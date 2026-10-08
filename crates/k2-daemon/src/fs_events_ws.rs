@@ -137,8 +137,9 @@ fn map_changed_paths(root: &str, abs_paths: &[String]) -> Vec<String> {
 
 async fn write_http(stream: &mut TcpStream, status: &str, body: &str) {
     let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{frame}Connection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
 }

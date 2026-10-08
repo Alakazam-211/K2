@@ -260,9 +260,11 @@ async fn send_error_then_close(stream: &mut TcpStream, message: &str) {
         "HTTP/1.1 400 Bad Request\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {}\r\n\
+         {}\
          Connection: close\r\n\r\n\
          {}",
         body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
         body
     );
     let _ = stream.write_all(resp.as_bytes()).await;

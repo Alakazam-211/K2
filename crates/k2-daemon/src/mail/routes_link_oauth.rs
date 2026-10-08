@@ -372,8 +372,9 @@ fn run_loopback_flow(
 fn write_loopback_page(stream: &mut std::net::TcpStream, page: &str) {
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+         Content-Length: {}\r\n{}Connection: close\r\n\r\n{}",
         page.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
         page
     );
     let _ = stream.write_all(resp.as_bytes());

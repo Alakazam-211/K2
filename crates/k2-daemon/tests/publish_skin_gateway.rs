@@ -3975,3 +3975,310 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         }
     });
 }
+
+// ── prd-app-frame-ancestors-v1: framing headers end to end ─────────────
+
+/// Every `Content-Security-Policy` and `X-Frame-Options` value in a head.
+fn frame_headers(headers: &str) -> (Vec<String>, Vec<String>) {
+    let mut csp = Vec::new();
+    let mut xfo = Vec::new();
+    for line in headers.lines().skip(1) {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        if k.trim().eq_ignore_ascii_case("content-security-policy") {
+            csp.push(v.trim().to_string());
+        } else if k.trim().eq_ignore_ascii_case("x-frame-options") {
+            xfo.push(v.trim().to_string());
+        }
+    }
+    (csp, xfo)
+}
+
+fn assert_frame(r: &Resp, csp: &str, xfo: &str, what: &str) {
+    let (c, x) = frame_headers(&r.headers);
+    assert_eq!(c, vec![csp.to_string()], "{what}: exactly one CSP\n{}", r.headers);
+    assert_eq!(x, vec![xfo.to_string()], "{what}: exactly one XFO\n{}", r.headers);
+}
+
+fn frame_post(dport: u16, path: &str, body_extra: &str) -> Resp {
+    http(
+        dport,
+        "POST",
+        &format!("/cli/publish/frame?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"name":"agents","project":"{path}"{body_extra}}}"#)),
+    )
+}
+
+fn first_service(dport: u16, path: &str) -> serde_json::Value {
+    let listed = http(
+        dport,
+        "GET",
+        &format!("/cli/publish/list?token={OWNER_TOKEN}&project={path}"),
+        None,
+    );
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    json(&listed.body)["services"]
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .expect("one service")
+}
+
+/// §5 tests 2, 3 and 8 against a real daemon + real helper child:
+/// default headers on the App and the daemon, `k2 publish frame` add /
+/// `none` / reset with a live helper restart, bad origins, GET 405, and
+/// the list JSON (FA4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_frame_policy_end_to_end() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgfa{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        const APP: &str = "frame-ancestors 'self' tauri://localhost http://tauri.localhost";
+
+        // The daemon itself (Connect surfaces): 'self' on every response.
+        let boot = http(dport, "GET", "/boot-status", None);
+        assert_frame(&boot, "frame-ancestors 'self'", "SAMEORIGIN", "daemon /boot-status");
+        let missing = http(dport, "GET", &format!("/cli/nope?token={OWNER_TOKEN}"), None);
+        assert_frame(&missing, "frame-ancestors 'self'", "SAMEORIGIN", "daemon 404");
+
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+        let svc = first_service(dport, &path);
+        assert_eq!(svc["frameAncestors"], "", "{svc}");
+        assert_eq!(svc["framePolicy"], "'self' tauri://localhost http://tauri.localhost", "{svc}");
+        assert!(svc["frameWarning"].is_null(), "{svc}");
+
+        for p in ["/", "/login", "/reset", "/nope"] {
+            let r = http(gport, "GET", p, None);
+            assert_frame(&r, APP, "SAMEORIGIN", &format!("helper GET {p}"));
+        }
+        let r = http(gport, "GET", "/cli/thread?addr=x", None);
+        assert_eq!(r.status, 401, "{}", r.body);
+        assert_frame(&r, APP, "SAMEORIGIN", "helper 401");
+        let bad_login = http(gport, "POST", "/login", Some(r#"{"username":"x","password":"y"}"#));
+        assert_eq!(bad_login.status, 401, "{}", bad_login.body);
+        assert_frame(&bad_login, APP, "SAMEORIGIN", "helper login 401 (daemon reply re-framed)");
+
+        // GET twin is 405; a GET never changes the policy.
+        let get = http(
+            dport,
+            "GET",
+            &format!("/cli/publish/frame?token={OWNER_TOKEN}&name=agents&project={path}&none=true"),
+            None,
+        );
+        assert_eq!(get.status, 405, "{}", get.body);
+
+        // Bad input: named codes, nothing stored, helper untouched.
+        for (extra, code) in [
+            (r#","allow":"https://*.k2.dev""#, "bad_frame_origin"),
+            (r#","allow":"http://partner.example""#, "bad_frame_origin"),
+            (r#","allow":"https://a.example/path""#, "bad_frame_origin"),
+            (r#","allow":"https://a.example;x""#, "bad_frame_origin"),
+            (r#","none":true,"reset":true"#, "usage"),
+            ("", "usage"),
+        ] {
+            let r = frame_post(dport, &path, extra);
+            assert_eq!(r.status, 400, "{extra}: {}", r.body);
+            assert_eq!(json(&r.body)["error"]["code"], code, "{extra}: {}", r.body);
+        }
+        let nine: Vec<String> = (1..=9).map(|i| format!("https://o{i}.example")).collect();
+        let r = frame_post(dport, &path, &format!(r#","allow":"{}""#, nine.join(" ")));
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(json(&r.body)["error"]["code"], "frame_too_many", "{}", r.body);
+        assert_eq!(first_service(dport, &path)["frameAncestors"], "", "refusals store nothing");
+
+        // Allow a partner: stored, helper restarted, new header live.
+        let r = frame_post(dport, &path, r#","allow":"HTTPS://Partner.Example/""#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["restarted"], true, "{}", r.body);
+        assert_eq!(v["service"]["frameAncestors"], "https://partner.example", "{}", r.body);
+        assert!(wait_port(gport, 8000), "helper back on {gport}");
+        let r = http(gport, "GET", "/login", None);
+        assert_frame(
+            &r,
+            &format!("{APP} https://partner.example"),
+            "SAMEORIGIN",
+            "after --allow",
+        );
+        // Additive + dedup.
+        let r = frame_post(dport, &path, r#","allow":"https://partner.example https://b.example""#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(
+            json(&r.body)["service"]["frameAncestors"],
+            "https://partner.example https://b.example",
+            "{}",
+            r.body
+        );
+        assert!(wait_port(gport, 8000));
+
+        // --none: DENY, K2's windows too.
+        let r = frame_post(dport, &path, r#","none":true"#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(wait_port(gport, 8000));
+        let r = http(gport, "GET", "/login", None);
+        assert_frame(&r, "frame-ancestors 'none'", "DENY", "after --none");
+        assert_eq!(first_service(dport, &path)["framePolicy"], "'none'");
+
+        // Stopped App: stored, no restart, applied at the next start.
+        stop_skin_only(dport, &path);
+        let r = frame_post(dport, &path, r#","reset":true"#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["restarted"], false, "{}", r.body);
+        let start = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/start?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"agents","project":"{path}"}}"#)),
+        );
+        assert_eq!(start.status, 200, "{}", start.body);
+        assert!(wait_port(gport, 8000));
+        let r = http(gport, "GET", "/login", None);
+        assert_frame(&r, APP, "SAMEORIGIN", "after --reset + start");
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+fn stop_skin_only(dport: u16, path: &str) {
+    let r = http(
+        dport,
+        "POST",
+        &format!("/cli/publish/stop?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"name":"agents","project":"{path}"}}"#)),
+    );
+    assert_eq!(r.status, 200, "stop; {}", r.body);
+}
+
+/// FA4 / FA21: a `--cmd` App whose own `GET /` is HTML with no framing
+/// header gets a `frameWarning` in the list; `k2 publish frame` refuses
+/// it (K2 does not touch its responses). Needs `python3` (the same
+/// stand-in server the other publish tests use).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_cmd_app_without_frame_header_is_warned() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgfw{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        std::fs::write(format!("{path}/index.html"), "<!doctype html><title>own</title>")
+            .expect("index.html");
+        let port = free_port();
+        let run = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"agents","cmd":"python3 -m http.server {port} --bind 127.0.0.1","port":{port},"project":"{path}","noTunnel":true}}"#
+            )),
+        );
+        assert_eq!(run.status, 200, "run cmd; {}", run.body);
+        assert!(wait_port(port, 8000), "python http.server must listen on {port}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let svc = loop {
+            let svc = first_service(dport, &path);
+            if !svc["frameWarning"].is_null() || std::time::Instant::now() > deadline {
+                break svc;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert_eq!(svc["kind"], "cmd", "{svc}");
+        assert!(svc["framePolicy"].is_null(), "{svc}");
+        let warn = svc["frameWarning"].as_str().expect("frameWarning set within 10 s");
+        assert!(warn.contains("frame-ancestors"), "{warn}");
+        assert!(warn.contains("k2 study publish-framing"), "{warn}");
+
+        let r = frame_post(dport, &path, r#","none":true"#);
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert!(r.body.contains("--skin Apps"), "{}", r.body);
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+/// Upgrade path: `--skin` helpers survive a daemon restart (setsid) and are
+/// reattached at boot. One left over from a build without framing headers
+/// must be restarted, or the fix would not reach a box until someone
+/// restarts the App by hand. A stand-in "old helper" (python, no headers)
+/// sits on the App's port with the row pointing at its pid; boot replaces
+/// it with a real helper sending the policy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn boot_reattach_restarts_a_helper_without_frame_headers() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgfb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _conv, path) = seed_workspace(&handle);
+        let old_root = format!("{path}/old-helper");
+        std::fs::create_dir_all(&old_root).expect("old root");
+        std::fs::write(format!("{old_root}/login"), "<!doctype html><title>old</title>")
+            .expect("old login");
+        let gport = free_port();
+        let mut old = std::process::Command::new("python3")
+            .args(["-m", "http.server", &gport.to_string(), "--bind", "127.0.0.1", "--directory", &old_root])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("python3 stand-in old helper");
+        assert!(wait_port(gport, 8000), "stand-in must listen on {gport}");
+        let before = http(gport, "HEAD", "/login", None);
+        assert_eq!(before.status, 200, "{}", before.headers);
+        assert_eq!(frame_headers(&before.headers), (vec![], vec![]), "old helper sends no framing");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            ps::insert(
+                &conn,
+                &project_id,
+                "agents",
+                CMD_SKIN_SENTINEL,
+                &path,
+                gport,
+                ps::EXPOSE_LOCAL,
+                DESIRED_RUNNING,
+                KIND_SKIN,
+                "",
+            )
+            .expect("row");
+            ps::set_runtime(&conn, &project_id, "agents", Some(old.id() as i64), None, None)
+                .expect("pid");
+        }
+
+        k2_daemon::publish_runtime::boot_desired_running();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while old.try_wait().expect("try_wait").is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(old.try_wait().expect("try_wait").is_some(), "old helper must be stopped");
+        assert!(wait_port(gport, 8000), "new helper on {gport}");
+        let after = http(gport, "GET", "/login", None);
+        assert_eq!(after.status, 200, "{}", after.body);
+        assert_frame(
+            &after,
+            "frame-ancestors 'self' tauri://localhost http://tauri.localhost",
+            "SAMEORIGIN",
+            "restarted helper",
+        );
+        let svc = first_service(dport, &path);
+        assert_ne!(svc["pid"], serde_json::json!(old.id()), "{svc}");
+        assert_eq!(svc["status"], "running", "{svc}");
+
+        // A helper that already sends its policy is left alone.
+        let pid_before = svc["pid"].clone();
+        assert!(pid_before.is_i64(), "{svc}");
+        k2_daemon::publish_runtime::boot_desired_running();
+        let svc = first_service(dport, &path);
+        assert_eq!(svc["pid"], pid_before, "no restart when the policy matches: {svc}");
+        let again = http(gport, "GET", "/login", None);
+        assert_eq!(again.status, 200, "{}", again.body);
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}

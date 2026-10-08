@@ -274,21 +274,24 @@ pub async fn serve_overlay_events_connection(
         .filter(|s| !s.is_empty());
     let Some(conversation) = conversation else {
         log_debug!("[daemon/overlay_ws] missing conversation=");
-        let _ = tokio::io::AsyncWriteExt::write_all(
-            stream,
-            b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 47\r\nConnection: close\r\n\r\n{\"error\":\"missing conversation query parameter\"}",
-        )
-        .await;
+        let body = r#"{"error":"missing conversation query parameter"}"#;
+        let resp = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{frame}Connection: close\r\n\r\n{body}",
+            body.len(),
+            frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
+        );
+        let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
         return;
     };
 
     if let Some(ref pass) = skin_pass {
         if let Err(r) = skin_overlay_gate(pass, &conversation) {
             let resp = format!(
-                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
                 r.status,
                 r.content_type,
                 r.body.len(),
+                k2_core::frame_policy::CONNECT_HEADER_LINES,
                 r.body
             );
             let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;

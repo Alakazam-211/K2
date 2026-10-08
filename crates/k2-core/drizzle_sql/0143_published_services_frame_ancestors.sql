@@ -1,0 +1,11 @@
+-- 0143: published_services.frame_ancestors (prd-app-frame-ancestors-v1 FA1/FA2).
+-- Who may frame this App, on top of the default
+-- `frame-ancestors 'self' tauri://localhost http://tauri.localhost`.
+--   ''      = the default (every existing row)
+--   'none'  = refuse every frame, K2's windows included (X-Frame-Options: DENY)
+--   else    = space-separated extra origins, validated by k2_core::frame_policy
+-- Written only by `POST /cli/publish/frame` (owner). The gateway helper gets
+-- the final policy as `--frame-ancestors` on every spawn.
+-- 0135-0142 are reserved for other 0.45.x work. Numbers apply in release
+-- order, so a reserved number that ships after this one is renumbered 0144+.
+ALTER TABLE published_services ADD COLUMN frame_ancestors TEXT NOT NULL DEFAULT '';

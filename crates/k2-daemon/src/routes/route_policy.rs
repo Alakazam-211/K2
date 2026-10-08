@@ -621,6 +621,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/projects/touch-interaction", Member),
     post("/cli/projects/touch-interaction-clear", Member),
     post("/cli/projects/update", Member),
+    // FA3: Owner on purpose (the other publish mutations are Member): this
+    // widens which other sites may frame an App.
+    post("/cli/publish/frame", Owner),
     get("/cli/publish/leftovers", Member),
     get("/cli/publish/list", Member),
     get("/cli/publish/logs", Member),

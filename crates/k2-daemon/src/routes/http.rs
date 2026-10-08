@@ -173,8 +173,9 @@ pub(crate) async fn send_plain_404_close(stream: &mut TcpStream) {
     let body = "Not Found";
     let resp = format!(
         "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\
-         Connection: close\r\n\r\n{body}",
-        body.len()
+         {frame}Connection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }
@@ -186,7 +187,8 @@ pub(crate) async fn send_plain_404_close(stream: &mut TcpStream) {
 pub(crate) async fn send_redirect_close(stream: &mut TcpStream, location: &str) {
     let resp = format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\
-         Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+         Cache-Control: no-store\r\n{frame}Connection: close\r\n\r\n",
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }
@@ -1206,9 +1208,10 @@ pub(crate) async fn send_response_with_cookie_and_location(
          Content-Length: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Expose-Headers: *\r\n\
-         {cookie_line}{location_line}\r\n{}",
+         {frame}{cookie_line}{location_line}\r\n{}",
         body.len(),
         body,
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }
@@ -1228,9 +1231,10 @@ pub(crate) async fn send_response_with_headers(
          Content-Length: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
          Access-Control-Expose-Headers: *\r\n\
-         {extra}\r\n{}",
+         {frame}{extra}\r\n{}",
         body.len(),
         body,
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }
@@ -1246,9 +1250,11 @@ pub(crate) async fn send_login_rate_limited(stream: &mut TcpStream) {
          Content-Length: {}\r\n\
          Retry-After: {}\r\n\
          Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Expose-Headers: *\r\n\r\n{body}",
+         Access-Control-Expose-Headers: *\r\n\
+         {frame}\r\n{body}",
         body.len(),
         crate::login_throttle::WINDOW_SECS,
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }

@@ -87,7 +87,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/publish/stop"
         | "/cli/publish/rm"
         | "/cli/publish/subdomain/claim"
-        | "/cli/publish/subdomain/unclaim" => CliResponse::method_not_allowed(),
+        | "/cli/publish/subdomain/unclaim"
+        | "/cli/publish/frame" => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     })
 }
@@ -101,6 +102,7 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/publish/rm" => handle_rm(params),
         "/cli/publish/subdomain/claim" => handle_subdomain_claim(params),
         "/cli/publish/subdomain/unclaim" => handle_subdomain_unclaim(params),
+        "/cli/publish/frame" => handle_frame(params),
         _ => CliResponse::not_found(),
     }
 }
@@ -432,6 +434,89 @@ fn handle_rm(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+fn frame_error(status: &'static str, code: &str, hint: &str) -> CliResponse {
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } })
+            .to_string(),
+    }
+}
+
+/// POST /cli/publish/frame — owner only (FA3). Exactly one of
+/// `allow` (space-separated origins, added to the default), `none: true`
+/// (refuse every frame) or `reset: true` (back to the default). Restarts
+/// the App's helper when it is running so the new headers apply at once.
+///
+/// The route-policy floor (Owner) already refuses Admin/Member logins with
+/// `role_required`. An agent passport (TCP hook or cell socket) reaches
+/// here stamped and gets `owner_only`: widening who may frame an App is
+/// the owner's call, never an agent's.
+fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
+    if crate::caller_workspace::request_principal().is_some()
+        || params.contains_key(crate::caller_workspace::PRINCIPAL_BOUND_KEY)
+    {
+        return frame_error(
+            "403 Forbidden",
+            "owner_only",
+            "k2 publish frame is owner-only: it decides which other sites may frame this App. \
+             Ask your human to run it from a shell outside K2 (or the owner's terminal).",
+        );
+    }
+    let project = match need_project(params) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let name = str_param(params, "name");
+    if name.trim().is_empty() {
+        return CliResponse::bad_request("Missing name");
+    }
+    let project_id = match resolve_project_id(&project) {
+        Ok(id) => id,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let allow = opt_param(params, "allow");
+    let none = boolish(params, &["none"]);
+    let reset = boolish(params, &["reset"]);
+    let picked = [allow.is_some(), none, reset].iter().filter(|b| **b).count();
+    if picked != 1 {
+        return frame_error(
+            "400 Bad Request",
+            "usage",
+            "pass exactly one of allow, none or reset (k2 publish frame <name> --allow <origin> | --none | --reset)",
+        );
+    }
+    let change = if none {
+        publish_runtime::FrameChange::None
+    } else if reset {
+        publish_runtime::FrameChange::Reset
+    } else {
+        let list: Vec<String> = allow
+            .unwrap_or_default()
+            .split_ascii_whitespace()
+            .map(str::to_string)
+            .collect();
+        if list.is_empty() {
+            return frame_error("400 Bad Request", "usage", "--allow needs an origin, e.g. https://partner.example");
+        }
+        publish_runtime::FrameChange::Allow(list)
+    };
+    match publish_runtime::set_frame(&project_id, &name, change) {
+        Ok((svc, restarted)) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "service": svc,
+                "restarted": restarted,
+            })
+            .to_string(),
+        ),
+        Err(publish_runtime::FrameSetError::Policy(e)) => {
+            frame_error("400 Bad Request", e.code(), &e.to_string())
+        }
+        Err(publish_runtime::FrameSetError::Publish(e)) => err_to_resp(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,10 +531,27 @@ mod tests {
             "/cli/publish/rm",
             "/cli/publish/subdomain/claim",
             "/cli/publish/subdomain/unclaim",
+            "/cli/publish/frame",
         ] {
             let resp = dispatch(path, &p).expect("GET twin must exist");
             assert_eq!(resp.status, "405 Method Not Allowed", "path={path}");
         }
+    }
+
+    /// FA3: an agent passport (stamped params) never changes who may
+    /// frame an App, even its own workspace's. Checked before any lookup.
+    #[test]
+    fn frame_refuses_agent_passports_with_owner_only() {
+        let mut p = HashMap::new();
+        p.insert(crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
+        p.insert("name".to_string(), "agents".to_string());
+        p.insert("project".to_string(), "/tmp/k2-frame-no-such-ws".to_string());
+        p.insert("allow".to_string(), "https://partner.example".to_string());
+        let r = dispatch_post("/cli/publish/frame", &p);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only", "{}", r.body);
+        assert!(v["error"]["hint"].as_str().expect("hint").contains("owner"), "{}", r.body);
     }
 
     #[test]

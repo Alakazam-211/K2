@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use k2_core::db::schema::SubdomainWorkspace;
+use k2_core::frame_policy::{self, FramePolicy};
 use k2_core::log_debug;
 
 use k2_core::published_services::{
@@ -495,7 +496,12 @@ fn spawn_skin_helper(
             .map_err(|e| format!("skinRoot: {e}"))?;
         Some(canon)
     };
-    let args = crate::skin_gateway::helper_argv(row.port as u16, daemon_port, root.as_deref());
+    // A stored value this daemon would never write: refuse to start rather
+    // than serve the App unguarded.
+    let frame = FramePolicy::from_stored(&row.frame_ancestors)
+        .map_err(|e| format!("frame policy: {e} (k2 publish frame {name} --reset)"))?;
+    let args =
+        crate::skin_gateway::helper_argv(row.port as u16, daemon_port, root.as_deref(), &frame);
     spawn_argv(&exe, &args, &cwd, project_id, name)
 }
 
@@ -583,7 +589,11 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     } else {
         public_url(&row.name, &row.expose)
     };
-    ServiceJson::from_row(row, status, url, pid)
+    let mut json = ServiceJson::from_row(row, status, url, pid);
+    if row.kind != KIND_SKIN && status == STATUS_RUNNING {
+        json.frame_warning = frame_warning_get(&row.project_id, &row.name);
+    }
+    json
 }
 
 fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
@@ -755,11 +765,25 @@ fn poll_foreign(entry: Arc<LiveChild>) {
 }
 
 fn on_child_exit(entry: &LiveChild, code: i64) {
-    live_remove(&entry.project_id, &entry.name);
+    // A restart (`k2 publish frame`, boot drift) may already have put a new
+    // child in this slot; only this entry's own slot and pid are cleared.
+    {
+        let mut map = live().lock().unwrap_or_else(|e| e.into_inner());
+        let key = (entry.project_id.clone(), entry.name.clone());
+        if map.get(&key).is_some_and(|cur| std::ptr::eq(cur.as_ref(), entry)) {
+            map.remove(&key);
+        }
+    }
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = ps::mark_exited(&conn, &entry.project_id, &entry.name, Some(code));
+        let _ = ps::mark_exited_if_pid(
+            &conn,
+            &entry.project_id,
+            &entry.name,
+            entry.pid as i64,
+            Some(code),
+        );
     }
     if !entry.stop_requested.load(Ordering::SeqCst) {
         log_debug!(
@@ -998,6 +1022,9 @@ fn start_inner(project_id: &str, name: &str, want_tunnel: bool) -> Result<Servic
         let _ = ps::set_desired(&conn, project_id, name, DESIRED_RUNNING);
         let _ = ps::set_error(&conn, project_id, name, None);
     }
+    if row.kind != KIND_SKIN {
+        probe_cmd_frame_async(project_id, name, row.port as u16);
+    }
     emit_changed(project_id);
     let row = load_row(project_id, name).unwrap_or(row);
     Ok(to_json(&row))
@@ -1094,6 +1121,257 @@ pub fn list(project_id: &str) -> Result<Vec<ServiceJson>, PublishError> {
     Ok(rows.iter().map(to_json).collect())
 }
 
+// ── Framing (prd-app-frame-ancestors-v1) ──────────────────────────────
+
+/// Shown on a running `--cmd` App whose own `GET /` is HTML with neither
+/// `frame-ancestors` nor `X-Frame-Options` (FA4, FA21). K2 byte-splices
+/// those responses and cannot add the header itself.
+pub const CMD_FRAME_WARNING: &str = "This App's own server sends no frame-ancestors header on GET /, so any site can put it in a frame. K2 does not change a --cmd App's responses. Add `Content-Security-Policy: frame-ancestors 'self'` in the App (see `k2 study publish-framing`).";
+
+/// The framing headers one loopback `GET`/`HEAD` returned.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FrameProbe {
+    pub status: u16,
+    pub content_type: String,
+    pub csp: Vec<String>,
+    pub xfo: Vec<String>,
+}
+
+/// One request to `127.0.0.1:<port>`; headers only. `None` when the port
+/// does not answer HTTP within ~3 s.
+pub fn probe_frame_headers(port: u16, method: &str, path: &str) -> Option<FrameProbe> {
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
+    let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/html\r\nUser-Agent: k2-frame-probe\r\nConnection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).ok()?;
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        if raw.windows(4).any(|w| w == b"\r\n\r\n") || raw.len() > 64 * 1024 {
+            break;
+        }
+        match s.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let head = text.split("\r\n\r\n").next()?;
+    let mut lines = head.split("\r\n");
+    let status: u16 = lines.next()?.split_whitespace().nth(1)?.parse().ok()?;
+    let mut probe = FrameProbe {
+        status,
+        ..FrameProbe::default()
+    };
+    for line in lines {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        let (k, v) = (k.trim(), v.trim().to_string());
+        if k.eq_ignore_ascii_case("content-security-policy") {
+            probe.csp.push(v);
+        } else if k.eq_ignore_ascii_case("x-frame-options") {
+            probe.xfo.push(v);
+        } else if k.eq_ignore_ascii_case("content-type") {
+            probe.content_type = v;
+        }
+    }
+    Some(probe)
+}
+
+/// True when a `--cmd` App's `GET /` is an HTML page anyone may frame.
+pub fn cmd_probe_needs_warning(p: &FrameProbe) -> bool {
+    (200..300).contains(&p.status)
+        && p.content_type.to_ascii_lowercase().starts_with("text/html")
+        && !p.csp.iter().any(|v| frame_policy::csp_has_frame_ancestors(v))
+        && p.xfo.is_empty()
+}
+
+/// True when a helper answers with exactly `policy` (one CSP line, one
+/// XFO line, both equal). An older helper build sends neither.
+pub fn helper_probe_matches(p: &FrameProbe, policy: &FramePolicy) -> bool {
+    let want_xfo: Vec<String> = policy.xfo_value().map(|v| vec![v.to_string()]).unwrap_or_default();
+    p.status == 200 && p.csp == vec![policy.csp_value()] && p.xfo == want_xfo
+}
+
+type FrameWarnings = HashMap<(String, String), String>;
+
+fn frame_warnings() -> &'static Mutex<FrameWarnings> {
+    static W: OnceLock<Mutex<FrameWarnings>> = OnceLock::new();
+    W.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn frame_warning_get(project_id: &str, name: &str) -> Option<String> {
+    frame_warnings()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(project_id.to_string(), name.to_string()))
+        .cloned()
+}
+
+/// Probe a `--cmd` App and record (or clear) its warning. Emits a change
+/// event when the warning flips.
+fn probe_cmd_frame(project_id: &str, name: &str, port: u16) {
+    let warn = probe_frame_headers(port, "GET", "/")
+        .is_some_and(|p| cmd_probe_needs_warning(&p));
+    let key = (project_id.to_string(), name.to_string());
+    let changed = {
+        let mut map = frame_warnings().lock().unwrap_or_else(|e| e.into_inner());
+        if warn {
+            map.insert(key, CMD_FRAME_WARNING.to_string()).is_none()
+        } else {
+            map.remove(&key).is_some()
+        }
+    };
+    if changed {
+        emit_changed(project_id);
+    }
+}
+
+fn probe_cmd_frame_async(project_id: &str, name: &str, port: u16) {
+    let (p, n) = (project_id.to_string(), name.to_string());
+    let _ = thread::Builder::new()
+        .name(format!("publish-frame-probe-{name}"))
+        .spawn(move || probe_cmd_frame(&p, &n, port));
+}
+
+/// Health tick: re-probe every running `--cmd` App.
+fn reprobe_cmd_frames() {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_desired_running(&conn).unwrap_or_default()
+    };
+    for row in rows {
+        if row.kind == KIND_SKIN || live_get(&row.project_id, &row.name).is_none() {
+            continue;
+        }
+        probe_cmd_frame(&row.project_id, &row.name, row.port as u16);
+    }
+}
+
+/// Kill a running `--skin` helper and start it again from its row (new
+/// `--frame-ancestors`). The nested hostname is untouched: same port.
+/// A stopped App is left stopped.
+pub fn restart_skin_helper(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
+    let row = load_row(project_id, name)
+        .ok_or_else(|| PublishError::bad("no such published service"))?;
+    if row.kind != KIND_SKIN {
+        return Err(PublishError::bad("not a --skin App"));
+    }
+    let entry = live_remove(project_id, name);
+    let had_live = entry.is_some();
+    if let Some(entry) = entry {
+        kill_tree(&entry);
+    } else if let Some(pid) = row.pid.and_then(|p| i32::try_from(p).ok()) {
+        if pid_alive(pid) {
+            kill_pid_tree(pid);
+        }
+    }
+    if !had_live && row.desired != DESIRED_RUNNING {
+        return Ok(to_json(&row));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while port_accepts(row.port as u16) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    if port_accepts(row.port as u16) {
+        return Err(PublishError::fail(format!(
+            "restart: 127.0.0.1:{} is still in use after stopping the helper",
+            row.port
+        )));
+    }
+    start_inner(project_id, name, false)
+}
+
+/// Boot reattach of a `--skin` helper: if it does not answer with the
+/// policy its row asks for (an older build sends no framing headers at
+/// all), restart it so the upgrade takes effect without an owner action.
+fn restart_helper_if_frame_drift(row: &ps::PublishedService) {
+    let Ok(want) = FramePolicy::from_stored(&row.frame_ancestors) else {
+        log_debug!(
+            "[publish] {}/{} has an invalid frame policy; leaving it",
+            row.project_id,
+            row.name
+        );
+        return;
+    };
+    let got = probe_frame_headers(row.port as u16, "HEAD", "/login");
+    if got.as_ref().is_some_and(|p| helper_probe_matches(p, &want)) {
+        return;
+    }
+    log_debug!(
+        "[publish] {}/{} helper frame policy drift ({:?}); restarting",
+        row.project_id,
+        row.name,
+        got
+    );
+    if let Err(e) = restart_skin_helper(&row.project_id, &row.name) {
+        log_debug!(
+            "[publish] {}/{} drift restart failed: {}",
+            row.project_id,
+            row.name,
+            e.message
+        );
+    }
+}
+
+/// What `POST /cli/publish/frame` asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrameChange {
+    Allow(Vec<String>),
+    None,
+    Reset,
+}
+
+/// Owner: change a `--skin` App's framing policy, then restart its helper
+/// when it is running. Returns the service JSON and whether it restarted.
+pub fn set_frame(
+    project_id: &str,
+    name: &str,
+    change: FrameChange,
+) -> Result<(ServiceJson, bool), FrameSetError> {
+    let name = ps::normalize_name(name).map_err(|e| FrameSetError::Publish(PublishError::bad(e)))?;
+    let row = load_row(project_id, &name).ok_or_else(|| {
+        FrameSetError::Publish(PublishError::bad("no such published service"))
+    })?;
+    if row.kind != KIND_SKIN {
+        return Err(FrameSetError::Publish(PublishError::bad(
+            "frame policy is for --skin Apps. A --cmd App sets its own header (k2 study publish-framing)",
+        )));
+    }
+    let stored = match change {
+        FrameChange::Reset => frame_policy::STORED_DEFAULT.to_string(),
+        FrameChange::None => frame_policy::STORED_NONE.to_string(),
+        FrameChange::Allow(adds) => {
+            frame_policy::stored_with_allow(&row.frame_ancestors, &adds).map_err(FrameSetError::Policy)?
+        }
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::set_frame_ancestors(&conn, project_id, &name, &stored)
+            .map_err(|e| FrameSetError::Publish(PublishError::fail(e.to_string())))?;
+    }
+    let running = is_running_now(project_id, &name, &row);
+    let json = if running {
+        restart_skin_helper(project_id, &name).map_err(FrameSetError::Publish)?
+    } else {
+        let row = load_row(project_id, &name).unwrap_or(row);
+        to_json(&row)
+    };
+    emit_changed(project_id);
+    Ok((json, running))
+}
+
+#[derive(Debug)]
+pub enum FrameSetError {
+    Publish(PublishError),
+    Policy(frame_policy::FrameError),
+}
+
 /// Boot: desired=running → reattach if pid alive AND port accepts, else respawn.
 /// Stagger between services. Bind clash fails loud (error on the row).
 pub fn boot_desired_running() {
@@ -1117,6 +1395,11 @@ pub fn boot_desired_running() {
             );
             adopt_reattach(&row.project_id, &row.name, port, pid);
             emit_changed(&row.project_id);
+            if row.kind == KIND_SKIN {
+                restart_helper_if_frame_drift(&row);
+            } else {
+                probe_cmd_frame_async(&row.project_id, &row.name, port);
+            }
             continue;
         }
         if port_accepts(port) && !(pid > 0 && pid_alive(pid)) {
@@ -1160,8 +1443,14 @@ pub fn spawn() -> thread::JoinHandle<()> {
         .name("publish-runtime".into())
         .spawn(|| {
             boot_desired_running();
+            let mut ticks: u32 = 0;
             loop {
                 thread::sleep(Duration::from_secs(30));
+                ticks = ticks.wrapping_add(1);
+                // `--cmd` frame check on the health tick (FA4): every 10 min.
+                if ticks % 20 == 0 {
+                    reprobe_cmd_frames();
+                }
             }
         })
         .expect("spawn publish-runtime")

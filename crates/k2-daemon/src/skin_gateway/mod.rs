@@ -14,6 +14,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
+use k2_core::frame_policy::FramePolicy;
+
 pub const COOKIE_NAME: &str = "k2_skin_ui";
 pub const GATEWAY_FORBIDDEN_JSON: &str = r#"{"error":"not allowed"}"#;
 /// 403 body for a state-changing request or socket that came from another
@@ -46,6 +48,10 @@ struct Gateway {
     upstream_host: String,
     root: Option<PathBuf>,
     sessions: Mutex<HashMap<String, Session>>,
+    /// This App's framing headers (`Content-Security-Policy:
+    /// frame-ancestors …` + `X-Frame-Options`), complete `\r\n` lines,
+    /// written on every response (prd-app-frame-ancestors-v1 §4).
+    frame_lines: String,
 }
 
 #[derive(Debug)]
@@ -53,6 +59,7 @@ struct Args {
     listen: SocketAddr,
     upstream: String,
     root: Option<PathBuf>,
+    frame: FramePolicy,
 }
 
 /// Test-harness opt-in: when this env is `1` the helper exits as soon as
@@ -126,6 +133,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut listen: Option<SocketAddr> = None;
     let mut upstream: Option<String> = None;
     let mut root: Option<PathBuf> = None;
+    let mut frame: Option<FramePolicy> = None;
     let mut i = 1usize;
     while i < args.len() {
         let a = args[i].as_str();
@@ -139,6 +147,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             ("--upstream", Some(rest.to_string()))
         } else if let Some(rest) = a.strip_prefix("--root=") {
             ("--root", Some(rest.to_string()))
+        } else if let Some(rest) = a.strip_prefix("--frame-ancestors=") {
+            ("--frame-ancestors", Some(rest.to_string()))
         } else {
             (a, None)
         };
@@ -184,9 +194,25 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 };
                 root = Some(PathBuf::from(v));
             }
+            "--frame-ancestors" => {
+                let v = match inline {
+                    Some(v) => v,
+                    None => {
+                        i += 1;
+                        args.get(i)
+                            .cloned()
+                            .ok_or("--frame-ancestors needs a source list")?
+                    }
+                };
+                // The daemon builds this from the App's stored setting; the
+                // helper re-validates and refuses to start on anything else.
+                let p = FramePolicy::from_sources(&v)
+                    .map_err(|e| format!("--frame-ancestors: {e}"))?;
+                frame = Some(p);
+            }
             "--help" | "-h" => {
                 return Err(
-                    "k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR]"
+                    "k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR] [--frame-ancestors SOURCES]"
                         .into(),
                 );
             }
@@ -200,11 +226,20 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         listen,
         upstream,
         root,
+        // No flag (a helper started by hand): the App default.
+        frame: frame.unwrap_or_else(FramePolicy::app_default),
     })
 }
 
 /// Synthesize helper argv (no exe). Daemon port is **current**, never persisted.
-pub fn helper_argv(listen_port: u16, daemon_port: u16, root: Option<&Path>) -> Vec<String> {
+/// `--frame-ancestors` is always passed, so a helper's policy is explicit
+/// in `ps` and the daemon's drift check can compare it.
+pub fn helper_argv(
+    listen_port: u16,
+    daemon_port: u16,
+    root: Option<&Path>,
+    frame: &FramePolicy,
+) -> Vec<String> {
     let mut v = vec![
         "--skin-gateway".into(),
         "--listen".into(),
@@ -216,6 +251,8 @@ pub fn helper_argv(listen_port: u16, daemon_port: u16, root: Option<&Path>) -> V
         v.push("--root".into());
         v.push(root.display().to_string());
     }
+    v.push("--frame-ancestors".into());
+    v.push(frame.sources().to_string());
     v
 }
 
@@ -395,6 +432,7 @@ async fn serve(args: Args) -> Result<(), String> {
         upstream_host: host,
         root: args.root,
         sessions: Mutex::new(HashMap::new()),
+        frame_lines: args.frame.header_lines(),
     });
     serve_listener(listener, gw).await
 }
@@ -453,7 +491,7 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
     let secure = request_is_secure(&head);
 
     if never_proxy(&path) {
-        write_json(&mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
+        write_json(&gw, &mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
         return Ok(());
     }
 
@@ -465,23 +503,23 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
     // Rule and rationale: [`check_request_origin`].
     if needs_origin_check(&method, upgrade) {
         if let Err(_why) = check_request_origin(&head) {
-            write_json(&mut stream, "403 Forbidden", CROSS_ORIGIN_REFUSED_JSON).await;
+            write_json(&gw, &mut stream, "403 Forbidden", CROSS_ORIGIN_REFUSED_JSON).await;
             return Ok(());
         }
     }
 
     if upgrade {
         if !allowlisted_ws(&path) {
-            write_json(&mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
+            write_json(&gw, &mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
             return Ok(());
         }
         let Some(sid) = cookie else {
-            write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+            write_json(&gw, &mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
             return Ok(());
         };
         let token = session_token(&gw, &sid).await;
         let Some(token) = token else {
-            write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+            write_json(&gw, &mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
             return Ok(());
         };
         proxy_upgrade(&gw, &mut stream, &head, &target, &token).await;
@@ -507,18 +545,18 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
         }
         (m, p) if allowlisted_http(m, p) => {
             let Some(sid) = cookie else {
-                write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+                write_json(&gw, &mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
                 return Ok(());
             };
             let token = session_token(&gw, &sid).await;
             let Some(token) = token else {
-                write_json(&mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+                write_json(&gw, &mut stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
                 return Ok(());
             };
             proxy_http(&gw, &mut stream, &method, &target, &head, &body, &token).await;
         }
         _ => {
-            write_json(&mut stream, "404 Not Found", r#"{"error":"not found"}"#).await;
+            write_json(&gw, &mut stream, "404 Not Found", r#"{"error":"not found"}"#).await;
         }
     }
     Ok(())
@@ -787,6 +825,7 @@ async fn handle_login(
     let (username, password) = parse_login_body(body, ct);
     if username.is_empty() || password.is_empty() {
         write_json(
+            gw,
             stream,
             "401 Unauthorized",
             r#"{"error":"invalid username or password"}"#,
@@ -815,11 +854,11 @@ async fn handle_login(
                 } else {
                     resp_body
                 };
-                write_json(stream, status_line(status), &body).await;
+                write_json(gw, stream, status_line(status), &body).await;
                 return;
             }
             let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp_body) else {
-                write_json(stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
+                write_json(gw, stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
                 return;
             };
             let token = v
@@ -828,7 +867,7 @@ async fn handle_login(
                 .unwrap_or("")
                 .to_string();
             if !token.starts_with("k2skn_") {
-                write_json(stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
+                write_json(gw, stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
                 return;
             }
             if let Some(obj) = v.as_object_mut() {
@@ -836,7 +875,7 @@ async fn handle_login(
             }
             let out = v.to_string();
             if out.contains("k2skn_") {
-                write_json(stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
+                write_json(gw, stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
                 return;
             }
             let sid = opaque_session_id();
@@ -854,10 +893,10 @@ async fn handle_login(
                     },
                 );
             }
-            write_json_cookie(stream, "200 OK", &out, &set_cookie_value(&sid, secure)).await;
+            write_json_cookie(gw, stream, "200 OK", &out, &set_cookie_value(&sid, secure)).await;
         }
         Err(_) => {
-            write_json(stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
+            write_json(gw, stream, "502 Bad Gateway", r#"{"error":"login upstream"}"#).await;
         }
     }
 }
@@ -937,6 +976,7 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
         }
     }
     write_json_cookie(
+        gw,
         stream,
         "200 OK",
         r#"{"ok":true}"#,
@@ -961,10 +1001,10 @@ async fn handle_password_reset(gw: &Gateway, stream: &mut TcpStream, body: &[u8]
             } else {
                 resp_body
             };
-            write_json(stream, status_line(status), &body).await;
+            write_json(gw, stream, status_line(status), &body).await;
         }
         Err(_) => {
-            write_json(stream, "502 Bad Gateway", r#"{"error":"reset upstream"}"#).await;
+            write_json(gw, stream, "502 Bad Gateway", r#"{"error":"reset upstream"}"#).await;
         }
     }
 }
@@ -977,12 +1017,12 @@ async fn handle_password_change(
     secure: bool,
 ) {
     let Some(sid) = cookie else {
-        write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+        write_json(gw, stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
         return;
     };
     let token = session_token(gw, sid).await;
     let Some(token) = token else {
-        write_json(stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
+        write_json(gw, stream, "401 Unauthorized", r#"{"error":"not logged in"}"#).await;
         return;
     };
     match upstream_json(
@@ -1002,13 +1042,13 @@ async fn handle_password_change(
             };
             if status == 200 {
                 gw.sessions.lock().await.remove(sid);
-                write_json_cookie(stream, "200 OK", &body, &clear_cookie_value(secure)).await;
+                write_json_cookie(gw, stream, "200 OK", &body, &clear_cookie_value(secure)).await;
             } else {
-                write_json(stream, status_line(status), &body).await;
+                write_json(gw, stream, status_line(status), &body).await;
             }
         }
         Err(_) => {
-            write_json(stream, "502 Bad Gateway", r#"{"error":"change upstream"}"#).await;
+            write_json(gw, stream, "502 Bad Gateway", r#"{"error":"change upstream"}"#).await;
         }
     }
 }
@@ -1039,6 +1079,7 @@ async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_onl
     if path == "/login" {
         let body = login_static_bytes(gw.root.as_deref());
         write_bytes(
+            gw,
             stream,
             "200 OK",
             "text/html; charset=utf-8",
@@ -1051,6 +1092,7 @@ async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_onl
     if path == "/reset" {
         let body = reset_static_bytes(gw.root.as_deref());
         write_bytes(
+            gw,
             stream,
             "200 OK",
             "text/html; charset=utf-8",
@@ -1063,10 +1105,10 @@ async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_onl
     if let Some(root) = gw.root.as_ref() {
         match read_static_file(root, path) {
             Ok((ct, bytes)) => {
-                write_bytes(stream, "200 OK", &ct, &bytes, head_only).await;
+                write_bytes(gw, stream, "200 OK", &ct, &bytes, head_only).await;
             }
             Err(_) => {
-                write_json(stream, "404 Not Found", r#"{"error":"not found"}"#).await;
+                write_json(gw, stream, "404 Not Found", r#"{"error":"not found"}"#).await;
             }
         }
         return;
@@ -1078,11 +1120,11 @@ async fn serve_static(gw: &Gateway, stream: &mut TcpStream, path: &str, head_onl
         "/assets/app.css" => ("text/css; charset=utf-8", APP_CSS.as_bytes()),
         "/assets/app.js" => ("text/javascript; charset=utf-8", APP_JS.as_bytes()),
         _ => {
-            write_json(stream, "404 Not Found", r#"{"error":"not found"}"#).await;
+            write_json(gw, stream, "404 Not Found", r#"{"error":"not found"}"#).await;
             return;
         }
     };
-    write_bytes(stream, "200 OK", ct, body, head_only).await;
+    write_bytes(gw, stream, "200 OK", ct, body, head_only).await;
 }
 
 fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()> {
@@ -1242,7 +1284,7 @@ async fn proxy_http(
     let mut up = match connect_upstream(gw).await {
         Ok(s) => s,
         Err(_) => {
-            write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+            write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
             return;
         }
     };
@@ -1259,18 +1301,21 @@ async fn proxy_http(
     }
     req.push_str("\r\n");
     if up.write_all(req.as_bytes()).await.is_err() {
-        write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+        write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         return;
     }
     if !body.is_empty() && up.write_all(body).await.is_err() {
-        write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+        write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         return;
     }
     let _ = up.flush().await;
     match read_http_message(&mut up).await {
         Ok((head, _status, body)) => {
             // Rebuild so Content-Length matches the body we actually hold.
-            let first = head.lines().next().unwrap_or("HTTP/1.1 200 OK");
+            let Some(first) = head.lines().next().filter(|l| l.starts_with("HTTP/")) else {
+                write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+                return;
+            };
             let mut out = format!("{first}\r\n");
             for line in head.lines().skip(1) {
                 let l = line.to_ascii_lowercase();
@@ -1278,6 +1323,7 @@ async fn proxy_http(
                     || l.starts_with("transfer-encoding:")
                     || l.starts_with("connection:")
                     || is_cors_header(line)
+                    || is_frame_header(line)
                     || line.is_empty()
                 {
                     continue;
@@ -1285,13 +1331,16 @@ async fn proxy_http(
                 out.push_str(line);
                 out.push_str("\r\n");
             }
+            // One framing policy per response: the daemon's own lines were
+            // dropped above (two CSPs intersect and would cancel an opt-in).
+            out.push_str(&gw.frame_lines);
             out.push_str(&format!("Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()));
             let _ = client.write_all(out.as_bytes()).await;
             let _ = client.write_all(&body).await;
             let _ = client.flush().await;
         }
         Err(_) => {
-            write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+            write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         }
     }
 }
@@ -1305,18 +1354,36 @@ fn is_cors_header(line: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Rebuild an upstream upgrade response head without CORS headers.
-fn strip_cors_from_head(head: &str) -> String {
-    let mut out = String::with_capacity(head.len());
+/// `Content-Security-Policy` / `X-Frame-Options` from upstream. The helper
+/// drops them and writes its own App policy instead.
+fn is_frame_header(line: &str) -> bool {
+    let name = line.split(':').next().unwrap_or("").trim();
+    name.eq_ignore_ascii_case("content-security-policy")
+        || name.eq_ignore_ascii_case("x-frame-options")
+}
+
+/// Rebuild an upstream upgrade response head without CORS headers. Framing
+/// headers are replaced by this App's policy, except on the `101` itself
+/// (a socket is not a document).
+fn strip_cors_from_head(head: &str, frame_lines: &str) -> String {
+    let mut out = String::with_capacity(head.len() + frame_lines.len());
+    let switching = head
+        .split("\r\n")
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        == Some("101");
     for line in head.split("\r\n") {
         if line.is_empty() {
             continue;
         }
-        if is_cors_header(line) {
+        if is_cors_header(line) || is_frame_header(line) {
             continue;
         }
         out.push_str(line);
         out.push_str("\r\n");
+    }
+    if !switching {
+        out.push_str(frame_lines);
     }
     out.push_str("\r\n");
     out
@@ -1349,12 +1416,12 @@ async fn proxy_upgrade(
     };
     let query = strip_token_query(query);
     let Some(param) = ws_required_param(path) else {
-        write_json(client, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
+        write_json(gw, client, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
         return;
     };
     if !query_has_param(&query, param) {
         let body = format!(r#"{{"error":"missing {param} query parameter"}}"#);
-        write_json(client, "400 Bad Request", &body).await;
+        write_json(gw, client, "400 Bad Request", &body).await;
         return;
     }
     let target = if query.is_empty() {
@@ -1365,7 +1432,7 @@ async fn proxy_upgrade(
     let mut up = match connect_upstream(gw).await {
         Ok(s) => s,
         Err(_) => {
-            write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+            write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
             return;
         }
     };
@@ -1386,7 +1453,7 @@ async fn proxy_upgrade(
     }
     req.push_str("\r\n");
     if up.write_all(req.as_bytes()).await.is_err() {
-        write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+        write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         return;
     }
     let _ = up.flush().await;
@@ -1409,7 +1476,7 @@ async fn proxy_upgrade(
     };
     let Some(end) = head_end else {
         if raw.is_empty() {
-            write_json(client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
+            write_json(gw, client, "502 Bad Gateway", r#"{"error":"upstream"}"#).await;
         } else {
             // Unparseable head: forward as-is rather than guess.
             let _ = client.write_all(&raw).await;
@@ -1417,7 +1484,7 @@ async fn proxy_upgrade(
         return;
     };
     let head = String::from_utf8_lossy(&raw[..end]).into_owned();
-    let out = strip_cors_from_head(&head);
+    let out = strip_cors_from_head(&head, &gw.frame_lines);
     if client.write_all(out.as_bytes()).await.is_err() {
         return;
     }
@@ -1441,33 +1508,43 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
-async fn write_json(stream: &mut TcpStream, status: &str, body: &str) {
-    write_bytes(stream, status, "application/json", body.as_bytes(), false).await;
+async fn write_json(gw: &Gateway, stream: &mut TcpStream, status: &str, body: &str) {
+    write_bytes(gw, stream, status, "application/json", body.as_bytes(), false).await;
 }
 
-async fn write_json_cookie(stream: &mut TcpStream, status: &str, body: &str, cookie: &str) {
+async fn write_json_cookie(
+    gw: &Gateway,
+    stream: &mut TcpStream,
+    status: &str,
+    body: &str,
+    cookie: &str,
+) {
+    let frame_lines = &gw.frame_lines;
     let resp = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nSet-Cookie: {cookie}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{frame_lines}Set-Cookie: {cookie}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(resp.as_bytes()).await;
     let _ = stream.flush().await;
 }
 
-fn http_headers(status: &str, ct: &str, len: usize) -> String {
+/// Response head for every helper-made reply. `frame_lines` is the App's
+/// framing policy ([`Gateway::frame_lines`]), on 200s and errors alike.
+fn http_headers(status: &str, ct: &str, len: usize, frame_lines: &str) -> String {
     format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\n{frame_lines}Connection: close\r\n\r\n"
     )
 }
 
 async fn write_bytes(
+    gw: &Gateway,
     stream: &mut TcpStream,
     status: &str,
     ct: &str,
     body: &[u8],
     head_only: bool,
 ) {
-    let resp = http_headers(status, ct, body.len());
+    let resp = http_headers(status, ct, body.len(), &gw.frame_lines);
     let _ = stream.write_all(resp.as_bytes()).await;
     if !head_only {
         let _ = stream.write_all(body).await;
@@ -1859,9 +1936,12 @@ mod tests {
 
     #[test]
     fn static_and_json_headers_are_no_store() {
-        let h = http_headers("200 OK", "text/javascript; charset=utf-8", 12);
+        let lines = FramePolicy::app_default().header_lines();
+        let h = http_headers("200 OK", "text/javascript; charset=utf-8", 12, &lines);
         assert!(h.contains("Cache-Control: no-store"), "{h}");
         assert!(h.contains("Content-Type: text/javascript; charset=utf-8"), "{h}");
+        assert!(h.contains(&lines), "{h}");
+        assert!(h.ends_with("Connection: close\r\n\r\n"), "{h}");
     }
 
     #[test]
@@ -2128,10 +2208,22 @@ mod tests {
         assert!(is_cors_header("ACCESS-CONTROL-ALLOW-CREDENTIALS: true"));
         assert!(!is_cors_header("Content-Type: application/json"));
         assert!(!is_cors_header("X-Access-Control: no"));
+        let lines = FramePolicy::app_default().header_lines();
         let h = strip_cors_from_head(
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+            &lines,
         );
         assert_eq!(h, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n");
+        // A refused upgrade is a plain reply: the daemon's framing lines are
+        // replaced by this App's policy, never doubled.
+        let h = strip_cors_from_head(
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Security-Policy: frame-ancestors 'self'\r\nx-frame-options: SAMEORIGIN\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+            &lines,
+        );
+        assert_eq!(
+            h,
+            format!("HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n{lines}\r\n")
+        );
     }
 
     #[test]
@@ -2217,7 +2309,8 @@ mod tests {
                             r#"{"ok":true}"#.to_string()
                         };
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: *\r\nAccess-Control-Allow-Credentials: true\r\nX-Stub: yes\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: *\r\nAccess-Control-Allow-Credentials: true\r\nX-Stub: yes\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            k2_core::frame_policy::CONNECT_HEADER_LINES,
                             body.len()
                         )
                     };
@@ -2230,12 +2323,17 @@ mod tests {
     }
 
     async fn start_helper(upstream_port: u16) -> u16 {
+        start_helper_with(upstream_port, None, &FramePolicy::app_default()).await
+    }
+
+    async fn start_helper_with(upstream_port: u16, root: Option<PathBuf>, frame: &FramePolicy) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("helper bind");
         let port = listener.local_addr().expect("helper addr").port();
         let gw = Arc::new(Gateway {
             upstream_host: format!("127.0.0.1:{upstream_port}"),
-            root: None,
+            root,
             sessions: Mutex::new(HashMap::new()),
+            frame_lines: frame.header_lines(),
         });
         tokio::spawn(async move {
             let _ = serve_listener(listener, gw).await;
@@ -2565,6 +2663,7 @@ mod tests {
             upstream_host: format!("127.0.0.1:{}", stub.port),
             root: None,
             sessions: Mutex::new(HashMap::new()),
+            frame_lines: FramePolicy::app_default().header_lines(),
         };
         gw.sessions.lock().await.insert(
             "old".into(),
@@ -2587,11 +2686,192 @@ mod tests {
 
     #[test]
     fn helper_argv_does_not_embed_cmd_shell() {
-        let a = helper_argv(8788, 4242, None);
+        let a = helper_argv(8788, 4242, None, &FramePolicy::app_default());
         assert_eq!(a[0], "--skin-gateway");
         assert!(a.contains(&"127.0.0.1:8788".to_string()));
         assert!(a.contains(&"http://127.0.0.1:4242".to_string()));
         assert!(!a.iter().any(|s| s.contains("(skin)")));
+        // The policy always travels explicitly, and parses back to itself.
+        let i = a.iter().position(|s| s == "--frame-ancestors").expect("--frame-ancestors");
+        assert_eq!(a[i + 1], k2_core::frame_policy::APP_DEFAULT_SOURCES);
+        let mut argv = vec!["k2-daemon".to_string()];
+        argv.extend(a.iter().cloned());
+        assert_eq!(parse_args(&argv).expect("argv round-trips").frame, FramePolicy::app_default());
+    }
+
+    fn argv_with(extra: &[&str]) -> Vec<String> {
+        let mut v: Vec<String> = [
+            "k2-daemon",
+            "--skin-gateway",
+            "--listen",
+            "127.0.0.1:9",
+            "--upstream",
+            "http://127.0.0.1:8",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        v.extend(extra.iter().map(|s| s.to_string()));
+        v
+    }
+
+    #[test]
+    fn frame_ancestors_flag_is_validated_and_defaults() {
+        assert_eq!(parse_args(&argv_with(&[])).unwrap().frame, FramePolicy::app_default());
+        let partner = FramePolicy::from_stored("https://partner.example").unwrap();
+        let a = parse_args(&argv_with(&["--frame-ancestors", partner.sources()])).unwrap();
+        assert_eq!(a.frame, partner);
+        let inline = format!("--frame-ancestors={}", partner.sources());
+        assert_eq!(parse_args(&argv_with(&[&inline])).unwrap().frame, partner);
+        assert_eq!(
+            parse_args(&argv_with(&["--frame-ancestors", "'none'"])).unwrap().frame,
+            FramePolicy::deny_all()
+        );
+        for bad in [
+            "*",
+            "'self'",
+            "'self' tauri://localhost http://tauri.localhost https://*.k2.dev",
+            "'self' tauri://localhost http://tauri.localhost https://a.example\r\nX-Evil: 1",
+        ] {
+            let err = parse_args(&argv_with(&["--frame-ancestors", bad])).unwrap_err();
+            assert!(err.contains("--frame-ancestors"), "{bad:?}: {err}");
+        }
+        let err = parse_args(&argv_with(&["--frame-ancestors"])).unwrap_err();
+        assert!(err.contains("source list"), "{err}");
+    }
+
+    /// Every framing header line in a reply head.
+    fn frame_values(r: &Reply) -> (Vec<String>, Vec<String>) {
+        let head = format!("{}\r\n", r.head);
+        (
+            header_values(&head, "content-security-policy")
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            header_values(&head, "x-frame-options")
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
+    fn assert_framed(r: &Reply, policy: &FramePolicy, what: &str) {
+        let (csp, xfo) = frame_values(r);
+        assert_eq!(csp, vec![policy.csp_value()], "{what}: exactly one CSP line\n{}", r.head);
+        let want_xfo: Vec<String> = policy.xfo_value().map(|v| vec![v.to_string()]).unwrap_or_default();
+        assert_eq!(xfo, want_xfo, "{what}: exactly one XFO line\n{}", r.head);
+    }
+
+    /// prd-app-frame-ancestors-v1 §5 test 2 + FA20: every helper reply —
+    /// pages, files, every error, login/logout cookies, proxied JSON whose
+    /// upstream sends its own CSP + XFO — carries exactly this App's
+    /// policy. Default, a partner allow-list, and `'none'`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_every_reply_carries_exactly_one_frame_policy() {
+        let stub = start_stub().await;
+        let dead = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind dead");
+            l.local_addr().expect("dead addr").port()
+        }; // listener dropped: connects are refused → 502 paths
+        let root = std::env::temp_dir().join(format!(
+            "k2-gw-frame-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("root dir");
+        std::fs::write(root.join("index.html"), "<!doctype html><title>root</title>").expect("index");
+        std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+        std::fs::write(root.join("assets").join("page.html"), "<!doctype html><title>page</title>")
+            .expect("page");
+        let policies = [
+            FramePolicy::app_default(),
+            FramePolicy::from_stored("https://partner.example").unwrap(),
+            FramePolicy::deny_all(),
+        ];
+        for policy in &policies {
+            let bundled = start_helper_with(stub.port, None, policy).await;
+            let rooted = start_helper_with(stub.port, Some(root.clone()), policy).await;
+            let down = start_helper_with(dead, None, policy).await;
+            let host = format!("Host: {APP}\r\n");
+            for (helper, path) in [
+                (bundled, "/"),
+                (bundled, "/index.html"),
+                (bundled, "/login"),
+                (bundled, "/reset"),
+                (bundled, "/assets/app.js"),
+                (rooted, "/"),
+                (rooted, "/assets/page.html"),
+                (rooted, "/login"),
+            ] {
+                for method in ["GET", "HEAD"] {
+                    let r = send(helper, method, path, &host, "").await;
+                    assert_eq!(r.status, 200, "{method} {path}: {}", r.head);
+                    assert_framed(&r, policy, &format!("{method} {path}"));
+                }
+            }
+            let cases: Vec<(u16, Reply, &str)> = vec![
+                (404, send(rooted, "GET", "/assets/missing.html", &host, "").await, "404 root file"),
+                (404, send(bundled, "GET", "/nope", &host, "").await, "404"),
+                (401, send(bundled, "GET", "/cli/thread?addr=room", &host, "").await, "401 no cookie"),
+                (403, send(bundled, "GET", "/cli/sessions/grid", &host, "").await, "403 never-proxy"),
+                (
+                    403,
+                    send(
+                        bundled,
+                        "POST",
+                        "/cli/thread/post",
+                        &format!("{host}Origin: https://evil.example\r\n"),
+                        "{}",
+                    )
+                    .await,
+                    "403 cross-origin",
+                ),
+                (
+                    502,
+                    send(
+                        down,
+                        "POST",
+                        "/login",
+                        &format!("{host}{SAME}"),
+                        r#"{"username":"a","password":"b"}"#,
+                    )
+                    .await,
+                    "502 login upstream down",
+                ),
+                (
+                    401,
+                    send(down, "POST", "/login", &format!("{host}{SAME}"), "{}").await,
+                    "401 empty login",
+                ),
+            ];
+            for (want, r, what) in &cases {
+                assert_eq!(r.status, *want, "{what}: {}", r.head);
+                assert_framed(r, policy, what);
+            }
+            // Login and logout (Set-Cookie replies).
+            let lr = send(
+                bundled,
+                "POST",
+                "/login",
+                &format!("{host}{SAME}"),
+                r#"{"username":"stub","password":"not-a-real-password"}"#,
+            )
+            .await;
+            assert_eq!(lr.status, 200, "{}", lr.body);
+            assert!(set_cookie_of(&lr).is_some(), "{}", lr.head);
+            assert_framed(&lr, policy, "login Set-Cookie");
+            let cookie = login(bundled).await;
+            // Proxied JSON: the stub (like the daemon) sends its own CSP +
+            // XFO; the helper replaces them with this App's policy.
+            let pr = send(bundled, "GET", "/cli/thread?addr=room", &format!("{host}{cookie}"), "").await;
+            assert_eq!(pr.status, 200, "{}", pr.body);
+            assert!(pr.head.contains("X-Stub: yes"), "proxied: {}", pr.head);
+            assert_framed(&pr, policy, "proxied JSON");
+            let out = send(bundled, "POST", "/logout", &format!("{host}{SAME}{cookie}"), "").await;
+            assert_eq!(out.status, 200, "{}", out.body);
+            assert_framed(&out, policy, "logout Set-Cookie");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

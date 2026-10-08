@@ -1143,6 +1143,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0141_remote_connection_workspace_id",
             include_str!("../../drizzle_sql/0141_remote_connection_workspace_id.sql"),
         ),
+        // 0143 — published_services.frame_ancestors: per-App framing policy
+        // (`k2 publish frame`, prd-app-frame-ancestors-v1). 0135–0142 are
+        // reserved for other 0.45.x work; whichever ships after 0143 is
+        // renumbered 0144+ so names keep applying in release order.
+        (
+            "0143_published_services_frame_ancestors",
+            include_str!("../../drizzle_sql/0143_published_services_frame_ancestors.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1803,7 +1811,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0141_remote_connection_workspace_id",
+            last_name, "0143_published_services_frame_ancestors",
             "unexpected last migration name: {last_name}"
         );
     }

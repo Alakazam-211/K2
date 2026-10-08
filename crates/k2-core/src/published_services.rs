@@ -85,6 +85,9 @@ pub struct PublishedService {
     pub kind: String,
     /// Workspace-relative UI dir. Empty = bundled login + Thread chrome.
     pub skin_root: String,
+    /// Framing policy (migration 0143): `''` default, `none`, or extra
+    /// origins. See [`crate::frame_policy`].
+    pub frame_ancestors: String,
 }
 
 /// Frozen HTTP Service object (`GET /cli/publish/list`).
@@ -115,6 +118,19 @@ pub struct ServiceJson {
     /// on the wire; `default` only so older JSON still deserializes.
     #[serde(default)]
     pub skin_root: String,
+    /// Stored framing setting (FA4): `""` = default, `"none"`, or the
+    /// owner's extra origins, space-separated. `--skin` Apps only; a `--cmd`
+    /// App sets its own header.
+    #[serde(default)]
+    pub frame_ancestors: String,
+    /// The `frame-ancestors` source list the App answers with, or null for
+    /// a `--cmd` App (K2 does not touch its responses).
+    #[serde(default)]
+    pub frame_policy: Option<String>,
+    /// `--cmd` Apps: set when the App's own `GET /` is HTML without
+    /// `frame-ancestors` or `X-Frame-Options` (daemon probe). Null otherwise.
+    #[serde(default)]
+    pub frame_warning: Option<String>,
 }
 
 impl ServiceJson {
@@ -150,13 +166,24 @@ impl ServiceJson {
                 row.kind.clone()
             },
             skin_root: row.skin_root.clone(),
+            frame_ancestors: row.frame_ancestors.clone(),
+            frame_policy: if row.kind == KIND_SKIN {
+                Some(
+                    crate::frame_policy::FramePolicy::from_stored(&row.frame_ancestors)
+                        .map(|p| p.sources().to_string())
+                        .unwrap_or_else(|e| format!("invalid ({e})")),
+                )
+            } else {
+                None
+            },
+            frame_warning: None,
         }
     }
 }
 
 const COLS: &str = "id, project_id, name, cmd, cwd, port, expose, desired, pid, \
      last_exit_code, last_started_at, last_exited_at, error, created_at, updated_at, \
-     kind, skin_root";
+     kind, skin_root, frame_ancestors";
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
     Ok(PublishedService {
@@ -177,6 +204,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
         updated_at: row.get(14)?,
         kind: row.get::<_, String>(15).unwrap_or_else(|_| KIND_CMD.to_string()),
         skin_root: row.get::<_, String>(16).unwrap_or_default(),
+        frame_ancestors: row.get(17)?,
     })
 }
 
@@ -349,6 +377,26 @@ pub fn mark_exited(
     Ok(())
 }
 
+/// [`mark_exited`] for one specific child: a no-op when the row already
+/// records a different (newer) pid, so a late exit of a replaced helper
+/// cannot clear its successor.
+pub fn mark_exited_if_pid(
+    conn: &Connection,
+    project_id: &str,
+    name: &str,
+    pid: i64,
+    exit_code: Option<i64>,
+) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let now = now_unix();
+    let n = conn.execute(
+        "UPDATE published_services SET pid = NULL, last_exit_code = ?1, last_exited_at = ?2, \
+         updated_at = ?2 WHERE project_id = ?3 AND name = ?4 AND (pid IS NULL OR pid = ?5)",
+        params![exit_code, now, project_id, name, pid],
+    )?;
+    Ok(n > 0)
+}
+
 /// Hostname-step fail: stop-persist so boot cannot resurrect as local-only.
 pub fn mark_hostname_failed(
     conn: &Connection,
@@ -364,6 +412,23 @@ pub fn mark_hostname_failed(
         params![error, now, project_id, name],
     )?;
     Ok(())
+}
+
+/// Store the framing setting (already validated by
+/// [`crate::frame_policy`]). Returns false when no such service.
+pub fn set_frame_ancestors(
+    conn: &Connection,
+    project_id: &str,
+    name: &str,
+    stored: &str,
+) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let n = conn.execute(
+        "UPDATE published_services SET frame_ancestors = ?1, updated_at = ?2 \
+         WHERE project_id = ?3 AND name = ?4",
+        params![stored, now_unix(), project_id, name],
+    )?;
+    Ok(n > 0)
 }
 
 pub fn set_error(conn: &Connection, project_id: &str, name: &str, error: Option<&str>) -> Result<()> {
@@ -509,6 +574,9 @@ mod tests {
             "lastExitCode",
             "kind",
             "skinRoot",
+            "frameAncestors",
+            "framePolicy",
+            "frameWarning",
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }
@@ -551,6 +619,26 @@ mod tests {
         assert_eq!(row.last_exit_code, Some(1));
         assert_eq!(row.desired, DESIRED_RUNNING, "P4: desired stays running");
         assert!(row.last_exited_at.is_some());
+    }
+
+    #[test]
+    fn late_exit_of_a_replaced_child_keeps_the_new_pid() {
+        let conn = fresh();
+        let pid = project(&conn, "/tmp/pub-exit-pid");
+        insert(
+            &conn, &pid, "agents", CMD_SKIN_SENTINEL, "/tmp/pub-exit-pid", 9,
+            EXPOSE_LOCAL, DESIRED_RUNNING, KIND_SKIN, "",
+        )
+        .unwrap();
+        set_runtime(&conn, &pid, "agents", Some(200), None, Some(now_unix())).unwrap();
+        // The old child (pid 100) reports its exit after pid 200 took over.
+        assert!(!mark_exited_if_pid(&conn, &pid, "agents", 100, Some(0)).unwrap());
+        let row = get_by_project_name(&conn, &pid, "agents").unwrap().unwrap();
+        assert_eq!(row.pid, Some(200), "a late exit must not clear the successor");
+        assert!(mark_exited_if_pid(&conn, &pid, "agents", 200, Some(1)).unwrap());
+        let row = get_by_project_name(&conn, &pid, "agents").unwrap().unwrap();
+        assert_eq!(row.pid, None);
+        assert_eq!(row.last_exit_code, Some(1));
     }
 
     #[test]
@@ -670,5 +758,51 @@ mod tests {
             "",
         );
         assert!(bad.is_err(), "CHECK (kind IN cmd|skin) must reject other kinds");
+    }
+
+    /// 0143 + FA4: the framing setting defaults to '' (the App default),
+    /// round-trips, and the list JSON shows the raw value and the policy.
+    #[test]
+    fn frame_ancestors_defaults_roundtrips_and_shows_policy() {
+        let conn = fresh();
+        let pid = project(&conn, "/tmp/pub-frame");
+        let skin = insert(
+            &conn, &pid, "agents", CMD_SKIN_SENTINEL, "/tmp/pub-frame", 8788,
+            EXPOSE_LOCAL, DESIRED_STOPPED, KIND_SKIN, "",
+        )
+        .unwrap();
+        assert_eq!(skin.frame_ancestors, "", "existing and new rows start at the default");
+        let v = serde_json::to_value(ServiceJson::from_row(&skin, STATUS_STOPPED, None, None))
+            .unwrap();
+        assert_eq!(v["frameAncestors"], "");
+        assert_eq!(v["framePolicy"], "'self' tauri://localhost http://tauri.localhost");
+        assert!(v["frameWarning"].is_null());
+
+        assert!(set_frame_ancestors(&conn, &pid, "AGENTS", "https://partner.example").unwrap());
+        let row = get_by_project_name(&conn, &pid, "agents").unwrap().unwrap();
+        assert_eq!(row.frame_ancestors, "https://partner.example");
+        let v = serde_json::to_value(ServiceJson::from_row(&row, STATUS_STOPPED, None, None))
+            .unwrap();
+        assert_eq!(
+            v["framePolicy"],
+            "'self' tauri://localhost http://tauri.localhost https://partner.example"
+        );
+
+        assert!(set_frame_ancestors(&conn, &pid, "agents", "none").unwrap());
+        let row = get_by_project_name(&conn, &pid, "agents").unwrap().unwrap();
+        let v = serde_json::to_value(ServiceJson::from_row(&row, STATUS_STOPPED, None, None))
+            .unwrap();
+        assert_eq!(v["framePolicy"], "'none'");
+
+        assert!(!set_frame_ancestors(&conn, &pid, "missing", "").unwrap());
+
+        let cmd = insert(
+            &conn, &pid, "web", "npm start", "/tmp/pub-frame", 3000,
+            EXPOSE_LOCAL, DESIRED_STOPPED, KIND_CMD, "",
+        )
+        .unwrap();
+        let v = serde_json::to_value(ServiceJson::from_row(&cmd, STATUS_STOPPED, None, None))
+            .unwrap();
+        assert!(v["framePolicy"].is_null(), "K2 does not frame-guard a --cmd App's responses");
     }
 }

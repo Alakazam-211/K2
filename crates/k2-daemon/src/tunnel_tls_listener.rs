@@ -576,8 +576,9 @@ where
     }
     let resp = format!(
         "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n\
-         Cache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+         Cache-Control: no-store\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
         UNREACHABLE_BODY.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
         UNREACHABLE_BODY
     );
     let _ = tls.write_all(resp.as_bytes()).await;
@@ -685,8 +686,9 @@ async fn serve_one(
             let body = "Unknown subdomain";
             let resp = format!(
                 "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
+                 Content-Length: {}\r\n{frame}Connection: close\r\n\r\n{body}",
+                body.len(),
+                frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
             );
             let _ = tls.write_all(resp.as_bytes()).await;
             let _ = tls.flush().await;

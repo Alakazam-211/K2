@@ -1326,8 +1326,10 @@ async fn write_site_response(
          Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n\
          Access-Control-Allow-Headers: Content-Type\r\n\
          Cache-Control: no-store\r\n\
+         {frame}\
          Connection: close\r\n\r\n{body}",
         body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     let _ = stream.write_all(resp.as_bytes()).await;
 }

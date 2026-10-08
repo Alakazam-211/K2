@@ -15423,8 +15423,8 @@ cmd_schema() {
     },
     {
       "name": "hostmail",
-      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate|keep (IMAP/SMTP once secret; owner, or an IT agent (mail_manage) for any mailbox but its own workspace's — agents without mail_manage never get a mail password; mailbox-password sessions die, app passwords do not), app-password add|list|revoke|keep (extra labeled secrets; mail_manage, same own-mailbox rule for add/keep; secret once), person <addr> on|off (a person's mailbox: an IT agent may set its passwords even in its own workspace; only the owner turns it on for the IT agent's own workspace), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), backup status|plan|set (the box's backup mode, chosen by the it-email agent (mail_manage) with the client; no backups run yet), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate|keep (IMAP/SMTP once secret; owner, or an IT agent (mail_manage) for any mailbox but its own workspace's — agents without mail_manage never get a mail password; mailbox-password sessions die, app passwords do not), app-password add|list|revoke|keep (extra labeled secrets; mail_manage, same own-mailbox rule for add/keep; secret once), person <addr> on|off (a person's mailbox: an IT agent may set its passwords even in its own workspace; only the owner turns it on for the IT agent's own workspace), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -15501,6 +15501,45 @@ cmd_schema() {
       "args": [],
       "flags": [
         {"name": "--stalwart-acme", "arg": null, "description": "Manual -> Automatic locked to the mail host (Stalwart queues one order). Refused while K2 owns the certificate."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail backup status",
+      "usage": "k2 hostmail backup status [--json]",
+      "description": "The box's backup choice: mode (unconfigured until chosen | local | offsite-only | both | none), who set it and when, reason (none), window, retention, and the churn observer (daily listing of the Stalwart store: last run, days measured, bytes deleted/created per day, store size, free space, view root on the same filesystem). GET /cli/mail/backup; also backup in hostmail status --json. Read-only. No backups run in this release.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail backup plan",
+      "usage": "k2 hostmail backup plan [--bandwidth-mbps N] [--keep-daily N] [--keep-weekly N] [--max-local-gb G] [--json]",
+      "description": "Dry-run, changes nothing: per mode (local, offsite-only, both, none) the first-night and steady local disk use, offsite first/nightly upload size and rough time, offsite temp space, a conservative downtime estimate, and a free-space verdict OK/TIGHT/REFUSED against the floor max(5 GiB, 10% of the filesystem). Churn is measured over N days (3+) or an unmeasured conservative bound (10% of the store per day). Prints planHash for backup set --confirm-plan. GET /cli/mail/backup/plan; it-email agent (mail_manage) or owner/admin.",
+      "args": [],
+      "flags": [
+        {"name": "--bandwidth-mbps", "arg": "N", "description": "Upload bandwidth for the time estimates (default 50)."},
+        {"name": "--keep-daily", "arg": "N", "description": "Local daily views to plan for (default 7, or the box's current value)."},
+        {"name": "--keep-weekly", "arg": "N", "description": "Local weekly views to plan for (default 4, or current)."},
+        {"name": "--max-local-gb", "arg": "G", "description": "Hard cap on local backup bytes to plan for."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail backup set",
+      "usage": "k2 hostmail backup set --mode local|offsite-only|both|none [--reason <text>] [--keep-daily N --keep-weekly N] [--offsite-keep-daily N --offsite-keep-weekly N --offsite-keep-monthly N] [--window HH:MM-HH:MM] [--max-local-gb G] --confirm-plan <hash> [--json]",
+      "description": "Choose the box's backup mode (nothing runs yet: backups start in a later release). --confirm-plan must be the current planHash of backup plan run with the same retention flags (else plan_changed). none needs --reason. offsite-only/both are refused until the owner sets an offsite destination (later release). local is refused when the plan's local verdict is REFUSED. Records who, workspace, when, old -> new. POST /cli/mail/backup/set; it-email agent (mail_manage) or owner/admin.",
+      "args": [],
+      "flags": [
+        {"name": "--mode", "arg": "local|offsite-only|both|none", "description": "The mode. Required."},
+        {"name": "--reason", "arg": "TEXT", "description": "Why there is no backup (mode none only; required there)."},
+        {"name": "--keep-daily", "arg": "N", "description": "Local daily views (default 7; minimum 1)."},
+        {"name": "--keep-weekly", "arg": "N", "description": "Local weekly views (default 4)."},
+        {"name": "--offsite-keep-daily", "arg": "N", "description": "Offsite daily snapshots (default 7)."},
+        {"name": "--offsite-keep-weekly", "arg": "N", "description": "Offsite weekly snapshots (default 4)."},
+        {"name": "--offsite-keep-monthly", "arg": "N", "description": "Offsite monthly snapshots (default 6)."},
+        {"name": "--window", "arg": "HH:MM-HH:MM", "description": "Nightly window, box time (default 03:30-04:30)."},
+        {"name": "--max-local-gb", "arg": "G", "description": "Hard cap on local backup bytes."},
+        {"name": "--confirm-plan", "arg": "HASH", "description": "planHash from backup plan. Required."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -17801,6 +17840,9 @@ OWNER VERBS — EXIT 3 (leftover M6)
 MAIL_MANAGE AGENTS
   With the workspace toggle on: status, doctor, approvals, grant,
   config (--workspace, including addressCap), import.
+  Backup: `k2 hostmail backup plan`, agree a mode with the client, then
+  `k2 hostmail backup set --mode … --confirm-plan <hash>` (no backups
+  run yet; restore and the offsite destination stay owner).
 
 HOSTMAIL TOGGLE
   Default off. Owner/Admin: Settings → Workspaces → (this
@@ -26828,6 +26870,11 @@ _mail_py() {
     M_FORCE="${M_FORCE:-false}" \
     M_CERT_ACTION="${M_CERT_ACTION:-}" \
     M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
+    M_BK_MODE="${M_BK_MODE:-}" M_BK_BANDWIDTH="${M_BK_BANDWIDTH:-}" \
+    M_BK_KEEP_DAILY="${M_BK_KEEP_DAILY:-}" M_BK_KEEP_WEEKLY="${M_BK_KEEP_WEEKLY:-}" \
+    M_BK_OFF_DAILY="${M_BK_OFF_DAILY:-}" M_BK_OFF_WEEKLY="${M_BK_OFF_WEEKLY:-}" \
+    M_BK_OFF_MONTHLY="${M_BK_OFF_MONTHLY:-}" M_BK_WINDOW="${M_BK_WINDOW:-}" \
+    M_BK_MAX_LOCAL_GB="${M_BK_MAX_LOCAL_GB:-}" M_BK_CONFIRM="${M_BK_CONFIRM:-}" \
     python3 - <<'PYEOF'
 import base64, json, os, socket, sys, time
 import urllib.error, urllib.parse, urllib.request
@@ -28315,6 +28362,153 @@ elif verb == "cert_owner":
                 print("           K2 issues, installs and renews it; Stalwart ACME stays Manual.")
             elif acme.get("type") == "Manual":
                 print("           Stalwart ACME is off and K2 does not own it — %s" % (d.get("restoreCommand") or "k2 hostmail cert owner --stalwart-acme"))
+
+elif verb in ("backup_status", "backup_plan", "backup_set"):
+    # S8 B1 hosted-mail backup (no backups run yet).
+    def _gib(n):
+        try:
+            n = float(n)
+        except (TypeError, ValueError):
+            return "?"
+        if abs(n) >= (1 << 30):
+            return "%.1f GiB" % (n / (1 << 30))
+        if abs(n) >= (1 << 20):
+            return "%.0f MiB" % (n / (1 << 20))
+        return "%d B" % n
+    def _dur(secs):
+        try:
+            s = int(secs)
+        except (TypeError, ValueError):
+            return "?"
+        if s < 120:
+            return "%d s" % s
+        if s < 7200:
+            return "%d min" % (s // 60)
+        return "%.1f h" % (s / 3600.0)
+    def _print_backup(b):
+        print("mode     : %s" % (b.get("mode") or "?"))
+        if b.get("configuredBy"):
+            ws = (" (%s)" % b["configuredWorkspace"]) if b.get("configuredWorkspace") else ""
+            print("set by   : %s%s, %s" % (b["configuredBy"], ws, unix_ago(b.get("configuredAt"))))
+        if b.get("reason"):
+            print("reason   : %s" % b["reason"])
+        if b.get("window"):
+            print("window   : %s (box time)" % b["window"])
+        r = b.get("retention") or {}
+        if r:
+            loc = r.get("local") or {}
+            off = r.get("offsite") or {}
+            cap = loc.get("maxLocalGb")
+            print("retention: local %s daily + %s weekly%s; offsite %s/%s/%s (d/w/m)" % (
+                loc.get("keepDaily"), loc.get("keepWeekly"),
+                (", max %s GiB" % cap) if cap else "",
+                off.get("keepDaily"), off.get("keepWeekly"), off.get("keepMonthly")))
+        o = b.get("observer") or {}
+        line = "observer : %s" % (o.get("status") or "never")
+        if o.get("lastSuccess"):
+            line += ", last %s" % unix_ago(o["lastSuccess"])
+        line += ", %s day(s) of churn" % (o.get("days") or 0)
+        print(line)
+        cp = o.get("churnPerDay") or {}
+        if o.get("days"):
+            print("churn    : deleted %s/day (worst %s), new %s/day%s" % (
+                _gib(cp.get("deletedBytes")), _gib(cp.get("maxDeletedBytes")),
+                _gib(cp.get("createdBytes")), "" if cp.get("measured") else " — not yet measured (3 days)"))
+        if o.get("storeBytes") is not None:
+            print("store    : %s (mutable %s); fs free %s of %s; view root same fs: %s" % (
+                _gib(o.get("storeBytes")), _gib(o.get("mutableBytes")), _gib(o.get("fsFree")),
+                _gib(o.get("fsTotal")), {True: "yes", False: "NO"}.get(o.get("sameFs"), "?")))
+        if o.get("lastError"):
+            print("obs err  : %s" % o["lastError"])
+        if b.get("configError"):
+            print("config   : %s" % b["configError"])
+        print("note     : %s" % (b.get("note") or ""))
+    if verb == "backup_status":
+        d = call("GET", "/cli/mail/backup")
+        if as_json:
+            print(dumps(d))
+        else:
+            _print_backup(d.get("backup") or {})
+    elif verb == "backup_plan":
+        params = {}
+        for k, e in (("bandwidthMbps", "M_BK_BANDWIDTH"), ("keepDaily", "M_BK_KEEP_DAILY"),
+                     ("keepWeekly", "M_BK_KEEP_WEEKLY"), ("maxLocalGb", "M_BK_MAX_LOCAL_GB")):
+            if env(e):
+                params[k] = env(e)
+        # A store listing on a big box takes a moment.
+        d = call("GET", "/cli/mail/backup/plan", params=params, timeout=120)
+        if as_json:
+            print(dumps(d))
+        else:
+            st = d.get("store") or {}
+            ch = d.get("churn") or {}
+            print("store    : %s at %s (%s files hard-linkable, mutable %s, /etc/stalwart %s, K2 half %s)" % (
+                _gib(st.get("bytes")), st.get("path"), st.get("immutableFiles"),
+                _gib(st.get("mutableBytes")), _gib(st.get("configBytes")), _gib(st.get("k2HalfBytes"))))
+            print("disk     : free %s of %s; floor %s; %s same filesystem: %s" % (
+                _gib(st.get("fsFree")), _gib(st.get("fsTotal")), _gib(st.get("floorBytes")),
+                st.get("viewRoot"), {True: "yes", False: "NO"}.get(st.get("sameFs"), "unknown")))
+            print("churn    : %s — deleted %s/day (worst %s), new %s/day" % (
+                ch.get("label"), _gib(ch.get("deletedPerDay")), _gib(ch.get("maxDeletedPerDay")),
+                _gib(ch.get("createdPerDay"))))
+            r = d.get("retention") or {}
+            loc = r.get("local") or {}
+            off = r.get("offsite") or {}
+            print("retention: local %s daily + %s weekly%s; offsite %s/%s/%s (d/w/m); window %s" % (
+                loc.get("keepDaily"), loc.get("keepWeekly"),
+                (", max %s GiB" % loc["maxLocalGb"]) if loc.get("maxLocalGb") else "",
+                off.get("keepDaily"), off.get("keepWeekly"), off.get("keepMonthly"), d.get("window")))
+            mbps = d.get("bandwidthMbps")
+            for name in ("local", "offsite-only", "both", "none"):
+                m = (d.get("modes") or {}).get(name) or {}
+                print("")
+                head = "%-12s verdict %s" % (name, (m.get("verdict") or "?").upper())
+                if m.get("available") is False:
+                    head += "  (not available yet: %s)" % (m.get("unavailableReason") or "")
+                print(head)
+                if name == "none":
+                    print("  nothing runs; --reason is required and recorded")
+                    continue
+                print("  local disk : first night %s, steady %s, peak %s (free after %s)" % (
+                    _gib(m.get("firstNightLocalBytes")), _gib(m.get("steadyLocalBytes")),
+                    _gib(m.get("peakBytes")), _gib(m.get("freeAfterBytes"))))
+                o = m.get("offsite")
+                if isinstance(o, dict):
+                    fu = o.get("firstUploadBytes") or {}
+                    print("  offsite    : first upload %s–%s (~%s at %s Mbit/s), nightly %s (~%s)" % (
+                        _gib(fu.get("low")), _gib(fu.get("high")), _dur(o.get("firstUploadSecs")), mbps,
+                        _gib(o.get("nightlyUploadBytes")), _dur(o.get("nightlyUploadSecs"))))
+                    print("  temp space : first %s, nightly %s" % (
+                        _gib(o.get("firstTempBytes")), _gib(o.get("nightlyTempBytes"))))
+                print("  downtime   : ~%s nightly (%s)" % (_dur(m.get("downtimeSecs")), m.get("downtimeLabel") or ""))
+                print("  protects   : %s" % (m.get("protects") or ""))
+            print("")
+            for n in d.get("notes") or []:
+                print("note     : %s" % n)
+            print("planHash : %s" % d.get("planHash"))
+            print("next     : k2 hostmail backup set --mode <local|none> [same retention flags] --confirm-plan %s" % d.get("planHash"))
+    else:
+        body = {"mode": env("M_BK_MODE"), "confirmPlan": env("M_BK_CONFIRM")}
+        if env("M_REASON"):
+            body["reason"] = env("M_REASON")
+        for k, e in (("keepDaily", "M_BK_KEEP_DAILY"), ("keepWeekly", "M_BK_KEEP_WEEKLY"),
+                     ("offsiteKeepDaily", "M_BK_OFF_DAILY"), ("offsiteKeepWeekly", "M_BK_OFF_WEEKLY"),
+                     ("offsiteKeepMonthly", "M_BK_OFF_MONTHLY")):
+            if env(e):
+                body[k] = int(env(e))
+        if env("M_BK_WINDOW"):
+            body["window"] = env("M_BK_WINDOW")
+        if env("M_BK_MAX_LOCAL_GB"):
+            try:
+                body["maxLocalGb"] = float(env("M_BK_MAX_LOCAL_GB"))
+            except ValueError:
+                die({"code": "usage", "hint": "--max-local-gb must be a number of GiB, got '%s'" % env("M_BK_MAX_LOCAL_GB")})
+        d = call("POST", "/cli/mail/backup/set", body=body, timeout=120)
+        if as_json:
+            print(dumps(d))
+        else:
+            print("backup mode: %s → %s" % (d.get("from") or "?", (d.get("backup") or {}).get("mode") or "?"))
+            _print_backup(d.get("backup") or {})
 
 elif verb == "cert_names":
     # CAL44: per-name certificates for the extra mail-family names.
@@ -30235,6 +30429,7 @@ cmd_hostmail() {
         disable) cmd_hostmail_disable "$@" ;;
         uninstall) cmd_hostmail_uninstall "$@" ;;
         upgrade) cmd_hostmail_upgrade "$@" ;;
+        backup)  cmd_hostmail_backup "$@" ;;
         rotate-admin) cmd_hostmail_rotate_admin "$@" ;;
         password) cmd_hostmail_password "$@" ;;
         app-password) cmd_hostmail_app_password "$@" ;;
@@ -30267,7 +30462,7 @@ cmd_hostmail() {
         profile) cmd_hostmail_profile "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
             exit 2 ;;
     esac
 }
@@ -30672,6 +30867,112 @@ cmd_hostmail_cert_renew() {
         esac
     done
     local M_VERB="cert_renew" M_JSON="$as_json"
+    _mail_py
+}
+
+# S8 B1 hosted-mail backup: the per-box choice. status = GET
+# /cli/mail/backup; plan = GET /cli/mail/backup/plan (dry-run, changes
+# nothing); set = POST /cli/mail/backup/set. B1 runs no backups.
+cmd_hostmail_backup() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_backup; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        status) cmd_hostmail_backup_status "$@" ;;
+        plan)   cmd_hostmail_backup_plan "$@" ;;
+        set)    cmd_hostmail_backup_set "$@" ;;
+        --help|-h) cmd_help_hostmail_backup; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown backup command '$sub' — usage: k2 hostmail backup <status|plan|set>"
+            exit 2 ;;
+    esac
+}
+
+_hostmail_backup_count() {
+    # $1 flag name, $2 value: a whole number or exit 2 before any request.
+    case "$2" in
+        ''|*[!0-9]*) _mail_err "usage" "$1 must be a whole number, got '$2'"; exit 2 ;;
+    esac
+}
+
+cmd_hostmail_backup_status() {
+    if _wants_help "$@"; then cmd_help_hostmail_backup_status; exit 0; fi
+    local as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *) _mail_err "usage" "unexpected argument '$1' — usage: k2 hostmail backup status [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="backup_status" M_JSON="$as_json"
+    _mail_py
+}
+
+cmd_hostmail_backup_plan() {
+    if _wants_help "$@"; then cmd_help_hostmail_backup_plan; exit 0; fi
+    local as_json=false mbps="" kd="" kw="" gb=""
+    local usage="usage: k2 hostmail backup plan [--bandwidth-mbps N] [--keep-daily N] [--keep-weekly N] [--max-local-gb G] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --bandwidth-mbps|--keep-daily|--keep-weekly|--max-local-gb)
+                [ $# -ge 2 ] || { _mail_err "usage" "$1 requires a value — $usage"; exit 2; }
+                case "$1" in
+                    --bandwidth-mbps) mbps="$2" ;;
+                    --keep-daily) _hostmail_backup_count "$1" "$2"; kd="$2" ;;
+                    --keep-weekly) _hostmail_backup_count "$1" "$2"; kw="$2" ;;
+                    --max-local-gb) gb="$2" ;;
+                esac
+                shift 2 ;;
+            *) _mail_err "usage" "unexpected argument '$1' — $usage"; exit 2 ;;
+        esac
+    done
+    local M_VERB="backup_plan" M_JSON="$as_json" M_BK_BANDWIDTH="$mbps" \
+          M_BK_KEEP_DAILY="$kd" M_BK_KEEP_WEEKLY="$kw" M_BK_MAX_LOCAL_GB="$gb"
+    _mail_py
+}
+
+cmd_hostmail_backup_set() {
+    if _wants_help "$@"; then cmd_help_hostmail_backup_set; exit 0; fi
+    local as_json=false mode="" reason="" kd="" kw="" okd="" okw="" okm="" window="" gb="" confirm=""
+    local usage="usage: k2 hostmail backup set --mode local|offsite-only|both|none [--reason <text>] [--keep-daily N --keep-weekly N] [--offsite-keep-daily N --offsite-keep-weekly N --offsite-keep-monthly N] [--window HH:MM-HH:MM] [--max-local-gb G] --confirm-plan <hash> [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --mode|--reason|--keep-daily|--keep-weekly|--offsite-keep-daily|--offsite-keep-weekly|--offsite-keep-monthly|--window|--max-local-gb|--confirm-plan)
+                [ $# -ge 2 ] || { _mail_err "usage" "$1 requires a value — $usage"; exit 2; }
+                case "$1" in
+                    --mode) mode="$2" ;;
+                    --reason) reason="$2" ;;
+                    --keep-daily) _hostmail_backup_count "$1" "$2"; kd="$2" ;;
+                    --keep-weekly) _hostmail_backup_count "$1" "$2"; kw="$2" ;;
+                    --offsite-keep-daily) _hostmail_backup_count "$1" "$2"; okd="$2" ;;
+                    --offsite-keep-weekly) _hostmail_backup_count "$1" "$2"; okw="$2" ;;
+                    --offsite-keep-monthly) _hostmail_backup_count "$1" "$2"; okm="$2" ;;
+                    --window) window="$2" ;;
+                    --max-local-gb) gb="$2" ;;
+                    --confirm-plan) confirm="$2" ;;
+                esac
+                shift 2 ;;
+            *) _mail_err "usage" "unexpected argument '$1' — $usage"; exit 2 ;;
+        esac
+    done
+    case "$mode" in
+        local|offsite-only|both|none) ;;
+        '') _mail_err "usage" "--mode is required — $usage"; exit 2 ;;
+        *) _mail_err "usage" "--mode must be local, offsite-only, both or none (got '$mode')"; exit 2 ;;
+    esac
+    if [ "$mode" = "none" ] && [ -z "$reason" ]; then
+        _mail_err "usage" "--mode none needs --reason \"<why>\" (e.g. \"provider snapshots daily\")"
+        exit 2
+    fi
+    if [ -z "$confirm" ]; then
+        _mail_err "usage" "--confirm-plan <hash> is required — run k2 hostmail backup plan (same retention flags) and pass its planHash"
+        exit 2
+    fi
+    local M_VERB="backup_set" M_JSON="$as_json" M_BK_MODE="$mode" M_REASON="$reason" \
+          M_BK_KEEP_DAILY="$kd" M_BK_KEEP_WEEKLY="$kw" M_BK_OFF_DAILY="$okd" \
+          M_BK_OFF_WEEKLY="$okw" M_BK_OFF_MONTHLY="$okm" M_BK_WINDOW="$window" \
+          M_BK_MAX_LOCAL_GB="$gb" M_BK_CONFIRM="$confirm"
     _mail_py
 }
 
@@ -33177,6 +33478,10 @@ COMMANDS
                               stop → snapshot → install → health check,
                               rolls back on failure. Owner-only, never
                               automatic. --dry-run prints the plan + outage.
+  backup status|plan|set      The box's backup choice (local|offsite-only|
+                              both|none), chosen by the it-email agent with
+                              the client after `backup plan`. No backups run
+                              in this release; unconfigured until chosen.
   rotate-admin                Rotate leftover recovery principal `admin` and
                               the provisioned admin password. Does not wipe
                               the store. enable no-op is not rotate.
@@ -33527,6 +33832,122 @@ OWNERS
   owns it — first `k2 domain name remove <mail host>`. K2 never flips it
   back by itself. One Stalwart setting, no restart; never
   `k2 hostmail disable/enable`. Owner/admin only.
+EOF
+}
+
+cmd_help_hostmail_backup() {
+    cat <<'EOF'
+k2 hostmail backup — choose how this box backs up its hosted mail.
+
+Backup is a per-box choice the box's it-email agent makes WITH the client.
+It stays "unconfigured" until someone chooses; the doctor reminds.
+
+THIS RELEASE RUNS NO BACKUPS. It records the choice and measures churn
+(a daily listing of the Stalwart store — no stop, no copy, no sudo) so
+`plan` gives real numbers. Local frozen views and offsite uploads come in
+later releases. Restore and the offsite destination are owner-only.
+
+USAGE
+  k2 hostmail backup status [--json]
+  k2 hostmail backup plan   [--bandwidth-mbps N] [--keep-daily N] [--keep-weekly N]
+                            [--max-local-gb G] [--json]
+  k2 hostmail backup set    --mode local|offsite-only|both|none [--reason <text>]
+                            [retention flags] [--window HH:MM-HH:MM]
+                            [--max-local-gb G] --confirm-plan <hash> [--json]
+
+MODES
+  local         a nightly frozen view (hard links, same filesystem): seconds
+                of downtime, no full copy. Protects against logical damage,
+                NOT disk failure (the view shares inodes with the store).
+  offsite-only  view → encrypted upload → view deleted. Temporary space only.
+                Not available until the owner sets a destination (later).
+  both          local + offsite. Not available until a destination exists.
+  none          nothing runs; --reason is required and recorded.
+
+WHO
+  The box's it-email agent (Settings → Workspaces → Allow agents to manage
+  hosted mail on this host) or the owner/admin. Every change is recorded
+  (who, workspace, when, old → new).
+
+Run `k2 hostmail backup <command> --help` for details.
+EOF
+}
+
+cmd_help_hostmail_backup_status() {
+    cat <<'EOF'
+The box's backup choice and the churn observer.
+
+USAGE
+  k2 hostmail backup status [--json]
+
+Prints mode (unconfigured until chosen), who set it and when, the reason
+(mode none), window, retention, and the observer: last run, days of churn
+measured, bytes deleted/created per day, store size, free space and
+whether the view root is on the store's filesystem. GET /cli/mail/backup
+(also `backup` in `k2 hostmail status --json`). Read-only.
+EOF
+}
+
+cmd_help_hostmail_backup_plan() {
+    cat <<'EOF'
+Dry-run: what each backup mode would cost on THIS box. Changes nothing.
+
+USAGE
+  k2 hostmail backup plan [--bandwidth-mbps N] [--keep-daily N]
+                          [--keep-weekly N] [--max-local-gb G] [--json]
+
+PER MODE (local, offsite-only, both, none)
+  local disk    first night (mutable files + /etc/stalwart + K2 half) and
+                steady state (views + churn deleted while views are kept,
+                capped by --max-local-gb)
+  offsite       first upload (≈ the store, shown as a range) and nightly
+                upload (≈ churn), rough time at --bandwidth-mbps (default
+                50), and the temporary space an upload needs
+  downtime      a conservative estimate (not measured yet)
+  verdict       OK / TIGHT / REFUSED against the free-space floor
+                max(5 GiB, 10% of the filesystem)
+
+Churn is "measured over N days" once the observer has 3 days, else
+"unmeasured — conservative bound" (10% of the store per day).
+
+planHash
+  Pass it to `k2 hostmail backup set --confirm-plan <hash>` with the SAME
+  --keep-daily/--keep-weekly/--max-local-gb. It changes when the numbers
+  change (rounded to GiB), so a stale plan is refused.
+
+GET /cli/mail/backup/plan. it-email agent (mail-manage) or owner/admin.
+EOF
+}
+
+cmd_help_hostmail_backup_set() {
+    cat <<'EOF'
+Choose this box's backup mode. Nothing runs yet: backups start in a later
+release; status says so.
+
+USAGE
+  k2 hostmail backup set --mode local|offsite-only|both|none
+                         [--reason <text>]                 (required for none)
+                         [--keep-daily N] [--keep-weekly N]           (7 / 4)
+                         [--offsite-keep-daily N] [--offsite-keep-weekly N]
+                         [--offsite-keep-monthly N]                (7 / 4 / 6)
+                         [--window HH:MM-HH:MM]          (03:30-04:30 box time)
+                         [--max-local-gb G]
+                         --confirm-plan <hash> [--json]
+
+RULES
+  --confirm-plan   the planHash of `k2 hostmail backup plan` run with the
+                   same retention flags; a changed plan is refused
+                   (plan_changed) — run plan again.
+  none             needs --reason (e.g. "provider snapshots daily").
+  offsite-only, both
+                   refused until the owner sets an offsite destination
+                   (a later release).
+  local            refused when the plan's local verdict is REFUSED (it
+                   would not fit above the free-space floor).
+
+Unset flags keep the box's current values (or the defaults).
+POST /cli/mail/backup/set. it-email agent (mail-manage) or owner/admin;
+recorded with who, workspace, when, old → new.
 EOF
 }
 

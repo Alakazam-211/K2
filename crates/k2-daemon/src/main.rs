@@ -1311,6 +1311,12 @@ async fn async_main() {
     // Skips under air-gap. Never Stalwart's or Caddy's own certificates.
     domains::renew::spawn();
 
+    // Hosted-mail backup B1: the churn observer (Linux, hostmail installed
+    // only). One detached thread, first tick ~10 min after boot, then
+    // hourly; lists the Stalwart store once a day. Never stops Stalwart,
+    // never copies data, never sudo.
+    mail::backup::spawn_observer();
+
     // P19: re-assert CLI folder trust after ready (never blocks the gate;
     // worktree cwds not in projects.path are covered by spawn P16).
     tokio::spawn(async move {

@@ -1641,6 +1641,11 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
             .checks
             .extend(super::agent_creds::doctor_person_checks());
     }
+    // S8 B1: backup mode chosen? churn observer healthy? Server-level
+    // runs only; warn/info, never gates_direct.
+    if domain_id.is_none() {
+        report.checks.push(super::backup::doctor_check());
+    }
     let (grade, direct_blockers) = grade_of(&report.checks);
     report.grade = grade;
     report.direct_blockers = direct_blockers;

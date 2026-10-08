@@ -1111,6 +1111,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0135_session_handle_aliases",
             include_str!("../../drizzle_sql/0135_session_handle_aliases.sql"),
         ),
+        // 0136 — hosted-mail backup S8 B1 (prd-hostmail-backup-v1):
+        // mail_server.backup_config_json (the per-box mode; NULL =
+        // unconfigured) + backup_state_json (churn observer summaries) +
+        // mail_backup_inventory (the latest immutable-file inventory).
+        // 0135 is reserved (Thread survives tab rename); 0130 is retired.
+        (
+            "0136_hostmail_backup",
+            include_str!("../../drizzle_sql/0136_hostmail_backup.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1771,7 +1780,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0135_session_handle_aliases",
+            last_name, "0136_hostmail_backup",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1816,6 +1825,48 @@ mod tests {
             "../../drizzle_sql/0135_session_handle_aliases.sql"
         ))
         .expect("0135 re-apply must be a no-op");
+    }
+
+    /// 0136 (hosted-mail backup B1): the two mail_server columns and the
+    /// inventory table exist, start empty, and a re-run is a no-op.
+    #[test]
+    fn hostmail_backup_migration_adds_config_state_and_inventory() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+             VALUES (1, 'running', '0.16.20', 1)",
+            [],
+        )
+        .unwrap();
+        let (cfg, state): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT backup_config_json, backup_state_json FROM mail_server WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((cfg, state), (None, None), "NULL = unconfigured / never observed");
+        conn.execute(
+            "INSERT INTO mail_backup_inventory (rel_path, bytes, mtime) VALUES ('data/000001.sst', 10, 5)",
+            [],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO mail_backup_inventory (rel_path, bytes, mtime) VALUES ('data/000001.sst', 11, 6)",
+            [],
+        );
+        assert!(dup.is_err(), "rel_path is the primary key");
+        run_single_migration(
+            &conn,
+            "0136_hostmail_backup_rerun",
+            include_str!("../../drizzle_sql/0136_hostmail_backup.sql"),
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM mail_backup_inventory", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "re-running 0136 keeps the inventory");
     }
 
     /// 0132 (k2 sidecar v1): the switch backfills ON only for

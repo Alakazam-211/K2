@@ -78,6 +78,9 @@
 //! | GET  /cli/mail/footer             | mail/footer.rs         |
 //! | POST /cli/mail/footer             | mail/footer.rs         |
 //! | POST /cli/mail/footer/unset       | mail/footer.rs         |
+//! | GET  /cli/mail/backup             | mail/backup.rs         |
+//! | GET  /cli/mail/backup/plan        | mail/backup.rs         |
+//! | POST /cli/mail/backup/set         | mail/backup.rs         |
 //! | GET  /cli/mail/app-password       | mail/app_password.rs   |
 //! | POST /cli/mail/app-password       | mail/app_password.rs   |
 //! | POST /cli/mail/app-password/revoke| mail/app_password.rs   |
@@ -221,6 +224,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Who owns the mail certificate (GET = state; POST = the owner
         // command {action: stalwart-acme}). Same gate as cert/renew.
         "/cli/mail/cert/owner" => crate::mail::cert_owner::handle_get(params),
+        // S8 B1 backup: status (plain read) + the plan dry-run (mail-manage,
+        // no side effects). The mode write is POST /cli/mail/backup/set.
+        "/cli/mail/backup" => crate::mail::backup::handle_status_get(params),
+        "/cli/mail/backup/plan" => crate::mail::backup::handle_plan(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -291,7 +298,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/bans/clear"
         | "/cli/mail/allowlist/add"
         | "/cli/mail/allowlist/remove"
-        | "/cli/mail/bans/migrate/restore" => CliResponse::method_not_allowed(),
+        | "/cli/mail/bans/migrate/restore"
+        | "/cli/mail/backup/set" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -413,6 +421,8 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         // Calendars S6: Apple setup profile — mints a fresh app password
         // into an unsigned .mobileconfig. Owner/admin (is_owner_level_mutation).
         "/cli/mail/profile" => crate::mail::profile::handle_profile(body),
+        // S8 B1: choose the box's backup mode (mail-manage; nothing runs yet).
+        "/cli/mail/backup/set" => crate::mail::backup::handle_set(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -594,6 +604,11 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/allowlist/remove"
             | "/cli/mail/bans/migrate"
             | "/cli/mail/bans/migrate/restore"
+            // S8 B1 backup (PRD §10a): the box's it-email agent plans and
+            // sets mode/retention/window. Status is a plain read; restore and
+            // the offsite destination are not here (owner-only, later slices).
+            | "/cli/mail/backup/plan"
+            | "/cli/mail/backup/set"
     )
 }
 
@@ -908,6 +923,8 @@ mod tests {
             "/cli/mail/allowlist/remove",
             "/cli/mail/bans/migrate",
             "/cli/mail/bans/migrate/restore",
+            "/cli/mail/backup/plan",
+            "/cli/mail/backup/set",
         ] {
             assert!(is_mail_manage_surface(p), "M5: {p}");
         }

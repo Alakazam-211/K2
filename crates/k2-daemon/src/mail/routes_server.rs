@@ -91,6 +91,7 @@ fn unsupported() -> CliResponse {
 ///   "helperFix": <root install command — only when helper != installed>,
 ///   "upgradeAvailable": <installed version present and != pinnedVersion>,
 ///   "upgrade": <last `k2 hostmail upgrade` record | null>,
+///   "backup": <S8 B1 mode + churn observer — mail::backup::status_json>,
 ///   "health": <live verdict — only present with ?health=1 on Linux> }
 /// ```
 ///
@@ -198,6 +199,8 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     // K2-issued certificate renewal (domains::renew): the mail host's
     // renewal state + the background renewer's last scan. Local reads.
     body["certRenewal"] = crate::domains::renew::mail_status_json(hostname.as_deref());
+    // S8 B1: the box's backup choice + churn observer (local reads only).
+    body["backup"] = crate::mail::backup::status_json(installed);
     // Who owns the mail certificate (mail::cert_owner — the one K2-issuer
     // definition): k2 | stalwart-acme | unknown. Local reads only.
     if let Some(cert) = body.get_mut("cert").and_then(|c| c.as_object_mut()) {

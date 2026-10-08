@@ -437,6 +437,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/archive", Member),
     both("/cli/mail/attachments", Member),
     both("/cli/mail/autoconfig", Admin),
+    // S8 B1 backup: status read (like /cli/mail/status), plan + set are
+    // mail-manage (Admin floor for logins, like quota/cert).
+    get("/cli/mail/backup", Member),
+    get("/cli/mail/backup/plan", Admin),
+    post("/cli/mail/backup/set", Admin),
     both("/cli/mail/bans", Admin),
     post("/cli/mail/bans/clear", Admin),
     both("/cli/mail/bans/migrate", Admin),

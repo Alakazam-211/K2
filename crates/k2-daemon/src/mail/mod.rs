@@ -115,6 +115,8 @@ pub mod catchall;
 pub mod cert_names;
 pub mod cert_owner;
 pub mod autoconfig;
+// S8 B1: backup mode choice + churn observer + plan (no backups run yet).
+pub mod backup;
 pub mod config;
 pub mod dav;
 pub mod dns_verify;

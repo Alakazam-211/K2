@@ -3810,6 +3810,12 @@ pub struct MailServer {
     /// 0129: explicit Stalwart upgrade progress + outcome (`state`, `from`,
     /// `to`, `steps`, `snapshotDir`, …). NULL = never upgraded.
     pub upgrade_progress_json: Option<String>,
+    /// 0136: hosted-mail backup mode chosen for this box (`mode`,
+    /// retention, window, `configuredBy`, …). NULL = unconfigured.
+    pub backup_config_json: Option<String>,
+    /// 0136: the backup churn observer (last run/error + up to 30 daily
+    /// summaries). NULL = never observed.
+    pub backup_state_json: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

@@ -442,12 +442,8 @@ async fn live_issue_async(
             let _ = store::save_acme_config(&cfg);
             let dir = store::certs_root();
             let _ = std::fs::create_dir_all(&dir);
-            let path = store::acme_account_path();
-            let _ = std::fs::write(&path, body);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            if let Err(e) = store::save_acme_account(&body) {
+                k2_core::log_debug!("[domains/acme] save account credentials: {e}");
             }
         }
     }

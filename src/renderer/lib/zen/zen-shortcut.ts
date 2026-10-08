@@ -88,3 +88,120 @@ export function dispatchZenShortcutsMenu(): void {
   if (typeof window === 'undefined') return
   window.dispatchEvent(new Event(ZEN_SHORTCUTS_MENU_EVENT))
 }
+
+// ── Chords forwarded out of a sealed widget frame (prd-zen-user-widgets-v2
+// UW33, UW58) ─────────────────────────────────────────────────────────────
+//
+// Keys typed in a focused widget frame never reach this window's listeners:
+// not the Linux / Windows Ctrl+Alt+Z capture listener above, not the Garden
+// keys (⌥⌘1–9, `lib/home-shortcuts.ts`), not the theme keys (⌃⌘. / ⌃⌘⇧.,
+// Ctrl+Alt+. on Linux, `zen-theme-switch.ts`). K2's frame runtime (the shim,
+// `sdk/k2-runtime.js`) watches keydown inside the frame and forwards a fixed
+// set as `{chord: <name>}` over the widget's port. It must forward only
+// trusted events (`e.isTrusted`), so a widget can't fake a key press by
+// dispatching a synthetic event. The host acts on a forwarded chord only
+// while that frame has focus, and at most once every 500 ms. On macOS ⌃⌘Z
+// is a native menu accelerator and works whatever has focus, so the shim
+// forwards no exit chord there. The Zen toggle stays clickable outside
+// every frame.
+
+/** Every chord a widget frame may forward (UW33). */
+export const ZEN_FORWARDED_CHORDS = [
+  'zen-exit',
+  'garden-1',
+  'garden-2',
+  'garden-3',
+  'garden-4',
+  'garden-5',
+  'garden-6',
+  'garden-7',
+  'garden-8',
+  'garden-9',
+  'theme-next',
+  'theme-prev',
+] as const
+
+export type ZenForwardedChord = (typeof ZEN_FORWARDED_CHORDS)[number]
+
+export function isZenForwardedChord(x: unknown): x is ZenForwardedChord {
+  return typeof x === 'string' && (ZEN_FORWARDED_CHORDS as readonly string[]).includes(x)
+}
+
+/** A keydown as the shim sees it. */
+export interface ZenFrameKeyLike extends ZenKeyEventLike {
+  isTrusted?: boolean
+  repeat?: boolean
+}
+
+/**
+ * The chord a keydown inside a widget frame stands for, or null: the
+ * reference the shim mirrors (the runtime keeps its own copy in plain JS;
+ * a test should check the two agree). Untrusted and repeated events are
+ * never forwarded.
+ */
+export function zenForwardedChordForKey(e: ZenFrameKeyLike, os: DesktopOs): ZenForwardedChord | null {
+  if (e.isTrusted === false || e.repeat) return null
+  const altGr = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')
+  // Exit Zen: Ctrl+Alt+Z off macOS (the native accelerator covers macOS).
+  if (os !== 'mac' && isZenChordNonMac(e)) return 'zen-exit'
+  // Garden 1–9: ⌥⌘1–9 on every platform (HOME_SWITCH_BINDING).
+  const digit = /^Digit([1-9])$/.exec(e.code)
+  if (digit && e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey) {
+    return `garden-${digit[1]}` as ZenForwardedChord
+  }
+  // Theme next / previous: ⌃⌘. / ⌃⌘⇧. on macOS, Ctrl+Alt+(Shift+). elsewhere.
+  if (e.code === 'Period') {
+    const mods = os === 'mac' ? e.ctrlKey && e.metaKey && !e.altKey : e.ctrlKey && e.altKey && !e.metaKey && !altGr
+    if (mods) return e.shiftKey ? 'theme-prev' : 'theme-next'
+  }
+  return null
+}
+
+/** What a forwarded chord does, supplied by the page that hosts the frames. */
+export interface ZenChordActions {
+  exitZen(): void
+  /** 1–9: the Nth Garden. */
+  switchGarden(n: number): void
+  cycleTheme(dir: 1 | -1): void
+}
+
+/** At most one forwarded chord per this many ms (UW33). */
+export const ZEN_FORWARDED_CHORD_GAP_MS = 500
+
+export interface ZenChordGate {
+  /** The chord when it may run now (a known chord, from a frame that has
+   *  focus, not within the gap of the last accepted one), else null. */
+  accept(chord: unknown, frameFocused: boolean, now: number): ZenForwardedChord | null
+  /** `accept`, then act. Returns whether it ran. */
+  run(chord: unknown, frameFocused: boolean, now: number, actions: ZenChordActions): boolean
+}
+
+/** The host's gate for forwarded chords: one per page, so all of its
+ *  widget frames share the 500 ms budget. */
+export function createZenChordGate(gapMs: number = ZEN_FORWARDED_CHORD_GAP_MS): ZenChordGate {
+  let last = Number.NEGATIVE_INFINITY
+  const accept = (chord: unknown, frameFocused: boolean, now: number): ZenForwardedChord | null => {
+    if (!frameFocused || !isZenForwardedChord(chord)) return null
+    if (now - last < gapMs) return null
+    last = now
+    return chord
+  }
+  return {
+    accept,
+    run(chord, frameFocused, now, actions) {
+      const c = accept(chord, frameFocused, now)
+      if (!c) return false
+      if (c === 'zen-exit') actions.exitZen()
+      else if (c === 'theme-next') actions.cycleTheme(1)
+      else if (c === 'theme-prev') actions.cycleTheme(-1)
+      else actions.switchGarden(Number(c.slice('garden-'.length)))
+      return true
+    },
+  }
+}
+
+/** Whether `frame` is the focused element of its document (the host's
+ *  focus test for a forwarded chord). */
+export function zenFrameHasFocus(frame: Element | null, doc: Pick<Document, 'activeElement'> = document): boolean {
+  return frame !== null && doc.activeElement === frame
+}

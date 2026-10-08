@@ -73,6 +73,7 @@ export const SESSION_EVENT_ROUTES = {
   },
   tunnel_status_changed: { class: 'app', app: true },
   tunnel_subdomains_changed: { class: 'app', app: true },
+  tunnel_identity_changed: { class: 'app', app: true },
   publish_services_changed: { class: 'app', app: true, carried: true },
   workspace_resources_changed: { class: 'app', app: true, carried: true },
   tab_title_changed: { class: 'workspace', workspace: true, tabs: true },

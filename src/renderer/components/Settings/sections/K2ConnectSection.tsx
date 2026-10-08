@@ -60,6 +60,8 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { primaryScope } from '@/kessel/server-scope'
+import { onTunnelIdentityChanged } from '@/stores/session-events'
+import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 
 const DEFAULT_SERVER_ADDR = '178.156.232.105'
 const DEFAULT_SERVER_PORT = 7000
@@ -138,6 +140,11 @@ interface TunnelStatus {
   enabled?: boolean
   /** PRD §2B — this device released (unpaired) its tunnel identity. */
   released?: boolean
+  /** 0.45.2 — the configured subdomain while running. */
+  subdomain?: string | null
+  /** 0.45.2 — the name the daemon's encrypted listener serves (null = no
+   *  listener). Must equal `subdomain` while running. */
+  e2eListener?: { subdomain: string; port: number } | null
 }
 
 // K2 #629 — connect-user permission tier. There is no Viewer tier any
@@ -421,6 +428,8 @@ export function K2ConnectSection({
   const [boundMsg, setBoundMsg] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [swapBusy, setSwapBusy] = useState(false)
+  // 0.45.2: live progress of a subdomain switch (claim → daemon steps).
+  const [switchProgress, setSwitchProgress] = useState<TunnelSwitchProgress | null>(null)
 
   // ── Subdomain claim / lease ───────────────────────────────────────────
   const deviceIdRef = useRef<string>(getDeviceId())
@@ -580,6 +589,18 @@ export function K2ConnectSection({
       if (res.ok) setStatus((await res.json()) as TunnelStatus)
     } catch { /* ignore */ }
   }
+
+  // 0.45.2: the daemon announces every tunnel identity change (a switch or
+  // release from here, the CLI, or another window) — reload instead of
+  // waiting for the 5 s poll.
+  useEffect(() => {
+    if (panel !== 'tunnel' || isRemote) return
+    return onTunnelIdentityChanged(primaryScope(), () => {
+      void loadConfig()
+      void refreshStatus()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel, isRemote])
 
   // Keep the access-token ref current so the one-shot claim paths (start /
   // swap) can read it without closing over stale state.
@@ -965,26 +986,56 @@ export function K2ConnectSection({
   // ~/.k2/unpaired.json, and notifies the relay so the old identity is
   // refused forever. The ACCOUNT keeps the subdomain — the confirm text
   // must say "this device", never "your subdomain".
-  const releaseFromDevice = async (): Promise<void> => {
+  //
+  // 0.45.2: K2 Connect is told only when this device's tunnel is RUNNING
+  // (it holds the name). `forget` never tells it anything: for a stale
+  // config copied from another machine whose subdomain a live box holds.
+  // Moving to another subdomain does not need either — pick it in the
+  // dropdown above (one switch, no restart).
+  const releaseFromDevice = async (mode: 'release' | 'forget'): Promise<void> => {
     const sub = subdomain.trim()
     const label = sub ? `${sub}.k2.dev` : 'its subdomain'
-    const ok = await confirm({
-      title: 'Release subdomain from this device?',
-      message:
-        `${label} will stop routing to THIS DEVICE permanently — even a restored ` +
-        `backup of this machine can never reclaim it. Your account keeps the ` +
-        `subdomain; you can pair it on another device any time. ` +
-        `(Just want to pause? Use Stop tunnel instead — it now persists.)`,
-      confirmLabel: 'Release this device',
-    })
+    const ok =
+      mode === 'forget'
+        ? await confirm({
+            title: 'Forget this tunnel on this device?',
+            message:
+              `This device stops using ${label} and deletes its local tunnel settings. ` +
+              `Nothing is sent to K2 Connect, so whichever device holds ${label} now keeps it. ` +
+              `Use this for settings copied from another machine.`,
+            confirmLabel: 'Forget on this device',
+          })
+        : await confirm({
+            title: 'Release subdomain from this device?',
+            message:
+              `${label} will stop routing to THIS DEVICE — this copy of the tunnel identity ` +
+              `is refused from now on. ` +
+              (running
+                ? `K2 Connect is told this device let go of it. `
+                : `This device's tunnel is not running, so it is not the holder: nothing is sent to K2 Connect. `) +
+              `Your account keeps the subdomain; you can pair it on any device any time. ` +
+              `(Moving to another subdomain? Pick it above instead. Just want to pause? Use Stop tunnel.)`,
+            confirmLabel: 'Release this device',
+          })
     if (!ok) return
     setBusy(true)
     setError(null)
+    setSwitchProgress(null)
     try {
-      const res = await tunnelPost('release?confirm=1')
+      const res = await tunnelPost(mode === 'forget' ? 'release?confirm=1&mode=forget' : 'release?confirm=1')
       if (!res.ok) {
         setError(await errText(res))
         return
+      }
+      const report = (await res.json()) as { note?: string; localOnly?: boolean; upstreamReported?: boolean }
+      setBoundMsg(
+        report.note ??
+          (report.upstreamReported ? `Released ${label}; K2 Connect recorded it.` : `Released ${label} on this device.`),
+      )
+      // Lease: only the holder had one; free it (best-effort).
+      const accessToken = session?.accessToken ?? accessTokenRef.current
+      if (mode === 'release' && running && accessToken && sub) {
+        void releaseSubdomain(accessToken, sub, deviceId).catch(() => undefined)
       }
       // Identity is gone — reload config (tokenSet drops) + status
       // (released: true drives the tri-state card).
@@ -1076,9 +1127,17 @@ export function K2ConnectSection({
         setError(await errText(res))
         return
       }
-      const cfg = (await res.json()) as TunnelConfigView
+      const cfg = (await res.json()) as TunnelConfigView & {
+        identityChange?: { ok: boolean; error?: string }
+      }
       setTokenSet(cfg.tokenSet)
       setToken('') // don't keep the secret in the manual field after save
+      // 0.45.2: the daemon moved off the old name as part of this write
+      // (listener, cert renewer, routes); a failed step is shown, not lost.
+      if (cfg.identityChange && !cfg.identityChange.ok) {
+        setError(`Bound ${sub.label}.k2.dev, but: ${cfg.identityChange.error ?? 'a step failed'}`)
+        return
+      }
       setBoundMsg(`Bound ${sub.label}.k2.dev — Start the tunnel below.`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to bind subdomain')
@@ -1106,6 +1165,13 @@ export function K2ConnectSection({
   const tunnelReleased = status?.released === true
   const publicUrl = status?.public_url ?? (subdomain.trim() ? `https://${subdomain.trim()}.k2.dev` : null)
   const frpcMissing = status ? !status.frpc_installed : false
+  // 0.45.2: a running tunnel whose encrypted listener serves another name
+  // (the 0.45.0 switch bug) — the daemon reports both since 0.45.2.
+  const listenerMismatch =
+    running &&
+    !!status?.e2eListener &&
+    !!subdomain.trim() &&
+    status.e2eListener.subdomain.toLowerCase() !== subdomain.trim().toLowerCase()
 
   // The custom dropdown's option values are the subdomain labels; map a
   // chosen value back to its full row so bindSubdomain gets the token.
@@ -1138,12 +1204,23 @@ export function K2ConnectSection({
       await swapTunnel(value)
       return
     }
+    // Re-picking the running name while its listener holds another name's
+    // certificate re-runs the switch for the same name (repairs in place).
+    if (running && listenerMismatch && value === subdomain.trim()) {
+      await swapTunnel(value)
+      return
+    }
     const row = subdomains.find((s) => s.label === value)
     if (row) await bindSubdomain(row)
   }
 
-  // Swap an already-running tunnel to a different subdomain:
-  // stop → release(old) → bind(new) → claim(new) → start.
+  // Swap an already-running tunnel to a different subdomain (0.45.2): claim
+  // the new name FIRST (a refusal changes nothing), then ONE daemon call
+  // (`/cli/tunnel/switch`) moves tunnel.json, the encrypted listener and its
+  // certificate + renewer, the nested routes and frpc — and rolls back to the
+  // old name if any step fails. Before 0.45.2 this stopped the tunnel and
+  // overwrote the config before claiming, and the daemon kept serving the
+  // old certificate until it was restarted.
   const swapTunnel = async (value: string): Promise<void> => {
     const row = subdomains.find((s) => s.label === value)
     if (!row) return
@@ -1152,65 +1229,39 @@ export function K2ConnectSection({
     setSwapBusy(true)
     setError(null)
     setBoundMsg(null)
+    setSwitchProgress(null)
     try {
-      // 1. Stop the current tunnel (the daemon stops its lease renewal for
-      // the old subdomain here — K2 #674).
-      const stopRes = await tunnelPost('stop')
-      if (!stopRes.ok) {
-        setError(await errText(stopRes))
-        return
+      const outcome = await runTunnelSwitch(
+        {
+          from: oldLabel,
+          to: row.label,
+          token: row.tunnel_token,
+          deviceId,
+          deviceLabel,
+          start: true,
+        },
+        {
+          claim: accessToken
+            ? (label) => claimSubdomain(accessToken, label, deviceId, deviceLabel)
+            : null,
+          releaseLease: accessToken
+            ? (label) => releaseSubdomain(accessToken, label, deviceId)
+            : null,
+          postSwitch: (body) => tunnelPost('switch', body),
+        },
+        setSwitchProgress,
+      )
+      if (outcome.ok) {
+        setSelectedLabel(row.label)
+        setBoundMsg(`Swapped to ${row.label}.k2.dev.`)
+      } else {
+        setError(outcome.error)
+        // Nothing changed, or the daemon put the old name back.
+        setSelectedLabel(oldLabel || null)
       }
-      // 2. Release the old lease (best-effort).
-      if (accessToken && oldLabel) {
-        void releaseSubdomain(accessToken, oldLabel, deviceId).catch(() => undefined)
-      }
-      // 3. Bind the new subdomain (config + state).
-      setSelectedLabel(row.label)
-      setSubdomain(row.label)
-      setToken(row.tunnel_token)
-      const cfgRes = await tunnelPost('config', {
-        serverAddr: serverAddr.trim() || DEFAULT_SERVER_ADDR,
-        serverPort: Number(serverPort) || DEFAULT_SERVER_PORT,
-        subdomain: row.label,
-        token: row.tunnel_token,
-        // Persist this device's claim identity so the daemon renews the new
-        // subdomain's lease under the same device (K2 #674).
-        deviceId,
-        deviceLabel: deviceLabel ?? '',
-      })
-      if (!cfgRes.ok) {
-        setError(await errText(cfgRes))
-        return
-      }
-      const cfg = (await cfgRes.json()) as TunnelConfigView
-      setTokenSet(cfg.tokenSet)
-      setToken('')
-      // 4. Claim the new lease (one-shot, explicit user action).
-      if (accessToken) {
-        try {
-          const result = await claimSubdomain(accessToken, row.label, deviceId, deviceLabel)
-          if (!result.claimed && result.holder && result.holder !== deviceId) {
-            setError(`${row.label}.k2.dev is in use on another device — stop it there first.`)
-            return
-          }
-        } catch (e) {
-          setError(e instanceof Error ? e.message : 'Failed to claim subdomain')
-          return
-        }
-      }
-      // 5. Start the new tunnel.
-      const startRes = await tunnelPost(`start?subdomain=${encodeURIComponent(row.label)}`)
-      if (!startRes.ok) {
-        setError(await errText(startRes))
-        if (accessToken) void releaseSubdomain(accessToken, row.label, deviceId).catch(() => undefined)
-        return
-      }
+      await loadConfig()
       await refreshStatus()
-      // Daemon now owns the renewal for the new subdomain (K2 #674).
-      setBoundMsg(`Swapped to ${row.label}.k2.dev.`)
       void refreshSubdomains()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Swap failed')
     } finally {
       setSwapBusy(false)
     }
@@ -1386,6 +1437,35 @@ export function K2ConnectSection({
               {boundMsg && (
                 <div className="text-[10px] text-[var(--color-status-ok-soft)] py-1">{boundMsg}</div>
               )}
+              {switchProgress && switchProgress.phase !== 'done' && (
+                <div
+                  className="text-[10px] py-1 space-y-0.5"
+                  data-testid="tunnel-switch-progress"
+                  aria-live="polite"
+                >
+                  <div
+                    className={
+                      switchProgress.phase === 'failed'
+                        ? 'text-[var(--color-status-error-soft)]'
+                        : 'text-[var(--color-text-secondary)]'
+                    }
+                  >
+                    {switchProgress.phase === 'failed' ? 'Switch failed' : switchProgress.message}
+                  </div>
+                  {switchProgress.steps.map((s, i) => (
+                    <div
+                      key={`${s.step}-${i}`}
+                      className={
+                        s.ok
+                          ? 'text-[var(--color-text-muted)]'
+                          : 'text-[var(--color-status-error-soft)]'
+                      }
+                    >
+                      {s.ok ? '✓' : '✗'} {s.detail}
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </SettingsGroup>
@@ -1424,6 +1504,14 @@ export function K2ConnectSection({
             </a>
           )}
         </div>
+
+        {listenerMismatch && (
+          <div className="text-[10px] px-3 py-1.5 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] text-[var(--color-status-warn-amber-soft)]">
+            The tunnel is {subdomain.trim()}.k2.dev but the encrypted listener still holds the{' '}
+            {status?.e2eListener?.subdomain}.k2.dev certificate, so direct connections fail. Pick{' '}
+            {subdomain.trim()} in the list above again to repair it (no restart needed).
+          </div>
+        )}
 
         {frpcMissing && (
           <div className="flex items-start gap-2 px-3 py-2 border border-[color-mix(in_srgb,var(--color-status-warn-amber)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warn-amber)_5%,transparent)]">
@@ -1485,9 +1573,17 @@ export function K2ConnectSection({
             an identity exists to release (token bound, not yet
             released). ─────────────────────────────────────────────────── */}
         {tokenSet && !tunnelReleased && (
-          <div className="flex items-center justify-end" data-settings-id="k2-connect.release-device">
+          <div className="flex items-center justify-end gap-4" data-settings-id="k2-connect.release-device">
             <button
-              onClick={() => void releaseFromDevice()}
+              onClick={() => void releaseFromDevice('forget')}
+              disabled={busy || swapBusy}
+              title="Delete this device's tunnel settings without telling K2 Connect (settings copied from another machine)"
+              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer disabled:opacity-60"
+            >
+              Forget this tunnel on this device…
+            </button>
+            <button
+              onClick={() => void releaseFromDevice('release')}
               disabled={busy || swapBusy}
               className="text-[10px] text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error)] hover:underline no-drag cursor-pointer disabled:opacity-60"
             >

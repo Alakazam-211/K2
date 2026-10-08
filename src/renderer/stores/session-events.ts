@@ -197,6 +197,19 @@ export interface TunnelSubdomainsChangedEvent {
   targets: Record<string, { target: string; projectId: string | null } | string>
 }
 
+/** APP-LEVEL (0.45.2) — the K2 Connect tunnel identity changed: a
+ *  subdomain switch, a release / forget, or a config write with a new
+ *  subdomain or token. The daemon already moved its E2E listener, cert
+ *  renewer, nested routes and frpc; clients reload the tunnel config. */
+export interface TunnelIdentityChangedEvent {
+  kind: 'tunnel_identity_changed'
+  previousSubdomain: string | null
+  subdomain: string | null
+  publicUrl: string | null
+  running: boolean
+  ok: boolean
+}
+
 /** APP-LEVEL — a daemon-owned published service changed (spawn / stop /
  *  exit / boot respawn). Carries `projectId` so the workspace Published
  *  drawer can refetch `GET /cli/publish/list` only when it matches (or
@@ -579,6 +592,7 @@ export type SessionEventMessage =
   | SessionActivityChangedEvent
   | TunnelStatusChangedEvent
   | TunnelSubdomainsChangedEvent
+  | TunnelIdentityChangedEvent
   | PublishServicesChangedEvent
   | WorkspaceResourcesChangedEvent
   | TabTitleChangedEvent
@@ -1016,6 +1030,7 @@ type TunnelStatusHandler = (e: TunnelStatusChangedEvent) => void
 // URLs & Ports drawer — the nested-subdomain map (whole-map replace, the
 // ActiveChanged convention). `UrlsPortsSection.tsx` is the consumer.
 type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
+type TunnelIdentityHandler = (e: TunnelIdentityChangedEvent) => void
 type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
 type WorkspaceResourcesHandler = (e: WorkspaceResourcesChangedEvent) => void
 /** RL4/A28: receives the hello frame (its `instance_id` tells a restart). */
@@ -1094,6 +1109,7 @@ interface AppBusHandlers {
   agentStatus: Set<AgentStatusHandler>
   tunnelStatus: Set<TunnelStatusHandler>
   tunnelSubdomains: Set<TunnelSubdomainsHandler>
+  tunnelIdentity: Set<TunnelIdentityHandler>
   publishServices: Set<PublishServicesHandler>
   workspaceResources: Set<WorkspaceResourcesHandler>
   appHello: Set<AppHelloHandler>
@@ -1133,6 +1149,7 @@ function createBusState(scopeId: string): BusState {
       agentStatus: new Set(),
       tunnelStatus: new Set(),
       tunnelSubdomains: new Set(),
+      tunnelIdentity: new Set(),
       publishServices: new Set(),
       workspaceResources: new Set(),
       appHello: new Set(),
@@ -1211,6 +1228,15 @@ export function onTunnelSubdomainsChanged(
   fn: TunnelSubdomainsHandler,
 ): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.tunnelSubdomains, fn)
+}
+
+/** Subscribe to APP-LEVEL `tunnel_identity_changed` (0.45.2 — the tunnel
+ *  moved to another subdomain, or was released). Returns an unsubscribe fn. */
+export function onTunnelIdentityChanged(
+  scope: ServerScope,
+  fn: TunnelIdentityHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.tunnelIdentity, fn)
 }
 
 /** Subscribe to APP-LEVEL `publish_services_changed` (Published drawer —
@@ -1478,6 +1504,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   tunnel_subdomains_changed: (h, m) => {
     for (const fn of h.tunnelSubdomains) fn(m)
   },
+  tunnel_identity_changed: (h, m) => {
+    for (const fn of h.tunnelIdentity) fn(m)
+  },
   publish_services_changed: (h, m) => {
     for (const fn of h.publishServices) fn(m)
   },
@@ -1553,6 +1582,7 @@ export interface AppBus {
   onAgentStatusChanged(fn: AgentStatusHandler): UnsubscribeFn
   onTunnelStatusChanged(fn: TunnelStatusHandler): UnsubscribeFn
   onTunnelSubdomainsChanged(fn: TunnelSubdomainsHandler): UnsubscribeFn
+  onTunnelIdentityChanged(fn: TunnelIdentityHandler): UnsubscribeFn
   onPublishServicesChanged(fn: PublishServicesHandler): UnsubscribeFn
   onWorkspaceResourcesChanged(fn: WorkspaceResourcesHandler): UnsubscribeFn
   onAppHello(fn: AppHelloHandler): UnsubscribeFn
@@ -1597,6 +1627,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onAgentStatusChanged: (fn) => onAgentStatusChanged(scope, fn),
     onTunnelStatusChanged: (fn) => onTunnelStatusChanged(scope, fn),
     onTunnelSubdomainsChanged: (fn) => onTunnelSubdomainsChanged(scope, fn),
+    onTunnelIdentityChanged: (fn) => onTunnelIdentityChanged(scope, fn),
     onPublishServicesChanged: (fn) => onPublishServicesChanged(scope, fn),
     onWorkspaceResourcesChanged: (fn) => onWorkspaceResourcesChanged(scope, fn),
     onAppHello: (fn) => onAppHello(scope, fn),

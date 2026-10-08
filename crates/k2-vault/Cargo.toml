@@ -1,0 +1,46 @@
+[package]
+name = "k2-vault"
+version = "0.45.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 vault: one encrypted store for passwords, tokens and keys, used in-process by the daemon behind the SecretStore trait."
+
+# The vault is its own small crate (cores direction): no dependency on
+# k2-core or k2-daemon. The daemon links it; clients never do.
+#
+# Crypto (KV3): RustCrypto XChaCha20-Poly1305 / ChaCha20-Poly1305, HKDF and
+# HMAC over SHA-256, X25519 for the age-format holders (recovery, backup,
+# clone target). The full `age` crate pulls an i18n stack (~20 crates), so
+# the age v1 X25519 format is written here directly (`agefmt.rs`) and
+# checked byte-for-byte against `age` in the tests only.
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+zeroize = "1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+bech32 = "0.9"
+base64 = "0.22"
+getrandom = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+aho-corasick = "1"
+idna = "1"
+url = "2"
+argon2 = "0.5"
+libc = "0.2"
+parking_lot = "0.12"
+
+[features]
+# Test fakes (FakeKeyStore, fake root helper, cheap KDF). Never in release
+# builds (VS14).
+test-util = []
+
+[dev-dependencies]
+age = { version = "0.11", default-features = false }
+# Integration tests use the fakes.
+k2-vault = { path = ".", features = ["test-util"] }

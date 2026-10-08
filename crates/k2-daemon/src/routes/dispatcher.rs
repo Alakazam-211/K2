@@ -8830,6 +8830,21 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/federation/address" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // NO token gate: the notice is signed by the peer's
+                    // federation key and verified against the key already
+                    // pinned for its fingerprint (inside the handler). It can
+                    // only move that one peer's address.
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::federation_address::handle_address_notice(&body)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/federation/inbound" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;

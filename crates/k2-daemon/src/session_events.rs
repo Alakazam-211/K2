@@ -672,6 +672,14 @@ pub enum SessionEvent {
     /// nameservers, no zone ids on the bus.
     DomainsChanged { reason: String, apex: Option<String> },
 
+    /// 0.45.2 — a pinned federation peer changed on this server: a signed
+    /// address notice moved its address (`reason: "address_changed"`).
+    /// APP-LEVEL; clients refetch `GET /cli/federation/peers`.
+    ///
+    /// Wire: `{ "kind": "federation_peers_changed", "fingerprint": string,
+    /// "reason": string }`.
+    FederationPeersChanged { fingerprint: String, reason: String },
+
     /// Remote Session Layer 0 — a drive attempt was denied (master switch
     /// OFF → `REMOTE_SESSIONS_DISABLED`, or ON without grant → `NO_GRANT`).
     /// APP-LEVEL: owner visibility across every connected client. Wire:
@@ -753,6 +761,7 @@ impl SessionEvent {
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::DomainsChanged { .. } => "domains_changed",
+            SessionEvent::FederationPeersChanged { .. } => "federation_peers_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
             SessionEvent::FsChanged { .. } => "fs_changed",
         }

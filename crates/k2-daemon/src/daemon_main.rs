@@ -1210,6 +1210,12 @@ async fn async_main() {
         Err(e) => k2_core::log_debug!("[federation] WARN: identity key unavailable: {e}"),
     }
 
+    // 0.45.2: tell paired peers when this box's address changes (signed
+    // address notices). Its first pass is the boot check: a change made
+    // while the daemon was down is announced now, and pending notices from
+    // before a restart are retried.
+    let _federation_address_handle = federation_address::spawn();
+
     // K2 Mail S2 (prd-email-server-v1 §6.3) — the mail-domain DNS
     // verification poller: pending/broken domains re-check every ~5
     // minutes (propagation retries never fail-fast, pre-mortem #4),

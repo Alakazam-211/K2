@@ -64,6 +64,8 @@ import {
   type FederationPeer,
 } from '@/lib/federation'
 import { isAirgap } from '@/lib/airgap'
+import { primaryScope } from '@/kessel/server-scope'
+import { onFederationPeersChanged } from '@/stores/session-events'
 import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { signOutOfHost } from '@/lib/host-pool-instance'
@@ -600,6 +602,9 @@ function ActiveHostPeersPanel({
   useEffect(() => {
     void reload()
   }, [reload, refreshKey, hostLabel])
+
+  // 0.45.2: a peer's signed address notice moved its address.
+  useEffect(() => onFederationPeersChanged(primaryScope(), () => void reload()), [reload])
 
   const pairableLocal = localHosts.filter((h) => h.token.length > 0)
 

@@ -271,6 +271,15 @@ export interface DomainsChangedEvent {
   apex: string | null
 }
 
+/** APP-LEVEL (0.45.2) — a pinned federation peer changed on this server: a
+ *  signed address notice moved its address. Refetch signal for the peers
+ *  list (Settings → Connections). `reason` is `address_changed`. */
+export interface FederationPeersChangedEvent {
+  kind: 'federation_peers_changed'
+  fingerprint: string
+  reason: string
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -617,6 +626,7 @@ export type SessionEventMessage =
   | ReviewChangedEvent
   | MailChangedEvent
   | DomainsChangedEvent
+  | FederationPeersChangedEvent
   | RemoteSessionAccessDeniedEvent
 
 export interface SessionEventHandlers {
@@ -1085,6 +1095,8 @@ type FsChangedHandler = (e: FsChangedEvent) => void
 type MailChangedHandler = (reason: string) => void
 // DN12e — Settings → Domains' refetch signal.
 type DomainsChangedHandler = (e: DomainsChangedEvent) => void
+// 0.45.2 — Settings → Connections' refetch signal.
+type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1126,6 +1138,7 @@ interface AppBusHandlers {
   fsChanged: Set<FsChangedHandler>
   mailChanged: Set<MailChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
+  federationPeersChanged: Set<FederationPeersChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
@@ -1166,6 +1179,7 @@ function createBusState(scopeId: string): BusState {
       fsChanged: new Set(),
       mailChanged: new Set(),
       domainsChanged: new Set(),
+      federationPeersChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       hooksInstallFailed: new Set(),
@@ -1406,6 +1420,16 @@ export function onDomainsChanged(scope: ServerScope, fn: DomainsChangedHandler):
   return addHandler(busFor(scope).handlers.domainsChanged, fn)
 }
 
+/** 0.45.2 — subscribe to APP-LEVEL `federation_peers_changed` on `scope`'s
+ *  server (a signed address notice moved a peer's address). Refetch signal
+ *  for the pinned-peers list. */
+export function onFederationPeersChanged(
+  scope: ServerScope,
+  fn: FederationPeersChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.federationPeersChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1548,6 +1572,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   domains_changed: (h, m) => {
     for (const fn of h.domainsChanged) fn(m)
+  },
+  federation_peers_changed: (h, m) => {
+    for (const fn of h.federationPeersChanged) fn(m)
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

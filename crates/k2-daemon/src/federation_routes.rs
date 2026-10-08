@@ -1201,6 +1201,12 @@ pub fn handle_peers() -> CliResponse {
         Ok(s) => s,
         Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
     };
+    // 0.45.2: outbound address notices (this box told the peer it moved).
+    // An unreadable outbox file only hides that column; the list still loads.
+    let notices = k2_core::federation::address_notice::rows().unwrap_or_else(|e| {
+        k2_core::log_debug!("[federation] peers: address-notice outbox unreadable: {e}");
+        Default::default()
+    });
     let peers: Vec<serde_json::Value> = store
         .list()
         .iter()
@@ -1212,6 +1218,8 @@ pub fn handle_peers() -> CliResponse {
                 "base_url": p.base_url,
                 "trust": serde_json::to_value(p.trust).unwrap_or(serde_json::Value::Null),
                 "capabilities": p.capabilities,
+                "address_notice": crate::federation_address::notice_view(&notices, &p.fingerprint),
+                "address_updated_at": p.address_updated_at.map(|t| t.to_rfc3339()),
             })
         })
         .collect();

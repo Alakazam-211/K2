@@ -26365,6 +26365,16 @@ for p in peers:
     fp = (p.get('fingerprint') or '')[:16]
     extra = ('  label=%s' % label) if label else ''
     print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
+    # 0.45.2: this server's signed address notice to that peer.
+    n = p.get('address_notice') or {}
+    st = n.get('status')
+    tgt = n.get('target') or {}
+    new_addr = (tgt.get('subdomain') or '') or (tgt.get('base_url') or '')
+    if st == 'pending':
+        err = n.get('last_error')
+        print('      address notice: pending -> %s (attempts %s%s)' % (new_addr, n.get('attempts', 0), ('; last error: %s' % err) if err else ''))
+    elif st == 'failed':
+        print('      address notice: FAILED -> %s (%s): %s' % (new_addr, n.get('failed_reason') or '?', n.get('last_error') or ''))
 "
             ;;
         outbox)

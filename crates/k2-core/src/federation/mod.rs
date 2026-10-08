@@ -34,6 +34,7 @@
 //! regardless of the flag — inertness comes from having no caller, not from a
 //! runtime branch inside the crypto.
 
+pub mod address_notice;
 pub mod dial;
 pub mod envelope;
 pub mod identity;

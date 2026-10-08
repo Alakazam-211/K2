@@ -417,6 +417,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // to one workspace.
         SessionEvent::DomainsChanged { .. } => None,
 
+        // 0.45.2 — APP-LEVEL: the pinned-peer store is host-wide.
+        SessionEvent::FederationPeersChanged { .. } => None,
+
         // Remote Session Layer 0 — APP-LEVEL: denial audit is
         // daemon-global owner visibility (no workspace scope).
         SessionEvent::RemoteSessionAccessDenied { .. } => None,
@@ -790,6 +793,10 @@ mod tests {
             },
             SessionEvent::MailChanged { reason: "send-decided".into() },
             SessionEvent::DomainsChanged { reason: "status_changed".into(), apex: Some("example.com".into()) },
+            SessionEvent::FederationPeersChanged {
+                fingerprint: "ab".into(),
+                reason: "address_changed".into(),
+            },
             SessionEvent::RemoteSessionAccessDenied {
                 principal_label: "owner".into(),
                 reason: "off".into(),

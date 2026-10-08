@@ -35,6 +35,7 @@ pub mod connect_users_routes;
 pub mod login_throttle;
 pub mod db_routes;
 pub mod events;
+pub mod federation_address;
 pub mod federation_drain;
 pub mod feedback_routes;
 pub mod federation_routes;

@@ -292,6 +292,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/domains/remove", Admin),
     post("/cli/done", Member),
     post("/cli/events", Member),
+    post("/cli/federation/address", Public),
     post("/cli/federation/inbound", Public),
     get("/cli/federation/outbox", Admin),
     post("/cli/federation/pair/confirm", Admin),

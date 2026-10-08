@@ -92,6 +92,14 @@ pub struct FederationPeer {
     pub epoch: u64,
     /// When the peer row was first created.
     pub added_at: DateTime<Utc>,
+    /// Highest address-notice `seq` accepted from this peer
+    /// ([`super::address_notice`]). A notice with a seq at or below it is a
+    /// replay. Additive (serde default 0); STORE_VERSION stays 1.
+    #[serde(default)]
+    pub address_seq: u64,
+    /// When a signed address notice last changed this peer's address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_updated_at: Option<DateTime<Utc>>,
 }
 
 impl FederationPeer {
@@ -115,6 +123,8 @@ impl FederationPeer {
             capabilities: BTreeSet::new(),
             epoch: 0,
             added_at: Utc::now(),
+            address_seq: 0,
+            address_updated_at: None,
         })
     }
 
@@ -228,6 +238,12 @@ impl PeerStore {
     /// Look up a peer by fingerprint (no trust/capability check).
     pub fn get(&self, fingerprint: &str) -> Option<&FederationPeer> {
         self.peers.iter().find(|p| p.fingerprint == fingerprint)
+    }
+
+    /// Mutable lookup by fingerprint. Crate-private: only verified paths
+    /// (the address-notice receiver) edit a row in place.
+    pub(crate) fn get_mut(&mut self, fingerprint: &str) -> Option<&mut FederationPeer> {
+        self.peers.iter_mut().find(|p| p.fingerprint == fingerprint)
     }
 
     /// Insert (or replace, by fingerprint) a peer. Returns the fingerprint.

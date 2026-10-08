@@ -104,6 +104,9 @@ export const SESSION_EVENT_ROUTES = {
   // refetches on it (`onDomainsChanged`). Not carried: Settings reads the
   // window's own server.
   domains_changed: { class: 'app', app: true },
+  // 0.45.2: a signed address notice moved a pinned federation peer's address.
+  // Settings → Connections refetches the peers list on it.
+  federation_peers_changed: { class: 'app', app: true },
   remote_session_access_denied: {
     class: 'app',
     ignored: 'Owner audit of a refused remote drive; no client surface shows it yet.',

@@ -33,6 +33,11 @@ pub fn emit_identity_events(report: &IdentityChangeReport) {
         running: report.status.running,
         ok: report.ok,
     });
+    // A completed move to a new name: tell paired peers now (signed address
+    // notice) instead of waiting for the next sweep.
+    if report.ok && report.subdomain.is_some() {
+        crate::federation_address::kick();
+    }
 }
 
 fn to_json<T: serde::Serialize>(v: &T) -> String {

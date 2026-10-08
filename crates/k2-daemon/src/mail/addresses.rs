@@ -638,15 +638,16 @@ pub fn mint_address(
             dav_permissions.as_ref(),
         )
         .map_err(AddrError::Engine)?;
-    let secret_ref = match secrets_store.store(&format!("account-{row_id}"), &password) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = engine.destroy_account(&account_id);
-            return Err(AddrError::Engine(format!(
-                "could not vault the account password: {e}"
-            )));
-        }
-    };
+    // The vault key is the exact `account-<row id>` that every reader
+    // resolves (`acl.rs`, rotate). `store()` would mint a random
+    // `mailsec_account-<row>_<hex>` ref that nothing looks up.
+    let secret_ref = secrets::account_secret_key(&row_id);
+    if let Err(e) = secrets_store.store_exact(&secret_ref, &password) {
+        let _ = engine.destroy_account(&account_id);
+        return Err(AddrError::Engine(format!(
+            "could not vault the account password: {e}"
+        )));
+    }
 
     let created_at = now_secs();
     let inserted = {
@@ -817,7 +818,7 @@ pub fn rotate_address_password(
         .map_err(AddrError::Engine)?;
     // Deterministic vault key so a later rotate overwrites. `store()`
     // mints a random `mailsec_*` ref the row never records.
-    if let Err(e) = secrets_store.store_exact(&format!("account-{}", row.id), &password) {
+    if let Err(e) = secrets_store.store_exact(&secrets::account_secret_key(&row.id), &password) {
         k2_core::log_debug!(
             "[mail] address password vault write failed after Stalwart set for {address}: {e}"
         );
@@ -1264,6 +1265,48 @@ pub(crate) mod tests {
     }
 
     // ── Mint ──
+
+    /// Regression (KV13): a new mailbox's password is stored under the
+    /// exact key every reader resolves, so the ACL path finds it without
+    /// a rotate. Uses the real file store in a temp dir.
+    #[test]
+    fn mint_vaults_password_under_the_key_readers_resolve() {
+        let domain = unique("mint-key") + ".example";
+        cleanup_domain(&domain);
+        seed_domain(&domain, "verified", Some("stw-k"));
+        let engine = FakeAddrEngine::ok();
+        let dir = std::env::temp_dir().join(format!(
+            "k2-mint-key-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("mail-secrets.json");
+        let vault = secrets::FileSecretStore::at(path.clone());
+        let project = unique("proj");
+
+        let v = mint_address(&engine, &vault, &project, 5, "keyed", Some(&domain), None)
+            .expect("mint ok");
+        let password = v["password"].as_str().expect("once password").to_string();
+        let row = address_row(&format!("keyed@{domain}")).expect("row persisted");
+
+        assert_eq!(
+            vault.resolve(&secrets::account_secret_key(&row.id)).expect("resolve"),
+            Some(password.clone()),
+            "the password must sit under account-<row id>"
+        );
+        assert_eq!(
+            vault.resolve_account_password(&row.id).expect("account lookup"),
+            Some(password),
+            "the ACL lookup finds a fresh mailbox's password without a rotate"
+        );
+        let raw = std::fs::read_to_string(&path).expect("store file");
+        assert!(
+            !raw.contains("mailsec_account-"),
+            "no random mailsec_account-* ref may be minted: {raw}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        cleanup_domain(&domain);
+    }
 
     #[test]
     fn mint_happy_path_creates_account_vaults_password_and_persists() {

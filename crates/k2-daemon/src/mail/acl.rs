@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use crate::cli_response::CliResponse;
 use crate::mail::hosted::{self, err_json};
 use crate::mail::jmap::StalwartClient;
-use crate::mail::secrets::SecretStore;
 
 const RIGHTS_CHARS: &str = "lrswipkxtena";
 
@@ -165,7 +164,7 @@ fn imap_setacl(mailbox: &str, identifier: &str, rights: Option<&str>) -> Result<
     // Uses the mailbox's vaulted secret. K2 never EXPUNGEs.
     let row = hosted::load_active_hosted(mailbox).map_err(hosted::addr_err)?;
     let secret = crate::mail::secrets::FileSecretStore::default()
-        .resolve(&format!("account-{}", row.id))
+        .resolve_account_password(&row.id)
         .map_err(|e| err_json("502 Bad Gateway", "engine", e))?;
     let Some(password) = secret.filter(|s| !s.is_empty()) else {
         return Err(err_json(

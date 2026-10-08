@@ -145,6 +145,53 @@ fn store_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// The vault key for a hosted mailbox's IMAP/SMTP password: exactly
+/// `account-<mail_addresses.id>`. Mint and rotate write it with
+/// [`SecretStore::store_exact`]; every reader resolves it.
+pub fn account_secret_key(row_id: &str) -> String {
+    format!("account-{row_id}")
+}
+
+impl FileSecretStore {
+    /// Resolve a hosted mailbox password by [`account_secret_key`].
+    ///
+    /// Mailboxes created before 0.45.1 stored it under a random
+    /// `mailsec_account-<row>_<hex>` ref that no reader looked up, so the
+    /// password was unreachable until a rotate. When the exact key is
+    /// missing and exactly one such ref exists for this row, it is moved
+    /// to the exact key (once) and returned. More than one candidate is
+    /// ambiguous and resolves to `None` (rotate fixes it).
+    pub fn resolve_account_password(&self, row_id: &str) -> Result<Option<String>, String> {
+        let key = account_secret_key(row_id);
+        let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let mut map = self.load()?;
+        if let Some(v) = map.get(&key).and_then(|v| v.as_str()) {
+            return Ok(Some(v.to_string()));
+        }
+        let prefix = format!("mailsec_{key}_");
+        let orphans: Vec<String> = map
+            .keys()
+            .filter(|k| {
+                k.strip_prefix(&prefix)
+                    .is_some_and(|hex| !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
+            })
+            .cloned()
+            .collect();
+        let [orphan] = orphans.as_slice() else {
+            return Ok(None);
+        };
+        let Some(value) = map.remove(orphan) else {
+            return Ok(None);
+        };
+        let Some(secret) = value.as_str().map(str::to_string) else {
+            return Ok(None);
+        };
+        map.insert(key, serde_json::Value::String(secret.clone()));
+        self.save(&map)?;
+        Ok(Some(secret))
+    }
+}
+
 impl SecretStore for FileSecretStore {
     fn store(&self, kind: &str, secret: &str) -> Result<String, String> {
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -244,6 +291,51 @@ mod tests {
             random_hex_12()
         ));
         (FileSecretStore::at(dir.join("mail-secrets.json")), dir)
+    }
+
+    /// Mailboxes minted before the fix hold their password under a random
+    /// `mailsec_account-<row>_<hex>` ref. The account lookup adopts that
+    /// one orphan onto the exact key; the exact key always wins; two
+    /// candidates are ambiguous and resolve to None.
+    #[test]
+    fn account_password_lookup_adopts_one_legacy_orphan() {
+        let (store, dir) = temp_store();
+        let legacy = store.store("account-row-a", "legacy-pass").expect("legacy store");
+        assert!(legacy.starts_with("mailsec_account-row-a_"), "{legacy}");
+        assert_eq!(store.resolve("account-row-a").expect("resolve"), None, "the bug");
+
+        assert_eq!(
+            store.resolve_account_password("row-a").expect("adopt"),
+            Some("legacy-pass".to_string())
+        );
+        assert_eq!(
+            store.resolve("account-row-a").expect("resolve exact"),
+            Some("legacy-pass".to_string()),
+            "adopted onto the exact key"
+        );
+        assert_eq!(store.resolve(&legacy).expect("resolve old"), None, "orphan removed");
+
+        store.store_exact("account-row-b", "exact-pass").expect("exact");
+        store.store("account-row-b", "stale-orphan").expect("orphan b");
+        assert_eq!(
+            store.resolve_account_password("row-b").expect("exact wins"),
+            Some("exact-pass".to_string())
+        );
+
+        store.store("account-row-c", "one").expect("c1");
+        store.store("account-row-c", "two").expect("c2");
+        assert_eq!(
+            store.resolve_account_password("row-c").expect("ambiguous"),
+            None,
+            "two orphans: never guess"
+        );
+        assert_eq!(store.resolve_account_password("row-missing").expect("missing"), None);
+        assert_eq!(
+            store.resolve_account_password("row").expect("prefix only"),
+            None,
+            "row-a's ref must not match row id 'row'"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

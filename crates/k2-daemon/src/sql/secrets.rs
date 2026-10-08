@@ -13,17 +13,32 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, sref: &str) -> Result<(), String>;
 }
 
+/// The DB secret store. `Default` is the K2 vault (`system` secrets in
+/// scope `engine:postgres`, KV11) whenever it's open; a box whose vault
+/// couldn't open falls back to `~/.k2/db-secrets.json`. Tests get the
+/// test vault (never the real home, KV12).
 pub struct FileSecretStore {
     path: PathBuf,
+    vault: Option<crate::vault::refstore::VaultRefStore>,
+}
+
+/// The old file location (adoption reads it once).
+pub fn legacy_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".k2")
+        .join("db-secrets.json")
 }
 
 impl Default for FileSecretStore {
     fn default() -> Self {
-        let dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".k2");
+        #[cfg(test)]
+        let vault = Some(crate::vault::ensure_test_vault());
+        #[cfg(not(test))]
+        let vault = crate::vault::get().ok();
         Self {
-            path: dir.join("db-secrets.json"),
+            path: legacy_path(),
+            vault: vault.map(|v| crate::vault::refstore::VaultRefStore::new(v, "postgres", "db")),
         }
     }
 }
@@ -31,7 +46,12 @@ impl Default for FileSecretStore {
 impl FileSecretStore {
     #[cfg(test)]
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
+        Self { path, vault: None }
+    }
+
+    /// The old JSON file as a map (adoption).
+    pub fn legacy_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        Self { path: path.to_path_buf(), vault: None }.load()
     }
 
     fn load(&self) -> Result<serde_json::Map<String, serde_json::Value>, String> {
@@ -78,6 +98,9 @@ fn store_lock() -> &'static Mutex<()> {
 
 impl SecretStore for FileSecretStore {
     fn store(&self, kind: &str, secret: &str) -> Result<String, String> {
+        if let Some(v) = &self.vault {
+            return v.store_new("dbsec", kind, secret);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         let sref = format!("dbsec_{kind}_{}", random_hex_12());
         let mut map = self.load()?;
@@ -87,6 +110,9 @@ impl SecretStore for FileSecretStore {
     }
 
     fn resolve(&self, sref: &str) -> Result<Option<String>, String> {
+        if let Some(v) = &self.vault {
+            return v.resolve(sref);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         Ok(self
             .load()?
@@ -96,6 +122,9 @@ impl SecretStore for FileSecretStore {
     }
 
     fn delete(&self, sref: &str) -> Result<(), String> {
+        if let Some(v) = &self.vault {
+            return v.delete(sref);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         let mut map = self.load()?;
         if map.remove(sref).is_some() {

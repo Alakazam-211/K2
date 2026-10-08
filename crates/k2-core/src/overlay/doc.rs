@@ -18,13 +18,39 @@ pub struct ChoiceBody {
     pub answer: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SecretBody {
     pub name: String,
     /// `pending` | `set` | `voided`
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// K2 vault (prd-k2-vault-v1 §10.1, KV9): what the asking agent
+    /// proposes. People can change all of it on the card. Never a value.
+    /// `workspace` | `server` | `session`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Proposed sites (exact hosts, normalised origins).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    /// `fetch` | `file` | `env`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
+    /// `api_key` | `password` | …
+    #[serde(default, rename = "secretKind", skip_serializing_if = "Option::is_none")]
+    pub secret_kind: Option<String>,
+    /// After a person saved it: the `k2v://` reference (never the value).
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+}
+
+/// The vault-side proposal on a secret card (KV9).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretProposal {
+    pub scope: Option<String>,
+    pub hosts: Vec<String>,
+    pub delivery: Option<String>,
+    pub kind: Option<String>,
 }
 
 /// A Thread post a Garden widget sent for the person (prd-zen-user-widgets-v2
@@ -143,6 +169,7 @@ impl OverlayDoc {
         to: String,
         name: String,
         prompt: Option<String>,
+        proposal: SecretProposal,
     ) -> Self {
         Self {
             id,
@@ -158,6 +185,11 @@ impl OverlayDoc {
                 name,
                 status: "pending".to_string(),
                 prompt,
+                scope: proposal.scope,
+                hosts: proposal.hosts,
+                delivery: proposal.delivery,
+                secret_kind: proposal.kind,
+                reference: None,
             }),
             widget: None,
         }

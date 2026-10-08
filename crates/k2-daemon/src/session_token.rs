@@ -504,6 +504,17 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Rosson R1 (prd-app-heartbeats-surface-v1): hard delete trashes
         // the WAKEUP.md folder and is owner-only. Agents archive instead.
         "/cli/heartbeat/remove",
+        // K2 vault: people only (KV14 DENY, VS2).
+        "/cli/vault/confirm/",
+        "/cli/vault/confirm-password/",
+        "/cli/vault/reveal",
+        "/cli/vault/recovery/",
+        "/cli/vault/kek/",
+        "/cli/vault/rekey",
+        "/cli/vault/rollback",
+        "/cli/vault/restore",
+        "/cli/vault/recipient",
+        "/cli/vault/legacy-export",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -558,6 +569,25 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/llm/accounts/list",
         "/cli/llm/accounts/status",
         "/cli/llm/accounts/usage",
+        // K2 vault (prd-k2-vault-v1 KV14): agents use and manage their own
+        // workspace's secrets; the handler applies §8.2/§11.2. Confirm,
+        // reveal, recovery and key routes are absent on purpose (DENY).
+        "/cli/vault/status",
+        "/cli/vault/list",
+        "/cli/vault/show",
+        "/cli/vault/presets",
+        "/cli/vault/set",
+        "/cli/vault/rotate",
+        "/cli/vault/policy",
+        "/cli/vault/grant",
+        "/cli/vault/revoke",
+        "/cli/vault/disable",
+        "/cli/vault/enable",
+        "/cli/vault/destroy",
+        "/cli/vault/get",
+        "/cli/vault/audit",
+        "/cli/vault/requests",
+        "/cli/vault/doctor",
         "/cli/llm/accounts/login/status",
         "/cli/llm/accounts/add",
         "/cli/llm/accounts/login",

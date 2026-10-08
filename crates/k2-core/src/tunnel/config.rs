@@ -334,10 +334,50 @@ fn restrict_mode(file: &Path) {
 #[cfg(not(unix))]
 fn restrict_mode(_file: &Path) {}
 
+/// Where the bearer token lives when the K2 vault is open (KV24): the
+/// daemon installs a vault-backed holder at boot, after which
+/// `tunnel.json` keeps every field except `token`. Every caller of
+/// [`load`] still sees `cfg.token` (resolved in memory).
+pub trait TokenVault: Send + Sync {
+    fn get(&self) -> Option<String>;
+    fn set(&self, token: &str) -> Result<(), String>;
+    fn clear(&self) -> Result<(), String>;
+}
+
+static TOKEN_VAULT: std::sync::OnceLock<Box<dyn TokenVault>> = std::sync::OnceLock::new();
+
+/// Install the vault-backed token holder (once, at daemon boot).
+pub fn install_token_vault(v: Box<dyn TokenVault>) -> bool {
+    TOKEN_VAULT.set(v).is_ok()
+}
+
+/// Forget the vault-held token (Release / unpair).
+pub fn clear_vault_token() -> Result<(), String> {
+    match TOKEN_VAULT.get() {
+        Some(v) => v.clear(),
+        None => Ok(()),
+    }
+}
+
+/// The token as it sits in `tunnel.json` itself (adoption reads it once).
+pub fn file_token() -> Result<String, String> {
+    Ok(load_file()?.token)
+}
+
 /// Load the tunnel config from disk. A missing file yields
 /// [`TunnelConfig::default`]; a malformed file is an error (fail loud —
 /// we never silently fall back over a corrupt secret store).
 pub fn load() -> Result<TunnelConfig, String> {
+    let mut cfg = load_file()?;
+    if cfg.token.trim().is_empty() {
+        if let Some(v) = TOKEN_VAULT.get() {
+            cfg.token = v.get().unwrap_or_default();
+        }
+    }
+    Ok(cfg)
+}
+
+fn load_file() -> Result<TunnelConfig, String> {
     let file = config_path();
     if !file.exists() {
         return Ok(TunnelConfig::default());
@@ -354,6 +394,24 @@ pub fn load() -> Result<TunnelConfig, String> {
 /// Persist the tunnel config via tmp+rename, then chmod 0600 so the
 /// token is owner-only. Creates `~/.k2/` if absent.
 pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
+    // With the vault holder installed, the token goes to the vault and the
+    // file keeps everything else.
+    let stripped;
+    let cfg = match TOKEN_VAULT.get() {
+        Some(v) => {
+            let t = cfg.token.trim();
+            if t.is_empty() {
+                v.clear()?;
+            } else if v.get().as_deref() != Some(t) {
+                v.set(t)?;
+            }
+            let mut c = cfg.clone();
+            c.token = String::new();
+            stripped = c;
+            &stripped
+        }
+        None => cfg,
+    };
     let dir = config_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let file = config_path();

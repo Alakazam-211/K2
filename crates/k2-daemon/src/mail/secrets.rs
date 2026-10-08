@@ -72,25 +72,46 @@ pub fn is_scheme_ref(sref: &str) -> bool {
     sref.starts_with("env:") || sref.starts_with("file:") || sref.starts_with('/')
 }
 
-/// The real 0600-file store. `Default` points at
-/// `~/.k2/mail-secrets.json`; tests construct with a temp path.
+/// The mail secret store. `Default` is the K2 vault (`system` secrets in
+/// scope `engine:stalwart`, KV11) whenever the vault is open; only a box
+/// whose vault couldn't open falls back to the old 0600 file
+/// `~/.k2/mail-secrets.json` (moved into the vault on the next open).
+/// Tests construct a file store with a temp path, or get the test vault.
 pub struct FileSecretStore {
     path: PathBuf,
+    vault: Option<crate::vault::refstore::VaultRefStore>,
+}
+
+/// The old file location (adoption reads it once).
+pub fn legacy_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".k2")
+        .join("mail-secrets.json")
 }
 
 impl Default for FileSecretStore {
     fn default() -> Self {
-        let dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".k2");
-        Self { path: dir.join("mail-secrets.json") }
+        #[cfg(test)]
+        let vault = Some(crate::vault::ensure_test_vault());
+        #[cfg(not(test))]
+        let vault = crate::vault::get().ok();
+        Self {
+            path: legacy_path(),
+            vault: vault.map(|v| crate::vault::refstore::VaultRefStore::new(v, "stalwart", "mail")),
+        }
     }
 }
 
 impl FileSecretStore {
     #[cfg(test)]
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
+        Self { path, vault: None }
+    }
+
+    /// The old JSON file as a map (adoption).
+    pub fn legacy_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        Self { path: path.to_path_buf(), vault: None }.load()
     }
 
     /// Whole-file read. Missing file = empty map; malformed file is an
@@ -194,6 +215,9 @@ impl FileSecretStore {
 
 impl SecretStore for FileSecretStore {
     fn store(&self, kind: &str, secret: &str) -> Result<String, String> {
+        if let Some(v) = &self.vault {
+            return v.store_new("mailsec", kind, secret);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         let sref = format!("mailsec_{kind}_{}", random_hex_12());
         let mut map = self.load()?;
@@ -213,6 +237,9 @@ impl SecretStore for FileSecretStore {
         if is_scheme_ref(sref) {
             return resolve_secret_ref(sref).map(Some);
         }
+        if let Some(v) = &self.vault {
+            return v.resolve(sref);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         Ok(self
             .load()?
@@ -222,6 +249,9 @@ impl SecretStore for FileSecretStore {
     }
 
     fn delete(&self, sref: &str) -> Result<(), String> {
+        if let Some(v) = &self.vault {
+            return v.delete(sref);
+        }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         let mut map = self.load()?;
         if map.remove(sref).is_some() {
@@ -238,6 +268,9 @@ impl SecretStore for FileSecretStore {
             return Err(format!(
                 "store_exact: invalid key '{key}' (must be a plain map key, not a scheme ref)"
             ));
+        }
+        if let Some(v) = &self.vault {
+            return v.put_exact(key, secret);
         }
         let _g = store_lock().lock().unwrap_or_else(|p| p.into_inner());
         let mut map = self.load()?;

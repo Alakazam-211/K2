@@ -1268,8 +1268,12 @@ fn handle_access(
     }
     let v = json_body(body)?;
     let toggle = str_field(&v, "toggle").unwrap_or("");
-    if toggle != "agents_manage" && toggle != "compute" {
-        return Err(err("bad_request", 400, "toggle must be 'agents_manage' or 'compute'"));
+    if toggle != "agents_manage" && toggle != "compute" && toggle != "vault_manage" {
+        return Err(err(
+            "bad_request",
+            400,
+            "toggle must be 'agents_manage', 'compute' or 'vault_manage'",
+        ));
     }
     let value = match v.get("value") {
         Some(serde_json::Value::Bool(b)) => *b,
@@ -1302,12 +1306,25 @@ fn handle_access(
             format!("ok {} compute={value}", ws.handle),
         ));
     }
-    k2_core::workspace::settings::set_agents_can_manage_agents(&ws.id, value)
-        .map_err(|e| err("workspace_not_found", 404, e))?;
+    if toggle == "vault_manage" {
+        // K2 vault (prd-k2-vault-v1 §8.2, 0149): "Allow managing
+        // server-wide secrets". Same single writer, same Admin floor.
+        k2_core::workspace::settings::set_agents_can_manage_vault(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+    } else {
+        k2_core::workspace::settings::set_agents_can_manage_agents(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+    }
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::SyncProjects,
         serde_json::Value::Null,
     );
+    if toggle == "vault_manage" {
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "vault_manage", "agentsCanManageVault": value }),
+            format!("ok {} vault_manage={value}", ws.handle),
+        ));
+    }
     Ok((
         serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "agents_manage", "agentsCanManage": value }),
         format!("ok {} agents_manage={value}", ws.handle),

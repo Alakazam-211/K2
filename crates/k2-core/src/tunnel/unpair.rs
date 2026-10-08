@@ -499,13 +499,16 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     })?;
 
     // 4. Delete the identity: tunnel.json (device id + bearer), the
-    //    rendered frpc.toml (embeds the bearer), and the old name's
-    //    certificate. A failed delete is an ERROR — a release that leaves
-    //    the bearer on disk must not report success. (The tombstone is
-    //    already down, so even the failure state is gate-blocked.)
+    //    rendered frpc.toml (embeds the bearer), the vault's tunnel token,
+    //    and the old name's certificate. A failed delete is an ERROR — a
+    //    release that leaves the bearer on disk must not report success.
+    //    (The tombstone is already down, so even the failure state is
+    //    gate-blocked.) The key stays (see below).
+    config::clear_vault_token()?;
     for path in [
         config::config_path(),
         super::connector::frpc_config_path(),
+        super::connector::legacy_frpc_config_path(),
         super::tls::cert_path(),
     ] {
         match fs::remove_file(&path) {

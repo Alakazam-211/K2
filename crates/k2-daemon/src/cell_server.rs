@@ -669,6 +669,19 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::compute_routes::handle(p, who, body, params))
             }
+            // K2 vault over the cell socket: the bound session's passport
+            // (agent or K2 shell tab), agent-level (KV15).
+            p if crate::vault_routes::is_route(p) => {
+                if crate::vault_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::vault_routes::MAX_BODY {
+                    return from_cli(crate::vault_routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                let vc = crate::vault::actor::from_caller(caller, Some(this_session_id.to_string()));
+                from_cli(crate::vault_routes::handle(p, vc, body, params, "cell"))
+            }
             p if crate::llm_accounts_routes::is_route(p) => {
                 if crate::llm_accounts_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());

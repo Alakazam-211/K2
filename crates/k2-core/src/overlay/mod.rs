@@ -14,7 +14,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, SecretBody, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::OverlayPage;
 
@@ -267,6 +267,7 @@ pub fn post_secret(
     to: &str,
     name: &str,
     prompt: Option<&str>,
+    proposal: SecretProposal,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     vault::validate_name(name)?;
     let _guard = WRITE.lock();
@@ -282,6 +283,7 @@ pub fn post_secret(
         to.trim().to_string(),
         name.trim().to_string(),
         prompt,
+        proposal,
     );
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
@@ -354,16 +356,43 @@ pub fn answer_card(
         choice.answer = Some(answer.to_string());
         format!("chose {answer}")
     } else if doc.is_pending_secret() {
-        let bytes = secret_bytes.ok_or_else(|| "secret value required".to_string())?;
-        let name = doc.secret.as_ref().expect("pending secret").name.clone();
-        vault::put(project_id, &name, bytes)?;
-        if let Some(s) = doc.secret.as_mut() {
-            s.status = "set".to_string();
-        }
-        format!("secret {name} set")
+        // K2 vault (prd-k2-vault-v1 §10.1): the daemon stores the value in
+        // the vault and then calls [`mark_secret`]. Nothing here writes a
+        // value anywhere.
+        let _ = (project_id, secret_bytes);
+        return Err("secret cards are answered through the K2 vault".to_string());
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
+    store::put_doc(&doc)?;
+    Ok(CardCallback {
+        conversation_id: conversation_id.to_string(),
+        doc_id: doc.id.clone(),
+        seq: item.seq,
+        doc,
+        inject_line,
+    })
+}
+
+/// After the vault stored a secret card's value (or the person declined):
+/// mark the card `set` / `voided` with the reference. Never takes a value.
+pub fn mark_secret(
+    conversation_id: &str,
+    card_id: &str,
+    status: &str,
+    reference: Option<String>,
+    inject_line: String,
+) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    if !doc.is_pending_secret() {
+        return Err("card is not pending".to_string());
+    }
+    if let Some(s) = doc.secret.as_mut() {
+        s.status = status.to_string();
+        s.reference = reference;
+    }
     store::put_doc(&doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
@@ -393,10 +422,11 @@ pub fn void_card(
         // A pending card never wrote a value, so voiding it deletes
         // nothing: a stored value under the same name belongs to an
         // earlier, answered card and must survive.
+        let name = doc.secret.as_ref().expect("pending secret").name.clone();
         if let Some(s) = doc.secret.as_mut() {
             s.status = "voided".to_string();
         }
-        "card voided — human replied in chat".to_string()
+        format!("secret {name} declined")
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
@@ -831,7 +861,7 @@ mod tests {
             false,
         )
         .expect("choice");
-        let (secret, _) = post_secret(&c, &conv, &project_id, "k2", "ovl-prose", "API_TOKEN", None)
+        let (secret, _) = post_secret(&c, &conv, &project_id, "k2", "ovl-prose", "API_TOKEN", None, SecretProposal::default())
             .expect("secret");
 
         let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
@@ -915,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn secret_submit_sets_vault_without_bytes_in_thread() {
+    fn secret_cards_take_no_value_here_and_mark_set_with_a_reference() {
         let project_id = seed_project("ovl-sec");
         let conv = uuid::Uuid::new_v4().to_string();
         let dbh = conn();
@@ -928,28 +958,27 @@ mod tests {
             "ovl-sec",
             "API_TOKEN",
             Some("Paste the Grok token"),
+            SecretProposal {
+                scope: Some("workspace".into()),
+                hosts: vec!["https://api.x.ai:443".into()],
+                delivery: Some("fetch".into()),
+                kind: Some("api_key".into()),
+            },
         )
         .expect("post_secret");
         assert_eq!(item.doc.kind, "secret");
-        assert_eq!(item.doc.secret.as_ref().expect("secret").status, "pending");
+        let sb = item.doc.secret.as_ref().expect("secret");
+        assert_eq!(sb.status, "pending");
+        assert_eq!(sb.hosts, vec!["https://api.x.ai:443".to_string()]);
         let secret_bytes = b"s3cr3t-NEVER-IN-REDB-xyz";
-        let cb = answer_card(
-            &conv,
-            &project_id,
-            &item.id,
-            None,
-            Some(secret_bytes.as_slice()),
-        )
-        .expect("submit");
+        let refused = answer_card(&conv, &project_id, &item.id, None, Some(secret_bytes.as_slice()));
+        assert!(refused.is_err(), "values go to the K2 vault, never through here");
+        assert!(!vault::exists(&project_id, "API_TOKEN"), "nothing written to the old folder");
+        let cb = mark_secret(&conv, &item.id, "set", Some("k2v://ws/ovl-sec/API_TOKEN".into()), "secret API_TOKEN set".into())
+            .expect("mark set");
         assert_eq!(cb.doc.secret.as_ref().expect("secret").status, "set");
-        assert_eq!(cb.inject_line, "secret API_TOKEN set");
-        assert!(
-            !cb.inject_line.contains("s3cr3t"),
-            "inject must never carry secret bytes: {}",
-            cb.inject_line
-        );
-        let got = vault::debug_read(&project_id, "API_TOKEN").expect("vault");
-        assert_eq!(got, secret_bytes, "vault must hold the bytes");
+        assert_eq!(cb.doc.secret.as_ref().expect("secret").reference.as_deref(), Some("k2v://ws/ovl-sec/API_TOKEN"));
+        assert!(mark_secret(&conv, &item.id, "set", None, "again".into()).is_err(), "no second answer");
         let items = read_thread(&conv, 0).expect("read");
         assert!(
             !snapshot_contains_secret(&items, "s3cr3t-NEVER-IN-REDB-xyz"),
@@ -975,6 +1004,7 @@ mod tests {
             "ovl-sec",
             "OTHER_TOKEN",
             None,
+            SecretProposal::default(),
         )
         .expect("pending");
         let voided = void_card(&conv2, &project_id, &pending.id).expect("void");
@@ -985,55 +1015,50 @@ mod tests {
         );
     }
 
-    /// An answered secret card is final: a second answer is refused with
-    /// [`CARD_NOT_PENDING`] and the stored value is unchanged; a later
-    /// card with the same name that is voided (button or prose) does not
-    /// delete the earlier answer.
+    /// An answered secret card is final (K2 vault model: the value lives in
+    /// the vault, the card only records `set` + the reference): a second
+    /// mark is refused, a void after the answer is refused with
+    /// [`CARD_NOT_PENDING`], no path here takes a value, and voiding a
+    /// later same-name card (button or prose) leaves the first card `set`.
     #[test]
     fn answered_secret_card_is_never_overwritten_or_deleted() {
         let project_id = seed_project("ovl-final");
         let conv = uuid::Uuid::new_v4().to_string();
         let dbh = conn();
         let c = dbh.lock();
-        let (first, _) =
-            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
-                .expect("post first");
+        let (first, _) = post_secret(
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+        )
+        .expect("post first");
         assert!(card_is_secret(&conv, &first.id).expect("kind"), "secret card");
         answer_card(&conv, &project_id, &first.id, None, Some(b"human-value".as_slice()))
+            .expect_err("values never go through answer_card");
+        mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/FINAL_TOKEN".into()), "set".into())
             .expect("first answer");
 
-        let again = answer_card(&conv, &project_id, &first.id, None, Some(b"overwrite".as_slice()))
+        let again = mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/OTHER".into()), "set".into())
             .expect_err("second answer must be refused");
-        assert_eq!(again, CARD_NOT_PENDING);
-        assert_eq!(
-            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault"),
-            b"human-value",
-            "a refused second answer must not touch the stored value"
-        );
+        assert_eq!(again, "card is not pending");
         let void_after = void_card(&conv, &project_id, &first.id)
             .expect_err("voiding an answered card must be refused");
         assert_eq!(void_after, CARD_NOT_PENDING);
 
-        let (second, _) =
-            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
-                .expect("post same-name card");
+        let (second, _) = post_secret(
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+        )
+        .expect("post same-name card");
         void_card(&conv, &project_id, &second.id).expect("void pending same-name card");
-        assert_eq!(
-            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault after void"),
-            b"human-value",
-            "voiding a pending same-name card must not delete the earlier answer"
-        );
-
-        let (third, _) =
-            post_secret(&c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None)
-                .expect("post third");
+        let (third, _) = post_secret(
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+        )
+        .expect("post third");
         let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
         assert!(voided.iter().any(|cb| cb.doc_id == third.id), "prose voids the pending card");
-        assert_eq!(
-            vault::debug_read(&project_id, "FINAL_TOKEN").expect("vault after prose"),
-            b"human-value",
-            "a prose void must not delete the earlier answer"
-        );
+        let first_now = thread_item(&conv, &first.id).expect("first card");
+        let sb = first_now.doc.secret.as_ref().expect("secret body");
+        assert_eq!(sb.status, "set", "the first answer stays set");
+        assert_eq!(sb.reference.as_deref(), Some("k2v://ws/ovl-final/FINAL_TOKEN"));
+        assert!(!vault::exists(&project_id, "FINAL_TOKEN"), "nothing written to the old folder");
     }
 
     #[test]

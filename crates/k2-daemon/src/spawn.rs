@@ -350,6 +350,8 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
             None, // bare-PTY — never stage workspace API keys
             owner,
         );
+        // K2 vault (KV19): this session's file/env secrets.
+        crate::vault::spawn::materialize(&mut env, &workspace_uuid, &session_id.to_string(), false);
         if minted {
             log_debug!(
                 "[hook-scoped] spawn.rs injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",

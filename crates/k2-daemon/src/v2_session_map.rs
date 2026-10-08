@@ -326,6 +326,8 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         // activity store's row removal below (`activity_events`).
 
         let terminal_id = session.session_id.to_string();
+        // K2 vault: the session's secrets dir and proxy placeholders go.
+        crate::vault::spawn::session_ended(&terminal_id);
         // DA2: the activity row goes with the session (RL5 compat `stop`
         // for a client that last heard `start`).
         crate::activity_store::unregister(&terminal_id);

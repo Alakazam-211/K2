@@ -227,6 +227,19 @@ const LOCAL_TARGET_PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 /// previous child is ignored (its run number is stale). A later
 /// `start error` for our proxy (frpc re-logged in and the name was taken)
 /// clears it.
+/// frpc log fragments that mean the control session to frps is gone (or
+/// being re-established), so our proxy registration no longer holds.
+/// Strings from frp 0.61's client (`client/service.go`, `client/control.go`)
+/// and from this box's own frpc.log.
+const SESSION_LOST_MARKERS: &[&str] = &[
+    "try to connect to server",
+    "connect to server error",
+    "login to server failed",
+    "try to reconnect",
+    "work connection closed",
+    "session shutdown",
+];
+
 pub(crate) struct ProxyRegistration {
     proxy_name: String,
     /// The current child's run number (0 = never spawned).
@@ -253,6 +266,18 @@ impl ProxyRegistration {
     pub(crate) fn observe_line(&self, run: u64, line: &str) {
         if self.run.load(Ordering::SeqCst) != run {
             return; // a previous child's late output
+        }
+        // The control session to frps went away (frp 0.61 lines, e.g.
+        // `[W] [client/service.go:319] [<runid>] connect to server error: …`,
+        // `[I] [client/service.go:308] [<runid>] try to connect to server...`,
+        // `[W] [client/control.go:119] [<runid>] start new connection to
+        // server error: session shutdown`). frps drops our proxies with the
+        // session; we hold the name again only after a new success line.
+        if SESSION_LOST_MARKERS.iter().any(|m| line.contains(m)) {
+            let _ = self
+                .registered_run
+                .compare_exchange(run, 0, Ordering::SeqCst, Ordering::SeqCst);
+            return;
         }
         if !line.contains(&format!("[{}]", self.proxy_name)) {
             return;
@@ -2532,6 +2557,37 @@ mod tests {
         assert!(!reg.is_registered(), "a stale run's success must not count");
         reg.observe_line(r2, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
         assert!(reg.is_registered());
+    }
+
+    #[test]
+    fn the_registration_clears_when_the_frps_session_is_lost() {
+        // Real frp 0.61 lines (from a K2 box's frpc.log, ANSI colour kept).
+        const OK: &str = "\u{1b}[0m\u{1b}[1;34m2026-06-03 16:20:11.804 [I] [client/control.go:165] [a7c3215c5a5056eb] [k2so-rosson] start proxy success";
+        let lost = [
+            "\u{1b}[0m\u{1b}[1;33m2026-06-03 22:06:31.021 [W] [client/service.go:319] [c8e85694758a289f] connect to server error: dial tcp 178.156.232.105:7000: connect: network is unreachable",
+            "\u{1b}[0m\u{1b}[1;34m2026-06-03 17:19:51.768 [I] [client/service.go:308] [b3b887f43fa3967e] try to connect to server...",
+            "\u{1b}[0m\u{1b}[1;33m2026-06-03 18:32:27.570 [W] [client/control.go:119] [b3b887f43fa3967e] start new connection to server error: session shutdown",
+            "[W] [client/control.go:80] [b3b887f43fa3967e] work connection write to server error: session shutdown",
+            "[W] [client/service.go:200] [x] login to server failed: i/o timeout",
+            "[I] [client/service.go:150] [x] try to reconnect to server...",
+            "[W] [client/control.go:90] [x] work connection closed before response StartWorkConn message: EOF",
+        ];
+        for line in lost {
+            let reg = ProxyRegistration::new(&TunnelConfig {
+                subdomain: "rosson".to_string(),
+                ..Default::default()
+            });
+            let run = reg.begin_run();
+            reg.observe_line(run, OK);
+            assert!(reg.is_registered(), "the success line registers");
+            reg.observe_line(run, line);
+            assert!(!reg.is_registered(), "a lost session must clear the flag: {line}");
+            // Re-login and a new success line register again.
+            reg.observe_line(run, "[I] [client/service.go:287] [d1] login to server success, get run id [d1]");
+            assert!(!reg.is_registered(), "logging in again is not registration");
+            reg.observe_line(run, OK);
+            assert!(reg.is_registered());
+        }
     }
 
     #[test]

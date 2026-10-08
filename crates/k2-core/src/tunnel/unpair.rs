@@ -945,6 +945,36 @@ mod tests {
     }
 
     #[test]
+    fn release_after_the_frps_session_dropped_sends_nothing() {
+        // Registered once, then the session to frps went away (frpc is
+        // reconnecting): not the holder right now.
+        with_temp_home(|| {
+            let cp = CountingControlPlane::start(200);
+            let lines = format!(
+                "{PROXY_OK}\n[I] [client/service.go:308] [0a1b2c3d] try to connect to server..."
+            );
+            start_frpc(live_identity(), &lines);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let log = std::fs::read_to_string(super::super::connector::frpc_log_path()).unwrap_or_default();
+                if log.contains("try to connect to server") {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "the fake frpc never logged the reconnect");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            // The pump tees a line to the log, then observes it.
+            while super::super::connector::proxy_registered() {
+                assert!(std::time::Instant::now() < deadline, "the reconnect line never cleared the flag");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let report = perform_release().expect("release");
+            assert!(report.local_only, "{report:?}");
+            assert_eq!(cp.hits(), 0, "no POST while the session is down");
+        });
+    }
+
+    #[test]
     fn release_while_frpc_runs_without_a_success_line_sends_nothing() {
         with_temp_home(|| {
             let cp = CountingControlPlane::start(200);

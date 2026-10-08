@@ -2478,7 +2478,7 @@ mod tests {
         }
     }
 
-    fn db_guard() -> std::sync::MutexGuard<'static, ()> {
+    fn db_guard() -> k2_core::test_env::SerialGuard {
         crate::mail::mail_server_test_lock()
     }
 

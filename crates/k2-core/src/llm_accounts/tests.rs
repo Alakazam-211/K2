@@ -1,5 +1,5 @@
-//! Wallet tests. Every test runs under a temp `HOME` (crate-wide
-//! `HOME_LOCK`), with fake credential files that carry a marker string.
+//! Wallet tests. Every test runs under a temp `HOME` (the ONE env lock,
+//! `crate::test_env`), with fake credential files that carry a marker string.
 //! No real CLI, no keychain (`keychain_enabled()` is false under
 //! `cfg(test)`), no real `~/.claude` / `~/.codex` / `~/.grok`.
 
@@ -7,62 +7,33 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use parking_lot::MutexGuard;
 use rusqlite::Connection;
 
 use super::store::{self, CredMeta};
 use super::wallet::{self, Refresher};
 use super::*;
-use crate::themes::HOME_LOCK;
 
 const MARKER: &str = "K2TEST_SECRET_MARKER";
 
 const SCRUB_VARS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "K2_AIRGAP", "K2_LLM_LOGIN_LIVE"];
 
 struct Home {
-    path: PathBuf,
-    prev_home: Option<std::ffi::OsString>,
-    prev_vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    _lock: MutexGuard<'static, ()>,
+    // Field order = drop order: the scrubbed vars restore before HOME (LIFO).
+    _vars: Vec<crate::test_env::EnvVar>,
+    home: crate::test_env::TempHome,
 }
 
 impl Home {
-    fn new(label: &str) -> Home {
-        let lock = HOME_LOCK.lock();
-        crate::test_isolation::assert_no_prod_env();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("k2-llm-acc-{label}-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(path.join(".k2")).unwrap();
-        let prev_home = std::env::var_os("HOME");
-        let prev_vars = SCRUB_VARS.iter().map(|v| (*v, std::env::var_os(v))).collect();
-        std::env::set_var("HOME", &path);
-        for v in SCRUB_VARS {
-            std::env::remove_var(v);
-        }
+    fn new(_label: &str) -> Home {
+        // TempHome holds the ONE env lock, asserts prod isolation and
+        // restores HOME + removes the dir on drop.
+        let home = crate::test_env::TempHome::new();
+        let _vars = SCRUB_VARS.iter().map(|v| crate::test_env::EnvVar::remove(v)).collect();
         crate::airgap::set_setting_enabled(false);
-        Home { path, prev_home, prev_vars, _lock: lock }
+        Home { _vars, home }
     }
     fn p(&self, rel: &str) -> PathBuf {
-        self.path.join(rel)
-    }
-}
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        match self.prev_home.take() {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        for (k, v) in self.prev_vars.drain(..) {
-            match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-        let _ = fs::remove_dir_all(&self.path);
+        self.home.path().join(rel)
     }
 }
 
@@ -249,9 +220,9 @@ fn switch_refreshes_an_expiring_idle_slot_first_and_never_under_airgap() {
     assert_eq!(live["claudeAiOauth"]["refreshToken"], format!("{MARKER}-refresh-rotated"));
     // Back to A, make A expiring, switch under air-gap: no refresh call.
     store::write_slot(Tool::Claude, &a.id, &claude_cred("a", now() * 1000 + 60_000)).unwrap();
-    std::env::set_var("K2_AIRGAP", "1");
+    let airgap = crate::test_env::EnvVar::set("K2_AIRGAP", "1");
     let out = wallet::switch(&conn, Tool::Claude, &a.id, None, Some(&r)).unwrap();
-    std::env::remove_var("K2_AIRGAP");
+    drop(airgap);
     assert!(!out.refreshed);
     assert_eq!(r.calls.load(Ordering::SeqCst), 1, "air-gap: no refresh");
 }
@@ -302,9 +273,9 @@ fn keep_warm_refreshes_due_idle_slots_only() {
     assert!(!res[0].refreshed);
     assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
     // Air-gap: nothing at all.
-    std::env::set_var("K2_AIRGAP", "1");
+    let airgap = crate::test_env::EnvVar::set("K2_AIRGAP", "1");
     let res = wallet::keep_warm(&conn, &bad, now() + 10 * 24 * 3600, &|_| false).unwrap();
-    std::env::remove_var("K2_AIRGAP");
+    drop(airgap);
     assert!(res.is_empty());
     assert!(!dump_db(&conn).contains(MARKER));
 }
@@ -475,10 +446,9 @@ fn login_method_defaults_to_temp_home_with_a_live_swap_escape_hatch() {
     for t in Tool::ALL {
         assert_eq!(wallet::login_method(t), wallet::LoginMethod::TempHome);
     }
-    std::env::set_var("K2_LLM_LOGIN_LIVE", "grok");
+    let _live = crate::test_env::EnvVar::set("K2_LLM_LOGIN_LIVE", "grok");
     assert_eq!(wallet::login_method(Tool::Grok), wallet::LoginMethod::LiveSwap);
     assert_eq!(wallet::login_method(Tool::Claude), wallet::LoginMethod::TempHome);
-    std::env::remove_var("K2_LLM_LOGIN_LIVE");
 }
 
 #[test]

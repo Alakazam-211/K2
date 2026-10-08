@@ -640,18 +640,14 @@ mod tests {
     #[test]
     fn control_plane_base_default_and_override() {
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::remove_var(CONTROL_PLANE_BASE_ENV);
+        // Guards nest LIFO; the original value is restored on drop.
+        let _unset = crate::test_env::EnvVar::remove(CONTROL_PLANE_BASE_ENV);
         assert_eq!(control_plane_base(), DEFAULT_CONTROL_PLANE_BASE);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, "http://127.0.0.1:9999/");
+        let _custom = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, "http://127.0.0.1:9999/");
         // Trailing slash trimmed.
         assert_eq!(control_plane_base(), "http://127.0.0.1:9999");
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, "   ");
+        let _blank = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, "   ");
         assert_eq!(control_plane_base(), DEFAULT_CONTROL_PLANE_BASE);
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
     }
 
     #[test]
@@ -685,15 +681,11 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
 
         let map = fetch_map("rosson", "tok_abc").expect("fetch must succeed");
 
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
 
         let req = rx.recv_timeout(Duration::from_secs(5)).expect("server saw a request");
         assert!(req.starts_with("GET /subdomains "), "must GET /subdomains:\n{req}");
@@ -729,13 +721,9 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         let err = fetch_map("rosson", "tok").expect_err("403 must be an error");
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
         assert!(
             err.contains("pro_required") || err.contains("HTTP 403"),
             "got: {err}"
@@ -801,8 +789,7 @@ mod tests {
         // HOME_LOCK serializes both the env-var override and the global
         // cache against the other cache-touching test.
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
 
         // Known baseline: empty cache (result intentionally ignored — the
         // prior state is whatever the last test left; we only need EMPTY now).
@@ -811,10 +798,7 @@ mod tests {
         let first = refresh_once("rosson", "tok_refresh");
         let second = refresh_once("rosson", "tok_refresh");
 
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
 
         assert_eq!(first.expect("first refresh must succeed"), (1, true), "empty → 1 target is a change");
         assert_eq!(second.expect("second refresh must succeed"), (1, false), "identical re-fetch must be unchanged");
@@ -850,13 +834,9 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         let acct = fetch_account("rosson", "tok");
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
         let acct = acct.expect("fetch_account");
         assert_eq!(acct.tier.as_deref(), Some("pro"));
         assert_eq!(
@@ -900,13 +880,9 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         create_subdomain("tok_write", "web", "127.0.0.1:3000").expect("create");
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
         let req = rx.recv_timeout(Duration::from_secs(5)).expect("saw POST");
         assert!(req.starts_with("POST /subdomains "), "must POST /subdomains:\n{req}");
         assert!(
@@ -944,14 +920,10 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         point_subdomain("tok", "web", "127.0.0.1:4000").expect("point");
         delete_subdomain("tok", "web").expect("delete");
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
         let put = rx.recv_timeout(Duration::from_secs(5)).expect("PUT");
         let del = rx.recv_timeout(Duration::from_secs(5)).expect("DELETE");
         assert!(put.starts_with("PUT /subdomains/web "), "got:\n{put}");
@@ -979,13 +951,9 @@ mod tests {
         });
 
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
         let err = create_subdomain("tok", "web", "127.0.0.1:1").expect_err("403");
-        match prev {
-            Some(p) => std::env::set_var(CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp);
         assert!(err.contains("pro_required"), "got: {err}");
         assert!(err.contains("k2.dev/dashboard"), "got: {err}");
     }

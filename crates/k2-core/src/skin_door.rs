@@ -468,7 +468,7 @@ fn mail_tls_alpn_blocks_direct(status: &str, plan: &str) -> bool {
 // ── Caddy binary ─────────────────────────────────────────────────────
 
 fn which_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = crate::terminal::path_env::lookup_path()?;
     for dir in std::env::split_paths(&path) {
         let cand = dir.join(name);
         if is_executable(&cand) {
@@ -986,22 +986,9 @@ mod tests {
     use super::*;
 
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os("HOME");
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp =
-            std::env::temp_dir().join(format!("k2-skin-door-{}-{}", std::process::id(), nanos));
-        std::fs::create_dir_all(&tmp).expect("temp HOME");
-        std::env::set_var("HOME", &tmp);
+        // Holds the ONE env lock; restores HOME and removes the dir on drop.
+        let _home = crate::test_env::TempHome::new();
         f();
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn spec(ui: Option<u16>, extra: Option<&str>) -> CaddyfileSpec {
@@ -1468,13 +1455,8 @@ mod tests {
     #[test]
     fn apply_without_caddy_is_caddy_missing() {
         with_temp_home(|| {
-            let prev_path = std::env::var_os("PATH");
-            std::env::set_var("PATH", "");
-            let err = apply(60710).unwrap_err();
-            match prev_path {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
+            // Per-thread lookup PATH: the process PATH is never changed.
+            let err = crate::terminal::path_env::with_lookup_path("", || apply(60710).unwrap_err());
             assert!(err.contains("caddy_missing"), "{err}");
             assert!(
                 err.contains("brew install caddy") || err.contains("apt install"),

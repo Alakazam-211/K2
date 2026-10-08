@@ -1460,33 +1460,15 @@ mod tests {
     /// `session` validation (c)). Same pattern as
     /// `workspace::provider_resume::tests::HomeGuard`.
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
         home: std::path::PathBuf,
-        _lock: parking_lot::MutexGuard<'static, ()>,
+        // Holds the ONE env lock; restores HOME + removes the dir on drop.
+        _temp: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
-        fn new(label: &str) -> Self {
-            let lock = crate::themes::HOME_LOCK.lock();
-            let home = std::env::temp_dir().join(format!(
-                "k2-hb-set-session-{label}-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&home).unwrap();
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", &home);
-            Self { original, home, _lock: lock }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.home);
+        fn new(_label: &str) -> Self {
+            let temp = crate::test_env::TempHome::new();
+            Self { home: temp.path().to_path_buf(), _temp: temp }
         }
     }
 

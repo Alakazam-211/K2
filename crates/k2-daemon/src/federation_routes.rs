@@ -2578,12 +2578,12 @@ mod tests {
         store.grant(&fp, "inbound");
         store.save().unwrap();
 
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         let send_body = body(serde_json::json!({ "to": "peer::ws-b::bob", "text": "are you in?" }));
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -2632,12 +2632,12 @@ mod tests {
 
         // Run the blocking send on a worker (reqwest::blocking can't run on the
         // async thread). Override the dial target to our loopback stub.
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         let send_body = body(serde_json::json!({ "to": "peer::ws-b::bob", "text": "hi over the wire" }));
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -2708,7 +2708,7 @@ mod tests {
 
         let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
 
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         // Agent-initiated send → satisfy the GAP #3 connection gate first.
         k2_core::connections::connections(
             &src_path,
@@ -2726,7 +2726,7 @@ mod tests {
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
 
@@ -2797,7 +2797,7 @@ mod tests {
 
         let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
 
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", &base);
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         // Satisfy the GAP #3 connection gate first.
         k2_core::connections::connections(
             &src_path,
@@ -2815,7 +2815,7 @@ mod tests {
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK", "send body: {}", resp.body);
 
@@ -3007,16 +3007,12 @@ mod tests {
     #[test]
     fn pubkey_base_url_round_trips_advertise_env() {
         with_temp_home(|| {
-            let prev = std::env::var_os(k2_core::federation::ADVERTISE_URL_ENV);
-            std::env::set_var(
+            let advertise = k2_core::test_env::EnvVar::set(
                 k2_core::federation::ADVERTISE_URL_ENV,
                 "http://192.168.1.40:38471",
             );
             let resp = handle_pubkey();
-            match prev {
-                Some(p) => std::env::set_var(k2_core::federation::ADVERTISE_URL_ENV, p),
-                None => std::env::remove_var(k2_core::federation::ADVERTISE_URL_ENV),
-            }
+            drop(advertise);
             assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
             let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
             assert_eq!(v["base_url"], "http://192.168.1.40:38471");
@@ -3030,16 +3026,12 @@ mod tests {
     #[test]
     fn pubkey_base_url_skips_loopback_env() {
         with_temp_home(|| {
-            let prev = std::env::var_os(k2_core::federation::ADVERTISE_URL_ENV);
-            std::env::set_var(
+            let advertise = k2_core::test_env::EnvVar::set(
                 k2_core::federation::ADVERTISE_URL_ENV,
                 "http://127.0.0.1:38471",
             );
             let resp = handle_pubkey();
-            match prev {
-                Some(p) => std::env::set_var(k2_core::federation::ADVERTISE_URL_ENV, p),
-                None => std::env::remove_var(k2_core::federation::ADVERTISE_URL_ENV),
-            }
+            drop(advertise);
             assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
             let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
             let base = v["base_url"].as_str().unwrap_or("missing");
@@ -3092,7 +3084,7 @@ mod tests {
         store.save().unwrap();
 
         // Override the dial host to a dead port → peer_host() == "127.0.0.1:1".
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
 
         // (A) No connection for the source workspace → 403, fail-closed.
         let send_body = body(serde_json::json!({
@@ -3132,7 +3124,7 @@ mod tests {
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(
             resp.status, "200 OK",
@@ -3161,12 +3153,12 @@ mod tests {
         store.save().unwrap();
 
         // Point at a dead port (nothing listening) → dial fails.
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
         let send_body = body(serde_json::json!({ "to": "peer::ws::bob", "text": "queued please" }));
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -3191,7 +3183,7 @@ mod tests {
         store.grant(&fp, "inbound");
         store.save().unwrap();
 
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
         let spec = brief_tray();
         let send_body = body(serde_json::json!({
             "to": "peer::ws::bob",
@@ -3200,7 +3192,7 @@ mod tests {
         let resp = tokio::task::spawn_blocking(move || handle_send(&send_body))
             .await
             .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -3279,7 +3271,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let (src_path, ws_uuid) = register_src_workspace("ok");
         let _fp = pin_trusted_peer_for_send("peer");
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
         k2_core::connections::connections(
             &src_path,
             "add",
@@ -3304,7 +3296,7 @@ mod tests {
         })
         .await
         .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(
             resp.status, "200 OK",
@@ -3322,7 +3314,7 @@ mod tests {
         k2_core::db::init_for_tests();
         let (_src_path, ws_uuid) = register_src_workspace("noconnect");
         let _fp = pin_trusted_peer_for_send("peer");
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
 
         let principal = crate::session_token::HookPrincipal {
             workspace_uuid: ws_uuid,
@@ -3339,7 +3331,7 @@ mod tests {
         })
         .await
         .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(resp.status, "403 Forbidden", "must fail closed: {}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
@@ -3360,7 +3352,7 @@ mod tests {
         let (_real_path, real_uuid) = register_src_workspace("real");
         let (spoof_path, _spoof_uuid) = register_src_workspace("spoof");
         let _fp = pin_trusted_peer_for_send("peer");
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", "http://127.0.0.1:1");
 
         // Only the spoofed workspace is connected — if body won, send would queue.
         k2_core::connections::connections(
@@ -3387,7 +3379,7 @@ mod tests {
         })
         .await
         .unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(
             resp.status, "403 Forbidden",
@@ -3416,24 +3408,24 @@ mod tests {
 
     // ── Air-gap LAN federation (prd-airgap-lan-federation-v1) ──
 
-    struct AirgapEnv(Option<std::ffi::OsString>);
+    /// `K2_AIRGAP` set/removed under the ONE shared env lock (restored on
+    /// drop), with the air-gap setting mirror reset on both ends.
+    struct AirgapEnv {
+        _var: k2_core::test_env::EnvVar,
+    }
     impl AirgapEnv {
         fn set(val: Option<&str>) -> Self {
-            let prev = std::env::var_os("K2_AIRGAP");
-            match val {
-                Some(v) => std::env::set_var("K2_AIRGAP", v),
-                None => std::env::remove_var("K2_AIRGAP"),
-            }
+            let var = match val {
+                Some(v) => k2_core::test_env::EnvVar::set("K2_AIRGAP", v),
+                None => k2_core::test_env::EnvVar::remove("K2_AIRGAP"),
+            };
             k2_core::airgap::set_setting_enabled(false);
-            Self(prev)
+            Self { _var: var }
         }
     }
     impl Drop for AirgapEnv {
         fn drop(&mut self) {
-            match &self.0 {
-                Some(p) => std::env::set_var("K2_AIRGAP", p),
-                None => std::env::remove_var("K2_AIRGAP"),
-            }
+            // Runs before the EnvVar field restores K2_AIRGAP (lock still held).
             k2_core::airgap::set_setting_enabled(false);
         }
     }
@@ -3442,7 +3434,7 @@ mod tests {
     fn peer_base_url_airgap_never_concatenates_k2_dev() {
         with_temp_home(|| {
             let _env = AirgapEnv::set(Some("1"));
-            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+            let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
             let url = peer_base_url_from("rpm", "");
             assert!(
                 !url.contains("k2.dev"),
@@ -3459,7 +3451,7 @@ mod tests {
     fn peer_base_url_connect_unchanged_when_not_airgap() {
         with_temp_home(|| {
             let _env = AirgapEnv::set(Some("0"));
-            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+            let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
             assert_eq!(peer_base_url_from("rpm", ""), "https://rpm.k2.dev");
         });
     }
@@ -3518,7 +3510,7 @@ mod tests {
     async fn airgap_send_to_k2_dev_refuses_without_syn() {
         let _home = crate::test_support::TempHome::new();
         let _env = AirgapEnv::set(Some("1"));
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
         let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy");
         spy.set_nonblocking(true).expect("nb");
         let fp = pin_trusted_peer_for_send("foo");
@@ -3568,7 +3560,7 @@ mod tests {
         store.set_trust(&fp, PeerTrust::Trusted);
         store.grant(&fp, "inbound");
         store.save().unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
 
         let to = format!("{fp}::ws::bob");
         let send_body = body(serde_json::json!({ "to": to, "text": "lan ping" }));

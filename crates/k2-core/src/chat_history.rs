@@ -4290,9 +4290,8 @@ mod tests {
 
     /// Each HOME-mutating test grabs this lock so cargo's parallel
     /// runner can't see another test's HOME between the set + the
-    /// inner call. Shared with `themes::tests` + `skill_layers::tests`
-    /// via the crate-wide `themes::HOME_LOCK` static so the lock is a
-    /// true process-wide singleton, not a per-module mutex.
+    /// inner call. `themes::HOME_LOCK` is a handle to the ONE env lock
+    /// (`crate::test_env::lock()`), shared by every env-touching test.
     use crate::themes::HOME_LOCK as UNIT6_HOME_LOCK;
 
     struct U6TempDir {
@@ -4301,12 +4300,7 @@ mod tests {
 
     impl U6TempDir {
         fn new(label: &str) -> Self {
-            let pid = std::process::id();
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("k2so-ch-u6-{label}-{pid}-{nanos}"));
+            let path = crate::test_env::unique_temp_path(&format!("ch-u6-{label}"));
             std::fs::create_dir_all(&path).expect("create tempdir");
             Self { path }
         }
@@ -4318,26 +4312,15 @@ mod tests {
         }
     }
 
+    /// Temp `$HOME` under the ONE env lock (`crate::test_env::TempHome`):
+    /// HOME is restored and the dir removed on drop, also on panic.
     struct U6HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _tmp: U6TempDir,
+        _home: crate::test_env::TempHome,
     }
 
     impl U6HomeGuard {
-        fn new(label: &str) -> Self {
-            let tmp = U6TempDir::new(label);
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", &tmp.path);
-            Self { original, _tmp: tmp }
-        }
-    }
-
-    impl Drop for U6HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+        fn new(_label: &str) -> Self {
+            Self { _home: crate::test_env::TempHome::new() }
         }
     }
 

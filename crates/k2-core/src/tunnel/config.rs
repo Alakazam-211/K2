@@ -509,8 +509,8 @@ mod tests {
         // Serialize with the HOME lock so the K2_E2E env mutation here can't
         // race the other env/HOME-touching suites.
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os("K2_E2E");
-        std::env::remove_var("K2_E2E");
+        // Guards restore K2_E2E on drop (LIFO), also on panic.
+        let _unset = crate::test_env::EnvVar::remove("K2_E2E");
 
         let mut cfg = TunnelConfig::default();
         // ON by default: no env, e2e defaults true.
@@ -525,7 +525,7 @@ mod tests {
 
         // A truthy env var forces ON even over the opt-out config.
         for truthy in ["1", "true", "TRUE", "Yes", "on"] {
-            std::env::set_var("K2_E2E", truthy);
+            let _v = crate::test_env::EnvVar::set("K2_E2E", truthy);
             assert!(
                 e2e_enabled(&cfg),
                 "K2_E2E={truthy} must force ON regardless of config"
@@ -535,14 +535,14 @@ mod tests {
         // (env-level opt-out wins over a default-on / explicit-on config).
         cfg.e2e = true;
         for falsey in ["0", "false", "no", "off", ""] {
-            std::env::set_var("K2_E2E", falsey);
+            let _v = crate::test_env::EnvVar::set("K2_E2E", falsey);
             assert!(
                 !e2e_enabled(&cfg),
                 "K2_E2E={falsey:?} must force OFF even over an e2e:true config"
             );
         }
         // An unrecognised env value is no override → follows the config.
-        std::env::set_var("K2_E2E", "maybe");
+        let _maybe = crate::test_env::EnvVar::set("K2_E2E", "maybe");
         assert!(
             e2e_enabled(&cfg),
             "unrecognised K2_E2E must defer to the (true) config"
@@ -552,11 +552,6 @@ mod tests {
             !e2e_enabled(&cfg),
             "unrecognised K2_E2E must defer to the (false) config"
         );
-
-        match prev {
-            Some(p) => std::env::set_var("K2_E2E", p),
-            None => std::env::remove_var("K2_E2E"),
-        }
     }
 
     #[test]

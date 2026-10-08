@@ -442,8 +442,7 @@ mod tests {
     #[test]
     fn airgap_blocks_start_enable_and_config() {
         with_temp_home(|| {
-            let prev = std::env::var_os("K2_AIRGAP");
-            std::env::set_var("K2_AIRGAP", "1");
+            let _airgap = crate::test_env::EnvVar::set("K2_AIRGAP", "1");
             let start_err = start_tunnel(None, 9).expect_err("start must refuse");
             assert!(
                 start_err.contains("K2_AIRGAP=1"),
@@ -463,10 +462,6 @@ mod tests {
                 cfg_err.contains("K2_AIRGAP=1"),
                 "config teaching error must name the env; got {cfg_err}"
             );
-            match prev {
-                Some(p) => std::env::set_var("K2_AIRGAP", p),
-                None => std::env::remove_var("K2_AIRGAP"),
-            }
         });
     }
 }
@@ -475,38 +470,24 @@ mod tests {
 pub(crate) mod test_support {
     //! Shared test scaffolding. Tunnel tests touch `$HOME` (config +
     //! frpc.toml + log all live under `~/.k2/`), so they must
-    //! serialize and redirect HOME to a tempdir. We reuse the crate-wide
-    //! `themes::HOME_LOCK` so we never race the other HOME-mutating test
-    //! suites (app_settings, themes, companion).
-
-    use crate::themes::HOME_LOCK;
+    //! serialize and redirect HOME to a tempdir. A `test_env::TempHome`
+    //! holds the ONE crate-wide env lock, so we never race the other
+    //! HOME-mutating test suites (app_settings, themes, companion).
 
     /// Run `f` with `$HOME` pointed at a fresh tempdir, under the global
-    /// HOME lock, and clean up afterward. Also clears any prior tunnel
+    /// env lock, and clean up afterward. Also clears any prior tunnel
     /// connector singleton state so start/stop tests don't bleed.
     pub fn with_temp_home<F: FnOnce()>(f: F) {
-        // parking_lot::Mutex — `lock()` returns the guard directly.
-        let _g = HOME_LOCK.lock();
-        let prev = std::env::var_os("HOME");
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp = std::env::temp_dir().join(format!("k2so-tunnel-test-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&tmp).expect("create temp HOME");
-        std::env::set_var("HOME", &tmp);
+        // Restores HOME and removes the dir on drop (after the teardown
+        // below, which still needs the temp HOME), even on panic.
+        let _home = crate::test_env::TempHome::new();
 
         // Ensure a clean connector singleton for this test.
         let _ = super::connector::stop();
 
         f();
 
-        // Best-effort connector teardown + HOME restore.
+        // Best-effort connector teardown.
         let _ = super::connector::stop();
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

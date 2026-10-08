@@ -383,24 +383,23 @@ mod tests {
     use super::*;
     use crate::themes::HOME_LOCK;
 
-    struct AirgapEnv(Option<std::ffi::OsString>);
+    /// `K2_AIRGAP` under the ONE env lock (restored on drop, even on
+    /// panic); also resets the in-memory air-gap setting.
+    struct AirgapEnv {
+        _var: crate::test_env::EnvVar,
+    }
     impl AirgapEnv {
         fn set(val: Option<&str>) -> Self {
-            let prev = std::env::var_os(crate::airgap::ENV_VAR);
-            match val {
-                Some(v) => std::env::set_var(crate::airgap::ENV_VAR, v),
-                None => std::env::remove_var(crate::airgap::ENV_VAR),
-            }
+            let var = match val {
+                Some(v) => crate::test_env::EnvVar::set(crate::airgap::ENV_VAR, v),
+                None => crate::test_env::EnvVar::remove(crate::airgap::ENV_VAR),
+            };
             crate::airgap::set_setting_enabled(false);
-            Self(prev)
+            Self { _var: var }
         }
     }
     impl Drop for AirgapEnv {
         fn drop(&mut self) {
-            match &self.0 {
-                Some(p) => std::env::set_var(crate::airgap::ENV_VAR, p),
-                None => std::env::remove_var(crate::airgap::ENV_VAR),
-            }
             crate::airgap::set_setting_enabled(false);
         }
     }
@@ -638,21 +637,15 @@ mod tests {
     #[test]
     fn advertised_federation_base_env_round_trips_never_loopback() {
         let _lock = HOME_LOCK.lock();
-        let prev_url = std::env::var_os(ADVERTISE_URL_ENV);
-        let prev_port = std::env::var_os(ADVERTISE_PORT_ENV);
-        std::env::set_var(ADVERTISE_URL_ENV, "http://192.168.1.40:38471");
-        std::env::remove_var(ADVERTISE_PORT_ENV);
+        let lan_url = crate::test_env::EnvVar::set(ADVERTISE_URL_ENV, "http://192.168.1.40:38471");
+        let no_port = crate::test_env::EnvVar::remove(ADVERTISE_PORT_ENV);
         let got = advertised_federation_base();
-        std::env::set_var(ADVERTISE_URL_ENV, "http://127.0.0.1:38471");
+        let loopback_url = crate::test_env::EnvVar::set(ADVERTISE_URL_ENV, "http://127.0.0.1:38471");
         let skipped = advertised_federation_base();
-        match prev_url {
-            Some(p) => std::env::set_var(ADVERTISE_URL_ENV, p),
-            None => std::env::remove_var(ADVERTISE_URL_ENV),
-        }
-        match prev_port {
-            Some(p) => std::env::set_var(ADVERTISE_PORT_ENV, p),
-            None => std::env::remove_var(ADVERTISE_PORT_ENV),
-        }
+        // Restore in reverse order (LIFO) before asserting, as before.
+        drop(loopback_url);
+        drop(no_port);
+        drop(lan_url);
         assert_eq!(got, "http://192.168.1.40:38471");
         assert!(
             !skipped.contains("127.0.0.1") && !skipped.to_ascii_lowercase().contains("localhost"),

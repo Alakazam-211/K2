@@ -592,30 +592,16 @@ older minor body
 
     #[test]
     fn read_write_clear_state_roundtrips() {
-        // Acquire the crate-wide HOME_LOCK so this test serializes with
-        // every other `$HOME`-mutating test across modules (themes,
-        // skill_layers, chat_history, app_settings). Phase 2 Unit 6's
-        // 68-test backfill (commit b65a5195) added many tests that
-        // mutate $HOME, exposing this test's pre-existing assumption
-        // that "no other tests touch state_path" as false. Lock kills
-        // the race.
-        let _g = crate::themes::HOME_LOCK.lock();
-
-        // Use a process-isolated HOME so we don't trample the real user's state.
-        let tmp = std::env::temp_dir().join(format!(
-            "k2so-whats-new-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        // SAFETY: HOME_LOCK above prevents any other test from racing
-        // $HOME during this test's lifetime; restore happens before
-        // the guard drops.
-        unsafe { std::env::set_var("HOME", &tmp); }
+        // The TempHome holds the ONE crate-wide env lock, so this test
+        // serializes with every other `$HOME`-mutating test across
+        // modules (themes, skill_layers, chat_history, app_settings).
+        // Phase 2 Unit 6's 68-test backfill (commit b65a5195) added many
+        // tests that mutate $HOME, exposing this test's pre-existing
+        // assumption that "no other tests touch state_path" as false.
+        // The lock kills the race; HOME is restored on drop (even on panic).
+        //
+        // Use an isolated HOME so we don't trample the real user's state.
+        let _home = crate::test_env::TempHome::new();
 
         // Empty state initially.
         assert!(read_last_seen().is_none(), "fresh tmp should have no state");
@@ -634,34 +620,13 @@ older minor body
 
         // Clear is idempotent.
         clear_last_seen().unwrap();
-
-        // Restore HOME.
-        // SAFETY: matches the set_var above; bounded to this test fn.
-        unsafe {
-            match prev_home {
-                Some(h) => std::env::set_var("HOME", h),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // ── End-to-end orchestrator ──────────────────────────────────────
 
     #[test]
     fn read_whats_new_keeps_041_series_after_dismiss() {
-        let _g = crate::themes::HOME_LOCK.lock();
-        let tmp = std::env::temp_dir().join(format!(
-            "k2-whats-new-floor-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let prev_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", &tmp); }
+        let _home = crate::test_env::TempHome::new();
 
         write_last_seen("0.41.5").unwrap();
         let seen = check_for_user("0.41.5");
@@ -688,14 +653,6 @@ older minor body
             before.content.trim().is_empty(),
             "a 0.40 daemon must not show the 0.41 series"
         );
-
-        unsafe {
-            match prev_home {
-                Some(h) => std::env::set_var("HOME", h),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

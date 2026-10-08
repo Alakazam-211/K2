@@ -29,13 +29,12 @@ pub fn sql_supported() -> bool {
 }
 
 /// Serializes tests that touch the SINGLETON `sql_server` row.
+/// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a
+/// test may combine it with `TempHome` / `EnvVar` in either order.
 #[cfg(test)]
-pub(crate) fn sql_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::{Mutex, OnceLock};
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+pub(crate) fn sql_server_test_lock() -> k2_core::test_env::SerialGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    k2_core::test_env::serial(&LOCK)
 }
 
 #[cfg(test)]
@@ -846,6 +845,10 @@ mod tests {
 
     #[test]
     fn agent_cannot_grant_without_can_manage() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -890,6 +893,10 @@ mod tests {
 
     #[test]
     fn bind_does_not_print_secrets() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -1056,6 +1063,10 @@ mod tests {
 
     #[test]
     fn agent_off_who_owns_db_lists_and_stores_create_still_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -1130,6 +1141,10 @@ mod tests {
 
     #[test]
     fn grant_read_lists_and_gets_put_migrate_are_grant_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -1211,6 +1226,10 @@ mod tests {
 
     #[test]
     fn older_read_then_newer_write_grant_unscoped_put_is_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -1304,6 +1323,10 @@ mod tests {
 
     #[test]
     fn owner_interact_put_write_without_grant_row() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -1357,6 +1380,10 @@ mod tests {
 
     #[test]
     fn agent_off_with_no_db_lists_empty_not_passport_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -2484,6 +2511,10 @@ mod tests {
 
     #[test]
     fn skin_store_get_gated_has_cap_in_room_and_platform_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -2637,6 +2668,10 @@ mod tests {
 
     #[test]
     fn dump_handlers_unsupported_off_linux() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -2803,6 +2838,10 @@ mod tests {
 
     #[test]
     fn skin_dump_gated_has_cap_in_room_and_platform_403() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -3312,6 +3351,10 @@ mod tests {
 
     #[test]
     fn dsn_test_actor_migrator_and_name_with_test_is_400() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -3353,6 +3396,10 @@ mod tests {
 
     #[test]
     fn grant_path_test_dsn_is_403_guest_create_stays_404_shape() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -3601,6 +3648,10 @@ mod tests {
 
     #[test]
     fn guest_query_records_lock_before_set_role_and_binds_params() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -3732,6 +3783,10 @@ mod tests {
 
     #[test]
     fn guest_query_refuses_platform_missing_cap_and_unparsed_sql() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
@@ -3846,6 +3901,10 @@ mod tests {
 
     #[test]
     fn guest_query_set_role_is_bind_or_grantee_login() {
+        // The route handlers (and this test) use `FileSecretStore::default()`,
+        // which resolves `~/.k2/db-secrets.json` from `$HOME`: hold a temp
+        // HOME (the ONE shared env lock, taken before the sql/DB locks).
+        let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();

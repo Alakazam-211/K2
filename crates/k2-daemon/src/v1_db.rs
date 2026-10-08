@@ -271,6 +271,9 @@ mod tests {
 
     #[test]
     fn get_v1_db_status_missing_db_fails_loud() {
+        // Temp HOME first (env lock before the sql lock): the handlers
+        // read the default secret store under `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let _g = crate::sql::sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running();
@@ -290,6 +293,9 @@ mod tests {
 
     #[test]
     fn get_v1_db_status_after_create_has_migrations_and_size() {
+        // Temp HOME first (env lock before the sql lock): the handlers
+        // read the default secret store under `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let _g = crate::sql::sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running();
@@ -328,6 +334,9 @@ mod tests {
 
     #[test]
     fn v1_restore_jail_rejects_dotdot_and_abs() {
+        // Temp HOME first (env lock before the sql lock): the handlers
+        // read the default secret store under `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let _g = crate::sql::sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running();
@@ -352,6 +361,9 @@ mod tests {
 
     #[test]
     fn v1_restore_happy_path_fresh_workspace() {
+        // Temp HOME first (env lock before the sql lock): the handlers
+        // read the default secret store under `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let _g = crate::sql::sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running();
@@ -381,6 +393,9 @@ mod tests {
 
     #[test]
     fn v1_create_access_write_persists() {
+        // Temp HOME first (env lock before the sql lock): the handlers
+        // read the default secret store under `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
         let _g = crate::sql::sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running();

@@ -1450,33 +1450,19 @@ mod tests {
 
     // ── Per-harness resume argv (SC48 helper; Big 7) ─────────────────
 
+    /// Temp HOME under the ONE crate-wide env lock (the inner
+    /// `test_env::TempHome` restores HOME and removes the dir on drop).
     struct Home {
         dir: std::path::PathBuf,
-        prev: Option<std::ffi::OsString>,
-        _lock: parking_lot::MutexGuard<'static, ()>,
+        _temp: crate::test_env::TempHome,
     }
     impl Home {
-        fn new(tag: &str) -> Self {
-            let lock = crate::themes::HOME_LOCK.lock();
-            let dir = std::env::temp_dir()
-                .join(format!("k2-sidecar-resume-{tag}-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", &dir);
+        fn new(_tag: &str) -> Self {
+            let temp = crate::test_env::TempHome::new();
             Self {
-                dir,
-                prev,
-                _lock: lock,
+                dir: temp.path().to_path_buf(),
+                _temp: temp,
             }
-        }
-    }
-    impl Drop for Home {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 

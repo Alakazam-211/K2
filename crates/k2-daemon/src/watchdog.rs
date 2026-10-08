@@ -267,60 +267,56 @@ fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use k2_core::test_env::EnvVar;
 
-    /// Env-var tests mutate process-wide state; serialize them so
-    /// parallel execution doesn't see torn config
-    /// (e.g. test A sets DISABLED=1; test B reads env mid-mutate
-    /// and mistakenly concludes defaults are None). Poison-tolerant
-    /// so a panicking test doesn't brick the rest of the suite.
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+    // Env-var tests mutate process-wide state, so they hold the ONE shared
+    // env lock (through the `EnvVar` guards) for their whole duration, and
+    // parallel execution never sees torn config (e.g. test A sets
+    // DISABLED=1; test B reads env mid-mutate and mistakenly concludes
+    // defaults are None). The lock never poisons, and every guard restores
+    // the previous value on drop, even on panic.
 
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Clear every watchdog env var the tests touch, defensively —
-    /// even other test binaries in the same process don't pollute
-    /// our reads. Called at the start of every env-touching test.
-    fn clear_watchdog_env() {
-        for v in [
+    /// Clear every watchdog env var the tests touch, defensively — even
+    /// other tests in the same process don't pollute our reads. Called at
+    /// the start of every env-touching test; bind the returned guards for
+    /// the test's duration.
+    #[must_use = "the vars are restored when the guards drop"]
+    fn clear_watchdog_env() -> Vec<EnvVar> {
+        [
             "K2SO_WATCHDOG_DISABLED",
             "K2SO_WATCHDOG_WARN_SECS",
             "K2SO_WATCHDOG_CTRL_C_SECS",
             "K2SO_WATCHDOG_KILL_SECS",
             "K2SO_WATCHDOG_SPAWN_GRACE_SECS",
             "K2SO_WATCHDOG_POLL_SECS",
-        ] {
-            std::env::remove_var(v);
-        }
+        ]
+        .into_iter()
+        .map(EnvVar::remove)
+        .collect()
     }
 
     #[test]
     fn config_from_env_defaults_with_no_vars() {
-        let _g = env_lock();
-        clear_watchdog_env();
+        let _env = clear_watchdog_env();
         let c = config_from_env();
         assert_eq!(c, WatchdogConfig::default());
     }
 
     #[test]
     fn config_from_env_disabled_flag_disables_everything() {
-        let _g = env_lock();
-        clear_watchdog_env();
-        std::env::set_var("K2SO_WATCHDOG_DISABLED", "1");
+        let _env = clear_watchdog_env();
+        let disabled = EnvVar::set("K2SO_WATCHDOG_DISABLED", "1");
         let c = config_from_env();
-        std::env::remove_var("K2SO_WATCHDOG_DISABLED");
+        drop(disabled);
         assert!(!c.any_stage_enabled());
     }
 
     #[test]
     fn config_from_env_zero_secs_disables_individual_stage() {
-        let _g = env_lock();
-        clear_watchdog_env();
-        std::env::set_var("K2SO_WATCHDOG_WARN_SECS", "0");
+        let _env = clear_watchdog_env();
+        let warn = EnvVar::set("K2SO_WATCHDOG_WARN_SECS", "0");
         let c = config_from_env();
-        std::env::remove_var("K2SO_WATCHDOG_WARN_SECS");
+        drop(warn);
         assert!(c.warn_after.is_none());
     }
 }

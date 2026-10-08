@@ -2253,35 +2253,27 @@ mod heartbeat_schedule_validation_tests {
 #[cfg(test)]
 mod api_key_route_tests {
     use super::*;
+    use k2_core::test_env::EnvVar;
 
-    /// Serializes the env-mutating gate tests in this module against each
-    /// other across threads (`K2_API` / `K2_SANDBOX_API` are process-wide).
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-
-    fn restore_env(name: &str, prev: Option<std::ffi::OsString>) {
-        match prev {
-            Some(v) => std::env::set_var(name, v),
-            None => std::env::remove_var(name),
-        }
-    }
+    // The env-mutating gate tests in this module (`K2_API` /
+    // `K2_SANDBOX_API` are process-wide) hold the ONE shared env lock for
+    // their whole duration; each `EnvVar` guard restores the previous value
+    // on drop (LIFO), even on panic.
 
     /// The `K2_SANDBOX_API` flag defaults OFF and only the canonical truthy
-    /// values flip it on (serialized via the module env lock to avoid racing
+    /// values flip it on (serialized via the shared env lock to avoid racing
     /// other env-mutating tests).
     #[test]
     fn sandbox_api_flag_defaults_off() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os("K2_SANDBOX_API");
-        std::env::remove_var("K2_SANDBOX_API");
+        let _env = crate::test_support::lock_home();
+        let _sbx = EnvVar::remove("K2_SANDBOX_API");
         assert!(!sandbox_api_enabled(), "K2_SANDBOX_API must default OFF");
-        std::env::set_var("K2_SANDBOX_API", "1");
+        let _sbx = EnvVar::set("K2_SANDBOX_API", "1");
         assert!(sandbox_api_enabled(), "K2_SANDBOX_API=1 enables");
-        std::env::set_var("K2_SANDBOX_API", "off");
+        let _sbx = EnvVar::set("K2_SANDBOX_API", "off");
         assert!(!sandbox_api_enabled(), "K2_SANDBOX_API=off disables");
-        std::env::set_var("K2_SANDBOX_API", "true");
+        let _sbx = EnvVar::set("K2_SANDBOX_API", "true");
         assert!(sandbox_api_enabled(), "K2_SANDBOX_API=true enables");
-        restore_env("K2_SANDBOX_API", prev);
     }
 
     /// F3 gate split: `api_enabled()` = `K2_API` truthy OR the legacy
@@ -2290,21 +2282,19 @@ mod api_key_route_tests {
     /// object mirrors it and reports `sandboxes` from `can_sandbox()`.
     #[test]
     fn api_enabled_combos_and_capability_shape() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // ALSO hold the crate-wide home lock: the settings-mirror leg below
-        // shares process state (`app_settings::API_SETTING_ENABLED`) with the
-        // settings_routes tests, which serialize on this lock via
-        // with_temp_home. Holding both prevents a parallel settings test's
-        // transient mirror flip from racing the default-OFF assertions here.
-        let _h = crate::test_support::lock_home();
-        let prev_api = std::env::var_os("K2_API");
-        let prev_sbx = std::env::var_os("K2_SANDBOX_API");
+        // Hold the ONE shared env lock for the whole test. It also covers the
+        // settings-mirror leg below: that shares process state
+        // (`app_settings::API_SETTING_ENABLED`) with the settings_routes
+        // tests, which serialize on this lock via with_temp_home, so a
+        // parallel settings test's transient mirror flip cannot race the
+        // default-OFF assertions here.
+        let _env = crate::test_support::lock_home();
         // Defensive: a previously-failed test could leak the mirror ON.
         k2_core::app_settings::set_api_enabled(false);
 
         // Both env flags unset + setting off → surface dark.
-        std::env::remove_var("K2_API");
-        std::env::remove_var("K2_SANDBOX_API");
+        let _api = EnvVar::remove("K2_API");
+        let _sbx = EnvVar::remove("K2_SANDBOX_API");
         assert!(!api_enabled(), "K2_API must default OFF");
         assert_eq!(api_capability()["enabled"], serde_json::json!(false));
 
@@ -2322,24 +2312,24 @@ mod api_key_route_tests {
         assert!(!api_enabled(), "apiEnabled setting OFF must go dark again");
 
         // K2_API alone turns the surface on.
-        std::env::set_var("K2_API", "1");
+        let _api = EnvVar::set("K2_API", "1");
         assert!(api_enabled(), "K2_API=1 enables the surface");
         assert!(!sandbox_api_enabled(), "…without implying the sandbox gate");
 
         // Legacy K2_SANDBOX_API alone still implies the surface (back-compat).
-        std::env::remove_var("K2_API");
-        std::env::set_var("K2_SANDBOX_API", "true");
+        let _api = EnvVar::remove("K2_API");
+        let _sbx = EnvVar::set("K2_SANDBOX_API", "true");
         assert!(api_enabled(), "legacy K2_SANDBOX_API=true implies K2_API");
 
         // Falsy values never enable.
-        std::env::set_var("K2_API", "0");
-        std::env::set_var("K2_SANDBOX_API", "off");
+        let _api = EnvVar::set("K2_API", "0");
+        let _sbx = EnvVar::set("K2_SANDBOX_API", "off");
         assert!(!api_enabled(), "falsy values must not enable the surface");
 
         // Capability object shape: enabled + hostSessions bools (hostSessions
         // ships with the surface — F1) + sandboxes tier string from
         // can_sandbox() (on a mac/feature-off test build that is "none").
-        std::env::set_var("K2_API", "1");
+        let _api = EnvVar::set("K2_API", "1");
         let cap = api_capability();
         assert_eq!(cap["enabled"], serde_json::json!(true));
         assert_eq!(
@@ -2354,9 +2344,6 @@ mod api_key_route_tests {
             Some(3),
             "capability object is FROZEN wire shape: exactly enabled+hostSessions+sandboxes; got {cap}"
         );
-
-        restore_env("K2_API", prev_api);
-        restore_env("K2_SANDBOX_API", prev_sbx);
     }
 
     /// create → list shows the key (redacted); revoke flips it; the create

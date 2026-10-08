@@ -586,17 +586,12 @@ mod tests {
     }
 
     /// Run `f` with the self-signed spike escape hatch engaged
-    /// (`K2_E2E_SELF_SIGNED=1`). Must be called from inside `with_temp_home`
-    /// (which holds `HOME_LOCK`) so the global env mutation is serialized.
+    /// (`K2_E2E_SELF_SIGNED=1`). Called from inside `with_temp_home`; the
+    /// `EnvVar` guard takes the ONE (re-entrant) env lock and restores the
+    /// var on drop, also on panic.
     fn with_self_signed<T>(f: impl FnOnce() -> T) -> T {
-        let prev = std::env::var_os("K2_E2E_SELF_SIGNED");
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
-        let out = f();
-        match prev {
-            Some(p) => std::env::set_var("K2_E2E_SELF_SIGNED", p),
-            None => std::env::remove_var("K2_E2E_SELF_SIGNED"),
-        }
-        out
+        let _self_signed = crate::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        f()
     }
 
     #[test]
@@ -650,10 +645,8 @@ mod tests {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         with_temp_home(|| {
             // Ensure the spike hatch is OFF for this test.
-            let prev = std::env::var_os("K2_E2E_SELF_SIGNED");
-            std::env::remove_var("K2_E2E_SELF_SIGNED");
+            let _self_signed = crate::test_env::EnvVar::remove("K2_E2E_SELF_SIGNED");
             // Point the broker at a closed port so the call fails fast.
-            let prev_url = std::env::var_os(super::super::cert_broker::BROKER_URL_ENV);
             let dead = {
                 use std::net::TcpListener;
                 let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -661,7 +654,7 @@ mod tests {
                 drop(l);
                 format!("http://127.0.0.1:{p}/cert")
             };
-            std::env::set_var(super::super::cert_broker::BROKER_URL_ENV, &dead);
+            let _broker_url = crate::test_env::EnvVar::set(super::super::cert_broker::BROKER_URL_ENV, &dead);
             super::super::config::save(&super::super::config::TunnelConfig {
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
@@ -679,15 +672,6 @@ mod tests {
                 !cert_path().exists(),
                 "a failed broker call must not leave a (self-signed) cert behind"
             );
-
-            match prev {
-                Some(p) => std::env::set_var("K2_E2E_SELF_SIGNED", p),
-                None => std::env::remove_var("K2_E2E_SELF_SIGNED"),
-            }
-            match prev_url {
-                Some(p) => std::env::set_var(super::super::cert_broker::BROKER_URL_ENV, p),
-                None => std::env::remove_var(super::super::cert_broker::BROKER_URL_ENV),
-            }
         });
     }
 

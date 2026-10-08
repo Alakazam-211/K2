@@ -1128,33 +1128,22 @@ mod tests {
     /// Each test points HOME at a fresh tempdir so `~/.k2so/settings.json`
     /// is isolated from the developer's real settings file and from
     /// concurrent tests.
+    /// Holds a `crate::test_env::TempHome` (the ONE env lock; HOME
+    /// restored and the dir removed on drop, also on panic).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _tmp: tempdir_lite::TempDir,
+        _home: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let tmp = tempdir_lite::TempDir::new("k2so-app-settings-test");
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", tmp.path());
             Self {
-                original,
-                _tmp: tmp,
+                _home: crate::test_env::TempHome::new(),
             }
         }
     }
 
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
-
-    // Re-use the crate-wide HOME_LOCK from `themes` so the HOME-mutating
+    // Re-use the crate-wide HOME_LOCK from `themes` (now a handle to the
+    // ONE env lock, `crate::test_env::lock()`) so the HOME-mutating
     // tests across modules (themes, skill_layers, chat_history, app_settings,
     // whats_new) all serialize on a single mutex. Cargo's parallel runner
     // would otherwise race separate per-module locks against each other
@@ -1759,40 +1748,5 @@ mod tests {
         // Cleanup so subsequent tests don't see a stale state.
         drop(guard);
         *crate::companion::STATE.lock() = None;
-    }
-
-    /// Tiny in-crate tempdir helper — we don't want a top-level
-    /// `tempfile` dep for one usage. Mimics the minimal API we need:
-    /// auto-create + auto-delete + path accessor.
-    mod tempdir_lite {
-        use std::path::{Path, PathBuf};
-
-        pub struct TempDir {
-            path: PathBuf,
-        }
-
-        impl TempDir {
-            pub fn new(prefix: &str) -> Self {
-                let pid = std::process::id();
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                let path =
-                    std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"));
-                std::fs::create_dir_all(&path).expect("create tempdir");
-                Self { path }
-            }
-
-            pub fn path(&self) -> &Path {
-                &self.path
-            }
-        }
-
-        impl Drop for TempDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.path);
-            }
-        }
     }
 }

@@ -5,58 +5,36 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use parking_lot::MutexGuard;
 use rusqlite::Connection;
 
 use super::pins::{self, ScopeKind, Source};
 use super::store;
 use super::wallet::{self, Refresher};
 use super::*;
-use crate::themes::HOME_LOCK;
 
 const MARKER: &str = "K2TEST_SECRET_MARKER";
 const API_KEY: &str = "sk-test-K2TEST_SECRET_MARKER-0123456789";
 
+// Field order = drop order: the scrubbed vars restore before HOME (LIFO).
 struct Home {
-    path: PathBuf,
-    prev: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    _lock: MutexGuard<'static, ()>,
+    _vars: Vec<crate::test_env::EnvVar>,
+    home: crate::test_env::TempHome,
 }
 
-const VARS: &[&str] = &["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "K2_AIRGAP"];
+/// Scrubbed for every test (HOME itself is the TempHome).
+const VARS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "K2_AIRGAP"];
 
 impl Home {
-    fn new(label: &str) -> Home {
-        let lock = HOME_LOCK.lock();
-        crate::test_isolation::assert_no_prod_env();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("k2-llm-pins-{label}-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(path.join(".k2")).unwrap();
-        let prev = VARS.iter().map(|v| (*v, std::env::var_os(v))).collect();
-        for v in VARS {
-            std::env::remove_var(v);
-        }
-        std::env::set_var("HOME", &path);
+    fn new(_label: &str) -> Home {
+        // TempHome holds the ONE env lock, asserts prod isolation and
+        // restores HOME + removes the dir on drop.
+        let home = crate::test_env::TempHome::new();
+        let _vars = VARS.iter().map(|v| crate::test_env::EnvVar::remove(v)).collect();
         crate::airgap::set_setting_enabled(false);
-        Home { path, prev, _lock: lock }
+        Home { _vars, home }
     }
     fn p(&self, rel: &str) -> PathBuf {
-        self.path.join(rel)
-    }
-}
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        for (k, v) in self.prev.drain(..) {
-            match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-        let _ = fs::remove_dir_all(&self.path);
+        self.home.path().join(rel)
     }
 }
 

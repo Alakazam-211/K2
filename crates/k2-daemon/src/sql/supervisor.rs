@@ -749,7 +749,7 @@ mod tests {
     use super::*;
     use crate::sql::sysops::FakeSystemOps;
 
-    fn db_guard() -> std::sync::MutexGuard<'static, ()> {
+    fn db_guard() -> k2_core::test_env::SerialGuard {
         crate::sql::sql_server_test_lock()
     }
     fn clean_row() {

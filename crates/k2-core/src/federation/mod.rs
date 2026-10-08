@@ -107,27 +107,23 @@ mod tests {
     #[test]
     fn feature_flag_defaults_off() {
         // The load-bearing default: with K2_FEDERATION unset, federation is OFF.
-        // (Serialized via the env lock that the crypto tests also hold — but this
-        // test only reads, and the default-unset case is what production ships.)
-        let prev = std::env::var_os("K2_FEDERATION");
-        std::env::remove_var("K2_FEDERATION");
+        // Holds the ONE env lock for the whole test (the env var and the
+        // in-memory switch are both process-global); the guards restore
+        // K2_FEDERATION on drop (LIFO), also on panic.
+        let _lock = crate::test_env::lock();
+        let _unset = crate::test_env::EnvVar::remove("K2_FEDERATION");
         assert!(!enabled(), "K2_FEDERATION must default OFF");
-        std::env::set_var("K2_FEDERATION", "1");
+        let _on = crate::test_env::EnvVar::set("K2_FEDERATION", "1");
         assert!(enabled(), "K2_FEDERATION=1 must enable");
-        std::env::set_var("K2_FEDERATION", "off");
+        let _off = crate::test_env::EnvVar::set("K2_FEDERATION", "off");
         assert!(!enabled(), "K2_FEDERATION=off must disable");
 
         // The persisted app-level switch (synced via set_enabled) also turns it
         // on with the env var off/unset, and back off — the UI-toggle path.
-        std::env::remove_var("K2_FEDERATION");
+        let _unset_again = crate::test_env::EnvVar::remove("K2_FEDERATION");
         set_enabled(true);
         assert!(enabled(), "federation_enabled setting must enable");
         set_enabled(false);
         assert!(!enabled(), "federation_enabled OFF must disable");
-
-        match prev {
-            Some(p) => std::env::set_var("K2_FEDERATION", p),
-            None => std::env::remove_var("K2_FEDERATION"),
-        }
     }
 }

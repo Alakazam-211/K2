@@ -273,43 +273,24 @@ pub fn chat_key_meta(workspace_path: &str) -> Option<ChatKeyMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
     use uuid::Uuid;
 
-    /// Serialize HOME-mutating tests so they don't stomp each other.
-    fn home_lock() -> std::sync::MutexGuard<'static, ()> {
-        static L: OnceLock<Mutex<()>> = OnceLock::new();
-        L.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    }
-
+    /// Temp HOME under the ONE crate-wide env lock (held by the inner
+    /// `test_env::TempHome`), so HOME-mutating tests across the crate
+    /// don't stomp each other. Restores HOME and removes the dir on drop.
+    /// Taken before the DB lock (lock order: env first).
     struct HomeGuard {
         home: PathBuf,
-        prev: Option<std::ffi::OsString>,
+        _temp: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let home = std::env::temp_dir().join(format!(
-                "k2-wiki-chat-home-{}-{}",
-                std::process::id(),
-                Uuid::new_v4()
-            ));
-            fs::create_dir_all(&home).expect("create temp HOME");
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", &home);
-            Self { home, prev }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
+            let temp = crate::test_env::TempHome::new();
+            Self {
+                home: temp.path().to_path_buf(),
+                _temp: temp,
             }
-            let _ = fs::remove_dir_all(&self.home);
         }
     }
 
@@ -335,7 +316,6 @@ mod tests {
 
     #[test]
     fn ensure_mints_host_sessions_only_and_load_round_trips() {
-        let _g = home_lock();
         let _home = HomeGuard::new();
 
         let path = unique_path("mint");
@@ -382,7 +362,6 @@ mod tests {
 
     #[test]
     fn ensure_remints_after_revoke() {
-        let _g = home_lock();
         let _home = HomeGuard::new();
 
         let path = unique_path("remint");

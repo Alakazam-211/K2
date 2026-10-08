@@ -2665,8 +2665,7 @@ mod tests {
     #[test]
     fn chat_gate_off_when_setting_off() {
         let ws = temp_ws("chat-gate-off");
-        let prev = std::env::var_os("K2_WIKI_PUBLIC_CHAT");
-        std::env::remove_var("K2_WIKI_PUBLIC_CHAT");
+        let gate_env = k2_core::test_env::EnvVar::remove("K2_WIKI_PUBLIC_CHAT");
         let st = chat_gate(&ws);
         assert!(!st.enabled);
         assert!(
@@ -2674,10 +2673,7 @@ mod tests {
             "reason={:?}",
             st.reason
         );
-        match prev {
-            Some(v) => std::env::set_var("K2_WIKI_PUBLIC_CHAT", v),
-            None => std::env::remove_var("K2_WIKI_PUBLIC_CHAT"),
-        }
+        drop(gate_env);
         let _ = fs::remove_dir_all(&ws);
     }
 

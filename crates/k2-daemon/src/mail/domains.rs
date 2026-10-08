@@ -1910,7 +1910,7 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
     #[test]
     fn secret_ref_forms() {
         use crate::mail::secrets::resolve_secret_ref;
-        std::env::set_var("K2_TEST_MAIL_KEY", "sekrit");
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_KEY", "sekrit");
         assert_eq!(resolve_secret_ref("env:K2_TEST_MAIL_KEY").unwrap(), "sekrit");
         assert!(resolve_secret_ref("env:K2_TEST_MAIL_KEY_MISSING").is_err());
         assert!(resolve_secret_ref("keychain:whatever").is_err(), "unknown scheme fails loudly");

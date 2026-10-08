@@ -100,13 +100,12 @@ fn fake_spawn() -> bool {
 }
 
 /// Serializes tests that touch the singleton `skin_hydra` row / live child.
+/// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a
+/// test may combine it with `TempHome` / `EnvVar` in either order.
 #[cfg(test)]
-pub(crate) fn hydra_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::{Mutex as StdMutex, OnceLock};
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+pub(crate) fn hydra_test_lock() -> k2_core::test_env::SerialGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    k2_core::test_env::serial(&LOCK)
 }
 
 /// Linux-supervisor Fake: supported + PATH hydra without spawning a process.

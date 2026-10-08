@@ -2064,8 +2064,7 @@ mod tests {
             .build()
             .expect("tokio");
         let _enter = rt.enter();
-        let prior = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND").ok();
-        std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", "/bin/cat");
+        let wake_cmd = k2_core::test_env::EnvVar::set("K2SO_WAKE_HEADLESS_TEST_COMMAND", "/bin/cat");
         let resp = handle_answer(
             serde_json::json!({ "id": id, "answer": "wake it" })
                 .to_string()
@@ -2074,10 +2073,7 @@ mod tests {
         if let Some(s) = crate::v2_session_map::unregister(&project_id) {
             s.kill();
         }
-        match prior {
-            Some(v) => std::env::set_var("K2SO_WAKE_HEADLESS_TEST_COMMAND", v),
-            None => std::env::remove_var("K2SO_WAKE_HEADLESS_TEST_COMMAND"),
-        }
+        drop(wake_cmd);
         let _ = std::fs::remove_dir_all(&path);
 
         assert_eq!(resp.status, "200 OK", "answer failed: {}", resp.body);

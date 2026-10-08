@@ -393,16 +393,10 @@ pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
 
-    /// Serialize env mutations (K2_DNS_API_BASE / HOME) across dns proxy tests.
-    /// The one lock for tests that set `K2_DNS_API_BASE` (process-global
-    /// env). `dns::routes` tests take it too; two separate locks let them
-    /// swap mock servers mid-test.
-    pub(crate) fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    // Env mutations (K2_DNS_API_BASE / HOME) go through the ONE shared env
+    // lock (`k2_core::test_env::EnvVar` / `TempHome`), not a private one.
 
     #[test]
     fn authorization_header_uses_token_as_is() {
@@ -460,16 +454,11 @@ pub(crate) mod tests {
 
     #[test]
     fn dns_api_base_default_and_override() {
-        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os(DNS_API_BASE_ENV);
-        std::env::remove_var(DNS_API_BASE_ENV);
+        let _env = crate::test_support::lock_home();
+        let _base = k2_core::test_env::EnvVar::remove(DNS_API_BASE_ENV);
         assert_eq!(dns_api_base(), DEFAULT_DNS_API_BASE);
-        std::env::set_var(DNS_API_BASE_ENV, "http://127.0.0.1:9/");
+        let _base = k2_core::test_env::EnvVar::set(DNS_API_BASE_ENV, "http://127.0.0.1:9/");
         assert_eq!(dns_api_base(), "http://127.0.0.1:9");
-        match prev {
-            Some(p) => std::env::set_var(DNS_API_BASE_ENV, p),
-            None => std::env::remove_var(DNS_API_BASE_ENV),
-        }
     }
 
     /// Manual mock HTTP: proxy builds the correct Authorization header.
@@ -493,9 +482,8 @@ pub(crate) mod tests {
             }
         });
 
-        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os(DNS_API_BASE_ENV);
-        std::env::set_var(DNS_API_BASE_ENV, format!("http://127.0.0.1:{port}"));
+        let base_env =
+            k2_core::test_env::EnvVar::set(DNS_API_BASE_ENV, format!("http://127.0.0.1:{port}"));
 
         let fake_token = "k2c_testlabel_deadbeefcafebabe";
         let resp = ReqwestDnsClient
@@ -507,11 +495,7 @@ pub(crate) mod tests {
                 None,
             )
             .expect("mock fetch");
-
-        match prev {
-            Some(p) => std::env::set_var(DNS_API_BASE_ENV, p),
-            None => std::env::remove_var(DNS_API_BASE_ENV),
-        }
+        drop(base_env);
 
         assert_eq!(resp.status, 200);
         let req = seen.lock().unwrap().clone();
@@ -536,24 +520,10 @@ pub(crate) mod tests {
 
     #[test]
     fn tunnel_bearer_token_empty_is_error() {
-        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let tmp = std::env::temp_dir().join(format!(
-            "k2-dns-proxy-tok-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::create_dir_all(&tmp);
-        let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp);
+        // Fresh temp HOME (no tunnel token) under the shared env lock;
+        // restored + removed on drop.
+        let _home = crate::test_support::TempHome::new();
         let err = tunnel_bearer_token().expect_err("empty token");
         assert!(err.contains("tunnel token"), "{err}");
-        match prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

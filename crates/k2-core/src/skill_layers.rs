@@ -121,8 +121,8 @@ mod tests {
     //! Tests for the Phase 2 Unit 6 skill_layers module.
     //!
     //! `layers_dir()` hardcodes `dirs::home_dir().join(".k2/templates/<tier>)`,
-    //! so we install a fresh HOME for each test via a HomeGuard +
-    //! serialized lock pattern (same shape as `app_settings::tests`).
+    //! so we install a fresh HOME for each test via a HomeGuard over
+    //! `test_env::TempHome` (which holds the ONE crate-wide env lock).
     //!
     //! NOTE: `delete()` routes through `safe_delete::trash`, which on
     //! macOS shells out to AppleScript/Finder and can trigger Touch ID
@@ -130,60 +130,23 @@ mod tests {
     //! `feedback_recycle_bin_tests` memory we **skip** the trash path
     //! and document the gap below.
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
+    /// Fresh temp HOME for the life of the guard; restores HOME and
+    /// removes the dir on drop (even on panic).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _tmp: TempDir,
+        _home: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let tmp = TempDir::new("k2so-skill_layers-test");
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", tmp.path());
-            Self { original, _tmp: tmp }
+            Self { _home: crate::test_env::TempHome::new() }
         }
     }
 
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(prefix: &str) -> Self {
-            let pid = std::process::id();
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"));
-            fs::create_dir_all(&path).expect("create tempdir");
-            Self { path }
-        }
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    // Share the process-wide HOME mutex with `themes::tests` so two
-    // HOME-mutating tests can't race when both modules run in
-    // parallel under cargo's default threading.
+    // Share the ONE process-wide env lock (`themes::HOME_LOCK` is the
+    // shared `test_env` lock) so two HOME-mutating tests can't race
+    // when modules run in parallel under cargo's default threading.
     use crate::themes::HOME_LOCK as TEST_LOCK;
 
     #[test]

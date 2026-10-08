@@ -492,12 +492,15 @@ fn new_job_id() -> String {
 /// every other job-touching test. The returned guard MUST be bound for the
 /// test's duration (`let _g = clear_jobs_for_test();`): the `jobs()` map is a
 /// crate-wide singleton, so without this lock a concurrent test's reset would
-/// wipe a job mid-assertion (`get_job(id)` → `None`).
+/// wipe a job mid-assertion (`get_job(id)` → `None`). This lock guards the
+/// job map only, not the env: a test that also needs `$HOME` takes its
+/// `TempHome` (the ONE shared env lock) FIRST, then this.
 #[cfg(test)]
 #[must_use = "bind the returned guard for the test's duration to serialize against other job tests"]
-fn clear_jobs_for_test() -> std::sync::MutexGuard<'static, ()> {
+fn clear_jobs_for_test() -> k2_core::test_env::SerialGuard {
+    // Env lock first (see `k2_core::test_env::serial`), then the job lock.
     static TEST_LOCK: StdMutex<()> = StdMutex::new(());
-    let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = k2_core::test_env::serial(&TEST_LOCK);
     jobs().lock().unwrap_or_else(|e| e.into_inner()).clear();
     guard
 }
@@ -1458,31 +1461,18 @@ mod tests {
       }
     }"#;
 
+    /// Both manifest-URL overrides removed for the guard's life (shared env
+    /// lock held; previous values restored on drop, LIFO).
     struct ManifestUrlEnv {
-        k2: Option<std::ffi::OsString>,
-        k2so: Option<std::ffi::OsString>,
+        _k2so: k2_core::test_env::EnvVar,
+        _k2: k2_core::test_env::EnvVar,
     }
 
     impl ManifestUrlEnv {
         fn unset() -> Self {
-            let k2 = std::env::var_os("K2_DAEMON_MANIFEST_URL");
-            let k2so = std::env::var_os("K2SO_DAEMON_MANIFEST_URL");
-            std::env::remove_var("K2_DAEMON_MANIFEST_URL");
-            std::env::remove_var("K2SO_DAEMON_MANIFEST_URL");
-            Self { k2, k2so }
-        }
-    }
-
-    impl Drop for ManifestUrlEnv {
-        fn drop(&mut self) {
-            match &self.k2 {
-                Some(v) => std::env::set_var("K2_DAEMON_MANIFEST_URL", v),
-                None => std::env::remove_var("K2_DAEMON_MANIFEST_URL"),
-            }
-            match &self.k2so {
-                Some(v) => std::env::set_var("K2SO_DAEMON_MANIFEST_URL", v),
-                None => std::env::remove_var("K2SO_DAEMON_MANIFEST_URL"),
-            }
+            let k2 = k2_core::test_env::EnvVar::remove("K2_DAEMON_MANIFEST_URL");
+            let k2so = k2_core::test_env::EnvVar::remove("K2SO_DAEMON_MANIFEST_URL");
+            Self { _k2so: k2so, _k2: k2 }
         }
     }
 
@@ -2215,12 +2205,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     impl Scratch {
         fn new(tag: &str) -> Self {
-            let p = std::env::temp_dir().join(format!(
-                "k2-update-test-{tag}-{}-{:?}",
-                std::process::id(),
-                std::thread::current().id()
-            ));
-            let _ = std::fs::remove_dir_all(&p);
+            let p = k2_core::test_env::unique_temp_path(&format!("update-test-{tag}"));
             std::fs::create_dir_all(&p).expect("scratch dir");
             Self(p)
         }
@@ -2284,9 +2269,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn boot_verifier_clears_marker_when_the_new_version_is_live() {
+        // Temp HOME under the ONE shared env lock (taken BEFORE the job
+        // lock); restored + removed on drop. The old hand-set HOME here was
+        // never restored and left HOME pointing at a deleted scratch dir.
+        let home = crate::test_support::TempHome::new();
         let _guard = clear_jobs_for_test();
-        let home = Scratch::new("boot");
-        std::env::set_var("HOME", home.path());
 
         let plan = ApplyPlan {
             job_id: "j2".into(),
@@ -2307,9 +2294,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn boot_verifier_restores_backup_after_repeated_failed_boots() {
+        // Shared env lock first (TempHome), then the job lock.
+        let home = crate::test_support::TempHome::new();
         let _guard = clear_jobs_for_test();
-        let home = Scratch::new("boot");
-        std::env::set_var("HOME", home.path());
 
         let running = home.path().join("k2-daemon");
         let backup = home.path().join("backup");

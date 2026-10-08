@@ -28,6 +28,17 @@
 //!    `/sbin`, `/usr/sbin` — SIP-sealed on macOS; no agent CLI is ever
 //!    installed there) so harnesses may keep spawning `cat` / `sh`.
 //!
+//! 3. **Test-build belt** (0.45.1, quiet-gate PRD §4.12) — in a test build
+//!    (`cfg(test)` or k2-core's `test-util` feature) a known agent CLI
+//!    ([`AGENT_CLIS`]: `claude`, `codex`, …) is NEVER resolved through PATH,
+//!    whatever `HOME` is: without a shim dir the spawn is refused with
+//!    "refusing: test tried to spawn real `claude`; install the agent shim".
+//!    Two daemon tests used to start the real Claude Code on a dev Mac
+//!    because their HOME was not under the temp dir. Tests install shims with
+//!    `k2_core::test_env::AgentShim`. The one carve-out is an explicit
+//!    path to a stub the test wrote under the OS temp dir (a path, never a
+//!    bare name, so PATH is never consulted).
+//!
 //! Production (no env, real HOME): [`resolve_program`] returns the input
 //! string untouched without touching the filesystem — byte-identical to the
 //! pre-guard behaviour.
@@ -42,6 +53,34 @@ pub const SHIM_DIR_ENV: &str = "K2_TEST_AGENT_SHIM_DIR";
 /// under a temp HOME — e.g. a manual end-to-end check).
 pub const ALLOW_REAL_ENV: &str = "K2_TEST_ALLOW_REAL_AGENT";
 
+/// Agent CLI basenames (the built-in presets plus aliases) that a test
+/// build must never resolve outside a shim dir.
+pub const AGENT_CLIS: &[&str] = &[
+    "claude",
+    "codex",
+    "grok",
+    "gemini",
+    "cursor-agent",
+    "cursor",
+    "pi",
+    "hermes",
+    "opencode",
+    "goose",
+    "aider",
+    "ollama",
+    "copilot",
+    "interpreter",
+];
+
+/// True when `program`'s basename is one of [`AGENT_CLIS`].
+pub fn is_agent_cli(program: &str) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| AGENT_CLIS.contains(&n))
+        .unwrap_or(false)
+}
+
 /// The environment facts the guard decides on. Built from the live process
 /// by [`GuardEnv::from_process`]; unit tests construct it directly.
 #[derive(Debug, Clone)]
@@ -54,6 +93,10 @@ pub struct GuardEnv {
     pub temp_dirs: Vec<PathBuf>,
     /// [`ALLOW_REAL_ENV`] == `1`.
     pub allow_real: bool,
+    /// This is a test build (`cfg(test)` / `test-util`): agent CLIs need a
+    /// shim dir. [`GuardEnv::from_process`] sets it; tests of the
+    /// production rules construct `GuardEnv` with `false`.
+    pub test_build: bool,
 }
 
 impl GuardEnv {
@@ -86,6 +129,7 @@ impl GuardEnv {
             home,
             temp_dirs,
             allow_real,
+            test_build: cfg!(any(test, feature = "test-util")),
         }
     }
 
@@ -111,6 +155,22 @@ impl GuardEnv {
     }
 }
 
+impl GuardEnv {
+    /// `program` is an explicit absolute path under one of the temp roots
+    /// (a stub a test wrote), not a bare name looked up on PATH.
+    pub fn is_temp_stub(&self, program: &str) -> bool {
+        let p = Path::new(program);
+        if !p.is_absolute() {
+            return false;
+        }
+        let forms = path_forms(p);
+        self.temp_dirs.iter().filter(|t| !t.as_os_str().is_empty()).any(|t| {
+            let temp_forms = path_forms(t);
+            forms.iter().any(|f| temp_forms.iter().any(|tf| f.starts_with(tf)))
+        })
+    }
+}
+
 /// Raw + canonical spellings of a path (canonical only when it resolves).
 fn path_forms(p: &Path) -> Vec<PathBuf> {
     let mut v = vec![p.to_path_buf()];
@@ -130,10 +190,18 @@ fn path_forms(p: &Path) -> Vec<PathBuf> {
 /// * Temp-HOME belt (no shim dirs, `HOME` under temp, not `allow_real`):
 ///   locate `program` on `search_path` (the enriched child PATH); refuse
 ///   unless it lives in an OS-owned system bin dir.
+/// * Test-build belt ([`GuardEnv::test_build`], no shim dirs, not
+///   `allow_real`): an [`AGENT_CLIS`] name is refused, whatever `HOME` is.
 /// * Otherwise: `Ok(program)` unchanged — no I/O.
 pub fn resolve_program(program: &str, search_path: &str, env: &GuardEnv) -> Result<String, String> {
     if let Some(dirs) = env.shim_dirs.as_deref() {
         return resolve_in_shim_dirs(program, dirs);
+    }
+    if env.test_build && !env.allow_real && is_agent_cli(program) && !env.is_temp_stub(program) {
+        return Err(format!(
+            "[spawn] refusing: test tried to spawn real `{program}`; install the agent shim \
+             (k2_core::test_env::AgentShim, or set {SHIM_DIR_ENV})"
+        ));
     }
     if env.allow_real || !env.home_is_temp() {
         return Ok(program.to_string());
@@ -227,14 +295,7 @@ mod tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "k2-agent-guard-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let d = crate::test_env::unique_temp_path(&format!("agent-guard-{label}"));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -256,6 +317,7 @@ mod tests {
             home: Some(PathBuf::from("/Users/someone")),
             temp_dirs: vec![std::env::temp_dir()],
             allow_real: false,
+            test_build: false,
         }
     }
 
@@ -265,6 +327,7 @@ mod tests {
             home: Some(home.to_path_buf()),
             temp_dirs: vec![std::env::temp_dir()],
             allow_real: false,
+            test_build: false,
         }
     }
 
@@ -282,6 +345,7 @@ mod tests {
             home: Some(PathBuf::from("/Users/someone")),
             temp_dirs: vec![std::env::temp_dir()],
             allow_real: false,
+            test_build: false,
         };
         let search = std::env::join_paths([real_dir.clone()])
             .unwrap()
@@ -307,6 +371,7 @@ mod tests {
             home: None,
             temp_dirs: vec![],
             allow_real: false,
+            test_build: false,
         };
         let got = resolve_program("grok", "/usr/bin:/bin", &env).expect("second dir");
         assert_eq!(got, in_b.to_string_lossy());
@@ -324,6 +389,7 @@ mod tests {
             home: Some(PathBuf::from("/Users/someone")),
             temp_dirs: vec![std::env::temp_dir()],
             allow_real: true, // allow_real must NOT rescue shim mode
+            test_build: false,
         };
         let search = real_dir.to_string_lossy().into_owned();
         let err = resolve_program("claude", &search, &env).expect_err("must refuse");
@@ -432,31 +498,81 @@ mod tests {
 
     #[test]
     fn from_process_parses_shim_list_and_allow_flag() {
-        // Scoped env mutation: restore afterwards. Tests in this module that
-        // touch process env are serialized by running them in one thread.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_shim = std::env::var_os(SHIM_DIR_ENV);
-        let prev_allow = std::env::var_os(ALLOW_REAL_ENV);
+        // Env guards hold the crate-wide env lock and restore on drop.
+        use crate::test_env::EnvVar;
         let a = PathBuf::from("/tmp/k2-guard-a");
         let b = PathBuf::from("/tmp/k2-guard-b");
-        std::env::set_var(SHIM_DIR_ENV, std::env::join_paths([&a, &b]).unwrap());
-        std::env::set_var(ALLOW_REAL_ENV, "1");
-        let env = GuardEnv::from_process();
-        assert_eq!(env.shim_dirs.as_deref(), Some(&[a.clone(), b.clone()][..]));
-        assert!(env.allow_real);
-        std::env::set_var(SHIM_DIR_ENV, "");
-        std::env::set_var(ALLOW_REAL_ENV, "0");
+        {
+            let _shim = EnvVar::set(SHIM_DIR_ENV, std::env::join_paths([&a, &b]).unwrap());
+            let _allow = EnvVar::set(ALLOW_REAL_ENV, "1");
+            let env = GuardEnv::from_process();
+            assert_eq!(env.shim_dirs.as_deref(), Some(&[a.clone(), b.clone()][..]));
+            assert!(env.allow_real);
+        }
+        let _shim = EnvVar::set(SHIM_DIR_ENV, "");
+        let _allow = EnvVar::set(ALLOW_REAL_ENV, "0");
         let env2 = GuardEnv::from_process();
         assert!(env2.shim_dirs.is_none(), "empty list is unset");
         assert!(!env2.allow_real);
-        match prev_shim {
-            Some(v) => std::env::set_var(SHIM_DIR_ENV, v),
-            None => std::env::remove_var(SHIM_DIR_ENV),
+    }
+
+    fn test_build_env(home: &str) -> GuardEnv {
+        GuardEnv {
+            shim_dirs: None,
+            home: Some(PathBuf::from(home)),
+            temp_dirs: vec![std::env::temp_dir()],
+            allow_real: false,
+            test_build: true,
         }
-        match prev_allow {
-            Some(v) => std::env::set_var(ALLOW_REAL_ENV, v),
-            None => std::env::remove_var(ALLOW_REAL_ENV),
+    }
+
+    #[test]
+    fn test_build_refuses_agent_clis_even_with_a_real_home() {
+        // The 0.45.0 gap: a test whose HOME is NOT under the temp dir
+        // passed the temp-HOME belt and spawned the real Claude Code.
+        let env = test_build_env("/Users/someone");
+        for prog in ["claude", "/opt/homebrew/bin/claude", "codex", "cursor-agent", "grok", "bin/claude"] {
+            let err = resolve_program(prog, "/usr/bin:/bin", &env).expect_err(prog);
+            assert!(err.contains("test tried to spawn real"), "{prog}: {err}");
+            assert!(err.contains("refusing"), "{prog}: {err}");
+            assert!(err.contains("AgentShim"), "{prog}: {err}");
         }
+        // An explicit stub path the test wrote under the temp dir may run.
+        let dir = scratch("belt-stub");
+        let stub = write_exec(&dir, "codex");
+        let stub = stub.to_string_lossy().into_owned();
+        assert_eq!(resolve_program(&stub, "/usr/bin", &env).unwrap(), stub);
+        std::fs::remove_dir_all(&dir).unwrap();
+        // Non-agent programs are untouched.
+        assert_eq!(resolve_program("cat", "/usr/bin:/bin", &env).unwrap(), "cat");
+        assert_eq!(resolve_program("bash", "/usr/bin:/bin", &env).unwrap(), "bash");
+    }
+
+    #[test]
+    fn test_build_belt_yields_to_shims_and_explicit_opt_in() {
+        let shims = scratch("belt-shim");
+        let shim = write_exec(&shims, "claude");
+        let env = GuardEnv { shim_dirs: Some(vec![shims.clone()]), ..test_build_env("/Users/someone") };
+        assert_eq!(
+            resolve_program("claude", "/usr/bin", &env).unwrap(),
+            shim.to_string_lossy()
+        );
+        let env = GuardEnv { allow_real: true, ..test_build_env("/Users/someone") };
+        assert_eq!(resolve_program("claude", "/usr/bin", &env).unwrap(), "claude");
+        std::fs::remove_dir_all(&shims).unwrap();
+    }
+
+    #[test]
+    fn from_process_marks_a_test_build() {
+        assert!(GuardEnv::from_process().test_build);
+    }
+
+    #[test]
+    fn agent_cli_names_match_basenames_only() {
+        assert!(is_agent_cli("claude"));
+        assert!(is_agent_cli("/usr/local/bin/codex"));
+        assert!(!is_agent_cli("claude-wrapper"));
+        assert!(!is_agent_cli("cat"));
+        assert!(!is_agent_cli(""));
     }
 }

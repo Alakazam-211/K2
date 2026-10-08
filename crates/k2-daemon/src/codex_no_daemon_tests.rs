@@ -19,44 +19,37 @@ use crate::v2_spawn::{handle_v2_refresh, handle_v2_spawn, spawn_session, SpawnRe
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// `$HOME` beside the test binary (outside the OS temp dir, so the spawn
-/// guard accepts an absolute stub path). Restored on drop.
+/// guard accepts an absolute stub path). The `EnvVar` guard holds the ONE
+/// shared env lock and restores `$HOME` on drop (after the dir is removed).
 struct StubHome {
-    prev: Option<std::ffi::OsString>,
     home: PathBuf,
-    _lock: std::sync::MutexGuard<'static, ()>,
+    _home_var: k2_core::test_env::EnvVar,
 }
 
 impl StubHome {
     fn new() -> Self {
-        let lock = crate::test_support::lock_home();
         let exe = std::env::current_exe().expect("test binary path");
-        let home = exe.parent().expect("test binary dir").join(format!(
-            "k2-codex-nd-home-{}-{}",
-            std::process::id(),
-            NEXT_ID.fetch_add(1, Ordering::SeqCst)
-        ));
+        let home = exe
+            .parent()
+            .expect("test binary dir")
+            .join(format!("k2-codex-nd-home-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME");
-        let prev = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
+        let home_var = k2_core::test_env::EnvVar::set("HOME", &home);
         assert!(
             !k2_core::terminal::agent_spawn_guard::GuardEnv::from_process().home_is_temp(),
             "stub HOME {} is under the OS temp dir; build with a target dir outside $TMPDIR",
             home.display()
         );
         Self {
-            prev,
             home,
-            _lock: lock,
+            _home_var: home_var,
         }
     }
 }
 
 impl Drop for StubHome {
     fn drop(&mut self) {
-        match self.prev.take() {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
+        // Runs before the fields drop, so the lock is still held here.
         let _ = std::fs::remove_dir_all(&self.home);
     }
 }

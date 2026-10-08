@@ -712,31 +712,24 @@ mod tests {
     /// default as of 0.40.6+, so "no env" no longer means off).
     #[tokio::test]
     async fn maybe_spawn_is_noop_when_user_opted_out() {
-        let prev = std::env::var_os("K2_E2E");
-        std::env::set_var("K2_E2E", "0"); // explicit opt-out wins → OFF
+        // Shared env lock held for the whole test; restored on drop.
+        let _e2e = k2_core::test_env::EnvVar::set("K2_E2E", "0"); // explicit opt-out wins → OFF
         let res = maybe_spawn(12345)
             .await
             .expect("opt-out must not error");
         assert!(res.is_none(), "opt-out must yield no HTTPS listener");
-        match prev {
-            Some(p) => std::env::set_var("K2_E2E", p),
-            None => std::env::remove_var("K2_E2E"),
-        }
     }
 
     #[tokio::test]
     async fn maybe_spawn_skips_cert_when_airgap_even_with_leftover_subdomain() {
         let _home = crate::test_support::TempHome::new();
-        let prev_air = std::env::var_os("K2_AIRGAP");
-        let prev_e2e = std::env::var_os("K2_E2E");
-        let prev_broker = std::env::var_os(k2_core::tunnel::cert_broker::BROKER_URL_ENV);
-        std::env::remove_var("K2_E2E"); // default ON — leftover subdomain would POST
-        std::env::set_var("K2_AIRGAP", "1");
+        let _e2e = k2_core::test_env::EnvVar::remove("K2_E2E"); // default ON — leftover subdomain would POST
+        let _air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
 
         let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
         spy.set_nonblocking(true).expect("nonblocking");
         let spy_port = spy.local_addr().expect("addr").port();
-        std::env::set_var(
+        let _broker = k2_core::test_env::EnvVar::set(
             k2_core::tunnel::cert_broker::BROKER_URL_ENV,
             format!("http://127.0.0.1:{spy_port}/cert"),
         );
@@ -754,31 +747,16 @@ mod tests {
             spy.accept().is_err(),
             "leftover subdomain must not HTTP to cert.k2.dev when air-gap is on"
         );
-
-        match prev_broker {
-            Some(p) => std::env::set_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV, p),
-            None => std::env::remove_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV),
-        }
-        match prev_e2e {
-            Some(p) => std::env::set_var("K2_E2E", p),
-            None => std::env::remove_var("K2_E2E"),
-        }
-        match prev_air {
-            Some(p) => std::env::set_var("K2_AIRGAP", p),
-            None => std::env::remove_var("K2_AIRGAP"),
-        }
     }
 
     #[tokio::test]
     async fn maybe_spawn_fresh_tunnel_json_still_skips_cert_when_airgap_off() {
         let _home = crate::test_support::TempHome::new();
-        let prev_air = std::env::var_os("K2_AIRGAP");
-        std::env::remove_var("K2_AIRGAP");
+        let _air = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
         let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
         spy.set_nonblocking(true).expect("nonblocking");
         let spy_port = spy.local_addr().expect("addr").port();
-        let prev_broker = std::env::var_os(k2_core::tunnel::cert_broker::BROKER_URL_ENV);
-        std::env::set_var(
+        let _broker = k2_core::test_env::EnvVar::set(
             k2_core::tunnel::cert_broker::BROKER_URL_ENV,
             format!("http://127.0.0.1:{spy_port}/cert"),
         );
@@ -793,14 +771,6 @@ mod tests {
             spy.accept().is_err(),
             "fresh tunnel.json must not POST cert.k2.dev at boot"
         );
-        match prev_broker {
-            Some(p) => std::env::set_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV, p),
-            None => std::env::remove_var(k2_core::tunnel::cert_broker::BROKER_URL_ENV),
-        }
-        match prev_air {
-            Some(p) => std::env::set_var("K2_AIRGAP", p),
-            None => std::env::remove_var("K2_AIRGAP"),
-        }
     }
 
     /// End-to-end: with a self-signed cert, the HTTPS listener accepts a
@@ -826,7 +796,7 @@ mod tests {
         //    test exercises the TLS→splice path, not the broker, so engage
         //    the explicit dev/spike self-signed escape hatch
         //    (`K2_E2E_SELF_SIGNED=1`) — the default path is broker-issued.
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
         // minted fresh for "rosson" into a throwaway `.k2/` rather than reusing
         // whatever real cert is persisted in this box's `~/.k2`.
@@ -1000,7 +970,7 @@ mod tests {
 
         // Self-signed cert covering rosson.k2.dev + *.rosson.k2.dev (the
         // per-user wildcard), so every SNI below presents a trusted name.
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         let (cert_pem, key_pem) =
             k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
         let server_config =
@@ -1071,7 +1041,7 @@ mod tests {
             targets,
         });
 
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         let (cert_pem, key_pem) =
             k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
         let server_config =
@@ -1116,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn slowloris_handshake_times_out_within_deadline() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
         // minted fresh for "rosson" rather than reusing this box's real cert.
         let _home = crate::test_support::TempHome::new();
@@ -1227,7 +1197,7 @@ mod tests {
     #[test]
     fn server_config_advertises_only_http1_1() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
         // minted fresh for "rosson" rather than reusing this box's real cert.
         let _home = crate::test_support::TempHome::new();
@@ -1256,12 +1226,12 @@ mod tests {
         use tokio_rustls::TlsConnector;
 
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        std::env::set_var("K2_E2E_SELF_SIGNED", "1");
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         // Redirect $HOME to a fresh tempdir so the self-signed cert is minted
         // for OUR chosen name ("rosson") rather than reusing whatever leaf is
         // persisted in the real ~/.k2 on this box (which may be for another
         // subdomain). `load_or_provision_cert` honors $HOME via `k2_dir()`.
-        // Crate-wide serialized via the shared `home_lock` so concurrent
+        // Serialized on the ONE shared env lock so concurrent
         // HOME-swapping tests in other modules can't stomp this sandbox.
         let _home = crate::test_support::TempHome::new();
 

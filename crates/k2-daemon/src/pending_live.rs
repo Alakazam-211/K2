@@ -407,15 +407,15 @@ mod tests {
         // Use a deliberately nonexistent path so any disk read would
         // fail. The result should still be Vec::new() courtesy of the
         // fast path.
-        std::env::set_var(
+        let missing = k2_core::test_env::unique_temp_path("pending-live-missing");
+        let _root = k2_core::test_env::EnvVar::set(
             "K2SO_PENDING_LIVE_ROOT",
-            "/tmp/k2so-pending-live-nonexistent-l11-test",
+            &missing,
         );
         // First access initializes PENDING_STATE from disk. The
         // nonexistent path means the initial map is empty. Subsequent
         // drain calls for any agent should hit the fast path.
         let result = drain_for_agent("agent-that-was-never-enqueued");
         assert!(result.is_empty());
-        std::env::remove_var("K2SO_PENDING_LIVE_ROOT");
     }
 }

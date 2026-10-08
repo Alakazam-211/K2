@@ -1301,15 +1301,15 @@ mod tests {
     fn issue_attached_fake_writes_0600_not_rcgen() {
         init();
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_ACME_FAKE", "1");
-        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _fake = k2_core::test_env::EnvVar::set("K2_ACME_FAKE", "1");
+        let _wait = k2_core::test_env::EnvVar::set("K2_ACME_DNS_WAIT_SECS", "0");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             upsert_binding(&conn, "example.com", None, false).unwrap();
             upsert_name(&conn, "app.example.com", "example.com", "other").unwrap();
         }
-        std::env::set_var("K2_ACME_HTTP01", "1");
+        let _http01 = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
         let mut params = HashMap::new();
         params.insert("hostname".into(), "app.example.com".into());
         let resp = handle_issue(&params);
@@ -1324,7 +1324,6 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = remove_binding(&conn, "example.com");
-        std::env::remove_var("K2_ACME_HTTP01");
     }
 
     #[test]

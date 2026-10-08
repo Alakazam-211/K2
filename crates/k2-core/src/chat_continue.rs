@@ -1168,45 +1168,17 @@ fn sqlite_ro_uri(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::themes::HOME_LOCK;
-    use parking_lot::MutexGuard;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct HomeGuard {
-        prev: Option<std::ffi::OsString>,
         path: PathBuf,
-        _lock: MutexGuard<'static, ()>,
+        // Holds the ONE env lock; restores HOME + removes the dir on drop.
+        _temp: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
-        fn new(label: &str) -> Self {
-            let lock = HOME_LOCK.lock();
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!(
-                "k2-continue-{label}-{}-{nanos}",
-                std::process::id()
-            ));
-            fs::create_dir_all(path.join(".k2")).expect("temp home");
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", &path);
-            Self {
-                prev,
-                path,
-                _lock: lock,
-            }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var("HOME", prev),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = fs::remove_dir_all(&self.path);
+        fn new(_label: &str) -> Self {
+            let temp = crate::test_env::TempHome::new();
+            Self { path: temp.path().to_path_buf(), _temp: temp }
         }
     }
 

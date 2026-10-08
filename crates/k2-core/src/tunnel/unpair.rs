@@ -219,7 +219,10 @@ pub fn report_upstream(
         "subdomain": subdomain,
         "deviceId": device_id,
     });
+    // Connect timeout (0.45.1): a control plane that never answers the SYN
+    // (a firewall that drops instead of refusing) fails in 5 s, not 20.
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
@@ -355,16 +358,17 @@ mod tests {
 
     /// Point the control plane at a dead local port so upstream reports
     /// fail FAST (connection refused) instead of dialing the real
-    /// connect.k2.dev from a unit test. Restores the prior value.
+    /// connect.k2.dev from a unit test. Restores the prior value (the
+    /// `EnvVar` guard holds the ONE env lock and restores on drop, also on
+    /// panic).
+    /// Point the control plane at a test-owned server that answers 503 (not
+    /// a dead port such as `127.0.0.1:9`, which HANGS where loopback RSTs
+    /// are dropped): the upstream report fails fast and the release queues.
     fn with_dead_control_plane<F: FnOnce()>(f: F) {
         let var = super::super::subdomains::CONTROL_PLANE_BASE_ENV;
-        let prev = std::env::var_os(var);
-        std::env::set_var(var, "http://127.0.0.1:9");
+        let down = crate::test_env::ErrorHttpServer::start(503);
+        let _cp = crate::test_env::EnvVar::set(var, down.url());
         f();
-        match prev {
-            Some(p) => std::env::set_var(var, p),
-            None => std::env::remove_var(var),
-        }
     }
 
     #[test]
@@ -521,14 +525,12 @@ mod tests {
     #[test]
     fn replay_pending_airgap_does_not_post() {
         with_temp_home(|| {
-            let prev_air = std::env::var_os("K2_AIRGAP");
-            std::env::set_var("K2_AIRGAP", "1");
+            let _air = crate::test_env::EnvVar::set("K2_AIRGAP", "1");
             let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
             spy.set_nonblocking(true).expect("nonblocking");
             let port = spy.local_addr().expect("addr").port();
             let var = super::super::subdomains::CONTROL_PLANE_BASE_ENV;
-            let prev_cp = std::env::var_os(var);
-            std::env::set_var(var, format!("http://127.0.0.1:{port}"));
+            let _cp = crate::test_env::EnvVar::set(var, format!("http://127.0.0.1:{port}"));
 
             save(&UnpairTombstone {
                 released_at: "2026-07-12T00:00:00+00:00".to_string(),
@@ -546,15 +548,6 @@ mod tests {
                 spy.accept().is_err(),
                 "leftover unpaired.json must not POST /tunnel/release when air-gap is on"
             );
-
-            match prev_cp {
-                Some(p) => std::env::set_var(var, p),
-                None => std::env::remove_var(var),
-            }
-            match prev_air {
-                Some(p) => std::env::set_var("K2_AIRGAP", p),
-                None => std::env::remove_var("K2_AIRGAP"),
-            }
         });
     }
 
@@ -592,8 +585,7 @@ mod tests {
             });
 
             let var = super::super::subdomains::CONTROL_PLANE_BASE_ENV;
-            let prev = std::env::var_os(var);
-            std::env::set_var(var, format!("http://127.0.0.1:{port}"));
+            let _cp = crate::test_env::EnvVar::set(var, format!("http://127.0.0.1:{port}"));
 
             save(&UnpairTombstone {
                 released_at: "2026-07-12T00:00:00+00:00".to_string(),
@@ -617,11 +609,6 @@ mod tests {
             let t = load().expect("load").expect("tombstone");
             assert!(t.upstream_reported);
             assert_eq!(t.pending_token, None, "pending bearer must be scrubbed after replay");
-
-            match prev {
-                Some(p) => std::env::set_var(var, p),
-                None => std::env::remove_var(var),
-            }
         });
     }
 }

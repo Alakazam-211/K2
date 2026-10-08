@@ -182,13 +182,12 @@ pub mod upgrade;
 /// race — the tree has been bitten by exactly this class of flake).
 /// Every test that inserts/updates/deletes `mail_server` MUST hold
 /// this guard for its whole body.
+/// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a
+/// test may combine it with `TempHome` / `EnvVar` in either order.
 #[cfg(test)]
-pub(crate) fn mail_server_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::{Mutex, OnceLock};
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+pub(crate) fn mail_server_test_lock() -> k2_core::test_env::SerialGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    k2_core::test_env::serial(&LOCK)
 }
 
 /// Deletes the singleton `mail_server` row on drop — even when the test

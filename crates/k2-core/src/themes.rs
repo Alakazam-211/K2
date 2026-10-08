@@ -130,81 +130,38 @@ pub fn delete(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Process-wide HOME lock shared by every k2so-core test module that
-/// mutates `$HOME` (themes, skill_layers, chat_history Unit-6 tests).
-/// Living at file scope (not inside `mod tests`) so other modules can
-/// reach it via `crate::themes::HOME_LOCK`. Tests in `app_settings`
-/// and `whats_new` predate Phase 2 Unit 6 and use private module-level
-/// locks; they can still race against this one — that's a pre-existing
-/// gap, not something this commit can close without touching those
-/// files (which is out of scope per the unit-6 backfill brief).
+/// Old name for the crate-wide test env lock ([`crate::test_env::lock`]).
+/// Kept so existing `HOME_LOCK.lock()` callers share the ONE lock; new
+/// tests use `crate::test_env` directly.
 #[cfg(test)]
-pub(crate) static HOME_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+pub(crate) static HOME_LOCK: crate::test_env::SharedEnvLock = crate::test_env::SharedEnvLock;
 
 #[cfg(test)]
 mod tests {
     //! Tests for the Phase 2 Unit 6 themes module.
     //!
     //! `themes_dir()` hardcodes `dirs::home_dir().join(".k2so/themes")`,
-    //! so we install a fresh HOME for each test via the same
-    //! `HomeGuard` + serialized lock pattern used in
-    //! `app_settings::tests`.
+    //! so we install a fresh HOME for each test via a `HomeGuard` over
+    //! `test_env::TempHome` (which holds the ONE crate-wide env lock).
     use super::*;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
+    /// Fresh temp HOME for the life of the guard; restores HOME and
+    /// removes the dir on drop (even on panic).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _tmp: TempDir,
+        _home: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let tmp = TempDir::new("k2so-themes-test");
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", tmp.path());
-            Self { original, _tmp: tmp }
+            Self { _home: crate::test_env::TempHome::new() }
         }
     }
 
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-    }
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new(prefix: &str) -> Self {
-            let pid = std::process::id();
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}"));
-            fs::create_dir_all(&path).expect("create tempdir");
-            Self { path }
-        }
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    // HOME-mutating tests share the process-wide `HOME_LOCK` so
-    // cargo's parallel runner doesn't see other tests' HOME between
-    // this test's set and the inner call.
+    // HOME-mutating tests share the process-wide env lock (`HOME_LOCK`
+    // is the shared `test_env` lock) so cargo's parallel runner doesn't
+    // see other tests' HOME between this test's set and the inner call.
     use super::HOME_LOCK as TEST_LOCK;
 
     #[test]
@@ -220,9 +177,7 @@ mod tests {
         let _g = TEST_LOCK.lock();
         let _h = HomeGuard::new();
         // Assert the *shape* of the returned path, not the specific
-        // tempdir prefix. `whats_new::tests` mutates HOME without
-        // sharing our lock, so an absolute-path equality check would
-        // be brittle. The contract we're pinning down is "themes dir
+        // tempdir prefix. The contract we're pinning down is "themes dir
         // sits at <HOME>/.k2/themes and is created on demand" —
         // both of those are observable in the returned string alone.
         let dir = ensure_dir().expect("ensure_dir");
@@ -272,7 +227,7 @@ mod tests {
         let _h = HomeGuard::new();
         ensure_dir().expect("ensure_dir");
         // /tmp/whatever — definitely not under ~/.k2so/themes.
-        let escape = std::env::temp_dir().join("not-a-theme.json");
+        let escape = crate::test_env::unique_temp_path("not-a-theme").with_extension("json");
         fs::write(&escape, "{}").expect("seed file");
         let err = delete(escape.to_str().unwrap()).expect_err("must reject");
         assert!(err.contains("Can only delete"), "got: {err}");

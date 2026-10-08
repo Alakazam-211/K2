@@ -52,92 +52,66 @@ pub fn bind_ip() -> Ipv4Addr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::themes::HOME_LOCK;
 
+    /// `K2_LISTEN` under the ONE env lock (restored on drop, even on
+    /// panic); also resets the in-memory LAN flags.
     struct EnvGuard {
-        prev: Option<std::ffi::OsString>,
+        _var: crate::test_env::EnvVar,
     }
 
     impl EnvGuard {
         fn set(val: Option<&str>) -> Self {
-            let prev = std::env::var_os(ENV_VAR);
-            match val {
-                Some(v) => std::env::set_var(ENV_VAR, v),
-                None => std::env::remove_var(ENV_VAR),
-            }
-            Self { prev }
+            let _var = match val {
+                Some(v) => crate::test_env::EnvVar::set(ENV_VAR, v),
+                None => crate::test_env::EnvVar::remove(ENV_VAR),
+            };
+            Self { _var }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.prev {
-                Some(p) => std::env::set_var(ENV_VAR, p),
-                None => std::env::remove_var(ENV_VAR),
-            }
             set_setting_lan(false);
             set_lan_bound(false);
         }
     }
 
-    fn isolated_home() -> (std::path::PathBuf, Option<std::ffi::OsString>) {
-        let prev = std::env::var_os("HOME");
-        let dir = std::env::temp_dir().join(format!(
-            "k2-listen-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("temp HOME");
-        std::env::set_var("HOME", &dir);
-        (dir, prev)
-    }
-
-    fn restore_home(dir: &std::path::Path, prev: Option<std::ffi::OsString>) {
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(dir);
+    fn isolated_home() -> crate::test_env::TempHome {
+        crate::test_env::TempHome::new()
     }
 
     #[test]
     fn defaults_loopback() {
-        let _lock = HOME_LOCK.lock();
+        let _lock = crate::test_env::lock();
         let _env = EnvGuard::set(None);
         set_setting_lan(false);
-        let (dir, prev) = isolated_home();
+        let _home = isolated_home();
         assert!(!lan_requested(), "LAN listen must default OFF");
         assert_eq!(bind_ip(), Ipv4Addr::LOCALHOST);
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn env_lan_wins() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_lan(false);
         let _env = EnvGuard::set(Some("lan"));
         assert!(lan_requested());
         assert_eq!(bind_ip(), Ipv4Addr::UNSPECIFIED);
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn env_lan_is_case_insensitive() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         let _env = EnvGuard::set(Some("LAN"));
         assert!(lan_requested());
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn env_garbage_is_loopback() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_lan(true);
         for v in ["garbage", "1", "true", "yes", "0.0.0.0", ""] {
             let _env = EnvGuard::set(Some(v));
@@ -147,17 +121,15 @@ mod tests {
             );
             assert_eq!(bind_ip(), Ipv4Addr::LOCALHOST);
         }
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn setting_enables_when_env_unset() {
-        let _lock = HOME_LOCK.lock();
+        let _lock = crate::test_env::lock();
         let _env = EnvGuard::set(None);
-        let (dir, prev) = isolated_home();
+        let _home = isolated_home();
         set_setting_lan(true);
         assert!(lan_requested());
         assert_eq!(bind_ip(), Ipv4Addr::UNSPECIFIED);
-        restore_home(&dir, prev);
     }
 }

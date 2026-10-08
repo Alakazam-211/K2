@@ -707,12 +707,10 @@ mod tests {
             }
         });
 
-        // Serialize with other tests that mutate K2_DNS_API_BASE.
-        let _g = crate::dns::proxy::tests::env_lock()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os(crate::dns::proxy::DNS_API_BASE_ENV);
-        std::env::set_var(
+        // Serialize with other tests that mutate K2_DNS_API_BASE: the guard
+        // holds the ONE shared env lock (taken before the DB below) and
+        // restores the previous value on drop.
+        let base_env = k2_core::test_env::EnvVar::set(
             crate::dns::proxy::DNS_API_BASE_ENV,
             format!("http://127.0.0.1:{port}"),
         );
@@ -756,10 +754,7 @@ mod tests {
             Err(e) => error_response("503 Service Unavailable", "proxy", &e),
         };
 
-        match prev {
-            Some(p) => std::env::set_var(crate::dns::proxy::DNS_API_BASE_ENV, p),
-            None => std::env::remove_var(crate::dns::proxy::DNS_API_BASE_ENV),
-        }
+        drop(base_env);
 
         assert!(
             resp.status.starts_with("201") || resp.status.starts_with("200"),

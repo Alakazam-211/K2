@@ -1285,9 +1285,10 @@ mod tests {
 
     /// `run` takes process-wide per-name locks; tests that run it share
     /// names, so they take turns.
-    fn serial() -> std::sync::MutexGuard<'static, ()> {
+    fn serial() -> k2_core::test_env::SerialGuard {
+        // Env lock first (`k2_core::test_env::serial`), then the name lock.
         static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+        k2_core::test_env::serial(&SERIAL)
     }
 
     /// Canned DNS: A / AAAA per name; anything unlisted = NotFound.

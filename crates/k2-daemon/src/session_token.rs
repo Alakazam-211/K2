@@ -1135,23 +1135,20 @@ mod tests {
     #[test]
     fn scoped_hooks_flag_defaults_on() {
         // Phase 1 / PR-A: default ON so new agent sessions get a passport.
-        // Opt-out is explicit (`0`/`false`/`off`). Restore whatever was set
-        // so parallel tests that pin the flag keep working.
-        let prev = std::env::var("K2_HOOK_SCOPED").ok();
-        std::env::remove_var("K2_HOOK_SCOPED");
+        // Opt-out is explicit (`0`/`false`/`off`). The guards hold the ONE
+        // shared env lock and restore whatever was set (LIFO) so parallel
+        // tests that pin the flag keep working.
+        let _env = crate::test_support::lock_home();
+        let _scoped = k2_core::test_env::EnvVar::remove("K2_HOOK_SCOPED");
         assert!(scoped_hooks_enabled(), "must default ON when unset");
-        std::env::set_var("K2_HOOK_SCOPED", "0");
+        let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "0");
         assert!(!scoped_hooks_enabled(), "explicit 0 must opt out");
-        std::env::set_var("K2_HOOK_SCOPED", "false");
+        let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "false");
         assert!(!scoped_hooks_enabled(), "explicit false must opt out");
-        std::env::set_var("K2_HOOK_SCOPED", "off");
+        let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "off");
         assert!(!scoped_hooks_enabled(), "explicit off must opt out");
-        std::env::set_var("K2_HOOK_SCOPED", "1");
+        let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "1");
         assert!(scoped_hooks_enabled(), "explicit 1 must stay ON");
-        match prev {
-            Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-            None => std::env::remove_var("K2_HOOK_SCOPED"),
-        }
     }
 
     // ── mint + validate round trip ──────────────────────────────────
@@ -1829,8 +1826,7 @@ mod tests {
         // Still wrap in with_temp_home so a future edit that mints cannot
         // silently write real ~/.k2/hook-sessions.json.
         with_temp_home(|| {
-            let prev = std::env::var("K2_HOOK_SCOPED").ok();
-            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "0");
             let sid = SessionId::new();
             assert!(
                 cell_env_pairs(
@@ -1844,10 +1840,6 @@ mod tests {
                 .is_none(),
                 "flag OFF (explicit opt-out) MUST inject no scoped env",
             );
-            match prev {
-                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-                None => std::env::remove_var("K2_HOOK_SCOPED"),
-            }
         });
     }
 
@@ -1856,8 +1848,7 @@ mod tests {
     #[test]
     fn t_s1i_pane_id_rides_the_spawn_with_scoped_hooks_off() {
         with_temp_home(|| {
-            let prev = std::env::var("K2_HOOK_SCOPED").ok();
-            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "0");
             let sid = SessionId::new();
             let pane = sid.to_string();
             let mut env = std::collections::HashMap::new();
@@ -1871,10 +1862,7 @@ mod tests {
                 None,
                 "owner-secret",
             );
-            match prev {
-                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-                None => std::env::remove_var("K2_HOOK_SCOPED"),
-            }
+            drop(scoped);
             assert!(!minted);
             for k in ["K2_PANE_ID", "K2SO_PANE_ID", "K2_TAB_ID", "K2SO_TAB_ID"] {
                 assert_eq!(env.get(k), Some(&pane), "{k} missing with scoped hooks off");
@@ -1900,8 +1888,7 @@ mod tests {
             let pane = sid.to_string();
 
             // Path A — flag ON (default mint): scoped passport replaces owner.
-            let prev = std::env::var("K2_HOOK_SCOPED").ok();
-            std::env::set_var("K2_HOOK_SCOPED", "1");
+            let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "1");
             let mut env = std::collections::HashMap::new();
             env.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
             env.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
@@ -1931,7 +1918,7 @@ mod tests {
             assert_eq!(v.principal, principal());
 
             // Path B — flag OFF: still strips owner even without a mint.
-            std::env::set_var("K2_HOOK_SCOPED", "0");
+            let _scoped = k2_core::test_env::EnvVar::set("K2_HOOK_SCOPED", "0");
             let mut env_off = std::collections::HashMap::new();
             env_off.insert("K2_HOOK_TOKEN".to_string(), owner.to_string());
             env_off.insert("K2SO_HOOK_TOKEN".to_string(), owner.to_string());
@@ -1954,11 +1941,6 @@ mod tests {
                 env_off.get("K2SO_HOOK_TOKEN").is_none(),
                 "flag OFF must still strip owner from K2SO_HOOK_TOKEN",
             );
-
-            match prev {
-                Some(v) => std::env::set_var("K2_HOOK_SCOPED", v),
-                None => std::env::remove_var("K2_HOOK_SCOPED"),
-            }
         });
     }
 

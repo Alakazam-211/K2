@@ -1082,38 +1082,21 @@ mod tests {
     // this exercises the ADAPTER surface through a fabricated
     // `~/.grok/sessions` tree under a scratch $HOME.
 
+    /// Scratch $HOME under the ONE crate-wide env lock (held by the inner
+    /// `test_env::TempHome`, which restores HOME and removes the dir on
+    /// drop).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
         home: std::path::PathBuf,
-        _lock: parking_lot::MutexGuard<'static, ()>,
+        _temp: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
-        fn new(label: &str) -> Self {
-            let lock = crate::themes::HOME_LOCK.lock();
-            let home = std::env::temp_dir().join(format!(
-                "k2-provider-resume-{label}-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&home).unwrap();
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", &home);
+        fn new(_label: &str) -> Self {
+            let temp = crate::test_env::TempHome::new();
             Self {
-                original,
-                home,
-                _lock: lock,
+                home: temp.path().to_path_buf(),
+                _temp: temp,
             }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.home);
         }
     }
 

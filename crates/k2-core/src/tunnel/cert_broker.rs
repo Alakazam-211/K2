@@ -543,18 +543,14 @@ mod tests {
     fn broker_url_defaults_and_env_override() {
         // Default when unset.
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(BROKER_URL_ENV);
-        std::env::remove_var(BROKER_URL_ENV);
+        // Guards nest LIFO; the original value is restored on drop.
+        let _unset = crate::test_env::EnvVar::remove(BROKER_URL_ENV);
         assert_eq!(broker_url(), DEFAULT_BROKER_URL);
-        std::env::set_var(BROKER_URL_ENV, "https://staging.example/cert");
+        let _staging = crate::test_env::EnvVar::set(BROKER_URL_ENV, "https://staging.example/cert");
         assert_eq!(broker_url(), "https://staging.example/cert");
         // Blank env falls back to default (never an empty URL).
-        std::env::set_var(BROKER_URL_ENV, "   ");
+        let _blank = crate::test_env::EnvVar::set(BROKER_URL_ENV, "   ");
         assert_eq!(broker_url(), DEFAULT_BROKER_URL);
-        match prev {
-            Some(p) => std::env::set_var(BROKER_URL_ENV, p),
-            None => std::env::remove_var(BROKER_URL_ENV),
-        }
     }
 
     #[test]
@@ -740,35 +736,25 @@ mod tests {
     #[test]
     fn self_signed_mode_off_by_default() {
         let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os("K2_E2E_SELF_SIGNED");
-        std::env::remove_var("K2_E2E_SELF_SIGNED");
+        let _unset = crate::test_env::EnvVar::remove("K2_E2E_SELF_SIGNED");
         assert!(!self_signed_mode(), "self-signed must default OFF (broker is the real path)");
         for truthy in ["1", "true", "ON", "yes"] {
-            std::env::set_var("K2_E2E_SELF_SIGNED", truthy);
+            let _v = crate::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", truthy);
             assert!(self_signed_mode(), "K2_E2E_SELF_SIGNED={truthy} must enable");
         }
         for falsey in ["0", "false", "", "off"] {
-            std::env::set_var("K2_E2E_SELF_SIGNED", falsey);
+            let _v = crate::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", falsey);
             assert!(!self_signed_mode(), "K2_E2E_SELF_SIGNED={falsey:?} must NOT enable");
-        }
-        match prev {
-            Some(p) => std::env::set_var("K2_E2E_SELF_SIGNED", p),
-            None => std::env::remove_var("K2_E2E_SELF_SIGNED"),
         }
     }
 
     /// Like `with_broker_url` but returns the closure's value (the env var
     /// is the only global state; HOME is already redirected by the caller's
-    /// `with_temp_home`, and HOME_LOCK is reentrant-safe here because
-    /// `with_temp_home` already holds it — so we set the env directly).
+    /// `with_temp_home`). The `EnvVar` guard takes the ONE env lock, which
+    /// is re-entrant, so nesting inside `with_temp_home` is fine; the URL
+    /// is restored on drop, also on panic.
     fn with_broker_url_ret<T>(url: &str, f: impl FnOnce() -> T) -> T {
-        let prev = std::env::var_os(BROKER_URL_ENV);
-        std::env::set_var(BROKER_URL_ENV, url);
-        let out = f();
-        match prev {
-            Some(p) => std::env::set_var(BROKER_URL_ENV, p),
-            None => std::env::remove_var(BROKER_URL_ENV),
-        }
-        out
+        let _url = crate::test_env::EnvVar::set(BROKER_URL_ENV, url);
+        f()
     }
 }

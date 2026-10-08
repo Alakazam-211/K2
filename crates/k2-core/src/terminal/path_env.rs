@@ -10,6 +10,41 @@ use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+/// The `PATH` to search when looking up an executable by name.
+///
+/// Tests override it for THEIR thread with [`with_lookup_path`] instead of
+/// changing the process `PATH`: a process-wide swap (to an empty dir, say)
+/// made every other test that spawns `sh` / `git` by name fail while it was
+/// in place (quiet-gate PRD §5.3).
+pub fn lookup_path() -> Option<OsString> {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(p) = TEST_LOOKUP_PATH.with(|p| p.borrow().clone()) {
+        return Some(p);
+    }
+    env::var_os("PATH")
+}
+
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static TEST_LOOKUP_PATH: std::cell::RefCell<Option<OsString>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: run `f` with [`lookup_path`] returning `path` on this thread.
+#[cfg(any(test, feature = "test-util"))]
+pub fn with_lookup_path<R>(path: impl Into<OsString>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<OsString>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            TEST_LOOKUP_PATH.with(|p| *p.borrow_mut() = prev);
+        }
+    }
+    let prev = TEST_LOOKUP_PATH.with(|p| p.borrow_mut().replace(path.into()));
+    let _restore = Restore(prev);
+    f()
+}
+
 /// Split a PATH-like string into components using the host separator.
 pub fn split(path: &str) -> Vec<PathBuf> {
     env::split_paths(path).collect()

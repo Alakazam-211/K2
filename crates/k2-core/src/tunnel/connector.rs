@@ -138,7 +138,7 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
 /// On Windows also tries `name.exe` (CreateProcess PATHEXT is not applied
 /// to raw path existence checks).
 fn which_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = crate::terminal::path_env::lookup_path()?;
     for dir in std::env::split_paths(&path) {
         for base in frpc_path_candidates(name) {
             let cand = dir.join(base);
@@ -1746,15 +1746,13 @@ mod tests {
         // common locations resolve — we must get the install guidance,
         // not a silent success.
         with_temp_home(|| {
-            let empty = std::env::temp_dir().join(format!("k2so-empty-{}", std::process::id()));
+            let empty = crate::test_env::unique_temp_path("frpc-empty");
             std::fs::create_dir_all(&empty).expect("mk empty dir");
-            let prev = std::env::var_os("PATH");
-            std::env::set_var("PATH", &empty);
-            let res = resolve_frpc(&FrpcBinary::Auto);
-            match prev {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
+            // Per-thread lookup PATH: the process PATH is never changed.
+            let res = crate::terminal::path_env::with_lookup_path(&empty, || {
+                resolve_frpc(&FrpcBinary::Auto)
+            });
+            let _ = std::fs::remove_dir_all(&empty);
             let err = res.expect_err("frpc must be unresolvable with empty PATH + temp HOME");
             assert!(
                 err.contains("frpc not installed"),
@@ -1770,7 +1768,7 @@ mod tests {
     #[test]
     fn resolve_frpc_finds_executable_on_path() {
         with_temp_home(|| {
-            let bin_dir = std::env::temp_dir().join(format!("k2so-bin-{}", std::process::id()));
+            let bin_dir = crate::test_env::unique_temp_path("frpc-bin");
             std::fs::create_dir_all(&bin_dir).expect("mk bin dir");
             let fake = bin_dir.join("frpc");
             std::fs::write(&fake, "#!/bin/sh\nexit 0\n").expect("write fake frpc");
@@ -1780,13 +1778,10 @@ mod tests {
                 std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
                     .expect("chmod fake frpc");
             }
-            let prev = std::env::var_os("PATH");
-            std::env::set_var("PATH", &bin_dir);
-            let res = resolve_frpc(&FrpcBinary::Auto);
-            match prev {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
+            let res = crate::terminal::path_env::with_lookup_path(&bin_dir, || {
+                resolve_frpc(&FrpcBinary::Auto)
+            });
+            let _ = std::fs::remove_dir_all(&bin_dir);
             assert_eq!(res.expect("should find fake frpc on PATH"), fake);
         });
     }
@@ -1840,8 +1835,7 @@ mod tests {
         with_temp_home(|| {
             // Default config → e2e is ON. A real frpc path (/bin/true) so we
             // get PAST frpc resolution and reach the HTTPS-port resolution.
-            let prev = std::env::var_os("K2_E2E");
-            std::env::remove_var("K2_E2E"); // follow config (default-on)
+            let _e2e = crate::test_env::EnvVar::remove("K2_E2E"); // follow config (default-on)
             config::save(&TunnelConfig {
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
@@ -1856,11 +1850,6 @@ mod tests {
                 "expected an HTTPS-listener/anti-cleartext error, got: {err}"
             );
             assert!(!status().running, "no child should be running after the loud failure");
-
-            match prev {
-                Some(p) => std::env::set_var("K2_E2E", p),
-                None => std::env::remove_var("K2_E2E"),
-            }
         });
     }
 
@@ -1872,8 +1861,7 @@ mod tests {
     #[test]
     fn e2e_start_resolves_https_port_when_published() {
         with_temp_home(|| {
-            let prev = std::env::var_os("K2_E2E");
-            std::env::remove_var("K2_E2E");
+            let _e2e = crate::test_env::EnvVar::remove("K2_E2E");
             config::save(&TunnelConfig {
                 token: "tok".to_string(),
                 subdomain: "rosson".to_string(),
@@ -1900,10 +1888,6 @@ mod tests {
             );
 
             let _ = stop();
-            match prev {
-                Some(p) => std::env::set_var("K2_E2E", p),
-                None => std::env::remove_var("K2_E2E"),
-            }
         });
     }
 
@@ -2023,14 +2007,7 @@ mod tests {
             // Fake frpc: one success line, then an error storm, never exits.
             // The storm rate (10 lines/s) crosses the watchdog threshold
             // (3 in 30s) almost immediately.
-            let dir = std::env::temp_dir().join(format!(
-                "k2so-fake-frpc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let dir = crate::test_env::unique_temp_path("fake-frpc");
             std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
             let script = dir.join("frpc-stuck.sh");
             std::fs::write(
@@ -2444,14 +2421,7 @@ mod tests {
 
             // Binary MUST be named `frpc` so the full cmdline contains the
             // pkill pattern `frpc -c <cfg>` (same as a real frpc spawn).
-            let dir = std::env::temp_dir().join(format!(
-                "k2so-orphan-frpc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let dir = crate::test_env::unique_temp_path("orphan-frpc");
             std::fs::create_dir_all(&dir).expect("mk orphan-frpc dir");
             let frpc = dir.join("frpc");
             std::fs::write(&frpc, "#!/bin/sh\nsleep 300\n").expect("write sleep-frpc");
@@ -2518,14 +2488,7 @@ mod tests {
     #[test]
     fn solo_stop_kills_long_lived_supervised_child() {
         with_temp_home(|| {
-            let dir = std::env::temp_dir().join(format!(
-                "k2so-solo-stop-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let dir = crate::test_env::unique_temp_path("solo-stop");
             std::fs::create_dir_all(&dir).expect("mk solo-stop dir");
             // Named `frpc` so stop()'s pattern reap is a second line of defense.
             let script = dir.join("frpc");
@@ -2774,22 +2737,28 @@ mod tests {
         );
     }
 
-    /// Dumps the rendered frpc TOML for the spec example so a human can
-    /// eyeball it (`cargo test -p k2so-core dump_spec -- --ignored
-    /// --nocapture`). Token is a placeholder. NOT a real-network test.
+    /// The spec-example frpc TOML (was a print-only `#[ignore]`d
+    /// diagnostic): pin its proxy shape. Token is a placeholder.
     #[test]
-    #[ignore = "diagnostic: prints the spec-example frpc TOML"]
-    fn dump_spec_example_toml() {
+    fn spec_example_toml_has_the_proxy_shape() {
         let cfg = TunnelConfig {
             token: "REDACTED".to_string(),
             subdomain: "rosson".to_string(),
             local_port: Some(57839),
             ..Default::default()
         };
-        println!(
-            "{}",
-            super::super::render::render_frpc_toml(&cfg, 57839, false)
+        let toml = super::super::render::render_frpc_toml(&cfg, 57839, false);
+        assert!(toml.starts_with("# K2SO tunnel connector"), "{toml}");
+        let proxy = toml.split("[[proxies]]\n").nth(1).expect("one proxy section");
+        assert_eq!(
+            proxy,
+            "name = \"k2so-rosson\"\n\
+             type = \"http\"\n\
+             localIP = \"127.0.0.1\"\n\
+             localPort = 57839\n\
+             subdomain = \"rosson\"\n"
         );
+        assert!(toml.contains("[metadatas]\ntoken = \"REDACTED\"\n"), "{toml}");
     }
 
     /// REAL-PROCESS, REAL-NETWORK test — gated `#[ignore]` so `cargo

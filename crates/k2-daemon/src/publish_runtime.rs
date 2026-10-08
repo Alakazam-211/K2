@@ -1711,16 +1711,9 @@ mod tests {
     struct MockCp {
         hits: StdArc<AtomicUsize>,
         _join: thread::JoinHandle<()>,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl Drop for MockCp {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var(subdomains::CONTROL_PLANE_BASE_ENV, p),
-                None => std::env::remove_var(subdomains::CONTROL_PLANE_BASE_ENV),
-            }
-        }
+        /// Control-plane base override under the ONE shared env lock;
+        /// restored on drop.
+        _cp_base: k2_core::test_env::EnvVar,
     }
 
     fn start_mock_cp(status: u16, body: &'static str, methods_ok: &'static str) -> MockCp {
@@ -1754,15 +1747,14 @@ mod tests {
                 }
             }
         });
-        let prev = std::env::var_os(subdomains::CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(
+        let cp_base = k2_core::test_env::EnvVar::set(
             subdomains::CONTROL_PLANE_BASE_ENV,
             format!("http://127.0.0.1:{port}"),
         );
         MockCp {
             hits,
             _join: join,
-            prev,
+            _cp_base: cp_base,
         }
     }
 
@@ -1772,7 +1764,7 @@ mod tests {
             panic!("python3 is required for published-service runtime tests");
         }
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_PUBLISH_PROBE_MS", "4000");
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
         let dir = _home.path().join("ws");
         fs::create_dir_all(&dir).unwrap();
         let project_id = make_project(&dir.to_string_lossy());
@@ -1824,7 +1816,7 @@ mod tests {
             panic!("python3 is required for published-service runtime tests");
         }
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_PUBLISH_PROBE_MS", "4000");
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
         let mock = start_mock_cp(200, r#"{"subdomains":[]}"#, "*");
         let dir = _home.path().join("ws2");
         fs::create_dir_all(&dir).unwrap();
@@ -1913,8 +1905,8 @@ mod tests {
             panic!("python3 is required for published-service runtime tests");
         }
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_PUBLISH_PROBE_MS", "4000");
-        std::env::set_var("K2_PUBLISH_CLAIM_TRIES", "2");
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+        let _claim_tries = k2_core::test_env::EnvVar::set("K2_PUBLISH_CLAIM_TRIES", "2");
         let cfg = serde_json::json!({
             "token": "tok_test",
             "subdomain": "rosson",
@@ -1953,8 +1945,7 @@ mod tests {
                 }
             }
         });
-        let prev = std::env::var_os(subdomains::CONTROL_PLANE_BASE_ENV);
-        std::env::set_var(
+        let cp_base = k2_core::test_env::EnvVar::set(
             subdomains::CONTROL_PLANE_BASE_ENV,
             format!("http://127.0.0.1:{port_cp}"),
         );
@@ -1977,10 +1968,7 @@ mod tests {
             cwd_explicit: false,
         })
         .expect_err("hostname fail");
-        match prev {
-            Some(p) => std::env::set_var(subdomains::CONTROL_PLANE_BASE_ENV, p),
-            None => std::env::remove_var(subdomains::CONTROL_PLANE_BASE_ENV),
-        }
+        drop(cp_base);
         assert!(
             !err.message.contains("probe failed"),
             "must get past probe to the hostname step: {}",
@@ -2008,7 +1996,7 @@ mod tests {
             panic!("python3 is required");
         }
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_PUBLISH_PROBE_MS", "4000");
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
         let dir = _home.path().join("ws5");
         fs::create_dir_all(&dir).unwrap();
         let project_id = make_project(&dir.to_string_lossy());

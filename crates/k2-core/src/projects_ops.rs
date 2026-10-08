@@ -1268,26 +1268,15 @@ mod tests {
     /// `AppSettings.default_agent` — pinning the workspace to the agent
     /// it was born with (the NULL = inherit-global fallthrough is only
     /// for pre-migration rows, covered in schema.rs). HOME is pointed at
-    /// a temp dir (under the crate-wide HOME_LOCK, like app_settings'
-    /// own tests) so the asserted value is fully deterministic and the
-    /// developer's real ~/.k2/settings.json is never read or written.
+    /// a temp dir (a `test_env::TempHome`, under the ONE crate-wide env
+    /// lock, taken before the scoped DB) so the asserted value is fully
+    /// deterministic and the developer's real ~/.k2/settings.json is
+    /// never read or written.
     #[test]
     fn projects_create_stamps_default_agent_from_global_setting() {
-        let _g = crate::themes::HOME_LOCK.lock();
-
         // Temp HOME with a settings.json whose default_agent is a known
-        // preset-id-shaped value.
-        let tmp_home = std::env::temp_dir().join(format!(
-            "k2so-stamp-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp_home).expect("create temp HOME");
-        let original_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &tmp_home);
+        // preset-id-shaped value. Restored + removed on drop (even on panic).
+        let _home = crate::test_env::TempHome::new();
 
         let run = || -> Project {
             let stamped_preset = "aaaabbbb-1234-4abc-9def-000011112222";
@@ -1369,8 +1358,8 @@ mod tests {
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
 
-        // Cleanup: restore HOME before re-raising any assertion failure so a
-        // failing run can't leak the temp HOME into sibling tests.
+        // Cleanup before re-raising any assertion failure (HOME itself is
+        // restored by the `_home` guard when this test returns or unwinds).
         let created_id = match &result {
             Ok(p) => Some(p.id.clone()),
             Err(_) => None,
@@ -1378,11 +1367,6 @@ mod tests {
         if let Some(id) = created_id {
             delete_project(&id);
         }
-        match original_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp_home);
         if let Err(e) = result {
             std::panic::resume_unwind(e);
         }
@@ -1406,6 +1390,10 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_ex_default_plants() {
+        // Add reads ~/.k2/settings.json and writes CLI folder trust under
+        // $HOME: hold the env lock with an isolated HOME (env lock first,
+        // then the scoped DB).
+        let _home = crate::test_env::TempHome::new();
         let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("default-on");
         let path = dir.to_string_lossy().into_owned();
@@ -1435,6 +1423,7 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_ex_seed_agents_md_false_does_not_plant() {
+        let _home = crate::test_env::TempHome::new();
         let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("generate-off");
         let path = dir.to_string_lossy().into_owned();
@@ -1469,6 +1458,7 @@ mod tests {
 
     #[test]
     fn projects_add_from_path_twice_is_c2_copy_one_row() {
+        let _home = crate::test_env::TempHome::new();
         let _scoped_db = db::scoped_for_test();
         let dir = git_scratch("add-twice");
         let path = dir.to_string_lossy().into_owned();
@@ -1495,6 +1485,7 @@ mod tests {
 
     #[test]
     fn projects_add_without_git_twice_is_c2_copy_one_row() {
+        let _home = crate::test_env::TempHome::new();
         let _scoped_db = db::scoped_for_test();
         let dir = std::env::temp_dir().join(format!(
             "k2-proj-nogit-{}-{}",

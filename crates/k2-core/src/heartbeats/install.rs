@@ -784,29 +784,12 @@ fn home_dir() -> PathBuf {
 }
 
 /// Test scaffolding: run `f` with `$HOME` pointed at a fresh temp folder,
-/// holding the crate-wide `themes::HOME_LOCK` so no other HOME-mutating
-/// test races it. Restores HOME and removes the folder afterwards.
+/// holding the ONE env lock (`crate::test_env`) so no other env-mutating
+/// test races it. Restores HOME and removes the folder afterwards (also on
+/// panic, via the `TempHome` guard).
 #[cfg(test)]
-pub(crate) fn with_temp_home<R>(label: &str, f: impl FnOnce(&Path) -> R) -> R {
-    let _lock = crate::themes::HOME_LOCK.lock();
-    let home = std::env::temp_dir().join(format!(
-        "k2-hb-transport-{label}-{}-{}",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    fs::create_dir_all(&home).expect("create temp HOME");
-    let prev = std::env::var_os("HOME");
-    std::env::set_var("HOME", &home);
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&home)));
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = fs::remove_dir_all(&home);
-    match out {
-        Ok(v) => v,
-        Err(panic) => std::panic::resume_unwind(panic),
-    }
+pub(crate) fn with_temp_home<R>(_label: &str, f: impl FnOnce(&Path) -> R) -> R {
+    crate::test_env::with_temp_home(f)
 }
 
 #[cfg(test)]
@@ -911,15 +894,10 @@ mod transport_guard_tests {
     /// The opt-out flag refuses even with the real HOME.
     #[test]
     fn opt_out_flag_refuses_apply() {
-        let _lock = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os(NO_SELF_HEAL_ENV);
-        std::env::set_var(NO_SELF_HEAL_ENV, "1");
+        let flag = crate::test_env::EnvVar::set(NO_SELF_HEAL_ENV, "1");
         test_recorder::take();
         let r = apply_wake_scheduler();
-        match prev {
-            Some(v) => std::env::set_var(NO_SELF_HEAL_ENV, v),
-            None => std::env::remove_var(NO_SELF_HEAL_ENV),
-        }
+        drop(flag);
         let e = r.expect_err("flag must refuse");
         assert!(e.contains("K2_HEARTBEAT_NO_SELF_HEAL=1"), "{e}");
         assert_eq!(test_recorder::take(), Vec::<String>::new());

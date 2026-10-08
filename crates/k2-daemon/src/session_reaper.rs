@@ -66,14 +66,13 @@ mod tests {
 
     #[test]
     fn tick_interval_default_when_unset() {
-        std::env::remove_var("K2_SESSION_REAPER_TICK_SECS");
+        let _unset = k2_core::test_env::EnvVar::remove("K2_SESSION_REAPER_TICK_SECS");
         assert_eq!(tick_interval(), Duration::from_secs(TICK_INTERVAL_SECS));
     }
 
     #[test]
     fn tick_interval_env_override() {
-        std::env::set_var("K2_SESSION_REAPER_TICK_SECS", "7");
+        let _seven = k2_core::test_env::EnvVar::set("K2_SESSION_REAPER_TICK_SECS", "7");
         assert_eq!(tick_interval(), Duration::from_secs(7));
-        std::env::remove_var("K2_SESSION_REAPER_TICK_SECS");
     }
 }

@@ -291,25 +291,33 @@ pub mod term;
 /// sites).
 #[cfg(unix)]
 pub fn enrich_path_from_login_shell() {
-    use std::process::Stdio;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let output = std::process::Command::new(&shell)
-        .args(["-ilc", terminal::login_path::LOGIN_PATH_PROBE])
-        .stderr(Stdio::null())
-        .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            // The PATH between the probe's markers, absolute + safe
-            // entries only — whatever the rc files print around it is
-            // ignored (0.45.0: zsh printed completion-function source).
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if let Some(captured) = terminal::login_path::extract_login_path(&stdout) {
-                if captured != std::env::var("PATH").unwrap_or_default() {
-                    std::env::set_var("PATH", captured);
-                }
-            }
+    if let Some(captured) = login_shell_path(std::path::Path::new(&shell)) {
+        if captured != std::env::var("PATH").unwrap_or_default() {
+            std::env::set_var("PATH", captured);
         }
     }
+}
+
+/// The PATH `shell -ilc <probe>` prints between the probe's markers
+/// (absolute + safe entries only), or `None` when the shell cannot run,
+/// exits non-zero, or prints no marked PATH. Pure: reads and changes no
+/// process env, so tests drive it with a fake shell.
+#[cfg(unix)]
+pub fn login_shell_path(shell: &std::path::Path) -> Option<String> {
+    use std::process::Stdio;
+    let out = std::process::Command::new(shell)
+        .args(["-ilc", terminal::login_path::LOGIN_PATH_PROBE])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // The PATH between the probe's markers, absolute + safe entries only;
+    // whatever the rc files print around it is ignored (0.45.0: zsh
+    // printed completion-function source).
+    terminal::login_path::extract_login_path(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Raise `RLIMIT_NOFILE` (soft limit) up to the kernel's hard limit so
@@ -379,15 +387,16 @@ mod path_enrichment_tests {
     //! installed tools like `claude` failed with ENOENT until the
     //! `enrich_path_from_login_shell` helper landed in 0.35.1.
     //!
-    //! Hermetic: `$SHELL` points at a FAKE login shell (a temp script)
-    //! that prints a known, marked PATH. The real login shell is never
-    //! run, so the result never depends on whoever runs the suite (their
-    //! rc files, or whether `/bin/zsh` exists: the Linux gate box has no
-    //! zsh, and `env -i` leaves `SHELL` unset).
+    //! Hermetic: the login shell is a FAKE (a temp script) that prints a
+    //! known, marked PATH. The real login shell is never run, so the result
+    //! never depends on whoever runs the suite (their rc files, or whether
+    //! `/bin/zsh` exists: the Linux gate box has no zsh, and `env -i` leaves
+    //! `SHELL` unset). The capture is tested through the pure
+    //! [`login_shell_path`]; only one test drives the process-level wrapper,
+    //! and its fake PATH only ADDS a dir to the current PATH, so concurrent
+    //! tests that spawn `sh` / `git` by name never lose a directory.
     use super::*;
     use std::path::{Path, PathBuf};
-
-    const SPARSE: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
     /// A temp dir holding an executable `login-shell` script with `body`.
     /// The script ignores its `-ilc <probe>` arguments.
@@ -398,7 +407,7 @@ mod path_enrichment_tests {
     impl FakeShell {
         fn new(body: &str) -> Self {
             use std::os::unix::fs::PermissionsExt;
-            let dir = std::env::temp_dir().join(format!("k2-fake-shell-{}", uuid::Uuid::new_v4()));
+            let dir = crate::test_env::unique_temp_path("fake-shell");
             std::fs::create_dir_all(&dir).expect("create fake shell dir");
             let script = dir.join("login-shell");
             std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write fake shell");
@@ -418,17 +427,7 @@ mod path_enrichment_tests {
         }
     }
 
-    /// Run `enrich_path_from_login_shell` with `PATH` paved down to the
-    /// launchd default and `SHELL` = `shell`, under the crate-wide env
-    /// lock. Returns the resulting PATH; restores both vars after.
-    fn enrich_with(shell: &Path) -> String {
-        let _env = crate::test_env::lock();
-        let _path = crate::test_env::EnvVar::set("PATH", SPARSE);
-        let _shell = crate::test_env::EnvVar::set("SHELL", shell);
-        enrich_path_from_login_shell();
-        std::env::var("PATH").expect("PATH set after enrich")
-    }
-
+    /// A shell command that prints `path` between the probe markers.
     fn marked(path: &str) -> String {
         format!(
             "printf '%s' '{}{path}{}'",
@@ -441,9 +440,12 @@ mod path_enrichment_tests {
     fn enrich_path_widens_sparse_launchd_default() {
         let shell = FakeShell::new(&format!(
             "echo 'Last login: noise from an rc file'\n{}",
-            marked("/opt/k2-test/bin:/usr/bin:/bin")
+            marked("/opt/k2-test/bin:/usr/bin:/bin:/usr/sbin:/sbin")
         ));
-        assert_eq!(enrich_with(&shell.path()), "/opt/k2-test/bin:/usr/bin:/bin");
+        assert_eq!(
+            login_shell_path(&shell.path()).as_deref(),
+            Some("/opt/k2-test/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        );
     }
 
     #[test]
@@ -454,32 +456,50 @@ mod path_enrichment_tests {
             "i=0\nwhile [ $i -lt 200 ]; do echo 'compdump () {{ local _d_file _d_f _d_bks _d_line _d_als _d_files _d_name _d_tmp; }}'; i=$((i+1)); done\n{}",
             marked("/opt/k2-test/bin:/usr/bin:/bin")
         ));
-        assert_eq!(enrich_with(&shell.path()), "/opt/k2-test/bin:/usr/bin:/bin");
+        assert_eq!(login_shell_path(&shell.path()).as_deref(), Some("/opt/k2-test/bin:/usr/bin:/bin"));
     }
 
     #[test]
     fn enrich_path_keeps_path_when_the_shell_fails() {
         let shell = FakeShell::new(&format!("{}\nexit 3", marked("/opt/k2-test/bin:/usr/bin")));
-        assert_eq!(enrich_with(&shell.path()), SPARSE, "non-zero exit leaves PATH alone");
+        assert_eq!(login_shell_path(&shell.path()), None, "non-zero exit adopts nothing");
     }
 
     #[test]
     fn enrich_path_keeps_path_when_the_shell_is_missing() {
-        let missing = std::env::temp_dir().join(format!("k2-no-such-shell-{}", uuid::Uuid::new_v4()));
-        assert_eq!(enrich_with(&missing), SPARSE, "spawn failure leaves PATH alone");
+        let missing = crate::test_env::unique_temp_path("no-such-shell");
+        assert_eq!(login_shell_path(Path::new(&missing)), None, "spawn failure adopts nothing");
+    }
+
+    #[test]
+    fn enrich_path_keeps_path_without_markers() {
+        let shell = FakeShell::new("echo /opt/k2-test/bin:/usr/bin");
+        assert_eq!(login_shell_path(&shell.path()), None, "unmarked output adopts nothing");
     }
 
     #[test]
     fn enrich_path_safe_to_call_multiple_times() {
-        let shell = FakeShell::new(&marked("/opt/k2-test/bin:/usr/bin:/bin"));
+        // The process-level wrapper: adopts the fake login PATH, and a
+        // second call changes nothing. The fake PATH is the current PATH
+        // plus one dir, so concurrent spawns by name keep working.
         let _env = crate::test_env::lock();
-        let _path = crate::test_env::EnvVar::set("PATH", SPARSE);
+        let current = std::env::var("PATH").expect("PATH is set in the test env");
+        let widened = format!("/opt/k2-test/bin:{current}");
+        let want = terminal::login_path::extract_login_path(&format!(
+            "{}{widened}{}",
+            terminal::login_path::LOGIN_PATH_BEGIN,
+            terminal::login_path::LOGIN_PATH_END
+        ))
+        .expect("current PATH has safe entries");
+        let shell = FakeShell::new(&marked(&widened));
         let _shell = crate::test_env::EnvVar::set("SHELL", shell.path());
+        let _path = crate::test_env::EnvVar::set("PATH", &current);
         enrich_path_from_login_shell();
         let after_one = std::env::var("PATH").expect("PATH after first enrich");
         enrich_path_from_login_shell();
         let after_two = std::env::var("PATH").expect("PATH after second enrich");
-        assert_eq!(after_one, "/opt/k2-test/bin:/usr/bin:/bin");
+        assert_eq!(after_one, want);
+        assert!(after_one.starts_with("/opt/k2-test/bin"), "{after_one}");
         assert_eq!(after_two, after_one, "a second call must not grow or change PATH");
     }
 }

@@ -416,52 +416,19 @@ mod tests {
     // (`db::scoped_for_test`), so archived rows never leak into another
     // test's `list_all_sessions`.
 
-    struct TempDir {
-        path: PathBuf,
-    }
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let pid = std::process::id();
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir().join(format!("k2so-ua-{label}-{pid}-{nanos}"));
-            fs::create_dir_all(&path).expect("create tempdir");
-            Self { path }
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
+    /// Temp `$HOME` for one test: holds the ONE env lock
+    /// (`crate::test_env`), restores HOME and removes the dir on drop.
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _tmp: TempDir,
+        _tmp: crate::test_env::TempHome,
     }
     impl HomeGuard {
-        fn new(label: &str) -> Self {
-            let tmp = TempDir::new(label);
-            let original = std::env::var_os("HOME");
-            // Tests hold HOME_LOCK for exclusive mutation of process env.
-            std::env::set_var("HOME", &tmp.path);
+        fn new(_label: &str) -> Self {
             Self {
-                original,
-                _tmp: tmp,
+                _tmp: crate::test_env::TempHome::new(),
             }
         }
         fn path(&self) -> &Path {
-            &self._tmp.path
-        }
-    }
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+            self._tmp.path()
         }
     }
 

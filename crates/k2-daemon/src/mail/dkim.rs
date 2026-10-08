@@ -613,10 +613,11 @@ mod tests {
 
     #[test]
     fn rotate_handler_byo_prints_txt_does_not_destroy_or_leak_pem() {
+        // Env lock first (the guards below), then the mail lock.
+        let _attempts = k2_core::test_env::EnvVar::set("K2_DKIM_POLL_ATTEMPTS", "1");
+        let _poll = k2_core::test_env::EnvVar::set("K2_DKIM_POLL_MS", "0");
+        let _key = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_API_KEY", "k2-test-key");
         let _g = crate::mail::mail_server_test_lock();
-        std::env::set_var("K2_DKIM_POLL_ATTEMPTS", "1");
-        std::env::set_var("K2_DKIM_POLL_MS", "0");
-        std::env::set_var("K2_TEST_MAIL_API_KEY", "k2-test-key");
         let date = chrono::Utc::now().format("%Y%m%d").to_string();
         let ed_sel = format!("v1-ed25519-{date}");
         let rsa_sel = format!("v1-rsa-{date}");

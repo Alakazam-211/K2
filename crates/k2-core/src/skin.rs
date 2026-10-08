@@ -3953,23 +3953,12 @@ pub fn effective_front_door() -> Result<SkinFrontDoor, String> {
 mod tests {
     use super::*;
 
+    /// Run `f` with a fresh temp HOME under the ONE env lock. The skin
+    /// store follows `$HOME`, so EVERY test that touches it goes through
+    /// here. HOME is restored and the dir removed on drop (even on panic).
     fn with_temp_home<F: FnOnce()>(f: F) {
-        let _g = crate::themes::HOME_LOCK.lock();
-        let prev = std::env::var_os("HOME");
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let tmp =
-            std::env::temp_dir().join(format!("k2-skin-core-{}-{}", std::process::id(), nanos));
-        std::fs::create_dir_all(&tmp).expect("temp HOME");
-        std::env::set_var("HOME", &tmp);
+        let _home = crate::test_env::TempHome::new();
         f();
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn reopen_skin_db() {

@@ -1015,9 +1015,9 @@ mod tests {
     #[test]
     fn manual_issue_reuses_outside_window_and_renews_inside_it() {
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_ACME_FAKE", "1");
-        std::env::set_var("K2_ACME_HTTP01", "1");
-        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _acme_fake = k2_core::test_env::EnvVar::set("K2_ACME_FAKE", "1");
+        let _acme_http01 = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
+        let _acme_dns_wait = k2_core::test_env::EnvVar::set("K2_ACME_DNS_WAIT_SECS", "0");
         let now = chrono::Utc::now().timestamp();
         let day = 86_400;
         for (host, not_after, want_reuse) in [
@@ -1050,7 +1050,6 @@ mod tests {
             assert_eq!(rec.failures, 0);
         }
         detach("window.test");
-        std::env::remove_var("K2_ACME_HTTP01");
     }
 
     /// A manual issue never runs while another run (the background
@@ -1058,8 +1057,8 @@ mod tests {
     #[test]
     fn manual_issue_refuses_while_the_name_is_locked() {
         let _home = crate::test_support::TempHome::new();
-        std::env::set_var("K2_ACME_FAKE", "1");
-        std::env::set_var("K2_ACME_HTTP01", "1");
+        let _acme_fake = k2_core::test_env::EnvVar::set("K2_ACME_FAKE", "1");
+        let _acme_http01 = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
         attach_other("lock.test", "app.lock.test");
         let held = renew::NameLock::try_acquire("app.lock.test").expect("lock");
         let err = issue_attached("app.lock.test").expect_err("busy");
@@ -1074,16 +1073,15 @@ mod tests {
         drop(held);
         issue_attached("app.lock.test").expect("free again");
         detach("lock.test");
-        std::env::remove_var("K2_ACME_HTTP01");
     }
 
     #[test]
     fn mail_issue_fails_loud_if_jmap_plant_fails() {
         let _home = crate::test_support::TempHome::new();
         attach_mail("plant-fail.test", "mail.plant-fail.test");
-        std::env::set_var("K2_ACME_FAKE", "1");
-        std::env::set_var("K2_ACME_HTTP01", "1");
-        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _acme_fake = k2_core::test_env::EnvVar::set("K2_ACME_FAKE", "1");
+        let _acme_http01 = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
+        let _acme_dns_wait = k2_core::test_env::EnvVar::set("K2_ACME_DNS_WAIT_SECS", "0");
         let _j = store::set_test_jmap_plant(Some(Err(
             "x:Certificate/set: JMAP error 'invalidProperties': bad PEM".into(),
         )));
@@ -1101,16 +1099,15 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = k2_core::domains::remove_binding(&conn, "plant-fail.test");
-        std::env::remove_var("K2_ACME_HTTP01");
     }
 
     #[test]
     fn mail_issue_fails_if_probe_still_self_signed() {
         let _home = crate::test_support::TempHome::new();
         attach_mail("rcgen-probe.test", "mail.rcgen-probe.test");
-        std::env::set_var("K2_ACME_FAKE", "1");
-        std::env::set_var("K2_ACME_HTTP01", "1");
-        std::env::set_var("K2_ACME_DNS_WAIT_SECS", "0");
+        let _acme_fake = k2_core::test_env::EnvVar::set("K2_ACME_FAKE", "1");
+        let _acme_http01 = k2_core::test_env::EnvVar::set("K2_ACME_HTTP01", "1");
+        let _acme_dns_wait = k2_core::test_env::EnvVar::set("K2_ACME_DNS_WAIT_SECS", "0");
         let _j = store::set_test_jmap_plant(Some(Ok(())));
         let _p = crate::domains::status::set_test_probe(Some(crate::domains::status::ProbeResult {
             state: "self-signed".into(),
@@ -1131,7 +1128,6 @@ mod tests {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = k2_core::domains::remove_binding(&conn, "rcgen-probe.test");
-        std::env::remove_var("K2_ACME_HTTP01");
     }
 
     #[test]
@@ -1208,17 +1204,19 @@ mod tests {
 
     #[test]
     fn cname_hostname_refuses_http01_without_dns_write() {
-        std::env::set_var("K2_ACME_HOSTNAME_IS_CNAME", "1");
+        let is_cname = k2_core::test_env::EnvVar::set("K2_ACME_HOSTNAME_IS_CNAME", "1");
         let err = select_challenge(&byo_binding(), "mail.discover-nocode.com")
             .expect_err("CNAME must not HTTP-01");
-        std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
+        drop(is_cname);
         assert!(err.contains("CNAME"), "{err}");
         assert!(err.contains("dns_write") || err.contains("DNS-01"), "{err}");
     }
 
     #[test]
     fn dns_write_still_picks_dns01_when_hostname_is_cname() {
-        std::env::set_var("K2_ACME_HOSTNAME_IS_CNAME", "1");
+        // Held (with the ONE shared env lock) for the whole test; restored
+        // on drop on every return path.
+        let _is_cname = k2_core::test_env::EnvVar::set("K2_ACME_HOSTNAME_IS_CNAME", "1");
         let binding = DomainBinding {
             apex: "discover-nocode.com".into(),
             zone_id: Some("z1".into()),
@@ -1231,7 +1229,6 @@ mod tests {
         let kind = match select_challenge(&binding, "mail.discover-nocode.com") {
             Ok(k) => k,
             Err(e) => {
-                std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
                 assert!(
                     e.contains("tunnel token") || e.contains("DNS-01"),
                     "dns_write must attempt DNS-01, not HTTP-01: {e}"
@@ -1239,7 +1236,6 @@ mod tests {
                 return;
             }
         };
-        std::env::remove_var("K2_ACME_HOSTNAME_IS_CNAME");
         assert_eq!(kind, ChallengeKind::Dns01);
     }
 

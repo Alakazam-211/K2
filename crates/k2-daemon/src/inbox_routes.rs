@@ -937,8 +937,7 @@ mod tests {
 
     #[test]
     fn deliver_federated_without_federation_fails_loud_not_connect_token() {
-        let prev = std::env::var_os("K2_FEDERATION");
-        std::env::remove_var("K2_FEDERATION");
+        let _no_federation = k2_core::test_env::EnvVar::remove("K2_FEDERATION");
         k2_core::federation::set_enabled(false);
 
         let tmp = std::env::temp_dir().join(format!(
@@ -953,10 +952,6 @@ mod tests {
         params.insert("wake".into(), "true".into());
         let resp = handle_deliver_post(&params);
         let _ = std::fs::remove_file(&tmp);
-        match prev {
-            Some(p) => std::env::set_var("K2_FEDERATION", p),
-            None => std::env::remove_var("K2_FEDERATION"),
-        }
         k2_core::federation::set_enabled(false);
 
         assert!(

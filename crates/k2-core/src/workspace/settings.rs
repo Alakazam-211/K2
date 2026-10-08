@@ -2300,45 +2300,23 @@ mod tests {
     // shared in-memory DB is process-wide. The new JSON backend reads
     // `$HOME/.k2so/settings.json`, so each test instead points `$HOME`
     // at a fresh tempdir (matching the pattern in `app_settings::tests`).
-    // We share the crate-wide `themes::HOME_LOCK` mutex with the other
-    // HOME-mutating test modules so two of them don't race on `$HOME`
-    // at once — see the long comment in `app_settings::tests` for why
-    // a single shared lock matters.
+    // We share the ONE crate-wide env lock (`themes::HOME_LOCK` is now
+    // `test_env::SharedEnvLock`) with the other HOME-mutating test
+    // modules so two of them don't race on `$HOME` at once — see the
+    // long comment in `app_settings::tests` for why a single shared lock
+    // matters. Take it before the DB lock (lock order: env first).
     use crate::themes::HOME_LOCK as HOME_TEST_LOCK;
 
     /// Point `$HOME` at a freshly-created tempdir for the lifetime of
-    /// the guard. Mirrors the pattern in `app_settings::tests` —
-    /// kept local here rather than re-exported so workspace/settings
-    /// tests don't depend on the private `tempdir_lite` module in
-    /// `app_settings::tests`.
+    /// the guard. A thin wrapper over `test_env::TempHome` (which holds
+    /// the env lock and restores HOME + removes the dir on drop).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        path: std::path::PathBuf,
+        _home: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
         fn new() -> Self {
-            let pid = std::process::id();
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let path = std::env::temp_dir()
-                .join(format!("k2so-workspace-settings-test-{pid}-{nanos}"));
-            std::fs::create_dir_all(&path).expect("create tempdir for HOME");
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", &path);
-            Self { original, path }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&self.path);
+            Self { _home: crate::test_env::TempHome::new() }
         }
     }
 

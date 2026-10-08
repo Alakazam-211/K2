@@ -397,7 +397,17 @@ pub fn test_force_fill(principal_key: &str, workspace: &str, n: usize) {
     }
 }
 
+/// Test-only: serializes every test that resets or depends on the
+/// process-global quota counters (`test_reset_all`, spawn_queue drains).
+/// Never poisons a later test: a panicking holder's guard is recovered.
+#[cfg(test)]
+pub(crate) fn test_quota_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Test-only: drop all process-global quota counters (isolate unit tests).
+/// Callers hold [`test_quota_lock`].
 #[cfg(test)]
 #[allow(dead_code)]
 pub fn test_reset_all() {
@@ -556,17 +566,21 @@ mod tests {
     #[test]
     fn env_cap_parsing_and_fallbacks() {
         // A var name unlikely to be set in the test env.
+        // A dedicated var, changed only through env guards (the one env lock).
+        use k2_core::test_env::EnvVar;
         let var = "K2_SANDBOX_TEST_CAP_UNSET_XYZ";
-        std::env::remove_var(var);
-        assert_eq!(env_cap(var, 7), 7, "absent → default");
-        // Note: we set/remove a dedicated var to avoid cross-test pollution.
-        std::env::set_var(var, "0");
-        assert_eq!(env_cap(var, 7), 7, "zero is treated as unset (would brick)");
-        std::env::set_var(var, "not-a-number");
-        assert_eq!(env_cap(var, 7), 7, "unparsable → default");
-        std::env::set_var(var, "  12 ");
-        assert_eq!(env_cap(var, 7), 12, "valid positive override (trimmed)");
-        std::env::remove_var(var);
+        {
+            let _absent = EnvVar::remove(var);
+            assert_eq!(env_cap(var, 7), 7, "absent → default");
+        }
+        for (raw, want, why) in [
+            ("0", 7, "zero is treated as unset (would brick)"),
+            ("not-a-number", 7, "unparsable → default"),
+            ("  12 ", 12, "valid positive override (trimmed)"),
+        ] {
+            let _v = EnvVar::set(var, raw);
+            assert_eq!(env_cap(var, 7), want, "{why}");
+        }
     }
 
     /// Per-workspace ceiling via `try_acquire_ws`: N ok, N+1 → `WorkspaceCap`
@@ -711,6 +725,7 @@ mod tests {
     /// sleeping the S8 wait window. Does not flip global wait env.
     #[test]
     fn nowait_acquire_ok_then_refuse_at_cap() {
+        let _q = test_quota_lock();
         test_reset_all();
         let ws = "/tmp/k2-quota-nowait-ws";
         let p = "nowait-principal";

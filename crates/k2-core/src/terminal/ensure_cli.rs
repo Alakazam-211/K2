@@ -228,42 +228,26 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard};
 
-    static HOME_LOCK: Mutex<()> = Mutex::new(());
-
-    fn lock_home() -> MutexGuard<'static, ()> {
-        HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    /// The ONE crate-wide test env lock (re-entrant, never poisons).
+    fn lock_home() -> crate::test_env::EnvLock {
+        crate::test_env::lock()
     }
 
+    /// Points `$HOME` at `home` until dropped (holds the env lock;
+    /// restores the previous HOME on drop, even on panic).
     struct HomeGuard {
-        prev: Option<std::ffi::OsString>,
+        _home: crate::test_env::EnvVar,
     }
 
     impl HomeGuard {
         fn set(home: &std::path::Path) -> Self {
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", home);
-            Self { prev }
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var("HOME", prev),
-                None => std::env::remove_var("HOME"),
-            }
+            Self { _home: crate::test_env::EnvVar::set("HOME", home) }
         }
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let n = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("k2-cli-install-{tag}-{}-{n}", std::process::id()));
+        let path = crate::test_env::unique_temp_path(&format!("cli-install-{tag}"));
         fs::create_dir_all(&path).unwrap();
         path
     }

@@ -3106,47 +3106,38 @@ mod tests {
     /// 20dc5d7f) refuses every program outside `/bin` `/usr/bin` … while the
     /// PROCESS `$HOME` sits under the OS temp dir — which it does whenever
     /// another lib test holds `test_support::TempHome`. These tests exec a
-    /// `#!/bin/sh exec cat` stub, so they take the crate-wide HOME lock and
-    /// point `$HOME` at a fresh dir next to the test binary (outside the
-    /// temp roots). They neither race the HOME swappers nor read the real
-    /// home dir. Restores `$HOME` and removes the dir on drop.
+    /// `#!/bin/sh exec cat` stub, so they take the ONE shared env lock
+    /// (through `EnvVar`) and point `$HOME` at a fresh dir next to the test
+    /// binary (outside the temp roots). They neither race the HOME swappers
+    /// nor read the real home dir. Removes the dir on drop, then the
+    /// `EnvVar` guard restores `$HOME` (and releases the lock).
     struct StubHome {
-        prev: Option<std::ffi::OsString>,
         home: std::path::PathBuf,
-        _lock: std::sync::MutexGuard<'static, ()>,
+        _home_var: k2_core::test_env::EnvVar,
     }
 
     impl StubHome {
         fn new() -> Self {
-            let lock = crate::test_support::lock_home();
             let exe = std::env::current_exe().expect("test binary path");
             let home = exe
                 .parent()
                 .expect("test binary dir")
-                .join(format!(
-                    "k2-v2spawn-home-{}-{}",
-                    std::process::id(),
-                    NEXT_ID.fetch_add(1, Ordering::SeqCst)
-                ));
+                .join(format!("k2-v2spawn-home-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir_all(home.join(".k2")).expect("create stub HOME");
-            let prev = std::env::var_os("HOME");
-            std::env::set_var("HOME", &home);
+            let home_var = k2_core::test_env::EnvVar::set("HOME", &home);
             assert!(
                 !k2_core::terminal::agent_spawn_guard::GuardEnv::from_process().home_is_temp(),
                 "stub HOME {} is under the OS temp dir; the spawn guard would refuse the stub \
                  (build with a target dir outside $TMPDIR)",
                 home.display()
             );
-            Self { prev, home, _lock: lock }
+            Self { home, _home_var: home_var }
         }
     }
 
     impl Drop for StubHome {
         fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
+            // Runs before the fields drop, so the lock is still held here.
             let _ = std::fs::remove_dir_all(&self.home);
         }
     }

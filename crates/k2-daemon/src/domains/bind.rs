@@ -128,12 +128,12 @@ pub(crate) fn replace_fake_bind(resp: Result<DnsHttpResponse, String>) {
 /// Serializes tests that put `pending_ns` rows in the shared test DB:
 /// `POST /cli/domains/refresh` with no apex re-binds every pending row,
 /// so those tests must not overlap.
+/// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a
+/// test may combine it with `TempHome` / `EnvVar` in either order.
 #[cfg(test)]
-pub(crate) fn pending_rows_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+pub(crate) fn pending_rows_test_lock() -> k2_core::test_env::SerialGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    k2_core::test_env::serial(&LOCK)
 }
 
 /// Test seam: `(path, body)` of every bind/unbind call on this thread.

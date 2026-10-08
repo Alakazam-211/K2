@@ -1211,6 +1211,7 @@ mod tests {
             home: Some(home.path().to_path_buf()),
             temp_dirs: vec![std::env::temp_dir()],
             allow_real: false,
+            test_build: false,
         };
         let search = bin.path().to_string_lossy().into_owned();
         assert_eq!(probe_version_with("claude", &search, &guard, Duration::from_secs(5)), None);
@@ -1236,6 +1237,7 @@ mod tests {
             home: None,
             temp_dirs: vec![],
             allow_real: false,
+            test_build: false,
         };
         let t = Instant::now();
         assert_eq!(probe_version_with("claude", "", &guard, Duration::from_millis(300)), None);

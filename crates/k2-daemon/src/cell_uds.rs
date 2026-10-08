@@ -204,23 +204,12 @@ mod unix_impl {
             // be short: a Unix socket path is capped at `SUN_LEN` (~104
             // bytes on macOS), and the real `/var/folders/...` temp dir
             // blows past it once `/.k2/run/cells/<uuid>.sock` is appended.
-            // A short `/tmp` base keeps the bound path under the limit.
-            // Serialize with every other $HOME mutator in the binary —
+            // A short `/tmp` base (`TempHome::short`) keeps the bound path
+            // under the limit. TempHome holds the ONE shared env lock —
             // HOME is process-global, and an unlocked swap here raced the
-            // TempHome tests (path re-derived from HOME mid-test).
-            let _home_lock = crate::test_support::lock_home();
-            let prev = std::env::var_os("HOME");
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let tmp = std::path::PathBuf::from(format!(
-                "/tmp/k2u{}{}",
-                std::process::id(),
-                nanos % 100_000
-            ));
-            std::fs::create_dir_all(&tmp).expect("create temp HOME");
-            std::env::set_var("HOME", &tmp);
+            // TempHome tests (path re-derived from HOME mid-test) — and
+            // restores HOME + removes the dir on drop (even on panic).
+            let _home = k2_core::test_env::TempHome::short();
 
             let sid = SessionId::new();
             let listener = bind_cell_socket(&sid).expect("bind per-cell socket");
@@ -242,22 +231,19 @@ mod unix_impl {
             assert_eq!(dir_mode, 0o700, "cells dir must be 0700, got {dir_mode:o}");
 
             drop(listener);
-            // Restore HOME + clean up.
-            match prev {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&tmp);
+            // `_home` restores HOME + cleans up on drop.
         }
 
         #[test]
         fn resolve_sandbox_cell_uid_honors_override_and_refuses_root() {
             // The shared resolver (reused by both cell_server's peer-cred belt
             // and the cell-socket chown) reads K2_SANDBOX_CELL_UID first.
-            let prev = std::env::var_os("K2_SANDBOX_CELL_UID");
+            // Hold the shared env lock for the whole test; each EnvVar guard
+            // below restores the previous value on drop (LIFO).
+            let _env = crate::test_support::lock_home();
 
             // A concrete non-zero uid is taken verbatim.
-            std::env::set_var("K2_SANDBOX_CELL_UID", "9001");
+            let _uid = k2_core::test_env::EnvVar::set("K2_SANDBOX_CELL_UID", "9001");
             assert_eq!(
                 resolve_sandbox_cell_uid(),
                 Some(9001),
@@ -265,7 +251,7 @@ mod unix_impl {
             );
 
             // uid 0 is REFUSED — never chown the socket to root (fail-closed).
-            std::env::set_var("K2_SANDBOX_CELL_UID", "0");
+            let _uid = k2_core::test_env::EnvVar::set("K2_SANDBOX_CELL_UID", "0");
             assert_eq!(
                 resolve_sandbox_cell_uid(),
                 None,
@@ -273,17 +259,12 @@ mod unix_impl {
             );
 
             // Garbage parses to None (fail-closed), not a panic.
-            std::env::set_var("K2_SANDBOX_CELL_UID", "not-a-number");
+            let _uid = k2_core::test_env::EnvVar::set("K2_SANDBOX_CELL_UID", "not-a-number");
             assert_eq!(
                 resolve_sandbox_cell_uid(),
                 None,
                 "unparseable override must fail-closed to None"
             );
-
-            match prev {
-                Some(p) => std::env::set_var("K2_SANDBOX_CELL_UID", p),
-                None => std::env::remove_var("K2_SANDBOX_CELL_UID"),
-            }
         }
 
         #[test]
@@ -298,20 +279,9 @@ mod unix_impl {
             // Serialize with every other $HOME mutator (see the sibling
             // bind test): set_cell_socket_owner re-derives the socket
             // path from HOME, so a concurrent swap = chown on a path
-            // that no longer exists (the exact flake this fixes).
-            let _home_lock = crate::test_support::lock_home();
-            let prev = std::env::var_os("HOME");
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let tmp = std::path::PathBuf::from(format!(
-                "/tmp/k2c{}{}",
-                std::process::id(),
-                nanos % 100_000
-            ));
-            std::fs::create_dir_all(&tmp).expect("create temp HOME");
-            std::env::set_var("HOME", &tmp);
+            // that no longer exists (the exact flake this fixes). Short
+            // HOME for the SUN_LEN cap; restored + removed on drop.
+            let _home = k2_core::test_env::TempHome::short();
 
             let sid = SessionId::new();
             let listener = bind_cell_socket(&sid).expect("bind per-cell socket");
@@ -330,11 +300,6 @@ mod unix_impl {
             assert_eq!(mode, 0o600, "chown must leave mode 0600, got {mode:o}");
 
             drop(listener);
-            match prev {
-                Some(p) => std::env::set_var("HOME", p),
-                None => std::env::remove_var("HOME"),
-            }
-            let _ = std::fs::remove_dir_all(&tmp);
         }
     }
 }

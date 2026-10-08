@@ -77,54 +77,31 @@ fn parse_env(raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::themes::HOME_LOCK;
 
+    /// `K2_AIRGAP` under the ONE env lock (restored on drop, even on
+    /// panic); also resets the in-memory setting.
     struct EnvGuard {
-        prev: Option<std::ffi::OsString>,
+        _var: crate::test_env::EnvVar,
     }
 
     impl EnvGuard {
         fn set(val: Option<&str>) -> Self {
-            let prev = std::env::var_os(ENV_VAR);
-            match val {
-                Some(v) => std::env::set_var(ENV_VAR, v),
-                None => std::env::remove_var(ENV_VAR),
-            }
-            Self { prev }
+            let _var = match val {
+                Some(v) => crate::test_env::EnvVar::set(ENV_VAR, v),
+                None => crate::test_env::EnvVar::remove(ENV_VAR),
+            };
+            Self { _var }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.prev {
-                Some(p) => std::env::set_var(ENV_VAR, p),
-                None => std::env::remove_var(ENV_VAR),
-            }
             set_setting_enabled(false);
         }
     }
 
-    fn isolated_home() -> (std::path::PathBuf, Option<std::ffi::OsString>) {
-        let prev = std::env::var_os("HOME");
-        let dir = std::env::temp_dir().join(format!(
-            "k2-airgap-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("temp HOME");
-        std::env::set_var("HOME", &dir);
-        (dir, prev)
-    }
-
-    fn restore_home(dir: &std::path::Path, prev: Option<std::ffi::OsString>) {
-        match prev {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(dir);
+    fn isolated_home() -> crate::test_env::TempHome {
+        crate::test_env::TempHome::new()
     }
 
     #[test]
@@ -139,8 +116,8 @@ mod tests {
     #[cfg(feature = "airgap")]
     #[test]
     fn baked_build_cannot_be_disabled_with_env() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_enabled(false);
         for v in ["0", "false", "OFF", "no"] {
             let _env = EnvGuard::set(Some(v));
@@ -148,80 +125,73 @@ mod tests {
         }
         let _unset = EnvGuard::set(None);
         assert!(enabled(), "baked airgap must stay on when env is unset");
-        restore_home(&dir, prev);
     }
 
     #[cfg(not(feature = "airgap"))]
     #[test]
     fn defaults_off_when_env_and_setting_unset() {
-        let _lock = HOME_LOCK.lock();
+        let _lock = crate::test_env::lock();
         let _env = EnvGuard::set(None);
         set_setting_enabled(false);
-        let (dir, prev) = isolated_home();
+        let _home = isolated_home();
         assert!(!enabled(), "air-gap must default OFF");
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn env_truthy_enables() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_enabled(false);
         for v in ["1", "true", "TRUE", "on", "Yes"] {
             let _env = EnvGuard::set(Some(v));
             assert!(enabled(), "K2_AIRGAP={v} must enable");
         }
-        restore_home(&dir, prev);
     }
 
     #[cfg(not(feature = "airgap"))]
     #[test]
     fn env_falsy_disables_even_if_setting_on() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_enabled(true);
         for v in ["0", "false", "OFF", "no"] {
             let _env = EnvGuard::set(Some(v));
             assert!(!enabled(), "K2_AIRGAP={v} must disable (env wins)");
         }
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn env_garbage_enables_fail_closed() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         set_setting_enabled(false);
         for v in ["garbage", "maybe", "", "2", "lan"] {
             let _env = EnvGuard::set(Some(v));
             assert!(enabled(), "K2_AIRGAP={v:?} must enable (fail closed)");
         }
-        restore_home(&dir, prev);
     }
 
     #[cfg(not(feature = "airgap"))]
     #[test]
     fn setting_enables_when_env_unset() {
-        let _lock = HOME_LOCK.lock();
+        let _lock = crate::test_env::lock();
         let _env = EnvGuard::set(None);
-        let (dir, prev) = isolated_home();
+        let _home = isolated_home();
         set_setting_enabled(true);
         assert!(enabled(), "persisted airgap setting must enable");
         set_setting_enabled(false);
         assert!(!enabled());
-        restore_home(&dir, prev);
     }
 
     #[test]
     fn refuse_err_names_env() {
-        let _lock = HOME_LOCK.lock();
-        let (dir, prev) = isolated_home();
+        let _lock = crate::test_env::lock();
+        let _home = isolated_home();
         let _env = EnvGuard::set(Some("1"));
         let err = refuse().expect_err("air-gap must refuse");
         assert!(
             err.contains("K2_AIRGAP=1"),
             "teaching error must name the env; got {err}"
         );
-        restore_home(&dir, prev);
     }
 }

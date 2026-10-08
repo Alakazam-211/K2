@@ -45,6 +45,44 @@ pub fn lock() -> EnvLock {
     ENV_LOCK.lock()
 }
 
+/// A module test lock taken AFTER the env lock: `_inner` is the module's
+/// guard, `_env` the env lock (fields drop in order: module first).
+///
+/// Use [`serial`] for every test-only module lock (a singleton DB row, a
+/// job map, a mock slot) whose tests may also change env. Because the env
+/// lock is always taken first, "module lock, then `TempHome`" in one test
+/// and "`EnvVar`, then module lock" in another can never deadlock (the env
+/// lock is re-entrant on the holder's thread).
+#[must_use = "bind the guard for the test's duration"]
+pub struct EnvSerial<G> {
+    _inner: G,
+    _env: EnvLock,
+}
+
+/// [`EnvSerial`] over a `std` mutex guard.
+pub type SerialGuard = EnvSerial<std::sync::MutexGuard<'static, ()>>;
+
+/// Take the env lock, then `module_lock` (poison recovered: a panicking
+/// test must not fail the next one).
+pub fn serial(module_lock: &'static std::sync::Mutex<()>) -> SerialGuard {
+    let env = lock();
+    let inner = module_lock.lock().unwrap_or_else(|p| p.into_inner());
+    EnvSerial { _inner: inner, _env: env }
+}
+
+/// A zero-sized handle whose `.lock()` takes [`lock`]. Old per-module lock
+/// statics (`themes::HOME_LOCK`, …) are declared as this type, so any code
+/// still written against them (including branches merged later) serializes
+/// on the ONE env lock instead of a private one.
+pub struct SharedEnvLock;
+
+impl SharedEnvLock {
+    /// Same as [`lock`].
+    pub fn lock(&self) -> EnvLock {
+        lock()
+    }
+}
+
 /// Set or remove one env var for the life of the guard, then restore the
 /// previous value. Holds [`lock`] the whole time.
 #[must_use = "the variable is restored when the guard drops"]
@@ -149,6 +187,279 @@ impl Drop for TempHome {
     }
 }
 
+/// RAII agent-CLI shims: a temp dir holding a `#!/bin/sh\nexec cat`
+/// executable for every [`crate::terminal::agent_spawn_guard::AGENT_CLIS`]
+/// name, registered as `K2_TEST_AGENT_SHIM_DIR` (prepended to any existing
+/// list) while the guard lives. Holds [`lock`]. Any test that makes the
+/// daemon spawn an agent (an explicit `claude`, or a workspace default
+/// agent) needs one: test builds refuse real agent CLIs.
+#[cfg(unix)]
+#[must_use = "the shims are unregistered when the guard drops"]
+pub struct AgentShim {
+    dir: PathBuf,
+    _var: EnvVar,
+}
+
+#[cfg(unix)]
+impl AgentShim {
+    /// Install the default `exec cat` shims.
+    pub fn install() -> Self {
+        Self::with_body("exec cat")
+    }
+
+    /// Install shims whose script body (after `#!/bin/sh`) is `body`.
+    pub fn with_body(body: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        use crate::terminal::agent_spawn_guard::{AGENT_CLIS, SHIM_DIR_ENV};
+        let dir = unique_temp_path("agent-shim");
+        std::fs::create_dir_all(&dir).expect("create agent shim dir");
+        for name in AGENT_CLIS {
+            let p = dir.join(name);
+            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).expect("write agent shim");
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod agent shim");
+        }
+        let list = match std::env::var_os(SHIM_DIR_ENV).filter(|v| !v.is_empty()) {
+            Some(prev) => {
+                let mut dirs = vec![dir.clone()];
+                dirs.extend(std::env::split_paths(&prev));
+                std::env::join_paths(dirs).expect("join shim dirs")
+            }
+            None => dir.clone().into_os_string(),
+        };
+        let var = EnvVar::set(SHIM_DIR_ENV, list);
+        Self { dir, _var: var }
+    }
+
+    /// The shim dir (holds one executable per agent CLI name).
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+#[cfg(unix)]
+impl Drop for AgentShim {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A loopback HTTP server that answers every request with one fixed
+/// error status, for tests that need an "unreachable" upstream (control
+/// plane, broker, peer). Use it instead of a well-known dead port such as
+/// `127.0.0.1:9` or `:1`: on a host whose firewall drops loopback RSTs
+/// (leftover K2 sandbox nft tables did, on the build box) a connect to a
+/// closed port HANGS instead of being refused. Binds `127.0.0.1:0`; stops
+/// on drop.
+pub struct ErrorHttpServer {
+    addr: std::net::SocketAddr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ErrorHttpServer {
+    /// Answer every request with `status` (e.g. 503) and an empty body.
+    pub fn start(status: u16) -> Self {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
+        let addr = listener.local_addr().expect("local_addr");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_t = stop.clone();
+        let response = format!(
+            "HTTP/1.1 {status} Test Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stop_t.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(mut stream) = stream else { continue };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                // Read until the end of the request headers (bodies are
+                // ignored; the connection closes after the answer).
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 2048];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        Self { addr, stop, thread: Some(thread) }
+    }
+
+    /// `http://127.0.0.1:<port>`.
+    pub fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    /// The bound address.
+    pub fn addr(&self) -> std::net::SocketAddr {
+        self.addr
+    }
+}
+
+impl Drop for ErrorHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Unblock `accept` so the thread sees the flag.
+        let _ = std::net::TcpStream::connect(self.addr);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+// ── Source-walk ratchet (quiet-gate PRD §5.3) ────────────────────────
+
+/// Env vars that only this module may set or remove (test code uses
+/// [`TempHome`] / [`EnvVar`]). Production call sites are listed per crate.
+pub const PROTECTED_VARS: &[&str] = &["HOME", "PATH", "SHELL"];
+
+/// One file's raw env-mutation call counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EnvMutationCount {
+    /// Every `set_var(` / `remove_var(` call.
+    pub all: usize,
+    /// Calls whose first argument is a literal in [`PROTECTED_VARS`].
+    pub protected: usize,
+}
+
+/// Count raw `set_var(` / `remove_var(` calls in Rust source text (comment
+/// lines and `fn set_var` definitions excluded; a call split over lines
+/// still counts).
+pub fn count_env_mutations(src: &str) -> EnvMutationCount {
+    // Blank out `//` comment lines so prose about set_var never counts.
+    let code: String = src
+        .lines()
+        .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let bytes = code.as_bytes();
+    let mut out = EnvMutationCount::default();
+    for needle in ["set_var(", "remove_var("] {
+        let mut from = 0;
+        while let Some(i) = code[from..].find(needle) {
+            let at = from + i;
+            from = at + needle.len();
+            let prev = if at == 0 { b' ' } else { bytes[at - 1] };
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                continue; // e.g. `my_set_var(`
+            }
+            if code[..at].trim_end().ends_with("fn") {
+                continue; // a definition, not a call
+            }
+            out.all += 1;
+            let rest = code[from..].trim_start();
+            if PROTECTED_VARS
+                .iter()
+                .any(|v| rest.starts_with(&format!("\"{v}\"")))
+            {
+                out.protected += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Walk `src_root` and compare every `.rs` file's env-mutation counts with
+/// `baseline` (path relative to `src_root`, `/`-separated, then
+/// `(max all, max protected)`; files not listed allow 0). Returns one line
+/// per file over its limit; empty = pass. Lower counts always pass, so the
+/// baseline only ever needs lowering (never raising) when sites are fixed.
+pub fn env_mutation_violations(
+    src_root: &Path,
+    baseline: &[(&str, usize, usize)],
+) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut stack = vec![src_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut out = Vec::new();
+    for path in files {
+        let rel = path
+            .strip_prefix(src_root)
+            .expect("under src root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let c = count_env_mutations(&src);
+        let (max_all, max_protected) = baseline
+            .iter()
+            .find(|(f, _, _)| *f == rel)
+            .map(|(_, a, p)| (*a, *p))
+            .unwrap_or((0, 0));
+        if c.protected > max_protected {
+            out.push(format!(
+                "{rel}: {} set_var/remove_var of HOME/PATH/SHELL (allowed {max_protected}): \
+                 use k2_core::test_env::TempHome / EnvVar",
+                c.protected
+            ));
+        }
+        if c.all > max_all {
+            out.push(format!(
+                "{rel}: {} raw set_var/remove_var calls (allowed {max_all}): tests change env \
+                 only through k2_core::test_env::EnvVar (holds the one env lock, restores on drop)",
+                c.all
+            ));
+        }
+    }
+    out
+}
+
+/// Lines under `src_root` (non-comment) that use `thread::current().id()`.
+/// Temp paths named from a `ThreadId` (or pid + nanos) repeat across the
+/// test binaries of one run and across runs (the 0.45.0 gate leaked
+/// `k2-update-test-boot-<pid>-ThreadId(N)` homes); use
+/// [`unique_temp_path`]. Nothing in `src/` needs a `ThreadId` today, so the
+/// rule is zero-tolerance.
+pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![src_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            for (n, line) in src.lines().enumerate() {
+                // concat! so this line never matches itself.
+                if !line.trim_start().starts_with("//")
+                    && line.contains(concat!("current()", ".id()"))
+                {
+                    out.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Run `f` with a fresh temp `$HOME` (see [`TempHome`]).
 pub fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
     let home = TempHome::new();
@@ -211,4 +522,81 @@ mod tests {
         // Not poisoned: the next taker proceeds.
         let _g = lock();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_shim_registers_and_unregisters() {
+        use crate::terminal::agent_spawn_guard::{resolve_program, GuardEnv, SHIM_DIR_ENV};
+        let _l = lock();
+        let before = std::env::var_os(SHIM_DIR_ENV);
+        let dir;
+        {
+            let shim = AgentShim::install();
+            dir = shim.dir().to_path_buf();
+            let resolved = resolve_program("claude", "/usr/bin", &GuardEnv::from_process())
+                .expect("claude resolves to the shim");
+            assert_eq!(resolved, dir.join("claude").to_string_lossy());
+            let body = std::fs::read_to_string(dir.join("codex")).unwrap();
+            assert_eq!(body, "#!/bin/sh\nexec cat\n");
+        }
+        assert_eq!(std::env::var_os(SHIM_DIR_ENV), before);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn error_http_server_answers_its_status_fast() {
+        use std::io::{Read, Write};
+        let srv = ErrorHttpServer::start(503);
+        assert!(srv.url().starts_with("http://127.0.0.1:"));
+        let t = std::time::Instant::now();
+        let mut c = std::net::TcpStream::connect(srv.addr()).expect("connect");
+        c.write_all(b"POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let mut out = String::new();
+        c.read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.1 503 "), "{out:?}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(2), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn env_mutation_counter_sees_calls_not_prose() {
+        let src = "// std::env::set_var(\"HOME\", x) in a comment\n\
+                   fn set_var(k: &str) {}\n\
+                   std::env::set_var(\"HOME\", h);\n\
+                   std::env::remove_var(\n    \"PATH\");\n\
+                   env::set_var(\"K2_X\", \"1\");\n\
+                   my_set_var(\"HOME\");\n";
+        assert_eq!(count_env_mutations(src), EnvMutationCount { all: 3, protected: 2 });
+    }
+
+    /// RATCHET: no new raw env mutation in k2-core. HOME/PATH/SHELL change
+    /// only through this module; other vars only in the files (and counts)
+    /// listed in `K2_CORE_ENV_BASELINE`. Lower a count when you convert
+    /// sites; never raise one.
+    #[test]
+    fn no_thread_id_temp_names_in_k2_core() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let v = thread_id_name_violations(&src);
+        assert!(v.is_empty(), "use test_env::unique_temp_path, not a ThreadId:\n{}", v.join("\n"));
+    }
+
+    #[test]
+    fn no_new_raw_env_mutation_in_k2_core() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let violations = env_mutation_violations(&src, K2_CORE_ENV_BASELINE);
+        assert!(
+            violations.is_empty(),
+            "raw env mutation over the ratchet:\n{}",
+            violations.join("\n")
+        );
+    }
 }
+
+/// `(file, max raw calls, max HOME/PATH/SHELL calls)` for k2-core `src/`.
+/// `test_env.rs` is the sanctioned home of the raw calls (its guards, plus
+/// the counter test's sample text); `lib.rs` is production
+/// (`enrich_path_from_login_shell` adopts the login-shell PATH).
+#[cfg(test)]
+const K2_CORE_ENV_BASELINE: &[(&str, usize, usize)] = &[
+    ("lib.rs", 1, 1),
+    ("test_env.rs", 13, 3),
+];

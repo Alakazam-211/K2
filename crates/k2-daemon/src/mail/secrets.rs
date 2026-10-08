@@ -409,7 +409,7 @@ mod tests {
         let (store, dir) = temp_store();
         // env: form — resolves, and a MISSING var is a loud Err (never
         // a silent None: the operator pointed at something broken).
-        std::env::set_var("K2_TEST_MAIL_RELAY_PW", "relay-pw");
+        let _pw = k2_core::test_env::EnvVar::set("K2_TEST_MAIL_RELAY_PW", "relay-pw");
         assert_eq!(
             store.resolve("env:K2_TEST_MAIL_RELAY_PW").expect("resolve"),
             Some("relay-pw".into())

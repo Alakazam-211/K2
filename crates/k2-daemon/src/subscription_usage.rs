@@ -1732,11 +1732,14 @@ fn percent_left(used: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::MutexGuard;
 
-    fn probe_lock() -> MutexGuard<'static, ()> {
+    /// Guards the module's probe state (`probe_hits`, the test IO and
+    /// air-gap slots), NOT the env. A test that also touches the env takes
+    /// the ONE shared env lock FIRST, then this (one lock order everywhere).
+    fn probe_lock() -> k2_core::test_env::SerialGuard {
+        // Env lock first (`k2_core::test_env::serial`), then the probe lock.
         static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+        k2_core::test_env::serial(&LOCK)
     }
 
     struct ScriptIo {
@@ -1806,22 +1809,18 @@ mod tests {
     }
 
     fn with_isolated(f: impl FnOnce()) {
-        let _probe = probe_lock();
+        // Env lock (TempHome) first, then the module probe lock.
         let _home = crate::test_support::TempHome::new();
+        let _probe = probe_lock();
         probe_hits().store(0, Ordering::SeqCst);
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         // Air-gap off unless a test says otherwise; immune to a parallel
         // test that sets K2_AIRGAP.
         set_airgap(false);
-        let prev_deny = std::env::var_os("K2_SUBSCRIPTION_PROBE");
-        std::env::set_var("K2_SUBSCRIPTION_PROBE", "deny");
+        let _deny = k2_core::test_env::EnvVar::set("K2_SUBSCRIPTION_PROBE", "deny");
         f();
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         *test_airgap_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
-        match prev_deny {
-            Some(v) => std::env::set_var("K2_SUBSCRIPTION_PROBE", v),
-            None => std::env::remove_var("K2_SUBSCRIPTION_PROBE"),
-        }
     }
 
     fn install(io: Arc<dyn UsageIo>) {
@@ -2255,14 +2254,13 @@ mod tests {
 
     #[test]
     fn claude_config_dir_is_not_the_only_file_path() {
+        // Env lock first (the guard holds it; restores on drop), then the
+        // module probe lock.
+        let config_dir =
+            k2_core::test_env::EnvVar::set("CLAUDE_CONFIG_DIR", "/tmp/k2-claude-config-dir");
         let _probe = probe_lock();
-        let prev = std::env::var_os("CLAUDE_CONFIG_DIR");
-        std::env::set_var("CLAUDE_CONFIG_DIR", "/tmp/k2-claude-config-dir");
         let paths = credential_file_paths();
-        match prev {
-            Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
-            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
-        }
+        drop(config_dir);
         assert_eq!(
             paths.first().map(|p| p.as_path()),
             Some(Path::new("/tmp/k2-claude-config-dir/.credentials.json"))
@@ -2620,7 +2618,8 @@ mod tests {
     #[test]
     fn probe_interval_is_fifteen_minutes_and_not_the_heartbeat() {
         assert_eq!(PROBE_INTERVAL.as_secs(), 15 * 60);
-        let main = include_str!("main.rs");
+        // The boot sequence lives in daemon_main.rs (main.rs is a shim).
+        let main = include_str!("daemon_main.rs");
         let usage = main
             .find("subscription_usage::spawn()")
             .expect("usage loop");

@@ -723,7 +723,7 @@ mod tests {
     async fn drain_delivers_in_order_and_clears_the_queue() {
         let _home = crate::test_support::TempHome::new();
         let (port, mut rx) = spawn_stub("200 OK", r#"{"delivered":true,"mode":"live"}"#).await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
 
         let fp = pin_trusted();
         let base = chrono::Utc::now();
@@ -734,7 +734,7 @@ mod tests {
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(outcome, DrainOutcome::Drained { delivered: 3, dead_lettered: 0 });
         assert!(outbox::list_for_peer(&fp).is_empty(), "queue must be cleared");
@@ -755,14 +755,14 @@ mod tests {
     async fn drain_stalls_on_5xx_and_backs_off_keeping_queue_in_order() {
         let _home = crate::test_support::TempHome::new();
         let (port, _rx) = spawn_stub("500 Internal Server Error", r#"{"error":"boom"}"#).await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
 
         let fp = pin_trusted();
         enqueue_msg(&fp, "queued", chrono::Utc::now());
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(
             outcome,
@@ -785,14 +785,14 @@ mod tests {
             r#"{"delivered":false,"mode":"declined","reason":"remote_instruction_disabled"}"#,
         )
         .await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
 
         let fp = pin_trusted();
         enqueue_msg(&fp, "unwanted", chrono::Utc::now());
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(outcome, DrainOutcome::Drained { delivered: 0, dead_lettered: 1 });
         assert!(outbox::list_for_peer(&fp).is_empty(), "declined message must leave the queue");
@@ -848,14 +848,14 @@ mod tests {
     async fn drain_treats_replay_reject_as_prior_delivery() {
         let _home = crate::test_support::TempHome::new();
         let (port, _rx) = spawn_stub("409 Conflict", r#"{"error":"replayed nonce"}"#).await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
 
         let fp = pin_trusted();
         enqueue_msg(&fp, "already landed", chrono::Utc::now());
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(
             outcome,
@@ -870,7 +870,7 @@ mod tests {
     async fn drain_reseals_every_dial_with_fresh_nonce_preserving_msg_uuid() {
         let _home = crate::test_support::TempHome::new();
         let (port, mut rx) = spawn_stub("200 OK", r#"{"delivered":true,"mode":"live"}"#).await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
 
         let fp = pin_trusted();
         enqueue_msg(&fp, "reseal me", chrono::Utc::now());
@@ -880,7 +880,7 @@ mod tests {
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound_base);
 
         assert_eq!(outcome, DrainOutcome::Drained { delivered: 1, dead_lettered: 0 });
         let wire = rx.try_recv().expect("stub must receive the resealed envelope");
@@ -902,14 +902,12 @@ mod tests {
     #[test]
     fn drain_peer_airgap_does_not_dial_k2_dev() {
         let _home = crate::test_support::TempHome::new();
-        let prev_air = std::env::var_os("K2_AIRGAP");
-        std::env::set_var("K2_AIRGAP", "1");
+        let _air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
         let spy = std::net::TcpListener::bind("127.0.0.1:0").expect("spy bind");
         spy.set_nonblocking(true).expect("nonblocking");
         // No inbound-base override: Connect subdomain would have been
         // https://peer.k2.dev — must refuse without SYN (F7).
-        let prev_base = std::env::var_os("K2_FEDERATION_INBOUND_BASE");
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
         let fp = pin_trusted();
         enqueue_msg(&fp, "leftover outbox", chrono::Utc::now());
         let outcome = drain_peer(&fp);
@@ -919,23 +917,14 @@ mod tests {
             "leftover *.k2.dev outbox must not dial when air-gap is on"
         );
         assert!(spy.accept().is_err(), "must not SYN *.k2.dev under air-gap");
-        match prev_base {
-            Some(p) => std::env::set_var("K2_FEDERATION_INBOUND_BASE", p),
-            None => std::env::remove_var("K2_FEDERATION_INBOUND_BASE"),
-        }
-        match prev_air {
-            Some(p) => std::env::set_var("K2_AIRGAP", p),
-            None => std::env::remove_var("K2_AIRGAP"),
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn drain_airgap_allows_lan_http_fake() {
         let _home = crate::test_support::TempHome::new();
-        let prev_air = std::env::var_os("K2_AIRGAP");
-        std::env::set_var("K2_AIRGAP", "1");
+        let air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
         let (port, _rx) = spawn_stub("200 OK", r#"{"delivered":true,"mode":"live"}"#).await;
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        let _inbound_base = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
 
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let mut store = PeerStore::load().unwrap_or_default();
@@ -951,10 +940,7 @@ mod tests {
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        match prev_air {
-            Some(p) => std::env::set_var("K2_AIRGAP", p),
-            None => std::env::remove_var("K2_AIRGAP"),
-        }
+        drop(air);
         assert_eq!(
             outcome,
             DrainOutcome::Drained {

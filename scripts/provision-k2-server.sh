@@ -86,6 +86,34 @@ export K2_CALLBACK_TOKEN="${K2_CALLBACK_TOKEN:-}"
 log() { printf '\033[1;36m[provision]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[provision] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Credentials never ride curl's argv (any OS user can read argv with `ps`).
+# k2_curl hands curl its URL (the owner token stays in the query, exactly
+# as before), an optional Authorization header and an optional body as a
+# config on stdin (`curl --config -`). printf is a builtin: nothing here
+# puts the values on an argv. The wire request is unchanged.
+#   k2_curl URL BODY BEARER [curl args...]   (BODY/BEARER may be "")
+_curl_cfg_quote() {
+	# \ and " escaped, newline -> \n (curl's config parser undoes exactly
+	# that). sed reads the value on stdin; the sentinel x keeps a trailing
+	# newline. Same behaviour on every bash (no ${s//} backslash quirks).
+	local s
+	s="$(printf '%sx' "$1" | LC_ALL=C sed -e 's/[\\"]/\\&/g' -e '$!s/$/\\n/' | LC_ALL=C tr -d '\n')"
+	printf '"%s"' "${s%x}"
+}
+k2_curl() {
+	local url="$1" body="$2" bearer="$3"
+	shift 3
+	{
+		printf 'url = %s\n' "$(_curl_cfg_quote "$url")"
+		if [ -n "$bearer" ]; then
+			printf 'header = %s\n' "$(_curl_cfg_quote "Authorization: Bearer $bearer")"
+		fi
+		if [ -n "$body" ]; then
+			printf 'data = %s\n' "$(_curl_cfg_quote "$body")"
+		fi
+	} | curl --config - "$@"
+}
+
 [ "$(id -u)" = "0" ] || die "run as root (cloud-init runcmd or sudo)"
 
 case "$(uname -m)" in
@@ -460,7 +488,7 @@ for _ in $(seq 1 90); do
 	if [ -n "$PORT" ] && [ -n "$TOKEN" ]; then
 		BASE="http://127.0.0.1:${PORT}"
 		if curl -fsS "$BASE/boot-status" 2>/dev/null | grep -q '"phase":"ready"'; then
-			AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/cli/auth/whoami?token=$TOKEN")
+			AUTH_CODE=$(k2_curl "$BASE/cli/auth/whoami?token=$TOKEN" "" "" -s -o /dev/null -w '%{http_code}')
 			[ "$AUTH_CODE" = "200" ] && break
 		fi
 	fi
@@ -481,7 +509,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"password":os.environ["K2_OWNER_PASSWORD"]}))')
 	ADD_RES_FILE=$(mktemp)
 	OWNER_CREATED=1
-	HTTP=$(curl -sS -o "$ADD_RES_FILE" -w '%{http_code}' -X POST "$BASE/cli/users/add?token=$TOKEN" -d "$BODY")
+	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$BODY" "" -sS -o "$ADD_RES_FILE" -w '%{http_code}' -X POST)
 	if [ "$HTTP" != "200" ]; then
 		grep -qi "exist" "$ADD_RES_FILE" \
 			|| die "users/add failed ($HTTP): $(cat "$ADD_RES_FILE")"
@@ -490,7 +518,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	fi
 	rm -f "$ADD_RES_FILE"
 	ROLE_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"role":"owner"}))')
-	curl -fsS -X POST "$BASE/cli/users/set-role?token=$TOKEN" -d "$ROLE_BODY" >/dev/null \
+	k2_curl "$BASE/cli/users/set-role?token=$TOKEN" "$ROLE_BODY" "" -fsS -X POST >/dev/null \
 		|| die "users/set-role owner failed"
 fi
 
@@ -507,7 +535,7 @@ if [ -n "${K2_OPS_USER:-}" ]; then
 	log "creating service user '${K2_OPS_USER}' (website management)"
 	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"]}))')
 	OPS_RES=$(mktemp)
-	HTTP=$(curl -sS -o "$OPS_RES" -w '%{http_code}' -X POST "$BASE/cli/users/add?token=$TOKEN" -d "$OPS_BODY")
+	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$OPS_BODY" "" -sS -o "$OPS_RES" -w '%{http_code}' -X POST)
 	if [ "$HTTP" != "200" ]; then
 		grep -qi "exist" "$OPS_RES" || die "ops users/add failed ($HTTP): $(cat "$OPS_RES")"
 		log "ops user already exists — leaving its password unchanged"
@@ -515,7 +543,7 @@ if [ -n "${K2_OPS_USER:-}" ]; then
 	fi
 	rm -f "$OPS_RES"
 	OPS_ROLE=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"role":"owner"}))')
-	curl -fsS -X POST "$BASE/cli/users/set-role?token=$TOKEN" -d "$OPS_ROLE" >/dev/null \
+	k2_curl "$BASE/cli/users/set-role?token=$TOKEN" "$OPS_ROLE" "" -fsS -X POST >/dev/null \
 		|| die "ops set-role owner failed"
 fi
 

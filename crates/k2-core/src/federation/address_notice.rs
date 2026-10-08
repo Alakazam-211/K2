@@ -610,6 +610,33 @@ pub struct NoticeRow {
     pub failed_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<DateTime<Utc>>,
+    /// Other spellings of what the peer may store for us, tried in turn
+    /// when it answers `address_mismatch` (a LAN pin keeps our host:port in
+    /// its subdomain field; an earlier announced address).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<PeerAddress>,
+}
+
+/// What a peer answering `address_mismatch` with no spelling left to try
+/// is told to do (shown in `k2 fed peers`).
+pub const REPAIR_HINT: &str =
+    "this peer stores a different address for this server; pair again with it to update \
+     (k2 fed pair-start, or Settings → Connections → Pair)";
+
+/// How many earlier announced addresses are kept as alternates.
+const HISTORY_LEN: usize = 5;
+
+/// Other spellings of `known` a peer may have pinned: a LAN pairing stores
+/// our `host:port` in the subdomain field next to the base URL.
+fn spellings(known: &PeerAddress) -> Vec<PeerAddress> {
+    let mut out = Vec::new();
+    if !known.base_url.is_empty() {
+        let hp = super::dial::host_port(&known.base_url);
+        if !hp.is_empty() && !same_subdomain(&hp, &known.subdomain) {
+            out.push(PeerAddress { subdomain: hp, base_url: known.base_url.clone() });
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -619,6 +646,10 @@ struct NoticeState {
     /// The address this box last announced (or first observed).
     #[serde(default)]
     announced: Option<PeerAddress>,
+    /// Addresses announced before `announced`, newest first (alternates for
+    /// a peer that never heard a notice and pinned an older one).
+    #[serde(default)]
+    history: Vec<PeerAddress>,
     #[serde(default)]
     peers: BTreeMap<String, NoticeRow>,
 }
@@ -720,6 +751,9 @@ pub fn observe_and_issue(
         .saturating_add(1)
         .max(u64::try_from(now.timestamp_millis()).unwrap_or(0));
     st.last_seq = seq;
+    st.history.retain(|h| !h.same_as(&announced));
+    st.history.insert(0, announced.clone());
+    st.history.truncate(HISTORY_LEN);
     st.announced = Some(merged.clone());
     let mut peers = Vec::new();
     for p in store.list().iter().filter(|p| p.trust == PeerTrust::Trusted) {
@@ -731,6 +765,18 @@ pub fn observe_and_issue(
             // Switched back before the peer heard about the move.
             st.peers.remove(&p.fingerprint);
             continue;
+        }
+        let mut alternates: Vec<PeerAddress> = Vec::new();
+        for cand in spellings(&peer_known)
+            .into_iter()
+            .chain(st.history.iter().flat_map(|h| std::iter::once(h.clone()).chain(spellings(h))))
+        {
+            if !cand.same_as(&peer_known)
+                && !cand.same_as(&merged)
+                && !alternates.iter().any(|a| a.same_as(&cand))
+            {
+                alternates.push(cand);
+            }
         }
         st.peers.insert(
             p.fingerprint.clone(),
@@ -746,6 +792,7 @@ pub fn observe_and_issue(
                 last_error: None,
                 failed_reason: None,
                 delivered_at: None,
+                alternates,
             },
         );
         peers.push(p.fingerprint.clone());
@@ -891,6 +938,21 @@ pub fn record_outcome(
             row.last_attempt_at = Some(now);
             row.last_error = Some(e.clone());
             row.next_attempt_at = now + backoff(row.attempts);
+        }
+        DeliveryOutcome::Failed { reason, detail } if reason == "address_mismatch" => {
+            row.attempts = row.attempts.saturating_add(1);
+            row.last_attempt_at = Some(now);
+            if row.alternates.is_empty() {
+                row.status = NoticeStatus::Failed;
+                row.failed_reason = Some(reason.clone());
+                row.last_error = Some(format!("{REPAIR_HINT} ({detail})"));
+            } else {
+                // The peer may store another spelling of our old address:
+                // try it as old_address, once each.
+                row.peer_known = row.alternates.remove(0);
+                row.next_attempt_at = now;
+                row.last_error = Some(format!("{detail}; trying another spelling of the old address"));
+            }
         }
         DeliveryOutcome::Failed { reason, detail } => {
             row.attempts = row.attempts.saturating_add(1);
@@ -1490,6 +1552,92 @@ mod tests {
             observe_and_issue(&PeerAddress::new("d", ""), &store, t1).expect("c->d");
             observe_and_issue(&PeerAddress::new("c", ""), &store, t1).expect("d->c");
             assert!(rows().expect("rows").is_empty(), "nothing to tell: the peer has c");
+        });
+    }
+
+    /// A receiver for drain tests: `apply` + the route's status codes.
+    fn deliver_to(
+        receiver: &mut PeerStore,
+        me_at_receiver: &LocalIdentity,
+        b: &[u8],
+        now: DateTime<Utc>,
+    ) -> SendResult {
+        match apply(receiver, b, me_at_receiver, now) {
+            Ok(_) => SendResult::Http(200, "{}".into()),
+            Err(e) => SendResult::Http(
+                409,
+                serde_json::json!({ "error": e.to_string(), "code": e.code() }).to_string(),
+            ),
+        }
+    }
+
+    #[test]
+    fn a_mismatch_retries_with_the_lan_pin_spelling_of_the_old_address() {
+        with_temp_home(|| {
+            let me = keypair();
+            let peer = keypair();
+            let store = peers_with(&[(&peer, "p")]);
+            let t0 = Utc::now();
+            let lan = "http://192.168.1.40:38471";
+            observe_and_issue(&PeerAddress::new("afs", lan), &store, t0).expect("baseline");
+            observe_and_issue(&PeerAddress::new("k2n1-m4", lan), &store, t0).expect("issue");
+            let row = rows().expect("rows").into_values().next().expect("row");
+            assert_eq!(row.alternates, vec![PeerAddress::new("192.168.1.40:38471", lan)]);
+
+            // The peer paired with us over the LAN: our host:port sits in its
+            // subdomain field, so the first notice (old = "afs") mismatches.
+            let mut receiver = PeerStore::default();
+            let f = trusted(&mut receiver, &me, "192.168.1.40:38471", lan);
+            let rcv = LocalIdentity { fingerprint: fp(&peer), address: PeerAddress::default() };
+            let res = drain_with(&me, &store, t0, |_, b| deliver_to(&mut receiver, &rcv, b, t0)).expect("drain");
+            assert!(matches!(&res[0].1, DeliveryOutcome::Failed { reason, .. } if reason == "address_mismatch"), "{res:?}");
+            let row = rows().expect("rows").into_values().next().expect("row");
+            assert_eq!(row.status, NoticeStatus::Pending, "retried with the other spelling");
+            assert_eq!(row.peer_known, PeerAddress::new("192.168.1.40:38471", lan));
+
+            let res = drain_with(&me, &store, t0, |_, b| deliver_to(&mut receiver, &rcv, b, t0)).expect("drain");
+            assert_eq!(res[0].1, DeliveryOutcome::Delivered, "{res:?}");
+            assert_eq!(receiver.get(&f).expect("me").subdomain, "k2n1-m4");
+            assert_eq!(rows().expect("rows").into_values().next().expect("row").status, NoticeStatus::Delivered);
+        });
+    }
+
+    #[test]
+    fn a_mismatch_with_no_spelling_left_fails_with_a_re_pair_hint() {
+        with_temp_home(|| {
+            let me = keypair();
+            let peer = keypair();
+            let store = peers_with(&[(&peer, "p")]);
+            let t0 = Utc::now();
+            observe_and_issue(&PeerAddress::new("afs", ""), &store, t0).expect("baseline");
+            observe_and_issue(&PeerAddress::new("k2n1-m4", ""), &store, t0).expect("issue");
+            // The peer pinned us under a name we never announced.
+            let mut receiver = PeerStore::default();
+            trusted(&mut receiver, &me, "someone-else", "");
+            let rcv = LocalIdentity { fingerprint: fp(&peer), address: PeerAddress::default() };
+            drain_with(&me, &store, t0, |_, b| deliver_to(&mut receiver, &rcv, b, t0)).expect("drain");
+            let row = rows().expect("rows").into_values().next().expect("row");
+            assert_eq!(row.status, NoticeStatus::Failed);
+            assert_eq!(row.failed_reason.as_deref(), Some("address_mismatch"));
+            assert!(row.last_error.as_deref().is_some_and(|e| e.contains("pair again")), "{row:?}");
+        });
+    }
+
+    #[test]
+    fn an_earlier_announced_address_is_an_alternate() {
+        with_temp_home(|| {
+            let store = peers_with(&[(&keypair(), "p")]);
+            let t0 = Utc::now();
+            observe_and_issue(&PeerAddress::new("a", ""), &store, t0).expect("baseline");
+            observe_and_issue(&PeerAddress::new("b", ""), &store, t0).expect("a->b");
+            // Delivered: the peer knows b. Then b -> c: a is an alternate.
+            let fp0 = rows().expect("rows").into_keys().next().expect("fp");
+            record_outcome(&fp0, rows().expect("r")[&fp0].seq, &PeerAddress::new("b", ""), &DeliveryOutcome::Delivered, t0)
+                .expect("record");
+            observe_and_issue(&PeerAddress::new("c", ""), &store, t0).expect("b->c");
+            let row = rows().expect("rows").into_values().next().expect("row");
+            assert_eq!(row.peer_known, PeerAddress::new("b", ""));
+            assert_eq!(row.alternates, vec![PeerAddress::new("a", "")]);
         });
     }
 

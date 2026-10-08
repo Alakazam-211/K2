@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_K2_ROOMFRAME_SINK?: string
   /** Dev-only: ConnectHost JSON for a `#room=<id>` probe frame (temp daemons only). */
   readonly VITE_K2_ROOMFRAME_HOST?: string
+  /** Throwaway spike builds only: `s0` renders the Zen v2 sealed-frame spike instead of the app. */
+  readonly VITE_K2_ZEN_SPIKE?: string
 }
 
 interface ImportMeta {

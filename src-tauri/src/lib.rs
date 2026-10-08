@@ -1000,6 +1000,15 @@ pub(crate) fn install_menu_bar_helper() {
     }
 }
 
+/// Zen v2 S0 spike builds only (`VITE_K2_ZEN_SPIKE=s0` at build time,
+/// prd-zen-user-widgets-v2 §15): the renderer shows the sealed-frame spike
+/// instead of the app, so the shell leaves this machine's daemon, its
+/// launchd plist and the menu-bar helper alone. Always false in a normal
+/// build.
+fn zen_spike_build() -> bool {
+    option_env!("VITE_K2_ZEN_SPIKE") == Some("s0")
+}
+
 pub fn run() {
     // Before any window exists: a caught ObjC exception or panic in tao's
     // `sendEvent:` writes one line to ~/.k2/client-event-faults.log.
@@ -1219,7 +1228,9 @@ pub fn run() {
                 log_debug!(
                     "[k2so] daemon self-heal: launchd unavailable — ensure local k2-daemon process"
                 );
-                ensure_local_daemon_process();
+                if !zen_spike_build() {
+                    ensure_local_daemon_process();
+                }
             }
 
             #[cfg(target_os = "macos")]
@@ -1237,8 +1248,8 @@ pub fn run() {
                     let db = db_arc.lock();
                     !db::has_code_migration_applied(&db, MIGRATION_ID)
                 };
-                let opted_in = !cfg!(debug_assertions)
-                    || std::env::var("K2SO_INSTALL_DAEMON").is_ok();
+                let opted_in = !zen_spike_build()
+                    && (!cfg!(debug_assertions) || std::env::var("K2SO_INSTALL_DAEMON").is_ok());
                 if needs_run && opted_in {
                     // Locate k2so-daemon next to the current Tauri binary
                     // (macOS: K2.app/Contents/Helpers/K2 Daemon.app/…). Skip install if
@@ -1322,7 +1333,7 @@ pub fn run() {
             // is already correct, or when the current exe is itself transient.
             #[cfg(target_os = "macos")]
             perf_timer!("startup_heal_daemon_plist", {
-                if heal_daemon_plist_program() {
+                if !zen_spike_build() && heal_daemon_plist_program() {
                     log_debug!("[k2so] daemon plist self-healed at startup (#14)");
                 }
             });
@@ -1336,6 +1347,9 @@ pub fn run() {
             // toggle, in both debug and release builds.
             #[cfg(target_os = "macos")]
             perf_timer!("startup_ensure_daemon_loaded", {
+              if zen_spike_build() {
+                log_debug!("[zen-spike] S0 spike build: daemon autostart skipped");
+              } else {
                 let plist = k2_core::wake::DaemonPlist::canonical(
                     std::path::PathBuf::from("/unused"),
                 );
@@ -1386,6 +1400,7 @@ pub fn run() {
                         log_debug!("[k2so] daemon autostart failed: {e}");
                     }
                 }
+              }
             });
 
             // Menu-bar helper plist, same GUI open as the daemon agent.
@@ -1396,7 +1411,11 @@ pub fn run() {
             // writing it. Debug is not special-cased — there is nothing
             // to stage until `k2-menubar` sits next to this exe.
             #[cfg(target_os = "macos")]
-            install_menu_bar_helper();
+            {
+                if !zen_spike_build() {
+                    install_menu_bar_helper();
+                }
+            }
 
             // Phase 2 Unit 4 — SKILL regeneration moved to the daemon's
             // boot sweep (`run_workspace_legacy_migrations_sweep` →
@@ -1542,7 +1561,9 @@ pub fn run() {
             // children inject the daemon's port + token into child envs
             // (`prime_hook_config_from_daemon` below).
             prime_hook_config_from_daemon();
-            check_daemon_version_and_restart();
+            if !zen_spike_build() {
+                check_daemon_version_and_restart();
+            }
             // Phase 2 Unit 7b: the per-workspace legacy migrations
             // (filename uppercase, CLAUDE.md harvest, heartbeat
             // promote/repair, orphan archive) + `ensure_all_skills_up_to_date`

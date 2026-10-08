@@ -80,6 +80,8 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'components/Settings/sections/CodeEditorSettingsSection.tsx': 'example code inside a prompt string',
   'hooks/useGit.ts': 'a local function named fetch (git refresh)',
   'dev/room-frame-probe.ts': 'dev-only P1.5 probe, not shipped',
+  'dev/zen-spike-s0.ts':
+    'Zen v2 S0 spike (VITE_K2_ZEN_SPIKE=s0 builds only): reads its own page CSP header; the rest are probes inside the sealed frame',
 }
 
 const PRIMARY_SCOPE_CALLERS: readonly string[] = [

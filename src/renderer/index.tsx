@@ -47,6 +47,16 @@ installExternalLinkHandler()
 // ConnectionGate runs so the gate never polls the Tauri local path.
 bootWebHostIfNeeded()
 
+// Zen v2 S0 spike (prd-zen-user-widgets-v2 §15): a build with
+// `VITE_K2_ZEN_SPIKE=s0` (a throwaway signed build on z3mbpZ / z13flow), or
+// `?zenspike=s0` on the dev page, renders the sealed-frame capability spike
+// instead of the app. A normal build never sets the variable, so this branch
+// and the spike module drop out.
+const zenSpikeS0 =
+  window === window.top &&
+  (import.meta.env.VITE_K2_ZEN_SPIKE === 's0' ||
+    (import.meta.env.DEV && new URLSearchParams(window.location.search).get('zenspike') === 's0'))
+
 // ConnectionGate (0.39.3): polls daemon's /ping until reachable,
 // THEN dynamically imports + mounts App. The dynamic import is the
 // key — App.tsx (and all its transitive imports) stays out of the
@@ -67,6 +77,8 @@ const roomFrameProbe =
 
 if (roomFrameProbe) {
   void import('./dev/room-frame-probe').then((m) => m.startRoomFrameProbe(root))
+} else if (zenSpikeS0) {
+  void import('./dev/zen-spike-s0').then((m) => m.startZenSpikeS0(root))
 } else {
   ReactDOM.createRoot(root).render(
     <ConnectionGate />

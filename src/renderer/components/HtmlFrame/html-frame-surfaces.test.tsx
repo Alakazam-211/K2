@@ -20,6 +20,18 @@ const ALLOWED_OTHER_FRAMES: Record<string, string> = {
   'dev/room-frame-probe.ts': 'DEV-only P1.5 probe (import.meta.env.DEV); same-app URL, never user HTML',
 }
 
+/**
+ * Throwaway capability spikes that build their own sealed srcdoc frame on
+ * purpose (they test the frame profile HtmlFrame will get). Each must stay
+ * behind its spike-build gate in index.tsx and never ask for same-origin.
+ */
+const SPIKE_FRAMES: Record<string, { reason: string; gate: RegExp }> = {
+  'dev/zen-spike-s0.ts': {
+    reason: 'Zen v2 S0 spike (prd-zen-user-widgets-v2 §15); VITE_K2_ZEN_SPIKE=s0 builds only',
+    gate: /import\.meta\.env\.VITE_K2_ZEN_SPIKE === 's0'[\s\S]{0,1500}import\('\.\/dev\/zen-spike-s0'\)/,
+  },
+}
+
 /** Surfaces that must use HtmlFrame, and the profile each must ask for. */
 const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' }> = [
   { file: 'components/FileViewerPane/FileViewerPane.tsx', profile: 'scripted' },
@@ -61,7 +73,7 @@ describe('HTML frame surfaces — source scan', () => {
   it('no file but HtmlFrame (and the listed dev probe) creates an iframe or srcdoc', () => {
     const offenders: string[] = []
     for (const rel of files) {
-      if (rel === OWNER) continue
+      if (rel === OWNER || rel in SPIKE_FRAMES) continue
       const code = stripComments(readFileSync(join(RENDERER, rel), 'utf8'))
       for (const [label, re] of FRAME_PATTERNS) {
         if (!re.test(code)) continue
@@ -80,6 +92,16 @@ describe('HTML frame surfaces — source scan', () => {
     }
     const index = readFileSync(join(RENDERER, 'index.tsx'), 'utf8')
     expect(index).toMatch(/import\.meta\.env\.DEV &&[\s\S]{0,400}room-frame-probe/)
+  })
+
+  it('every spike frame still exists, makes a frame, and stays behind its build gate', () => {
+    const index = readFileSync(join(RENDERER, 'index.tsx'), 'utf8')
+    for (const [rel, { reason, gate }] of Object.entries(SPIKE_FRAMES)) {
+      const code = stripComments(readFileSync(join(RENDERER, rel), 'utf8'))
+      expect(code, `${rel} (${reason})`).toMatch(/createElement\(\s*['"`]iframe['"`]/)
+      expect(code, `${rel} keeps the sandbox to scripts only`).toMatch(/setAttribute\('sandbox', 'allow-scripts'\)/)
+      expect(index, `${rel} must stay gated: ${reason}`).toMatch(gate)
+    }
   })
 
   it('nothing in the renderer asks for allow-same-origin', () => {

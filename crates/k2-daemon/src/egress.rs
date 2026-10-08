@@ -153,7 +153,7 @@ impl Destination {
         Destination { host: host.to_string(), kind: DestKind::Pinned(addrs) }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn host(&self) -> &str {
         &self.host
     }

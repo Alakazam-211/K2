@@ -371,22 +371,29 @@ fn spawn_child(
     cwd: &Path,
     project_id: &str,
     name: &str,
+    service: Option<(&str, u16)>,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     #[cfg(unix)]
     {
         let mut c = Command::new("sh");
         c.arg("-c").arg(cmd).current_dir(cwd);
+        // K2 vault (§10.5, Q16): clean env + granted secrets for new
+        // services; services from before the vault keep inheriting.
+        if let Some((service_id, port)) = service {
+            crate::vault::publish_env::apply(&mut c, service_id, project_id, cwd, port);
+        }
         spawn_prepared(c, project_id, name)
     }
     #[cfg(windows)]
     {
+        let _ = service;
         let mut c = Command::new("cmd.exe");
         c.arg("/c").arg(cmd).current_dir(cwd);
         spawn_prepared(c, project_id, name)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (cmd, cwd, project_id, name);
+        let _ = (cmd, cwd, project_id, name, service);
         Err("published services require Unix or Windows".into())
     }
 }
@@ -973,7 +980,7 @@ fn start_inner(project_id: &str, name: &str, want_tunnel: bool) -> Result<Servic
     let (child, pid, job) = if row.kind == KIND_SKIN {
         spawn_skin_helper(&row, project_id, name).map_err(PublishError::fail)?
     } else {
-        spawn_child(&row.cmd, &cwd, project_id, name).map_err(PublishError::fail)?
+        spawn_child(&row.cmd, &cwd, project_id, name, Some((&row.id, row.port as u16))).map_err(PublishError::fail)?
     };
     {
         let db = k2_core::db::shared();

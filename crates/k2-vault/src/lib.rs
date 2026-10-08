@@ -14,10 +14,12 @@
 
 pub mod agefmt;
 pub mod audit;
+pub mod carry;
 pub mod confirm;
 pub mod crypto;
 pub mod db;
 pub mod delivery;
+pub mod engine;
 pub mod error;
 pub mod fetch;
 pub mod fsutil;

@@ -21,6 +21,8 @@ hmac = "0.12"
 sha2 = "0.10"
 zeroize = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
+# Engine signing keys (asymmetric engine tokens) and signed clone carries (VS20).
+ed25519-dalek = "2"
 bech32 = "0.9"
 base64 = "0.22"
 getrandom = "0.2"

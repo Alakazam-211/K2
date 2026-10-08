@@ -79,15 +79,16 @@ _ws_dot_dir() {
 # prd-cli-addressing A7). Same name and shape as the CLI-addressing
 # builder's helper (TR17), so the two branches print one way.
 _k2_addr_note() {
-    local old="$1" new="$2" how="${3:-}"
+    local old="${1:-}" new="${2:-}" how="${3:-}"
     if [ -z "$old" ] || [ -z "$new" ] || [ "$old" = "$new" ]; then
         return 0
     fi
     if [ "$how" = "renamed" ]; then
-        echo "note: $old is now $new" >&2
+        printf 'note: %s is now %s\n' "$old" "$new" >&2
     else
-        echo "note: $old is $new" >&2
+        printf 'note: %s is %s\n' "$old" "$new" >&2
     fi
+    return 0
 }
 
 # The rename note when a daemon response carries `movedFrom` (+ `addr`).
@@ -1109,22 +1110,9 @@ _split_remote_target() {
     esac
 }
 
-# One `note:` line on stderr when an address resolved to another name of
-# the same target. Never changes the exit code. Shared wording (TR17):
-#   _k2_addr_note <old> <new>          → note: <old> is <new>      (A7: a second name)
-#   _k2_addr_note <old> <new> renamed  → note: <old> is now <new>  (a rename)
-_k2_addr_note() {
-    local old="${1:-}" new="${2:-}" kind="${3:-}"
-    if [ -z "$old" ] || [ -z "$new" ] || [ "$old" = "$new" ]; then
-        return 0
-    fi
-    if [ "$kind" = "renamed" ]; then
-        printf 'note: %s is now %s\n' "$old" "$new" >&2
-    else
-        printf 'note: %s is %s\n' "$old" "$new" >&2
-    fi
-    return 0
-}
+# `_k2_addr_note <old> <new> [renamed]` (defined once near the top of this
+# file) prints the shared `note:` line (TR17): "is" for a second name (A7),
+# "is now" for a rename.
 
 # ── Cross-server agent msg over FEDERATION ────────────────────────────
 # `k2 msg <agent>::<host> "text"` (canonical) or legacy `agent@host` routes a

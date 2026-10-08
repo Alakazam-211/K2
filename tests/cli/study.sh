@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -466,6 +466,24 @@ else
     echo "  PASS: no raw k2skn_ secret material"
     pass=$((pass + 1))
 fi
+
+echo "== k2 study publish-framing (prd-app-frame-ancestors-v1 FA21) =="
+pf_out="$("$K2" study publish-framing)"
+assert_contains "title" "$pf_out" "k2 study publish-framing"
+assert_contains "app default policy" "$pf_out" "frame-ancestors 'self' tauri://localhost http://tauri.localhost"
+assert_contains "allow verb" "$pf_out" "k2 publish frame <name> --allow https://your.site"
+assert_contains "none verb" "$pf_out" "k2 publish frame <name> --none"
+assert_contains "reset verb" "$pf_out" "k2 publish frame <name> --reset"
+assert_contains "owner only" "$pf_out" "owner_only, exit 3"
+assert_contains "never k2.dev wildcard" "$pf_out" "Never allow *.k2.dev"
+assert_contains "cmd apps untouched" "$pf_out" "cannot add the"
+assert_contains "next headers" "$pf_out" "async headers()"
+assert_contains "express header" "$pf_out" "res.set('Content-Security-Policy', \"frame-ancestors 'self'\")"
+assert_contains "node header" "$pf_out" "res.setHeader('Content-Security-Policy', \"frame-ancestors 'self'\")"
+pf_json="$("$K2" study publish-framing --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="publish-framing" and "frame-ancestors" in d["body"], d["id"]' "$pf_json"
+echo "  PASS: publish-framing --json id+body"
+pass=$((pass + 1))
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

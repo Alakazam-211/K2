@@ -10655,6 +10655,7 @@ USAGE
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
   k2 publish ps|status [--json]
+  k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
   k2 publish subdomain <create|list|point|rm|claim|unclaim> ...
 
 run
@@ -10702,6 +10703,13 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
 
 logs <name> [--tail]   dump the log file; --tail follows
 
+frame  (owner only) who may put a --skin App in a frame on another site.
+  Default: the App itself and K2's own windows. Every other site is refused.
+  --allow https://your.site   add an origin (repeatable, at most 8)
+  --none                      refuse every frame, K2's windows too
+  --reset                     back to the default
+  ps shows the policy. A --cmd App sets its own header: k2 study publish-framing
+
 If Connect/tunnel is down, default run FAILS (nothing starts). --no-tunnel still works.
 EOF
 }
@@ -10731,6 +10739,12 @@ mode = os.environ.get("P_MODE") or "service"
 verb = os.environ.get("P_VERB") or ""
 
 def fail(code, hint, exit_code=1):
+    if verb == "frame":
+        # Exit 2 = bad input; exit 3 = stop, this needs the owner.
+        if code in ("usage", "bad_frame_origin", "frame_too_many", "bad_frame_policy"):
+            exit_code = 2
+        elif code in ("owner_only", "role_required"):
+            exit_code = 3
     hint = hint if isinstance(hint, str) else str(hint)
     text = hint.rstrip("\n")
     if as_json:
@@ -10823,11 +10837,26 @@ def url_or_target(s):
         return "localhost:%s" % port
     return "-"
 
+def frame_label(s):
+    # --skin: the policy K2 sends. --cmd: the App's own job.
+    if not isinstance(s, dict):
+        return "-"
+    pol = s.get("framePolicy")
+    if pol is None:
+        return "own server"
+    raw = str(s.get("frameAncestors") or "")
+    if raw == "":
+        return "default"
+    if raw == "none":
+        return "none"
+    return "default + " + raw.replace(" ", ",")
+
 if mode == "list":
     services = d.get("services")
     if not isinstance(services, list):
         services = []
     rows = []
+    warnings = []
     for s in services:
         if not isinstance(s, dict):
             continue
@@ -10837,17 +10866,23 @@ if mode == "list":
             str(s.get("name") or "?"),
             str(s.get("status") or s.get("desired") or "-"),
             port_s,
+            frame_label(s),
             url_or_target(s),
         ))
+        if s.get("frameWarning"):
+            warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
     if not rows:
         print("No published services.")
         sys.exit(0)
     nw = max([len(r[0]) for r in rows] + [len("NAME")])
     sw = max([len(r[1]) for r in rows] + [len("STATUS")])
     pw = max([len(r[2]) for r in rows] + [len("PORT")])
-    print("%-*s  %-*s  %-*s  %s" % (nw, "NAME", sw, "STATUS", pw, "PORT", "URL/TARGET"))
-    for n, st, p, u in rows:
-        print("%-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, u))
+    fw = max([len(r[3]) for r in rows] + [len("FRAME")])
+    print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, "NAME", sw, "STATUS", pw, "PORT", fw, "FRAME", "URL/TARGET"))
+    for n, st, p, f, u in rows:
+        print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, fw, f, u))
+    for n, w in warnings:
+        print("warning: %s: %s" % (n, w))
     sys.exit(0)
 
 svc = d.get("service") if isinstance(d.get("service"), dict) else d
@@ -10855,6 +10890,14 @@ name = str(svc.get("name") or "?") if isinstance(svc, dict) else "?"
 status = str(svc.get("status") or svc.get("desired") or "") if isinstance(svc, dict) else ""
 port = svc.get("port") if isinstance(svc, dict) else None
 url = url_or_target(svc) if isinstance(svc, dict) else "-"
+if verb == "frame" and isinstance(svc, dict):
+    print("Frame policy %s · %s" % (name, frame_label(svc)))
+    print("  Content-Security-Policy: frame-ancestors %s" % (svc.get("framePolicy") or "?"))
+    if d.get("restarted"):
+        print("  App restarted with the new policy.")
+    else:
+        print("  App is not running; the policy applies at the next start.")
+    sys.exit(0)
 past = {"run": "Started", "start": "Started", "stop": "Stopped", "rm": "Removed"}.get(verb, "ok")
 line = "%s %s" % (past, name)
 if status:
@@ -10905,6 +10948,9 @@ cmd_publish() {
             ;;
         subdomain)
             cmd_publish_subdomain "$@"
+            ;;
+        frame)
+            cmd_publish_frame "$@"
             ;;
         ""|help|--help|-h)
             _publish_usage
@@ -11074,6 +11120,62 @@ print(json.dumps({"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT
 ')
     RESP=$(cli_send cli_post_json "$endpoint" "$body") || RESP=""
     local AS_JSON="$as_json" P_MODE="service" P_VERB="$verb"
+    _publish_handle_resp
+}
+
+# `k2 publish frame <name> (--allow <origin> ... | --none | --reset)` — owner
+# only (prd-app-frame-ancestors-v1). Which other sites may put a --skin App in
+# a frame. The daemon validates; bad origins exit 2, agents get exit 3.
+cmd_publish_frame() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" as_json=false mode="" allow=""
+    local usage="usage: k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --allow)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--allow needs an origin, e.g. https://partner.example"; exit 2; }
+                case "$mode" in ""|allow) ;; *) as_json="$as_json" _publish_err "usage" "$usage"; exit 2 ;; esac
+                mode=allow; allow="${allow:+$allow }$2"; shift 2 ;;
+            --allow=*)
+                case "$mode" in ""|allow) ;; *) as_json="$as_json" _publish_err "usage" "$usage"; exit 2 ;; esac
+                mode=allow; allow="${allow:+$allow }${1#--allow=}"; shift ;;
+            --none)
+                [ -z "$mode" ] || { as_json="$as_json" _publish_err "usage" "$usage"; exit 2; }
+                mode=none; shift ;;
+            --reset)
+                [ -z "$mode" ] || { as_json="$as_json" _publish_err "usage" "$usage"; exit 2; }
+                mode=reset; shift ;;
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"
+                    exit 2
+                fi ;;
+        esac
+    done
+    if [ -z "$name" ] || [ -z "$mode" ]; then
+        as_json="$as_json" _publish_err "usage" "$usage"
+        exit 2
+    fi
+    local body RESP
+    body=$(P_NAME="$name" P_PROJECT="$PROJECT" P_MODE="$mode" P_ALLOW="$allow" python3 -c '
+import json, os
+b = {"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT"]}
+m = os.environ["P_MODE"]
+if m == "allow":
+    b["allow"] = os.environ["P_ALLOW"]
+else:
+    b[m] = True
+print(json.dumps(b))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/frame" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="frame"
     _publish_handle_resp
 }
 
@@ -16408,7 +16510,7 @@ cmd_schema() {
     },
     {
       "name": "publish",
-      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|subdomain> ...",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|subdomain> ...",
       "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
@@ -16425,6 +16527,18 @@ cmd_schema() {
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
         {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
         {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
+      ]
+    },
+    {
+      "name": "publish frame",
+      "usage": "k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]",
+      "description": "Owner only. Which other sites may put a --skin App in a frame. Default: the App itself and K2's own windows (frame-ancestors 'self' tauri://localhost http://tauri.localhost). --allow adds https origins (at most 8); --none refuses every frame; --reset goes back to the default. Restarts the App if running. Bad origin exits 2; an agent passport exits 3 (owner_only). --cmd Apps set their own header: k2 study publish-framing.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--allow", "arg": "origin", "description": "Add an origin (https://host[:port]; http:// only for localhost). Repeatable. No wildcards, no paths."},
+        {"name": "--none", "arg": null, "description": "Refuse every frame, K2's own windows too (X-Frame-Options: DENY)."},
+        {"name": "--reset", "arg": null, "description": "Back to the default."},
+        {"name": "--json", "arg": null, "description": "JSON {ok, service, restarted} on stdout."}
       ]
     },
     {
@@ -17330,7 +17444,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing"
 
 _study_usage() {
     cat <<'EOF'
@@ -17348,7 +17462,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts
+  llm-accounts  publish-framing
 EOF
 }
 
@@ -17377,6 +17491,7 @@ _study_title() {
         sidecars) echo "Sidecars" ;;
         llm-tokens) echo "LLM tokens" ;;
         llm-accounts) echo "LLM tokens" ;;
+        publish-framing) echo "Who may frame your App" ;;
         *) echo "" ;;
     esac
 }
@@ -17418,6 +17533,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   sidecars            Open, list and stop sidecars; the brief; who may
   llm-tokens          LLM tokens: subscriptions and API tokens; Server default
   llm-accounts        leftover alias of llm-tokens
+  publish-framing     Who may frame your App; the header for --cmd Apps
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -17456,6 +17572,7 @@ _study_page() {
             echo
             _study_page_llm_tokens
             ;;
+        publish-framing) _study_page_publish_framing ;;
         *) return 1 ;;
     esac
 }
@@ -18990,6 +19107,63 @@ WHO
 
 HANDBACK
   Write in the brief: "when done, k2 msg <primary> with a summary".
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_publish_framing() {
+    cat <<'EOF'
+k2 study publish-framing — who may put your App in a frame
+
+WHY
+  A site that frames your App can lay invisible buttons over it and
+  trick a signed-in guest into clicking (clickjacking). The browser
+  only refuses when the App's response says who may frame it:
+    Content-Security-Policy: frame-ancestors <who>
+  A <meta> tag cannot carry frame-ancestors. It must be a header.
+
+--skin APPS (K2 serves the responses)
+  Every response, login page and error pages included, carries:
+    Content-Security-Policy: frame-ancestors 'self' tauri://localhost http://tauri.localhost
+    X-Frame-Options: SAMEORIGIN
+  'self' is the App's own origin; the tauri ones are K2's desktop
+  windows. Every other site is refused.
+  Owner only, from the UI or a shell outside K2 (an agent passport gets
+  owner_only, exit 3):
+    k2 publish frame <name> --allow https://your.site    add a site (max 8)
+    k2 publish frame <name> --none                       refuse every frame
+    k2 publish frame <name> --reset                      back to the default
+  https only (http:// only for localhost dev); no wildcards, no paths.
+  Never allow *.k2.dev: other customers live there. A running App
+  restarts with the new policy. k2 publish ps shows it (FRAME column).
+
+--cmd APPS (your own server)
+  K2 passes your server's bytes through untouched, so it cannot add the
+  header. k2 publish ps prints a warning when GET / is HTML without
+  frame-ancestors or X-Frame-Options. Add the header yourself:
+
+  Next.js (next.config.js):
+    async headers() {
+      return [{ source: '/:path*', headers: [
+        { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+        { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+      ] }]
+    }
+  Express:
+    app.use((req, res, next) => {
+      res.set('Content-Security-Policy', "frame-ancestors 'self'")
+      res.set('X-Frame-Options', 'SAMEORIGIN')
+      next()
+    })
+  Plain Node (http.createServer handler):
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self'")
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+
+  To let a partner frame it, list it: frame-ancestors 'self' https://your.site
+  (and drop X-Frame-Options, which cannot name other sites).
+  If your App already sets a Content-Security-Policy, add frame-ancestors
+  to that same header; two CSP headers both apply.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

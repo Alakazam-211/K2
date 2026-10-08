@@ -782,6 +782,12 @@ mod tests {
     async fn https_listener_routes_a_request_through_the_dispatcher() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
+        // Sandbox $HOME FIRST (the env lock): it serializes this test with
+        // every other user of the process-wide tunnel-ingress listener, and
+        // the self-signed leaf is minted fresh for "rosson" into a throwaway
+        // `.k2/` rather than reusing a real cert in this box's `~/.k2`.
+        let _home = crate::test_support::TempHome::new();
+
         // 1) Install the daemon state the TUNNEL-INGRESS listener dispatches
         //    with (PRD connect-login-edge-only I2: the TLS splice now lands on
         //    the real dispatcher tagged `Ingress::Tunnel`, brought up on
@@ -797,10 +803,6 @@ mod tests {
         //    the explicit dev/spike self-signed escape hatch
         //    (`K2_E2E_SELF_SIGNED=1`) — the default path is broker-issued.
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
-        // Sandbox $HOME (crate-wide serialized) so the self-signed leaf is
-        // minted fresh for "rosson" into a throwaway `.k2/` rather than reusing
-        // whatever real cert is persisted in this box's `~/.k2`.
-        let _home = crate::test_support::TempHome::new();
         let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson")
             .expect("provision self-signed cert");
         let server_config =
@@ -921,7 +923,11 @@ mod tests {
     /// TLS tests install a throwaway `DaemonState` for it and assert against
     /// the real `/ping` banner. Returns a "main HTTP port" that NOTHING
     /// listens on — proof the splice never falls back to it.
+    /// Install the test daemon state AND forget any listener an earlier
+    /// test's (now dropped) runtime owned. Callers hold a `TempHome` (the
+    /// env lock) first, which serializes every user of this global.
     fn install_test_ingress_state() -> u16 {
+        crate::tunnel_ingress_listener::forget_recorded_port_for_test();
         let (event_tx, _rx) = tokio::sync::broadcast::channel::<crate::events::WireEvent>(
             crate::events::EVENT_CHANNEL_CAP,
         );

@@ -61,6 +61,18 @@ fn set_recorded_port(port: Option<u16>) {
     *port_slot().lock().unwrap_or_else(|p| p.into_inner()) = port;
 }
 
+/// Test-only: forget the recorded listener port so the next
+/// [`ensure_port`] binds a fresh listener on the CALLER's runtime. Each
+/// `#[tokio::test]` has its own runtime; a port recorded by an earlier test
+/// belongs to a listener that dies with that test's runtime, and a liveness
+/// probe that races the shutdown can still pass (empty TLS response under
+/// load, quiet-gate run 5). Callers hold the env lock (`TempHome`), which
+/// serializes every test that uses the process-wide listener.
+#[cfg(test)]
+pub(crate) fn forget_recorded_port_for_test() {
+    set_recorded_port(None);
+}
+
 /// Install the daemon state the process-wide listener dispatches with.
 /// Called once at boot (before the tunnel can start). Tests that need
 /// their own state use [`spawn`] directly and never touch this.

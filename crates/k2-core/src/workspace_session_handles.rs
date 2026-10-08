@@ -294,6 +294,20 @@ pub fn rekey_conversation(
     if old_key == new_key {
         return Ok(());
     }
+    // TR5: retired names follow the conversation onto its provider id,
+    // in the same lock as the handle row.
+    conn.execute(
+        "UPDATE workspace_session_handle_aliases SET conversation_key = ?3 \
+         WHERE project_id = ?1 AND conversation_key = ?2",
+        params![project_id, old_key, new_key],
+    )
+    .map_err(|e| format!("rekey aliases: {e}"))?;
+    conn.execute(
+        "UPDATE OR IGNORE workspace_session_unclaimed_names SET conversation_key = ?3 \
+         WHERE project_id = ?1 AND conversation_key = ?2",
+        params![project_id, old_key, new_key],
+    )
+    .map_err(|e| format!("rekey unclaimed: {e}"))?;
     if get(conn, project_id, new_key)?.is_some() {
         return Ok(());
     }
@@ -391,13 +405,79 @@ pub fn custom_name_for_session_id(
     }
 }
 
-/// True when this conversation has a valid custom-name slug (ordinal
-/// must then fail loud).
+/// True when this conversation has a Chats name that claims an address
+/// (the ordinal then fails loud on the strict [`resolve_handle`]).
 pub fn has_valid_custom_slug(conn: &Connection, conversation_key: &str) -> Result<bool, String> {
-    match custom_name_for_session_id(conn, conversation_key)? {
-        Some(name) => Ok(slugify_custom_name(&name).is_ok()),
-        None => Ok(false),
+    Ok(address_slug_for(conn, None, conversation_key)?.is_some())
+}
+
+/// TR2: an all-digit token is only ever an ordinal, never a name.
+pub fn is_ordinal_token(token: &str) -> bool {
+    let t = token.trim();
+    !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// True when `(project_id, conversation_key)` is a restored chat whose
+/// name was taken while it was archived (TR6b): it keeps its Chats
+/// label but answers only at its ordinal.
+fn name_is_unclaimed(
+    conn: &Connection,
+    project_id: &str,
+    conversation_key: &str,
+) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM workspace_session_unclaimed_names \
+         WHERE project_id = ?1 AND conversation_key = ?2",
+        params![project_id, conversation_key],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .map_err(|e| format!("unclaimed name lookup: {e}"))
+}
+
+/// The address slug a conversation's Chats name claims, if any.
+///
+/// `None` when the chat has no name, the name does not slug, the name
+/// is all digits (TR2: display only, the address stays the ordinal),
+/// the chat is archived (TR6a: archive frees its name), or, with a
+/// workspace, the name was left unclaimed on restore (TR6b).
+pub fn address_slug_for(
+    conn: &Connection,
+    project_id: Option<&str>,
+    conversation_key: &str,
+) -> Result<Option<String>, String> {
+    let key = conversation_key.trim();
+    if key.is_empty() {
+        return Ok(None);
     }
+    let name: Option<String> = conn
+        .query_row(
+            "SELECT custom_name FROM chat_session_names \
+             WHERE session_id = ?1 AND TRIM(custom_name) != '' AND archived = 0 \
+             ORDER BY updated_at DESC LIMIT 1",
+            params![key],
+            |r| r.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })?;
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let Ok(slug) = slugify_custom_name(&name) else {
+        return Ok(None);
+    };
+    if is_ordinal_token(&slug) {
+        return Ok(None);
+    }
+    if let Some(pid) = project_id.map(str::trim).filter(|p| !p.is_empty()) {
+        if name_is_unclaimed(conn, pid, key)? {
+            return Ok(None);
+        }
+    }
+    Ok(Some(slug))
 }
 
 /// Address token for a sidecar session: slug if custom_name is valid,
@@ -412,18 +492,337 @@ pub fn handle_for_session(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(conversation_key);
-    if let Some(name) = custom_name_for_session_id(conn, name_key)? {
-        if let Ok(slug) = slugify_custom_name(&name) {
-            return Ok(slug);
-        }
+    if let Some(slug) = address_slug_for(conn, Some(project_id), name_key)? {
+        return Ok(slug);
     }
     let ordinal = allocate_ordinal(conn, project_id, conversation_key)?;
     Ok(ordinal.to_string())
 }
 
-/// Resolve `handle` (`1` / `reviewer`) to a conversation_key.
-/// Slug match on custom_name wins. After a rename the old ordinal
-/// fails loud. Clearing the name lets the ordinal work again.
+/// The handle a conversation answers at right now: its name slug, else
+/// its ordinal. `None` when it has neither. Never allocates.
+pub fn current_handle_for(
+    conn: &Connection,
+    project_id: &str,
+    conversation_key: &str,
+) -> Result<Option<String>, String> {
+    if let Some(slug) = address_slug_for(conn, Some(project_id), conversation_key)? {
+        return Ok(Some(slug));
+    }
+    Ok(get(conn, project_id, conversation_key)?.map(|row| row.ordinal.to_string()))
+}
+
+/// Full current address of a conversation in a workspace: the workspace
+/// handle for the pinned Chat, `ws/<handle>` for a sidecar, else `None`.
+pub fn current_address_for(
+    conn: &Connection,
+    project_id: &str,
+    conversation_id: &str,
+) -> Result<Option<String>, String> {
+    let ws = workspace_address_name(conn, project_id)?;
+    if conversation_is_canonical(conn, project_id, conversation_id) {
+        return Ok(Some(ws));
+    }
+    Ok(current_handle_for(conn, project_id, conversation_id)?
+        .map(|h| format_address(&ws, Some(&h))))
+}
+
+/// Every address token a conversation answered at before: its ordinal
+/// (when the name now wins) plus each retired name. Current handle
+/// excluded. Used to render old Thread rows under the current name (Q5).
+pub fn past_handles_for(
+    conn: &Connection,
+    project_id: &str,
+    conversation_key: &str,
+) -> Result<Vec<String>, String> {
+    let current = current_handle_for(conn, project_id, conversation_key)?;
+    let mut out: Vec<String> = Vec::new();
+    if let Some(row) = get(conn, project_id, conversation_key)? {
+        out.push(row.ordinal.to_string());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT slug FROM workspace_session_handle_aliases \
+             WHERE project_id = ?1 AND conversation_key = ?2 ORDER BY retired_at, slug",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![project_id, conversation_key], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    out.retain(|h| Some(h) != current.as_ref());
+    out.dedup();
+    Ok(out)
+}
+
+/// The chat a retired name is reserved to, if any.
+pub fn alias_owner(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT conversation_key FROM workspace_session_handle_aliases \
+         WHERE project_id = ?1 AND slug = ?2",
+        params![project_id, slug.trim()],
+        |r| r.get::<_, String>(0),
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(format!("alias lookup: {other}")),
+    })
+}
+
+/// Record that `conversation_key` used to answer at `slug` in this
+/// workspace. The rename path already refused a slug reserved to another
+/// chat, so a replace only ever re-stamps this chat's own row.
+pub fn retire_slug(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+    conversation_key: &str,
+) -> Result<(), String> {
+    if is_ordinal_token(slug) {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO workspace_session_handle_aliases (project_id, slug, conversation_key, retired_at) \
+         VALUES (?1, ?2, ?3, unixepoch()) \
+         ON CONFLICT(project_id, slug) DO UPDATE SET \
+            conversation_key = excluded.conversation_key, retired_at = excluded.retired_at",
+        params![project_id, slug.trim(), conversation_key.trim()],
+    )
+    .map_err(|e| format!("retire name: {e}"))?;
+    Ok(())
+}
+
+/// "Release old names" (TR6c): drop a chat's retired names in one
+/// workspace (or every workspace when `project_id` is `None`). Returns
+/// the slugs released.
+pub fn release_aliases(
+    conn: &Connection,
+    project_id: Option<&str>,
+    conversation_key: &str,
+) -> Result<Vec<String>, String> {
+    let key = conversation_key.trim();
+    let mut released: Vec<String> = Vec::new();
+    {
+        // `project_id = ''` never matches a real row, so `''` means "any".
+        let pid = project_id.unwrap_or("");
+        let mut stmt = conn
+            .prepare(
+                "SELECT slug FROM workspace_session_handle_aliases \
+                 WHERE conversation_key = ?1 AND (?2 = '' OR project_id = ?2) ORDER BY slug",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![key, pid], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            released.push(row.map_err(|e| e.to_string())?);
+        }
+    }
+    match project_id {
+        Some(p) => conn.execute(
+            "DELETE FROM workspace_session_handle_aliases \
+             WHERE conversation_key = ?1 AND project_id = ?2",
+            params![key, p],
+        ),
+        None => conn.execute(
+            "DELETE FROM workspace_session_handle_aliases WHERE conversation_key = ?1",
+            params![key],
+        ),
+    }
+    .map_err(|e| format!("release names: {e}"))?;
+    Ok(released)
+}
+
+/// TR6a: archiving a chat frees its current name (resolution skips
+/// archived rows) and every retired name. Also drops any unclaimed mark.
+pub fn free_names_on_archive(conn: &Connection, conversation_key: &str) -> Result<(), String> {
+    release_aliases(conn, None, conversation_key)?;
+    conn.execute(
+        "DELETE FROM workspace_session_unclaimed_names WHERE conversation_key = ?1",
+        params![conversation_key.trim()],
+    )
+    .map_err(|e| format!("free names on archive: {e}"))?;
+    Ok(())
+}
+
+/// TR6b, called while the chat is still archived: if its current name
+/// was taken meanwhile (by another chat's current name or a retired name
+/// reserved to another chat), mark it unclaimed so it answers at its
+/// ordinal. Returns a note for the restore response, or `None` when it
+/// re-claims its name (or has none).
+pub fn reclaim_on_restore(
+    conn: &Connection,
+    project_id: &str,
+    conversation_key: &str,
+) -> Result<Option<String>, String> {
+    let key = conversation_key.trim();
+    let name: Option<String> = conn
+        .query_row(
+            "SELECT custom_name FROM chat_session_names \
+             WHERE session_id = ?1 AND TRIM(custom_name) != '' \
+             ORDER BY updated_at DESC LIMIT 1",
+            params![key],
+            |r| r.get::<_, String>(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other.to_string()),
+        })?;
+    let Some(slug) = name
+        .as_deref()
+        .and_then(|n| slugify_custom_name(n).ok())
+        .filter(|s| !is_ordinal_token(s))
+    else {
+        return Ok(None);
+    };
+    let held_by_current = find_conversation_by_slug(conn, project_id, &slug)
+        .unwrap_or(None)
+        .filter(|k| k != key);
+    let held_by_alias = alias_owner(conn, project_id, &slug)?.filter(|k| k != key);
+    if held_by_current.is_none() && held_by_alias.is_none() {
+        conn.execute(
+            "DELETE FROM workspace_session_unclaimed_names \
+             WHERE project_id = ?1 AND conversation_key = ?2",
+            params![project_id, key],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(None);
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO workspace_session_unclaimed_names (project_id, conversation_key) \
+         VALUES (?1, ?2)",
+        params![project_id, key],
+    )
+    .map_err(|e| format!("mark unclaimed: {e}"))?;
+    let ws = workspace_address_name(conn, project_id)?;
+    let ordinal = allocate_ordinal(conn, project_id, key)?;
+    Ok(Some(format!(
+        "another chat took the name {ws}/{slug} while this one was archived; it keeps its Chats name and answers at {ws}/{ordinal} until you rename it"
+    )))
+}
+
+/// Who owns a retired name, spelled for a refusal: `k2/3 (now k2/critic)`.
+fn reserved_owner_phrase(conn: &Connection, project_id: &str, owner_key: &str) -> String {
+    let ws = workspace_address_name(conn, project_id).unwrap_or_else(|_| "this workspace".into());
+    let ordinal = get(conn, project_id, owner_key).ok().flatten().map(|r| r.ordinal);
+    let current = current_handle_for(conn, project_id, owner_key).ok().flatten();
+    match (ordinal, current) {
+        (Some(o), Some(c)) if c != o.to_string() => format!("{ws}/{o} (now {ws}/{c})"),
+        (Some(o), _) => format!("{ws}/{o}"),
+        (None, Some(c)) => format!("{ws}/{c}"),
+        (None, None) => format!("another chat in {ws}"),
+    }
+}
+
+/// Refusal text when `slug` is a retired name reserved to `owner_key`.
+pub fn reserved_name_hint(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+    owner_key: &str,
+) -> String {
+    format!(
+        "'{slug}' was the name of {}. Old names stay reserved to their chat. Pick another name, or free it with Release old names on that chat (Chats, right-click).",
+        reserved_owner_phrase(conn, project_id, owner_key)
+    )
+}
+
+/// What a delivery address resolved to (Thread routes, `k2 msg`,
+/// `k2 talk`, inject).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryTarget {
+    pub conversation_key: String,
+    /// The handle the conversation answers at now (`reviewer`, or `3`).
+    pub current_handle: String,
+}
+
+/// Resolve `ws/<token>` for **delivery**. Old addresses keep working:
+///
+/// 1. All digits: the ordinal, always (TR2), even after a rename.
+/// 2. A current name.
+/// 3. A retired name: the chat that had it (reserved, so never a stranger).
+/// 4. Else an error that lists the workspace's sidecars.
+///
+/// [`resolve_handle`] stays strict for naming jobs (`k2 sidecar new`,
+/// `stop`, rename uniqueness).
+pub fn resolve_for_delivery(
+    conn: &Connection,
+    project_id: &str,
+    token: &str,
+) -> Result<DeliveryTarget, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("empty sidecar handle".to_string());
+    }
+    if token.contains('/') || token.contains(':') {
+        return Err(format!(
+            "invalid sidecar handle '{token}' — use workspace/handle with a single slash"
+        ));
+    }
+    let key = if is_ordinal_token(token) {
+        let ordinal = token
+            .parse::<u32>()
+            .map_err(|_| format!("unknown sidecar handle '{token}' in this workspace"))?;
+        if ordinal == 0 {
+            return Err("sidecar ordinals start at 1".to_string());
+        }
+        match get_by_ordinal(conn, project_id, ordinal)? {
+            Some(row) => row.conversation_key,
+            None => return Err(unknown_handle_hint(conn, project_id, token)),
+        }
+    } else if let Some(key) = find_conversation_by_slug(conn, project_id, token)? {
+        key
+    } else if let Some(key) = alias_owner(conn, project_id, token)? {
+        key
+    } else {
+        return Err(unknown_handle_hint(conn, project_id, token));
+    };
+    let current_handle = current_handle_for(conn, project_id, &key)?
+        .unwrap_or_else(|| token.to_string());
+    Ok(DeliveryTarget {
+        conversation_key: key,
+        current_handle,
+    })
+}
+
+/// Unknown-handle error listing up to eight of the workspace's sidecars.
+fn unknown_handle_hint(conn: &Connection, project_id: &str, token: &str) -> String {
+    let ws = workspace_address_name(conn, project_id).unwrap_or_default();
+    let mut known: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT conversation_key FROM workspace_session_handles \
+         WHERE project_id = ?1 ORDER BY ordinal DESC LIMIT 8",
+    ) {
+        if let Ok(rows) = stmt.query_map(params![project_id], |r| r.get::<_, String>(0)) {
+            for key in rows.flatten() {
+                if let Ok(Some(h)) = current_handle_for(conn, project_id, &key) {
+                    known.push(format_address(&ws, Some(&h)));
+                }
+            }
+        }
+    }
+    if known.is_empty() {
+        format!("unknown sidecar handle '{token}' in this workspace")
+    } else {
+        format!(
+            "unknown sidecar handle '{token}' in this workspace (sidecars: {})",
+            known.join(", ")
+        )
+    }
+}
+
+/// Resolve `handle` (`1` / `reviewer`) to a conversation_key — the
+/// **strict** lookup for naming jobs. A current name match wins; an
+/// all-digit token is only an ordinal (TR2). After a rename the old
+/// ordinal fails loud here; delivery uses [`resolve_for_delivery`].
 pub fn resolve_handle(
     conn: &Connection,
     project_id: &str,
@@ -439,8 +838,10 @@ pub fn resolve_handle(
         ));
     }
 
-    if let Some(key) = find_conversation_by_slug(conn, project_id, handle)? {
-        return Ok(key);
+    if !is_ordinal_token(handle) {
+        if let Some(key) = find_conversation_by_slug(conn, project_id, handle)? {
+            return Ok(key);
+        }
     }
 
     if let Ok(ordinal) = handle.parse::<u32>() {
@@ -483,10 +884,11 @@ fn collect_named_slug_matches(
     slug: &str,
     matches: &mut Vec<String>,
 ) -> Result<(), String> {
+    // Archived chats free their name (TR6a).
     let mut stmt = conn
         .prepare(
             "SELECT session_id, custom_name FROM chat_session_names \
-             WHERE TRIM(custom_name) != ''",
+             WHERE TRIM(custom_name) != '' AND archived = 0",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -495,6 +897,9 @@ fn collect_named_slug_matches(
     for row in rows {
         let (sid, name) = row.map_err(|e| e.to_string())?;
         if !slug_matches(&name, slug) {
+            continue;
+        }
+        if name_is_unclaimed(conn, project_id, &sid)? {
             continue;
         }
         match project_id_for_session_id(conn, &sid)? {
@@ -510,6 +915,10 @@ fn find_conversation_by_slug(
     project_id: &str,
     slug: &str,
 ) -> Result<Option<String>, String> {
+    // TR2: digits are ordinals, never names.
+    if is_ordinal_token(slug) {
+        return Ok(None);
+    }
     let mut matches: Vec<String> = Vec::new();
 
     collect_named_slug_matches(conn, project_id, slug, &mut matches)?;
@@ -530,15 +939,11 @@ fn find_conversation_by_slug(
     for row in rows {
         let (session_id, pane) = row.map_err(|e| e.to_string())?;
         if let Some(sid) = session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            if let Some(name) = custom_name_for_session_id(conn, sid)? {
-                if slug_matches(&name, slug) {
-                    push_unique(&mut matches, sid.to_string());
-                }
+            if address_slug_for(conn, Some(project_id), sid)?.as_deref() == Some(slug) {
+                push_unique(&mut matches, sid.to_string());
             }
-        } else if let Some(name) = custom_name_for_session_id(conn, &pane)? {
-            if slug_matches(&name, slug) {
-                push_unique(&mut matches, pane);
-            }
+        } else if address_slug_for(conn, Some(project_id), &pane)?.as_deref() == Some(slug) {
+            push_unique(&mut matches, pane);
         }
     }
 
@@ -553,10 +958,8 @@ fn find_conversation_by_slug(
         .map_err(|e| e.to_string())?;
     for key in keys {
         let key = key.map_err(|e| e.to_string())?;
-        if let Some(name) = custom_name_for_session_id(conn, &key)? {
-            if slug_matches(&name, slug) {
-                push_unique(&mut matches, key);
-            }
+        if address_slug_for(conn, Some(project_id), &key)?.as_deref() == Some(slug) {
+            push_unique(&mut matches, key);
         }
     }
 
@@ -584,6 +987,10 @@ pub fn ensure_slug_unique_among_names(
              WHERE TRIM(custom_name) != ''",
         )
         .map_err(|e| e.to_string())?;
+    if is_ordinal_token(slug) {
+        // TR2: an all-digit name is display only; it never claims an address.
+        return Ok(());
+    }
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(|e| e.to_string())?;
@@ -601,18 +1008,28 @@ pub fn ensure_slug_unique_among_names(
     Ok(())
 }
 
-/// Fail the second rename in a workspace that would share a slug.
+/// Fail the second rename in a workspace that would share a slug, or
+/// take a retired name reserved to another chat (Q2).
 pub fn ensure_slug_unique_in_workspace(
     conn: &Connection,
     project_id: &str,
     session_id: &str,
     slug: &str,
 ) -> Result<(), String> {
+    if is_ordinal_token(slug) {
+        // TR2: an all-digit name is display only; it never claims an address.
+        return Ok(());
+    }
     if let Some(existing) = find_conversation_by_slug(conn, project_id, slug)? {
         if existing != session_id {
             return Err(format!(
                 "chat name slug '{slug}' is already used by another session in this workspace"
             ));
+        }
+    }
+    if let Some(owner) = alias_owner(conn, project_id, slug)? {
+        if owner != session_id.trim() {
+            return Err(reserved_name_hint(conn, project_id, slug, &owner));
         }
     }
     Ok(())
@@ -749,6 +1166,9 @@ pub fn ensure_sidecar_handle(
             rekey_conversation(conn, project_id, pane, sid)?;
         }
     }
+    // RC4: every sidecar gets a permanent ordinal at first register,
+    // named or not, so a later rename always leaves `ws/<n>` behind.
+    allocate_ordinal(conn, project_id, &key)?;
     let handle = handle_for_session(conn, project_id, &key, provider_session_id)?;
     Ok(Some(handle))
 }
@@ -1069,6 +1489,266 @@ mod tests {
         .expect_err("disk-only custom_name must block a second slug");
         crate::workspace_session_handles::ensure_slug_unique_among_names(&c, &b, "disk-reviewer")
             .expect_err("unplaced custom_name must also fail loud");
+    }
+
+    fn project_path_of(project_id: &str) -> String {
+        let dbh = conn();
+        let c = dbh.lock();
+        c.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            params![project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .expect("project path")
+    }
+
+    fn set_handle(project_id: &str, handle: &str) {
+        let dbh = conn();
+        let c = dbh.lock();
+        c.execute(
+            "UPDATE projects SET handle = ?2 WHERE id = ?1",
+            params![project_id, handle],
+        )
+        .expect("set handle");
+    }
+
+    /// Seed a workspace with handle `ws` and one Claude sidecar at
+    /// ordinal 1. Returns (project_id, path, conversation id).
+    fn seed_sidecar(label: &str) -> (String, String, String) {
+        let project_id = seed_project(label);
+        set_handle(&project_id, &format!("ws-{}", &project_id[..8]));
+        let sid = format!("sid-{label}-{}", uuid::Uuid::new_v4());
+        insert_tab(&project_id, &format!("pane-{label}"), Some(&sid), "claude");
+        let dbh = conn();
+        let c = dbh.lock();
+        let n = allocate_ordinal(&c, &project_id, &sid).expect("ordinal");
+        assert_eq!(n, 1);
+        drop(c);
+        let path = project_path_of(&project_id);
+        (project_id, path, sid)
+    }
+
+    fn rename(sid: &str, name: &str, path: &str) -> crate::chat_history::RenameOutcome {
+        crate::chat_history::rename_session_scoped("claude", sid, name, Some(path))
+            .unwrap_or_else(|e| panic!("rename {sid} to {name:?}: {e}"))
+    }
+
+    fn deliver(project_id: &str, token: &str) -> DeliveryTarget {
+        let dbh = conn();
+        let c = dbh.lock();
+        resolve_for_delivery(&c, project_id, token)
+            .unwrap_or_else(|e| panic!("deliver {token}: {e}"))
+    }
+
+    #[test]
+    fn delivery_keeps_old_ordinal_and_old_names_after_renames() {
+        let (pid, path, c_sid) = seed_sidecar("dlv");
+        let ws = format!("ws-{}", &pid[..8]);
+        let out = rename(&c_sid, "Reviewer", &path);
+        assert_eq!(out.previous_address.as_deref(), Some(format!("{ws}/1").as_str()));
+        assert_eq!(out.address.as_deref(), Some(format!("{ws}/reviewer").as_str()));
+        assert!(out.address_changed());
+
+        let t = deliver(&pid, "1");
+        assert_eq!(t.conversation_key, c_sid);
+        assert_eq!(t.current_handle, "reviewer");
+        assert_eq!(deliver(&pid, "reviewer").conversation_key, c_sid);
+
+        rename(&c_sid, "Critic", &path);
+        let t = deliver(&pid, "reviewer");
+        assert_eq!(t.conversation_key, c_sid, "a retired name stays an alias");
+        assert_eq!(t.current_handle, "critic");
+        assert_eq!(deliver(&pid, "1").current_handle, "critic");
+        assert_eq!(deliver(&pid, "critic").conversation_key, c_sid);
+
+        // Strict lookups stay strict (naming jobs).
+        let dbh = conn();
+        let c = dbh.lock();
+        resolve_handle(&c, &pid, "reviewer").expect_err("strict: retired name is not a current name");
+        resolve_handle(&c, &pid, "1").expect_err("strict: replaced ordinal still fails");
+        let past = past_handles_for(&c, &pid, &c_sid).expect("past");
+        assert_eq!(past, vec!["1".to_string(), "reviewer".to_string()]);
+        assert_eq!(
+            current_address_for(&c, &pid, &c_sid).expect("addr").as_deref(),
+            Some(format!("{ws}/critic").as_str())
+        );
+        resolve_for_delivery(&c, &pid, "nobody").expect_err("unknown stays an error");
+    }
+
+    #[test]
+    fn retired_name_is_reserved_until_released_and_owner_may_take_it_back() {
+        let (pid, path, c_sid) = seed_sidecar("rsv");
+        let d_sid = format!("sid-rsv-d-{}", uuid::Uuid::new_v4());
+        insert_tab(&pid, "pane-rsv-d", Some(&d_sid), "claude");
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            allocate_ordinal(&c, &pid, &d_sid).expect("d ordinal");
+        }
+        rename(&c_sid, "Reviewer", &path);
+        rename(&c_sid, "Critic", &path);
+        let err = crate::chat_history::rename_session_scoped("claude", &d_sid, "Reviewer", Some(&path))
+            .expect_err("another chat may not take a reserved name");
+        assert!(err.contains("was the name of"), "{err}");
+        assert!(err.contains("/1 (now"), "names the owner: {err}");
+        assert!(err.contains("Release old names"), "{err}");
+
+        // The original chat may take it back; it is then its current name.
+        rename(&c_sid, "Reviewer", &path);
+        assert_eq!(deliver(&pid, "reviewer").current_handle, "reviewer");
+        assert_eq!(deliver(&pid, "critic").conversation_key, c_sid);
+
+        // Release old names frees `critic` for D.
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            let released = release_aliases(&c, Some(&pid), &c_sid).expect("release");
+            assert_eq!(released, vec!["critic".to_string()]);
+        }
+        rename(&d_sid, "Critic", &path);
+        assert_eq!(deliver(&pid, "critic").conversation_key, d_sid);
+    }
+
+    #[test]
+    fn archive_frees_current_and_retired_names() {
+        // Archived rows show in every chat list: serialize with the chat
+        // list tests (they share this lock and the test DB).
+        let _home = crate::themes::HOME_LOCK.lock();
+        let (pid, path, c_sid) = seed_sidecar("arc");
+        let d_sid = format!("sid-arc-d-{}", uuid::Uuid::new_v4());
+        insert_tab(&pid, "pane-arc-d", Some(&d_sid), "claude");
+        rename(&c_sid, "Reviewer", &path);
+        rename(&c_sid, "Critic", &path);
+        crate::chat_user_archive::set_archived_flags(
+            "claude",
+            &c_sid,
+            true,
+            Some(1),
+            Some(&path),
+            Some("t"),
+            Some(1),
+            None,
+        )
+        .expect("archive");
+        rename(&d_sid, "Reviewer", &path);
+        assert_eq!(deliver(&pid, "reviewer").conversation_key, d_sid);
+        rename(&d_sid, "Critic", &path);
+        assert_eq!(deliver(&pid, "critic").conversation_key, d_sid);
+        // C still answers at its permanent ordinal.
+        let t = deliver(&pid, "1");
+        assert_eq!(t.conversation_key, c_sid);
+        assert_eq!(t.current_handle, "1", "an archived chat's name is not an address");
+        // Leave no archived row behind: the shared test DB's chat list
+        // tests expect a clean archive.
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            reclaim_on_restore(&c, &pid, &c_sid).expect("reclaim");
+        }
+        crate::chat_user_archive::set_archived_flags("claude", &c_sid, false, None, None, None, None, None)
+            .expect("restore flags");
+        assert_eq!(deliver(&pid, "critic").conversation_key, d_sid, "D keeps the name after C's restore");
+    }
+
+    #[test]
+    fn restore_marks_a_taken_name_unclaimed() {
+        let _home = crate::themes::HOME_LOCK.lock();
+        let (pid, path, c_sid) = seed_sidecar("rst");
+        let d_sid = format!("sid-rst-d-{}", uuid::Uuid::new_v4());
+        insert_tab(&pid, "pane-rst-d", Some(&d_sid), "claude");
+        rename(&c_sid, "Reviewer", &path);
+        crate::chat_user_archive::set_archived_flags(
+            "claude", &c_sid, true, Some(1), Some(&path), Some("t"), Some(1), None,
+        )
+        .expect("archive");
+        rename(&d_sid, "Reviewer", &path);
+        let note = {
+            let dbh = conn();
+            let c = dbh.lock();
+            reclaim_on_restore(&c, &pid, &c_sid).expect("reclaim")
+        };
+        let note = note.expect("taken name must produce a note");
+        assert!(note.contains("/1"), "{note}");
+        crate::chat_user_archive::set_archived_flags("claude", &c_sid, false, None, None, None, None, None)
+            .expect("restore flags");
+        assert_eq!(deliver(&pid, "reviewer").conversation_key, d_sid, "no ambiguity after restore");
+        assert_eq!(deliver(&pid, "1").current_handle, "1");
+        // A rename re-claims.
+        rename(&c_sid, "Scout", &path);
+        assert_eq!(deliver(&pid, "1").current_handle, "scout");
+    }
+
+    #[test]
+    fn all_digit_token_is_always_an_ordinal() {
+        let (pid, path, c_sid) = seed_sidecar("dig");
+        // Make room for ordinals 2 and 3 so C is not the only row.
+        let d_sid = format!("sid-dig-d-{}", uuid::Uuid::new_v4());
+        insert_tab(&pid, "pane-dig-d", Some(&d_sid), "claude");
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            assert_eq!(allocate_ordinal(&c, &pid, &d_sid).expect("d"), 2);
+        }
+        // D is named "1": a display name only.
+        let out = rename(&d_sid, "1", &path);
+        assert!(!out.address_changed(), "an all-digit name never moves the address: {out:?}");
+        assert_eq!(deliver(&pid, "1").conversation_key, c_sid, "ws/1 stays C's ordinal");
+        assert_eq!(deliver(&pid, "2").conversation_key, d_sid);
+        let dbh = conn();
+        let c = dbh.lock();
+        assert_eq!(resolve_handle(&c, &pid, "1").expect("strict ordinal"), c_sid);
+        assert_eq!(
+            handle_for_session(&c, &pid, &d_sid, Some(&d_sid)).expect("h"),
+            "2"
+        );
+    }
+
+    #[test]
+    fn named_before_first_register_still_gets_an_ordinal() {
+        let project_id = seed_project("birth");
+        set_handle(&project_id, &format!("ws-{}", &project_id[..8]));
+        let path = project_path_of(&project_id);
+        let sid = format!("sid-birth-{}", uuid::Uuid::new_v4());
+        insert_tab(&project_id, "pane-birth", Some(&sid), "claude");
+        rename(&sid, "Scout", &path);
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            let h = ensure_sidecar_handle(&c, &project_id, "tab-pane-birth", Some("claude"), Some(&sid), "pane-birth")
+                .expect("ensure");
+            assert_eq!(h.as_deref(), Some("scout"));
+            assert!(get(&c, &project_id, &sid).expect("get").is_some(), "RC4: ordinal row exists");
+        }
+        rename(&sid, "Scout2", &path);
+        assert_eq!(deliver(&project_id, "1").conversation_key, sid);
+        assert_eq!(deliver(&project_id, "scout").conversation_key, sid);
+        assert_eq!(deliver(&project_id, "scout").current_handle, "scout2");
+    }
+
+    #[test]
+    fn rekey_moves_retired_names_with_the_handle_row() {
+        let project_id = seed_project("rekey");
+        set_handle(&project_id, &format!("ws-{}", &project_id[..8]));
+        let path = project_path_of(&project_id);
+        let pane = format!("pane-rk-{}", uuid::Uuid::new_v4());
+        insert_tab(&project_id, &pane, None, "codex");
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            allocate_ordinal(&c, &project_id, &pane).expect("pane ordinal");
+        }
+        // Pane-keyed names (Codex before adoption).
+        crate::chat_history::rename_session_scoped("codex", &pane, "Draft", Some(&path)).expect("r1");
+        crate::chat_history::rename_session_scoped("codex", &pane, "Final", Some(&path)).expect("r2");
+        assert_eq!(deliver(&project_id, "draft").conversation_key, pane);
+        let provider = format!("prov-{}", uuid::Uuid::new_v4());
+        {
+            let dbh = conn();
+            let c = dbh.lock();
+            rekey_conversation(&c, &project_id, &pane, &provider).expect("rekey");
+            assert_eq!(alias_owner(&c, &project_id, "draft").expect("owner").as_deref(), Some(provider.as_str()));
+        }
+        assert_eq!(deliver(&project_id, "1").conversation_key, provider);
     }
 
     #[test]

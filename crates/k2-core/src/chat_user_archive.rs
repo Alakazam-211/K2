@@ -149,6 +149,9 @@ pub fn set_archived_flags(
             ],
         )
         .map_err(|e| e.to_string())?;
+        // TR6a: archive frees the chat's current name and every retired
+        // name, so another chat may take them.
+        crate::workspace_session_handles::free_names_on_archive(&conn, session_id)?;
     } else {
         // Clear archive flags; leave custom_name/pinned alone.
         conn.execute(
@@ -321,12 +324,28 @@ fn source_parent_valid_for_project(parent: &Path, project_path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// TR6b: before a restore clears the archive flag, check whether the
+/// chat's name was taken while it was archived. Returns the note the
+/// restore response carries when the chat answers at its ordinal instead.
+fn reclaim_name_before_restore(project_path: &str, session_id: &str) -> Result<Option<String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(project_id) =
+        crate::workspace::agent_identity::resolve_project_id(&conn, project_path)
+    else {
+        return Ok(None);
+    };
+    crate::workspace_session_handles::reclaim_on_restore(&conn, &project_id, session_id)
+}
+
 /// Restore a Claude session from the user archive back to live storage.
+/// `Ok(Some(note))` when the chat's name was taken while it was archived
+/// (it then answers at its ordinal; TR6b).
 pub fn restore_user_session(
     project_path: &str,
     provider: &str,
     session_id: &str,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     if provider != "claude" {
         return Err("only claude supported for physical archive in v1".into());
     }
@@ -359,8 +378,9 @@ pub fn restore_user_session(
                 "archived session not found: {provider}:{session_id}"
             ));
         }
+        let note = reclaim_name_before_restore(project_path, session_id)?;
         set_archived_flags(provider, session_id, false, None, None, None, None, None)?;
-        return Ok(());
+        return Ok(note);
     }
 
     let dest = if let Some(ref src) = stored_source {
@@ -382,8 +402,9 @@ pub fn restore_user_session(
         let _ = move_file(&arch_meta, &dest_meta);
     }
 
+    let note = reclaim_name_before_restore(project_path, session_id)?;
     set_archived_flags(provider, session_id, false, None, None, None, None, None)?;
-    Ok(())
+    Ok(note)
 }
 
 #[cfg(test)]

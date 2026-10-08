@@ -394,6 +394,11 @@ pub type Snaps<'a> = &'a dyn Fn(&str) -> Option<RowSnap>;
 pub struct Tracker {
     turns: HashMap<String, Turn>,
     steps: HashMap<String, Steps>,
+    /// TR9: maps a stamped `[thread:<addr>]` to its conversation id when
+    /// the string differs from the turn's (the agent's transcript still
+    /// says `k2/3` after a rename to `k2/reviewer`). `None` (unit tests)
+    /// keeps the plain string compare.
+    addr_resolver: Option<fn(&str) -> Option<String>>,
 }
 
 impl Tracker {
@@ -660,11 +665,29 @@ impl Tracker {
         }
     }
 
-    /// TW2 / A22: a stamped record for `addr` from session `sid`.
+    /// Resolve stamped addresses with `resolver` when the string differs
+    /// from the turn's address (TR9).
+    pub fn with_addr_resolver(mut self, resolver: fn(&str) -> Option<String>) -> Self {
+        self.addr_resolver = Some(resolver);
+        self
+    }
+
+    /// TW2 / A22: a stamped record for `addr` from session `sid`. The
+    /// cheap string compare first; on a mismatch the address is resolved
+    /// once and binds when it maps to the turn's conversation (TR9).
     fn bind(&mut self, sid: &str, addr: &str, kind: BindKind, at: i64, snaps: Snaps) {
+        let mut resolved: Option<Option<String>> = None;
+        let resolver = self.addr_resolver;
         for turn in self.turns.values_mut() {
-            if turn.addr != addr || at < turn.started_at {
+            if at < turn.started_at {
                 continue;
+            }
+            if turn.addr != addr {
+                let Some(resolve) = resolver else { continue };
+                let conv = resolved.get_or_insert_with(|| resolve(addr));
+                if conv.as_deref() != Some(turn.conversation_id.as_str()) {
+                    continue;
+                }
             }
             match turn.stage {
                 Stage::Delivering => {
@@ -947,7 +970,9 @@ fn maybe_send(turn: &mut Turn, body: Value, now: i64, out: &mut Vec<Out>) {
 
 fn tracker() -> &'static Mutex<Tracker> {
     static T: OnceLock<Mutex<Tracker>> = OnceLock::new();
-    T.get_or_init(|| Mutex::new(Tracker::default()))
+    T.get_or_init(|| {
+        Mutex::new(Tracker::default().with_addr_resolver(crate::overlay_routes::conversation_for_addr))
+    })
 }
 
 fn now_ms() -> i64 {
@@ -1047,7 +1072,8 @@ pub fn current_turn(conversation_id: &str) -> Option<Value> {
 /// Drop every turn (integration tests share the process).
 #[allow(dead_code)] // called via the LIB target by integration tests
 pub fn clear_for_tests() {
-    *tracker().lock() = Tracker::default();
+    *tracker().lock() =
+        Tracker::default().with_addr_resolver(crate::overlay_routes::conversation_for_addr);
 }
 
 /// Start the tracker once per process: the transcript and row consumers
@@ -1522,6 +1548,35 @@ mod tests {
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/reviewer".into()) }, 1_200, &row.lookup(), 1_200);
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 900, &row.lookup(), 1_200);
         assert!(t.turns[CONV].bound.is_none(), "wrong session, wrong addr, or older than the turn");
+    }
+
+    /// TR9: after a rename the turn carries the new address while the
+    /// agent's transcript still stamps the old one. The resolver maps the
+    /// old address to the turn's conversation, so it still binds; an
+    /// address of another conversation does not.
+    #[test]
+    fn an_old_address_binds_through_the_resolver() {
+        fn resolve(addr: &str) -> Option<String> {
+            match addr {
+                "sales/1" => Some(CONV.to_string()),
+                "sales/other" => Some("conv-other".to_string()),
+                _ => None,
+            }
+        }
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 1_050));
+        let mut t = Tracker::default().with_addr_resolver(resolve);
+        t.start(CONV, "sales/reviewer", "turn-1", 1_000);
+        t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_010);
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/other".into()) }, 1_100, &row.lookup(), 1_100);
+        assert!(t.turns[CONV].bound.is_none(), "another conversation's address never binds");
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/1".into()) }, 1_100, &row.lookup(), 1_100);
+        assert!(t.turns[CONV].bound.is_some(), "the old address binds the renamed turn");
+
+        let mut plain = Tracker::default();
+        plain.start(CONV, "sales/reviewer", "turn-1", 1_000);
+        plain.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_010);
+        plain.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/1".into()) }, 1_100, &row.lookup(), 1_100);
+        assert!(plain.turns[CONV].bound.is_none(), "without a resolver only the exact string binds");
     }
 
     /// A bound turn whose lead runs with `subagents` / `background` live.

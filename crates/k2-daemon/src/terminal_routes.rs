@@ -142,34 +142,25 @@ pub(crate) fn resolve_screen_lines(
         }
         // `sales/1` → that sidecar session (D14). Session UUID first-arg
         // is handled below via session=.
-        if let Some(crate::workspace_msg::MsgTarget::Sidecar { conversation_key, .. }) =
-            crate::workspace_msg::resolve_msg_target(ws)
+        if let Some(crate::workspace_msg::MsgTarget::Sidecar {
+            path,
+            conversation_key,
+            ..
+        }) = crate::workspace_msg::resolve_msg_target(ws)
         {
-            if let Some(sid) = k2_core::session::SessionId::parse(&conversation_key) {
-                if let Some(session) = crate::v2_session_map::lookup_by_session_id(&sid) {
-                    return Ok(v2_grid_lines(&session, requested_lines));
-                }
-            }
-            for (name, session) in crate::session_lookup::snapshot_all() {
-                if k2_core::workspace::provider_resume::argv_references_session(
-                    &session.args(),
-                    &conversation_key,
-                ) || name == conversation_key
-                    || name == format!("tab-{conversation_key}")
+            // TR21: the sidecar's own workspace first. One provider id can
+            // sit in two workspaces (a fork tab), and the project-blind
+            // scan read whichever live session the map yielded first.
+            let project_id = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+            };
+            if let Some(project_id) = project_id {
+                if let Some(live) =
+                    crate::workspace_msg::lookup_live_for_sidecar(&project_id, &conversation_key)
                 {
-                    return Ok(v2_grid_lines(&session.0, requested_lines));
-                }
-            }
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            if let Some(tab) =
-                k2_core::db::schema::WorkspaceTabSession::get_by_session_id(&conn, &conversation_key)
-                    .ok()
-                    .flatten()
-            {
-                if let Some(session) = crate::v2_session_map::lookup_by_agent_name(&tab.agent_name)
-                {
-                    return Ok(v2_grid_lines(&session, requested_lines));
+                    return Ok(v2_grid_lines(&live.0, requested_lines));
                 }
             }
             return Err(CliResponse::bad_request(format!(

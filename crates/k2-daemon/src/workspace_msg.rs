@@ -188,6 +188,18 @@ pub struct MsgResponse {
     /// Not part of the canonical JSON.
     #[serde(skip)]
     pub branch: Option<String>,
+
+    /// The sidecar address this delivery reached, when the caller used an
+    /// older one (`k2/3` after a rename to `k2/reviewer`). Present only
+    /// with [`Self::moved_from`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
+
+    /// The address the caller sent, when the chat now answers elsewhere
+    /// (a local rename only; TR17). The CLI prints
+    /// `note: <movedFrom> is now <addr>`.
+    #[serde(rename = "movedFrom", default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 /// serde `skip_serializing_if` helper — keep `woke: false` out of the wire.
@@ -206,6 +218,8 @@ impl MsgResponse {
             woke: false,
             wake_ms: None,
             branch: Some(branch.to_string()),
+            addr: None,
+            moved_from: None,
         }
     }
 
@@ -229,6 +243,8 @@ impl MsgResponse {
             woke: false,
             wake_ms: None,
             branch: None,
+            addr: None,
+            moved_from: None,
         }
     }
 }
@@ -292,13 +308,42 @@ pub enum MsgTarget {
     },
     Sidecar {
         path: String,
+        /// The handle the caller sent (`3`, or a retired name).
         handle: String,
         conversation_key: String,
+        /// The handle the chat answers at now (`reviewer`). Differs from
+        /// `handle` after a rename; old addresses keep delivering.
+        current_handle: String,
     },
     /// UUID that matched a live or durable session (provider or PTY id).
     Session {
         session_id: String,
     },
+}
+
+/// Why a `workspace/handle` token did not resolve, for the 404 hint
+/// (the resolver itself returns `Option`). `None` for other shapes or
+/// when the workspace half is unknown.
+pub fn explain_unresolved_sidecar(first_arg: &str) -> Option<String> {
+    let (ws, handle) =
+        k2_core::workspace_session_handles::split_workspace_handle(first_arg.trim())?;
+    if !k2_core::workspace_session_handles::is_address_token(ws) {
+        return None;
+    }
+    let path = resolve_workspace(ws)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let project_id = resolve_project_id(&conn, &path)?;
+    k2_core::workspace_session_handles::resolve_for_delivery(&conn, &project_id, handle).err()
+}
+
+/// `ws/<current handle>` for a resolved sidecar, keeping the workspace
+/// token the caller sent (workspace renames are not this PRD's).
+pub fn current_sidecar_address(requested: &str, current_handle: &str) -> String {
+    match k2_core::workspace_session_handles::split_workspace_handle(requested.trim()) {
+        Some((ws, _)) => k2_core::workspace_session_handles::format_address(ws, Some(current_handle)),
+        None => requested.trim().to_string(),
+    }
 }
 
 /// Resolve `k2 msg` first arg. Order (D12):
@@ -324,15 +369,19 @@ pub fn resolve_msg_target(first_arg: &str) -> Option<MsgTarget> {
             let conn = db.lock();
             resolve_project_id(&conn, &path)
         }?;
-        let conversation_key = {
+        // Delivery resolver: the old ordinal and every retired name keep
+        // reaching the same chat (Thread survives a tab rename).
+        let target = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::workspace_session_handles::resolve_handle(&conn, &project_id, handle).ok()
+            k2_core::workspace_session_handles::resolve_for_delivery(&conn, &project_id, handle)
+                .ok()
         }?;
         return Some(MsgTarget::Sidecar {
             path,
             handle: handle.to_string(),
-            conversation_key,
+            conversation_key: target.conversation_key,
+            current_handle: target.current_handle,
         });
     }
 
@@ -813,9 +862,12 @@ pub fn deliver_live_with_via(
                 k2_core::connections::suggest_project_name(&conn, suggest_token)
             };
             if workspace_token.contains('/') && !workspace_token.starts_with('/') {
-                resp.hint = Some(format!(
-                    "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
-                ));
+                resp.hint = Some(match explain_unresolved_sidecar(workspace_token) {
+                    Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`)."),
+                    None => format!(
+                        "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
+                    ),
+                });
             } else if let Some(s) = suggestion {
                 resp.hint = Some(format!(
                     "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `k2so connections list` to see available workspaces."
@@ -835,6 +887,7 @@ pub fn deliver_live_with_via(
                 path,
                 handle,
                 conversation_key,
+                ..
             } => attempt_sidecar_delivery(
                 path,
                 handle,
@@ -850,6 +903,12 @@ pub fn deliver_live_with_via(
             }
         };
         result.attempts = attempt;
+        if let MsgTarget::Sidecar { handle, current_handle, .. } = &target {
+            if handle != current_handle {
+                result.addr = Some(current_sidecar_address(workspace_token, current_handle));
+                result.moved_from = Some(workspace_token.trim().to_string());
+            }
+        }
 
         if result.success {
             // Human Thread compose / card inject already stored on the
@@ -1211,6 +1270,22 @@ fn inject_and_submit(live: &session_lookup::LiveSession, payload: &str) -> Injec
     inject_and_submit_with_timeout(live, payload, INJECT_LOCK_TIMEOUT)
 }
 
+/// A daemon notice (`via=notice`, TR8) into an already-live session: the
+/// same serialized inject + submit as a `k2 msg` live delivery. Never
+/// wakes, records no Chatter, starts no Thread turn, is not stored.
+pub(crate) fn inject_notice(live: &session_lookup::LiveSession, line: &str) -> bool {
+    matches!(inject_and_submit(live, line), InjectOutcome::Delivered)
+}
+
+/// This workspace's newest tab row for a sidecar conversation (its pane
+/// id, for the `session_address_changed` event).
+pub(crate) fn pane_group_for_sidecar(project_id: &str, conversation_key: &str) -> Option<String> {
+    project_tab_rows_for_conversation(project_id, conversation_key)
+        .into_iter()
+        .next()
+        .map(|row| row.pane_group_id)
+}
+
 /// [`inject_and_submit`] with an explicit lock-acquire deadline. The
 /// production wrapper passes [`INJECT_LOCK_TIMEOUT`]; tests pass a short
 /// deadline to exercise the `Stalled` path deterministically without a
@@ -1569,7 +1644,7 @@ fn live_owned_by_other_workspace(live: &session_lookup::LiveSession, project_id:
 /// the other workspace's pinned conversation. The project-blind lookup
 /// then injected a Thread send for `ws/1` into whichever live session the
 /// map yielded first, often the other workspace's pinned Chat.
-fn lookup_live_for_sidecar(
+pub(crate) fn lookup_live_for_sidecar(
     project_id: &str,
     conversation_key: &str,
 ) -> Option<session_lookup::LiveSession> {
@@ -2510,9 +2585,24 @@ mod tests {
             }
             other => panic!("expected sidecar reviewer, got {other:?}"),
         }
-        assert!(
-            resolve_msg_target(&format!("{ws}/1")).is_none(),
-            "old ordinal must fail after rename"
+        // Thread survives a tab rename (TR23 flip): the old ordinal keeps
+        // delivering to the same chat and says where it answers now.
+        match resolve_msg_target(&format!("{ws}/1")).expect("old ordinal still delivers") {
+            MsgTarget::Sidecar {
+                handle,
+                conversation_key,
+                current_handle,
+                ..
+            } => {
+                assert_eq!(handle, "1");
+                assert_eq!(conversation_key, sid);
+                assert_eq!(current_handle, "reviewer");
+            }
+            other => panic!("expected sidecar via old ordinal, got {other:?}"),
+        }
+        assert_eq!(
+            current_sidecar_address(&format!("{ws}/1"), "reviewer"),
+            format!("{ws}/reviewer")
         );
         assert!(
             resolve_msg_target(&format!("{ws}-reviewer")).is_none()

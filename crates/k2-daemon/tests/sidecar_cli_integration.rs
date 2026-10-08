@@ -1734,3 +1734,111 @@ fn route_table_and_agent_verbs() {
         "/cli/agent-access/set"
     ));
 }
+
+// ── Thread survives a tab rename (prd-thread-survives-tab-rename-v1) ──
+
+fn grid_contains(agent: &str, needle: &str) -> bool {
+    k2_daemon::v2_session_map::lookup_by_agent_name(agent)
+        .map(|s| s.visible_text_rows().join("\n").contains(needle))
+        .unwrap_or(false)
+}
+
+/// Headless smoke as a test (S7, TR8, TR11, Q8): a live `k2 sidecar`
+/// renamed from Reviewer to Critic. The live PTY gets the one notice line
+/// and its label (locked), the old addresses keep posting into the same
+/// Thread with `movedFrom`, and `k2 sidecar new reviewer` is refused
+/// without touching the renamed sidecar's brief.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rename_keeps_old_addresses_notifies_the_live_chat_and_reserves_the_name() {
+    let env = setup();
+    let d = futures_block(test_harness::start(OWNER));
+    let ws = seed_ws(&env, &unique("rn"));
+    let brief = "# Reviewer\nReview the tests.\n";
+    let v = ok_new(&new_sidecar(d.port, OWNER, &ws, "Reviewer", "claude", Some(brief)));
+    let cid = v["conversationId"].as_str().expect("conversationId").to_string();
+    let pg = v["paneGroupId"].as_str().expect("paneGroupId").to_string();
+    let agent = format!("tab-{pg}");
+    assert!(live(&agent), "{agent} live");
+    let old_name = format!("{}/reviewer", ws.handle);
+    let ordinal_addr = format!("{}/1", ws.handle);
+    let new_name = format!("{}/critic", ws.handle);
+
+    let first = post(
+        d.port,
+        "/cli/thread/post",
+        OWNER,
+        &serde_json::json!({ "addr": ordinal_addr, "text": "before", "from": "k2" }),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+
+    let renamed = post(
+        d.port,
+        "/cli/chat/rename",
+        OWNER,
+        &serde_json::json!({
+            "provider": "claude",
+            "session_id": cid,
+            "custom_name": "Critic",
+            "project_path": ws.path.to_string_lossy(),
+        }),
+    );
+    assert_eq!(renamed.status, 200, "{}", renamed.body);
+    let rj = json(&renamed.body);
+    assert_eq!(rj["address"], new_name.as_str(), "{rj}");
+    assert_eq!(rj["previousAddress"], old_name.as_str(), "{rj}");
+
+    // TR8: the live session gets exactly the notice line (the shim is cat).
+    // Grid rows wrap at the PTY width; match a short, unwrapped prefix.
+    let notice = "[k2] This chat's address is now";
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !grid_contains(&agent, &notice) {
+        assert!(Instant::now() < deadline, "the live sidecar never got the rename notice");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Q8: the daemon label follows the rename, locked.
+    let session = k2_daemon::v2_session_map::lookup_by_agent_name(&agent).expect("live session");
+    assert_eq!(session.label(), "Critic");
+    assert!(
+        format!("{:?}", session.label_source()).contains("Locked"),
+        "a reconnect keeps the new name: {:?}",
+        session.label_source()
+    );
+
+    for (addr, text) in [(&old_name, "via-old-name"), (&ordinal_addr, "via-ordinal")] {
+        let r = post(
+            d.port,
+            "/cli/thread/post",
+            OWNER,
+            &serde_json::json!({ "addr": addr, "text": text, "from": "k2" }),
+        );
+        assert_eq!(r.status, 200, "post to {addr}: {}", r.body);
+        let j = json(&r.body);
+        assert_eq!(j["conversation_id"], cid.as_str(), "{j}");
+        assert_eq!(j["addr"], new_name.as_str(), "{j}");
+        assert_eq!(j["movedFrom"], addr.as_str(), "{j}");
+    }
+    let thread = req(
+        d.port,
+        "GET",
+        &format!("/cli/thread?token={}&addr={}&limit=0", enc(OWNER), enc(&new_name)),
+        None,
+    );
+    assert_eq!(thread.status, 200, "{}", thread.body);
+    let bodies: Vec<String> = json(&thread.body)["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["doc"]["body"].as_str().expect("body").to_string())
+        .collect();
+    assert_eq!(bodies, ["before", "via-old-name", "via-ordinal"]);
+
+    // Q7/TR11: a new sidecar may not take the retired name; the renamed
+    // sidecar's brief stays its own.
+    let brief_path = ws.path.join(".k2/sidecars/reviewer/BRIEF.md");
+    let brief_before = std::fs::read_to_string(&brief_path).expect("brief");
+    let refused = new_sidecar(d.port, OWNER, &ws, "reviewer", "claude", Some("# stranger\n"));
+    assert_eq!(refused.status, 409, "{}", refused.body);
+    assert_eq!(error_code(&refused), "name_reserved");
+    assert!(refused.body.contains("k2 sidecar new critic"), "{}", refused.body);
+    assert_eq!(std::fs::read_to_string(&brief_path).expect("brief"), brief_before);
+}

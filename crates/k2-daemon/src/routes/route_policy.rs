@@ -174,6 +174,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/chat/list", Member),
     post("/cli/chat/migrate-ide", Member),
     get("/cli/chat/pinned", Member),
+    post("/cli/chat/release-names", Member),
     post("/cli/chat/rename", Member),
     post("/cli/chat/restore", Member),
     get("/cli/chat/session-exists", Member),

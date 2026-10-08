@@ -1276,6 +1276,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // POST-only. A GET must 405 here — a post_allowed arm alone
         // falls through this chain to 404 "route not found".
         "/cli/chat/continue-seed" => CliResponse::method_not_allowed(),
+        "/cli/chat/release-names" => crate::chat_routes::handle_release_names(false, b""),
 
         // ── Phase 2 Unit 6: themes (GET) ──────────────────────────
         "/cli/themes/list" => crate::themes_routes::handle_list(params),

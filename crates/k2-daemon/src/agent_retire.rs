@@ -516,10 +516,24 @@ pub fn handle_agent_retire(body: &[u8]) -> CliResponse {
         let res = {
             let db = k2_core::db::shared();
             let conn = db.lock();
+            // TR7: retired sidecar names and unclaimed marks go with the
+            // workspace (the FK cascade covers them too; explicit here).
             conn.execute(
-                "DELETE FROM chat_session_names WHERE agent_project_id = ?1",
+                "DELETE FROM workspace_session_handle_aliases WHERE project_id = ?1",
                 rusqlite::params![pid],
             )
+            .and_then(|_| {
+                conn.execute(
+                    "DELETE FROM workspace_session_unclaimed_names WHERE project_id = ?1",
+                    rusqlite::params![pid],
+                )
+            })
+            .and_then(|_| {
+                conn.execute(
+                    "DELETE FROM chat_session_names WHERE agent_project_id = ?1",
+                    rusqlite::params![pid],
+                )
+            })
         };
         match res {
             Ok(n) => {

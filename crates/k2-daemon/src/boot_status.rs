@@ -223,6 +223,12 @@ pub const FEATURE_HOME_AVATARS: &str = "home-avatars-v1";
 /// client renders its rows; a server without the key gets RL13.
 pub const FEATURE_DAEMON_ACTIVITY: &str = "daemon-activity";
 
+/// prd-thread-survives-tab-rename-v1 S3: a sidecar's old addresses keep
+/// delivering after a rename (`movedFrom` on Thread routes), and the
+/// daemon emits `session_address_changed` + the overlay `address` frame.
+/// A client without it re-looks-up the address on a Thread 404.
+pub const FEATURE_THREAD_ADDRESS_STABLE: &str = "thread-address-stable";
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -238,6 +244,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_LATEST);
     out.push(FEATURE_HOME_AVATARS);
     out.push(FEATURE_DAEMON_ACTIVITY);
+    out.push(FEATURE_THREAD_ADDRESS_STABLE);
     out
 }
 
@@ -259,7 +266,8 @@ mod tests {
                 "zen-chrome-v1",
                 "thread-latest",
                 "home-avatars-v1",
-                "daemon-activity"
+                "daemon-activity",
+                "thread-address-stable"
             ]
         );
     }

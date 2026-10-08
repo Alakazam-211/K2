@@ -56,9 +56,38 @@ fn recorded_injects() -> Vec<String> {
 struct ResolvedOverlay {
     conversation_id: String,
     project_id: String,
+    /// The address the conversation answers at **now** (S2). The inject
+    /// line, the stored `to`, the activity turn and the JSON `addr` use
+    /// it. A post to `k2/3` after a rename resolves to `k2/reviewer`.
     addr: String,
+    /// The address the caller sent.
+    requested_addr: String,
     /// `sales` / pinned Chat — not a `sales/reviewer` sidecar address.
     canonical_alias: bool,
+}
+
+impl ResolvedOverlay {
+    /// `movedFrom` for the JSON: the caller's address when the chat was
+    /// renamed away from it (a local rename only, TR17).
+    fn moved_from(&self) -> Option<&str> {
+        (!self.canonical_alias && self.requested_addr != self.addr)
+            .then_some(self.requested_addr.as_str())
+    }
+}
+
+/// Add `movedFrom` to a Thread route's JSON body when the caller used an
+/// older address (the CLI prints `note: <old> is now <new>`).
+fn with_moved_from(mut body: serde_json::Value, resolved: &ResolvedOverlay) -> String {
+    if let Some(old) = resolved.moved_from() {
+        body["movedFrom"] = serde_json::json!(old);
+    }
+    body.to_string()
+}
+
+/// The conversation an address reaches now, for the activity tracker's
+/// stamped-address fallback (TR9). Never a skin resolution.
+pub fn conversation_for_addr(addr: &str) -> Option<String> {
+    resolve_addr(addr).ok().map(|r| r.conversation_id)
 }
 
 fn error_json(status: &'static str, code: &str, hint: impl std::fmt::Display) -> CliResponse {
@@ -154,6 +183,7 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
             conversation_id: pin,
             project_id,
             addr: addr.to_string(),
+            requested_addr: addr.to_string(),
             canonical_alias: true,
         });
     }
@@ -174,6 +204,7 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
         conversation_id: pin,
         project_id,
         addr: addr.to_string(),
+        requested_addr: addr.to_string(),
         canonical_alias: true,
     })
 }
@@ -221,12 +252,14 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
                 conversation_id,
                 project_id,
                 addr: addr.to_string(),
+                requested_addr: addr.to_string(),
                 canonical_alias: true,
             })
         }
         Some(MsgTarget::Sidecar {
             path,
             conversation_key,
+            current_handle,
             ..
         }) => {
             let db = k2_core::db::shared();
@@ -234,10 +267,28 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
             let Some(project_id) = resolve_project_id(&conn, &path) else {
                 return Err(not_found(format!("workspace not found: {addr}")));
             };
+            // A Chats name on the pinned conversation is `ws/<name>`-shaped
+            // but it is the main Chat: canonical-only writes apply (S2).
+            if k2_core::workspace_session_handles::conversation_is_canonical(
+                &conn,
+                &project_id,
+                &conversation_key,
+            ) {
+                let ws = k2_core::workspace_session_handles::workspace_address_name(&conn, &project_id)
+                    .unwrap_or_else(|_| addr.to_string());
+                return Ok(ResolvedOverlay {
+                    conversation_id: conversation_key,
+                    project_id,
+                    addr: ws,
+                    requested_addr: addr.to_string(),
+                    canonical_alias: true,
+                });
+            }
             Ok(ResolvedOverlay {
                 conversation_id: conversation_key,
                 project_id,
-                addr: addr.to_string(),
+                addr: workspace_msg::current_sidecar_address(addr, &current_handle),
+                requested_addr: addr.to_string(),
                 canonical_alias: false,
             })
         }
@@ -254,10 +305,14 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
                 conversation_id: session_id,
                 project_id,
                 addr: addr.to_string(),
-                canonical_alias: canonical_alias,
+                requested_addr: addr.to_string(),
+                canonical_alias,
             })
         }
-        None => Err(not_found(format!("unknown overlay addr '{addr}'"))),
+        None => Err(not_found(match workspace_msg::explain_unresolved_sidecar(addr) {
+            Some(why) => format!("unknown overlay addr '{addr}': {why}"),
+            None => format!("unknown overlay addr '{addr}'"),
+        })),
     }
 }
 
@@ -299,15 +354,36 @@ fn authorize_write(
 }
 
 fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage) -> String {
-    serde_json::json!({
+    let body = serde_json::json!({
         "ok": true,
         "collection": collection,
         "addr": resolved.addr,
         "conversation_id": resolved.conversation_id,
         "items": page.items,
         "has_more": page.has_more,
-    })
-    .to_string()
+        // Q5: every address this chat answered at before, so a client
+        // renders old rows' `from`/`to` under the current name.
+        "pastAddresses": past_addresses(resolved),
+    });
+    with_moved_from(body, resolved)
+}
+
+/// `ws/<n>` and each retired `ws/<name>` of a sidecar conversation.
+fn past_addresses(resolved: &ResolvedOverlay) -> Vec<String> {
+    if resolved.canonical_alias {
+        return Vec::new();
+    }
+    let Some((ws, _)) = k2_core::workspace_session_handles::split_workspace_handle(&resolved.addr)
+    else {
+        return Vec::new();
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::workspace_session_handles::past_handles_for(&conn, &resolved.project_id, &resolved.conversation_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| k2_core::workspace_session_handles::format_address(ws, Some(&h)))
+        .collect()
 }
 
 const OVERLAY_PAGE_DEFAULT: usize = 25;
@@ -661,7 +737,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 // bar, not an app guest): the strip ends with the reply.
                 crate::thread_activity::note_reply(&resolved.conversation_id);
             }
-            CliResponse::ok_json(
+            CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
                     "id": item.id,
@@ -673,9 +749,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "via": item.doc.via,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
-                })
-                .to_string(),
-            )
+                }),
+                &resolved,
+            ))
         }
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
@@ -756,7 +832,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
                 .unwrap_or_default();
-            CliResponse::ok_json(
+            CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
                     "id": item.id,
@@ -769,9 +845,9 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
                     "seq": item.seq,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
-                })
-                .to_string(),
-            )
+                }),
+                &resolved,
+            ))
         }
         Err(e) => error_json("400 Bad Request", "usage", e),
     }
@@ -819,7 +895,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             crate::thread_activity::note_reply(&resolved.conversation_id);
             let secret = item.doc.secret.as_ref();
-            CliResponse::ok_json(
+            CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
                     "id": item.id,
@@ -830,9 +906,9 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                     "seq": item.seq,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
-                })
-                .to_string(),
-            )
+                }),
+                &resolved,
+            ))
         }
         Err(e) => error_json("400 Bad Request", "usage", e),
     }
@@ -912,7 +988,7 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
                 body["status"] = serde_json::json!(secret_body.status);
                 body["name"] = serde_json::json!(secret_body.name);
             }
-            CliResponse::ok_json(body.to_string())
+            CliResponse::ok_json(with_moved_from(body, &resolved))
         }
         Err(e) => card_error(e),
     }
@@ -972,7 +1048,7 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
                 .map(|c| c.status.clone())
                 .or_else(|| cb.doc.secret.as_ref().map(|s| s.status.clone()))
                 .unwrap_or_else(|| "voided".to_string());
-            CliResponse::ok_json(
+            CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
                     "id": cb.doc_id,
@@ -981,9 +1057,9 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
                     "kind": cb.doc.kind,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
-                })
-                .to_string(),
-            )
+                }),
+                &resolved,
+            ))
         }
         Err(e) => card_error(e),
     }
@@ -1158,30 +1234,19 @@ fn thread_from_room_handle(resolved: &ResolvedOverlay) -> String {
     }
 }
 
+/// The address a conversation answers at now: the workspace handle for
+/// the pinned Chat, `ws/<handle>` for a sidecar (S2; was the workspace
+/// handle for every conversation, so a sidecar Terminal's card answer
+/// went to the main Chat — Side finding B).
 fn display_addr_for(
     conn: &rusqlite::Connection,
     project_id: &str,
     conversation_id: &str,
 ) -> String {
-    let ws = conn
-        .query_row(
-            "SELECT handle FROM projects WHERE id = ?1",
-            rusqlite::params![project_id],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let pinned = WorkspaceSession::get(conn, project_id)
-        .ok()
-        .flatten()
-        .and_then(|s| s.session_id)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    match (ws, pinned) {
-        (Some(ws), Some(pin)) if pin == conversation_id => ws,
-        (Some(ws), _) => ws,
-        (None, _) => conversation_id.to_string(),
+    match k2_core::workspace_session_handles::current_address_for(conn, project_id, conversation_id) {
+        Ok(Some(addr)) => addr,
+        _ => k2_core::workspace_session_handles::workspace_address_name(conn, project_id)
+            .unwrap_or_else(|_| conversation_id.to_string()),
     }
 }
 
@@ -1207,15 +1272,15 @@ fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
         return e;
     }
     let turn = crate::thread_activity::current_turn(&resolved.conversation_id);
-    CliResponse::ok_json(
+    CliResponse::ok_json(with_moved_from(
         serde_json::json!({
             "ok": true,
             "addr": resolved.addr,
             "conversation_id": resolved.conversation_id,
             "turn": turn,
-        })
-        .to_string(),
-    )
+        }),
+        &resolved,
+    ))
 }
 
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
@@ -3305,5 +3370,241 @@ mod tests {
             other,
             "explicit secret from is the trimmed handle: {secret_peer_body}"
         );
+    }
+
+    // ── Thread survives a tab rename (prd-thread-survives-tab-rename-v1) ──
+
+    fn project_path(project_id: &str) -> String {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            params![project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .expect("project path")
+    }
+
+    /// A sidecar with ordinal 1 and no name, like a fresh app tab.
+    fn unnamed_sidecar(project_id: &str, conv: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace_session_handles::allocate_ordinal(&conn, project_id, conv)
+            .expect("ordinal");
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions \
+             (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+             VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+            params![project_id, format!("pane-{conv}"), format!("tab-pane-{conv}"), conv],
+        )
+        .expect("tab");
+    }
+
+    /// The app's rename: `POST /cli/chat/rename` with the workspace path.
+    fn rename_via_route(conv: &str, name: &str, path: &str) -> serde_json::Value {
+        let resp = crate::chat_routes::handle_rename(
+            serde_json::json!({
+                "provider": "claude",
+                "session_id": conv,
+                "custom_name": name,
+                "project_path": path,
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "rename to {name:?} failed: {}", resp.body);
+        json_body(&resp)
+    }
+
+    fn post_thread(addr: &str, text: &str, via: Option<&str>) -> serde_json::Value {
+        let mut body = serde_json::json!({ "addr": addr, "text": text, "from": "k2" });
+        if let Some(v) = via {
+            body["via"] = serde_json::json!(v);
+        }
+        let resp = dispatch_post("/cli/thread/post", &HashMap::new(), body.to_string().as_bytes());
+        assert_eq!(resp.status, "200 OK", "post to {addr} failed: {}", resp.body);
+        json_body(&resp)
+    }
+
+    fn read_thread(addr: &str) -> serde_json::Value {
+        let get = dispatch("/cli/thread", &params_of(&[("addr", addr), ("limit", "0")]))
+            .expect("GET thread");
+        assert_eq!(get.status, "200 OK", "read {addr}: {}", get.body);
+        json_body(&get)
+    }
+
+    /// Tests 1, 2, 8: the old ordinal and old names keep posting into the
+    /// same Thread, answer with the current address + `movedFrom`, and the
+    /// stored `to` is the address current at post time.
+    #[test]
+    fn old_addresses_keep_posting_after_renames() {
+        let handle = format!("ovlrn{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let conv = uuid::Uuid::new_v4().to_string();
+        unnamed_sidecar(&project_id, &conv);
+        let path = project_path(&project_id);
+        let ord = format!("{handle}/1");
+
+        let first = post_thread(&ord, "before", None);
+        assert_eq!(first["addr"], ord.as_str());
+        assert!(first.get("movedFrom").is_none(), "no rename yet: {first}");
+
+        let renamed = rename_via_route(&conv, "Reviewer", &path);
+        assert_eq!(renamed["address"], format!("{handle}/reviewer"), "{renamed}");
+        assert_eq!(renamed["previousAddress"], ord.as_str(), "{renamed}");
+
+        let after = post_thread(&ord, "after", None);
+        assert_eq!(after["conversation_id"], conv.as_str());
+        assert_eq!(after["addr"], format!("{handle}/reviewer"), "{after}");
+        assert_eq!(after["movedFrom"], ord.as_str(), "{after}");
+        assert_eq!(after["to"], format!("{handle}/reviewer"), "stored to is current: {after}");
+
+        let snap = read_thread(&format!("{handle}/reviewer"));
+        let items = snap["items"].as_array().expect("items");
+        let bodies: Vec<&str> = items.iter().map(|i| i["doc"]["body"].as_str().expect("body")).collect();
+        assert_eq!(bodies, vec!["before", "after"], "{snap}");
+        assert_eq!(items[0]["doc"]["to"], ord.as_str(), "history keeps its address");
+        assert_eq!(
+            snap["pastAddresses"],
+            serde_json::json!([ord.clone()]),
+            "Q5: old addresses for render-time mapping: {snap}"
+        );
+
+        rename_via_route(&conv, "Critic", &path);
+        let via_old_name = post_thread(&format!("{handle}/reviewer"), "third", None);
+        assert_eq!(via_old_name["conversation_id"], conv.as_str());
+        assert_eq!(via_old_name["addr"], format!("{handle}/critic"));
+        assert_eq!(via_old_name["movedFrom"], format!("{handle}/reviewer"));
+        let via_ord = post_thread(&ord, "fourth", None);
+        assert_eq!(via_ord["conversation_id"], conv.as_str());
+        let snap = read_thread(&ord);
+        assert_eq!(snap["items"].as_array().expect("items").len(), 4, "{snap}");
+        assert_eq!(snap["addr"], format!("{handle}/critic"));
+        assert_eq!(snap["movedFrom"], ord.as_str());
+    }
+
+    /// Test 7: a compose post to the old ordinal injects the CURRENT
+    /// address, so the agent learns the new name from the next message.
+    #[test]
+    fn compose_to_an_old_address_injects_the_current_one() {
+        let handle = format!("ovlinj{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let conv = uuid::Uuid::new_v4().to_string();
+        unnamed_sidecar(&project_id, &conv);
+        rename_via_route(&conv, "Reviewer", &project_path(&project_id));
+        let text = format!("lint-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let posted = post_thread(&format!("{handle}/1"), &text, Some("compose"));
+        let from = posted["from"].as_str().expect("from").to_string();
+        let want = format_thread_compose_pty_line(&from, &format!("{handle}/reviewer"), &text);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &want),
+            "want {want:?} in {injects:?}"
+        );
+        assert!(
+            !injects.iter().any(|l| l.contains(&format!("[thread:{handle}/1] {text}"))),
+            "the stale address must not be injected: {injects:?}"
+        );
+    }
+
+    /// Test 9: a Chats name on the pinned conversation is the main Chat:
+    /// canonical_alias, so a sidecar may not write it through `ws/<name>`.
+    #[test]
+    fn a_named_pinned_chat_stays_canonical_only() {
+        let handle = format!("ovllead{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let pinned = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &pinned);
+        let reviewer = uuid::Uuid::new_v4().to_string();
+        sidecar(&project_id, &reviewer, "reviewer");
+        rename_via_route(&pinned, "Lead", &project_path(&project_id));
+
+        let owner = post_thread(&format!("{handle}/lead"), "owner-ok", None);
+        assert_eq!(owner["conversation_id"], pinned.as_str());
+        assert_eq!(owner["addr"], handle.as_str(), "the pinned Chat answers at the workspace: {owner}");
+        assert!(owner.get("movedFrom").is_none(), "movedFrom means a sidecar rename only: {owner}");
+
+        let params = stamp_sidecar(&project_id, &reviewer);
+        let post = post_as_owner(
+            &params,
+            serde_json::json!({ "addr": format!("{handle}/lead"), "text": "sneaky" }),
+        );
+        assert_eq!(post.status, "403 Forbidden", "{}", post.body);
+        assert!(post.body.contains("canonical-only"), "{}", post.body);
+        let ws = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET");
+        assert_eq!(json_body(&ws)["conversation_id"], pinned.as_str(), "`ws` unchanged");
+    }
+
+    /// Test 10 (Side finding B): a card answered by typing in a sidecar's
+    /// Terminal injects into the sidecar's address, never the workspace's.
+    #[test]
+    fn terminal_card_answer_goes_to_the_sidecar_address() {
+        let handle = format!("ovlcard{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let conv = uuid::Uuid::new_v4().to_string();
+        sidecar(&project_id, &conv, "reviewer");
+        let label = format!("Ship{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let ask = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({
+                "addr": format!("{handle}/reviewer"),
+                "prompt": "Go?",
+                "options": format!("{label},Wait"),
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(ask.status, "200 OK", "{}", ask.body);
+        on_human_pty_text(&conv, &label);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}/reviewer] ")) && l.contains(&label)),
+            "card callback must address the sidecar: {injects:?}"
+        );
+        assert!(
+            !injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}] ")) && l.contains(&label)),
+            "never the main Chat: {injects:?}"
+        );
+    }
+
+    /// Test 11: the working-strip read follows an old address.
+    #[test]
+    fn thread_activity_answers_on_an_old_address() {
+        let handle = format!("ovlact{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let conv = uuid::Uuid::new_v4().to_string();
+        unnamed_sidecar(&project_id, &conv);
+        rename_via_route(&conv, "Reviewer", &project_path(&project_id));
+        let resp = dispatch("/cli/thread/activity", &params_of(&[("addr", &format!("{handle}/1"))]))
+            .expect("activity");
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let body = json_body(&resp);
+        assert_eq!(body["conversation_id"], conv.as_str());
+        assert_eq!(body["addr"], format!("{handle}/reviewer"));
+        assert_eq!(body["movedFrom"], format!("{handle}/1"));
+    }
+
+    /// An unknown sidecar address is still a 404, and the hint lists the
+    /// workspace's sidecars instead of a bare "unknown".
+    #[test]
+    fn unknown_sidecar_address_404_lists_sidecars() {
+        let handle = format!("ovlunk{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        sidecar(&project_id, &conv, "reviewer");
+        let resp = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({ "addr": format!("{handle}/nobody"), "text": "x" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert!(resp.body.contains(&format!("{handle}/reviewer")), "{}", resp.body);
     }
 }

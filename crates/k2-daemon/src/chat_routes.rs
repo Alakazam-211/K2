@@ -150,6 +150,10 @@ struct RenameBody {
     provider: String,
     session_id: String,
     custom_name: String,
+    /// TR4: the workspace the app renamed the chat in (TabBar and Chats
+    /// both know it). Used before the reverse lookup.
+    #[serde(default)]
+    project_path: Option<String>,
 }
 
 pub fn handle_rename(body: &[u8]) -> CliResponse {
@@ -157,8 +161,13 @@ pub fn handle_rename(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    match ch::rename_session(&parsed.provider, &parsed.session_id, &parsed.custom_name) {
-        Ok(()) => {
+    match ch::rename_session_scoped(
+        &parsed.provider,
+        &parsed.session_id,
+        &parsed.custom_name,
+        parsed.project_path.as_deref(),
+    ) {
+        Ok(outcome) => {
             // Mirror the Tauri-side `sync:chat-history` event so the
             // renderer's tab list refreshes after a rename. The
             // daemon-side broadcast lands on every `/events` WS
@@ -168,8 +177,139 @@ pub fn handle_rename(body: &[u8]) -> CliResponse {
                 k2_core::agent_hooks::HookEvent::SyncChatHistory,
                 serde_json::Value::Null,
             );
-            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+            after_rename(&outcome, &parsed.custom_name);
+            let mut body = serde_json::json!({ "success": true });
+            if let Some(addr) = outcome.address.as_deref() {
+                body["address"] = serde_json::json!(addr);
+            }
+            if outcome.address_changed() {
+                body["previousAddress"] = serde_json::json!(outcome.previous_address);
+            }
+            CliResponse::ok_json(body.to_string())
         }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// TR8: the one line a live session gets when its chat is renamed.
+pub fn rename_notice_line(previous: &str, address: &str) -> String {
+    format!("[k2] This chat's address is now {address} (was {previous}). Old addresses still reach you.")
+}
+
+#[cfg(test)]
+static TEST_NOTICES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn recorded_notices() -> Vec<(String, String)> {
+    TEST_NOTICES.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// S3: a rename that moved the chat's address tells everyone.
+/// - `session_address_changed` on the workspace event socket (TR12).
+/// - an `address` frame on the conversation's overlay socket (TR13).
+/// - the live session's label, Locked, so a reconnect titles the tab with
+///   the new name (Q8, SC33 drift).
+/// - a one-line notice into the live session, never a wake (TR8).
+fn after_rename(outcome: &ch::RenameOutcome, custom_name: &str) {
+    let Some(project_id) = outcome.project_id.as_deref() else {
+        return;
+    };
+    if outcome.canonical {
+        return;
+    }
+    let key = outcome.conversation_key.as_str();
+    let live = crate::workspace_msg::lookup_live_for_sidecar(project_id, key);
+    let name = custom_name.trim();
+    if let Some(live) = live.as_ref() {
+        if !name.is_empty() {
+            live.0.set_label(name.to_string(), true);
+        }
+    }
+    if !outcome.address_changed() {
+        return;
+    }
+    let (Some(address), Some(previous)) =
+        (outcome.address.clone(), outcome.previous_address.clone())
+    else {
+        return;
+    };
+    let workspace_path = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_default()
+    };
+    // No subscribers is fine (headless, no client attached).
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::SessionAddressChanged {
+        workspace_path,
+        pane_group_id: crate::workspace_msg::pane_group_for_sidecar(project_id, key),
+        conversation_id: key.to_string(),
+        address: address.clone(),
+        previous_address: previous.clone(),
+    });
+    crate::overlay_ws::publish_address(key, &address, &previous);
+    let Some(live) = live else {
+        // Dormant: its next spawn's brief and the next Thread inject carry
+        // the new name. Never wake it for this.
+        return;
+    };
+    let line = rename_notice_line(&previous, &address);
+    #[cfg(test)]
+    if let Ok(mut g) = TEST_NOTICES.lock() {
+        g.push((key.to_string(), line.clone()));
+    }
+    // Off the request thread: the inject waits on the session's lock.
+    let spawned = std::thread::Builder::new()
+        .name("rename-notice".into())
+        .spawn(move || {
+            if !crate::workspace_msg::inject_notice(&live, &line) {
+                k2_core::log_debug!("[chat/rename] notice not delivered to {}", live.session_id());
+            }
+        });
+    if let Err(e) = spawned {
+        k2_core::log_debug!("[chat/rename] could not start the notice: {e}");
+    }
+}
+
+#[derive(Deserialize)]
+struct ReleaseNamesBody {
+    provider: String,
+    session_id: String,
+    #[serde(default)]
+    project_path: Option<String>,
+}
+
+/// POST chat/release-names (TR6c, "Release old names"): drop a chat's
+/// retired names so another chat may take them. Its current name and
+/// `ws/<n>` stay. Member floor (route policy), POST-only.
+pub fn handle_release_names(is_post: bool, body: &[u8]) -> CliResponse {
+    if !is_post {
+        return CliResponse::method_not_allowed();
+    }
+    let parsed: ReleaseNamesBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let key = parsed.session_id.trim();
+    if key.is_empty() || parsed.provider.trim().is_empty() {
+        return CliResponse::bad_request("Missing 'provider' or 'session_id' parameter");
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let project_id = parsed
+        .project_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .and_then(|p| k2_core::workspace::agent_identity::resolve_project_id(&conn, p));
+    match k2_core::workspace_session_handles::release_aliases(&conn, project_id.as_deref(), key) {
+        Ok(released) => CliResponse::ok_json(
+            serde_json::json!({ "success": true, "released": released }).to_string(),
+        ),
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -386,12 +526,17 @@ pub fn handle_restore(body: &[u8]) -> CliResponse {
         &parsed.provider,
         &parsed.session_id,
     ) {
-        Ok(()) => {
+        Ok(note) => {
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncChatHistory,
                 serde_json::Value::Null,
             );
-            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+            let mut body = serde_json::json!({ "success": true });
+            if let Some(note) = note {
+                // TR6b: the name was taken while archived.
+                body["note"] = serde_json::json!(note);
+            }
+            CliResponse::ok_json(body.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -618,5 +763,166 @@ mod tests {
         let err = error_of(&cursor);
         assert_eq!(err, "no readable transcript");
         assert!(!cursor.body.contains("CURSOR_DB_BYTES_MUST_NOT_LEAK"));
+    }
+
+    // ── Thread survives a tab rename (S3/TR8/TR6c) ─────────────────────
+
+    /// A workspace with handle `<h>` and one unnamed Claude sidecar at
+    /// ordinal 1. Returns (project_id, path, handle, conversation id).
+    fn seed_rename_sidecar(label: &str) -> (String, String, String, String) {
+        k2_core::db::init_for_tests();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let id = uuid::Uuid::new_v4().to_string();
+        let handle = format!("{label}{}", &id[..8]);
+        let path = format!("/tmp/chat-rename-{handle}");
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![id, handle, path],
+        )
+        .expect("seed project");
+        let conv = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO workspace_tab_sessions \
+             (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+             VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+            rusqlite::params![id, format!("pane-{conv}"), format!("tab-pane-{conv}"), conv],
+        )
+        .expect("tab");
+        k2_core::workspace_session_handles::allocate_ordinal(&conn, &id, &conv).expect("ordinal");
+        (id, path, handle, conv)
+    }
+
+    fn rename_body(conv: &str, name: &str, path: &str) -> Vec<u8> {
+        serde_json::json!({
+            "provider": "claude",
+            "session_id": conv,
+            "custom_name": name,
+            "project_path": path,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    /// Every `session_address_changed` for `conv` on the bus right now.
+    fn address_events_for(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>,
+        conv: &str,
+    ) -> Vec<(Option<String>, String, String, String)> {
+        let mut out = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(crate::session_events::SessionEvent::SessionAddressChanged {
+                    workspace_path,
+                    pane_group_id,
+                    conversation_id,
+                    address,
+                    previous_address,
+                }) if conversation_id == conv => {
+                    out.push((pane_group_id, workspace_path, address, previous_address));
+                }
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+        out
+    }
+
+    /// Test 12: a rename emits exactly one `session_address_changed`
+    /// carrying old and new; a blank rename emits one back to the ordinal;
+    /// renaming to the same name again emits nothing. The response names
+    /// both addresses.
+    #[test]
+    fn rename_emits_one_address_event_per_change() {
+        let (_pid, path, handle, conv) = seed_rename_sidecar("chrnev");
+        let mut rx = crate::session_events::subscribe();
+
+        let resp = handle_rename(&rename_body(&conv, "Reviewer", &path));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(body["address"], format!("{handle}/reviewer"));
+        assert_eq!(body["previousAddress"], format!("{handle}/1"));
+        let events = address_events_for(&mut rx, &conv);
+        assert_eq!(
+            events,
+            vec![(
+                Some(format!("pane-{conv}")),
+                path.clone(),
+                format!("{handle}/reviewer"),
+                format!("{handle}/1"),
+            )],
+            "exactly one event with old and new"
+        );
+
+        let same = handle_rename(&rename_body(&conv, "Reviewer", &path));
+        assert_eq!(same.status, "200 OK", "{}", same.body);
+        assert!(address_events_for(&mut rx, &conv).is_empty(), "no change, no event");
+
+        let cleared = handle_rename(&rename_body(&conv, "   ", &path));
+        assert_eq!(cleared.status, "200 OK", "{}", cleared.body);
+        let events = address_events_for(&mut rx, &conv);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].2, format!("{handle}/1"), "blank goes back to the ordinal");
+        assert_eq!(events[0].3, format!("{handle}/reviewer"));
+    }
+
+    /// TR8: the notice is one fixed line, and a dormant chat (no live
+    /// session) gets nothing — a rename never wakes.
+    #[test]
+    fn rename_notice_is_one_line_and_never_reaches_a_dormant_chat() {
+        assert_eq!(
+            rename_notice_line("k2/3", "k2/reviewer"),
+            "[k2] This chat's address is now k2/reviewer (was k2/3). Old addresses still reach you."
+        );
+        let (_pid, path, _handle, conv) = seed_rename_sidecar("chrnnt");
+        let resp = handle_rename(&rename_body(&conv, "Reviewer", &path));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert!(
+            recorded_notices().iter().all(|(k, _)| k != &conv),
+            "dormant chats get no notice: {:?}",
+            recorded_notices()
+        );
+    }
+
+    /// TR6c: Release old names frees a chat's retired names (POST only),
+    /// so another chat may take them.
+    #[test]
+    fn release_names_frees_retired_names() {
+        let (pid, path, handle, conv) = seed_rename_sidecar("chrnrl");
+        let other = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO workspace_tab_sessions \
+                 (project_id, pane_group_id, agent_name, session_id, command, last_seen_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'claude', unixepoch())",
+                rusqlite::params![pid, format!("pane-{other}"), format!("tab-pane-{other}"), other],
+            )
+            .expect("tab");
+        }
+        assert_eq!(handle_rename(&rename_body(&conv, "Reviewer", &path)).status, "200 OK");
+        assert_eq!(handle_rename(&rename_body(&conv, "Critic", &path)).status, "200 OK");
+        let refused = handle_rename(&rename_body(&other, "Reviewer", &path));
+        assert_eq!(refused.status, "400 Bad Request", "{}", refused.body);
+        assert!(refused.body.contains(&format!("{handle}/1 (now {handle}/critic)")), "{}", refused.body);
+
+        let get = handle_release_names(false, b"");
+        assert_eq!(get.status, "405 Method Not Allowed");
+        let via_get = crate::misc_routes::dispatch("/cli/chat/release-names", &HashMap::new())
+            .expect("GET dispatch owns /cli/chat/release-names");
+        assert_eq!(via_get.status, "405 Method Not Allowed");
+
+        let released = handle_release_names(
+            true,
+            serde_json::json!({ "provider": "claude", "session_id": conv, "project_path": path })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(released.status, "200 OK", "{}", released.body);
+        let body: serde_json::Value = serde_json::from_str(&released.body).expect("json");
+        assert_eq!(body["released"], serde_json::json!(["reviewer"]));
+        assert_eq!(handle_rename(&rename_body(&other, "Reviewer", &path)).status, "200 OK");
     }
 }

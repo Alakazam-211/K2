@@ -1103,6 +1103,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0134_llm_accounts",
             include_str!("../../drizzle_sql/0134_llm_accounts.sql"),
         ),
+        // 0135 — Thread survives a tab rename: retired sidecar names stay
+        // aliases of their chat (reserved until archive / Release old
+        // names), plus restored chats whose name was taken meanwhile.
+        // New tables only, IF NOT EXISTS.
+        (
+            "0135_session_handle_aliases",
+            include_str!("../../drizzle_sql/0135_session_handle_aliases.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1763,9 +1771,51 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0134_llm_accounts",
+            last_name, "0135_session_handle_aliases",
             "unexpected last migration name: {last_name}"
         );
+    }
+
+    /// 0135 (Thread survives a tab rename, TR22): applied, right after
+    /// 0134, and its tables exist. Re-running the SQL is a no-op (TR7).
+    #[test]
+    fn session_handle_aliases_migration_applies_in_order() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let ids: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, name FROM _migrations \
+                     WHERE name IN ('0134_llm_accounts', '0135_session_handle_aliases') \
+                     ORDER BY id",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert_eq!(ids.len(), 2, "both migrations applied: {ids:?}");
+        assert_eq!(ids[0].1, "0134_llm_accounts");
+        assert_eq!(ids[1].1, "0135_session_handle_aliases");
+        assert!(ids[0].0 < ids[1].0, "0135 applies after 0134: {ids:?}");
+        for table in [
+            "workspace_session_handle_aliases",
+            "workspace_session_unclaimed_names",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "table {table} missing");
+        }
+        conn.execute_batch(include_str!(
+            "../../drizzle_sql/0135_session_handle_aliases.sql"
+        ))
+        .expect("0135 re-apply must be a no-op");
     }
 
     /// 0132 (k2 sidecar v1): the switch backfills ON only for

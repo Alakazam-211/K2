@@ -618,7 +618,46 @@ fn handle_new(
                 format!("'{slug}' matches more than one chat; rename one in Chats"),
             ))
         }
-        Err(_) => Plan::New,
+        Err(_) => {
+            // Q7 / TR11: a retired name stays reserved to the chat that had
+            // it. Refuse instead of making a stranger, which would also
+            // overwrite the renamed sidecar's `.k2/sidecars/<name>/BRIEF.md`
+            // (its row still points there).
+            let owner = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace_session_handles::alias_owner(&conn, &ws.id, &slug)
+                    .map(|o| o.map(|key| {
+                        let ordinal = k2_core::workspace_session_handles::get(&conn, &ws.id, &key)
+                            .ok()
+                            .flatten()
+                            .map(|r| r.ordinal);
+                        let current = k2_core::workspace_session_handles::current_handle_for(&conn, &ws.id, &key)
+                            .ok()
+                            .flatten();
+                        (ordinal, current)
+                    }))
+            };
+            match owner {
+                Ok(Some((ordinal, current))) => {
+                    let was = match ordinal {
+                        Some(n) => format!("{}/{n}", ws.handle),
+                        None => "another sidecar".to_string(),
+                    };
+                    let now = current.clone().unwrap_or_else(|| slug.clone());
+                    return Err(err(
+                        "name_reserved",
+                        409,
+                        format!(
+                            "{slug} was {was}'s name (now {}/{now}); pick another name, or resume it with `k2 sidecar new {now}`",
+                            ws.handle
+                        ),
+                    ));
+                }
+                Ok(None) => Plan::New,
+                Err(e) => return Err(err("internal", 500, e)),
+            }
+        }
         Ok(key) => {
             let canonical =
                 k2_core::workspace_session_handles::conversation_is_canonical_shared(&ws.id, &key);

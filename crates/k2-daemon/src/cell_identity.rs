@@ -71,7 +71,7 @@ pub fn identity_system_brief(identity: &CellIdentity) -> String {
         CellKind::Canonical => identity.primary.clone(),
         CellKind::Sidecar => format_address(&identity.primary, identity.sidecar_name.as_deref()),
     };
-    format!(
+    let brief = format!(
         "{IDENTITY_BRIEF_MARKER}\n\
          workspace: {}\n\
          role:      {role}\n\
@@ -79,8 +79,16 @@ pub fn identity_system_brief(identity: &CellIdentity) -> String {
          primary:   {}\n\
          session:   {}",
         identity.primary, identity.primary, identity.session_id
-    )
+    );
+    match identity.cell {
+        CellKind::Canonical => brief,
+        // S5: a sidecar's address follows its Chats name.
+        CellKind::Sidecar => format!("{brief}\n{SIDECAR_ADDRESS_NOTE}"),
+    }
 }
+
+/// One line in a sidecar's identity brief (prd-thread-survives-tab-rename S5).
+pub const SIDECAR_ADDRESS_NOTE: &str = "This address can change if the chat is renamed. Old addresses keep working. `k2 whoami` prints the current one.";
 
 /// Flag that can carry the brief. Claude / Pi: `--append-system-prompt`.
 /// Grok: `--rules`. Everyone else: None (env + whoami only).
@@ -621,6 +629,17 @@ mod tests {
         assert!(brief.contains("address:   sales/reviewer"));
         assert!(brief.contains("primary:   sales"));
         assert!(brief.contains("session:   sid"));
+        assert!(
+            brief.ends_with(SIDECAR_ADDRESS_NOTE),
+            "a sidecar learns its address can change and old ones keep working: {brief}"
+        );
+        let canonical = identity_system_brief(&CellIdentity {
+            cell: CellKind::Canonical,
+            sidecar_name: None,
+            primary: "sales".into(),
+            session_id: "sid".into(),
+        });
+        assert!(!canonical.contains(SIDECAR_ADDRESS_NOTE), "the main Chat's address is the workspace");
 
         assert_eq!(identity_argv_flag(Some("claude")), Some("--append-system-prompt"));
         assert_eq!(identity_argv_flag(Some("/usr/bin/pi")), Some("--append-system-prompt"));

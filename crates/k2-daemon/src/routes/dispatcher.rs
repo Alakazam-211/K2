@@ -9959,6 +9959,7 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
         "/cli/chat/toggle-pin" => crate::chat_routes::handle_toggle_pin(body),
         "/cli/chat/archive" => crate::chat_routes::handle_archive(body),
         "/cli/chat/restore" => crate::chat_routes::handle_restore(body),
+        "/cli/chat/release-names" => crate::chat_routes::handle_release_names(true, body),
         "/cli/sandbox/reopen" => crate::sandbox_chat_routes::handle_sandbox_reopen(body),
         "/cli/chat/migrate-ide" => crate::chat_routes::handle_migrate_ide(body),
         // Read-only seed. `is_post` is true on this arm; the handler

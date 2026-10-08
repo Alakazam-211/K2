@@ -360,6 +360,26 @@ pub enum SessionEvent {
         locked: bool,
     },
 
+    /// Thread survives a tab rename (S3/TR12): a chat's address changed
+    /// because it was renamed (or its name cleared). WORKSPACE-SCOPED.
+    /// The old address keeps working; clients swap the address they send
+    /// to and show. Never reuse the wire-frozen `SessionRenamed`.
+    ///
+    /// Wire: `{ "kind": "session_address_changed", "workspacePath":
+    /// string, "paneGroupId": string|null, "conversationId": string,
+    /// "address": string, "previousAddress": string }`.
+    SessionAddressChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        #[serde(rename = "paneGroupId")]
+        pane_group_id: Option<String>,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        address: String,
+        #[serde(rename = "previousAddress")]
+        previous_address: String,
+    },
+
     /// #677.3 — workspace tab-order persistence advanced. WORKSPACE-
     /// SCOPED. Carries the monotonic `revision` the daemon stamped on
     /// the write so concurrent clients resolve last-write-wins
@@ -680,6 +700,7 @@ impl SessionEvent {
             SessionEvent::PublishServicesChanged { .. } => "publish_services_changed",
             SessionEvent::WorkspaceResourcesChanged { .. } => "workspace_resources_changed",
             SessionEvent::TabTitleChanged { .. } => "tab_title_changed",
+            SessionEvent::SessionAddressChanged { .. } => "session_address_changed",
             SessionEvent::TabOrderChanged { .. } => "tab_order_changed",
             SessionEvent::HeartbeatStateChanged { .. } => "heartbeat_state_changed",
             SessionEvent::HeartbeatRosterChanged { .. } => "heartbeat_roster_changed",

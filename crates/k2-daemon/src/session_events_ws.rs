@@ -430,6 +430,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::ReviewQueueChanged { workspace_path: cwd } => Some(cwd),
         SessionEvent::ReviewChanged { workspace_path: cwd, .. } => Some(cwd),
         SessionEvent::TabTitleChanged { workspace_path: cwd, .. } => Some(cwd),
+        SessionEvent::SessionAddressChanged { workspace_path: cwd, .. } => Some(cwd),
         SessionEvent::TabOrderChanged { workspace_path: cwd, .. } => Some(cwd),
         SessionEvent::HeartbeatStateChanged { workspace_path: cwd, .. } => Some(cwd),
         SessionEvent::HeartbeatRosterChanged { workspace_path: cwd, .. } => Some(cwd),
@@ -724,6 +725,13 @@ mod tests {
                 tab_id: "t".into(),
                 title: "T".into(),
                 locked: false,
+            },
+            SessionEvent::SessionAddressChanged {
+                workspace_path: "/x/foo".into(),
+                pane_group_id: Some("pg".into()),
+                conversation_id: "c".into(),
+                address: "foo/reviewer".into(),
+                previous_address: "foo/1".into(),
             },
             SessionEvent::TabOrderChanged {
                 workspace_path: "/x/foo".into(),

@@ -124,6 +124,25 @@ pub fn publish_moved(mv: &k2_core::overlay::ConversationMove) {
     }
 }
 
+/// Wire collection of the "this Thread's address changed" frame.
+pub const ADDRESS_COLLECTION: &str = "address";
+
+/// A chat was renamed, so its Thread answers at a new address (TR13).
+/// Every open Thread view on the conversation (Agents, Home, Zen) swaps
+/// the address it sends to and shows; items, socket and turn stay. Wire:
+/// `{collection:"address", seq:0, id:<conversation>, address, previous}`.
+/// Not stored; app guests never see it (thread frames only).
+pub fn publish_address(conversation_id: &str, address: &str, previous: &str) {
+    publish(OverlayFrame {
+        collection: ADDRESS_COLLECTION.to_string(),
+        seq: 0,
+        id: conversation_id.to_string(),
+        doc: None,
+        activity: Some(serde_json::json!({ "address": address, "previous": previous })),
+        conversation_id: Some(conversation_id.to_string()),
+    });
+}
+
 fn on_conversation_moved(mv: &k2_core::overlay::ConversationMove) {
     log_debug!(
         "[daemon/overlay_ws] Thread moved {} -> {} ({} thread rows, {} chatter rows)",
@@ -152,6 +171,17 @@ pub fn install_move_listener() {
 }
 
 fn wire_json(frame: &OverlayFrame) -> String {
+    if frame.collection == ADDRESS_COLLECTION {
+        let payload = frame.activity.as_ref();
+        return serde_json::json!({
+            "collection": frame.collection,
+            "seq": frame.seq,
+            "id": frame.id,
+            "address": payload.and_then(|p| p.get("address")).cloned().unwrap_or(serde_json::Value::Null),
+            "previous": payload.and_then(|p| p.get("previous")).cloned().unwrap_or(serde_json::Value::Null),
+        })
+        .to_string();
+    }
     if frame.collection == MOVED_COLLECTION {
         let payload = frame.activity.as_ref();
         return serde_json::json!({

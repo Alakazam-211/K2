@@ -3091,42 +3091,139 @@ pub fn rename_session(
     session_id: &str,
     custom_name: &str,
 ) -> Result<(), String> {
-    // Blank / whitespace clears the Chats name so the durable ordinal
-    // address works again. Non-empty names must slugify as a sidecar
-    // handle: reject `/` and `:`, fail loud on collision.
+    rename_session_scoped(provider, session_id, custom_name, None).map(|_| ())
+}
+
+/// What a Chats / tab rename did to the chat's address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenameOutcome {
+    /// Workspace the rename was placed in (`None`: a disk-only chat no
+    /// workspace knows; no alias was recorded).
+    pub project_id: Option<String>,
+    pub conversation_key: String,
+    /// The workspace's pinned Chat (its address is the workspace handle
+    /// either way).
+    pub canonical: bool,
+    /// Full addresses before and after (`k2/3` → `k2/reviewer`).
+    pub previous_address: Option<String>,
+    pub address: Option<String>,
+}
+
+impl RenameOutcome {
+    /// True when the chat now answers at a different address.
+    pub fn address_changed(&self) -> bool {
+        !self.canonical
+            && self.address.is_some()
+            && self.previous_address.is_some()
+            && self.address != self.previous_address
+    }
+}
+
+/// Rename a chat (Chats sidebar / tab strip) in one DB transaction
+/// (TR4): read the old name, check uniqueness and reserved names, write
+/// the new name, retire the old one as an alias of this chat.
+///
+/// `project_path` (sent by the app) places the chat in a workspace
+/// before the `LIMIT 1` reverse lookup, which picks an arbitrary one when
+/// an id sits in two. Blank clears the name so the ordinal is the address.
+pub fn rename_session_scoped(
+    provider: &str,
+    session_id: &str,
+    custom_name: &str,
+    project_path: Option<&str>,
+) -> Result<RenameOutcome, String> {
+    use crate::workspace_session_handles as handles;
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id required".to_string());
+    }
     let trimmed = custom_name.trim();
-    let stored = if trimmed.is_empty() {
-        String::new()
+    let new_slug = if trimmed.is_empty() {
+        None
     } else {
-        let slug = crate::workspace_session_handles::slugify_custom_name(custom_name)?;
-        let db = crate::db::shared();
-        let conn = db.lock();
-        if let Some(project_id) =
-            crate::workspace_session_handles::project_id_for_session_id(&conn, session_id)?
-        {
-            crate::workspace_session_handles::ensure_slug_unique_in_workspace(
-                &conn,
-                &project_id,
-                session_id,
-                &slug,
-            )?;
-        } else {
-            crate::workspace_session_handles::ensure_slug_unique_among_names(
-                &conn, session_id, &slug,
-            )?;
-        }
-        trimmed.to_string()
+        Some(handles::slugify_custom_name(custom_name)?)
     };
     let db = crate::db::shared();
     let conn = db.lock();
-    conn.execute(
-        "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
-         VALUES (?1, ?2, ?3, 0, unixepoch()) \
-         ON CONFLICT(provider, session_id) DO UPDATE SET custom_name = ?3, updated_at = unixepoch()",
-        rusqlite::params![provider, session_id, stored],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    conn.execute_batch("SAVEPOINT chat_rename")
+        .map_err(|e| format!("rename begin: {e}"))?;
+    let result = (|| -> Result<RenameOutcome, String> {
+        let project_id = match project_path.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(path) => crate::workspace::agent_identity::resolve_project_id(&conn, path),
+            None => None,
+        };
+        let project_id = match project_id {
+            Some(p) => Some(p),
+            None => handles::project_id_for_session_id(&conn, session_id)?,
+        };
+        let canonical = project_id
+            .as_deref()
+            .is_some_and(|p| handles::conversation_is_canonical(&conn, p, session_id));
+        let (old_slug, previous_address) = match project_id.as_deref() {
+            Some(p) => (
+                handles::address_slug_for(&conn, Some(p), session_id)?,
+                handles::current_address_for(&conn, p, session_id)?,
+            ),
+            None => (None, None),
+        };
+        if let Some(slug) = new_slug.as_deref() {
+            match project_id.as_deref() {
+                Some(p) => handles::ensure_slug_unique_in_workspace(&conn, p, session_id, slug)?,
+                None => handles::ensure_slug_unique_among_names(&conn, session_id, slug)?,
+            }
+        }
+        conn.execute(
+            "INSERT INTO chat_session_names (provider, session_id, custom_name, pinned, updated_at) \
+             VALUES (?1, ?2, ?3, 0, unixepoch()) \
+             ON CONFLICT(provider, session_id) DO UPDATE SET custom_name = ?3, updated_at = unixepoch()",
+            rusqlite::params![provider, session_id, trimmed],
+        )
+        .map_err(|e| e.to_string())?;
+        let mut address = None;
+        if let Some(p) = project_id.as_deref() {
+            // A rename re-claims: the chat answers at its new name.
+            conn.execute(
+                "DELETE FROM workspace_session_unclaimed_names \
+                 WHERE project_id = ?1 AND conversation_key = ?2",
+                rusqlite::params![p, session_id],
+            )
+            .map_err(|e| e.to_string())?;
+            let now_slug = handles::address_slug_for(&conn, Some(p), session_id)?;
+            if let Some(old) = old_slug.as_deref() {
+                if now_slug.as_deref() != Some(old) {
+                    handles::retire_slug(&conn, p, old, session_id)?;
+                }
+            }
+            if let Some(now) = now_slug.as_deref() {
+                // Its own retired name is current again.
+                conn.execute(
+                    "DELETE FROM workspace_session_handle_aliases \
+                     WHERE project_id = ?1 AND slug = ?2 AND conversation_key = ?3",
+                    rusqlite::params![p, now, session_id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            address = handles::current_address_for(&conn, p, session_id)?;
+        }
+        Ok(RenameOutcome {
+            project_id,
+            conversation_key: session_id.to_string(),
+            canonical,
+            previous_address,
+            address,
+        })
+    })();
+    match result {
+        Ok(outcome) => {
+            conn.execute_batch("RELEASE chat_rename")
+                .map_err(|e| format!("rename commit: {e}"))?;
+            Ok(outcome)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO chat_rename; RELEASE chat_rename");
+            Err(e)
+        }
+    }
 }
 
 pub fn get_pinned() -> Result<Vec<String>, String> {
@@ -5332,6 +5429,18 @@ mod tests {
         assert_eq!(archived.title.as_str(), "Transcript Archive Title");
         assert_eq!(archived.custom_name.as_deref(), Some("Custom Archive Name"));
         assert!(archived.archived);
+        // Leave no archived row behind: `list_all_sessions(None)` lists every
+        // archived row in the shared test DB, so the clean-home test failed
+        // whenever this one ran first.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "DELETE FROM chat_session_names WHERE provider = 'claude' AND session_id = ?1",
+                rusqlite::params![arch_sid],
+            )
+            .expect("clean archived row");
+        }
     }
 
     #[test]

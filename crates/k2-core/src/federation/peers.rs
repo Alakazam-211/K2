@@ -2,8 +2,9 @@
 //!
 //! Phase 1 of `prd-cross-server-agent-comms.md`. A **federated peer** is
 //! another K2 daemon, identified by the **SHA-256 fingerprint of its ECDSA
-//! P-256 SubjectPublicKeyInfo (SPKI)** — the SAME key `tunnel::tls` already
-//! persists at `~/.k2/tunnel-key.pem` (no new key material). The store pins
+//! P-256 SubjectPublicKeyInfo (SPKI)**. Our own key is the federation identity
+//! at `~/.k2/federation/identity.pem` (`federation::identity`; before 0.45.2
+//! it was the tunnel key, which the identity was copied from). The store pins
 //! each peer's public key (TOFU, SSH-`authorized_keys` ergonomics) and a
 //! **default-deny capability set**.
 //!
@@ -197,7 +198,7 @@ impl PeerStore {
     }
 
     /// Persist the store atomically (tmp+rename) with 0600 perms. Mirrors
-    /// `tunnel::tls::load_or_generate_keypair`'s write discipline.
+    /// the other `~/.k2` secret stores' write discipline.
     pub fn save(&self) -> Result<(), String> {
         let stored = StoredPeers {
             version: STORE_VERSION,
@@ -336,11 +337,10 @@ pub fn fingerprint_of_spki_pem(pem: &str) -> Result<String, String> {
     Ok(fingerprint_of_spki_der(&der))
 }
 
-/// This daemon's own federation fingerprint, derived from the EXISTING tunnel
-/// keypair (`tunnel::tls::load_or_generate_keypair`). No new key material.
+/// This daemon's own federation fingerprint, derived from the federation
+/// identity key ([`crate::federation::identity::load_or_create`]).
 pub fn local_fingerprint() -> Result<String, String> {
-    let kp = crate::tunnel::tls::load_or_generate_keypair()?;
-    Ok(fingerprint_of_spki_der(&kp.public_key_der()))
+    crate::federation::identity::fingerprint()
 }
 
 /// Decode a PEM `PUBLIC KEY` (SPKI) block to its DER bytes. Fails loud on a
@@ -400,7 +400,7 @@ fn restrict_mode(_file: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::tunnel::test_support::with_temp_home;
-    use crate::tunnel::tls::load_or_generate_keypair;
+    use crate::federation::identity::load_or_create;
 
     /// Mint a fresh, unrelated SPKI PEM to act as a "peer" public key.
     fn fresh_peer_pem() -> String {
@@ -580,12 +580,12 @@ mod tests {
     }
 
     #[test]
-    fn local_fingerprint_matches_tunnel_keypair() {
+    fn local_fingerprint_matches_the_federation_identity() {
         with_temp_home(|| {
-            let kp = load_or_generate_keypair().expect("keypair");
+            let kp = load_or_create().expect("keypair");
             let expected = fingerprint_of_spki_der(&kp.public_key_der());
             let got = local_fingerprint().expect("local fp");
-            assert_eq!(got, expected, "local fp must derive from the tunnel key");
+            assert_eq!(got, expected, "local fp must derive from the federation identity");
         });
     }
 }

@@ -4,8 +4,8 @@
 //!
 //! Phase 1 of `prd-cross-server-agent-comms.md`. These are **pure functions**
 //! with no I/O and no network: [`seal`] wraps a signal in a
-//! [`FederationEnvelope`] signed by the daemon's EXISTING tunnel keypair
-//! ([`crate::tunnel::tls::load_or_generate_keypair`]); [`open`] verifies an
+//! [`FederationEnvelope`] signed by the box's federation identity key
+//! ([`crate::federation::identity::load_or_create`]); [`open`] verifies an
 //! envelope against a **pinned** peer SPKI and returns the inner signal.
 //!
 //! ## What "verify" enforces (Phase 1)
@@ -241,7 +241,7 @@ pub fn open(bytes: &[u8], sender_pinned_pubkey_pem: &str) -> Result<AgentSignal,
 mod tests {
     use super::*;
     use crate::awareness::{AgentAddress, SignalKind, WorkspaceId};
-    use crate::tunnel::tls::load_or_generate_keypair;
+    use crate::federation::identity::load_or_create;
     use crate::tunnel::test_support::with_temp_home;
 
     fn sample_signal() -> AgentSignal {
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn seal_open_round_trip() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let my_pem = my_key.public_key_pem();
             let signal = sample_signal();
 
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn reseal_preserves_msg_uuid_and_signal_with_fresh_nonce_and_at() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let my_pem = my_key.public_key_pem();
             let signal = sample_signal();
 
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn reseal_rejects_foreign_envelope() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let bytes = seal(&sample_signal(), &my_key, "rosson", 8).expect("seal");
             let other = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
                 .expect("other key");
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn open_rejects_tampered_payload() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let my_pem = my_key.public_key_pem();
             let bytes = seal(&sample_signal(), &my_key, "rosson", 8).expect("seal");
 
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn open_rejects_wrong_unpinned_key() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let bytes = seal(&sample_signal(), &my_key, "rosson", 8).expect("seal");
 
             // A different key the envelope was NOT signed with. Its fingerprint
@@ -357,7 +357,7 @@ mod tests {
         // selector check passes against the attacker's pinned key) but whose sig
         // was made by a different key → signature verification must fail.
         with_temp_home(|| {
-            let real_key = load_or_generate_keypair().expect("real keypair");
+            let real_key = load_or_create().expect("real keypair");
             let attacker = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
                 .expect("attacker key");
 
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn open_rejects_malformed_pinned_key() {
         with_temp_home(|| {
-            let my_key = load_or_generate_keypair().expect("keypair");
+            let my_key = load_or_create().expect("keypair");
             let bytes = seal(&sample_signal(), &my_key, "rosson", 8).expect("seal");
             let err = open(&bytes, "-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----")
                 .expect_err("empty pinned key must be rejected");

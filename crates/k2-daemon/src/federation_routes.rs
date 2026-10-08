@@ -142,8 +142,9 @@ pub fn handle_pair_confirm(body: &[u8]) -> CliResponse {
 /// `GET /cli/federation/pubkey` — OWNER-gated (dispatcher enforces). Returns
 /// THIS daemon's federation identity so a peer can PIN it during pairing:
 ///
-///   - `public_key_pem` — the SPKI PEM of the existing tunnel keypair (no new
-///     key material; same key `seal`/`pair` derive their fingerprint from).
+///   - `public_key_pem` — the SPKI PEM of the federation identity key
+///     (`~/.k2/federation/identity.pem`; the key `seal`/`pair` derive their
+///     fingerprint from).
 ///   - `fingerprint`    — `sha256(SPKI DER)` hex (== [`federation::local_fingerprint`]).
 ///   - `subdomain`      — this daemon's tunnel subdomain (or `""` when none).
 ///
@@ -151,7 +152,7 @@ pub fn handle_pair_confirm(body: &[u8]) -> CliResponse {
 /// holds an owner token for each) so it can present each side's key to the
 /// other and confirm the SAS programmatically — no human out-of-band step.
 pub fn handle_pubkey() -> CliResponse {
-    let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
+    let key = match k2_core::federation::identity::load_or_create() {
         Ok(k) => k,
         Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
     };
@@ -665,7 +666,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         }
     }
 
-    let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
+    let key = match k2_core::federation::identity::load_or_create() {
         Ok(k) => k,
         Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
     };
@@ -1301,7 +1302,7 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         );
     }
 
-    let key = match k2_core::tunnel::tls::load_or_generate_keypair() {
+    let key = match k2_core::federation::identity::load_or_create() {
         Ok(k) => k,
         Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
     };
@@ -1382,7 +1383,7 @@ fn fetch_peer_roster(
     peer: &k2_core::federation::FederationPeer,
     timeout: std::time::Duration,
 ) -> Result<serde_json::Value, String> {
-    let key = k2_core::tunnel::tls::load_or_generate_keypair()
+    let key = k2_core::federation::identity::load_or_create()
         .map_err(|e| format!("load keypair: {e}"))?;
     let ts = chrono::Utc::now().timestamp();
     let (fp, sig) = roster::sign_roster_request(&key, ts)?;
@@ -1816,7 +1817,7 @@ mod tests {
     fn inbound_rejects_unknown_peer() {
         with_temp_home(|| {
             // Seal an envelope from a key nobody pinned.
-            let key = k2_core::tunnel::tls::load_or_generate_keypair().unwrap();
+            let key = k2_core::federation::identity::load_or_create().unwrap();
             let signal = AgentSignal::new(
                 AgentAddress::Broadcast,
                 AgentAddress::Agent {
@@ -2627,7 +2628,7 @@ mod tests {
         store.grant(&fp, "inbound");
         store.save().unwrap();
 
-        let local_key = k2_core::tunnel::tls::load_or_generate_keypair().unwrap();
+        let local_key = k2_core::federation::identity::load_or_create().unwrap();
         let local_pem = local_key.public_key_pem();
 
         // Run the blocking send on a worker (reqwest::blocking can't run on the
@@ -2706,7 +2707,7 @@ mod tests {
         store.grant(&fp, "inbound");
         store.save().unwrap();
 
-        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+        let local_pem = k2_core::federation::identity::load_or_create().unwrap().public_key_pem();
 
         let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         // Agent-initiated send → satisfy the GAP #3 connection gate first.
@@ -2795,7 +2796,7 @@ mod tests {
         store.grant(&fp, "inbound");
         store.save().unwrap();
 
-        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+        let local_pem = k2_core::federation::identity::load_or_create().unwrap().public_key_pem();
 
         let inbound_base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &base);
         // Satisfy the GAP #3 connection gate first.
@@ -3819,7 +3820,7 @@ mod tests {
             None,
         )
         .expect("add remote connection");
-        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+        let local_pem = k2_core::federation::identity::load_or_create().unwrap().public_key_pem();
 
         let resp = send_as_agent(&src_uuid, format!("{fp}::ws-b::bob"), "stamp check").await;
         assert_eq!(resp.status, "200 OK", "{}", resp.body);

@@ -11,8 +11,9 @@
 //!     **asymmetric-key principal**, never a `connect_user`/owner token.
 //!   - [`envelope`] — pure [`seal`](envelope::seal) / [`open`](envelope::open)
 //!     of an [`AgentSignal`](crate::awareness::AgentSignal) into a signed
-//!     envelope, signed by the **existing daemon tunnel keypair**
-//!     ([`crate::tunnel::tls::load_or_generate_keypair`]) and verified against a
+//!     envelope, signed by the box's **federation identity key**
+//!     ([`identity::load_or_create`], `~/.k2/federation/identity.pem`; 0.45.2
+//!     split it from the tunnel TLS key) and verified against a
 //!     peer's **pinned** ECDSA P-256 public key.
 //!
 //! ## What is deliberately NOT here (later phases — see the PRD phase map)
@@ -35,6 +36,7 @@
 
 pub mod dial;
 pub mod envelope;
+pub mod identity;
 pub mod ingress;
 pub mod outbox;
 pub mod pairing;

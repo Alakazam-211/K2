@@ -26273,11 +26273,15 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
         pubkey)
             # Export THIS box's federation identity — the SPKI public key PEM a
             # peer pins via `k2 fed pair-request --pubkey`. Pure-CLI: derive it
-            # from the on-box ECDSA P-256 tunnel key with openssl, so it works
+            # from the on-box ECDSA P-256 identity key with openssl, so it works
             # even when K2_FEDERATION is off (you need the key to START pairing).
             # fingerprint = sha256(SPKI DER) hex — matches the daemon's
             # federation::peers::fingerprint_of_spki_der.
-            local key_file="$K2_HOME/tunnel-key.pem"
+            # 0.45.2: the identity is ~/.k2/federation/identity.pem. Before the
+            # daemon's first 0.45.2 boot it does not exist yet; the daemon will
+            # copy tunnel-key.pem into it, so that key IS the identity until then.
+            local key_file="$K2_HOME/federation/identity.pem"
+            [ -f "$key_file" ] || key_file="$K2_HOME/tunnel-key.pem"
             local want="${1:-}"
             if [ ! -f "$key_file" ]; then
                 echo "k2 fed pubkey: no federation key at $key_file (start the daemon once to generate it)" >&2

@@ -371,7 +371,7 @@ pub fn drain_peer(fp: &str) -> DrainOutcome {
 /// Re-seal a queued envelope with our key and overwrite the queued file
 /// (same msg_uuid ⇒ same path) so the fresh seal is the durable copy.
 fn reseal_queued(fp: &str, old_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let key = k2_core::tunnel::tls::load_or_generate_keypair()
+    let key = k2_core::federation::identity::load_or_create()
         .map_err(|e| format!("load keypair: {e}"))?;
     let new_bytes = federation::reseal(old_bytes, &key).map_err(|e| e.to_string())?;
     outbox::enqueue(fp, &new_bytes)?;
@@ -646,7 +646,7 @@ mod tests {
     /// Seal `text` (from our own key) and enqueue it for `fp`, with the
     /// signal's order key pinned to `at`.
     fn enqueue_msg(fp: &str, text: &str, at: chrono::DateTime<chrono::Utc>) {
-        let key = k2_core::tunnel::tls::load_or_generate_keypair().unwrap();
+        let key = k2_core::federation::identity::load_or_create().unwrap();
         let mut signal = AgentSignal::new(
             AgentAddress::Agent {
                 workspace: WorkspaceId("ws-a".into()),
@@ -898,7 +898,7 @@ mod tests {
         // the live two-daemon e2e caught exactly this).
         assert_ne!(sent.payload.nonce, orig_env.payload.nonce, "nonce must rotate per dial");
         // And it must verify against OUR key (a real re-sign, not a splice).
-        let key = k2_core::tunnel::tls::load_or_generate_keypair().unwrap();
+        let key = k2_core::federation::identity::load_or_create().unwrap();
         federation::open(&wire, &key.public_key_pem()).expect("resealed envelope must open");
     }
 

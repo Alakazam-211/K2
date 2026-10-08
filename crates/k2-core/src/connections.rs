@@ -2459,7 +2459,7 @@ mod tests {
             // "trusted peer" for host self.k2.dev — connecting to it must
             // fail closed as self-peer.
             let local_fp = local_fingerprint().expect("local fp");
-            let local_pem = crate::tunnel::tls::load_or_generate_keypair()
+            let local_pem = crate::federation::identity::load_or_create()
                 .expect("local key")
                 .public_key_pem();
             let mut store = PeerStore::default();

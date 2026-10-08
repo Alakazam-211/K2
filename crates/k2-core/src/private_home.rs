@@ -43,6 +43,7 @@ pub const SECRET_DIRS: &[&str] = &[
     "run",
     "mail-outbound",
     "federation-outbox",
+    "federation",
     "wiki-public-chat",
     "skin",
 ];

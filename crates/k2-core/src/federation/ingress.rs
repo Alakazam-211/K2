@@ -271,7 +271,7 @@ mod tests {
     use crate::federation::envelope::{seal, FederationEnvelope};
     use crate::federation::peers::{FederationPeer, PeerStore, PeerTrust};
     use crate::tunnel::test_support::with_temp_home;
-    use crate::tunnel::tls::load_or_generate_keypair;
+    use crate::federation::identity::load_or_create;
 
     fn signal_to(agent: &str, text: &str) -> AgentSignal {
         AgentSignal::new(
@@ -300,7 +300,7 @@ mod tests {
     fn valid_envelope_from_trusted_peer_returns_verified_signal() {
         with_temp_home(|| {
             crate::db::init_for_tests();
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let (store, fp) = trusted_store(&pem);
             let cache = NonceCache::new();
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn rejects_unknown_peer() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let bytes = seal(&signal_to("bob", "hi"), &key, "peer", 8).expect("seal");
             let store = PeerStore::default(); // nobody pinned
             let cache = NonceCache::new();
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn rejects_untrusted_pending_peer() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let mut store = PeerStore::default();
             // Pinned + granted but left Pending → fail-closed.
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn rejects_trusted_peer_without_capability() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let mut store = PeerStore::default();
             let fp = store.upsert(FederationPeer::pin("p", "p", &pem).expect("pin"));
@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn rejects_bad_signature() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();
@@ -394,7 +394,7 @@ mod tests {
     fn rejects_replayed_nonce() {
         with_temp_home(|| {
             crate::db::init_for_tests();
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn rejects_ttl_zero() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn rejects_self_in_trace_loop() {
         with_temp_home(|| {
-            let key = load_or_generate_keypair().expect("keypair");
+            let key = load_or_create().expect("keypair");
             let pem = key.public_key_pem();
             let (store, _fp) = trusted_store(&pem);
             let cache = NonceCache::new();

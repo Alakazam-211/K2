@@ -511,12 +511,13 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
             Err(e) => return Err(format!("delete {}: {e}", path.display())),
         }
     }
-    // `tunnel-key.pem` STAYS (0.45.2). It is this box's FEDERATION identity
-    // (`federation::peers::local_fingerprint`, `k2 fed pubkey`) as well as
-    // the key the tunnel certificate is issued for. It is no credential for
-    // the released name — the cert broker and the relay authenticate the
-    // bearer token, which IS deleted — so deleting it bought nothing and
-    // silently broke every federation peer that pinned this box.
+    // `tunnel-key.pem` STAYS (0.45.2). It is the key the tunnel certificate
+    // is issued for, and on a box that has not loaded its federation
+    // identity yet it is still the source `federation::identity` copies
+    // (`~/.k2/federation/identity.pem`): deleting it then would change the
+    // fingerprint every peer pinned. It is no credential for the released
+    // name: the cert broker and the relay authenticate the bearer token,
+    // which IS deleted.
 
     Ok(ReleaseReport {
         subdomain,

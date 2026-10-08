@@ -1198,6 +1198,18 @@ async fn async_main() {
     // federation is off or every queue is empty.
     let _federation_drain_handle = federation_drain::spawn();
 
+    // 0.45.2: federation has its own identity key. Load it once at boot so
+    // the one-time copy from tunnel-key.pem happens before anything else
+    // could replace the tunnel key (same fingerprint, no peer re-pairs).
+    match k2_core::federation::identity::load_or_create_with_source() {
+        Ok((_, k2_core::federation::identity::IdentitySource::Existing)) => {}
+        Ok((_, source)) => k2_core::log_debug!(
+            "[federation] identity key created at {} ({source:?})",
+            k2_core::federation::identity::identity_path().display()
+        ),
+        Err(e) => k2_core::log_debug!("[federation] WARN: identity key unavailable: {e}"),
+    }
+
     // K2 Mail S2 (prd-email-server-v1 §6.3) — the mail-domain DNS
     // verification poller: pending/broken domains re-check every ~5
     // minutes (propagation retries never fail-fast, pre-mortem #4),

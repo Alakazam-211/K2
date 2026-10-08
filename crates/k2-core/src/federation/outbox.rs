@@ -349,7 +349,7 @@ mod tests {
     use crate::awareness::{AgentAddress, AgentSignal, SignalKind, WorkspaceId};
     use crate::federation::envelope::seal;
     use crate::tunnel::test_support::with_temp_home;
-    use crate::tunnel::tls::load_or_generate_keypair;
+    use crate::federation::identity::load_or_create;
 
     fn sealed_bytes() -> Vec<u8> {
         sealed_bytes_at(chrono::Utc::now())
@@ -358,7 +358,7 @@ mod tests {
     /// Seal a fresh signal whose creation time (`signal.at` — the per-peer
     /// order key) is pinned to `at`.
     fn sealed_bytes_at(at: chrono::DateTime<chrono::Utc>) -> Vec<u8> {
-        let key = load_or_generate_keypair().expect("keypair");
+        let key = load_or_create().expect("keypair");
         let mut signal = AgentSignal::new(
             AgentAddress::Agent {
                 workspace: WorkspaceId("a".into()),

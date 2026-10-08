@@ -1338,6 +1338,8 @@ fn peer_host(peer: &k2_core::federation::FederationPeer) -> String {
 pub fn post_inbound(base: &str, envelope_bytes: &[u8]) -> Result<String, String> {
     let url = format!("{base}/cli/federation/inbound");
     let client = reqwest::blocking::Client::builder()
+        // Never follow a redirect: a peer must not steer us to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
@@ -1950,6 +1952,8 @@ fn get_peer_roster(
 ) -> Result<String, String> {
     let url = format!("{base}/cli/federation/roster");
     let client = reqwest::blocking::Client::builder()
+        // Never follow a redirect: a peer must not steer us to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
         .build()
         .map_err(|e| format!("build http client: {e}"))?;

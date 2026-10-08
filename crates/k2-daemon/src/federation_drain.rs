@@ -447,6 +447,8 @@ fn classify(status: u16, body: &str) -> Disposition {
 fn post_inbound_status(base: &str, envelope_bytes: &[u8]) -> Result<(u16, String), String> {
     let url = format!("{base}/cli/federation/inbound");
     let client = reqwest::blocking::Client::builder()
+        // Never follow a redirect: a peer must not steer us to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;

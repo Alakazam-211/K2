@@ -28,7 +28,12 @@
 //! `issued_at` older than 7 days → 409
 //! `stale_notice`, more than 5 min ahead → 400 `issued_in_future`; `seq` at or
 //! below the last accepted seq from that peer → 409 `replay`. Then, per field
-//! that changed (`old != new`, `new` non-empty): the stored value is updated
+//! that changed (`old != new`, `new` non-empty) the new value is validated
+//! first: a subdomain must be a Connect label (or `<label>.k2.dev`), never a
+//! URL; a base URL must be `http(s)://host[:port]` and not loopback,
+//! link-local, unspecified or multicast (400 `bad_address`); an address that
+//! another pinned peer or this server itself uses is refused (409
+//! `address_conflict`). Then the stored value is updated
 //! when it equals `old`; left alone when empty (that peer does not route by
 //! that field) or already `new`; a stored value that is neither is a
 //! conflict. Only conflicts and no update → 409 `address_mismatch`.
@@ -191,6 +196,8 @@ pub enum NoticeError {
     Key(String),
     BadSignature,
     BadTime(String),
+    BadAddress(String),
+    AddressConflict(String),
     Stale,
     InFuture,
     Replay { seq: u64, last: u64 },
@@ -203,13 +210,17 @@ impl NoticeError {
     /// HTTP status line for the receiver route.
     pub fn status(&self) -> &'static str {
         match self {
-            Self::Decode(_) | Self::UnsupportedVersion(_) | Self::BadTime(_) | Self::InFuture => {
-                "400 Bad Request"
-            }
+            Self::Decode(_)
+            | Self::UnsupportedVersion(_)
+            | Self::BadTime(_)
+            | Self::InFuture
+            | Self::BadAddress(_) => "400 Bad Request",
             Self::UnknownPeer | Self::NotTrusted | Self::Key(_) | Self::BadSignature | Self::WrongRecipient => {
                 "403 Forbidden"
             }
-            Self::Stale | Self::Replay { .. } | Self::AddressMismatch => "409 Conflict",
+            Self::Stale | Self::Replay { .. } | Self::AddressMismatch | Self::AddressConflict(_) => {
+                "409 Conflict"
+            }
             Self::Store(_) => "500 Internal Server Error",
         }
     }
@@ -223,6 +234,8 @@ impl NoticeError {
             Self::NotTrusted => "not_trusted",
             Self::Key(_) | Self::BadSignature => "bad_signature",
             Self::BadTime(_) => "bad_issued_at",
+            Self::BadAddress(_) => "bad_address",
+            Self::AddressConflict(_) => "address_conflict",
             Self::Stale => "stale_notice",
             Self::InFuture => "issued_in_future",
             Self::Replay { .. } => "replay",
@@ -243,6 +256,8 @@ impl std::fmt::Display for NoticeError {
             Self::Key(e) => write!(f, "pinned key: {e}"),
             Self::BadSignature => write!(f, "signature does not verify against the pinned key"),
             Self::BadTime(e) => write!(f, "issued_at is not RFC 3339: {e}"),
+            Self::BadAddress(e) => write!(f, "the new address is not acceptable: {e}"),
+            Self::AddressConflict(e) => write!(f, "the new address is already in use here: {e}"),
             Self::Stale => write!(f, "notice is older than {MAX_AGE_DAYS} days"),
             Self::InFuture => write!(f, "notice is issued more than {MAX_FUTURE_SECS}s in the future"),
             Self::Replay { seq, last } => {
@@ -311,13 +326,108 @@ fn field_step(stored: &str, old: &str, new: &str, same: fn(&str, &str) -> bool) 
 pub struct LocalIdentity {
     /// This server's federation fingerprint.
     pub fingerprint: String,
+    /// This server's own address: a peer may not move onto it.
+    pub address: PeerAddress,
 }
 
 impl LocalIdentity {
-    /// This server: its identity-key fingerprint.
+    /// This server: its identity-key fingerprint and current address.
     pub fn current() -> Result<Self, String> {
-        Ok(Self { fingerprint: super::identity::fingerprint()? })
+        Ok(Self { fingerprint: super::identity::fingerprint()?, address: local_address() })
     }
+}
+
+/// A Connect label (`[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`), optionally
+/// followed by `.k2.dev`. Never a URL, a host:port or another zone.
+fn valid_connect_subdomain(s: &str) -> bool {
+    let s = s.trim().to_ascii_lowercase();
+    let label = s.strip_suffix(".k2.dev").unwrap_or(&s);
+    let b = label.as_bytes();
+    !b.is_empty()
+        && b.len() <= 63
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && b[0] != b'-'
+        && b[b.len() - 1] != b'-'
+}
+
+/// The host part of a base URL (`[v6]` brackets and `:port` removed).
+fn url_host(url: &str) -> String {
+    let hp = super::dial::host_port(url);
+    if let Some(rest) = hp.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or_default().to_string();
+    }
+    match hp.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => h.to_string(),
+        _ => hp,
+    }
+}
+
+fn forbidden_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_unspecified() || v4.is_multicast() || v4.is_link_local() || v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return forbidden_ip(IpAddr::V4(v4));
+            }
+            v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Validate a base URL a notice asks us to dial. Returns it normalized.
+fn checked_base_url(raw: &str) -> Result<String, NoticeError> {
+    let url = super::dial::normalize_base_url(raw).map_err(NoticeError::BadAddress)?;
+    super::dial::assert_lan_http(&url).map_err(NoticeError::BadAddress)?;
+    if url.contains('@') || url.trim_start_matches("http://").trim_start_matches("https://").contains('/') {
+        return Err(NoticeError::BadAddress("a base URL is scheme://host[:port] only".to_string()));
+    }
+    let host = url_host(&url).to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return Err(NoticeError::BadAddress(format!("{host:?} is not a routable host")));
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if forbidden_ip(ip) {
+            return Err(NoticeError::BadAddress(format!(
+                "{ip} is a loopback, link-local, unspecified or multicast address"
+            )));
+        }
+    }
+    Ok(url)
+}
+
+/// Validate the fields a notice changes and refuse an address another
+/// pinned peer or this server uses.
+fn check_new_address(
+    store: &PeerStore,
+    sender: &str,
+    n: &AddressNotice,
+    local: &LocalIdentity,
+) -> Result<(), NoticeError> {
+    let new = &n.new_address;
+    if !new.subdomain.trim().is_empty() && !valid_connect_subdomain(&new.subdomain) {
+        return Err(NoticeError::BadAddress(format!(
+            "subdomain {:?} is not a K2 Connect name",
+            new.subdomain
+        )));
+    }
+    let base = if new.base_url.trim().is_empty() { None } else { Some(checked_base_url(&new.base_url)?) };
+    let sub_taken = |s: &str| !new.subdomain.trim().is_empty() && !s.trim().is_empty() && same_subdomain(s, &new.subdomain);
+    let base_taken = |b: &str| base.as_deref().is_some_and(|nb| !b.trim().is_empty() && same_base(b, nb));
+    if sub_taken(&local.address.subdomain) || base_taken(&local.address.base_url) {
+        return Err(NoticeError::AddressConflict("it is this server's own address".to_string()));
+    }
+    for p in store.list().iter().filter(|p| p.fingerprint != sender) {
+        if sub_taken(&p.subdomain) || base_taken(&p.base_url) {
+            return Err(NoticeError::AddressConflict(format!(
+                "another pinned peer ({}) uses it",
+                p.fingerprint.chars().take(16).collect::<String>()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Receiver: verify `body` and apply it to `store` (the caller saves the
@@ -355,6 +465,7 @@ pub fn apply(
     if n.seq <= peer.address_seq {
         return Err(NoticeError::Replay { seq: n.seq, last: peer.address_seq });
     }
+    check_new_address(store, &n.fingerprint, n, local)?;
 
     let previous = PeerAddress { subdomain: peer.subdomain.clone(), base_url: peer.base_url.clone() };
     let mut current = previous.clone();
@@ -370,7 +481,7 @@ pub fn apply(
     }
     match field_step(&peer.base_url, &n.old_address.base_url, &n.new_address.base_url, same_base) {
         FieldStep::Update => {
-            current.base_url = super::dial::trim_base(&n.new_address.base_url);
+            current.base_url = checked_base_url(&n.new_address.base_url)?;
             changed.push("base_url");
         }
         FieldStep::Conflict => conflicts.push("base_url"),
@@ -802,7 +913,7 @@ mod tests {
     const LOCAL_FP: &str = "local-fp";
 
     fn local() -> LocalIdentity {
-        LocalIdentity { fingerprint: LOCAL_FP.to_string() }
+        LocalIdentity { fingerprint: LOCAL_FP.to_string(), address: PeerAddress::default() }
     }
 
     fn keypair() -> KeyPair {
@@ -888,6 +999,85 @@ mod tests {
         assert_eq!(store.get(&fo).expect("other"), &other_before);
     }
 
+    fn moved_to(sub: &str, base: &str) -> (PeerStore, String, Vec<u8>) {
+        let k = keypair();
+        let mut store = PeerStore::default();
+        let f = trusted(&mut store, &k, "afs", "http://192.168.1.5:38471");
+        let s = sign(&notice(&k, ("afs", "http://192.168.1.5:38471"), (sub, base), 9, Utc::now()), &k).expect("sign");
+        (store, f, body(&s))
+    }
+
+    #[test]
+    fn a_new_subdomain_must_be_a_connect_label() {
+        for bad in ["http://127.0.0.1:38471", "https://evil.example", "evil.example.com", "a:1", "-x", "x_y", "a/b"] {
+            let (mut store, f, b) = moved_to(bad, "");
+            let before = store.get(&f).expect("peer").clone();
+            let err = apply(&mut store, &b, &local(), Utc::now()).expect_err(bad);
+            assert!(matches!(err, NoticeError::BadAddress(_)), "{bad}: {err:?}");
+            assert_eq!(err.status(), "400 Bad Request");
+            assert_eq!(store.get(&f).expect("peer"), &before, "{bad}");
+        }
+        for good in ["k2n1-m4", "K2N1-M4.k2.dev", "a"] {
+            let (mut store, _, b) = moved_to(good, "");
+            apply(&mut store, &b, &local(), Utc::now()).unwrap_or_else(|e| panic!("{good}: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_new_base_url_cannot_point_at_loopback_link_local_or_odd_hosts() {
+        for bad in [
+            "http://127.0.0.1:38471",
+            "http://localhost:38471",
+            "http://0.0.0.0:38471",
+            "http://169.254.169.254",
+            "http://224.0.0.1:38471",
+            "http://[::1]:38471",
+            "http://[fe80::1]:38471",
+            "http://[::ffff:127.0.0.1]:38471",
+            "ftp://192.168.1.9",
+            "http://192.168.1.9:38471/path",
+            "http://user@192.168.1.9:38471",
+            "https://192.168.1.9:38471",
+        ] {
+            let (mut store, f, b) = moved_to("afs", bad);
+            let before = store.get(&f).expect("peer").clone();
+            let err = apply(&mut store, &b, &local(), Utc::now()).expect_err(bad);
+            assert!(matches!(err, NoticeError::BadAddress(_)), "{bad}: {err:?}");
+            assert_eq!(store.get(&f).expect("peer"), &before, "{bad}");
+        }
+        for good in ["http://192.168.1.77:38471", "http://100.101.102.103:38471", "http://box.tail1.ts.net:38471"] {
+            let (mut store, f, b) = moved_to("afs", good);
+            apply(&mut store, &b, &local(), Utc::now()).unwrap_or_else(|e| panic!("{good}: {e}"));
+            assert_eq!(store.get(&f).expect("peer").base_url, good);
+        }
+    }
+
+    #[test]
+    fn a_peer_cannot_take_another_peers_or_this_servers_address() {
+        // Another pinned peer's subdomain.
+        let (mut store, f, b) = moved_to("bravo", "");
+        trusted(&mut store, &keypair(), "bravo", "");
+        let err = apply(&mut store, &b, &local(), Utc::now()).expect_err("taken");
+        assert!(matches!(err, NoticeError::AddressConflict(_)), "{err:?}");
+        assert_eq!(err.status(), "409 Conflict");
+        assert_eq!(err.code(), "address_conflict");
+        assert_eq!(store.get(&f).expect("peer").subdomain, "afs");
+        // Another pinned peer's LAN URL.
+        let (mut store, f, b) = moved_to("afs", "http://192.168.1.50:38471");
+        trusted(&mut store, &keypair(), "zed", "http://192.168.1.50:38471/");
+        assert!(matches!(apply(&mut store, &b, &local(), Utc::now()), Err(NoticeError::AddressConflict(_))));
+        assert_eq!(store.get(&f).expect("peer").base_url, "http://192.168.1.5:38471");
+        // This server's own name or LAN URL.
+        let me = LocalIdentity {
+            fingerprint: LOCAL_FP.to_string(),
+            address: PeerAddress::new("mine", "http://192.168.1.40:38471"),
+        };
+        let (mut store, _, b) = moved_to("mine", "");
+        assert!(matches!(apply(&mut store, &b, &me, Utc::now()), Err(NoticeError::AddressConflict(_))));
+        let (mut store, _, b) = moved_to("afs", "http://192.168.1.40:38471");
+        assert!(matches!(apply(&mut store, &b, &me, Utc::now()), Err(NoticeError::AddressConflict(_))));
+    }
+
     #[test]
     fn a_notice_for_another_server_is_refused() {
         // A notice the sender addressed to C, replayed at D (both pinned the
@@ -899,7 +1089,7 @@ mod tests {
         let mut n = notice(&k, ("afs", ""), ("evil", ""), 3, Utc::now());
         n.to_fingerprint = "fp-of-c".to_string();
         let s = sign(&n, &k).expect("sign");
-        let d = LocalIdentity { fingerprint: "fp-of-d".to_string() };
+        let d = LocalIdentity { fingerprint: "fp-of-d".to_string(), address: PeerAddress::default() };
         let err = apply(&mut store_d, &body(&s), &d, Utc::now()).expect_err("wrong recipient");
         assert_eq!(err, NoticeError::WrongRecipient);
         assert_eq!(err.status(), "403 Forbidden");
@@ -907,7 +1097,7 @@ mod tests {
         // At C it applies.
         let mut store_c = PeerStore::default();
         trusted(&mut store_c, &k, "afs", "");
-        let c = LocalIdentity { fingerprint: "fp-of-c".to_string() };
+        let c = LocalIdentity { fingerprint: "fp-of-c".to_string(), address: PeerAddress::default() };
         apply(&mut store_c, &body(&s), &c, Utc::now()).expect("right recipient");
     }
 
@@ -1147,7 +1337,7 @@ mod tests {
             let mut receiver = PeerStore::default();
             let my_fp_at_peer = trusted(&mut receiver, &me, "afs", "");
             let t1 = t0 + Duration::seconds(31);
-            let res = drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer) }, t1) {
+            let res = drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer), address: PeerAddress::default() }, t1) {
                 Ok(_) => SendResult::Http(200, "{}".to_string()),
                 Err(e) => SendResult::Http(409, e.to_string()),
             })
@@ -1232,7 +1422,7 @@ mod tests {
             let mut receiver = PeerStore::default();
             let f = trusted(&mut receiver, &me, "a", "");
             let t1 = t0 + Duration::seconds(2);
-            drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer) }, t1) {
+            drain_with(&me, &store, t1, |_, b| match apply(&mut receiver, b, &LocalIdentity { fingerprint: fp(&peer), address: PeerAddress::default() }, t1) {
                 Ok(_) => SendResult::Http(200, "{}".into()),
                 Err(e) => SendResult::Http(409, e.to_string()),
             })

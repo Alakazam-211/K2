@@ -134,6 +134,8 @@ fn send_notice(peer: &FederationPeer, body: &[u8]) -> SendResult {
     };
     let url = format!("{base}{}", notice::ROUTE);
     let client = match reqwest::blocking::Client::builder()
+        // Never follow a redirect: a peer must not steer us to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(SEND_TIMEOUT)
         .build()
@@ -410,6 +412,42 @@ mod tests {
 
         drop(home_a);
         let _ = std::fs::remove_dir_all(&home_b);
+    }
+
+    #[test]
+    fn a_notice_send_never_follows_a_redirect() {
+        with_temp_home(|| {
+            use std::io::{Read, Write};
+            let _inbound = k2_core::test_env::EnvVar::remove("K2_FEDERATION_INBOUND_BASE");
+            let _air = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
+            // Where a redirect would lead: must never be dialed.
+            let target = std::net::TcpListener::bind("127.0.0.1:0").expect("bind target");
+            target.set_nonblocking(true).expect("nonblocking");
+            let target_port = target.local_addr().expect("addr").port();
+            // The peer answers 302 to that target.
+            let peer = std::net::TcpListener::bind("127.0.0.1:0").expect("bind peer");
+            let peer_port = peer.local_addr().expect("addr").port();
+            let srv = std::thread::spawn(move || {
+                let (mut s, _) = peer.accept().expect("accept");
+                s.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/cli/federation/address\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                s.write_all(resp.as_bytes()).expect("write");
+            });
+            let row = FederationPeer::pin("p", "p", keypair().public_key_pem())
+                .expect("pin")
+                .with_base_url(format!("http://127.0.0.1:{peer_port}"));
+            let res = send_notice(&row, b"{}");
+            srv.join().expect("peer thread");
+            assert!(matches!(res, SendResult::Http(302, _)), "the 302 is returned as is: {res:?}");
+            match target.accept() {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                other => panic!("the redirect target must never be dialed: {other:?}"),
+            }
+        });
     }
 
     #[test]

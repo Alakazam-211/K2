@@ -45,6 +45,7 @@
 mod active_reaper;
 mod session_reaper;
 mod agents_routes;
+mod agent_name_repair_migrate;
 mod agent_retire;
 mod awareness_ws;
 mod boot_status;
@@ -1197,6 +1198,10 @@ async fn async_main() {
     // each its own pane key and split its Thread rows out (TR20).
     // One-shot, gated by a code_migrations marker; logs each re-key.
     k2_core::fork_tab_repair::run_once();
+
+    // A8 H2 — one-shot: agents the old `k2 agent hire` named "AGENT.md" /
+    // "ROLE.md" (both name stores) go back to their folder name.
+    agent_name_repair_migrate::run_once();
 
     // daemon-run may have queued signals for offline agents that
     // never got injected (daemon crashed before the session came

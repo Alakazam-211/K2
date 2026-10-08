@@ -221,6 +221,20 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 if new_name.is_empty() {
                     return Some(CliResponse::bad_request("Missing name"));
                 }
+                // A8 / CA18: an old `k2 agent hire` sends the persona file
+                // name. `error` stays a string for older CLI parsers.
+                if k2_core::workspace::display::is_persona_file_name(&new_name) {
+                    return Some(CliResponse {
+                        status: "400 Bad Request",
+                        content_type: "application/json",
+                        body: serde_json::json!({
+                            "error": k2_core::workspace::display::PERSONA_FILE_NAME_HINT,
+                            "code": "bad_usage",
+                            "hint": k2_core::workspace::display::PERSONA_FILE_NAME_HINT,
+                        })
+                        .to_string(),
+                    });
+                }
                 match k2_core::workspace::display::set_agent_display_name(&p, &new_name) {
                     Ok(()) => {
                         // Phase B: live-session label propagation.

@@ -21284,8 +21284,10 @@ agent_name = re.sub(r"[^A-Za-z0-9_-]", "-", basename) or "agent"
 persona_path = conf.get("personaPath") if registered else None
 if not persona_path:
     for dot in (".k2", ".k2so"):
-        for name in ("ROLE.md", "AGENT.md"):
-            cand = os.path.join(path, dot, "agent", name)
+        # `fname`, not `name`: `name` is the --name value (A8 — a loop
+        # variable called `name` renamed every new hire "AGENT.md").
+        for fname in ("ROLE.md", "AGENT.md"):
+            cand = os.path.join(path, dot, "agent", fname)
             if os.path.isfile(cand):
                 persona_path = cand
                 break

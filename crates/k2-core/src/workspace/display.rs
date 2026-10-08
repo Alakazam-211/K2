@@ -176,6 +176,18 @@ pub fn validate_display_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A8 / CA18: the persona FILE names. `k2 agent hire` from 0.40.100 to
+/// 0.45.0 sent these as the agent's name (a shadowed loop variable), so
+/// [`set_agent_display_name`] refuses exactly these and a stale CLI fails
+/// loudly instead of misnaming the agent.
+pub fn is_persona_file_name(name: &str) -> bool {
+    matches!(name, "AGENT.md" | "ROLE.md")
+}
+
+/// Refusal text for [`is_persona_file_name`].
+pub const PERSONA_FILE_NAME_HINT: &str = "that's the persona file name, not an agent name \
+(old `k2 agent hire` bug); pass the agent's name";
+
 /// Drop the in-memory display-name cache for `project_path`.
 pub fn invalidate_agent_display_name_cache(project_path: &str) {
     cache().lock().unwrap().remove(project_path);
@@ -208,6 +220,9 @@ pub fn invalidate_agent_display_name_cache(project_path: &str) {
 /// only; 0 DB rows updated is not an error.
 pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), String> {
     validate_display_name(name)?;
+    if is_persona_file_name(name) {
+        return Err(PERSONA_FILE_NAME_HINT.to_string());
+    }
 
     let dir = workspace_agent_path(project_path);
     let live = persona_md_in(&dir);
@@ -357,6 +372,21 @@ mod tests {
     // control chars (one-line frontmatter + PTY prefix), surrounding
     // whitespace (trimmed matching everywhere), and "/" (the name
     // seeds retire's archive folder label).
+
+    /// A8 / CA18: the persona file names are refused before anything is
+    /// written; names that merely contain them are fine.
+    #[test]
+    fn set_agent_display_name_refuses_persona_file_names() {
+        let dir = std::env::temp_dir().join(format!("k2-ca18-{}", uuid::Uuid::new_v4()));
+        let path = dir.to_string_lossy().into_owned();
+        for bad in ["AGENT.md", "ROLE.md"] {
+            let err = set_agent_display_name(&path, bad).expect_err(bad);
+            assert_eq!(err, PERSONA_FILE_NAME_HINT, "{bad}");
+        }
+        assert!(!dir.exists(), "a refused name writes nothing");
+        assert!(!is_persona_file_name("AGENT.md bot"));
+        assert!(!is_persona_file_name("Press Agent"));
+    }
 
     #[test]
     fn validate_accepts_simple_name() {

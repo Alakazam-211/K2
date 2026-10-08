@@ -144,6 +144,11 @@ pub(crate) fn current_ops() -> &'static dyn SystemOps {
     &RealSystemOps
 }
 
+/// K2 vault Q23: rotate DB role passwords once they moved into the vault.
+pub fn rotate_after_vault_adoption() -> Vec<String> {
+    ops::rotate_db_role_passwords(ops())
+}
+
 fn ops() -> &'static dyn SystemOps {
     current_ops()
 }

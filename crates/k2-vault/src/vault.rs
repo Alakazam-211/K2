@@ -2419,6 +2419,39 @@ impl LocalVault {
 
     /// Restore support: open a copied vault.db with an age identity
     /// (recovery or backup), then re-wrap it to this box's key.
+    /// Restore dry run: does `identity` open the `holder` wrap of the vault
+    /// in `dir`, and does its audit chain verify? Changes nothing. Returns
+    /// the vault id and how many `user` secrets it holds.
+    pub fn check_identity(dir: &Path, identity: &agefmt::Identity, holder: &str) -> Result<(String, u64)> {
+        let path = dir.join("vault.db");
+        if !path.exists() {
+            return Err(VaultError::not_found("no vault.db there"));
+        }
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let (h, _mac) = load_header(&conn)?.ok_or_else(|| VaultError::tamper("vault.db has no header"))?;
+        let w = h
+            .wraps
+            .iter()
+            .find(|w| w.holder == holder)
+            .ok_or_else(|| VaultError::forbidden("no_holder", format!("this vault has no {holder} key")))?;
+        let vdk = agefmt::decrypt(identity, &base64_decode(&w.wrapped)?)?;
+        if vdk.len() != 32 {
+            return Err(VaultError::tamper("data key has the wrong length"));
+        }
+        let vid = vid_bytes(&h.vault_id)?;
+        let audit_key = hkdf32(vdk.expose(), &vid, crypto::INFO_AUDIT);
+        verify_chain(&conn, &audit_key)?;
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM secret WHERE namespace = 'user' AND status = 'active'", [], |r| r.get(0))?;
+        Ok((h.vault_id, n as u64))
+    }
+
+    /// How many active `user` secrets this vault holds.
+    pub fn user_secret_count(&self) -> u64 {
+        let conn = self.conn.lock();
+        conn.query_row("SELECT COUNT(*) FROM secret WHERE namespace = 'user' AND status = 'active'", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0) as u64
+    }
+
     pub fn adopt_with_identity(dir: impl Into<PathBuf>, ks: Arc<dyn KeyStore>, identity: &agefmt::Identity, holder: &str, opts: OpenOptions) -> Result<LocalVault> {
         let dir = dir.into();
         let path = dir.join("vault.db");

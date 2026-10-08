@@ -51,12 +51,18 @@ fn put_key(vault: &LocalVault, scope: Scope, name: &str, value: &str, hosts: Vec
     put_and_verify(vault, r, value.as_bytes(), &Actor::System("adopt".into())).map(|_| ())
 }
 
-/// The holder k2-core calls for new keys and to read references.
-pub struct Holder(pub Arc<LocalVault>);
+/// The holder k2-core calls for new keys and to read references. It uses
+/// whichever vault is open (a restore swaps it).
+pub struct Holder;
+
+fn open_vault() -> Result<Arc<LocalVault>, String> {
+    super::get().map_err(|e| format!("vault: {}", e.code))
+}
 
 impl k2_core::secret_refs::SecretRefs for Holder {
     fn store_workspace_key(&self, project_id: &str, key: &str) -> Result<String, String> {
-        put_key(&self.0, Scope::workspace(project_id), "ANTHROPIC_API_KEY", key, vec!["api.anthropic.com".into()], "ui")
+        let v = open_vault()?;
+        put_key(&v, Scope::workspace(project_id), "ANTHROPIC_API_KEY", key, vec!["api.anthropic.com".into()], "ui")
             .map_err(|e| format!("vault: {}", e.code))?;
         Ok(format!("k2v://ws/{project_id}/ANTHROPIC_API_KEY"))
     }
@@ -64,7 +70,8 @@ impl k2_core::secret_refs::SecretRefs for Holder {
     fn store_api_key_credential(&self, api_key_id: &str, key: &str, provider: Option<&str>, base_url: Option<&str>) -> Result<String, String> {
         let short: String = api_key_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
         let name = format!("API_KEY_{short}_LLM");
-        put_key(&self.0, Scope::server(), &name, key, provider_host(provider, base_url), "cli-owner")
+        let v = open_vault()?;
+        put_key(&v, Scope::server(), &name, key, provider_host(provider, base_url), "cli-owner")
             .map_err(|e| format!("vault: {}", e.code))?;
         Ok(format!("k2v://server/{name}"))
     }
@@ -77,7 +84,8 @@ impl k2_core::secret_refs::SecretRefs for Holder {
             _ => return None,
         };
         use k2_vault::SecretStore as _;
-        self.0
+        open_vault()
+            .ok()?
             .resolve(
                 &k2_vault::Selector::user(scope, r.name),
                 k2_vault::Use::System,
@@ -95,7 +103,8 @@ impl k2_core::secret_refs::SecretRefs for Holder {
                 _ => return,
             };
             use k2_vault::SecretStore as _;
-            let _ = self.0.destroy(&k2_vault::Selector::user(scope, r.name), &Actor::System("settings".into()));
+            let Ok(v) = open_vault() else { return };
+            let _ = v.destroy(&k2_vault::Selector::user(scope, r.name), &Actor::System("settings".into()));
         }
     }
 }
@@ -152,7 +161,7 @@ pub fn adopt(vault: &Arc<LocalVault>) -> Adopted {
             Err(_) => vec![],
         }
     };
-    let holder = Holder(vault.clone());
+    let holder = Holder;
     for (id, key, provider, base_url) in rows {
         use k2_core::secret_refs::SecretRefs as _;
         let r = holder
@@ -270,7 +279,7 @@ mod tests {
         assert!(plain.is_none());
         assert_eq!(sref.as_deref(), Some(format!("k2v://ws/{id}/ANTHROPIC_API_KEY").as_str()));
         // Readers resolve through the holder.
-        let _ = k2_core::secret_refs::install(Box::new(Holder(v.clone())));
+        let _ = k2_core::secret_refs::install(Box::new(Holder));
         let path = format!("/tmp/k2-vault-test-{id}");
         assert_eq!(k2_core::workspace::settings::get_workspace_api_key(&path).as_deref(), Some(sentinel.as_str()));
     }

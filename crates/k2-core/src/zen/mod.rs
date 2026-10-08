@@ -46,10 +46,12 @@ pub mod bundle;
 pub mod defaults;
 pub mod garden_catalog;
 pub mod grants;
+pub mod news;
 pub mod schema;
 pub mod skill;
 pub mod stdlib;
 pub mod store;
+pub mod sync;
 pub mod widget_store;
 pub mod widgets;
 

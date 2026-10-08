@@ -75,6 +75,7 @@ mod charter_compose_watch;
 mod notify_bound;
 mod zen_lib_routes;
 mod zen_routes;
+mod zen_sync_routes;
 mod zen_watch;
 mod grid_emitter;
 mod git_routes;

@@ -43,6 +43,30 @@ fn every_installer_script_parses_and_is_executable() {
     }
 }
 
+/// The S0 spike scripts (run by hand on the minis / z13flow) parse, are
+/// executable, and refuse to start without their required arguments.
+#[test]
+fn spike_scripts_parse_and_refuse_without_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/node/spikes");
+    let mut names = Vec::new();
+    for e in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())).flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "sh") {
+            continue;
+        }
+        names.push(p.file_name().unwrap().to_string_lossy().into_owned());
+        let o = Command::new("bash").arg("-n").arg(&p).output().unwrap();
+        assert!(o.status.success(), "bash -n {}: {}", p.display(), String::from_utf8_lossy(&o.stderr));
+        assert!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o111 != 0, "{} not executable", p.display());
+        // An unknown argument stops every spike before it does anything.
+        let o = Command::new("bash").arg(&p).arg("--no-such-flag").env_clear().env("PATH", "/usr/bin:/bin").output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}: {}", p.display(), String::from_utf8_lossy(&o.stderr));
+    }
+    names.sort();
+    assert_eq!(names, ["s0a-tests-as-hidden-user.sh", "s0b-linux-vm-on-mac.sh", "s0c-launchdaemon-probe.sh"]);
+}
+
 #[test]
 fn installers_refuse_to_run_unprivileged_before_touching_anything() {
     // As a normal user every installer stops at its root check (or OS check).

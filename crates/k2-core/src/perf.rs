@@ -191,7 +191,7 @@ impl Drop for HistGuard {
 
 /// Time a block and log its elapsed duration through `log_debug!`.
 ///
-/// ```ignore
+/// ```text
 /// let hash = perf_timer!("grid_hash", {
 ///     compute_hash(&grid)
 /// });
@@ -214,7 +214,7 @@ macro_rules! perf_timer {
 /// Open a scoped histogram guard. The elapsed time from this point until the
 /// guard is dropped is recorded under the given name.
 ///
-/// ```ignore
+/// ```text
 /// let _h = perf_hist!("terminal_poll_tick");
 /// // ... do work ...
 /// // guard drops here, time is recorded

@@ -322,7 +322,7 @@ mod fake {
         /// object becomes a directory; each string becomes a file
         /// containing that string. Arrays are not supported.
         ///
-        /// ```ignore
+        /// ```text
         /// fs.insert_tree("/root", serde_json::json!({
         ///   "a.txt": "hello",
         ///   "sub": { "b.md": "# header" }

@@ -15,7 +15,7 @@
 //!
 //! Set the provider once in src-tauri's `setup()`:
 //!
-//! ```ignore
+//! ```text
 //! k2_core::companion::settings_bridge::set_provider(
 //!     Box::new(TauriCompanionSettingsProvider)
 //! );

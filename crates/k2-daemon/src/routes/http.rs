@@ -1364,7 +1364,7 @@ pub(crate) fn request_is_chunked(headers_blob: &str) -> bool {
 ///
 /// Usage:
 ///
-/// ```ignore
+/// ```text
 /// if !require_post(&mut stream, &mut buf, is_post).await { return; }
 /// ```
 pub(crate) async fn require_post(stream: &mut TcpStream, buf: &mut [u8], is_post: bool) -> bool {

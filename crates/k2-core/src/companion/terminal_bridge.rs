@@ -8,7 +8,7 @@
 //!
 //! Registered once at app startup, same pattern as `settings_bridge`:
 //!
-//! ```ignore
+//! ```text
 //! k2_core::companion::terminal_bridge::set_provider(
 //!     Box::new(TauriTerminalProvider::new(app_state.clone())),
 //! );

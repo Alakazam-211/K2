@@ -10,7 +10,7 @@
 //!
 //! # Integration (DNS / mail / future surfaces)
 //!
-//! ```ignore
+//! ```text
 //! use crate::caller_workspace::{resolve_caller_workspace, CallerWorkspace};
 //! use crate::session_token::HookPrincipal;
 //!

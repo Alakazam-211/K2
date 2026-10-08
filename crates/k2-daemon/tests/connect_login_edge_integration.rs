@@ -141,7 +141,13 @@ fn with_temp_home<F: FnOnce()>(f: F) {
     std::fs::create_dir_all(tmp.join(".k2")).expect("create temp HOME");
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();
+    // The login limiter (and LM4's global failed-login ceiling) is
+    // process-wide; the tests in this binary share it. Start and leave
+    // every test with a clean one, so a sibling's failed-login burst
+    // can't 429 this test's first good login.
+    k2_daemon::login_throttle::reset();
     f();
+    k2_daemon::login_throttle::reset();
     match prev {
         Some(p) => std::env::set_var("HOME", p),
         None => std::env::remove_var("HOME"),

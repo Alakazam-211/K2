@@ -128,7 +128,7 @@ export interface ZenWidgetThreadItem {
         kind: 'text' | 'choice'
         from: string
         to: string | null
-        created_at: number | null
+        created_at?: number
         body: string | null
         via: string | null
         choice: ZenWidgetChoice | null
@@ -160,7 +160,7 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
       kind: d.kind,
       from: d.from,
       to: d.to ?? null,
-      created_at: typeof d.created_at === 'number' ? d.created_at : null,
+      ...(typeof d.created_at === 'number' ? { created_at: d.created_at } : {}),
       body: d.body ?? null,
       via: d.via ?? null,
       choice: d.kind === 'choice' ? projectChoice(d.choice) : null,

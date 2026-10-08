@@ -11,24 +11,18 @@
 // (UW8). Every script text has `</script` escaped, so no text can close
 // its element early.
 //
-// k2-frame.js: B1's generator writes `sdk/generated/k2-frame.js` (UWA11).
-// Until it lands the renderer joins the same two parts here: the custom
-// verb table (`ZEN_CUSTOM_VERBS`) and `sdk/k2-runtime.js`.
+// k2-frame.js is generated (`contract-gen`, UWA11): the catalog's widget
+// verb table as `K2_CONTRACT`, then `sdk/k2-runtime.js`, in one classic
+// script. Never edited by hand; the freshness tests check it.
 
-import k2Runtime from '../../../../sdk/k2-runtime.js?raw'
-import { ZEN_CUSTOM_VERBS } from './zen-verbs.generated'
+import k2Frame from '../../../../sdk/generated/k2-frame.js?raw'
 
 /** TUWA6: the runtime text the frame gets is at most this big. */
 export const K2_FRAME_MAX_BYTES = 16 * 1024
 
-/** The verb-table line the runtime reads (`self.__K2_VERBS__`). */
-export function k2VerbTableScript(table: Record<string, unknown> = ZEN_CUSTOM_VERBS): string {
-  return `self.__K2_VERBS__ = ${JSON.stringify(table)};\n`
-}
-
 /** k2-frame.js: the table, then the runtime. */
 export function k2FrameScript(): string {
-  return k2VerbTableScript() + k2Runtime
+  return k2Frame
 }
 
 /** Script text that can sit inside `<script>…</script>` as-is: `</script`

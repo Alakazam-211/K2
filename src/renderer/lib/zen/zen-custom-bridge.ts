@@ -39,7 +39,6 @@ import type { ZenCustomWidgetPayload, ZenFrameReply, ZenFrameRequest } from './z
 import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
 import {
   projectZenPeople,
-  projectZenRow,
   projectZenRows,
   projectZenThreadItems,
   projectZenThreadView,
@@ -89,7 +88,7 @@ export interface ZenCustomLayerDeps {
   stop(reason: ZenWidgetStopReason): void
   /** Runaway: turn Sending off on the grant (sets the daemon's pause). */
   sendingOffForRunaway(): Promise<void>
-  /** The Garden's theme now, and its changes (UW39). */
+  /** The Garden's theme now (`ThemeInfo`), and its changes (UW39). */
   theme(): unknown
   onThemeChange(cb: () => void): () => void
   now(): number
@@ -225,12 +224,14 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       lastSwitch = now
       return inner('gardens.switch', id)
     },
-    'theme.get': () => inner('theme.get'),
+    // ThemeInfo {theme: {scheme, vars}, chrome: {corners, stoplights}, motion}.
+    'theme.get': () => deps.theme(),
     'agents.list': () => projectZenRows(inner('agents.list') as ZenAgentRow[], caps()),
     'conversation.open': async (args) => {
       // In Zen only: `where: "agents"` is never passed through (UW16).
       const address = needAddress('conversation.open', args[0])
-      return projectZenRow((await inner('conversation.open', address)) as ZenAgentRow, caps())
+      await inner('conversation.open', address)
+      return null
     },
     'conversation.close': () => {
       inner('conversation.close')

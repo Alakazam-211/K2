@@ -126,7 +126,7 @@ function harness(over: Partial<ZenCustomLayerDeps> = {}, impls: Record<string, (
     sendingOffForRunaway: async () => {
       h.runaway += 1
     },
-    theme: () => ({ vars: {}, scheme: 'light' }),
+    theme: () => ({ theme: { scheme: 'light', vars: {} }, chrome: { corners: null, stoplights: null }, motion: { reduced: false } }),
     onThemeChange: () => () => undefined,
     now: () => h.clock.t,
     ...over,
@@ -399,7 +399,7 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
         address: 'alice::local',
         phase: 'ready',
         note: null,
-        items: [{ seq: 1, id: 'a', doc: { id: 'a', kind: 'text', from: 'alice', to: null, created_at: null, body: 'yo', via: null, choice: null } }],
+        items: [{ seq: 1, id: 'a', doc: { id: 'a', kind: 'text', from: 'alice', to: null, body: 'yo', via: null, choice: null } }],
         hasMore: false,
         turn: { state: 'working', since: 10 },
       },

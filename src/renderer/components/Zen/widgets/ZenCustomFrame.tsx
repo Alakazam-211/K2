@@ -51,6 +51,23 @@ export function readZenFrameTheme(root: HTMLElement | null): ZenFrameTheme & { r
   return { vars, scheme, reduced: root?.hasAttribute('data-zen-reduced-motion') ?? false }
 }
 
+/** `theme.get` / `theme.changed` (the catalog's ThemeInfo): `{theme:
+ *  {scheme, vars}, chrome: {corners, stoplights}, motion: {reduced}}`. The
+ *  window's `[chrome]` as the Zen root shows it, never free-form placement
+ *  (UWA14). */
+export function zenFrameThemeInfo(root: HTMLElement | null): {
+  theme: { scheme: 'light' | 'dark'; vars: Record<string, string> }
+  chrome: { corners: string | null; stoplights: string | null }
+  motion: { reduced: boolean }
+} {
+  const t = readZenFrameTheme(root)
+  return {
+    theme: { scheme: t.scheme, vars: t.vars },
+    chrome: { corners: root?.getAttribute('data-zen-corners') ?? null, stoplights: root?.getAttribute('data-zen-stoplights') ?? null },
+    motion: { reduced: t.reduced },
+  }
+}
+
 type Loaded = { html: string; nonce: string; prelude: string }
 
 export function ZenCustomFrame({
@@ -136,14 +153,14 @@ export function ZenCustomFrame({
           stop: (reason) => stopZenWidget(key, reason),
           sendingOffForRunaway: () =>
             setZenWidgetSending({ garden: gardenId, placement: widgetRef.current.id, on: false, reason: 'runaway' }),
-          theme: () => {
-            const t = readZenFrameTheme(root)
-            return { vars: t.vars, scheme: t.scheme, motion: { reduced: t.reduced } }
-          },
+          theme: () => zenFrameThemeInfo(root),
           onThemeChange: (cb) => {
             if (!root || typeof MutationObserver === 'undefined') return () => undefined
             const mo = new MutationObserver(cb)
-            mo.observe(root, { attributes: true, attributeFilter: ['style', 'data-zen-scheme', 'data-zen-reduced-motion'] })
+            mo.observe(root, {
+              attributes: true,
+              attributeFilter: ['style', 'data-zen-scheme', 'data-zen-reduced-motion', 'data-zen-corners', 'data-zen-stoplights'],
+            })
             return () => mo.disconnect()
           },
           now: () => Date.now(),

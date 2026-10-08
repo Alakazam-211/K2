@@ -46,52 +46,19 @@ import type { ZenControlRegistry, ZenBindKind } from './zen-controls'
 import type { ZenResolvedPage } from './zen-page'
 import { BLANK_TEMPLATE_ID } from './zen-page'
 import type { ZenGardenNewRequest } from './zen-custom-types'
+import { ZEN_VERBS } from './zen-verbs.generated'
+import type { CatalogErrorCode } from '../contract/catalog-types'
 import { isZenTemplateShort } from './zen-templates'
 
-export const ZEN_VERBS = {
-  'agents.list': 'agents:read',
-  'agents.subscribe': 'agents:read',
-  'agents.add': 'agents:add',
-  'agents.home': 'agents:read',
-  'agents.setHome': 'agents:read',
-  'agents.local': 'agents:read',
-  'presence.get': 'presence:read',
-  'presence.subscribe': 'presence:read',
-  'conversation.open': 'agents:read',
-  'conversation.close': 'agents:read',
-  'thread.read': 'thread:read',
-  'thread.subscribe': 'thread:read',
-  'thread.markRead': 'thread:read',
-  'thread.post': 'thread:post',
-  'thread.answer': 'thread:post',
-  'thread.void': 'thread:post',
-  'compose.draft': 'thread:post',
-  'focusGroups.get': 'agents:read',
-  'focusGroups.set': 'agents:read',
-  'focusGroups.subscribe': 'agents:read',
-  'app.open': 'app:navigate',
-  'app.current': 'app:navigate',
-  'app.subscribeCurrent': 'app:navigate',
-  'app.badges': 'app:navigate',
-  'app.subscribe': 'app:navigate',
-  'homes.list': 'agents:read',
-  'gardens.list': null,
-  'gardens.current': null,
-  'gardens.switch': null,
-  'gardens.create': 'gardens:manage',
-  'gardens.rename': 'gardens:manage',
-  'gardens.delete': 'gardens:manage',
-  'gardens.empty': 'gardens:template',
-  'gardens.useTemplate': 'gardens:template',
-  'zen.exit': null,
-  'controls.bind': null,
-  'theme.get': null,
-} as const satisfies Record<string, string | null>
+// UWA4: generated from the verb catalog (`contract-gen`), with the custom
+// widgets' own allowlist beside it. A pinned test keeps it today's 37.
+export { ZEN_VERBS }
 
 export type ZenVerb = keyof typeof ZEN_VERBS
 export type ZenCap = Exclude<(typeof ZEN_VERBS)[ZenVerb], null>
 
-export type ZenBridgeErrorCode = 'cap_not_granted' | 'verb_unavailable' | 'unknown_verb'
+/** A subset of the shared error list (UWA10, `CatalogErrorCode`). */
+export type ZenBridgeErrorCode = Extract<CatalogErrorCode, 'cap_not_granted' | 'verb_unavailable' | 'unknown_verb'>
 
 export class ZenBridgeError extends Error {
   readonly code: ZenBridgeErrorCode

@@ -5,10 +5,11 @@
 // of every sealed widget frame, so `window.k2` exists before the widget's
 // own scripts run, and the widget can't load or replace it.
 //
-// Delivery: `sdk/generated/k2-frame.js` (B1's contract-gen, UWA11) is
-//   self.__K2_VERBS__ = { "<verb>": {cap, reach, kind, feature?}, ... };
-// followed by this file. Until the generator lands, the renderer joins the
-// same two parts itself (`lib/zen/zen-custom-prelude.ts`).
+// Delivery: `cargo run -p k2-core --bin contract-gen` (UWA11) wraps this
+// body in a function after the catalog's widget table,
+//   var K2_CONTRACT = {catalogVersion, errors, verbs: {verb: {cap, reach, kind, feature}}}
+// and writes `sdk/generated/k2-frame.js`, which the renderer inlines. Rerun
+// contract-gen after any edit here (the freshness tests check).
 //
 // Transport interface: {call(verb, args), subscribe(verb, args, cb), info()}.
 // v2 wires one adapter, MessagePort, created from K2's hello; the cookie and
@@ -22,7 +23,7 @@
 //                {ping}
 // Calls made before the hello wait for it (it comes on the frame's load);
 // with no hello in 10 s they reject with K2Error `failed` "not connected".
-(function () {
+;(function () {
   'use strict'
 
   /** @typedef {{cap: string | null, reach: 'portable' | 'local', kind: 'call' | 'subscribe' | 'event', feature?: string}} VerbRow */
@@ -30,12 +31,8 @@
 
   var g = /** @type {any} */ (self)
   /** @type {Record<string, VerbRow>} */
-  var TABLE = g.__K2_VERBS__ || {}
-  try {
-    delete g.__K2_VERBS__
-  } catch (_e) {
-    g.__K2_VERBS__ = undefined
-  }
+  // eslint-disable-next-line no-undef
+  var TABLE = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.verbs ? K2_CONTRACT.verbs : {}
   if (g.k2) return
 
   class K2Error extends Error {
@@ -147,11 +144,14 @@
     }
   }
 
-  /** The theme the host pushes: `--zen-*` variables and the scheme (UW39). */
+  /** The theme the host pushes (`ThemeInfo`: {theme: {scheme, vars},
+   *  chrome, motion}): `--zen-*` variables and the scheme on :root (UW39). */
   /** @param {unknown} v */
   function applyTheme(v) {
     if (!v || typeof v !== 'object') return
-    var t = /** @type {{vars?: Record<string, string>, scheme?: string}} */ (v)
+    var info = /** @type {{theme?: {vars?: Record<string, string>, scheme?: string}}} */ (v)
+    var t = info.theme
+    if (!t || typeof t !== 'object') return
     var root = document.documentElement
     if (t.vars) {
       for (var k in t.vars) {
@@ -261,7 +261,6 @@
   Object.defineProperty(k2, 'config', { enumerable: true, get: function () { return hello ? hello.config : Object.freeze({}) } })
   Object.defineProperty(k2, 'widget', { enumerable: true, get: function () { return hello ? hello.widget : null } })
   Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
-  k2.K2Error = K2Error
 
   // Named helpers, one per row (`surface.action` → k2.surface.action).
   /** @type {Record<string, Record<string, Function>>} */

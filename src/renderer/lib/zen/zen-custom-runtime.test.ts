@@ -226,7 +226,7 @@ describe('TUWA6: the frame runtime', () => {
     const { heard, host } = connect(r)
     await tick()
     const sub = (heard[0] as { sub: number }).sub
-    host.postMessage({ sub, value: { vars: { '--zen-text': '#111', color: 'red' }, scheme: 'dark' } })
+    host.postMessage({ sub, value: { theme: { vars: { '--zen-text': '#111', color: 'red' }, scheme: 'dark' }, chrome: {}, motion: { reduced: false } } })
     await tick()
     expect(r.rootStyle).toEqual({ '--zen-text': '#111' })
     expect(r.rootAttrs).toEqual({ 'data-zen-scheme': 'dark' })

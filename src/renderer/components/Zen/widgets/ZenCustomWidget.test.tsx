@@ -310,8 +310,8 @@ describe('TUW3.1: the sealed frame', () => {
     const doc = f.getAttribute('srcdoc') ?? ''
     expect(doc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'nonce-q83vFzPq1N3V0aZ8k2LmTw\' \'wasm-unsafe-eval\'')).toBe(true)
     // K2's runtime runs before the widget's own first script.
-    expect(doc.indexOf('__K2_VERBS__')).toBeGreaterThan(0)
-    expect(doc.indexOf('__K2_VERBS__')).toBeLessThan(doc.indexOf('k2.ready()'))
+    expect(doc.indexOf('K2_CONTRACT')).toBeGreaterThan(0)
+    expect(doc.indexOf('K2_CONTRACT')).toBeLessThan(doc.indexOf('<html><body>'))
     expect(doc).not.toContain('allow-same-origin')
   })
 

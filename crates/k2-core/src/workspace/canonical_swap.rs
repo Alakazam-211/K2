@@ -265,38 +265,17 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Temp HOME under the ONE shared env lock (`test_env::TempHome`:
+    /// restored + removed on drop, even on panic).
     struct HomeGuard {
-        original: Option<std::ffi::OsString>,
-        _lock: parking_lot::MutexGuard<'static, ()>,
+        _home: crate::test_env::TempHome,
     }
 
     impl HomeGuard {
-        fn new(label: &str) -> (Self, PathBuf) {
-            let lock = crate::themes::HOME_LOCK.lock();
-            let home = std::env::temp_dir().join(format!(
-                "k2-swap-{label}-{}-{}",
-                std::process::id(),
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&home).unwrap();
-            let original = std::env::var_os("HOME");
-            std::env::set_var("HOME", &home);
-            (
-                Self {
-                    original,
-                    _lock: lock,
-                },
-                home,
-            )
-        }
-    }
-
-    impl Drop for HomeGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(value) => std::env::set_var("HOME", value),
-                None => std::env::remove_var("HOME"),
-            }
+        fn new(_label: &str) -> (Self, PathBuf) {
+            let home = crate::test_env::TempHome::new();
+            let path = home.path().to_path_buf();
+            (Self { _home: home }, path)
         }
     }
 

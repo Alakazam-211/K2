@@ -3613,17 +3613,14 @@ mod tests {
         v["status"].as_str().unwrap_or("").to_string()
     }
 
-    /// Restores K2_FEDERATION_INBOUND_BASE even when an assert panics.
-    struct InboundBase;
+    /// K2_FEDERATION_INBOUND_BASE under the ONE shared env lock; restores
+    /// the previous value even when an assert panics.
+    struct InboundBase {
+        _var: k2_core::test_env::EnvVar,
+    }
     impl InboundBase {
         fn set(base: &str) -> Self {
-            std::env::set_var("K2_FEDERATION_INBOUND_BASE", base);
-            InboundBase
-        }
-    }
-    impl Drop for InboundBase {
-        fn drop(&mut self) {
-            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+            Self { _var: k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", base) }
         }
     }
 

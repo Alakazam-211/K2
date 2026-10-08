@@ -819,7 +819,10 @@ mod tests {
             )
         );
         let (port, mut rx) = spawn_stub("404 Not Found", body).await;
-        std::env::set_var("K2_FEDERATION_INBOUND_BASE", format!("http://127.0.0.1:{port}"));
+        let inbound = k2_core::test_env::EnvVar::set(
+            "K2_FEDERATION_INBOUND_BASE",
+            format!("http://127.0.0.1:{port}"),
+        );
 
         let fp = pin_trusted();
         let base = chrono::Utc::now();
@@ -828,7 +831,7 @@ mod tests {
 
         let fp2 = fp.clone();
         let outcome = tokio::task::spawn_blocking(move || drain_peer(&fp2)).await.unwrap();
-        std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        drop(inbound);
 
         assert_eq!(outcome, DrainOutcome::Drained { delivered: 0, dead_lettered: 2 });
         assert!(outbox::list_for_peer(&fp).is_empty(), "a refusal must leave the queue");

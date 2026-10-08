@@ -323,6 +323,36 @@ describe('TUW3.5: limits', () => {
     await layer.handle({ sub: 51, verb: 'agents.subscribe', args: [] })
     expect(layer.subscriptions).toBe(17)
   })
+
+  it('a refused subscription is answered once with {sub, error}, never dropped (B4 Q2)', async () => {
+    const h = harness({}, { 'agents.subscribe': () => () => undefined })
+    h.widget.current = payload({ caps: [], grant: null })
+    const noCap = createZenCustomLayer(h.deps)
+    expect(await noCap.handle({ sub: 7, verb: 'agents.subscribe', args: [] })).toEqual({
+      sub: 7,
+      error: expect.objectContaining({ code: 'cap_not_granted', cap: 'agents:read' }),
+    })
+    expect(await noCap.handle({ sub: 8, verb: 'made.up', args: [] })).toEqual({
+      sub: 8,
+      error: expect.objectContaining({ code: 'unknown_verb' }),
+    })
+    // A call verb sent as a subscription.
+    expect(await noCap.handle({ sub: 9, verb: 'gardens.list', args: [] })).toEqual({
+      sub: 9,
+      error: expect.objectContaining({ code: 'failed' }),
+    })
+    expect(noCap.subscriptions).toBe(0)
+
+    const h2 = harness({}, { 'agents.subscribe': () => () => undefined })
+    const layer = createZenCustomLayer(h2.deps)
+    for (let i = 0; i < 16; i++) expect(await layer.handle({ sub: i + 1, verb: 'agents.subscribe', args: [] })).toBeNull()
+    expect(await layer.handle({ sub: 17, verb: 'agents.subscribe', args: [] })).toEqual({
+      sub: 17,
+      error: expect.objectContaining({ code: 'rate_limited' }),
+    })
+    // A repeated sub id is the frame's own bug: ignored, not refused.
+    expect(await layer.handle({ sub: 1, verb: 'agents.subscribe', args: [] })).toBeNull()
+  })
 })
 
 describe('TUW3.4 / TUWA7: the guest projection', () => {

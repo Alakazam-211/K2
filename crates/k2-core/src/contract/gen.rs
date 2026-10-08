@@ -447,6 +447,7 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
                     sub_verbs.push(ts_str(&v.verb));
                     let mut a = args.clone();
                     a.push(format!("cb: (value: {value}) => void"));
+                    a.push("onError?: (error: K2Error) => void".into());
                     format!("  {action}({}): () => void", a.join(", "))
                 }
             };
@@ -484,7 +485,7 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
         s.push_str("  }\n");
     }
     s.push_str(
-        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args: [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file. */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n",
+        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file. */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n",
     );
     Ok(s)
 }
@@ -578,7 +579,9 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
         "  checks every call. k2.ready() once drawn. k2.config, k2.widget,",
         "  k2.asset(name), k2.motion.reduced. A refused call rejects with K2Error",
         "  (.code, .message, .verb, .cap, .room, .feature). Subscribes return the",
-        "  unsubscribe.",
+        "  unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,",
+        "  onError)) to hear a refused subscription (it ends; without onError K2",
+        "  logs it as a widget error).",
         "",
         "RULES",
         "  textContent for anything an agent wrote, never innerHTML. No onclick=:",
@@ -750,5 +753,18 @@ mod tests {
         for b in &catalog().banned_fields {
             assert!(!dts.contains(&format!(" {b}:")) && !dts.contains(&format!(" {b}?:")), "k2.d.ts names banned field {b}");
         }
+    }
+
+    /// Integrator decision (B4 Q2): a refused subscription answers
+    /// `{sub, error}`; every subscribe helper takes an `onError` after `cb`.
+    #[test]
+    fn subscribe_helpers_take_on_error() {
+        let dts = k2_dts(catalog()).expect("d.ts renders");
+        let subs: Vec<&str> = dts.lines().filter(|l| l.contains("cb: (value:")).collect();
+        assert!(!subs.is_empty(), "k2.d.ts has subscribe helpers");
+        for l in subs {
+            assert!(l.contains("onError?: (error: K2Error) => void"), "subscribe helper without onError: {l}");
+        }
+        assert!(dts.contains("(value: K2Verbs[V]['value']) => void, (error: K2Error) => void]"));
     }
 }

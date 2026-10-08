@@ -179,13 +179,13 @@ export interface K2 {
     /** The page's theme: scheme and --zen-* values, the window's chrome table, and reduced motion. no cap · local · zen-v1. e.g. `const {theme, motion} = await k2.theme.get()` */
     get(): Promise<ThemeInfo>
     /** The same value as theme.get, pushed when the theme or motion changes. no cap · local · zen-widgets-v1. e.g. `k2.theme.changed(({theme}) => paint(theme))` */
-    changed(cb: (value: ThemeInfo) => void): () => void
+    changed(cb: (value: ThemeInfo) => void, onError?: (error: K2Error) => void): () => void
   }
   readonly agents: {
     /** The agents in the widget's scope, with live status. cap agents:read · portable · zen-v1. e.g. `const rows = await k2.agents.list()` */
     list(): Promise<AgentRow[]>
     /** The same rows as agents.list, pushed on every change. cap agents:read · portable · zen-v1. e.g. `const off = k2.agents.subscribe((rows) => draw(rows))` */
-    subscribe(cb: (value: AgentRow[]) => void): () => void
+    subscribe(cb: (value: AgentRow[]) => void, onError?: (error: K2Error) => void): () => void
   }
   readonly conversation: {
     /** Show this agent in the built-in Conversation that follows the widget. cap agents:read · local · zen-v1. e.g. `await k2.conversation.open(row.address)` */
@@ -197,13 +197,13 @@ export interface K2 {
     /** Other people looking at one agent right now (never you). cap presence:read · local · zen-v1. e.g. `const people = await k2.presence.get(row.address)` */
     get(address: string): Promise<Person[]>
     /** The same list as presence.get, pushed on change. cap presence:read · local · zen-v1. e.g. `const off = k2.presence.subscribe(row.address, (people) => draw(people))` */
-    subscribe(address: string, cb: (value: Person[]) => void): () => void
+    subscribe(address: string, cb: (value: Person[]) => void, onError?: (error: K2Error) => void): () => void
   }
   readonly thread: {
     /** A page of the Thread, oldest first; beforeSeq pages back through history. cap thread:read · portable · zen-v1. e.g. `const page = await k2.thread.read(row.address, {limit: 50})` */
     read(address: string, opts?: { beforeSeq?: number; limit?: number }): Promise<ThreadPage>
     /** The live Thread with one agent and its working turn, pushed on every change. cap thread:read · portable · zen-v1. e.g. `const off = k2.thread.subscribe(row.address, (view) => draw(view))` */
-    subscribe(address: string, cb: (value: ThreadView) => void): () => void
+    subscribe(address: string, cb: (value: ThreadView) => void, onError?: (error: K2Error) => void): () => void
     /** Send text to the agent as you (text only, no files). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
     post(address: string, text: string): Promise<Posted>
     /** Answer a choice card in the Thread (never a secret card). cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
@@ -215,10 +215,12 @@ export interface K2 {
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>
-  /** Subscribe by name; returns the unsubscribe. */
+  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */
   subscribe<V extends K2SubscribeVerb>(
     verb: V,
-    ...args: [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]
+    ...args:
+      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]
+      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]
   ): () => void
   /** Alias of `subscribe`. */
   on: K2['subscribe']

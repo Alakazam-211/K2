@@ -221,6 +221,45 @@ describe('TUWA6: the frame runtime', () => {
     await expect(p2).rejects.toMatchObject({ code: 'verb_unavailable', feature: 'zen-widgets-v1' })
   })
 
+  it('a refused subscription ({sub, error}) ends and reaches onError; without onError K2 hears it (B4 Q2)', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    const got: unknown[] = []
+    const errs: any[] = []
+    r.k2.thread.subscribe('alice::local', (v: unknown) => got.push(v), (e: unknown) => errs.push(e))
+    r.k2.agents.subscribe((v: unknown) => got.push(v))
+    await tick()
+    const subOf = (verb: string): number =>
+      (heard.find((m) => (m as { verb?: string }).verb === verb) as { sub: number; args: unknown[] }).sub
+    const threadMsg = heard.find((m) => (m as { verb?: string }).verb === 'thread.subscribe') as { args: unknown[] }
+    expect(threadMsg.args).toEqual(['alice::local'])
+    const tSub = subOf('thread.subscribe')
+    const aSub = subOf('agents.subscribe')
+    host.postMessage({ sub: tSub, error: { code: 'cap_not_granted', message: 'thread.subscribe needs thread:read.', cap: 'thread:read' } })
+    host.postMessage({ sub: aSub, error: { code: 'rate_limited', message: 'At most 16 live subscriptions.' } })
+    await tick()
+    expect(errs).toHaveLength(1)
+    expect(errs[0].name).toBe('K2Error')
+    expect(errs[0].code).toBe('cap_not_granted')
+    expect(errs[0].cap).toBe('thread:read')
+    expect(errs[0].verb).toBe('thread.subscribe')
+    expect(heard).toContainEqual({ error: { message: 'k2: agents.subscribe refused (rate_limited): At most 16 live subscriptions.' } })
+    // The subscriptions are over: a late push reaches no one.
+    host.postMessage({ sub: tSub, value: 'late' })
+    host.postMessage({ sub: aSub, value: 'late' })
+    await tick()
+    expect(got).toEqual([])
+  })
+
+  it('a subscription made before a hello that never comes reaches onError "not connected"', () => {
+    const r = realm()
+    const errs: any[] = []
+    r.k2.agents.subscribe(() => undefined, (e: unknown) => errs.push(e))
+    r.runTimers()
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toMatchObject({ code: 'failed', message: 'not connected', verb: 'agents.subscribe' })
+  })
+
   it('theme.changed: K2 applies --zen-* variables and the scheme on :root, nothing else', async () => {
     const r = realm()
     const { heard, host } = connect(r)

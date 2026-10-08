@@ -700,7 +700,7 @@ Then, over the port only:
 | Frame → host | Host → frame |
 |---|---|
 | `{id, verb, args}` | `{id, ok: true, value}` or `{id, ok: false, error: {code, message, cap?, room?, feature?}}` |
-| `{sub, verb, args}` | `{sub, value}` per push |
+| `{sub, verb, args}` | `{sub, value}` per push, or `{sub, error: {code, message, …}}` once when K2 refuses it (the subscription is over; the runtime calls the widget's `onError`, the function after `cb`, or reports it to K2 as an uncaught error) |
 | `{unsub}` | — |
 | `{ready: true}` (once drawn) | `{ping}` every 5 s after ready |
 | `{pong}` | — |

@@ -39114,7 +39114,9 @@ ALSO ON k2
   checks every call. k2.ready() once drawn. k2.config, k2.widget,
   k2.asset(name), k2.motion.reduced. A refused call rejects with K2Error
   (.code, .message, .verb, .cap, .room, .feature). Subscribes return the
-  unsubscribe.
+  unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,
+  onError)) to hear a refused subscription (it ends; without onError K2
+  logs it as a widget error).
 
 RULES
   textContent for anything an agent wrote, never innerHTML. No onclick=:

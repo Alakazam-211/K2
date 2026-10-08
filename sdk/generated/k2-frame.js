@@ -42,18 +42,18 @@
   // and writes `sdk/generated/k2-frame.js`, which the renderer inlines. Rerun
   // contract-gen after any edit here (the freshness tests check).
   //
-  // Transport interface: {call(verb, args), subscribe(verb, args, cb), info()}.
-  // v2 wires one adapter, MessagePort, created from K2's hello; the cookie and
-  // server adapters are Cut B and are not written here. The frame never holds
-  // a token: no mode of this runtime takes one.
+  // One transport adapter in v2: the hello's MessagePort (cookie and server
+  // adapters are Cut B). The frame never holds a token.
   //
   // Protocol (host = K2's renderer, over the hello's private port):
   //   frame → host {id, verb, args} · {sub, verb, args} · {unsub} · {ready}
   //                {pong} · {error: {message, stack?}} · {chord}
   //   host → frame {id, ok, value} · {id, ok: false, error} · {sub, value}
-  //                {ping}
+  //                {sub, error} · {ping}
   // Calls made before the hello wait for it (it comes on the frame's load);
   // with no hello in 10 s they reject with K2Error `failed` "not connected".
+  // A refused subscription gets `{sub, error}` once and ends: the runtime
+  // calls its onError (after cb) or, with none, reports it to K2.
   ;(function () {
     'use strict'
 
@@ -89,13 +89,12 @@
     var nextId = 1
     /** @type {Map<number, {resolve: (v: unknown) => void, reject: (e: unknown) => void, verb: string}>} */
     var pending = new Map()
-    /** @type {Map<number, (v: unknown) => void>} */
+    /** @typedef {{cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null, verb: string}} Sub */
+    /** @type {Map<number, Sub>} */
     var subs = new Map()
 
-    // K2's hello arrives on the frame's `load`, after the widget's top-level
-    // scripts ran. Messages sent before it wait (in order) and go out with
-    // the hello; with no hello within CONNECT_MS, waiting calls reject with
-    // K2Error `failed` "not connected" (and K2 shows "didn't start").
+    // Messages sent before the hello (it comes on `load`) wait, in order; with
+    // none in CONNECT_MS they fail "not connected" (K2 shows "didn't start").
     var CONNECT_MS = 10000
     /** @type {unknown[] | null} */
     var early = []
@@ -118,12 +117,34 @@
         p.reject(notConnected(p.verb))
       })
       pending.clear()
+      var waiting = Array.from(subs.values())
       subs.clear()
+      waiting.forEach(function (s) {
+        refused(s, notConnected(s.verb))
+      })
     }, CONNECT_MS)
+
+    /** @param {any} r */
+    function report(r) {
+      send({ error: { message: String(r && r.message ? r.message : r), stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined } })
+    }
+
+    /**
+     * @param {Sub} s
+     * @param {K2Error} err
+     */
+    function refused(s, err) {
+      if (!s.onError) return send({ error: { message: 'k2: ' + s.verb + ' refused (' + err.code + '): ' + err.message } })
+      try {
+        s.onError(err)
+      } catch (e) {
+        report(e)
+      }
+    }
 
     /**
      * One adapter: the hello's MessagePort.
-     * @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
+     * @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
      */
     var transport = {
       call: function (verb, args) {
@@ -134,11 +155,11 @@
           send({ id: id, verb: verb, args: args })
         })
       },
-      subscribe: function (verb, args, cb) {
-        if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the last argument must be a function')
+      subscribe: function (verb, args, cb, onError) {
+        if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
         if (!port && !early) throw notConnected(verb)
         var sub = nextId++
-        subs.set(sub, cb)
+        subs.set(sub, { cb: cb, onError: onError, verb: verb })
         send({ sub: sub, verb: verb, args: args })
         var live = true
         return function unsubscribe() {
@@ -162,8 +183,15 @@
         return
       }
       if (typeof m.sub === 'number' && 'value' in m) {
-        var cb = subs.get(m.sub)
-        if (cb) cb(m.value)
+        var s = subs.get(m.sub)
+        if (s) s.cb(m.value)
+        return
+      }
+      if (typeof m.sub === 'number') {
+        var gone = subs.get(m.sub)
+        if (!gone) return
+        subs.delete(m.sub)
+        refused(gone, new K2Error(m.error || { code: 'failed', message: 'refused' }, gone.verb))
         return
       }
       if (typeof m.id === 'number') {
@@ -209,7 +237,7 @@
       port.onmessage = onPortMessage
       g.removeEventListener('message', onHello)
       // K2's own subscription: the frame follows the Garden's theme.
-      transport.subscribe('theme.changed', [], applyTheme)
+      transport.subscribe('theme.changed', [], applyTheme, null)
       var waiting = early || []
       early = null
       for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
@@ -219,11 +247,10 @@
     // ── Errors and keys reported to K2 (UW30, UW33) ─────────────────────────
 
     g.addEventListener('error', function (/** @type {ErrorEvent} */ e) {
-      send({ error: { message: String(e.message || 'error'), stack: e.error && e.error.stack ? String(e.error.stack).slice(0, 2000) : undefined } })
+      report({ message: e.message || 'error', stack: e.error && e.error.stack })
     })
     g.addEventListener('unhandledrejection', function (/** @type {PromiseRejectionEvent} */ e) {
-      var r = e.reason
-      send({ error: { message: String(r && r.message ? r.message : r), stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined } })
+      report(e.reason)
     })
 
     var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
@@ -264,12 +291,16 @@
     }
 
     /**
+     * Args can't be functions (MessagePort), so trailing ones are cb, onError?.
      * @param {string} verb
-     * @param {unknown[]} rest  args…, cb
+     * @param {unknown[]} rest
      */
     function subscribe(verb, rest) {
-      var cb = rest[rest.length - 1]
-      return transport.subscribe(verb, rest.slice(0, -1), /** @type {(v: unknown) => void} */ (cb))
+      var n = rest.length
+      var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
+      var cb = two ? rest[n - 2] : rest[n - 1]
+      var onError = two ? /** @type {(e: K2Error) => void} */ (rest[n - 1]) : null
+      return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
     }
 
     /** @type {Record<string, any>} */

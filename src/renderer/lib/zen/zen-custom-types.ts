@@ -248,4 +248,7 @@ export type ZenFrameReply =
   | { id: number; ok: true; value: unknown }
   | { id: number; ok: false; error: CatalogWireError }
   | { sub: number; value: unknown }
+  /** The subscription was refused (cap, budget, bad args, unknown verb):
+   *  sent once, and the subscription is over. */
+  | { sub: number; error: CatalogWireError }
   | { ping: number }

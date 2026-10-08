@@ -387,7 +387,9 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       return { id: id as number, ok: true, value: zenPlain(value) }
     } catch (err) {
       const wire = toRefusal(err).wire
-      if (id === null) return null
+      // A refused subscription is answered once (`{sub, error}`), never
+      // dropped: the runtime ends it and tells the widget's onError.
+      if (id === null) return typeof m.sub === 'number' ? { sub: m.sub, error: wire } : null
       return { id, ok: false, error: wire }
     }
   }

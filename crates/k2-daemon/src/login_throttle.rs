@@ -41,6 +41,21 @@ pub const CAPACITY: usize = 4096;
 /// (and live in separate tables).
 pub const SKIN_KEY_PREFIX: &str = "skin:";
 
+/// LM4 — failed logins per [`WINDOW_SECS`], per door, across ALL
+/// clients, counted and enforced only on the LAN and tunnel listeners
+/// (the dispatcher decides). A forged forwarded header still picks the
+/// per-IP bucket, so rotating buckets is bounded only by this ceiling.
+pub const GLOBAL_FAIL_LIMIT: usize = 60;
+
+/// Which login door a global-ceiling call is about. Connect and app
+/// (skin) logins have separate ceilings so a spray on one cannot lock
+/// out the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Door {
+    Connect,
+    Skin,
+}
+
 /// Whether this attempt may proceed to argon2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -121,6 +136,19 @@ fn prune_queue(q: &mut VecDeque<i64>, now: i64) {
 struct Store {
     connect: Table,
     skin: Table,
+    /// LM4 — timestamps of recent failures per door (oldest first),
+    /// capped at [`GLOBAL_FAIL_LIMIT`] entries.
+    connect_fails: VecDeque<i64>,
+    skin_fails: VecDeque<i64>,
+}
+
+impl Store {
+    fn fails(&mut self, door: Door) -> &mut VecDeque<i64> {
+        match door {
+            Door::Connect => &mut self.connect_fails,
+            Door::Skin => &mut self.skin_fails,
+        }
+    }
 }
 
 fn store() -> &'static Mutex<Store> {
@@ -157,6 +185,29 @@ pub fn check_and_record_with_limit(key: &str, limit: usize, now: i64) -> Verdict
     table.check_and_record(key, limit, now)
 }
 
+/// LM4 — true when `door` has seen [`GLOBAL_FAIL_LIMIT`] failed logins
+/// inside the window ending at `now`; the caller refuses the attempt
+/// (429) before argon2. Does not record anything.
+pub fn global_ceiling_reached(door: Door, now: i64) -> bool {
+    let mut g = locked();
+    let q = g.fails(door);
+    prune_queue(q, now);
+    q.len() >= GLOBAL_FAIL_LIMIT
+}
+
+/// LM4 — record one failed login on `door` at `now`. Memory stays
+/// bounded: only the newest [`GLOBAL_FAIL_LIMIT`] failures are kept,
+/// which is all the ceiling needs.
+pub fn record_global_failure(door: Door, now: i64) {
+    let mut g = locked();
+    let q = g.fails(door);
+    prune_queue(q, now);
+    q.push_back(now);
+    while q.len() > GLOBAL_FAIL_LIMIT {
+        q.pop_front();
+    }
+}
+
 /// Skin login map key: `"skin:" + ip`. Empty aliases `-` like Connect.
 pub fn skin_ip_key(ip: &str) -> String {
     let ip = if ip.is_empty() { "-" } else { ip };
@@ -178,6 +229,8 @@ pub fn reset() {
     let mut g = locked();
     g.connect.hits.clear();
     g.skin.hits.clear();
+    g.connect_fails.clear();
+    g.skin_fails.clear();
 }
 
 #[cfg(test)]
@@ -191,6 +244,38 @@ mod tests {
         reset();
         f();
         reset();
+    }
+
+    /// LM4 — the per-door ceiling trips at exactly GLOBAL_FAIL_LIMIT
+    /// failures, ages out with the window, keeps the doors apart, and
+    /// keeps at most GLOBAL_FAIL_LIMIT timestamps.
+    #[test]
+    fn global_failure_ceiling_per_door() {
+        isolated(|| {
+            let now = 1_700_000_000;
+            for i in 0..(GLOBAL_FAIL_LIMIT - 1) {
+                record_global_failure(Door::Connect, now + (i as i64 % 10));
+            }
+            assert!(
+                !global_ceiling_reached(Door::Connect, now + 10),
+                "one below the ceiling still admits"
+            );
+            record_global_failure(Door::Connect, now + 10);
+            assert!(global_ceiling_reached(Door::Connect, now + 10), "ceiling reached");
+            assert!(
+                !global_ceiling_reached(Door::Skin, now + 10),
+                "a Connect spray must not close the app door"
+            );
+            for _ in 0..500 {
+                record_global_failure(Door::Connect, now + 20);
+            }
+            assert_eq!(locked().connect_fails.len(), GLOBAL_FAIL_LIMIT, "bounded");
+            assert!(global_ceiling_reached(Door::Connect, now + 20 + WINDOW_SECS - 1));
+            assert!(
+                !global_ceiling_reached(Door::Connect, now + 20 + WINDOW_SECS),
+                "failures age out with the window"
+            );
+        });
     }
 
     #[test]

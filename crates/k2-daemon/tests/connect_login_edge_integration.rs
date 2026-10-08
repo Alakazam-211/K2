@@ -1371,3 +1371,118 @@ async fn full_throttle_tables_do_not_429_new_clients() {
         assert!(connect <= cap && skin <= cap, "still bounded: {connect}/{skin}");
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// LM4 (prd-lan-mode-toggle-tls-docs-v1 §11) — a local reverse proxy is not
+// "local", and a global failed-login ceiling closes bucket rotation.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proxied_loopback_connect_login_is_capped_on_rightmost_hop() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let _s = seed("lm4cap", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        // LM15: distinct usernames, so the 3/15 username lockout can't be
+        // what produces the 429.
+        for i in 1..=k2_daemon::login_throttle::LIMIT {
+            let xff = format!("X-Forwarded-For: 203.0.113.{i}, 198.51.100.50");
+            let body = format!(r#"{{"username":"lm4cap{i}","password":"WRONG"}}"#);
+            let r = http(d.port, "POST", LOGIN, Some(&body), &[&xff]);
+            assert_eq!(r.status, 401, "proxied attempt {i}; body={}", r.body);
+        }
+        let r = http(
+            d.port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"lm4cap-last","password":"WRONG"}"#),
+            &["X-Forwarded-For: 203.0.113.99, 198.51.100.50"],
+        );
+        assert_rate_limited(&r, "6th proxied Connect login from right-most hop 198.51.100.50");
+        let last = audit_events_for("login").pop().expect("rate_limited audit");
+        assert_eq!(last["outcome"], "rate_limited", "{last}");
+        assert_eq!(last["ingress"], "lan", "proxied loopback is audited as lan: {last}");
+
+        // A plain loopback client (desktop app, CLI) stays uncapped.
+        for i in 1..=(k2_daemon::login_throttle::LIMIT + 1) {
+            let body = format!(r#"{{"username":"lm4plain{i}","password":"WRONG"}}"#);
+            let r = http(d.port, "POST", LOGIN, Some(&body), &[]);
+            assert_eq!(r.status, 401, "plain loopback attempt {i}; body={}", r.body);
+        }
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_failed_login_ceiling_refuses_fresh_remote_clients_only() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let _s = seed("lm4glob", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        // One real proxied failure counts toward the Connect ceiling...
+        let first = http(
+            d.port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"lm4glob1","password":"WRONG"}"#),
+            &["X-Real-IP: 203.0.113.7", "X-Forwarded-For: 198.51.100.60"],
+        );
+        assert_eq!(first.status, 401, "first proxied attempt; body={}", first.body);
+        assert!(
+            !k2_daemon::login_throttle::global_ceiling_reached(
+                k2_daemon::login_throttle::Door::Connect,
+                now(),
+            ),
+            "one failure is far below the ceiling"
+        );
+        // ...the rest of the window's failures arrive from elsewhere.
+        for _ in 1..k2_daemon::login_throttle::GLOBAL_FAIL_LIMIT {
+            k2_daemon::login_throttle::record_global_failure(
+                k2_daemon::login_throttle::Door::Connect,
+                now(),
+            );
+        }
+        assert!(
+            k2_daemon::login_throttle::global_ceiling_reached(
+                k2_daemon::login_throttle::Door::Connect,
+                now(),
+            ),
+            "the proxied failure was counted: ceiling now full"
+        );
+        let fresh = http(
+            d.port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"lm4glob","password":"password123"}"#),
+            &["X-Forwarded-For: 198.51.100.61"],
+        );
+        assert_rate_limited(&fresh, "a fresh proxied client once the Connect ceiling is full");
+
+        let plain = http(
+            d.port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"lm4glob","password":"password123"}"#),
+            &[],
+        );
+        assert_eq!(
+            plain.status, 200,
+            "plain loopback logins are exempt from the ceiling; body={}",
+            plain.body
+        );
+
+        let skin = http(
+            d.port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"WRONG"}"#),
+            &["X-Forwarded-For: 198.51.100.62"],
+        );
+        assert_eq!(
+            skin.status, 401,
+            "a full Connect ceiling must not close the app door; body={}",
+            skin.body
+        );
+    });
+}

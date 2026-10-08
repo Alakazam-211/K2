@@ -35,7 +35,9 @@ use tokio::net::TcpStream;
 /// - `Loopback` — the main listener, peer is 127.0.0.1/::1 (desktop app,
 ///   CLI, local agents). Full surface.
 /// - `Lan` — the main listener bound to a LAN address, non-loopback peer
-///   (`K2_LISTEN=lan`). Same surface as loopback today.
+///   (`K2_LISTEN=lan`). Same surface as loopback today. Also a loopback
+///   peer that relays someone else through proxy headers (LM4,
+///   [`Ingress::reclassify_proxied`]).
 /// - `Tunnel` — the tunnel-ingress listener (`tunnel_ingress_listener.rs`):
 ///   bytes that arrived through the public K2 Connect tunnel (E2E splice
 ///   or cleartext frpc). The MOST restricted: no HTML account page, and
@@ -54,6 +56,37 @@ impl Ingress {
             Ingress::Loopback
         } else {
             Ingress::Lan
+        }
+    }
+
+    /// LM4 — a loopback connection that carries a proxy header
+    /// (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, any
+    /// `Tailscale-User-*`) is a local reverse proxy relaying someone
+    /// else: treat it as `Lan` for the whole request (login caps apply,
+    /// it is not "local"). No such header → unchanged. `Lan` / `Tunnel`
+    /// are never changed.
+    pub fn reclassify_proxied(self, request_head: &str) -> Self {
+        if self != Ingress::Loopback {
+            return self;
+        }
+        // Header names only: skip the request line, stop at the blank
+        // line (a peeked body is not headers).
+        let proxied = request_head
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.trim().is_empty())
+            .any(|line| {
+            let Some((name, _)) = line.split_once(':') else {
+                return false;
+            };
+            let name = name.trim().to_ascii_lowercase();
+            matches!(name.as_str(), "x-forwarded-for" | "forwarded" | "x-real-ip")
+                || name.starts_with("tailscale-user-")
+        });
+        if proxied {
+            Ingress::Lan
+        } else {
+            self
         }
     }
 
@@ -306,7 +339,8 @@ fn proxied_client(
 ) -> Option<std::net::IpAddr> {
     let peer_trusted = match ingress {
         Ingress::Loopback => peer.is_some_and(|p| p.is_loopback()),
-        Ingress::Lan => peer.is_some_and(|p| trusted.contains(&p)),
+        // LM4: a loopback peer on `Lan` is a reclassified local proxy.
+        Ingress::Lan => peer.is_some_and(|p| p.is_loopback() || trusted.contains(&p)),
         Ingress::Tunnel => false,
     };
     if !peer_trusted {
@@ -490,6 +524,60 @@ mod login_throttle_key_tests {
         );
     }
 
+    /// LM4 — each proxy header turns a loopback connection into `Lan`
+    /// (header names case-insensitive); without one nothing changes; a
+    /// body line never counts; `Lan`/`Tunnel` are never changed.
+    #[test]
+    fn proxied_loopback_is_reclassified_as_lan() {
+        let head = |h: &str| format!("POST /cli/auth/login HTTP/1.1\r\nHost: x\r\n{h}\r\n");
+        for h in [
+            "X-Forwarded-For: 203.0.113.1\r\n",
+            "x-forwarded-for: 203.0.113.1\r\n",
+            "Forwarded: for=203.0.113.1\r\n",
+            "X-Real-IP: 203.0.113.1\r\n",
+            "Tailscale-User-Login: someone@example.com\r\n",
+            "tailscale-user-name: Someone\r\n",
+        ] {
+            assert_eq!(
+                Ingress::Loopback.reclassify_proxied(&head(h)),
+                Ingress::Lan,
+                "{h:?} must reclassify"
+            );
+        }
+        for h in ["", "X-Forwarded-Proto: https\r\n", "CF-Connecting-IP: 203.0.113.1\r\n"] {
+            assert_eq!(
+                Ingress::Loopback.reclassify_proxied(&head(h)),
+                Ingress::Loopback,
+                "{h:?} must not reclassify"
+            );
+        }
+        let body_only = "POST /cli/auth/login HTTP/1.1\r\nHost: x\r\n\r\nX-Forwarded-For: 1.2.3.4\r\n";
+        assert_eq!(Ingress::Loopback.reclassify_proxied(body_only), Ingress::Loopback);
+        let xff = head("X-Forwarded-For: 203.0.113.1\r\n");
+        assert_eq!(Ingress::Lan.reclassify_proxied(&xff), Ingress::Lan);
+        assert_eq!(Ingress::Tunnel.reclassify_proxied(&xff), Ingress::Tunnel);
+    }
+
+    /// LM4 — on a reclassified local proxy the bucket is the right-most
+    /// hop for both doors; with no usable hop it is the peer.
+    #[test]
+    fn reclassified_local_proxy_keys_on_rightmost_hop() {
+        let h = "X-Forwarded-For: 203.0.113.80, 198.51.100.81\r\nCF-Connecting-IP: 203.0.113.82\r\n";
+        assert_eq!(
+            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), h, &[]),
+            ThrottleKey::Client("198.51.100.81".into())
+        );
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Lan, Some(ip(LO)), h, &[]),
+            ThrottleKey::Client("198.51.100.81".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Lan, None, Some(ip(LO)), "X-Real-IP: 203.0.113.83\r\n", &[]),
+            ThrottleKey::Client(LO.into()),
+            "no X-Forwarded-For: the proxy's own bucket"
+        );
+    }
+
     #[test]
     fn loopback_connect_stays_uncapped() {
         assert_eq!(
@@ -658,6 +746,8 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
     let req = String::from_utf8_lossy(&buf[..n]);
+    // LM4: a local reverse proxy is not "local".
+    let ingress = ingress.reclassify_proxied(&req);
 
     // 0.39.7: parse the request's `Connection:` header. If the client
     // requested close, we still serve THIS request normally, but
@@ -3091,6 +3181,30 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             }
+            // LM4 — global failed-login ceiling for remote listeners (LAN,
+            // reclassified local proxies, tunnel). Loopback never counts.
+            let remote_login = ingress != Ingress::Loopback;
+            if remote_login
+                && crate::login_throttle::global_ceiling_reached(
+                    crate::login_throttle::Door::Connect,
+                    k2_core::edge_attest::now_unix(),
+                )
+            {
+                let audit_ingress = match &attested {
+                    Some(att) => format!("edge:{}", att.kid),
+                    None => ingress.as_str().to_string(),
+                };
+                k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                    "login",
+                    &crate::connect_users_routes::login_body_username(&body_bytes),
+                    "rate_limited",
+                    audit_ingress,
+                    "-".to_string(),
+                    if web_mode { "web" } else { "api" },
+                ));
+                super::http::send_login_rate_limited(&mut *stream).await;
+                return DispatchOutcome::Done;
+            }
             // argon2 verify is slow + happens regardless of outcome
             // (anti-enumeration) — spawn_blocking off the accept loop.
             let reply = tokio::task::spawn_blocking(move || {
@@ -3120,6 +3234,12 @@ async fn handle_one_request(
                 if web_mode { "web" } else { "api" },
             ));
             let r = reply.response;
+            if remote_login && r.status.starts_with("401") {
+                crate::login_throttle::record_global_failure(
+                    crate::login_throttle::Door::Connect,
+                    k2_core::edge_attest::now_unix(),
+                );
+            }
             // Fixed failure delay on the 401 path so successful logins
             // stay snappy. The per-IP cap (T1, above) is the limiter;
             // this stacks a deterministic floor on remaining 401s. The
@@ -3198,6 +3318,18 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             }
+            // LM4 — global failed-login ceiling for remote listeners, its
+            // own budget so an app-login spray cannot close Connect.
+            let remote_login = ingress != Ingress::Loopback;
+            if remote_login
+                && crate::login_throttle::global_ceiling_reached(
+                    crate::login_throttle::Door::Skin,
+                    k2_core::edge_attest::now_unix(),
+                )
+            {
+                super::http::send_login_rate_limited(&mut *stream).await;
+                return DispatchOutcome::Done;
+            }
             let r = tokio::task::spawn_blocking(move || {
                 crate::skin_routes::handle_login(&body_bytes, &content_type)
             })
@@ -3209,6 +3341,12 @@ async fn handle_one_request(
                 token: None,
                 location: None,
             });
+            if remote_login && r.response.status.starts_with("401") {
+                crate::login_throttle::record_global_failure(
+                    crate::login_throttle::Door::Skin,
+                    k2_core::edge_attest::now_unix(),
+                );
+            }
             if r.response.status.starts_with("401") {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }

@@ -281,6 +281,10 @@ mod tests {
 
     #[test]
     fn remove_validates_body_and_maps_op_errors() {
+        // The confirmed remove below needs NO mail_server row; hold the
+        // lock so a sibling's seeded row (and its mock engine) can't be
+        // reached mid-test (the dkim rotate test's mock got this call).
+        let _g = crate::mail::mail_server_test_lock();
         let resp = handle_domain_remove(b"{}");
         assert_eq!(resp.status, "400 Bad Request");
 

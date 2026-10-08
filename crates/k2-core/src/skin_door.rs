@@ -18,6 +18,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::frame_policy::FramePolicy;
 use crate::skin::{self, SkinFrontDoor};
 use crate::tunnel::config::SUBDOMAIN_HOST;
 
@@ -209,6 +210,10 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
             out.push_str("\t\t\ttls_insecure_skip_verify\n");
             out.push_str("\t\t}\n");
             out.push_str("\t}\n");
+            // Stalwart's web admin has no reason to be framed. After the
+            // reverse_proxy line: `caddyfile_has_mail_site` reads that one
+            // first. `?` keeps any header Stalwart sets itself.
+            push_frame_headers(&mut out, "\t", &FramePolicy::deny_all());
             out.push_str("}\n");
         }
         // Unknown Host on :443 → 403. Not `http://:443` skin allowlist.
@@ -297,6 +302,7 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     }
     out.push_str("\thandle {\n");
     out.push_str("\t\theader Content-Type application/json\n");
+    push_frame_headers(out, "\t\t", &FramePolicy::app_default());
     out.push_str("\t\trespond `{\"error\":\"");
     out.push_str(PATH_FILTER_ERROR);
     out.push_str("\"}` 403\n");
@@ -307,16 +313,36 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
 fn push_unknown_host_handle(out: &mut String) {
     out.push_str("\thandle {\n");
     out.push_str("\t\theader Content-Type application/json\n");
+    push_frame_headers(out, "\t\t", &FramePolicy::app_default());
     out.push_str("\t\trespond `{\"error\":\"");
     out.push_str(UNKNOWN_HOST_ERROR);
     out.push_str("\"}` 403\n");
     out.push_str("\t}\n");
 }
 
+/// Framing headers (prd-app-frame-ancestors-v1 §4, FA7). `?` sets each
+/// only when the upstream did not, so the daemon's own lines win. Never
+/// used in front of `@skinUi`: an upstream CSP without `frame-ancestors`
+/// would leave a Caddy `X-Frame-Options: SAMEORIGIN` alone in force, and
+/// that refuses K2's windows. The helper there sets its own per-App policy.
+fn push_frame_headers(out: &mut String, indent: &str, policy: &FramePolicy) {
+    out.push_str(indent);
+    out.push_str("header ?Content-Security-Policy \"");
+    out.push_str(&policy.csp_value());
+    out.push_str("\"\n");
+    if let Some(xfo) = policy.xfo_value() {
+        out.push_str(indent);
+        out.push_str("header ?X-Frame-Options ");
+        out.push_str(xfo);
+        out.push('\n');
+    }
+}
+
 fn push_handle(out: &mut String, matcher: &str, daemon: &str) {
     out.push_str("\thandle ");
     out.push_str(matcher);
     out.push_str(" {\n");
+    push_frame_headers(out, "\t\t", &FramePolicy::app_default());
     out.push_str("\t\treverse_proxy ");
     out.push_str(daemon);
     out.push('\n');
@@ -1376,6 +1402,67 @@ mod tests {
         assert!(file.contains("http://mail.acme.dev:80"), "{file}");
         assert!(!file.contains("http://:443"), "{file}");
         assert_no_daemon_loop_via_38472(&file);
+    }
+
+    /// prd-app-frame-ancestors-v1 §5 test 5 + FA7: every daemon route and
+    /// every 403 carries the `?` framing lines; `@skinUi` (the helper sets
+    /// its own per-App policy) does not; the mail site refuses all frames
+    /// and stays recognisable as the mail site.
+    #[test]
+    fn render_frame_headers_on_daemon_routes_and_403s_not_skin_ui() {
+        let csp = "\t\theader ?Content-Security-Policy \"frame-ancestors 'self' tauri://localhost http://tauri.localhost\"";
+        let xfo = "\t\theader ?X-Frame-Options SAMEORIGIN";
+        let mut ui_spec = spec_hosts(
+            Some("box.example.com"),
+            Some("mail.acme.dev"),
+            ":443",
+            true,
+        );
+        ui_spec.ui_port = Some(5173);
+        for file in [
+            render_caddyfile(&spec(None, None)),
+            render_caddyfile(&spec(Some(5173), None)),
+            render_caddyfile(&ui_spec),
+        ] {
+            let lines: Vec<&str> = file.lines().collect();
+            let mut handles = 0;
+            for (i, l) in lines.iter().enumerate() {
+                if !l.starts_with("\thandle") {
+                    continue;
+                }
+                // The block body: up to the matching `\t}`.
+                let body: Vec<&str> = lines[i + 1..]
+                    .iter()
+                    .take_while(|b| **b != "\t}")
+                    .copied()
+                    .collect();
+                if l.starts_with("\thandle @skinUi") {
+                    assert!(
+                        !body.iter().any(|b| b.contains("Frame-Options") || b.contains("frame-ancestors")),
+                        "@skinUi must not get Caddy framing headers (FA7): {file}"
+                    );
+                    continue;
+                }
+                handles += 1;
+                assert!(body.contains(&csp), "handle without CSP line: {l}\n{file}");
+                assert!(body.contains(&xfo), "handle without XFO line: {l}\n{file}");
+                assert_eq!(
+                    body.iter().filter(|b| b.contains("Content-Security-Policy")).count(),
+                    1,
+                    "{l}\n{file}"
+                );
+            }
+            assert!(handles >= 20, "too few handles checked ({handles}): {file}");
+        }
+        let file = render_caddyfile(&ui_spec);
+        assert!(caddyfile_has_mail_site(&file, "mail.acme.dev"), "{file}");
+        assert!(
+            file.contains("\theader ?Content-Security-Policy \"frame-ancestors 'none'\"\n\theader ?X-Frame-Options DENY\n}"),
+            "mail site refuses all frames: {file}"
+        );
+        // The unknown-Host :443 site has its own lines (FA7).
+        let tail = file.split("\n:443 {\n").nth(1).expect(":443 site");
+        assert!(tail.contains(csp) && tail.contains(xfo), "{tail}");
     }
 
     #[test]

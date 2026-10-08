@@ -194,6 +194,9 @@ pub mod project_groups;
 pub mod projects_ops;
 /// Daemon-owned published services (`published_services` / migration 0104).
 pub mod published_services;
+/// Who may frame a K2 web page: the one `frame-ancestors` policy for the
+/// daemon, the App gateway helper and the Caddy front door.
+pub mod frame_policy;
 /// Host-wide custom-domain inventory (`domain_bindings` / `domain_names`, 0120).
 pub mod domains;
 /// Daemon-owned workspace resources (`workspace_resources` / migration 0105).

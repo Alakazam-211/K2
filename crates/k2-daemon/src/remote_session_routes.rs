@@ -528,11 +528,20 @@ mod tests {
 
     /// Serialize tests that flip Layer 0 / mint grants so parallel
     /// lib tests cannot race `is_enabled` into an accidental real PTY
-    /// spawn (which needs a Tokio runtime).
+    /// spawn (which needs a Tokio runtime). Layer 0 lives in
+    /// `~/.k2/settings.json`, so each test also gets a temp HOME under the
+    /// shared env lock (taken first): another test's HOME swap between
+    /// `set_enabled(true)` and the gate read made it look OFF.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock() -> k2_core::test_env::EnvSerial<(
+        crate::test_support::TempHome,
+        std::sync::MutexGuard<'static, ()>,
+    )> {
+        k2_core::test_env::serial_with(|| {
+            let home = crate::test_support::TempHome::new();
+            (home, TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+        })
     }
 
     #[test]

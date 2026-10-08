@@ -70,6 +70,13 @@ pub fn serial(module_lock: &'static std::sync::Mutex<()>) -> SerialGuard {
     EnvSerial { _inner: inner, _env: env }
 }
 
+/// Take the env lock, then build the module guard(s) with `f` (for a module
+/// lock that comes with its own `TempHome`, a tuple, …).
+pub fn serial_with<G>(f: impl FnOnce() -> G) -> EnvSerial<G> {
+    let env = lock();
+    EnvSerial { _inner: f(), _env: env }
+}
+
 /// A zero-sized handle whose `.lock()` takes [`lock`]. Old per-module lock
 /// statics (`themes::HOME_LOCK`, …) are declared as this type, so any code
 /// still written against them (including branches merged later) serializes

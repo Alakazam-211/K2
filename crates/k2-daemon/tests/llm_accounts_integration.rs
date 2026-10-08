@@ -435,6 +435,30 @@ async fn wallet_routes_end_to_end() {
     let default_slot = env.home.join(format!(".k2/llm-accounts/claude/{default_id}/.credentials.json"));
     assert_eq!(std::fs::read_to_string(&default_slot).unwrap(), refreshed, "outgoing saved back");
 
+    // A Connect login is how a desktop window on ANOTHER computer reads this
+    // server (Settings → LLMs per server, 0.45.1): it gets this server's
+    // tokens — the same rows the owner token sees — and never a filesystem
+    // path of this server.
+    let owner_list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let r = get(port, "/cli/llm/accounts/list", &member);
+    assert_eq!(r.status, 200, "member list: {}", r.body);
+    let member_list = js(&r);
+    let ids = |l: &Value| -> Vec<String> {
+        tool_doc(l, "claude")["accounts"]
+            .as_array()
+            .expect("claude accounts")
+            .iter()
+            .map(|a| a["id"].as_str().expect("id").to_string())
+            .collect()
+    };
+    assert_eq!(ids(&member_list), ids(&owner_list), "a login sees the server's tokens");
+    assert_eq!(ids(&member_list).len(), 2, "Default + Work: {}", r.body);
+    assert_eq!(tool_doc(&member_list, "claude")["activeId"], work_id.as_str());
+    let home_str = env.home.display().to_string();
+    assert!(!r.body.contains(&home_str), "no server path in the list: {}", r.body);
+    assert!(!r.body.contains("llm-accounts/"), "no slot path in the list: {}", r.body);
+    assert!(!r.body.contains(MARKER), "no token in the list");
+
     // Remove the active one → refused. Next → back to Default.
     let r = post(port, "/cli/llm/accounts/remove", OWNER, json!({"id": work_id}));
     assert_eq!(r.status, 409);

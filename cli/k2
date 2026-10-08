@@ -39635,7 +39635,7 @@ if err is not None:
     elif err == "garden_has_changes":
         print("Error: Garden %s has its own changes (%s). Add --force to start it over; the file is kept in .history/." % (d.get("garden"), ", ".join(d.get("keys") or [])), file=sys.stderr)
     elif err == "zen_local_only" and verb.startswith(("sync", "news")):
-        print("Error: only the person on this computer can change Garden sync and news. Ask the person: Settings → Gardens.", file=sys.stderr)
+        print("Error: only the person on this computer can change Garden sync and news. Ask the person: Settings → Gardens. (Inside a K2 terminal this runs as that session; a person can use Settings or a terminal outside K2.)", file=sys.stderr)
     elif err == "zen_local_only":
         print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner.", file=sys.stderr)
     elif isinstance(err, dict):
@@ -40194,6 +40194,23 @@ print(json.dumps(b))
 # k2 zen sync / k2 zen news (prd-zen-garden-sync-defaults-v1 §11). The
 # daemon owns sync.json and news.json; the changes are owner-only, so an
 # agent gets 403 zen_local_only and the message to ask the person.
+
+# GS32: a person-only Zen change (sync on/off/undo/keep-previous, news
+# seen). `zen` is an Open tool, so inside a K2 terminal the CLI would
+# otherwise send the disk owner token; this sends the session's passport
+# instead, and the daemon refuses it. Outside K2 the owner token is used.
+_zen_person_post() {
+    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    if [ -n "$hook_sock" ]; then
+        local saved="$TOKEN"
+        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        cli_post_json "$endpoint" "$body"
+        TOKEN="$saved"
+    else
+        cli_post_json "$endpoint" "$body"
+    fi
+}
+
 cmd_zen_sync() {
     local as_json=false part="" raw body
     local -a pos=()
@@ -40222,13 +40239,13 @@ cmd_zen_sync() {
 import json, os
 print(json.dumps({"garden": os.environ["ZG"], "part": os.environ["ZP"], "sync": os.environ["ZS"] == "on"}))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            raw=$(_zen_person_post "/cli/zen/garden/sync" "$body")
             _zen_print sync-change "$as_json" "$raw"
             ;;
         undo)
             [ -z "$part" ] || { echo "Error: undo puts back the last change; it takes no --page or --theme" >&2; exit 2; }
             body=$(ZG="$garden" python3 -c 'import json, os; print(json.dumps({"garden": os.environ["ZG"], "undo": True}))')
-            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            raw=$(_zen_person_post "/cli/zen/garden/sync" "$body")
             _zen_print sync-change "$as_json" "$raw"
             ;;
         keep-previous)
@@ -40236,7 +40253,7 @@ print(json.dumps({"garden": os.environ["ZG"], "part": os.environ["ZP"], "sync": 
 import json, os
 print(json.dumps({"garden": os.environ["ZG"], "keep": "previous", "part": os.environ["ZP"]}))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            raw=$(_zen_person_post "/cli/zen/garden/sync" "$body")
             _zen_print sync-change "$as_json" "$raw"
             ;;
         preview)
@@ -40285,7 +40302,7 @@ if os.environ.get("ZA") == "true":
 else:
     print(json.dumps({"ids": sys.argv[1:]}))
 ' ${ids[@]+"${ids[@]}"})
-    raw=$(cli_post_json "/cli/zen/news/seen" "$body")
+    raw=$(_zen_person_post "/cli/zen/news/seen" "$body")
     _zen_print news-seen "$as_json" "$raw"
 }
 

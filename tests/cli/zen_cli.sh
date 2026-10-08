@@ -161,6 +161,18 @@ assert_eq "news seen needs ids or --all" "$rc" "2"
 capture zen news seen --all
 assert_eq "news seen --all exit" "$rc" "0"
 [ -f "$ZEN/sync.json" ] && ok "the daemon wrote sync.json" || bad "no sync.json"
+
+echo "== inside a K2 session the change goes out as the session (GS32) =="
+set +e
+out="$(env -u K2SO_HOOK_SOCK -u K2SO_PORT -u K2SO_HOOK_TOKEN -u K2_PROJECT_PATH \
+    HOME="$SANDBOX" K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_SOCK="$SANDBOX/no-such.sock" \
+    K2_HOOK_TOKEN="not-the-owner-token" "$K2_CLI" zen sync "Garden 2" off 2>&1)"
+rc=$?
+set -e
+assert_eq "a session's sync off is refused (exit 1)" "$rc" "1"
+case "$out" in *"$TOKEN"*) bad "the refusal leaked the owner token" ;; *) ok "no owner token in the refusal" ;; esac
+capture zen sync
+assert_contains "Garden 2 is still synced" "$out" "Garden 2  page synced; theme synced"
 capture zen validate
 assert_eq "fresh setup validates" "$rc" "0"
 assert_contains "validate ok line" "$out" "ok: zen.toml, gardens/$DEFAULT_ID.toml"

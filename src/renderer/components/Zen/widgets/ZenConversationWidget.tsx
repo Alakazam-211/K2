@@ -22,7 +22,7 @@ import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -48,20 +48,27 @@ export const zenPermissionText = (label: string): string => `${label} is stuck o
 function itemText(item: OverlayThreadItem): string {
   const d = item.doc
   if (d.kind === 'choice') return d.choice?.prompt || d.body || ''
-  if (d.kind === 'secret') return d.secret?.prompt || d.body || ''
+  // The secret card shows the agent's prompt itself, as plain text (VS13).
+  if (d.kind === 'secret') return d.secret ? '' : d.body || ''
   return d.body || ''
 }
 
 function Bubble({
   item,
   nowSec,
+  server,
   onAnswer,
   onVoid,
+  onMoreOptions,
 }: {
   item: OverlayThreadItem
   nowSec: number
-  onAnswer(payload: { answer?: string; secret?: string }): void
+  server?: string
+  /** Resolves when the daemon took the answer; throws its refusal. */
+  onAnswer(payload: ThreadAnswerPayload): Promise<void>
   onVoid(): void
+  /** The full secret card, in the agent's Thread pane. */
+  onMoreOptions(): void
 }): React.JSX.Element {
   const mine = item.doc.via === 'compose'
   const kind = item.doc.kind
@@ -96,16 +103,23 @@ function Bubble({
             allowCustom={item.doc.choice.allow_custom}
             status={item.doc.choice.status}
             answer={item.doc.choice.answer}
-            onPick={(label) => onAnswer({ answer: label })}
+            onPick={(label) => {
+              onAnswer({ answer: label }).catch((err: unknown) => console.warn('[zen] answer failed:', err))
+            }}
           />
         )}
         {kind === 'secret' && item.doc.secret && (
           <div style={{ marginTop: 6 }}>
+            {/* prd-k2-vault-v1 KV9: the compact card (the proposal's
+                defaults), same answer body; More options opens the full one. */}
             <SecretCard
-              name={item.doc.secret.name}
-              status={item.doc.secret.status}
-              onSubmit={(value) => onAnswer({ secret: value })}
+              compact
+              secret={item.doc.secret}
+              agent={item.doc.from || ''}
+              server={server}
+              onSubmit={onAnswer}
               onDismiss={onVoid}
+              onMoreOptions={onMoreOptions}
             />
           </div>
         )}
@@ -173,14 +187,19 @@ export function ZenConversation({
   const typing =
     view?.turn !== undefined ? view.turn !== null && (view.turn.state === 'working' || view.turn.state === 'monitoring') : row.working
 
+  // The card awaits this: a secret card's refusal (a red warning, a scope
+  // only an admin may pick) shows on the card. Never logs the payload.
   const answer = useCallback(
-    (id: string, payload: { answer?: string; secret?: string }) => {
-      void (bridge.call('thread.answer', row.address, id, payload) as Promise<unknown>).catch((err: unknown) =>
-        console.warn('[zen] answer failed:', err),
-      )
+    async (id: string, payload: ThreadAnswerPayload): Promise<void> => {
+      await (bridge.call('thread.answer', row.address, id, payload) as Promise<unknown>)
     },
     [bridge, row.address],
   )
+  const moreOptions = useCallback(() => {
+    void Promise.resolve()
+      .then(() => bridge.call('conversation.open', row.address, { where: 'agents' }))
+      .catch((err: unknown) => console.warn('[zen] open in Agents failed:', err))
+  }, [bridge, row.address])
   const dismiss = useCallback(
     (id: string) => {
       void (bridge.call('thread.void', row.address, id) as Promise<unknown>).catch((err: unknown) =>
@@ -344,8 +363,10 @@ export function ZenConversation({
               key={it.id}
               item={it}
               nowSec={nowSec}
+              server={row.server ?? 'this computer'}
               onAnswer={(payload) => answer(it.id, payload)}
               onVoid={() => dismiss(it.id)}
+              onMoreOptions={moreOptions}
             />
           ))}
         {ready && typing && <TypingIndicator />}

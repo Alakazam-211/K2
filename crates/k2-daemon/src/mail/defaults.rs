@@ -536,6 +536,9 @@ pub fn plan_spam_repair(servers: &[Value], installed: Ver) -> Vec<RepairWrite> {
         let (Some(id), Some(name)) = (str_field(s, "id"), str_field(s, "name")) else {
             continue;
         };
+        if !REPAIR_NAMES.contains(&name) {
+            continue;
+        }
         let Some(tag) = v301_tag(name) else {
             continue;
         };
@@ -1196,6 +1199,7 @@ fn run_live(reason: &'static str) {
     for line in out.lines {
         k2_core::log_debug!("{line} ({reason})");
     }
+    k2_core::log_debug!("{P} done ({reason}): {} settings write(s)", out.settings_written);
     invalidate_status_cache();
 }
 

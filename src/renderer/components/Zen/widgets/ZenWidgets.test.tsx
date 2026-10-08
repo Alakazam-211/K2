@@ -433,10 +433,11 @@ function windowWorkspace(display: ActivityDisplay): void {
 }
 
 /** One session row on an open room's server, in the room's workspace. */
-function roomRow(index: number, display: ActivityDisplay): void {
+function roomRow(index: number, display: ActivityDisplay, counts?: ActivityRow['counts']): void {
   const room = h.rooms[index]
   if (!room) throw new Error(`no room ${index}`)
   const row: ActivityRow = {
+    ...(counts ? { counts } : {}),
     sessionId: 'sess-1',
     agentName: 'tab-sess-1',
     projectId: 'bp1',
@@ -792,6 +793,15 @@ describe('Agents widget', () => {
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
     act(() => roomRow(0, 'waiting'))
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('needs-you')
+    expect(rowEl(ROWS.sales.address).querySelector('[data-zen-activity-counts]')).toBeNull()
+    // 0.45.2 counts: small text beside the word while busy, never when idle.
+    act(() => roomRow(0, 'working', { subagents: 2, tools: 14, commands: 5 }))
+    expect(rowEl(ROWS.sales.address).querySelector('[data-zen-activity-counts]')?.textContent).toBe(
+      '2 subagents · 14 tools · 5 commands',
+    )
+    act(() => roomRow(0, 'idle', { subagents: 0, tools: 14, commands: 5 }))
+    expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
+    expect(rowEl(ROWS.sales.address).querySelector('[data-zen-activity-counts]')).toBeNull()
     act(() => roomRow(0, 'idle'))
     expect(rowEl(ROWS.sales.address).getAttribute('data-activity')).toBe('idle')
 

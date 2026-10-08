@@ -48,6 +48,7 @@ import {
   type ActivityChangedEvent,
   type ActivityDisplay,
   type ActivityRow,
+  type ActivityRowCounts,
   type ActivitySnapshot,
   type ActivityWorkspace,
   type AgentStatusChangedEvent,
@@ -64,7 +65,7 @@ import {
   type LegacyProject,
 } from '@/stores/activity-legacy'
 
-export type { ActivityDisplay, ActivityRow, ActivityWorkspace } from '@/stores/session-events'
+export type { ActivityDisplay, ActivityRow, ActivityRowCounts, ActivityWorkspace } from '@/stores/session-events'
 
 /** A finished turn this client hasn't looked at (RL11). */
 export interface UnseenDone {
@@ -143,6 +144,45 @@ export function workspaceDisplay(
   if (byId) return byId.display
   const byPath = ref.path ? state.workspaces.get(workspaceKey(null, ref.path)) : undefined
   return byPath?.display ?? 'idle'
+}
+
+/** No subagents, tools or commands. */
+export const ZERO_COUNTS: Readonly<ActivityRowCounts> = Object.freeze({ subagents: 0, tools: 0, commands: 0 })
+
+/** The summed `counts` of the rows `match` keeps, over sessions that are
+ *  working, monitoring or waiting only (an idle session keeps its finished
+ *  turn's numbers; they are not "now"). Rows from an older server carry no
+ *  `counts` and add nothing. */
+function liveCounts(state: Pick<ScopeActivity, 'rows'>, match: (row: ActivityRow) => boolean): ActivityRowCounts {
+  const out = { subagents: 0, tools: 0, commands: 0 }
+  for (const row of state.rows.values()) {
+    if (!row.counts || !isLiveDisplay(row.display) || !match(row)) continue
+    out.subagents += row.counts.subagents
+    out.tools += row.counts.tools
+    out.commands += row.counts.commands
+  }
+  return out
+}
+
+/** A workspace's live counts, by the rollup's own keys (`workspaceDisplay`):
+ *  its project's rows when any row carries the id, else the rows with no
+ *  project at exactly its path. */
+export function workspaceCounts(
+  state: Pick<ScopeActivity, 'rows'>,
+  ref: { projectId?: string | null; path?: string | null },
+): ActivityRowCounts {
+  const id = ref.projectId
+  if (id && [...state.rows.values()].some((r) => r.projectId === id)) {
+    return liveCounts(state, (r) => r.projectId === id)
+  }
+  const path = ref.path
+  if (!path) return { ...ZERO_COUNTS }
+  return liveCounts(state, (r) => !r.projectId && r.workspacePath === path)
+}
+
+/** The live counts of the rows under `root` (an open room's Home row). */
+export function countsUnderRoot(state: Pick<ScopeActivity, 'rows'>, root: string): ActivityRowCounts {
+  return liveCounts(state, (r) => !!r.workspacePath && pathUnderRoot(r.workspacePath, root))
 }
 
 /** The v2 `agent_name` a terminal tab spawns or attaches under (the

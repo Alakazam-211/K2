@@ -68,7 +68,7 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { usePageViewStore } from '@/stores/page-view'
-import { workspaceDisplay, type ActivityDisplay } from '@/stores/activity'
+import { countsUnderRoot, workspaceCounts, workspaceDisplay, type ActivityDisplay } from '@/stores/activity'
 import { usePresenceStore, usersForWorkspace } from '@/stores/presence'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { homeRooms, type HomeRoomEntry } from '@/stores/home-rooms'
@@ -113,6 +113,7 @@ import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
+import type { ZenAgentCounts } from './zen-counts'
 
 // ── Shapes a widget sees ──────────────────────────────────────────────────
 
@@ -151,6 +152,8 @@ export interface ZenPerson {
   name: string
 }
 
+export type { ZenAgentCounts }
+
 export interface ZenAgentRow {
   /** The Home row address, `handle::host`. Every verb takes it. */
   address: string
@@ -166,6 +169,10 @@ export interface ZenAgentRow {
   auth: string | null
   /** Live status; null when the server can't say (no indicator). */
   activity: ZenActivity | null
+  /** 0.45.2: live subagents and this turn's tool calls / shell commands,
+   *  summed over the agent's busy sessions. Null when the row has no
+   *  activity (not `ok`, or the server can't say). */
+  counts: ZenAgentCounts | null
   working: boolean
   needsYou: boolean
   state: ZenRowState
@@ -444,6 +451,12 @@ const STATE_LABEL: Record<Exclude<ZenRowState, 'ok' | 'update'>, string> = {
 function roomActivityOf(entry: HomeRoomEntry | undefined): ReturnType<typeof roomRowActivity> | null {
   if (!entry || entry.phase !== 'open' || !entry.room) return null
   return roomRowActivity(entry.room.activityView.getState(), entry.room.cwd())
+}
+
+/** An open room's live counts (its server's rows under its workspace). */
+function roomCountsOf(entry: HomeRoomEntry | undefined): ZenAgentCounts | null {
+  if (!entry || entry.phase !== 'open' || !entry.room) return null
+  return countsUnderRoot(entry.room.activityView.getState(), entry.room.cwd())
 }
 
 
@@ -741,6 +754,9 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   const server = serverLabel(hostKey, host.hosts)
   let state: ZenRowState
   let activity: ZenActivity | null = null
+  // An open room on another server reads its own rows; the window's server
+  // reads the primary room's (below).
+  let counts: ZenAgentCounts | null = onConnected ? null : roomCountsOf(roomEntry)
   let people: ZenPerson[] = []
   let detail: string | null = status.detail ?? null
   if (onConnected) {
@@ -748,9 +764,9 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
       state = 'ok'
       const ws = findWorkspaceForRow(projects, row)
       if (ws) {
-        activity = fromDisplay(
-          workspaceDisplay(primaryRoom().activityView.getState(), { projectId: ws.id, path: ws.path }),
-        )
+        const rows = primaryRoom().activityView.getState()
+        activity = fromDisplay(workspaceDisplay(rows, { projectId: ws.id, path: ws.path }))
+        counts = workspaceCounts(rows, { projectId: ws.id, path: ws.path })
         const presence = usePresenceStore.getState()
         const self = host.activeHost === 'local' ? 'owner' : host.activeHost.username || 'owner'
         people = presence.supported
@@ -809,6 +825,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     reach: onConnected ? (host.connectionStatus === 'connected' ? 'live' : 'unknown') : (entry?.reach ?? 'unknown'),
     auth: onConnected ? 'ok' : (entry?.auth ?? null),
     activity,
+    counts: state === 'ok' && activity !== null ? counts : null,
     working: activity === 'working',
     needsYou: activity === 'needs-you',
     state,

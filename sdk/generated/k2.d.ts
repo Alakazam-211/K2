@@ -35,6 +35,15 @@ export interface ThemeInfo {
   readonly theme: ThemeVars
 }
 
+export interface AgentCounts {
+  /** The shell commands among them. */
+  readonly commands: number
+  /** Helper agents running now. */
+  readonly subagents: number
+  /** Tool calls started this turn. */
+  readonly tools: number
+}
+
 export interface Person {
   readonly name: string
   readonly user: string
@@ -54,6 +63,8 @@ export interface AgentRow {
   readonly address: string
   /** A data: URL, or null. */
   readonly avatar: string | null
+  /** Summed over the agent's busy sessions; tools and commands reset when a turn starts. Null when activity is unknown. */
+  readonly counts: AgentCounts | null
   readonly detail: string | null
   readonly index: number
   readonly label: string

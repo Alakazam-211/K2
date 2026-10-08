@@ -96,6 +96,7 @@ import {
   activityStore,
   agentHasUnseen,
   attachActivity,
+  countsUnderRoot,
   displayUnderRoot,
   forgetLegacyScreen,
   isLegacyActivityServer,
@@ -107,6 +108,7 @@ import {
   rowForTerminal,
   setViewing,
   terminalDisplay,
+  workspaceCounts,
   workspaceDisplay,
   type ActivityToaster,
 } from './activity'
@@ -642,6 +644,45 @@ function mustOldRow(sid: string): ActivityRow {
   if (!r) throw new Error(`no row ${sid} on the old server`)
   return r
 }
+
+describe('counts (0.45.2): live subagents, tools and commands per workspace', () => {
+  const c = (subagents: number, tools: number, commands: number) => ({ subagents, tools, commands })
+  const rows = (list: ActivityRow[]) => ({ rows: new Map(list.map((r) => [r.sessionId, r])) })
+
+  it('sums the busy sessions of a project; idle sessions and rows without counts add nothing', () => {
+    const st = rows([
+      row('a', 'working', { counts: c(2, 10, 4) }),
+      row('b', 'waiting', { counts: c(0, 3, 1) }),
+      row('c', 'monitoring', { counts: c(1, 0, 0) }),
+      row('d', 'idle', { counts: c(0, 99, 99) }),
+      row('e', 'working'),
+      row('f', 'working', { projectId: 'p2', counts: c(5, 5, 5) }),
+    ])
+    expect(workspaceCounts(st, { projectId: 'p1', path: '/srv/ws' })).toEqual(c(3, 13, 5))
+    expect(workspaceCounts(st, { projectId: 'p2' })).toEqual(c(5, 5, 5))
+    expect(workspaceCounts(st, { projectId: 'none' })).toEqual(c(0, 0, 0))
+  })
+
+  it('falls back to rows with no project at exactly the path, like the rollup', () => {
+    const st = rows([
+      row('a', 'working', { projectId: null, workspacePath: '/srv/loose', counts: c(0, 4, 2) }),
+      row('b', 'working', { projectId: null, workspacePath: '/srv/loose/sub', counts: c(0, 7, 7) }),
+    ])
+    expect(workspaceCounts(st, { projectId: 'unknown', path: '/srv/loose' })).toEqual(c(0, 4, 2))
+    expect(workspaceCounts(st, { path: '/srv/loose' })).toEqual(c(0, 4, 2))
+    expect(workspaceCounts(st, {})).toEqual(c(0, 0, 0))
+  })
+
+  it('an open room sums the busy rows under its root', () => {
+    const st = rows([
+      row('a', 'working', { workspacePath: '/srv/ws', counts: c(1, 2, 1) }),
+      row('b', 'working', { workspacePath: '/srv/ws/wt', counts: c(0, 3, 0) }),
+      row('c', 'working', { workspacePath: '/srv/ws-other', counts: c(9, 9, 9) }),
+      row('d', 'idle', { workspacePath: '/srv/ws', counts: c(9, 9, 9) }),
+    ])
+    expect(countsUnderRoot(st, '/srv/ws')).toEqual(c(1, 5, 1))
+  })
+})
 
 describe('surface mappings (T-S5c, RL10)', () => {
   it('a tab maps to its row by sessionId, then by its agent name', async () => {

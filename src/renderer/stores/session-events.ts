@@ -491,6 +491,14 @@ export interface HooksInstallFailedEvent {
 export type ActivityDisplay = 'working' | 'monitoring' | 'waiting' | 'idle' | 'unverifiable'
 
 /** §7.2 — one activity row (one live v2 session). No tool or task names. */
+/** A row's `counts` (0.45.2): live subagents, this turn's lead tool calls,
+ *  and the shell commands among them. Reset to 0 when a turn starts. */
+export interface ActivityRowCounts {
+  subagents: number
+  tools: number
+  commands: number
+}
+
 export interface ActivityRow {
   sessionId: string
   agentName: string
@@ -513,6 +521,9 @@ export interface ActivityRow {
     owed: number
     waiting: number
   }
+  /** 0.45.2+: live subagents and this turn's lead tool calls / shell
+   *  commands (numbers only). Absent from older servers and legacy rows. */
+  counts?: ActivityRowCounts
   turnStartedAt: number | null
   evidenceAt: number | null
   evidenceSource: 'hook' | 'transcript' | 'title' | 'process' | 'screen' | null

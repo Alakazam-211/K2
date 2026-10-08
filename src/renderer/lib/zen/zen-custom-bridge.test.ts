@@ -23,6 +23,7 @@ function row(address: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
     reach: 'live',
     auth: 'ok',
     activity: 'working',
+    counts: { subagents: 2, tools: 14, commands: 5 },
     working: true,
     needsYou: false,
     state: 'ok',
@@ -393,6 +394,16 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
     const r = (await call(createZenCustomLayer(h.deps), 'agents.list')) as { value: Array<Record<string, unknown>> }
     expect(Object.keys(r.value[0]).sort()).toEqual([...ZEN_WIDGET_ROW_KEYS].sort())
     for (const banned of ['hostKey', 'role', 'reach', 'auth', 'avatarUrl']) expect(banned in r.value[0], banned).toBe(false)
+  })
+
+  it('counts: exactly three numbers cross; null when unreachable or unknown', () => {
+    expect(projectZenRow(ALICE, new Set()).counts).toEqual({ subagents: 2, tools: 14, commands: 5 })
+    const sneaky = row('x::local', {
+      counts: { subagents: 1, tools: 2, commands: 0, toolName: 'Bash' } as unknown as ZenAgentRow['counts'],
+    })
+    expect(projectZenRow(sneaky, new Set()).counts).toEqual({ subagents: 1, tools: 2, commands: 0 })
+    expect(projectZenRow(row('x::h', { state: 'offline', activity: null }), new Set()).counts).toBeNull()
+    expect(projectZenRow(row('x::local', { counts: null }), new Set()).counts).toBeNull()
   })
 
   it('avatar: data: passes, any other URL is null; a new row key never crosses', () => {

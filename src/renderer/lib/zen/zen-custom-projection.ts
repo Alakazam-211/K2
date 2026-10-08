@@ -5,7 +5,8 @@
 // (closed shapes), so a new field on `ZenAgentRow` or a Thread item can't
 // leak by accident (TUWA7 pins the keys):
 //   - agent rows: `{address, label, index, server, state, stateLabel, detail,
-//     working, needsYou, activity, openable, selected, avatar}`, plus
+//     working, needsYou, activity, counts, openable, selected, avatar}`
+//     (`counts` = `{subagents, tools, commands}` numbers or null), plus
 //     `preview` with `thread:read` and `people` with `presence:read`.
 //     Dropped: `hostKey`, `role`, `reach`, `auth`. `avatar` is a `data:` URL
 //     or null (a workspace icon URL would leak a local address and can't
@@ -36,6 +37,13 @@ export interface ZenWidgetPerson {
   name: string
 }
 
+/** Live subagents and this turn's tool calls / shell commands. */
+export interface ZenWidgetCounts {
+  subagents: number
+  tools: number
+  commands: number
+}
+
 export interface ZenWidgetRow {
   address: string
   label: string
@@ -47,6 +55,7 @@ export interface ZenWidgetRow {
   working: boolean
   needsYou: boolean
   activity: ZenWidgetActivity | null
+  counts: ZenWidgetCounts | null
   openable: boolean
   selected: boolean
   avatar: string | null
@@ -66,6 +75,7 @@ export const ZEN_WIDGET_ROW_KEYS = [
   'working',
   'needsYou',
   'activity',
+  'counts',
   'openable',
   'selected',
   'avatar',
@@ -94,6 +104,11 @@ export function projectZenRow(row: ZenAgentRow, caps: ReadonlySet<UserWidgetCap 
     working: row.working,
     needsYou: row.needsYou,
     activity: unreachable ? 'unreachable' : row.activity,
+    // Built key by key: three numbers, nothing else crosses.
+    counts:
+      unreachable || !row.counts
+        ? null
+        : { subagents: row.counts.subagents, tools: row.counts.tools, commands: row.counts.commands },
     openable: row.openable,
     selected: row.selected,
     avatar: typeof row.avatarUrl === 'string' && row.avatarUrl.startsWith('data:') ? row.avatarUrl : null,

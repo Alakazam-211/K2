@@ -43,6 +43,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
+import { zenCountsText } from '@/lib/zen/zen-counts'
 import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenAgentAvatar, ZenWidgetStyles, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
@@ -309,6 +310,10 @@ function AgentRow({
       ? `${row.preview.mine ? 'You: ' : ''}${row.preview.text}`
       : null
   const muted = row.state !== 'ok'
+  // Small, beside the word, only while the agent is busy (the finished
+  // turn's numbers stay on an idle row; they aren't news).
+  const busy = row.activity === 'working' || row.activity === 'monitoring' || row.activity === 'needs-you'
+  const countsText = row.state === 'ok' && busy ? zenCountsText(row.counts) : null
   return (
     <li role="presentation">
       <button
@@ -377,6 +382,15 @@ function AgentRow({
             >
               {second ?? ' '}
             </span>
+            {countsText && (
+              <span
+                className="flex-shrink-0"
+                data-zen-activity-counts=""
+                style={{ fontSize: '0.78em', color: 'var(--zen-text-muted)' }}
+              >
+                {countsText}
+              </span>
+            )}
             {row.activity !== null && row.state === 'ok' && (
               <span
                 className="flex-shrink-0"

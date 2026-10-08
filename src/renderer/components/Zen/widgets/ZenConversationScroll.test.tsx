@@ -293,6 +293,7 @@ function row(working: boolean): ZenAgentRow {
     reach: 'live',
     auth: null,
     activity: working ? 'working' : 'idle',
+    counts: null,
     working,
     needsYou: false,
     state: 'ok',

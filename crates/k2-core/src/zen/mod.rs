@@ -239,12 +239,18 @@ pub fn layout_json(kind: &J, columns: &[J]) -> J {
 /// "builtin"`, its `slot` (`column` unless the file put it in a band),
 /// `edge` and `align` only when the file set them (FC28), every prop filled
 /// (defaults, `agents.mode`, `nav-rail.orientation`).
-pub fn builtin_widget(mut w: J) -> J {
+pub fn builtin_widget(w: J) -> J {
+    builtin_widget_in(Defaults::live(), w)
+}
+
+/// [`builtin_widget`] with the prop defaults of `d` (a Garden's own copy,
+/// prd-zen-garden-sync-defaults-v1 GS20).
+pub fn builtin_widget_in(d: &Defaults, mut w: J) -> J {
     let kind = w["kind"].as_str().unwrap_or_default().to_string();
     let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string();
     let edge = w["edge"].as_str().map(str::to_string);
     let mut props = w["props"].as_object().cloned().unwrap_or_default();
-    schema::normalize_props(&kind, &mut props);
+    schema::normalize_props_in(d, &kind, &mut props);
     schema::normalize_slot_props(&kind, &slot, edge.as_deref(), &mut props);
     w["slot"] = json!(slot);
     w["props"] = J::Object(props);
@@ -285,10 +291,15 @@ pub fn custom_widget(w: J) -> J {
 /// A content widget as the renderer reads it: a custom placement
 /// ([`custom_widget`]) or a built-in ([`builtin_widget`]).
 pub fn content_widget(w: J) -> J {
+    content_widget_in(Defaults::live(), w)
+}
+
+/// [`content_widget`] with the prop defaults of `d` (GS20).
+pub fn content_widget_in(d: &Defaults, w: J) -> J {
     if w["kind"] == schema::CUSTOM_KIND {
         custom_widget(w)
     } else {
-        builtin_widget(w)
+        builtin_widget_in(d, w)
     }
 }
 
@@ -298,11 +309,16 @@ pub fn content_widget(w: J) -> J {
 /// gets `edge` and `align`; a menu item gets `menu`. Every prop is filled
 /// (`menu.icon`); caps are K2's (FC31).
 pub fn chrome_item(w: &J) -> J {
+    chrome_item_in(Defaults::live(), w)
+}
+
+/// [`chrome_item`] with the prop defaults of `d` (GS20).
+pub fn chrome_item_in(d: &Defaults, w: &J) -> J {
     let kind = w["kind"].as_str().unwrap_or_default().to_string();
     let slot = w["slot"].as_str().unwrap_or(schema::DEFAULT_SLOT).to_string();
     let id = w["id"].as_str().unwrap_or(&kind).to_string();
     let mut props = w["props"].as_object().cloned().unwrap_or_default();
-    schema::normalize_props(&kind, &mut props);
+    schema::normalize_props_in(d, &kind, &mut props);
     let mut out = serde_json::Map::new();
     out.insert("id".into(), json!(id));
     out.insert("kind".into(), json!(kind));
@@ -507,17 +523,23 @@ pub fn template_page(id: &str) -> Option<J> {
     Defaults::live().template(id)
 }
 
-/// Build one template's resolved page from its TOML (the work behind
-/// [`Defaults::template`]).
-fn build_template_page(tid: &str, toml_src: &str) -> J {
+/// [`template_page`] from the set `d` (GS20).
+pub fn template_page_in(d: &Defaults, id: &str) -> Option<J> {
+    d.template(id)
+}
+
+/// Build one template's resolved page from its TOML with the prop defaults
+/// of `d` (the work behind [`Defaults::template`]).
+pub(crate) fn build_template_page_in(d: &Defaults, tid: &str, toml_src: &str) -> J {
     let v: toml::Value =
         toml::from_str(toml_src).unwrap_or_else(|e| panic!("built-in Zen template {tid} does not parse: {e}"));
     let t = serde_json::to_value(v).unwrap_or_else(|e| panic!("built-in Zen template {tid} to JSON: {e}"));
     let columns = t["layout"]["column"].as_array().cloned().unwrap_or_default();
     let all = t["widget"].as_array().cloned().unwrap_or_default();
-    let mut widgets: Vec<J> = all.iter().filter(|w| !kind_is_chrome(w)).cloned().map(content_widget).collect();
+    let mut widgets: Vec<J> =
+        all.iter().filter(|w| !kind_is_chrome(w)).cloned().map(|w| content_widget_in(d, w)).collect();
     link_conversations(&mut widgets);
-    let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(chrome_item).collect();
+    let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(|w| chrome_item_in(d, w)).collect();
     let mut page = json!({
         "template": tid,
         "layout": layout_json(&t["layout"]["kind"], &columns),
@@ -572,8 +594,14 @@ pub fn texting_page() -> J {
 /// file's placements). Chrome never goes into `widgets` (FC28), so an older
 /// app never draws a toggle as a placeholder widget.
 pub fn garden_page(layer: &Layer, default_template: &str) -> J {
+    garden_page_in(Defaults::live(), layer, default_template)
+}
+
+/// [`garden_page`] on the set `d` (GS20). A template the set doesn't have
+/// resolves live (GS22).
+pub fn garden_page_in(d: &Defaults, layer: &Layer, default_template: &str) -> J {
     let tid = layer.get("page.template").and_then(J::as_str).unwrap_or(default_template);
-    let mut page = template_page(tid).unwrap_or_else(texting_page);
+    let mut page = template_page_in(d, tid).or_else(|| template_page(tid)).unwrap_or_else(texting_page);
     let layout = layer.get("page.layout");
     let widgets = layer.get("page.widgets");
     if layout.is_none() && widgets.is_none() {
@@ -583,7 +611,7 @@ pub fn garden_page(layer: &Layer, default_template: &str) -> J {
     // Every file widget in file order, as the renderer reads it.
     let file_items: Vec<(J, bool)> = file
         .iter()
-        .map(|w| if kind_is_chrome(w) { (chrome_item(w), true) } else { (content_widget(w.clone()), false) })
+        .map(|w| if kind_is_chrome(w) { (chrome_item_in(d, w), true) } else { (content_widget_in(d, w.clone()), false) })
         .collect();
     let has_content = file_items.iter().any(|(_, c)| !c);
     let has_chrome = file_items.iter().any(|(_, c)| *c);

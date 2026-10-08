@@ -555,12 +555,24 @@ pub fn valid_widget_id(id: &str) -> bool {
 /// always reads every prop.
 pub fn normalize_props(kind: &str, props: &mut Map<String, J>) {
     // Defaults are read through `Defaults::live()` (sync-defaults D0).
-    let defaults = super::Defaults::live();
+    normalize_props_in(super::Defaults::live(), kind, props)
+}
+
+/// [`normalize_props`] with the defaults of the set `d`
+/// (prd-zen-garden-sync-defaults-v1 GS20). A prop the set doesn't list
+/// (added by a later K2) takes the live default (GS22).
+pub fn normalize_props_in(d: &super::Defaults, kind: &str, props: &mut Map<String, J>) {
+    let live = super::Defaults::live();
     for p in widget_props(kind) {
         if props.contains_key(p.name) {
             continue;
         }
-        if let Some(v) = defaults.widget_prop_default(p.kind, p.name) {
+        let v = if d.knows_widget_prop(p.kind, p.name) {
+            d.widget_prop_default(p.kind, p.name)
+        } else {
+            live.widget_prop_default(p.kind, p.name)
+        };
+        if let Some(v) = v {
             props.insert(p.name.to_string(), v.clone());
         }
     }
@@ -635,6 +647,8 @@ struct Ctx<'a> {
     src: &'a str,
     /// A Garden file's template when it doesn't name one (its list entry's).
     default_template: &'a str,
+    /// The defaults a Garden file is checked on (GS20); `None` = live.
+    defaults: Option<&'a super::Defaults>,
     line_starts: Vec<usize>,
     out: Checked,
     /// Where each layer key was set, for cross-checks after the walk.
@@ -649,7 +663,15 @@ impl<'a> Ctx<'a> {
                 line_starts.push(i + 1);
             }
         }
-        Ctx { file, src, default_template: TEMPLATE_ID, line_starts, out: Checked::default(), pos: BTreeMap::new() }
+        Ctx {
+            file,
+            src,
+            default_template: TEMPLATE_ID,
+            defaults: None,
+            line_starts,
+            out: Checked::default(),
+            pos: BTreeMap::new(),
+        }
     }
 
     fn at_offset(&self, off: usize) -> (usize, usize) {
@@ -1144,19 +1166,32 @@ fn check_animation(ctx: &mut Ctx, t: &dyn TableLike, at: (usize, usize)) {
 /// Garden file checked here defaults to the texting template; the store
 /// uses [`check_garden`] with the Garden's own.
 pub fn check(file: &str, src: &str, kind: FileKind, base: &Layer) -> Checked {
-    check_with(file, src, kind, base, TEMPLATE_ID)
+    check_with(file, src, kind, base, TEMPLATE_ID, None)
 }
 
 /// Check a Garden file whose list entry names `default_template` (used when
 /// the file has no `template` line): its widgets' columns and links are
 /// checked against that template when the file doesn't replace them.
 pub fn check_garden(file: &str, src: &str, base: &Layer, default_template: &str) -> Checked {
-    check_with(file, src, FileKind::Garden, base, default_template)
+    check_with(file, src, FileKind::Garden, base, default_template, None)
 }
 
-fn check_with(file: &str, src: &str, kind: FileKind, base: &Layer, default_template: &str) -> Checked {
+/// [`check_garden`] on the set `d`: its templates and prop defaults (GS20).
+pub fn check_garden_in(d: &super::Defaults, file: &str, src: &str, base: &Layer, default_template: &str) -> Checked {
+    check_with(file, src, FileKind::Garden, base, default_template, Some(d))
+}
+
+fn check_with(
+    file: &str,
+    src: &str,
+    kind: FileKind,
+    base: &Layer,
+    default_template: &str,
+    defaults: Option<&super::Defaults>,
+) -> Checked {
     let mut ctx = Ctx::new(file, src);
     ctx.default_template = default_template;
+    ctx.defaults = defaults;
     if src.len() > MAX_FILE_BYTES {
         ctx.error((1, 1), format!("this file is {} bytes; Zen files must be under 64 KB", src.len()));
         return ctx.out;
@@ -2011,7 +2046,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
             let id = w.get("id").and_then(J::as_str).unwrap_or(kind.as_str()).to_string();
             placed.push(Placed { kind: kind.clone(), slot: sl, id, pos: tpos, at_edge, menu: menu.clone() });
         }
-        normalize_props(&kind, &mut props);
+        normalize_props_in(ctx.defaults.unwrap_or_else(|| super::Defaults::live()), &kind, &mut props);
         normalize_slot_props(&kind, slot.unwrap_or(DEFAULT_SLOT), edge, &mut props);
         w.insert("kind".into(), json!(kind));
         w.insert("props".into(), J::Object(props));
@@ -2147,7 +2182,11 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
     if file_layout.is_none() && file_widgets.is_none() {
         return;
     }
-    let Some(tpl) = super::template_page(&template) else { return };
+    let tpl = match ctx.defaults {
+        Some(d) => super::template_page_in(d, &template).or_else(|| super::template_page(&template)),
+        None => super::template_page(&template),
+    };
+    let Some(tpl) = tpl else { return };
     let ncols = match &file_layout {
         Some(l) => l["columns"].as_array().map_or(0, Vec::len),
         None => tpl["layout"]["columns"].as_array().map_or(0, Vec::len),

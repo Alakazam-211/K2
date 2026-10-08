@@ -24,6 +24,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
 
+use super::defaults::Defaults;
 use super::schema::{self, Checked, Diagnostic, FileKind, Layer};
 
 /// Snapshots kept per file (Z14).
@@ -913,8 +914,14 @@ impl ZenFiles {
     /// Check one file's text with the rules for its kind. A Garden page is
     /// checked against its own default template (G38).
     fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
+        self.check_src_in(f, text, base, Defaults::live())
+    }
+
+    /// [`ZenFiles::check_src`] with a Garden page checked on the set `d`
+    /// (prd-zen-garden-sync-defaults-v1 GS20).
+    fn check_src_in(&self, f: &ZenFile, text: &str, base: &Layer, d: &Defaults) -> Checked {
         match f {
-            ZenFile::Garden(id) => schema::check_garden(&f.label(), text, base, &self.default_template(id)),
+            ZenFile::Garden(id) => schema::check_garden_in(d, &f.label(), text, base, &self.default_template(id)),
             _ => schema::check(&f.label(), text, f.kind(), base),
         }
     }
@@ -929,8 +936,12 @@ impl ZenFiles {
     }
 
     fn check_text(&self, f: &ZenFile, text: &Result<String, String>, base: &Layer) -> Checked {
+        self.check_text_in(f, text, base, Defaults::live())
+    }
+
+    fn check_text_in(&self, f: &ZenFile, text: &Result<String, String>, base: &Layer, d: &Defaults) -> Checked {
         match text {
-            Ok(t) => self.check_src(f, t, base),
+            Ok(t) => self.check_src_in(f, t, base, d),
             Err(msg) => Checked {
                 errors: vec![Diagnostic { file: f.label(), line: 1, col: 1, message: msg.clone() }],
                 ..Checked::default()
@@ -1004,6 +1015,11 @@ impl ZenFiles {
 
     /// The live version of `f` over `base` (last-good semantics, Z13).
     pub fn effective(&self, f: &ZenFile, base: &Layer) -> Effective {
+        self.effective_in(f, base, Defaults::live())
+    }
+
+    /// [`ZenFiles::effective`] with a Garden page checked on the set `d`.
+    pub fn effective_in(&self, f: &ZenFile, base: &Layer, d: &Defaults) -> Effective {
         let Some(text) = self.read_current(f) else {
             return Effective {
                 layer: Layer::new(),
@@ -1014,7 +1030,7 @@ impl ZenFiles {
                 positions: BTreeMap::new(),
             };
         };
-        let checked = self.check_text(f, &text, base);
+        let checked = self.check_text_in(f, &text, base, d);
         if checked.is_clean() {
             return Effective {
                 layer: checked.layer,
@@ -1027,7 +1043,7 @@ impl ZenFiles {
         }
         for snap in self.snapshots(f) {
             let Some(t) = self.snapshot_text(f, &snap.name) else { continue };
-            let c = self.check_src(f, &t, base);
+            let c = self.check_src_in(f, &t, base, d);
             if c.is_clean() {
                 return Effective {
                     layer: c.layer,
@@ -1172,11 +1188,27 @@ impl ZenFiles {
         super::builtin_theme_layer(name).unwrap_or_else(super::builtin_layer)
     }
 
+    /// The built-in layer a theme sits on in the set `d` (GS20). A built-in
+    /// the set doesn't have resolves live (GS22); a theme only the user has
+    /// sits on the set's `basic`.
+    fn theme_parent_in(d: &Defaults, name: &str) -> Layer {
+        d.theme_layer(name)
+            .or_else(|| super::builtin_theme(name).and_then(|_| Defaults::live().theme_layer(name)))
+            .or_else(|| d.theme_layer(super::DEFAULT_THEME))
+            .cloned()
+            .unwrap_or_else(|| super::builtin_layer().clone())
+    }
+
     /// `(built-in parent, the user file's live version, parent + file)`.
-    fn theme_stack(&self, name: &str) -> (&'static Layer, Effective, Layer) {
-        let parent = Self::theme_parent(name);
-        let eff = self.effective(&ZenFile::Theme(name.to_string()), parent);
-        let base = schema::merge(&[parent, &eff.layer]);
+    fn theme_stack(&self, name: &str) -> (Layer, Effective, Layer) {
+        self.theme_stack_in(Defaults::live(), name)
+    }
+
+    /// [`ZenFiles::theme_stack`] on the set `d`.
+    fn theme_stack_in(&self, d: &Defaults, name: &str) -> (Layer, Effective, Layer) {
+        let parent = Self::theme_parent_in(d, name);
+        let eff = self.effective(&ZenFile::Theme(name.to_string()), &parent);
+        let base = schema::merge(&[&parent, &eff.layer]);
         (parent, eff, base)
     }
 
@@ -1439,7 +1471,7 @@ impl ZenFiles {
         let gfile = ZenFile::Garden(id.clone());
         let page = self.effective(&gfile, &base);
         let user = schema::merge(&[&theme.layer, &zen.layer, &page.layer]);
-        let rt = schema::resolve(parent, &user);
+        let rt = schema::resolve(&parent, &user);
 
         let mut errors = theme.errors.clone();
         errors.extend(zen.errors.iter().cloned());

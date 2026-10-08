@@ -1,0 +1,72 @@
+# K2's Zen frame (prd-zen-garden-sync-defaults-v1 GF1): the looks the app
+# draws that no Garden file sets. It is data the daemon owns, archived with
+# every defaults set (`~/.k2/zen/.defaults/<fp>.json`) and sent as `frame`
+# in `GET /cli/zen/get`, so a Garden that is its own copy keeps the frame it
+# had.
+#
+# FROZEN until the renderer reads it (S7, 0.45.2): every value here pins a
+# renderer constant, and `src/renderer/lib/zen/zen-frame-parity.test.ts`
+# fails if either side moves. After S7, a frame change is a defaults change
+# (GS45): edit this file, update the S0 hash test, add one WHATS_NEW line.
+#
+# Keep it to plain tables of numbers, strings, booleans and string arrays
+# (the parity test reads it with a small parser).
+
+format = 1
+
+# `lib/zen/zen-glass.ts` ZEN_GLASS_TOKENS_CSS: the edge is the Zen border
+# mixed with a little text colour; a white inset sheen; a faint wide shadow.
+[glass]
+edge-border-mix = 55
+edge-text-mix = 14
+sheen-white-mix = 22
+shadow = "0 10px 30px"
+shadow-black-mix = 8
+blur = "none"
+
+# `lib/zen/zen-motion.ts` ZEN_KEYFRAMES_CSS.
+[motion]
+slide-px = 8
+popin-from = 0.92
+pulse-opacity = 0.35
+
+# `lib/zen/zen-style-shield.ts`.
+[shield]
+box-radius-factor = 0.5
+scrim = 0.32
+agent-selection-accent-mix = 30
+me-selection-text-mix = 35
+
+# `lib/zen/zen-overflow.ts`: what gives way when a row is too narrow.
+[overflow]
+order = ["usage", "theme-picker"]
+switcher-compact = "6rem"
+column-min-width-share = true
+
+# `components/Zen/ZenBands.tsx`, `ZenTemplateControls.tsx`.
+[bands]
+group-gap-px = 12
+bar-height-px = 44
+inset-px = 14
+
+# `components/Zen/ZenPage.tsx`: columns use the theme's gap and radius.
+[columns]
+gap-token = "gap"
+radius-token = "radius"
+
+# `ZenAgentsWidget.tsx`, `ZenNavRailWidget.tsx`, `lib/zen/zen-window.ts`.
+[widgets]
+agents-avatar-px = 40
+agents-focus-group-width-px = 240
+nav-rail-width-px = 44
+nav-rail-row-px = 36
+rail-views = ["home", "agents", "projects", "tickets"]
+
+# `lib/zen/zen-controls.ts`: the required-controls check. The daemon clamps
+# these to a floor in code (GF3): data can make the check stricter, never
+# looser.
+[controls]
+target-px = 24
+drag-min-width-px = 120
+drag-min-height-px = 12
+min-opacity = 0.3

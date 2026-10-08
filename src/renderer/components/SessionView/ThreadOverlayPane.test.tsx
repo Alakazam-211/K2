@@ -290,7 +290,7 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(go.className).toContain('bg-[var(--thread-card-accent,var(--color-accent))]/15')
   })
 
-  it('renders a secret field and submit/dismiss; never shows the value as body text', () => {
+  it('renders a secret field and submit/dismiss; never shows the value as body text', async () => {
     const submitted: string[] = []
     let dismissed = 0
     const item: OverlayThreadItem = {
@@ -301,23 +301,35 @@ describe('Thread overlay choice chips + secret field', () => {
         id: 's1',
         kind: 'secret',
         from: 'k2',
-        secret: { name: 'API_TOKEN', status: 'pending', prompt: 'Paste the Grok token' },
+        secret: {
+          name: 'API_TOKEN',
+          status: 'pending',
+          prompt: 'Paste the Grok token',
+          hosts: ['https://api.x.ai:443'],
+        },
       },
     }
-    renderInRoom(overlayRoom, 
+    renderInRoom(overlayRoom,
       <ThreadItemRow
         item={item}
-        onAnswer={(p) => submitted.push(p.secret || '')}
+        onAnswer={(p) => {
+          submitted.push(p.secret || '')
+        }}
         onVoid={() => {
           dismissed += 1
         }}
+        cardContext={{ workspace: 'grok', server: 'This computer' }}
       />,
     )
     const field = screen.getByTestId('thread-secret-field') as HTMLInputElement
     expect(field.type).toBe('password')
+    // The prompt is in the card as plain text, not the message body.
+    expect(screen.getByTestId('thread-secret-prompt').textContent).toBe('k2 says: Paste the Grok token')
     fireEvent.change(field, { target: { value: 's3cr3t-bytes' } })
     fireEvent.click(screen.getByTestId('thread-secret-submit'))
     expect(submitted).toEqual(['s3cr3t-bytes'])
+    await act(async () => {})
+    expect(field.value).toBe('')
     expect(screen.queryByText('s3cr3t-bytes')).toBeNull()
     fireEvent.click(screen.getByTestId('thread-secret-dismiss'))
     expect(dismissed).toBe(1)

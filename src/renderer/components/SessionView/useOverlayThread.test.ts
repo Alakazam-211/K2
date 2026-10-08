@@ -298,3 +298,89 @@ describe('overlay hooks disable', () => {
     expect(FakeOverlayWS.instances.every((ws) => ws.closed)).toBe(true)
   })
 })
+
+// prd-k2-vault-v1 §10.1: a secret card answer rides the POST body only; the
+// value never reaches Thread state, and a refusal leaves the card pending.
+describe('useOverlayThread secret answers', () => {
+  afterEach(() => {
+    daemonCliGet.mockReset()
+    daemonCliPost.mockReset()
+  })
+
+  const VALUE = 'k2test_HOOKVALUE_456'
+
+  function secretSnapshot() {
+    return {
+      conversation_id: '',
+      has_more: false,
+      items: [
+        {
+          collection: 'thread',
+          seq: 1,
+          id: 'card-1',
+          doc: {
+            id: 'card-1',
+            kind: 'secret',
+            from: 'sales',
+            secret: { name: 'STRIPE_KEY', status: 'pending', hosts: ['https://api.stripe.com:443'] },
+          },
+        },
+      ],
+    }
+  }
+
+  it('posts the value with the choices and keeps only status + reference in state', async () => {
+    daemonCliGet.mockResolvedValueOnce(secretSnapshot())
+    daemonCliPost.mockResolvedValueOnce({
+      ok: true,
+      id: 'card-1',
+      status: 'set',
+      name: 'STRIPE_KEY',
+      ref: 'k2v://ws/sales/STRIPE_KEY',
+      trimmed: false,
+      agentCanSee: false,
+    })
+    const { result } = renderHook(() =>
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+    await act(async () => {
+      await result.current.answer('card-1', { secret: VALUE, scope: 'server', hosts: ['api.stripe.com'], confirm: true })
+    })
+    expect(daemonCliPost).toHaveBeenCalledWith('thread/answer', {
+      addr: 'sales',
+      id: 'card-1',
+      secret: VALUE,
+      scope: 'server',
+      hosts: 'api.stripe.com',
+      confirm: '1',
+    })
+    const secret = result.current.items[0].doc.secret
+    expect(secret?.status).toBe('set')
+    expect(secret?.ref).toBe('k2v://ws/sales/STRIPE_KEY')
+    expect(JSON.stringify(result.current.items)).not.toContain(VALUE)
+  })
+
+  it('a 409 refusal throws to the card and leaves the item pending, with no value in state', async () => {
+    daemonCliGet.mockResolvedValueOnce(secretSnapshot())
+    daemonCliPost.mockRejectedValueOnce(
+      new Error(JSON.stringify({ ok: false, error: { code: 'card_host_mismatch', hint: 'confirm to save anyway' } })),
+    )
+    const { result } = renderHook(() =>
+      useOverlayThread({ scope: primaryScope(), addr: 'sales', conversationId: null, enabled: true }),
+    )
+    await waitFor(() => expect(result.current.items).toHaveLength(1))
+    let thrown: unknown = null
+    await act(async () => {
+      try {
+        await result.current.answer('card-1', { secret: VALUE })
+      } catch (e) {
+        thrown = e
+      }
+    })
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('card_host_mismatch')
+    expect(result.current.items[0].doc.secret?.status).toBe('pending')
+    expect(JSON.stringify(result.current.items)).not.toContain(VALUE)
+  })
+})

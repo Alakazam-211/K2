@@ -57,8 +57,10 @@ import {
   subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
   threadWindowFloor,
+  threadAnswerBody,
   type OverlayThreadItem,
   type OverlayWsFrame,
+  type ThreadAnswerPayload,
   type ThreadTurn,
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -130,7 +132,7 @@ export function useOverlayThread(opts: {
   error: string | null
   posting: boolean
   post: (text: string) => Promise<void>
-  answer: (id: string, payload: { answer?: string; secret?: string }) => Promise<void>
+  answer: (id: string, payload: ThreadAnswerPayload) => Promise<void>
   voidCard: (id: string) => Promise<void>
   hasMore: boolean
   loadOlder: () => Promise<void>
@@ -558,11 +560,11 @@ export function useOverlayThread(opts: {
   )
 
   const answer = useCallback(
-    async (id: string, payload: { answer?: string; secret?: string }) => {
+    async (id: string, payload: ThreadAnswerPayload) => {
       if (!addr.trim() || !id) return
-      const body: Record<string, string> = { addr, id }
-      if (payload.answer !== undefined) body.answer = payload.answer
-      if (payload.secret !== undefined) body.secret = payload.secret
+      // A secret value rides this POST body only. A refusal (409 warning,
+      // 403 scope) throws to the card, which keeps its own field; nothing
+      // here keeps the payload.
       const res = await daemonCliPost<{
         ok?: boolean
         id?: string
@@ -570,16 +572,22 @@ export function useOverlayThread(opts: {
         answer?: string
         name?: string
         kind?: string
-      }>(scope, 'thread/answer', body)
+        ref?: string
+      }>(scope, 'thread/answer', threadAnswerBody(addr, id, payload))
+      const isSecret = payload.secret !== undefined
       setItems((prev) =>
         prev.map((it) => {
           if (it.id !== id) return it
-          if (payload.secret !== undefined && it.doc.secret) {
+          if (isSecret && it.doc.secret) {
             return {
               ...it,
               doc: {
                 ...it.doc,
-                secret: { ...it.doc.secret, status: res.status || 'set' },
+                secret: {
+                  ...it.doc.secret,
+                  status: res?.status || 'set',
+                  ...(typeof res?.ref === 'string' ? { ref: res.ref } : {}),
+                },
               },
             }
           }

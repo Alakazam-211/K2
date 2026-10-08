@@ -12,7 +12,18 @@ import {
   isVoidedHitl,
   type OverlayDoc,
   type OverlayThreadItem,
+  type ThreadAnswerPayload,
 } from './overlayThread'
+import { SecretCard } from './SecretCard'
+
+// The vault secret card lives in its own file; Zen imports it from here.
+export { SecretCard } from './SecretCard'
+
+/** Who a secret card names in its K2-drawn header. */
+export interface SecretCardContext {
+  workspace?: string
+  server?: string
+}
 
 interface ThreadOverlayPaneProps {
   addr: string
@@ -33,9 +44,10 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   agentName,
   onStop,
 }: ThreadOverlayPaneProps): JSX.Element {
+  const roomScope = useRoom().scope
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
-    scope: useRoom().scope,
+    scope: roomScope,
     addr,
     conversationId,
     enabled: active,
@@ -219,8 +231,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
               fontSize={editorFontSize}
               currentAddr={currentAddr}
               pastAddresses={pastAddresses}
-              onAnswer={(payload) => void answer(it.id, payload)}
+              onAnswer={(payload) => answer(it.id, payload)}
               onVoid={() => void voidCard(it.id)}
+              cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
             />
           ))}
           {/* TW12: live only, under the last message; never stored (TW13). */}
@@ -243,6 +256,7 @@ export function ThreadItemRow({
   pastAddresses,
   onAnswer,
   onVoid,
+  cardContext,
 }: {
   item: OverlayThreadItem
   nowSec?: number
@@ -251,8 +265,10 @@ export function ThreadItemRow({
    *  current one (storage keeps what was stamped). */
   currentAddr?: string
   pastAddresses?: readonly string[]
-  onAnswer?: (payload: { answer?: string; secret?: string }) => void
+  /** Resolves when the daemon took the answer; throws its refusal. */
+  onAnswer?: (payload: ThreadAnswerPayload) => unknown
   onVoid?: () => void
+  cardContext?: SecretCardContext
 }): JSX.Element {
   const kind = item.doc.kind
   const owner = isHumanPost(item.doc)
@@ -270,8 +286,9 @@ export function ThreadItemRow({
   const prompt =
     kind === 'choice'
       ? item.doc.choice?.prompt || item.doc.body || ''
-      : kind === 'secret'
-        ? item.doc.secret?.prompt || item.doc.body || ''
+      : kind === 'secret' && item.doc.secret
+        ? // The card shows the agent's prompt as plain text (VS13), never markdown.
+          ''
         : item.doc.body || ''
   return (
     <div
@@ -297,9 +314,13 @@ export function ThreadItemRow({
             />
           ) : kind === 'secret' && item.doc.secret ? (
             <SecretCard
-              name={item.doc.secret.name}
-              status={item.doc.secret.status}
-              onSubmit={(value) => onAnswer?.({ secret: value })}
+              secret={item.doc.secret}
+              agent={item.doc.from || ''}
+              workspace={cardContext?.workspace}
+              server={cardContext?.server}
+              onSubmit={async (payload) => {
+                await onAnswer?.(payload)
+              }}
               onDismiss={() => onVoid?.()}
             />
           ) : null
@@ -392,64 +413,6 @@ export function ChoiceCard({
           >
             Send
           </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export function SecretCard({
-  name,
-  status,
-  onSubmit,
-  onDismiss,
-}: {
-  name: string
-  status: string
-  onSubmit: (value: string) => void
-  onDismiss: () => void
-}): JSX.Element {
-  const pending = status === 'pending'
-  const [value, setValue] = useState('')
-  return (
-    <div data-testid="thread-secret-card">
-      <div className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))] mb-2">{name}</div>
-      {pending ? (
-        <div className="flex gap-2 items-center">
-          <input
-            data-testid="thread-secret-field"
-            type="password"
-            autoComplete="off"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="Paste secret"
-            className="flex-1 bg-transparent text-[12px] text-[var(--thread-card-text,var(--color-text-primary))] outline-none border border-[var(--thread-card-border,var(--color-border))] px-2 py-1"
-          />
-          <button
-            type="button"
-            data-testid="thread-secret-submit"
-            disabled={!value}
-            onClick={() => {
-              const v = value
-              setValue('')
-              onSubmit(v)
-            }}
-            className="px-2 py-1 text-[11px] border border-[var(--thread-card-border,var(--color-border))]"
-          >
-            Set
-          </button>
-          <button
-            type="button"
-            data-testid="thread-secret-dismiss"
-            onClick={onDismiss}
-            className="px-2 py-1 text-[11px] text-[var(--thread-card-muted,var(--color-text-muted))]"
-          >
-            Dismiss
-          </button>
-        </div>
-      ) : (
-        <div className="text-[11px] text-[var(--thread-card-muted,var(--color-text-muted))]" data-testid="thread-secret-set">
-          {name} {status}
         </div>
       )}
     </div>

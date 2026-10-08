@@ -101,6 +101,7 @@ import {
   threadItemsFromSnapshot,
   type OverlayDoc,
   type OverlayThreadItem,
+  type ThreadAnswerPayload,
   type ThreadTurn,
 } from '@/components/SessionView/overlayThread'
 import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
@@ -274,7 +275,7 @@ export function zenTurn(f: ZenFeedView | undefined): ZenThreadTurn | null | unde
 
 export interface ZenFeedHandlers {
   loadOlder(): Promise<void>
-  answer(id: string, payload: { answer?: string; secret?: string }): Promise<void>
+  answer(id: string, payload: ThreadAnswerPayload): Promise<void>
   voidCard(id: string): Promise<void>
 }
 
@@ -1533,13 +1534,25 @@ export function installZenDataVerbs(): () => void {
       return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', { paths, files, origin })
     }),
     registerZenVerb('thread.answer', (_ctx, address, cardId, answer) => {
-      const payload =
+      const payload: ThreadAnswerPayload | null =
         typeof answer === 'string'
           ? { answer }
           : isObj(answer)
             ? {
                 ...(typeof answer.answer === 'string' ? { answer: answer.answer } : {}),
                 ...(typeof answer.secret === 'string' ? { secret: answer.secret } : {}),
+                // K2 vault card choices (prd-k2-vault-v1 §10.1); the daemon
+                // checks every one of them.
+                ...(answer.scope === 'workspace' || answer.scope === 'server' || answer.scope === 'session'
+                  ? { scope: answer.scope }
+                  : {}),
+                ...(Array.isArray(answer.hosts)
+                  ? { hosts: answer.hosts.filter((h): h is string => typeof h === 'string') }
+                  : {}),
+                ...(answer.delivery === 'fetch' || answer.delivery === 'file' || answer.delivery === 'env'
+                  ? { delivery: answer.delivery }
+                  : {}),
+                ...(answer.confirm === true ? { confirm: true } : {}),
               }
             : null
       if (!payload || (payload.answer === undefined && payload.secret === undefined)) {

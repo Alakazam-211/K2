@@ -22,6 +22,50 @@ export interface OverlaySecret {
   name: string
   status: string
   prompt?: string | null
+  /** K2 vault (prd-k2-vault-v1 §10.1, KV9): what the asking agent proposes.
+   *  Never a value. `workspace` | `server` | `session`. */
+  scope?: string | null
+  /** Proposed sites, normalised origins (`https://api.stripe.com:443`). */
+  hosts?: string[]
+  /** `fetch` | `file` | `env` (the daemon may also say `proxy`). */
+  delivery?: string | null
+  /** `api_key` | `password` | `ssh_key` | … */
+  secretKind?: string | null
+  /** After a person saved it: the `k2v://` reference (never the value). */
+  ref?: string | null
+}
+
+/** Where a secret card's answer is kept (the vault's scope). */
+export type SecretScope = 'workspace' | 'server' | 'session'
+/** How the agent gets a secret card's answer. */
+export type SecretDelivery = 'fetch' | 'file' | 'env'
+
+/** A Thread card answer. `secret` is the pasted value: it travels in the POST
+ *  body only and never lands in Thread state, a store or a log. The other
+ *  fields are what the person chose on a secret card (sent only when they
+ *  differ from the agent's proposal); `confirm` is the second click after a
+ *  `card_host_mismatch` / `card_readable_delivery` warning. */
+export interface ThreadAnswerPayload {
+  answer?: string
+  secret?: string
+  scope?: SecretScope
+  hosts?: string[]
+  delivery?: SecretDelivery
+  confirm?: boolean
+}
+
+/** The `POST thread/answer` body for a payload (values in the body only). */
+export function threadAnswerBody(addr: string, id: string, payload: ThreadAnswerPayload): Record<string, string> {
+  const body: Record<string, string> = { addr, id }
+  if (payload.answer !== undefined) body.answer = payload.answer
+  if (payload.secret !== undefined) {
+    body.secret = payload.secret
+    if (payload.scope) body.scope = payload.scope
+    if (payload.hosts) body.hosts = payload.hosts.join(',')
+    if (payload.delivery) body.delivery = payload.delivery
+    if (payload.confirm) body.confirm = '1'
+  }
+  return body
 }
 
 export interface OverlayDoc {
@@ -606,9 +650,17 @@ function coerceChoice(raw: unknown): OverlayChoice | null {
 function coerceSecret(raw: unknown): OverlaySecret | null {
   if (!raw || typeof raw !== 'object') return null
   const s = raw as Record<string, unknown>
-  return {
+  const out: OverlaySecret = {
     name: typeof s.name === 'string' ? s.name : '',
     status: typeof s.status === 'string' ? s.status : 'pending',
     prompt: typeof s.prompt === 'string' ? s.prompt : null,
   }
+  // Only the proposal and the reference are copied. A card body never
+  // carries a value; anything else on it is dropped here.
+  if (typeof s.scope === 'string') out.scope = s.scope
+  if (Array.isArray(s.hosts)) out.hosts = s.hosts.filter((h): h is string => typeof h === 'string')
+  if (typeof s.delivery === 'string') out.delivery = s.delivery
+  if (typeof s.secretKind === 'string') out.secretKind = s.secretKind
+  if (typeof s.ref === 'string') out.ref = s.ref
+  return out
 }

@@ -9,10 +9,10 @@
 // cover them:
 //   - the Garden switcher is a pill with the Garden's name; it opens a menu
 //     of every Garden (each bound as `garden-option`, with its ⌥⌘N hint), a
-//     separator, then "+ New Garden" (`ZenNewGarden`): a name field, then
-//     Start with the default or Start empty and ask my agent, which creates
-//     the Garden (`gardens.create`, cap `gardens:manage`), switches to it
-//     and closes the menu; Esc steps back. Rename and delete are CLI and
+//     separator, then "+ New Garden" (`ZenNewGarden`), which closes the
+//     menu and opens the New Garden modal (a name and the catalog's cards;
+//     `ZenNewGardenModal`): Create makes the Garden (`gardens.create`, cap
+//     `gardens:manage`) and switches to it. Rename and delete are CLI and
 //     agent only in this cut. The menu closes on a pick, Esc or a click
 //     outside. It opens toward the page (down from the top band, up from
 //     the bottom band) and lines up with the pill's side, through
@@ -29,7 +29,7 @@ import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { ZEN_SWITCHER_COMPACT_MAX } from '@/lib/zen/zen-overflow'
 import { useZenBind, useZenK2Overlay, ZenChromePlaceContext, ZenRowCompactContext } from '../ZenTemplateControls'
-import { useZenOpenNewGardenRequest, ZenNewGarden } from './ZenNewGarden'
+import { ZenNewGarden } from './ZenNewGarden'
 
 /** One Garden in a list (the switcher's menu, or a `menu`'s Gardens
  *  section): bound as `garden-option` with its Garden id and ⌥⌘N hint. */
@@ -91,20 +91,11 @@ export const ZEN_DROPDOWN_STYLE: React.CSSProperties = {
 /** The Garden switcher (G25): a pill naming this window's Garden. */
 export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  // A catalog short "See it in New Garden" asked for (What's new card).
-  const [highlight, setHighlight] = useState<string | null>(null)
   const place = useContext(ZenChromePlaceContext)
   const compact = useContext(ZenRowCompactContext)
   const trigger = useZenBind(bridge, 'garden-switcher')
-  const close = useCallback(() => {
-    setOpen(false)
-    setHighlight(null)
-  }, [])
+  const close = useCallback(() => setOpen(false), [])
   const manage = bridge.caps.has('gardens:manage')
-  useZenOpenNewGardenRequest(manage, (short) => {
-    setHighlight(short)
-    setOpen(true)
-  })
   const menu = useAnchoredMenu<HTMLDivElement>({
     open,
     onClose: close,
@@ -178,7 +169,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
             {manage && (
               <>
                 <div role="separator" aria-hidden style={{ height: 1, margin: '3px 6px', background: 'var(--zen-border)' }} />
-                <ZenNewGarden key={highlight ?? ''} bridge={bridge} onDone={close} highlight={highlight} />
+                <ZenNewGarden bridge={bridge} onDone={close} />
               </>
             )}
           </div>,

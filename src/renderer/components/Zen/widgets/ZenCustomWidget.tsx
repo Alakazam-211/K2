@@ -198,6 +198,11 @@ function CornerMenu({
   const [open, setOpen] = useState(false)
   const [sendingOverride, setSendingOverride] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // K2's own built-in widgets (the haunted Diary) draw their page edge to
+  // edge: the menu stays, faint until pointed at or focused (Rosson
+  // 2026-10-08: nothing on the Diary that isn't haunted).
+  const quiet = widget.widget.startsWith('k2:')
+  const [hot, setHot] = useState(false)
   const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 190, align: 'end' })
   const g = widget.grant
   const canSend = g !== null && g.caps.includes('thread:post')
@@ -229,8 +234,13 @@ function CornerMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         data-zen-custom-menu=""
+        data-zen-custom-menu-quiet={quiet ? '' : undefined}
         data-zen-soft-button=""
         onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setHot(true)}
+        onMouseLeave={() => setHot(false)}
+        onFocus={() => setHot(true)}
+        onBlur={() => setHot(false)}
         className="no-drag cursor-pointer"
         style={{
           position: 'absolute',
@@ -244,6 +254,8 @@ function CornerMenu({
           border: '1px solid var(--zen-border)',
           background: 'var(--zen-surface-raised)',
           color: 'var(--zen-text-muted)',
+          opacity: quiet && !open && !hot ? 0.3 : 1,
+          transition: 'opacity 160ms ease',
         }}
       >
         ⋯

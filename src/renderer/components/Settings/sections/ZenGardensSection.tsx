@@ -1,6 +1,7 @@
 // Settings → Gardens (prd-zen-gardens-v1 item 17, Rosson 2026-10-04).
 // This computer's Zen Gardens: list, rename, reorder, delete, + New Garden
-// (default layout or empty), the global theme with per-Garden overrides, and
+// (the same modal as Zen's: a name and the catalog's cards, Rosson
+// 2026-10-08), the global theme with per-Garden overrides, and
 // the folder. Thin client over `lib/zen/zen-settings.ts`: every request goes
 // to the LOCAL daemon. Re-reads on every local `zen_changed`, like the
 // Garden switcher, so Settings and an open Zen window stay in step.
@@ -21,7 +22,6 @@ import {
   deleteZenSettingsGarden,
   loadZenSettings,
   moveZenSettingsGarden,
-  nextZenGardenName,
   renameZenSettingsGarden,
   setZenGardenTheme,
   setZenGlobalTheme,
@@ -36,23 +36,11 @@ import {
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
-import { useZenCatalogBadges, useZenTemplatesStore, zenCatalogGardenName, zenTemplateSections } from '@/lib/zen/zen-templates'
-import {
-  ZEN_TEMPLATES_FALLBACK,
-  type ZenGardenNewRequest,
-  type ZenScope,
-  type ZenTemplateInfo,
-  type ZenWidgetGrantRow,
-} from '@/lib/zen/zen-custom-types'
-import { zenGrantEntries, zenScopeKind, zenScopeRows, zenScopeWhere } from '@/lib/zen/zen-custom-scope'
+import { useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
+import { type ZenWidgetGrantRow } from '@/lib/zen/zen-custom-types'
+import { zenScopeWhere } from '@/lib/zen/zen-custom-scope'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
-import {
-  ZenCapList,
-  ZenScopeCount,
-  ZenScopePicker,
-  ZenSendingChoice,
-  zenDefaultScope,
-} from '@/components/Zen/widgets/ZenGrantDialog'
+import { ZenGardenSketch, ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   {
@@ -335,138 +323,8 @@ function GardenRow({
   )
 }
 
-function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // A ready-made Garden that runs a widget: its scope, picked here (UWB22).
-  const [entry, setEntry] = useState<ZenTemplateInfo | null>(null)
-  const [scope, setScope] = useState<ZenScope | null>(null)
-  const [sending, setSending] = useState(true)
-  const [confirmed, setConfirmed] = useState(false)
-  const templates = useZenTemplatesStore((s) => s.templates)
-  const fallback = nextZenGardenName(gardens)
-
-  const create = async (template: ZenNewGardenTemplate, grant?: ZenGardenNewRequest['grant']): Promise<void> => {
-    let clean: string
-    try {
-      clean = checkZenGardenName(name.trim() === '' ? fallback : name, gardens)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      return
-    }
-    const ok = await attempt(() => createZenSettingsGarden(clean, template, grant), setBusy, setError)
-    if (ok) {
-      setName('')
-      setOpen(false)
-      setEntry(null)
-    }
-  }
-  const pickCatalog = (t: ZenTemplateInfo): void => {
-    if (!t.needsGrant) {
-      void create(t.short)
-      return
-    }
-    setEntry(t)
-    setScope(zenDefaultScope())
-    setSending(true)
-    setConfirmed(false)
-    setError(null)
-  }
-  const { starts, catalog } = zenTemplateSections(templates)
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setError(null)
-          setOpen(true)
-        }}
-        className={`${BTN} mt-3`}
-      >
-        + New Garden
-      </button>
-    )
-  }
-
-  return (
-    <div className="mt-3 p-3 border border-[var(--color-border)] space-y-2" data-zen-new-garden="">
-      <input
-        aria-label="New Garden name"
-        autoFocus
-        value={name}
-        placeholder={fallback}
-        disabled={busy}
-        maxLength={80}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault()
-            e.stopPropagation()
-            setOpen(false)
-          }
-        }}
-        className={`${INPUT} w-full`}
-      />
-      {entry?.needsGrant ? (
-        <CatalogGrant
-          entry={entry}
-          scope={scope}
-          onScope={setScope}
-          sending={sending}
-          onSending={setSending}
-          confirmed={confirmed}
-          onConfirmed={setConfirmed}
-          busy={busy}
-          onBack={() => setEntry(null)}
-          onCreate={(grant) => void create(entry.short, grant)}
-        />
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-2">
-            {(starts.length > 0 ? starts : ZEN_TEMPLATES_FALLBACK).map((t) => (
-              <button key={t.short} type="button" disabled={busy} onClick={() => void create(t.short)} className={BTN}>
-                {t.label}
-              </button>
-            ))}
-            <button type="button" disabled={busy} onClick={() => setOpen(false)} className={BTN}>
-              Cancel
-            </button>
-          </div>
-          {catalog.length > 0 && (
-            <div className="space-y-1" data-zen-settings-catalog="">
-              <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-                Ready-made Gardens
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {catalog.map((t) => (
-                  <button
-                    key={t.short}
-                    type="button"
-                    disabled={busy}
-                    title={t.description}
-                    data-zen-settings-catalog-choice={t.short}
-                    onClick={() => pickCatalog(t)}
-                    className={BTN}
-                  >
-                    {t.label}
-                    <CatalogBadge short={t.short} />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-      <InlineError text={error} testId="zen-new-garden-error" />
-    </div>
-  )
-}
-
-/** Zen's own tokens mapped onto Settings' look, so the shared scope picker
- *  and cap list (drawn with `--zen-*`) read as part of this page. */
+/** Zen's own tokens mapped onto Settings' look, so the shared New Garden
+ *  modal and cards (drawn with `--zen-*`) read as part of this page. */
 const ZEN_TOKENS_IN_SETTINGS = {
   '--zen-text': 'var(--color-text-primary)',
   '--zen-text-muted': 'var(--color-text-muted)',
@@ -476,162 +334,64 @@ const ZEN_TOKENS_IN_SETTINGS = {
   '--zen-accent': 'var(--color-accent)',
   '--zen-danger': 'var(--color-status-error)',
   '--zen-radius': '6px',
+  color: 'var(--color-text-primary)',
 } as React.CSSProperties
 
-/** UWB22: which agents a ready-made Garden's widget may see, in the same click. */
-function CatalogGrant({
-  entry,
-  scope,
-  onScope,
-  sending,
-  onSending,
-  confirmed,
-  onConfirmed,
-  busy,
-  onBack,
-  onCreate,
+/**
+ * Settings' New Garden: the same modal as Zen's (Rosson 2026-10-08): a
+ * name and the catalog's cards, the Diary first. `highlight` opens it on
+ * a catalog entry (the Garden catalog's cards). Creates through the local
+ * daemon; a catalog Garden's grant rides the same click.
+ */
+function SettingsNewGardenModal({
+  gardens,
+  highlight,
+  onClose,
 }: {
-  entry: ZenTemplateInfo
-  scope: ZenScope | null
-  onScope(s: ZenScope | null): void
-  sending: boolean
-  onSending(on: boolean): void
-  confirmed: boolean
-  onConfirmed(on: boolean): void
-  busy: boolean
-  onBack(): void
-  onCreate(grant: NonNullable<ZenGardenNewRequest['grant']>): void
+  gardens: readonly ZenSettingsGarden[]
+  highlight: string | null
+  onClose(): void
 }): React.JSX.Element {
-  const caps = entry.needsGrant?.caps ?? []
-  const posts = caps.includes('thread:post')
-  const everyServer = scope !== null && zenScopeKind(scope) === 'allServers'
-  const empty = scope === null || zenScopeRows(scope).rows.length === 0
-  const blocked = busy || empty || (posts && sending && everyServer && !confirmed)
   return (
-    <div className="space-y-2 text-xs" style={ZEN_TOKENS_IN_SETTINGS} data-zen-settings-catalog-grant={entry.short}>
-      <div className="text-[var(--color-text-primary)]">
-        <span className="font-semibold">{entry.label}</span>: its page can
-      </div>
-      <ZenCapList caps={caps} scope={scope} />
-      <ZenScopePicker ask={{}} value={scope} onChange={onScope} />
-      <ZenScopeCount scope={scope} />
-      {posts && (
-        <ZenSendingChoice
-          sending={sending}
-          onSending={onSending}
-          everyServer={everyServer}
-          confirmed={confirmed}
-          onConfirmed={onConfirmed}
-        />
-      )}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={busy} onClick={onBack} className={BTN}>
-          Back
-        </button>
-        <button
-          type="button"
-          disabled={blocked}
-          data-zen-settings-catalog-create=""
-          onClick={() =>
-            scope && onCreate({ scope, sending: posts ? sending : false, entries: zenGrantEntries(zenScopeRows(scope).rows) })
-          }
-          className={BTN}
-        >
-          Create
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** A catalog entry's badge ("New"), set by whoever knows what's new. */
-function CatalogBadge({ short }: { short: string }): React.JSX.Element | null {
-  const text = useZenCatalogBadges((s) => s.badges[short])
-  if (!text) return null
-  return (
-    <span
-      data-zen-catalog-badge={short}
-      className="ml-2 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--color-accent)] border border-[var(--color-accent)]"
-    >
-      {text}
-    </span>
-  )
-}
-
-/** A catalog Garden's preview: a small page sketch in its own colours. The
- *  catalog rows carry no picture yet, so K2 draws one from the entry. */
-function CatalogPreview({ entry, large }: { entry: ZenTemplateInfo; large?: boolean }): React.JSX.Element {
-  // A stable hue per Garden, so each entry keeps its look.
-  let hash = 0
-  for (const ch of entry.short) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
-  const hue = hash % 360
-  return (
-    <div
-      aria-hidden
-      data-zen-catalog-preview={entry.short}
-      className="relative w-full overflow-hidden border border-[var(--color-border)]"
-      style={{
-        aspectRatio: large ? '16 / 7' : '16 / 9',
-        background: `linear-gradient(135deg, hsl(${hue} 45% 92%), hsl(${(hue + 40) % 360} 40% 80%))`,
+    <ZenNewGardenModal
+      taken={gardens.map((g) => g.name)}
+      highlight={highlight}
+      vars={ZEN_TOKENS_IN_SETTINGS}
+      onClose={onClose}
+      onCreate={async (pick) => {
+        const clean = checkZenGardenName(pick.name, gardens)
+        await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate, pick.grant)
       }}
-    >
-      <div className="absolute inset-0 flex" style={{ padding: large ? 14 : 8, gap: large ? 10 : 6 }}>
-        <div style={{ flex: '1 1 0%', background: 'rgba(255,255,255,0.55)', borderRadius: 4 }} />
-        <div className="flex flex-col" style={{ flex: '2 1 0%', gap: large ? 8 : 4 }}>
-          <div style={{ height: large ? 16 : 8, width: '60%', background: `hsl(${hue} 35% 35% / 0.55)`, borderRadius: 3 }} />
-          <div style={{ flex: '1 1 0%', background: 'rgba(255,255,255,0.7)', borderRadius: 4 }} />
-        </div>
-      </div>
-      <span
-        className="absolute font-semibold"
-        style={{ right: 8, bottom: 4, fontSize: large ? 28 : 18, color: `hsl(${hue} 40% 30% / 0.7)` }}
-      >
-        {entry.label.slice(0, 1).toUpperCase()}
-      </span>
-    </div>
+    />
+  )
+}
+
+function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={`${BTN} mt-3`}>
+        + New Garden
+      </button>
+      {open && <SettingsNewGardenModal gardens={gardens} highlight={null} onClose={() => setOpen(false)} />}
+    </>
   )
 }
 
 /**
- * Settings → Gardens → Garden catalog (Rosson 2026-10-08): browse the
- * ready-made Gardens, see one up close, and Add it as a new Garden. The
- * list is the daemon's (`GET /cli/zen/templates`, section `catalog`), so a
- * new catalog Garden shows here with no code change. Adding makes a NEW
- * Garden; the person's Gardens never change. One that runs a widget asks
- * which agents it may see in the same click (UWB22).
+ * Settings → Gardens → Garden catalog (Rosson 2026-10-08): the ready-made
+ * Gardens as the same cards New Garden shows. The list is the daemon's
+ * (`GET /cli/zen/templates`, section `catalog`), so a new catalog Garden
+ * shows here with no code change. Picking a card opens New Garden on it;
+ * Create makes a NEW Garden (the person's Gardens never change), and for
+ * K2's own Gardens the click is the consent, said in one sentence there.
  */
 function GardenCatalog({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element | null {
   const templates = useZenTemplatesStore((s) => s.templates)
+  const badges = useZenCatalogBadges((s) => s.badges)
   const catalog = zenTemplateSections(templates).catalog
-  const [picked, setPicked] = useState<string | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [name, setName] = useState('')
-  const [scope, setScope] = useState<ZenScope | null>(null)
-  const [sending, setSending] = useState(true)
-  const [confirmed, setConfirmed] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [adding, setAdding] = useState<string | null>(null)
   if (catalog.length === 0) return null
-  const entry = catalog.find((t) => t.short === picked) ?? null
-  const startAdd = (t: ZenTemplateInfo): void => {
-    setAdding(true)
-    setName(zenCatalogGardenName(t.label, gardens.map((g) => g.name)))
-    setScope(zenDefaultScope())
-    setSending(true)
-    setConfirmed(false)
-    setError(null)
-  }
-  const create = async (t: ZenTemplateInfo, grant?: ZenGardenNewRequest['grant']): Promise<void> => {
-    let clean: string
-    try {
-      clean = checkZenGardenName(name, gardens)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      return
-    }
-    if (await attempt(() => createZenSettingsGarden(clean, t.short, grant), setBusy, setError)) setAdding(false)
-  }
-  const inUse = entry ? gardens.filter((g) => g.template === entry.id).length : 0
   return (
     <section data-settings-id="zen-gardens.catalog" className="mt-8" data-zen-settings-catalog-area="">
       <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
@@ -640,92 +400,40 @@ function GardenCatalog({ gardens }: { gardens: readonly ZenSettingsGarden[] }): 
       <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
         Ready-made Gardens from K2. Adding one makes a new Garden; your Gardens stay as they are.
       </p>
-      <div className="grid grid-cols-2 gap-3">
-        {catalog.map((t) => (
-          <button
-            key={t.short}
-            type="button"
-            aria-pressed={picked === t.short}
-            data-zen-catalog-card={t.short}
-            onClick={() => {
-              setPicked(t.short)
-              setAdding(false)
-              setError(null)
-            }}
-            className={`text-left p-2 border transition-colors no-drag cursor-pointer hover:bg-[var(--color-bg-elevated)] ${
-              picked === t.short ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
-            }`}
-          >
-            <CatalogPreview entry={t} />
-            <div className="mt-2 flex items-center text-xs text-[var(--color-text-primary)]">
-              <span className="truncate">{t.label}</span>
-              <CatalogBadge short={t.short} />
-            </div>
-            <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{t.description}</div>
-          </button>
-        ))}
-      </div>
-      {entry && (
-        <div className="mt-3 p-3 border border-[var(--color-border)] space-y-2 text-xs" data-zen-catalog-detail={entry.short}>
-          <CatalogPreview entry={entry} large />
-          <div className="flex items-center text-[var(--color-text-primary)]">
-            <span className="font-semibold">{entry.label}</span>
-            <CatalogBadge short={entry.short} />
-          </div>
-          <p className="text-[var(--color-text-secondary)]">{entry.description}</p>
-          {entry.needsGrant && entry.needsGrant.caps.length > 0 && (
-            <div style={ZEN_TOKENS_IN_SETTINGS} className="space-y-1">
-              <div className="text-[var(--color-text-muted)]">Its page asks to:</div>
-              <ZenCapList caps={entry.needsGrant.caps} scope={null} />
-            </div>
-          )}
-          {inUse > 0 && (
-            <p className="text-[10px] text-[var(--color-text-muted)]" data-zen-catalog-in-use={inUse}>
-              You have {inUse === 1 ? 'one Garden' : `${inUse} Gardens`} from it already.
-            </p>
-          )}
-          {!adding ? (
-            <button type="button" data-zen-catalog-add="" disabled={busy} onClick={() => startAdd(entry)} className={BTN}>
-              Add
-            </button>
-          ) : (
-            <div className="space-y-2" data-zen-catalog-adding="">
-              <input
-                aria-label="Name for the new Garden"
-                value={name}
-                disabled={busy}
-                maxLength={80}
-                onChange={(e) => setName(e.target.value)}
-                className={`${INPUT} w-full`}
-              />
-              {entry.needsGrant ? (
-                <CatalogGrant
-                  entry={entry}
-                  scope={scope}
-                  onScope={setScope}
-                  sending={sending}
-                  onSending={setSending}
-                  confirmed={confirmed}
-                  onConfirmed={setConfirmed}
-                  busy={busy}
-                  onBack={() => setAdding(false)}
-                  onCreate={(grant) => void create(entry, grant)}
-                />
-              ) : (
-                <div className="flex gap-2">
-                  <button type="button" disabled={busy} onClick={() => setAdding(false)} className={BTN}>
-                    Cancel
-                  </button>
-                  <button type="button" disabled={busy} data-zen-catalog-create="" onClick={() => void create(entry)} className={BTN}>
-                    Create
-                  </button>
+      <div className="grid grid-cols-2 gap-3" style={ZEN_TOKENS_IN_SETTINGS}>
+        {catalog.map((t) => {
+          const inUse = gardens.filter((g) => g.template === t.id).length
+          return (
+            <button
+              key={t.short}
+              type="button"
+              data-zen-catalog-card={t.short}
+              onClick={() => setAdding(t.short)}
+              className="text-left p-2 border border-[var(--color-border)] transition-colors no-drag cursor-pointer hover:bg-[var(--color-bg-elevated)] flex flex-col gap-1"
+            >
+              <ZenGardenSketch entry={t} />
+              <div className="mt-1 flex items-center text-xs text-[var(--color-text-primary)]">
+                <span className="truncate">{t.label}</span>
+                {badges[t.short] && (
+                  <span
+                    data-zen-catalog-badge={t.short}
+                    className="ml-2 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--color-accent)] border border-[var(--color-accent)]"
+                  >
+                    {badges[t.short]}
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{t.description}</div>
+              {inUse > 0 && (
+                <div className="text-[10px] text-[var(--color-text-muted)]" data-zen-catalog-in-use={inUse}>
+                  You have {inUse === 1 ? 'one Garden' : `${inUse} Gardens`} from it already.
                 </div>
               )}
-            </div>
-          )}
-          <InlineError text={error} testId="zen-catalog-error" />
-        </div>
-      )}
+            </button>
+          )
+        })}
+      </div>
+      {adding && <SettingsNewGardenModal gardens={gardens} highlight={adding} onClose={() => setAdding(null)} />}
     </section>
   )
 }

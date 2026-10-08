@@ -172,6 +172,15 @@ export interface ZenWidgetGrantRow {
   gardenName?: string
 }
 
+/** A catalog Garden's grant (Rust `CatalogGrant`). */
+export interface ZenCatalogGrant {
+  widget: string
+  caps: UserWidgetCap[]
+  /** `'local'` = this computer's agents only; null = the person picks. */
+  scope: 'local' | null
+  consent: string | null
+}
+
 /** One row of GET /cli/zen/templates (UWB23; Rust `TemplateInfo`). */
 export interface ZenTemplateInfo {
   /** `k2.texting@1`, `k2.blank@1`, `k2.diary@1`, … */
@@ -182,8 +191,11 @@ export interface ZenTemplateInfo {
   description: string
   /** start = the two New Garden starts; catalog = ready-made Gardens (R5). */
   section: 'start' | 'catalog'
-  /** Creating it also grants this (UWB22): ask for a scope in the same click. */
-  needsGrant: { widget: string; caps: UserWidgetCap[] } | null
+  /** Creating it also grants this (UWB22), in the same click. `scope:
+   *  'local'` fixes the scope to this computer's agents (`{server:
+   *  'local'}`; the Diary, Rosson 2026-10-08); `consent` is the one plain
+   *  sentence New Garden shows beside Create. */
+  needsGrant: ZenCatalogGrant | null
   newUsers: boolean
 }
 
@@ -215,8 +227,10 @@ export interface ZenGardenNewRequest {
   template?: string
   seedHome?: string
   at?: number
-  /** B2: `entries` (the bound rows at Allow, UWA8) may be empty. */
-  grant?: { scope: ZenScope; sending?: boolean; entries?: ZenGrantEntry[] }
+  /** B2: `entries` (the bound rows at Allow, UWA8) may be empty. `scope`
+   *  may be left out when the catalog fixes it (the daemon refuses any
+   *  other scope then). */
+  grant?: { scope?: ZenScope; sending?: boolean; entries?: ZenGrantEntry[] }
 }
 
 // ── The frame protocol (UW15, §7) ───────────────────────────────────────

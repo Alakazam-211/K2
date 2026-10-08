@@ -42,7 +42,15 @@ export function parseZenTemplates(raw: unknown): ZenTemplateInfo[] {
       label: typeof t.label === 'string' && t.label.trim() ? t.label : t.short,
       description: typeof t.description === 'string' ? t.description : '',
       section: t.section,
-      needsGrant: isObj(g) && typeof g.widget === 'string' ? { widget: g.widget, caps: zenWidgetCaps(g.caps) } : null,
+      needsGrant:
+        isObj(g) && typeof g.widget === 'string'
+          ? {
+              widget: g.widget,
+              caps: zenWidgetCaps(g.caps),
+              scope: g.scope === 'local' ? 'local' : null,
+              consent: typeof g.consent === 'string' && g.consent.trim() ? g.consent.trim() : null,
+            }
+          : null,
       newUsers: t.newUsers === true,
     })
   }

@@ -46,6 +46,7 @@ import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { __resetZenCustomRunForTests, useZenCustomRunStore } from '@/lib/zen/zen-custom-run'
 import { resetZenPausedStartForTests, takeZenPausedAtBoot, zenWidgetsRunningKey } from '@/lib/zen/zen-widgets-running'
+import { __resetZenTemplatesForTests, useZenTemplatesStore } from '@/lib/zen/zen-templates'
 import { ZenCustomWidget } from './ZenCustomWidget'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -389,5 +390,93 @@ describe('paused and stopped', () => {
     expect(q('[data-zen-custom-card="broken"]').textContent).toBe(
       'This widget has errors: onclick= won’t run. Ask your agent to fix it.',
     )
+  })
+})
+
+describe('K2’s own Diary (k2:diary@1): fixed to this computer’s agents (Rosson 2026-10-08)', () => {
+  const CONSENT = 'Diary can read your agents on this computer and post to their Threads.'
+  const diary = (over: Partial<ZenCustomWidgetPayload> = {}): ZenCustomWidgetPayload =>
+    payload({
+      id: 'diary',
+      widget: 'k2:diary@1',
+      name: 'Diary',
+      description: 'A haunted journal.',
+      requested: ['agents:read', 'thread:read', 'thread:post'],
+      reasons: {},
+      ...over,
+    })
+
+  beforeEach(() => {
+    useZenTemplatesStore.setState({
+      status: 'ready',
+      templates: [
+        {
+          id: 'k2.diary@1',
+          short: 'diary',
+          label: 'Diary',
+          description: 'A haunted journal.',
+          section: 'catalog',
+          needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'], scope: 'local', consent: CONSENT },
+          newUsers: true,
+        },
+      ],
+    })
+  })
+  afterEach(() => __resetZenTemplatesForTests())
+
+  it('a preinstalled Diary’s review asks no scope: one sentence, and Allow binds only this computer’s agents', async () => {
+    mount(diary())
+    fireEvent.click(q('[data-zen-custom-action="review"]'))
+    const dlg = q('[data-testid="zen-grant-dialog"]')
+    expect(q('[data-zen-grant-fixed-scope]').textContent).toContain(CONSENT)
+    // No scope picker: no select, no scope kinds.
+    expect(dlg.querySelector('select')).toBeNull()
+    expect(dlg.textContent).not.toContain('Which agents:')
+    await act(async () => void fireEvent.click(q('[data-zen-grant-allow]')))
+    expect(h.posts).toEqual([
+      {
+        hostKey: 'local',
+        route: 'zen/widget/grant',
+        body: {
+          garden: 'g-test0001',
+          placement: 'diary',
+          widget: 'k2:diary@1',
+          caps: ['agents:read', 'thread:read', 'thread:post'],
+          scope: { server: 'local' },
+          // Alice and Carol are on this computer; Bob (box.example.test) never is.
+          entries: [
+            { server: 'local', room: 'alice' },
+            { server: 'local', room: 'carol' },
+          ],
+          sending: true,
+          hash: 'hash-1',
+        },
+      },
+    ])
+  })
+
+  it('a user’s copy of the Diary (a folder widget) still gets the full review with the scope picker', () => {
+    mount(diary({ widget: 'my-diary' }))
+    fireEvent.click(q('[data-zen-custom-action="review"]'))
+    expect(document.querySelector('[data-zen-grant-fixed-scope]')).toBeNull()
+    expect(q('[data-testid="zen-grant-dialog"]').textContent).toContain('Which agents:')
+  })
+
+  it('the Diary’s ⋯ corner menu stays (Reload, Sending) but is faint until pointed at or focused', () => {
+    mount(diary({ caps: ['agents:read', 'thread:read', 'thread:post'], grant: granted({ caps: ['agents:read', 'thread:read', 'thread:post'], granted: ['agents:read', 'thread:read', 'thread:post'], scope: { server: 'local' } }) }))
+    const menu = q('[data-zen-custom-menu]')
+    expect(menu.hasAttribute('data-zen-custom-menu-quiet')).toBe(true)
+    expect(menu.style.opacity).toBe('0.3')
+    fireEvent.focus(menu)
+    expect(menu.style.opacity).toBe('1')
+    fireEvent.blur(menu)
+    expect(menu.style.opacity).toBe('0.3')
+    fireEvent.click(menu)
+    expect(q('[data-zen-custom-menu-item="sending"]').textContent).toBe('Sending: on (turn off)')
+    // A user widget's menu is never faint.
+    cleanup()
+    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    expect(q('[data-zen-custom-menu]').hasAttribute('data-zen-custom-menu-quiet')).toBe(false)
+    expect(q('[data-zen-custom-menu]').style.opacity).toBe('1')
   })
 })

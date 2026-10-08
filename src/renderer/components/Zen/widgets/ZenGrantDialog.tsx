@@ -19,7 +19,7 @@
 // grant (UWB4) through the owner-only route. A widget that changed while
 // the dialog was open is 409 `widget_changed` → "Review it again."
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useHomesStore } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -49,6 +49,9 @@ import {
 } from '@/lib/zen/zen-custom-words'
 import { grantZenWidget, revokeZenWidget, ZenWidgetError, zenWidgetError } from '@/lib/zen/zen-custom-grants'
 import { parseHomeAddress } from '@/lib/home-address'
+import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
+import { loadZenTemplates, useZenTemplatesStore } from '@/lib/zen/zen-templates'
+import { zenCatalogConsent, zenCatalogFixedScopeFor } from '@/lib/zen/zen-new-garden'
 
 // ── Scope picker ──────────────────────────────────────────────────────────
 
@@ -335,15 +338,28 @@ export function ZenOverlay({
   onClose,
   children,
   testId,
+  vars,
+  width = 480,
 }: {
   label: string
   onClose(): void
   children: React.ReactNode
   testId: string
+  /** Extra CSS variables on the overlay (Settings maps `--zen-*` here). */
+  vars?: React.CSSProperties
+  width?: number
 }): React.JSX.Element {
   const anchor = useRef<HTMLSpanElement | null>(null)
   const layer = useZenLayer(anchor)
   const boxRef = useRef<HTMLDivElement | null>(null)
+  // A K2 overlay (FC18): while it is open, the required-controls check
+  // reads a control under it as covered by K2, not by the page.
+  const offOverlay = useRef<(() => void) | null>(null)
+  useEffect(() => () => offOverlay.current?.(), [])
+  const backdropRef = useCallback((el: HTMLDivElement | null) => {
+    offOverlay.current?.()
+    offOverlay.current = el ? registerZenK2Overlay(el) : null
+  }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -355,7 +371,8 @@ export function ZenOverlay({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
   useEffect(() => {
-    boxRef.current?.focus({ preventScroll: true })
+    // A field inside that took focus as it mounted (New Garden's name) keeps it.
+    if (boxRef.current && !boxRef.current.contains(document.activeElement)) boxRef.current.focus({ preventScroll: true })
   }, [layer])
   return (
     <>
@@ -363,9 +380,10 @@ export function ZenOverlay({
       {layer &&
         createPortal(
           <div
+            ref={backdropRef}
             className="no-drag flex items-center justify-center"
             data-zen-overlay=""
-            style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0, 0, 0, 0.32)' }}
+            style={{ ...vars, position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0, 0, 0, 0.32)' }}
             onMouseDown={(e) => {
               if (e.target === e.currentTarget) onClose()
             }}
@@ -379,7 +397,7 @@ export function ZenOverlay({
               data-testid={testId}
               className="flex flex-col"
               style={{
-                width: 'min(480px, calc(100vw - 32px))',
+                width: `min(${width}px, calc(100vw - 32px))`,
                 maxHeight: 'calc(100vh - 48px)',
                 overflowY: 'auto',
                 gap: 14,
@@ -468,8 +486,16 @@ export function ZenGrantDialog({
   const [error, setError] = useState<string | null>(null)
   useHomesStore((s) => s.homes)
   useZenServerRosters((s) => s.rosters)
+  // K2's own catalog widget (the Diary) has its scope fixed by the
+  // catalog: this computer's agents. No picker; one plain sentence.
+  const templates = useZenTemplatesStore((s) => s.templates)
+  useEffect(() => {
+    if (widget.widget.startsWith('k2:') && useZenTemplatesStore.getState().status === 'idle') void loadZenTemplates()
+  }, [widget.widget])
+  const catalogScope = zenCatalogFixedScopeFor(widget.widget, templates)
+  const catalogEntry = catalogScope ? (templates.find((t) => t.needsGrant?.widget === widget.widget) ?? null) : null
 
-  const scope = zenEffectiveScope(ask, picked)
+  const scope = catalogScope ?? zenEffectiveScope(ask, picked)
   const everyServer = scope !== null && zenScopeKind(scope) === 'allServers'
   const rows = scope ? zenScopeRows(scope).rows : []
   const needsConfirm = posts && sending && everyServer && !confirmed
@@ -520,11 +546,18 @@ export function ZenGrantDialog({
           <ZenCapList caps={widget.requested} scope={scope} />
         </div>
       )}
-      <div className="flex flex-col" style={{ gap: 6 }}>
-        <span style={{ color: 'var(--zen-text-muted)' }}>Which agents:</span>
-        <ZenScopePicker ask={ask} value={picked} onChange={setPicked} />
-        <ZenScopeCount scope={scope} />
-      </div>
+      {catalogEntry ? (
+        <div className="flex flex-col" style={{ gap: 6 }} data-zen-grant-fixed-scope="">
+          <span>{zenCatalogConsent(catalogEntry)}</span>
+          <ZenScopeCount scope={scope} />
+        </div>
+      ) : (
+        <div className="flex flex-col" style={{ gap: 6 }}>
+          <span style={{ color: 'var(--zen-text-muted)' }}>Which agents:</span>
+          <ZenScopePicker ask={ask} value={picked} onChange={setPicked} />
+          <ZenScopeCount scope={scope} />
+        </div>
+      )}
       {posts && (
         <ZenSendingChoice
           sending={sending}

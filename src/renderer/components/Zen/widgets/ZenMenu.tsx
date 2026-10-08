@@ -39,7 +39,7 @@ import { ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
 import { ZenUsageTool } from '../ZenUsageTool'
 import { useZenBind, useZenK2Overlay, ZenChromePlaceContext, ZenK2ChromeContext } from '../ZenTemplateControls'
 import { GardenChoice, ZEN_DROPDOWN_STYLE } from './ZenChromeControls'
-import { useZenOpenNewGardenRequest, ZenNewGarden } from './ZenNewGarden'
+import { ZenNewGarden } from './ZenNewGarden'
 
 /** A menu button's icons (FC15). */
 export const ZEN_MENU_ICONS = ['dots', 'bars', 'zen'] as const
@@ -201,22 +201,10 @@ export function ZenMenu({
     },
     [bind],
   )
-  // A catalog short "See it in New Garden" asked for (What's new card).
-  const [highlight, setHighlight] = useState<string | null>(null)
   const close = useCallback(() => {
     setOpen(false)
     setPanel('top')
-    setHighlight(null)
   }, [])
-  // Only a menu that holds the Garden switcher answers it.
-  useZenOpenNewGardenRequest(
-    bridge.caps.has('gardens:manage') && menuItems.some((m) => m.kind === 'garden-switcher'),
-    (short) => {
-      setPanel('top')
-      setHighlight(short)
-      setOpen(true)
-    },
-  )
   const closeToButton = useCallback(() => {
     close()
     buttonEl.current?.focus()
@@ -337,7 +325,7 @@ export function ZenMenu({
               <GardenChoice key={g.id} bridge={bridge} garden={g} selected={g.id === current?.id} onPicked={close} />
             ))}
             {bridge.caps.has('gardens:manage') && (
-              <ZenNewGarden key={highlight ?? ''} bridge={bridge} onDone={close} highlight={highlight} />
+              <ZenNewGarden bridge={bridge} onDone={close} />
             )}
           </div>
         )

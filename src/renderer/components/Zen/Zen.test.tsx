@@ -456,37 +456,35 @@ describe('Gardens (G22–G25)', () => {
     expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
   })
 
-  it('+ New Garden asks how it starts: Start with the default makes Garden 1’s page, Start empty makes an empty Garden (TG4.2)', async () => {
+  it('+ New Garden opens the modal: Start with the default makes Garden 1’s page, Start empty makes an empty Garden (TG4.2, Rosson 2026-10-08)', async () => {
     mount()
     await enterViaTopBar()
     await pageReady()
     await act(async () => void fireEvent.click(el('[data-zen-garden-pill]')))
     await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    // The menu closes; the modal holds the name and the cards.
+    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
     const input = el('[data-zen-new-garden-name]') as HTMLInputElement
     expect(document.activeElement).toBe(input)
-    await act(async () => void fireEvent.change(input, { target: { value: 'Notes' } }))
-    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
-    // After the name, a clear choice; nothing is made yet.
-    expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
-    expect(el('[data-zen-new-garden-named]').textContent).toBe('“Notes”')
-    const choices = Array.from(document.querySelectorAll('[data-zen-new-garden-choice]'))
-    expect(choices.map((c) => [c.getAttribute('data-zen-new-garden-choice'), c.querySelector('span')?.textContent])).toEqual([
+    expect(input.value).toBe('Garden 2')
+    // This daemon has no templates route: the two starts, as cards.
+    await waitFor(() => expect(document.querySelectorAll('[data-zen-new-garden-card]').length).toBe(2))
+    const cards = Array.from(document.querySelectorAll('[data-zen-new-garden-card]'))
+    expect(cards.map((c) => [c.getAttribute('data-zen-new-garden-card'), c.querySelector('.truncate')?.textContent])).toEqual([
       ['texting', 'Start with the default'],
       ['blank', 'Start empty and ask my agent'],
     ])
-    // The default is the selected choice: focused, so Enter takes it.
-    expect(choices[0].hasAttribute('data-zen-new-garden-selected')).toBe(true)
-    expect(choices[1].hasAttribute('data-zen-new-garden-selected')).toBe(false)
-    expect(document.activeElement).toBe(choices[0])
-    for (const c of choices) expect(c.classList.contains('cursor-pointer')).toBe(true)
-    // ↓ moves to the other choice; Esc goes back to the name, kept.
-    await act(async () => void fireEvent.keyDown(choices[0], { key: 'ArrowDown' }))
-    expect(document.activeElement).toBe(choices[1])
-    await act(async () => void fireEvent.keyDown(choices[1], { key: 'Escape' }))
-    expect((el('[data-zen-new-garden-name]') as HTMLInputElement).value).toBe('Notes')
-    expect(el('[data-zen-garden-menu]')).not.toBeNull()
-    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Enter' }))
-    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="texting"]')))
+    expect(cards[0].getAttribute('aria-checked')).toBe('true')
+    for (const c of cards) expect(c.classList.contains('cursor-pointer')).toBe(true)
+    // Arrows move the pick; nothing is made yet.
+    await act(async () => void fireEvent.keyDown(cards[0], { key: 'ArrowRight' }))
+    expect(el('[data-zen-new-garden-card="blank"]').getAttribute('aria-checked')).toBe('true')
+    expect(document.activeElement).toBe(el('[data-zen-new-garden-card="blank"]'))
+    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-card="blank"]'), { key: 'ArrowLeft' }))
+    expect(el('[data-zen-new-garden-card="texting"]').getAttribute('aria-checked')).toBe('true')
+    expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
+    await act(async () => void fireEvent.change(input, { target: { value: 'Notes' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
     await waitFor(() => expect(useZenWindowStore.getState().garden).toBe('g-notes'))
     await pageReady('k2.texting@1')
     expect(h.calls.filter((c) => c.route === 'zen/garden/new').map((c) => [c.method, c.hostKey, c.data])).toEqual([
@@ -496,7 +494,7 @@ describe('Gardens (G22–G25)', () => {
       { garden: 'g-default' },
       { garden: 'g-notes' },
     ])
-    expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
+    expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull()
     expect(el('[data-zen-garden-pill]').textContent).toContain('Notes')
 
     await zenChanged()
@@ -508,9 +506,9 @@ describe('Gardens (G22–G25)', () => {
 
     // Start empty and ask my agent: an empty Garden.
     await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden-card="blank"]')))
     await act(async () => void fireEvent.change(el('[data-zen-new-garden-name]'), { target: { value: 'Ideas' } }))
-    await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Enter' }))
-    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="blank"]')))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden-create]')))
     await pageReady('k2.blank@1')
     expect(useZenWindowStore.getState().garden).toBe('g-ideas')
     expect(h.calls.filter((c) => c.route === 'zen/garden/new').map((c) => c.data)).toEqual([
@@ -532,22 +530,20 @@ describe('Gardens (G22–G25)', () => {
     await act(async () => void fireEvent.change(input, { target: { value: 'garden 1' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
     expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “garden 1”.')
-    expect(document.querySelector('[data-zen-new-garden-start]')).toBeNull()
     await act(async () => void fireEvent.change(input, { target: { value: '   ' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
     expect(el('[data-zen-new-garden-error]').textContent).toBe('A Garden name is 1 to 60 characters.')
     expect(h.calls.some((c) => c.route === 'zen/garden/new')).toBe(false)
     // Another window made "Later" a moment ago: the daemon refuses, and the
-    // name field comes back with the reason.
+    // modal stays open with the reason and the name.
     h.gardens.push({ id: 'g-later', name: 'Later', template: 'k2.blank@1' })
     await act(async () => void fireEvent.change(input, { target: { value: 'Later' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
-    await act(async () => void fireEvent.click(el('[data-zen-new-garden-choice="texting"]')))
     await waitFor(() => expect(el('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “Later”.'))
     expect((el('[data-zen-new-garden-name]') as HTMLInputElement).value).toBe('Later')
     expect(h.calls.filter((c) => c.route === 'zen/garden/new').length).toBe(1)
     expect(useZenWindowStore.getState().garden).toBe('g-default')
-    // Esc cancels the field.
+    // Esc closes the modal.
     await act(async () => void fireEvent.keyDown(el('[data-zen-new-garden-name]'), { key: 'Escape' }))
     expect(document.querySelector('[data-zen-new-garden-name]')).toBeNull()
   })

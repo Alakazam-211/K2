@@ -75,6 +75,29 @@ vi.mock('@/lib/daemon-cli', () => ({
       return h.page
     }
     if (route === 'usage/subscriptions') return { harnesses: [] }
+    if (route === 'zen/templates') {
+      return {
+        ok: true,
+        templates: [
+          { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', needsGrant: null, newUsers: true },
+          { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'e', section: 'start', needsGrant: null, newUsers: true },
+          {
+            id: 'k2.diary@1',
+            short: 'diary',
+            label: 'Diary',
+            description: 'A haunted journal.',
+            section: 'catalog',
+            needsGrant: {
+              widget: 'k2:diary@1',
+              caps: ['agents:read', 'thread:read', 'thread:post'],
+              scope: 'local',
+              consent: 'Diary can read your agents on this computer and post to their Threads.',
+            },
+            newUsers: true,
+          },
+        ],
+      }
+    }
     throw new Error(`unexpected GET ${route}`)
   }),
   daemonCliPost: vi.fn(async (_scope: unknown, route: string, body?: unknown) => {
@@ -176,6 +199,15 @@ const EXAMPLES: Record<string, Example> = {
     items: [MORE, SWITCHER('menu', { menu: 'more' }), item('theme-picker', 'menu', { menu: 'more' }), item('zen-toggle', 'menu', { menu: 'more' })],
     bands: { top: g([], [], ['more']), bottom: null },
     menus: { more: ['garden-switcher', 'theme-picker', 'zen-toggle'] },
+  },
+  // The Diary's chrome (Rosson 2026-10-08, `diary-1.toml`): one small ⋯
+  // menu top right holding only the Garden switcher and the Zen toggle.
+  diary: {
+    widgets: [AGENTS, CONVERSATION, STRIP_RAIL],
+    from: 'template',
+    items: [{ ...MORE, props: { icon: 'dots', label: 'Diary' } }, SWITCHER('menu', { menu: 'more' }), item('zen-toggle', 'menu', { menu: 'more' })],
+    bands: { top: g([], [], ['more']), bottom: null },
+    menus: { more: ['garden-switcher', 'zen-toggle'] },
   },
   'texting-chrome': {
     widgets: [AGENTS, CONVERSATION, STRIP_RAIL],
@@ -407,6 +439,55 @@ describe('each guide example draws its layout from the page answer (FC34, S2)', 
     expect(el('[data-zen-column="1"]').querySelector('[data-zen-switch]')).toBeNull()
     twoChecks()
     expectNoSafeMode('column-corner')
+  })
+})
+
+describe('the Diary’s chrome: one ⋯ menu with the switcher and the Zen toggle (Rosson 2026-10-08)', () => {
+  it('the band is only the ⋯ menu; it holds the Gardens and Exit Zen Mode, and the required-controls check passes', async () => {
+    await show('diary')
+    expect(row('[data-zen-band-row="top"]')).toEqual(['drag', 'menu'])
+    // Nothing that isn't haunted: no usage chip, no theme control, no pill.
+    expect(document.querySelector('[data-zen-chrome-kind="usage"], [data-zen-chrome-kind="theme-picker"], [data-zen-garden-pill]')).toBeNull()
+    const button = el('[data-zen-menu-button="more"]')
+    expect(button.getAttribute('aria-label')).toBe('Diary')
+    expect(button.querySelector('[data-zen-menu-icon="dots"]')).not.toBeNull()
+    twoChecks()
+    expectNoSafeMode('diary, closed')
+    await act(async () => void fireEvent.click(button))
+    const list = el('[data-zen-menu-list="more"]')
+    const sections = Array.from(list.querySelectorAll('[data-zen-menu-section]')).map((s) => s.getAttribute('data-zen-menu-section'))
+    expect(sections).toEqual(['garden-switcher', 'zen-toggle'])
+    expect(list.querySelectorAll('[data-zen-bound="garden-option"]').length).toBe(2)
+    expect(list.querySelector('[data-zen-new-garden]')).not.toBeNull()
+    expect(list.querySelector('[data-zen-menu-exit]')?.getAttribute('data-zen-bound')).toBe('zen-toggle')
+    twoChecks()
+    expectNoSafeMode('diary, menu open')
+    // The way out works from the menu.
+    await act(async () => void fireEvent.click(el('[data-zen-menu-exit]')))
+    expect(useZenWindowStore.getState().on).toBe(false)
+  })
+
+  it('+ New Garden in the menu opens the modal over the page; the open modal never trips the check', async () => {
+    await show('diary')
+    await act(async () => void fireEvent.click(el('[data-zen-menu-button="more"]')))
+    await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
+    // The menu closed; the modal is open, with the Diary's card first.
+    expect(document.querySelector('[data-zen-menu-list]')).toBeNull()
+    const modal = el('[data-testid="zen-new-garden-modal"]')
+    await waitFor(() => {
+      const cards = Array.from(modal.querySelectorAll('[data-zen-new-garden-card]')).map((c) => c.getAttribute('data-zen-new-garden-card'))
+      expect(cards).toEqual(['diary', 'texting', 'blank'])
+    })
+    // The modal's backdrop covers the ⋯ button: it is K2's own overlay,
+    // so the button still counts as visible.
+    const backdrop = el('[data-zen-overlay]')
+    coveredBy.set(el('[data-zen-menu-button="more"]'), () => backdrop)
+    twoChecks()
+    expectNoSafeMode('modal open over the menu button')
+    // A page element over it still fails, so the overlay is what passed.
+    coveredBy.set(el('[data-zen-menu-button="more"]'), () => document.body)
+    twoChecks()
+    expect(safeReason()).toBe('The Zen toggle’s menu (Diary) isn’t visible.')
   })
 })
 

@@ -81,6 +81,7 @@ import { ZenWidgetBoundary } from './ZenWidgetBoundary'
 import { useZenWidgetsRunningMarker } from '@/lib/zen/zen-custom-run'
 import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
+import { ZenNewGardenHost } from './widgets/ZenNewGardenModal'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -384,6 +385,7 @@ export function ZenPage({
         })}
       </div>
       {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
+      <ZenNewGardenHost bridge={controlsBridge} />
     </div>
   )
 }

@@ -256,6 +256,17 @@ function rowNames(): string[] {
   return [...document.querySelectorAll('[data-zen-garden-row]')].map((el) => el.getAttribute('data-zen-garden-row') ?? '')
 }
 
+/** The New Garden modal's cards, in order (Rosson 2026-10-08). */
+function newGardenCards(): string[] {
+  return [...document.querySelectorAll('[data-zen-new-garden-card]')].map((el) => el.getAttribute('data-zen-new-garden-card') ?? '')
+}
+
+function newGardenEl(selector: string): HTMLElement {
+  const el = document.querySelector<HTMLElement>(`[data-testid="zen-new-garden-modal"] ${selector}`)
+  if (!el) throw new Error(`no ${selector} in the New Garden modal\n${document.body.innerHTML.slice(0, 1500)}`)
+  return el
+}
+
 async function settle(): Promise<void> {
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0))
@@ -525,17 +536,22 @@ describe('Settings → Gardens: the section', () => {
     expect(rowNames()).toEqual(['g-1'])
   })
 
-  it('+ New Garden: "Start with the default" sends texting, "Start empty and ask my agent" sends blank', async () => {
+  it('+ New Garden opens the New Garden modal: “Start with the default” sends texting, “Start empty and ask my agent” sends blank', async () => {
     await mountSection()
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    // An older daemon (no templates route): the two starts, as cards.
+    await waitFor(() => expect(newGardenCards()).toEqual(['texting', 'blank']))
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Launch room' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start with the default' }))
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(row(rowNames()[3]).textContent).toContain('Default layout')
+    await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
 
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    fireEvent.click(newGardenEl('[data-zen-new-garden-card="blank"]'))
     // Left unnamed: the first free "Garden N".
-    fireEvent.click(screen.getByRole('button', { name: 'Start empty and ask my agent' }))
+    expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Garden 5')
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(5))
     expect(row(rowNames()[4]).textContent).toContain('Empty')
 
@@ -546,14 +562,15 @@ describe('Settings → Gardens: the section', () => {
     expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
   })
 
-  it('+ New Garden onto a taken name shows the 409 inline', async () => {
+  it('+ New Garden onto a taken name shows the 409 in the modal', async () => {
     await mountSection()
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
     h.failNext = 'garden_exists'
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Ideas' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start empty and ask my agent' }))
+    fireEvent.click(newGardenEl('[data-zen-new-garden-card="blank"]'))
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() =>
-      expect(screen.getByTestId('zen-new-garden-error').textContent).toBe('You already have a Garden called “Ideas”.'),
+      expect(newGardenEl('[data-zen-new-garden-error]').textContent).toBe('You already have a Garden called “Ideas”.'),
     )
     expect(rowNames()).toHaveLength(3)
   })
@@ -630,21 +647,33 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', needsGrant: null, newUsers: true },
     { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'e', section: 'start', needsGrant: null, newUsers: true },
   ]
+  const CONSENT = 'Diary can read your agents on this computer and post to their Threads.'
   const DIARY = {
     id: 'k2.diary@1',
     short: 'diary',
     label: 'Diary',
-    description: 'One agent at a time, in ink.',
+    description: 'A haunted journal.',
     section: 'catalog',
-    needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'] },
+    needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'], scope: 'local', consent: CONSENT },
     newUsers: false,
   }
+  // The Diary's grant is this computer's agents: Alice, never Julie (remote).
+  const LOCAL_GRANT = { scope: { server: 'local' }, sending: true, entries: [{ server: 'local', room: 'alice' }] }
   let savedHomes: ReturnType<typeof useHomesStore.getState>['homes']
 
   beforeEach(() => {
     savedHomes = useHomesStore.getState().homes
     useHomesStore.setState({
-      homes: [{ id: 'home-work', name: 'Work', rows: [{ address: 'alice::local', workspaceId: 'w1', label: 'Alice' }] }],
+      homes: [
+        {
+          id: 'home-work',
+          name: 'Work',
+          rows: [
+            { address: 'alice::local', workspaceId: 'w1', label: 'Alice' },
+            { address: 'julie::scout.k2.dev', workspaceId: 'w2', label: 'Julie' },
+          ],
+        },
+      ],
       selectedId: 'home-work',
     })
   })
@@ -652,25 +681,22 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     useHomesStore.setState({ homes: savedHomes })
   })
 
-  it('R5: the Diary is a catalog choice in + New Garden; it asks for a scope and sends the grant in the same click', async () => {
+  it('Rosson 2026-10-08: the Diary is the first card in + New Garden; the click is the consent, its grant fixed to this computer', async () => {
     h.templates = [...STARTS, DIARY]
     h.grants = []
     await mountSection()
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
+    await waitFor(() => expect(newGardenCards()).toEqual(['diary', 'texting', 'blank']))
+    expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true')
+    expect(newGardenEl('[data-zen-new-garden-card="diary"] [data-zen-garden-sketch="diary"]')).not.toBeNull()
+    expect(newGardenEl('[data-zen-new-garden-consent="diary"]').textContent).toBe(CONSENT)
+    // No scope picker, no Sending choice: one plain sentence.
+    expect(document.querySelector('[data-testid="zen-new-garden-modal"] select, [data-zen-sending-choice]')).toBeNull()
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Notebook' } })
-    expect(document.querySelector('[data-zen-settings-catalog]')?.textContent).toContain('Ready-made Gardens')
-    fireEvent.click(document.querySelector('[data-zen-settings-catalog-choice="diary"]') as HTMLElement)
-    const grant = document.querySelector('[data-zen-settings-catalog-grant="diary"]') as HTMLElement
-    expect(grant).not.toBeNull()
-    expect(grant.textContent).toContain('See the agents in Work:')
-    // Sending is on by default (R6).
-    expect((grant.querySelector('[data-zen-sending-choice]') as HTMLInputElement).checked).toBe(true)
-    fireEvent.click(document.querySelector('[data-zen-settings-catalog-create]') as HTMLElement)
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(row(rowNames()[3]).textContent).toContain('Diary')
-    expect(zenPosts()).toEqual([
-      ['zen/garden/new', { name: 'Notebook', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } }],
-    ])
+    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Notebook', template: 'diary', grant: LOCAL_GRANT }]])
   })
 
   it('R5: nothing is ever appended; the plain starts post no grant', async () => {
@@ -679,12 +705,15 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Start with the default' }))
+    await waitFor(() => expect(newGardenCards()).toEqual(['diary', 'texting', 'blank']))
+    fireEvent.click(newGardenEl('[data-zen-new-garden-card="texting"]'))
+    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Garden 4', template: 'texting' }]])
   })
 
-  it('Rosson 2026-10-08: the Garden catalog area: browse, preview, badge, Add makes a new Garden with its grant', async () => {
+  it('Rosson 2026-10-08: the Garden catalog area uses the same cards; a card opens New Garden on it', async () => {
     h.templates = [...STARTS, DIARY, { ...DIARY, id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', needsGrant: null }]
     h.grants = []
     h.gardens.push({ id: 'g-diary', name: 'Diary', template: 'k2.diary@1', theme: null })
@@ -694,25 +723,23 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     expect(cards).toEqual(['diary', 'stickers'])
     expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-badge="diary"]')?.textContent).toBe('New')
     expect(document.querySelector('[data-zen-catalog-card="stickers"] [data-zen-catalog-badge]')).toBeNull()
-    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-preview="diary"]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-garden-sketch="diary"]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-in-use="1"]')).not.toBeNull()
+    // Nothing is created until Create.
     fireEvent.click(document.querySelector('[data-zen-catalog-card="diary"]') as HTMLElement)
-    const detail = document.querySelector('[data-zen-catalog-detail="diary"]') as HTMLElement
-    expect(detail.textContent).toContain('One agent at a time, in ink.')
-    expect(detail.textContent).toContain('Its page asks to:')
-    expect(detail.querySelector('[data-zen-catalog-in-use="1"]')).not.toBeNull()
-    // Nothing is created until Add, then Create.
+    await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true'))
     expect(zenPosts()).toEqual([])
-    fireEvent.click(detail.querySelector('[data-zen-catalog-add]') as HTMLElement)
-    expect((screen.getByRole('textbox', { name: 'Name for the new Garden' }) as HTMLInputElement).value).toBe('Diary 2')
-    fireEvent.click(detail.querySelector('[data-zen-settings-catalog-create]') as HTMLElement)
+    expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Diary 2')
+    expect(newGardenEl('[data-zen-new-garden-consent="diary"]').textContent).toBe(CONSENT)
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(zenPosts()).toEqual([
-      ['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } }],
-    ])
-    // A catalog Garden with no widget: Add → Create, no grant.
+    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: LOCAL_GRANT }]])
+    // A catalog Garden with no widget: no consent, no grant.
+    await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
     fireEvent.click(document.querySelector('[data-zen-catalog-card="stickers"]') as HTMLElement)
-    fireEvent.click(document.querySelector('[data-zen-catalog-add]') as HTMLElement)
-    fireEvent.click(document.querySelector('[data-zen-catalog-create]') as HTMLElement)
+    await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="stickers"]').getAttribute('aria-checked')).toBe('true'))
+    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
+    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(zenPosts()).toHaveLength(2))
     expect(zenPosts()[1]).toEqual(['zen/garden/new', { name: 'Stickers', template: 'stickers' }])
   })

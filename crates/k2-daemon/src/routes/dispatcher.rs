@@ -5486,6 +5486,49 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // K2 compute nodes (prd-k2-compute-nodes-v1). Dark (404) until
+        // K2_COMPUTE / computePreview is on (CN30). The two sockets carry no
+        // HTTP credential: `Public` rows whose handlers fail closed on the
+        // signed handshake / one-time code (CN11, CN19).
+        p if crate::compute_routes::is_route(p) => {
+            if !k2_core::compute::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::compute_routes::dark();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if crate::compute_routes::is_socket(p) {
+                if p == crate::compute_ws::ATTACH_PATH {
+                    crate::compute_ws::serve_attach(stream, ingress).await;
+                } else {
+                    crate::compute_ws::serve_enroll(stream, ingress).await;
+                }
+                return DispatchOutcome::Done;
+            }
+            if crate::compute_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::compute_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::compute_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::compute_routes::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::sidecar_routes::is_route(p) => {
             let post_row = crate::sidecar_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

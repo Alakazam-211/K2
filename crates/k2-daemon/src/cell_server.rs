@@ -656,6 +656,19 @@ mod unix_impl {
             // session. Same body caps as TCP (413).
             // LLM login wallet over the cell socket: read-only for every
             // passport (the handler refuses mutations with owner_only).
+            // K2 compute nodes: the agent verbs for THIS cell's session
+            // (owner verbs never pass require_hook on this socket). The two
+            // node sockets are TCP-only.
+            p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
+                if crate::compute_routes::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::compute_routes::MAX_BODY {
+                    return from_cli(crate::compute_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::compute_routes::handle(p, who, body, params))
+            }
             p if crate::llm_accounts_routes::is_route(p) => {
                 if crate::llm_accounts_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());

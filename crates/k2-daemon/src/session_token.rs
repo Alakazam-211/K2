@@ -572,6 +572,21 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/llm/accounts/pin",
         "/cli/llm/accounts/unpin",
         "/cli/llm/accounts/add-key",
+        // K2 compute nodes (CN18): the agent verbs. The handler checks the
+        // workspace switch (`compute_off`) and the node grant
+        // (`not_granted`) and scopes everything to the passport's
+        // workspace. Enroll/confirm/remove/grant/pause/policy are NOT here.
+        "/cli/compute/nodes",
+        "/cli/compute/nodes/info",
+        "/cli/compute/run",
+        "/cli/compute/jobs",
+        "/cli/compute/jobs/get",
+        "/cli/compute/jobs/logs",
+        "/cli/compute/jobs/receipt",
+        "/cli/compute/jobs/cancel",
+        "/cli/compute/jobs/retry",
+        "/cli/compute/grants",
+        "/cli/compute/local/status",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

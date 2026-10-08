@@ -116,6 +116,58 @@ mod tests {
         assert_eq!(r.status, "405 Method Not Allowed");
     }
 
+    /// `k2 db create --name` keeps working through the root helper's psql
+    /// allowlist (the fake refuses any argv the real helper would), and a
+    /// name Postgres / the helper can't take is refused up front.
+    #[test]
+    fn named_create_stays_inside_the_helper_psql_allowlist() {
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM sql_server", []);
+            let _ = conn.execute("DELETE FROM sql_databases", []);
+            conn.execute(
+                "INSERT INTO sql_server (id, status, installed_major, listen, updated_at) \
+                 VALUES (1, 'running', 16, 'localhost', 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("k2-sql-named-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let pid = insert_project("sql-named", &path);
+        let ops = FakeSystemOps::baked();
+        let secrets = MemSecretStore::default();
+        ops::create_database(&ops, &secrets, &pid, 1, None, Some("Reports-2024 Q1"))
+            .expect("named create must pass the helper allowlist");
+        let calls = ops.recorded().join("\n");
+        assert!(
+            calls.contains("helper psql -d reports_2024_q1 -v ON_ERROR_STOP=1"),
+            "named db reached the helper by its sanitized name: {calls}"
+        );
+
+        let long = "a".repeat(64);
+        match ops::create_database(&ops, &secrets, &pid, 5, None, Some(&long)) {
+            Err(ops::OpsError::Usage(m)) => assert!(m.contains("63"), "{m}"),
+            other => panic!("64-char name must be a usage error, got {other:?}"),
+        }
+
+        assert!(crate::sql::sysops::helper_psql_argv_ok(&["-d", "postgres", "-tA"]));
+        for bad in [
+            &["-d", "x; id"][..],
+            &["-d", "postgres", "-c", "SELECT 1"][..],
+            &["-d", "template1"][..],
+            &["-tA"][..],
+            &["-d", "postgres", "-v", "ON_ERROR_STOP=0"][..],
+            &["-d", "a", "-d", "b"][..],
+        ] {
+            assert!(!crate::sql::sysops::helper_psql_argv_ok(bad), "{bad:?}");
+        }
+    }
+
     #[test]
     fn create_catalog_row_json_has_no_superuser() {
         let _g = sql_server_test_lock();

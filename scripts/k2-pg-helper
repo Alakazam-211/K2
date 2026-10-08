@@ -6,7 +6,8 @@
 #   systemctl start|stop|is-active|enable|disable|restart postgresql*
 #   systemctl daemon-reload
 #   install-ram-fence   (canned systemd drop-in + pg conf.d; no stdin)
-#   psql  (as the postgres OS user; SQL on stdin, never from argv -c)
+#   psql -d <db> [-v ON_ERROR_STOP=1] [-tA]
+#         (as the postgres OS user via runuser, no shell; SQL on stdin only)
 #
 # The k2 daemon (User=k2) invokes this via sudo. NEVER pass agent SQL
 # through this helper — the daemon constructs CREATE DATABASE/ROLE /
@@ -100,18 +101,62 @@ EOF
 		exit 0
 		;;
 	psql)
-		# Remaining args are passed to psql (e.g. -d postgres -v ON_ERROR_STOP=1 -tA).
-		# Refuse -c / --command so agent SQL cannot ride argv.
-		for a in "$@"; do
+		# Exact argv allowlist — the only shapes the daemon sends:
+		#   -d <db>  (required, once)   -v ON_ERROR_STOP=1   -tA
+		# <db> is `postgres` or a K2 database name ([a-z0-9_], ≤63, which
+		# keeps `k2 db create --name` working), never template0/1. SQL
+		# comes on stdin only: -c / --command and every other flag are
+		# refused. psql runs as the postgres OS user with an argv array
+		# (runuser), never through a shell, so nothing is re-parsed.
+		# Rebuild argv in place: consume exactly the original $# words from
+		# the front, append each accepted one at the back.
+		db=""
+		left=$#
+		while [ "$left" -gt 0 ]; do
+			a="$1"
+			shift
+			left=$((left - 1))
 			case "$a" in
 				-c|--command|--command=*)
 					echo "k2-pg-helper: psql -c is forbidden (stdin only)" >&2
 					exit 2
 					;;
+				-d)
+					[ -z "$db" ] || { echo "k2-pg-helper: psql -d given twice" >&2; exit 2; }
+					[ "$left" -gt 0 ] || { echo "k2-pg-helper: psql -d needs a database" >&2; exit 2; }
+					db="$1"
+					shift
+					left=$((left - 1))
+					# Explicit character list (no locale-dependent ranges).
+					case "$db" in
+						""|template0|template1|*[!abcdefghijklmnopqrstuvwxyz0123456789_]*)
+							echo "k2-pg-helper: refused psql database name" >&2
+							exit 2
+							;;
+					esac
+					[ "${#db}" -le 63 ] || { echo "k2-pg-helper: refused psql database name" >&2; exit 2; }
+					set -- "$@" -d "$db"
+					;;
+				-v)
+					[ "$left" -gt 0 ] && [ "$1" = "ON_ERROR_STOP=1" ] || {
+						echo "k2-pg-helper: refused psql -v value" >&2
+						exit 2
+					}
+					shift
+					left=$((left - 1))
+					set -- "$@" -v ON_ERROR_STOP=1
+					;;
+				-tA)
+					set -- "$@" -tA
+					;;
+				*)
+					echo "k2-pg-helper: refused psql arg" >&2
+					exit 2
+					;;
 			esac
 		done
-		# shellcheck disable=SC2086
-		exec su -s /bin/sh postgres -c "psql $*"
+		[ -n "$db" ] || { echo "k2-pg-helper: psql -d <database> is required" >&2; exit 2; }
+		exec runuser -u postgres -- psql "$@"
 		;;
 	*)
 		echo "k2-pg-helper: unknown command '$cmd'" >&2

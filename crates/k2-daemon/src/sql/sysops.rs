@@ -278,6 +278,49 @@ impl SystemOps for RealSystemOps {
     }
 }
 
+/// Mirror of `scripts/k2-pg-helper`'s `psql` argv allowlist (after the
+/// `psql` word): `-d <db>` exactly once, optional `-v ON_ERROR_STOP=1`
+/// and `-tA`, nothing else; `<db>` is `[a-z0-9_]{1,63}` and not
+/// template0/1. [`FakeSystemOps`] refuses anything else, so every daemon
+/// call path exercised by the sql tests proves it stays inside what the
+/// real helper accepts (tests/cli/k2_pg_helper.sh checks the script).
+#[cfg(test)]
+pub fn helper_psql_argv_ok(args: &[&str]) -> bool {
+    let mut db: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "-d" => {
+                let Some(name) = args.get(i + 1).copied() else {
+                    return false;
+                };
+                if db.is_some()
+                    || name.is_empty()
+                    || name.len() > 63
+                    || name == "template0"
+                    || name == "template1"
+                    || !name
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                {
+                    return false;
+                }
+                db = Some(name);
+                i += 2;
+            }
+            "-v" => {
+                if args.get(i + 1).copied() != Some("ON_ERROR_STOP=1") {
+                    return false;
+                }
+                i += 2;
+            }
+            "-tA" => i += 1,
+            _ => return false,
+        }
+    }
+    db.is_some()
+}
+
 /// In-memory Postgres stand-in used by [`FakeSystemOps`]. Unit tests
 /// never talk to a live cluster.
 #[cfg(test)]
@@ -1154,6 +1197,9 @@ impl SystemOps for FakeSystemOps {
         let joined = args.join(" ");
         if joined.contains("apt") {
             return Err("apt-get is forbidden on the sql sidecar".into());
+        }
+        if args.first().copied() == Some("psql") && !helper_psql_argv_ok(&args[1..]) {
+            return Err(format!("k2-pg-helper would refuse psql argv: {joined}"));
         }
         self.record(format!(
             "helper {joined} stdin={}",

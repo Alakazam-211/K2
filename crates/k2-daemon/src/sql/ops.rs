@@ -832,6 +832,14 @@ fn create_database_inner(
                 .collect::<String>()
         })
         .unwrap_or(default_name);
+    // Postgres names are ≤63 bytes, and the root helper refuses longer
+    // database names (`scripts/k2-pg-helper`), so refuse them here with
+    // a clear message instead of failing later.
+    if name.len() > 63 {
+        return Err(OpsError::Usage(format!(
+            "database name '{name}' is longer than 63 characters"
+        )));
+    }
     if !name.starts_with("ws_") && name_override.is_none() {
         return Err(OpsError::Usage(
             "internal db name must start with ws_".into(),

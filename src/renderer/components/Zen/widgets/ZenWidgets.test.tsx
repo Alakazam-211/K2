@@ -3224,7 +3224,7 @@ describe('the empty Garden: Ask my agent (G28, TG5.1)', () => {
     await threadReady('cortana::local')
     const draft = zenGardenAskDraft({ id: 'g-notes', name: 'Notes' })
     expect(draft).toBe(
-      'In my Zen Garden "Notes" (id g-notes), please add: \n(Use the k2-zen skill and k2 zen garden; check with k2 zen validate.)',
+      'In my Zen Garden "Notes" (id g-notes), please add: \n(Use the k2-zen skill: built-in widgets, or your own with k2 zen widget new; check with k2 zen validate.)',
     )
     await waitFor(() => expect(composeInput().value).toBe(draft))
     // The caret waits after "please add: ".

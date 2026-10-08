@@ -35,7 +35,7 @@ import {
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
-import { useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
+import { useZenCatalogBadges, useZenTemplatesStore, zenCatalogGardenName, zenTemplateSections } from '@/lib/zen/zen-templates'
 import {
   ZEN_TEMPLATES_FALLBACK,
   type ZenGardenNewRequest,
@@ -67,6 +67,13 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
     label: 'Zen Theme',
     description: 'The theme every Garden uses, and per-Garden overrides',
     keywords: ['zen', 'theme', 'garden', 'appearance'],
+  },
+  {
+    id: 'zen-gardens.catalog',
+    section: 'zen-gardens',
+    label: 'Garden Catalog',
+    description: 'Browse ready-made Gardens (like the Diary) and add one',
+    keywords: ['zen', 'garden', 'catalog', 'diary', 'ready-made', 'template', 'add'],
   },
   {
     id: 'zen-gardens.widgets',
@@ -443,6 +450,7 @@ function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Reac
                     className={BTN}
                   >
                     {t.label}
+                    <CatalogBadge short={t.short} />
                   </button>
                 ))}
               </div>
@@ -529,6 +537,192 @@ function CatalogGrant({
         </button>
       </div>
     </div>
+  )
+}
+
+/** A catalog entry's badge ("New"), set by whoever knows what's new. */
+function CatalogBadge({ short }: { short: string }): React.JSX.Element | null {
+  const text = useZenCatalogBadges((s) => s.badges[short])
+  if (!text) return null
+  return (
+    <span
+      data-zen-catalog-badge={short}
+      className="ml-2 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--color-accent)] border border-[var(--color-accent)]"
+    >
+      {text}
+    </span>
+  )
+}
+
+/** A catalog Garden's preview: a small page sketch in its own colours. The
+ *  catalog rows carry no picture yet, so K2 draws one from the entry. */
+function CatalogPreview({ entry, large }: { entry: ZenTemplateInfo; large?: boolean }): React.JSX.Element {
+  // A stable hue per Garden, so each entry keeps its look.
+  let hash = 0
+  for (const ch of entry.short) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  const hue = hash % 360
+  return (
+    <div
+      aria-hidden
+      data-zen-catalog-preview={entry.short}
+      className="relative w-full overflow-hidden border border-[var(--color-border)]"
+      style={{
+        aspectRatio: large ? '16 / 7' : '16 / 9',
+        background: `linear-gradient(135deg, hsl(${hue} 45% 92%), hsl(${(hue + 40) % 360} 40% 80%))`,
+      }}
+    >
+      <div className="absolute inset-0 flex" style={{ padding: large ? 14 : 8, gap: large ? 10 : 6 }}>
+        <div style={{ flex: '1 1 0%', background: 'rgba(255,255,255,0.55)', borderRadius: 4 }} />
+        <div className="flex flex-col" style={{ flex: '2 1 0%', gap: large ? 8 : 4 }}>
+          <div style={{ height: large ? 16 : 8, width: '60%', background: `hsl(${hue} 35% 35% / 0.55)`, borderRadius: 3 }} />
+          <div style={{ flex: '1 1 0%', background: 'rgba(255,255,255,0.7)', borderRadius: 4 }} />
+        </div>
+      </div>
+      <span
+        className="absolute font-semibold"
+        style={{ right: 8, bottom: 4, fontSize: large ? 28 : 18, color: `hsl(${hue} 40% 30% / 0.7)` }}
+      >
+        {entry.label.slice(0, 1).toUpperCase()}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Settings → Gardens → Garden catalog (Rosson 2026-10-08): browse the
+ * ready-made Gardens, see one up close, and Add it as a new Garden. The
+ * list is the daemon's (`GET /cli/zen/templates`, section `catalog`), so a
+ * new catalog Garden shows here with no code change. Adding makes a NEW
+ * Garden; the person's Gardens never change. One that runs a widget asks
+ * which agents it may see in the same click (UWB22).
+ */
+function GardenCatalog({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element | null {
+  const templates = useZenTemplatesStore((s) => s.templates)
+  const catalog = zenTemplateSections(templates).catalog
+  const [picked, setPicked] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [scope, setScope] = useState<ZenScope | null>(null)
+  const [sending, setSending] = useState(true)
+  const [confirmed, setConfirmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (catalog.length === 0) return null
+  const entry = catalog.find((t) => t.short === picked) ?? null
+  const startAdd = (t: ZenTemplateInfo): void => {
+    setAdding(true)
+    setName(zenCatalogGardenName(t.label, gardens.map((g) => g.name)))
+    setScope(zenDefaultScope())
+    setSending(true)
+    setConfirmed(false)
+    setError(null)
+  }
+  const create = async (t: ZenTemplateInfo, grant?: ZenGardenNewRequest['grant']): Promise<void> => {
+    let clean: string
+    try {
+      clean = checkZenGardenName(name, gardens)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      return
+    }
+    if (await attempt(() => createZenSettingsGarden(clean, t.short, grant), setBusy, setError)) setAdding(false)
+  }
+  const inUse = entry ? gardens.filter((g) => g.template === entry.id).length : 0
+  return (
+    <section data-settings-id="zen-gardens.catalog" className="mt-8" data-zen-settings-catalog-area="">
+      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
+        Garden catalog
+      </h3>
+      <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
+        Ready-made Gardens from K2. Adding one makes a new Garden; your Gardens stay as they are.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        {catalog.map((t) => (
+          <button
+            key={t.short}
+            type="button"
+            aria-pressed={picked === t.short}
+            data-zen-catalog-card={t.short}
+            onClick={() => {
+              setPicked(t.short)
+              setAdding(false)
+              setError(null)
+            }}
+            className={`text-left p-2 border transition-colors no-drag cursor-pointer hover:bg-[var(--color-bg-elevated)] ${
+              picked === t.short ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
+            }`}
+          >
+            <CatalogPreview entry={t} />
+            <div className="mt-2 flex items-center text-xs text-[var(--color-text-primary)]">
+              <span className="truncate">{t.label}</span>
+              <CatalogBadge short={t.short} />
+            </div>
+            <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{t.description}</div>
+          </button>
+        ))}
+      </div>
+      {entry && (
+        <div className="mt-3 p-3 border border-[var(--color-border)] space-y-2 text-xs" data-zen-catalog-detail={entry.short}>
+          <CatalogPreview entry={entry} large />
+          <div className="flex items-center text-[var(--color-text-primary)]">
+            <span className="font-semibold">{entry.label}</span>
+            <CatalogBadge short={entry.short} />
+          </div>
+          <p className="text-[var(--color-text-secondary)]">{entry.description}</p>
+          {entry.needsGrant && entry.needsGrant.caps.length > 0 && (
+            <div style={ZEN_TOKENS_IN_SETTINGS} className="space-y-1">
+              <div className="text-[var(--color-text-muted)]">Its page asks to:</div>
+              <ZenCapList caps={entry.needsGrant.caps} scope={null} />
+            </div>
+          )}
+          {inUse > 0 && (
+            <p className="text-[10px] text-[var(--color-text-muted)]" data-zen-catalog-in-use={inUse}>
+              You have {inUse === 1 ? 'one Garden' : `${inUse} Gardens`} from it already.
+            </p>
+          )}
+          {!adding ? (
+            <button type="button" data-zen-catalog-add="" disabled={busy} onClick={() => startAdd(entry)} className={BTN}>
+              Add
+            </button>
+          ) : (
+            <div className="space-y-2" data-zen-catalog-adding="">
+              <input
+                aria-label="Name for the new Garden"
+                value={name}
+                disabled={busy}
+                maxLength={80}
+                onChange={(e) => setName(e.target.value)}
+                className={`${INPUT} w-full`}
+              />
+              {entry.needsGrant ? (
+                <CatalogGrant
+                  entry={entry}
+                  scope={scope}
+                  onScope={setScope}
+                  sending={sending}
+                  onSending={setSending}
+                  confirmed={confirmed}
+                  onConfirmed={setConfirmed}
+                  busy={busy}
+                  onBack={() => setAdding(false)}
+                  onCreate={(grant) => void create(entry, grant)}
+                />
+              ) : (
+                <div className="flex gap-2">
+                  <button type="button" disabled={busy} onClick={() => setAdding(false)} className={BTN}>
+                    Cancel
+                  </button>
+                  <button type="button" disabled={busy} data-zen-catalog-create="" onClick={() => void create(entry)} className={BTN}>
+                    Create
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          <InlineError text={error} testId="zen-catalog-error" />
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -688,6 +882,8 @@ export function ZenGardensSection(): React.JSX.Element {
             </ol>
             <NewGarden gardens={st.gardens} />
           </section>
+
+          <GardenCatalog gardens={st.gardens} />
 
           <section data-settings-id="zen-gardens.theme" className="mt-8">
             <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">

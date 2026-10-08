@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ZenGardenTemplate, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenScope, ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
-import { loadZenTemplates, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
+import { loadZenTemplates, useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
 import { zenScopeKind, zenScopeRows } from '@/lib/zen/zen-custom-scope'
 import { ZenCapList, ZenScopeCount, ZenScopePicker, ZenSendingChoice, zenDefaultScope } from './ZenGrantDialog'
 
@@ -101,6 +101,8 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
   const [sending, setSending] = useState(true)
   const [confirmed, setConfirmed] = useState(false)
   const templates = useZenTemplatesStore((s) => s.templates)
+  // A "New" (or other) badge per catalog entry, set by whoever knows.
+  const badges = useZenCatalogBadges((s) => s.badges)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const firstChoiceRef = useRef<HTMLButtonElement | null>(null)
 
@@ -358,7 +360,25 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
               className="flex w-full flex-col items-start text-left cursor-pointer disabled:cursor-default"
               style={choiceStyle(false)}
             >
-              <span style={{ fontWeight: 600 }}>{t.label}</span>
+              <span className="flex items-center" style={{ fontWeight: 600, gap: 6 }}>
+                {t.label}
+                {badges[t.short] && (
+                  <span
+                    data-zen-catalog-badge={t.short}
+                    style={{
+                      fontSize: '0.65em',
+                      padding: '0 5px',
+                      border: '1px solid var(--zen-accent)',
+                      borderRadius: 999,
+                      color: 'var(--zen-accent)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    {badges[t.short]}
+                  </span>
+                )}
+              </span>
               <span style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>{t.description}</span>
             </button>
           ))}

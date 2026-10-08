@@ -108,8 +108,37 @@ export function zenTemplateName(id: string): string {
   return id || 'Unknown'
 }
 
+// ── Catalog badges ────────────────────────────────────────────────────────
+
+/** A short word on a catalog entry ("New"), keyed by the template's short
+ *  name. Whoever knows what's new (the Garden sync builder's What's new
+ *  card) sets it; the catalog only draws it. Per-window view state. */
+export const useZenCatalogBadges = create<{ badges: Record<string, string> }>(() => ({ badges: {} }))
+
+export function setZenCatalogBadge(short: string, text: string | null): void {
+  useZenCatalogBadges.setState((s) => {
+    const badges = { ...s.badges }
+    if (text) badges[short] = text
+    else delete badges[short]
+    return { badges }
+  })
+}
+
+/** A free name for a Garden added from the catalog: its label, else
+ *  "<label> 2", "<label> 3", … (case aside, like the daemon). */
+export function zenCatalogGardenName(label: string, taken: readonly string[]): string {
+  const used = new Set(taken.map((n) => n.toLocaleLowerCase()))
+  const base = label.trim().slice(0, 56) || 'Garden'
+  if (!used.has(base.toLocaleLowerCase())) return base
+  for (let n = 2; ; n++) {
+    const name = `${base} ${n}`
+    if (!used.has(name.toLocaleLowerCase())) return name
+  }
+}
+
 /** Tests only. */
 export function __resetZenTemplatesForTests(): void {
   loadSeq = 0
   useZenTemplatesStore.setState({ status: 'idle', templates: ZEN_TEMPLATES_FALLBACK })
+  useZenCatalogBadges.setState({ badges: {} })
 }

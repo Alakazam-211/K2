@@ -224,7 +224,7 @@ import {
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import Settings, { settingsNav } from '../Settings'
 import { ZenGardensSection } from './ZenGardensSection'
-import { __resetZenTemplatesForTests } from '@/lib/zen/zen-templates'
+import { __resetZenTemplatesForTests, setZenCatalogBadge } from '@/lib/zen/zen-templates'
 import { useHomesStore } from '@/stores/homes'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -680,6 +680,44 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     fireEvent.click(screen.getByRole('button', { name: 'Start with the default' }))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Garden 4', template: 'texting' }]])
+  })
+
+  it('Rosson 2026-10-08: the Garden catalog area: browse, preview, badge, Add makes a new Garden with its grant', async () => {
+    h.templates = [...STARTS, DIARY, { ...DIARY, id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', needsGrant: null }]
+    h.grants = []
+    h.gardens.push({ id: 'g-diary', name: 'Diary', template: 'k2.diary@1', theme: null })
+    await mountSection()
+    act(() => setZenCatalogBadge('diary', 'New'))
+    const cards = [...document.querySelectorAll('[data-zen-catalog-card]')].map((c) => c.getAttribute('data-zen-catalog-card'))
+    expect(cards).toEqual(['diary', 'stickers'])
+    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-badge="diary"]')?.textContent).toBe('New')
+    expect(document.querySelector('[data-zen-catalog-card="stickers"] [data-zen-catalog-badge]')).toBeNull()
+    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-preview="diary"]')).not.toBeNull()
+    fireEvent.click(document.querySelector('[data-zen-catalog-card="diary"]') as HTMLElement)
+    const detail = document.querySelector('[data-zen-catalog-detail="diary"]') as HTMLElement
+    expect(detail.textContent).toContain('One agent at a time, in ink.')
+    expect(detail.textContent).toContain('Its page asks to:')
+    expect(detail.querySelector('[data-zen-catalog-in-use="1"]')).not.toBeNull()
+    // Nothing is created until Add, then Create.
+    expect(zenPosts()).toEqual([])
+    fireEvent.click(detail.querySelector('[data-zen-catalog-add]') as HTMLElement)
+    expect((screen.getByRole('textbox', { name: 'Name for the new Garden' }) as HTMLInputElement).value).toBe('Diary 2')
+    fireEvent.click(detail.querySelector('[data-zen-settings-catalog-create]') as HTMLElement)
+    await waitFor(() => expect(rowNames()).toHaveLength(5))
+    expect(zenPosts()).toEqual([
+      ['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true } }],
+    ])
+    // A catalog Garden with no widget: Add → Create, no grant.
+    fireEvent.click(document.querySelector('[data-zen-catalog-card="stickers"]') as HTMLElement)
+    fireEvent.click(document.querySelector('[data-zen-catalog-add]') as HTMLElement)
+    fireEvent.click(document.querySelector('[data-zen-catalog-create]') as HTMLElement)
+    await waitFor(() => expect(zenPosts()).toHaveLength(2))
+    expect(zenPosts()[1]).toEqual(['zen/garden/new', { name: 'Stickers', template: 'stickers' }])
+  })
+
+  it('no catalog (older daemon): no catalog area', async () => {
+    await mountSection()
+    expect(document.querySelector('[data-zen-settings-catalog-area]')).toBeNull()
   })
 
   it('UWB3: the permissions list: sending off, resume, turn off, all on the local daemon', async () => {

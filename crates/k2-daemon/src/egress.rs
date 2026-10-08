@@ -32,18 +32,21 @@ use k2_vault::hosts::{canonical_ip, is_blocked_ip};
 pub enum Purpose {
     /// `k2 vault fetch` (§9.2).
     VaultFetch,
+    /// The vault's loopback proxy for LLM CLIs and SDKs (§9.3).
+    VaultProxy,
 }
 
 impl Purpose {
     pub fn label(self) -> &'static str {
         match self {
             Purpose::VaultFetch => "vault-fetch",
+            Purpose::VaultProxy => "vault-proxy",
         }
     }
 
     fn connect_timeout(self) -> Duration {
         match self {
-            Purpose::VaultFetch => Duration::from_secs(10),
+            Purpose::VaultFetch | Purpose::VaultProxy => Duration::from_secs(10),
         }
     }
 }
@@ -153,6 +156,8 @@ impl Destination {
         Destination { host: host.to_string(), kind: DestKind::Pinned(addrs) }
     }
 
+    // Unused in the binary's test build too (only the lib's tests may
+    // read it), so the allow is unconditional.
     #[allow(dead_code)]
     pub fn host(&self) -> &str {
         &self.host
@@ -219,6 +224,51 @@ pub fn client(purpose: Purpose, dest: &Destination, timeout: Duration) -> Result
         .timeout(timeout)
         // No resolver except the pins below: a name that isn't pinned
         // fails instead of falling back to a fresh lookup.
+        .dns_resolver(Arc::new(NoLookup));
+    if let DestKind::Pinned(addrs) = &dest.kind {
+        b = b.resolve_to_addrs(&dest.host, addrs);
+    }
+    #[cfg(test)]
+    {
+        for c in TEST_ROOTS.with(|r| r.borrow().clone()) {
+            b = b.add_root_certificate(c);
+        }
+    }
+    b.build()
+        .map_err(|_| EgressError::new("egress_unavailable", 500, format!("couldn't set up a {} client", purpose.label())))
+}
+
+/// Re-run the air-gap check for a destination a cached client still
+/// points at (air-gap may have turned on since it was vetted).
+pub fn recheck(dest: &Destination) -> Result<(), EgressError> {
+    check_airgap(dest.literal(), dest.literal().is_some(), &dest.host)
+}
+
+/// The async client for one vetted destination, for streamed responses
+/// (the proxy). Same shape as [`client`]; instead of a total timeout it has
+/// an idle timeout between reads (`read_idle`), so a long generation keeps
+/// streaming while a stalled upstream still ends. Keeps a small pool to
+/// the pinned addresses.
+pub fn async_client(purpose: Purpose, dest: &Destination, read_idle: Duration) -> Result<reqwest::Client, EgressError> {
+    check_airgap(dest.literal(), dest.literal().is_some(), &dest.host)?;
+    if read_idle.is_zero() {
+        return Err(EgressError::new("upstream_error", 504, format!("timed out talking to {}", dest.host)));
+    }
+    let mut b = reqwest::Client::builder()
+        .use_rustls_tls()
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
+        .tls_built_in_root_certs(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .pool_max_idle_per_host(8)
+        .pool_idle_timeout(Duration::from_secs(60))
+        .connect_timeout(purpose.connect_timeout())
+        .read_timeout(read_idle)
         .dns_resolver(Arc::new(NoLookup));
     if let DestKind::Pinned(addrs) = &dest.kind {
         b = b.resolve_to_addrs(&dest.host, addrs);

@@ -1,0 +1,22 @@
+# k2-node policy: the machine owner's limits for jobs from the controller.
+# The controller can narrow these, never widen them. Edit with
+#   sudo k2-node policy set cpu_cap_percent=50
+# Uncomment a line to change a default.
+
+# cpu_cap_percent = 75          # of all cores
+# mem_cap_gb = 24               # default: 3/4 of RAM
+# disk_budget_gb = 150
+# disk_floor_gb = 30            # default: max(10% of disk, 30)
+# availability = "always"       # always | plugged_in | window (idle modes: later)
+#                               # default: plugged_in on machines with a battery
+# on_owner_return = "finish"    # finish | pause_now
+# max_parallel = 2
+# workspaces = []               # empty = whatever the controller grants
+# foreign_locks = ["/home/sew-ci/sew-build/.job.lock"]
+# write_smoke_lock = "/var/tmp/k2-smoke.lock"
+# network = "full"              # full | none
+#
+# [[window]]
+# days = "mon-fri"
+# from = "19:00"
+# to = "07:00"

@@ -1,0 +1,26 @@
+# K2 compute node. Installed by scripts/node/install-node-linux.sh.
+[Unit]
+Description=K2 compute node (runs jobs from your K2 server as k2node)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=k2node
+Group=k2node
+ExecStart=/usr/local/libexec/k2-node run --home /var/lib/k2node --config-dir /etc/k2-node
+Restart=always
+RestartSec=5
+# cgroup v2 delegation: k2-node moves itself to supervisor/ and gives each
+# job its own leaf with cpu.max / memory.max / pids.max (CN24).
+Delegate=yes
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/k2node /var/tmp /tmp
+WorkingDirectory=/var/lib/k2node
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

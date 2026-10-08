@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- K2 compute node. Installed by scripts/node/install-node-macos.sh. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.k2.node</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/Application Support/K2/node/k2-node</string>
+		<string>run</string>
+		<string>--home</string>
+		<string>/var/k2node</string>
+		<string>--config-dir</string>
+		<string>/etc/k2-node</string>
+	</array>
+	<key>UserName</key>
+	<string>_k2node</string>
+	<key>GroupName</key>
+	<string>_k2node</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>WorkingDirectory</key>
+	<string>/var/k2node</string>
+	<key>StandardOutPath</key>
+	<string>/var/k2node/log/k2-node.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/k2node/log/k2-node.log</string>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
+</dict>
+</plist>

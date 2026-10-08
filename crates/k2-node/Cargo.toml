@@ -6,6 +6,9 @@ edition = "2021"
 license = "FSL-1.1-Apache-2.0"
 description = "K2 compute node runtime: runs a controller's jobs as its own OS user. Never links k2-core or k2-daemon (CN26)."
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "k2-node"
 path = "src/main.rs"

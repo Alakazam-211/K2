@@ -2332,6 +2332,122 @@ impl StalwartClient {
         self.calendars_call(account_id, "CalendarEvent/set", args)
     }
 
+    // ── Calendars S4: groups + calendar sharing ──────────────────────
+
+    /// `Calendar/get` with `shareWith` (0.16.20's default property set
+    /// omits it, `calendar/get.rs:49-59`). The admin key is a member of
+    /// every account, so Stalwart returns the full `shareWith` map
+    /// (`api/acl.rs` `share_with`: `is_member` → the map).
+    pub(crate) fn calendar_list_shares(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let mut props: Vec<&str> = CALENDAR_PROPERTIES.to_vec();
+        props.push("shareWith");
+        let args = self.calendars_call(
+            account_id,
+            "Calendar/get",
+            serde_json::json!({ "ids": null, "properties": props }),
+        )?;
+        args.get("list")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .ok_or_else(|| "Calendar/get: reply has no list".to_string())
+    }
+
+    /// `Calendar/set` on the owner's account (create / update name+color /
+    /// `shareWith/<id>` patches). Returns the method response; the caller
+    /// reads `notCreated`/`notUpdated`.
+    pub(crate) fn calendar_set(
+        &self,
+        account_id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.calendars_call(account_id, "Calendar/set", args)
+    }
+
+    /// Every registry account (users AND groups) with the fields S4
+    /// needs. `@type` must be NAMED: the registry get keeps only the
+    /// listed properties (`registry/get.rs` retain). `emailAddress` is
+    /// computed by Stalwart as `name@<domain>` for users and groups.
+    pub fn account_rows(&self) -> Result<Vec<serde_json::Value>, String> {
+        let ids = self.account_query_ids()?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resp = self.registry_call(
+            "x:Account/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["@type", "name", "domainId", "emailAddress",
+                               "memberGroupIds", "permissions", "aliases", "description"],
+            }),
+        )?;
+        resp.get("list")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .ok_or_else(|| "x:Account/get: reply has no list".to_string())
+    }
+
+    /// `x:Account/set` create `{"@type":"Group","name","domainId"}`
+    /// (0.16 `GroupAccount`, `registry/schema/structs.rs:2964`), with
+    /// optional `permissions` (Merge — e.g. `emailReceive` off).
+    pub fn group_create(
+        &self,
+        name: &str,
+        domain_id: &str,
+        description: &str,
+        permissions: Option<&serde_json::Value>,
+    ) -> Result<String, String> {
+        let mut group = serde_json::json!({
+            "@type": "Group",
+            "name": name,
+            "domainId": domain_id,
+            "description": description,
+        });
+        if let Some(p) = permissions {
+            group["permissions"] = p.clone();
+        }
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({ "create": { CREATE_TAG: group } }),
+        )?;
+        parse_set_created_id("x:Account/set", &resp)
+    }
+
+    /// `x:Account/set` update of one account with `patch` (full property
+    /// values, e.g. the whole `memberGroupIds` set object).
+    pub fn account_update(&self, id: &str, patch: serde_json::Value) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Account/set",
+            serde_json::json!({ "update": { id: patch } }),
+        )?;
+        parse_set_updated("x:Account/set", id, &resp)
+    }
+
+    /// `x:Sharing/get` singleton → `{maxShares, allowDirectoryQueries}`
+    /// (defaults 10 / false, `structs_impl.rs` `impl Default for Sharing`).
+    pub fn sharing_get(&self) -> Result<serde_json::Value, String> {
+        let resp = self.registry_call(
+            "x:Sharing/get",
+            serde_json::json!({ "ids": [SYSTEM_SETTINGS_SINGLETON_ID] }),
+        )?;
+        resp.get("list")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .cloned()
+            .ok_or_else(|| "x:Sharing/get: reply has no singleton".to_string())
+    }
+
+    /// `x:Sharing/set` update of the singleton (`maxShares`).
+    pub fn sharing_set(&self, patch: serde_json::Value) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:Sharing/set",
+            serde_json::json!({ "update": { SYSTEM_SETTINGS_SINGLETON_ID: patch } }),
+        )?;
+        parse_set_updated("x:Sharing/set", SYSTEM_SETTINGS_SINGLETON_ID, &resp)
+    }
+
     /// S4 — the target account's Inbox mailbox id (`Mailbox/query`
     /// filtered on the RFC 8621 `role: "inbox"`). Every read/wait
     /// query scopes to it.
@@ -4312,6 +4428,32 @@ pub fn recipients_addrs(v: &serde_json::Value) -> Vec<String> {
                 }
             }
         }
+    }
+    out
+}
+
+/// Keys of a registry set object (`{"<id>": true}`; also accepts an
+/// array of ids). Ids are case-sensitive — never lowercased.
+pub fn set_object_keys(v: Option<&serde_json::Value>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    match v {
+        Some(serde_json::Value::Object(obj)) => {
+            for (k, val) in obj {
+                if val.as_bool() != Some(false) && !val.is_null() && !out.contains(k) {
+                    out.push(k.clone());
+                }
+            }
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            for e in arr {
+                if let Some(s) = e.as_str() {
+                    if !out.iter().any(|o| o == s) {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     out
 }

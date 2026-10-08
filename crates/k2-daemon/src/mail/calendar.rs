@@ -817,7 +817,7 @@ fn resolve_calendar(
 /// The calendar a create lands in when `--calendar` is absent: the one
 /// marked `isDefault`, else the only calendar, else the first by
 /// `sortOrder`. `None` = the account has no calendar yet.
-fn default_calendar(cals: &[Value]) -> Option<String> {
+pub(crate) fn default_calendar(cals: &[Value]) -> Option<String> {
     if let Some(c) = cals
         .iter()
         .find(|c| c.get("isDefault").and_then(Value::as_bool) == Some(true))

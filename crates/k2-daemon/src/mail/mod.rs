@@ -53,6 +53,9 @@
 //! - [`calendar`] — `k2 calendar` (calendars S3): agent calendar
 //!   read/write on hosted inboxes over JMAP for Calendars, gated by the
 //!   `k2 mail access` levels (read = read, draft = write without email).
+//! - [`calendar_share`] — calendars S4: `k2 hostmail group` and calendar
+//!   create/rename/share/unshare/shares/sharing (mail-manage surface;
+//!   an agent never widens its own access).
 //! - [`app_password`] — extra labeled secrets on a minted User
 //!   (`x:AppPassword`); mail_manage extra-gate like quota; lookup is
 //!   password-rotate (any active hosted row).
@@ -115,6 +118,7 @@ pub mod alias;
 pub mod app_password;
 pub mod bans;
 pub mod calendar;
+pub mod calendar_share;
 pub mod catchall;
 pub mod cert_names;
 pub mod cert_owner;

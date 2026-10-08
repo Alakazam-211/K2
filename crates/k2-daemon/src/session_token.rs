@@ -1584,6 +1584,20 @@ mod tests {
         for p in ["/cli/mail/credentials/keep", "/cli/mail/address/person"] {
             assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
         }
+        // Calendars S4: groups + calendar sharing ride the same M5 gate
+        // (self-widening refused in the handlers, mail::calendar_share).
+        for p in [
+            "/cli/mail/group",
+            "/cli/mail/group/members",
+            "/cli/mail/group/delete",
+            "/cli/mail/calendar/manage",
+            "/cli/mail/calendar/share",
+            "/cli/mail/calendar/unshare",
+            "/cli/mail/calendar/shares",
+            "/cli/mail/calendar/sharing",
+        ] {
+            assert!(is_agent_verb(p), "M5 must be an agent verb: {p}");
+        }
         assert!(is_agent_verb("/cli/db/create"));
         assert!(is_agent_verb("/cli/db/list"));
         assert!(is_agent_verb("/cli/db/grant"));

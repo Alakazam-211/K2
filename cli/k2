@@ -15947,6 +15947,115 @@ cmd_schema() {
       ]
     },
     {
+      "name": "hostmail calendar create",
+      "usage": "k2 hostmail calendar create <owner-addr> <name> [--color <c>] [--json]",
+      "description": "Create a calendar on a hosted mailbox (Calendar/set create on the owner's account). Needs Stalwart 0.16.19+ (older stores the name on the admin): 409 upgrade_required → k2 hostmail upgrade. POST /cli/mail/calendar/manage {action:create}. mail_manage.",
+      "args": [{"name": "owner-addr", "required": true}, {"name": "name", "required": true}],
+      "flags": [
+        {"name": "--color", "arg": "<c>", "description": "Calendar color (#rrggbb or a name)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail calendar rename",
+      "usage": "k2 hostmail calendar rename <owner-addr> <calendar> <new-name> [--color <c>] [--json]",
+      "description": "Rename a hosted mailbox's calendar (id or current name). Needs Stalwart 0.16.19+. POST /cli/mail/calendar/manage {action:rename}. mail_manage.",
+      "args": [{"name": "owner-addr", "required": true}, {"name": "calendar", "required": true}, {"name": "new-name", "required": true}],
+      "flags": [
+        {"name": "--color", "arg": "<c>", "description": "Also set the color."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail calendar share",
+      "usage": "k2 hostmail calendar share <owner-addr> [--calendar <id|name>] --with <addr|group> --freebusy|--read|--write|--editor [--json]",
+      "description": "Share a hosted mailbox's calendar (default calendar unless --calendar) with a hosted address or group: Calendar/set shareWith/<id>. --freebusy=mayReadFreeBusy; --read +mayReadItems; --write +mayWriteAll+mayRSVP; --editor +mayDelete. Never mayShare. Respects maxShares (409 max_shares). mail_manage; an agent sharing with an inbox its workspace can read (or a group holding one) is owner_only unless it narrows. POST /cli/mail/calendar/share.",
+      "args": [{"name": "owner-addr", "required": true}],
+      "flags": [
+        {"name": "--calendar", "arg": "<id|name>", "description": "Which calendar (default: the owner's default)."},
+        {"name": "--with", "arg": "<addr|group>", "description": "Hosted address or group on this server."},
+        {"name": "--freebusy", "arg": null, "description": "Busy times only."},
+        {"name": "--read", "arg": null, "description": "See events."},
+        {"name": "--write", "arg": null, "description": "Add and edit events."},
+        {"name": "--editor", "arg": null, "description": "Write plus delete the calendar."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail calendar unshare",
+      "usage": "k2 hostmail calendar unshare <owner-addr> [--calendar <id|name>] --with <addr|group> [--json]",
+      "description": "Stop sharing a calendar with an address or group (shareWith/<id>: null). Always allowed. POST /cli/mail/calendar/unshare. mail_manage.",
+      "args": [{"name": "owner-addr", "required": true}],
+      "flags": [
+        {"name": "--calendar", "arg": "<id|name>", "description": "Which calendar (default: the owner's default)."},
+        {"name": "--with", "arg": "<addr|group>", "description": "The grantee to remove."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail calendar shares",
+      "usage": "k2 hostmail calendar shares <owner-addr> [--json]",
+      "description": "A hosted mailbox's calendars and who each is shared with (level + rights), plus maxShares. GET /cli/mail/calendar/shares. mail_manage.",
+      "args": [{"name": "owner-addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail calendar sharing",
+      "usage": "k2 hostmail calendar sharing [--max-shares N] [--json]",
+      "description": "Show or set the server's share limit per calendar (x:Sharing maxShares, default 10; allowDirectoryQueries stays as is), then ReloadSettings. GET|POST /cli/mail/calendar/sharing. mail_manage.",
+      "args": [],
+      "flags": [
+        {"name": "--max-shares", "arg": "N", "description": "1..1000."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail group create",
+      "usage": "k2 hostmail group create <name> [--domain <apex>] [--mail] [--json]",
+      "description": "Create a group (x:Account @type Group, address <name>@<domain>) for shared calendars. Collision-checked against mailboxes (any status), accounts, aliases, lists and the catch-all. Inbound mail to the group is off unless --mail. Members see an IMAP Shared Folders/<group> tree. A list is for mail fan-out. POST /cli/mail/group. mail_manage.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--domain", "arg": "<apex>", "description": "Hosted domain (needed when the server hosts several)."},
+        {"name": "--mail", "arg": null, "description": "Keep inbound mail to the group address on."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "hostmail group add",
+      "usage": "k2 hostmail group add <group> <addr> [<addr>…] [--json]",
+      "description": "Add hosted addresses to a group (the user's memberGroupIds). An agent adding an inbox its workspace can read to a group with calendar shares is owner_only. POST /cli/mail/group/members {group, add}. mail_manage.",
+      "args": [{"name": "group", "required": true}, {"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail group remove",
+      "usage": "k2 hostmail group remove <group> <addr> [<addr>…] [--json]",
+      "description": "Remove hosted addresses from a group. POST /cli/mail/group/members {group, remove}. mail_manage.",
+      "args": [{"name": "group", "required": true}, {"name": "addr", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail group list",
+      "usage": "k2 hostmail group list [--json]",
+      "description": "Groups with members and whether they receive mail. GET /cli/mail/group. mail_manage.",
+      "args": [],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail group show",
+      "usage": "k2 hostmail group show <group> [--json]",
+      "description": "One group. GET /cli/mail/group?group=. mail_manage.",
+      "args": [{"name": "group", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "hostmail group delete",
+      "usage": "k2 hostmail group delete <group> [--json]",
+      "description": "Remove the group from every hosted calendar share, take its members out, then destroy it. POST /cli/mail/group/delete. mail_manage.",
+      "args": [{"name": "group", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
       "name": "hostmail profile",
       "usage": "k2 hostmail profile <addr> --apple [--out <file> [--force]] [--json]",
       "description": "Unsigned Apple setup profile (.mobileconfig) for one ACTIVE hosted address: Mail (IMAP 993 + SMTP 465, TLS) and, when calendars are on and reachable, Calendar (CalDAV) + Contacts (CardDAV) on https://<mail host>/dav/cal|card. Server = the domain's mail host (the cert name), never *.k2.dev. Every run mints a FRESH app password k2-profile-<YYYY-MM-DD> (never a stored secret); revoke with k2 hostmail app-password revoke. The secret is only inside the profile. Refuses linked or retired addresses and a stopped server. POST /cli/mail/profile {address, apple:true}. Owner/admin only (not mail_manage).",
@@ -17928,8 +18037,9 @@ AGENT SURFACE
 
 OWNER VERBS — EXIT 3 (leftover M6)
   uninstall, domain remove, oauth/link admin, mail-manage toggle,
-  `k2 hostmail calendar` (CalDAV/CardDAV/WebDAV-files policy for every
-  hosted address; the toggle never opens it), `k2 hostmail upgrade`
+  `k2 hostmail calendar status|enable|disable` (CalDAV/CardDAV/WebDAV-
+  files policy for every hosted address; the toggle never opens it),
+  `k2 hostmail upgrade`
   (replaces the Stalwart binary; never automatic), `k2 hostmail profile`
   (Apple setup profile; mints a mailbox app password).
   Approving your own mail is futile. Ask your human.
@@ -17940,6 +18050,14 @@ MAIL_MANAGE AGENTS
   Backup: `k2 hostmail backup plan`, agree a mode with the client, then
   `k2 hostmail backup set --mode … --confirm-plan <hash>` (no backups
   run yet; restore and the offsite destination stay owner).
+  Calendars + groups: `k2 hostmail calendar create|rename|share|unshare|
+  shares|sharing` and `k2 hostmail group create|add|remove|list|delete`
+  — any calendar permission for any person, EXCEPT widening your own
+  access (sharing with an inbox your workspace can read, or adding one to
+  a group with shares, is owner_only, exit 3).
+  Team calendar: group create team → group add team a@ b@ → calendar
+  create owner@ "Team" → calendar share owner@ --calendar Team --with
+  team --write → --editor for the few who may delete it.
 
 HOSTMAIL TOGGLE
   Default off. Owner/Admin: Settings → Workspaces → (this
@@ -26966,6 +27084,9 @@ _mail_py() {
     M_ACL_READ="${M_ACL_READ:-false}" M_ACL_WRITE="${M_ACL_WRITE:-false}" \
     M_ACL_POST="${M_ACL_POST:-false}" M_ACL_ADMIN="${M_ACL_ADMIN:-false}" \
     M_DAV_ACTION="${M_DAV_ACTION:-}" M_FILES="${M_FILES:-}" \
+    M_GROUP="${M_GROUP:-}" M_GROUP_MAIL="${M_GROUP_MAIL:-false}" \
+    M_CAL_ACTION="${M_CAL_ACTION:-}" M_CALENDAR="${M_CALENDAR:-}" M_COLOR="${M_COLOR:-}" \
+    M_WITH="${M_WITH:-}" M_SHARE_LEVEL="${M_SHARE_LEVEL:-}" M_MAX_SHARES="${M_MAX_SHARES:-}" \
     M_FORCE="${M_FORCE:-false}" \
     M_CERT_ACTION="${M_CERT_ACTION:-}" \
     M_DRY_RUN="${M_DRY_RUN:-false}" M_ACK_FAILED="${M_ACK_FAILED:-false}" \
@@ -29230,6 +29351,126 @@ elif verb == "dav":
         print("note      : a calendar app retrying a wrong password gets its IP banned —"
               " k2 hostmail bans list / k2 hostmail allowlist")
 
+elif verb in ("group_create", "group_members", "group_list", "group_show", "group_delete"):
+    # Calendars S4: groups (mail-manage). A group is for shared calendars;
+    # a list (k2 hostmail list) is for mail fan-out.
+    def print_group(g):
+        print("group %s · %s member(s)%s" % (
+            g.get("address") or g.get("name") or "?", len(g.get("members") or []),
+            "" if g.get("receivesMail") else " · inbound mail off"))
+        for m in g.get("members") or []:
+            print("  %s" % m)
+    if verb == "group_create":
+        body = {"name": env("M_NAME"), "mail": env("M_GROUP_MAIL") == "true"}
+        if env("M_DOMAIN"):
+            body["domain"] = env("M_DOMAIN")
+        d = call("POST", "/cli/mail/group", body=body, timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            print("created group %s%s" % (d.get("address"),
+                  "" if d.get("receivesMail") else " (inbound mail off; --mail keeps it on)"))
+            print("add members: k2 hostmail group add %s <addr> [<addr>…]" % d.get("address"))
+    elif verb == "group_members":
+        body = {"group": env("M_GROUP")}
+        body["add" if env("M_LIST_OP") == "add" else "remove"] = env_list("M_MEMBERS")
+        d = call("POST", "/cli/mail/group/members", body=body, timeout=120)
+        print(dumps(d) if as_json else "group %s members=%s" % (
+            d.get("group") or env("M_GROUP"), ",".join(d.get("members") or []) or "(none)"))
+    elif verb == "group_list":
+        d = call("GET", "/cli/mail/group", timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            gs = d.get("groups") or []
+            if not gs:
+                print("No groups. Create one: k2 hostmail group create <name>")
+            for g in gs:
+                print_group(g)
+    elif verb == "group_show":
+        d = call("GET", "/cli/mail/group", params={"group": env("M_GROUP")}, timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            print_group(d.get("group") or {})
+    else:
+        d = call("POST", "/cli/mail/group/delete", body={"group": env("M_GROUP")}, timeout=300)
+        print(dumps(d) if as_json else "deleted group %s (%s calendar share(s) and %s membership(s) removed)" % (
+            d.get("group") or env("M_GROUP"), d.get("sharesRemoved", 0), d.get("membersRemoved", 0)))
+
+elif verb in ("cal_manage", "cal_share", "cal_unshare", "cal_shares", "cal_sharing"):
+    # Calendars S4: calendar create/rename + sharing (mail-manage).
+    if verb == "cal_manage":
+        body = {"action": env("M_CAL_ACTION"), "owner": env("M_ADDRESS"), "name": env("M_NAME")}
+        if env("M_CALENDAR"):
+            body["calendar"] = env("M_CALENDAR")
+        if env("M_COLOR"):
+            body["color"] = env("M_COLOR")
+        d = call("POST", "/cli/mail/calendar/manage", body=body, timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            c = d.get("calendar") or {}
+            if d.get("created"):
+                print("created calendar '%s' (%s) on %s" % (c.get("name"), c.get("id"), d.get("owner")))
+            else:
+                print("renamed calendar '%s' → '%s' (%s) on %s" % (
+                    c.get("previousName"), c.get("name"), c.get("id"), d.get("owner")))
+    elif verb in ("cal_share", "cal_unshare"):
+        body = {"owner": env("M_ADDRESS"), "with": env("M_WITH")}
+        if env("M_CALENDAR"):
+            body["calendar"] = env("M_CALENDAR")
+        if verb == "cal_share":
+            body["level"] = env("M_SHARE_LEVEL")
+        d = call("POST", "/cli/mail/calendar/" + ("share" if verb == "cal_share" else "unshare"),
+                 body=body, timeout=120)
+        if as_json:
+            print(dumps(d))
+        else:
+            c = d.get("calendar") or {}
+            if verb == "cal_share":
+                prev = d.get("previousLevel")
+                print("shared '%s' of %s with %s: %s%s" % (
+                    c.get("name"), d.get("owner"), d.get("with"), d.get("level"),
+                    (" (was %s)" % prev) if prev else ""))
+                if d.get("maxShares"):
+                    print("limit: %s shares per calendar (k2 hostmail calendar sharing)" % d.get("maxShares"))
+            elif d.get("removed"):
+                print("stopped sharing '%s' of %s with %s" % (c.get("name"), d.get("owner"), d.get("with")))
+            else:
+                print("'%s' of %s was not shared with %s — nothing to do" % (
+                    c.get("name"), d.get("owner"), d.get("with")))
+    elif verb == "cal_shares":
+        d = call("GET", "/cli/mail/calendar/shares", params={"owner": env("M_ADDRESS")}, timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            cals = d.get("calendars") or []
+            if not cals:
+                print("%s has no calendars." % d.get("owner"))
+            for c in cals:
+                shares = c.get("shares") or []
+                print("%s · %s%s · %s" % (c.get("id"), c.get("name") or "(unnamed)",
+                      " · default" if c.get("isDefault") else "",
+                      "not shared" if not shares else "%d share(s)" % len(shares)))
+                for s in shares:
+                    print("  %s (%s): %s" % (s.get("with"), s.get("withType"), s.get("level")))
+            if d.get("maxShares"):
+                print("limit: %s shares per calendar" % d.get("maxShares"))
+    else:
+        if env("M_MAX_SHARES"):
+            d = call("POST", "/cli/mail/calendar/sharing",
+                     body={"maxShares": int(env("M_MAX_SHARES"))}, timeout=60)
+        else:
+            d = call("GET", "/cli/mail/calendar/sharing", timeout=60)
+        if as_json:
+            print(dumps(d))
+        else:
+            print("max shares per calendar : %s" % d.get("maxShares"))
+            print("directory queries       : %s" % ("on" if d.get("allowDirectoryQueries") else "off"))
+            if isinstance(d.get("reloaded"), str):
+                print("note: %s" % d.get("reloaded"))
+
 elif verb == "profile":
     # Calendars S6: Apple .mobileconfig with a FRESH app password. The
     # secret is only inside the profile: never echoed in human output,
@@ -30558,10 +30799,11 @@ cmd_hostmail() {
         bans)    cmd_hostmail_bans "$@" ;;
         allowlist) cmd_hostmail_allowlist "$@" ;;
         calendar) cmd_hostmail_calendar "$@" ;;
+        group)   cmd_hostmail_group "$@" ;;
         profile) cmd_hostmail_profile "$@" ;;
         --help|-h) cmd_help_hostmail; exit 0 ;;
         *)
-            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|profile>"
+            _mail_err "usage" "unknown hostmail command '$sub' — usage: k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|app-password|person|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|dkim|dmarc|ptr|bans|allowlist|calendar|group|profile>"
             exit 2 ;;
     esac
 }
@@ -32406,9 +32648,10 @@ cmd_hostmail_calendar() {
     local sub="$1"; shift
     case "$sub" in
         status|enable|disable) cmd_hostmail_calendar_action "$sub" "$@" ;;
+        create|rename|share|unshare|shares|sharing) cmd_hostmail_calendar_share "$sub" "$@" ;;
         --help|-h) cmd_help_hostmail_calendar; exit 0 ;;
         *)
-            _mail_err "usage" "unknown calendar command '$sub' — usage: k2 hostmail calendar <status|enable|disable> [--files on|off] [--json]"
+            _mail_err "usage" "unknown calendar command '$sub' — usage: k2 hostmail calendar <status|enable|disable|create|rename|share|unshare|shares|sharing>"
             exit 2 ;;
     esac
 }
@@ -32446,6 +32689,151 @@ cmd_hostmail_calendar_action() {
     fi
     local M_VERB="dav" M_JSON="$as_json" M_DAV_ACTION="$action" M_FILES="$files"
     _mail_py
+}
+
+
+
+# ── Calendars S4: groups + calendar sharing (mail-manage surface) ─────
+
+cmd_hostmail_group() {
+    if [ $# -eq 0 ]; then cmd_help_hostmail_group; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        create|add|remove|list|show|delete) ;;
+        --help|-h) cmd_help_hostmail_group; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown group command '$sub' — usage: k2 hostmail group <create|add|remove|list|show|delete>"
+            exit 2 ;;
+    esac
+    if _wants_help "$@"; then cmd_help_hostmail_group; exit 0; fi
+    local as_json=false mail=false domain="" positional=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --mail)
+                [ "$sub" = "create" ] || { _mail_err "usage" "--mail goes with 'group create'"; exit 2; }
+                mail=true; shift ;;
+            --domain)
+                [ "$sub" = "create" ] || { _mail_err "usage" "--domain goes with 'group create'"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--domain requires a value"; exit 2; }
+                domain="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — see k2 hostmail group --help"
+                exit 2 ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    local n=${#positional[@]}
+    case "$sub" in
+        create)
+            [ "$n" -eq 1 ] || { _mail_err "usage" "k2 hostmail group create <name> [--domain <apex>] [--mail]"; exit 2; }
+            local M_VERB="group_create" M_JSON="$as_json" M_NAME="${positional[0]}" \
+                  M_DOMAIN="$domain" M_GROUP_MAIL="$mail"
+            _mail_py ;;
+        add|remove)
+            [ "$n" -ge 2 ] || { _mail_err "usage" "k2 hostmail group $sub <group> <addr> [<addr>…]"; exit 2; }
+            local members="" i
+            for (( i=1; i<n; i++ )); do
+                if [ -n "$members" ]; then members="$members
+${positional[$i]}"; else members="${positional[$i]}"; fi
+            done
+            local M_VERB="group_members" M_JSON="$as_json" M_GROUP="${positional[0]}" \
+                  M_LIST_OP="$sub" M_MEMBERS="$members"
+            _mail_py ;;
+        list)
+            [ "$n" -eq 0 ] || { _mail_err "usage" "k2 hostmail group list [--json]"; exit 2; }
+            local M_VERB="group_list" M_JSON="$as_json"
+            _mail_py ;;
+        show|delete)
+            [ "$n" -eq 1 ] || { _mail_err "usage" "k2 hostmail group $sub <group> [--json]"; exit 2; }
+            local M_VERB="group_$sub" M_JSON="$as_json" M_GROUP="${positional[0]}"
+            _mail_py ;;
+    esac
+}
+
+
+# k2 hostmail calendar create|rename|share|unshare|shares|sharing
+cmd_hostmail_calendar_share() {
+    local sub="$1"; shift
+    if _wants_help "$@"; then cmd_help_hostmail_calendar_share; exit 0; fi
+    local as_json=false calendar="" with="" level="" color="" max_shares="" positional=()
+    local allowed
+    case "$sub" in
+        create)  allowed=" --color --json " ;;
+        rename)  allowed=" --color --json " ;;
+        share)   allowed=" --calendar --with --read --write --editor --freebusy --json " ;;
+        unshare) allowed=" --calendar --with --json " ;;
+        shares)  allowed=" --json " ;;
+        sharing) allowed=" --max-shares --json " ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --*)
+                case "$allowed" in
+                    *" $1 "*) ;;
+                    *)
+                        _mail_err "usage" "'k2 hostmail calendar $sub' does not take '$1' — see k2 hostmail calendar --help"
+                        exit 2 ;;
+                esac
+                case "$1" in
+                    --json) as_json=true; shift; continue ;;
+                    --read|--write|--editor|--freebusy)
+                        if [ -n "$level" ]; then
+                            _mail_err "usage" "give ONE of --freebusy --read --write --editor"
+                            exit 2
+                        fi
+                        level="${1#--}"; shift; continue ;;
+                esac
+                [ $# -ge 2 ] || { _mail_err "usage" "$1 requires a value — see k2 hostmail calendar --help"; exit 2; }
+                case "$1" in
+                    --calendar) calendar="$2" ;;
+                    --with) with="$2" ;;
+                    --color) color="$2" ;;
+                    --max-shares) max_shares="$2" ;;
+                esac
+                shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — see k2 hostmail calendar --help"
+                exit 2 ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    local n=${#positional[@]}
+    case "$sub" in
+        create)
+            [ "$n" -eq 2 ] || { _mail_err "usage" "k2 hostmail calendar create <owner-addr> <name> [--color <c>]"; exit 2; }
+            local M_VERB="cal_manage" M_JSON="$as_json" M_CAL_ACTION="create" \
+                  M_ADDRESS="${positional[0]}" M_NAME="${positional[1]}" M_COLOR="$color"
+            _mail_py ;;
+        rename)
+            [ "$n" -eq 3 ] || { _mail_err "usage" "k2 hostmail calendar rename <owner-addr> <calendar> <new-name> [--color <c>]"; exit 2; }
+            local M_VERB="cal_manage" M_JSON="$as_json" M_CAL_ACTION="rename" \
+                  M_ADDRESS="${positional[0]}" M_CALENDAR="${positional[1]}" \
+                  M_NAME="${positional[2]}" M_COLOR="$color"
+            _mail_py ;;
+        share|unshare)
+            [ "$n" -eq 1 ] || { _mail_err "usage" "k2 hostmail calendar $sub <owner-addr> [--calendar <id|name>] --with <addr|group>"; exit 2; }
+            [ -n "$with" ] || { _mail_err "usage" "$sub needs --with <addr|group>"; exit 2; }
+            if [ "$sub" = "share" ] && [ -z "$level" ]; then
+                _mail_err "usage" "share needs one of --freebusy --read --write --editor"
+                exit 2
+            fi
+            local M_VERB="cal_$sub" M_JSON="$as_json" M_ADDRESS="${positional[0]}" \
+                  M_CALENDAR="$calendar" M_WITH="$with" M_SHARE_LEVEL="$level"
+            _mail_py ;;
+        shares)
+            [ "$n" -eq 1 ] || { _mail_err "usage" "k2 hostmail calendar shares <owner-addr> [--json]"; exit 2; }
+            local M_VERB="cal_shares" M_JSON="$as_json" M_ADDRESS="${positional[0]}"
+            _mail_py ;;
+        sharing)
+            [ "$n" -eq 0 ] || { _mail_err "usage" "k2 hostmail calendar sharing [--max-shares N] [--json]"; exit 2; }
+            if [ -n "$max_shares" ] && ! _mail_is_uint "$max_shares"; then
+                _mail_err "usage" "--max-shares must be a number from 1 to 1000"
+                exit 2
+            fi
+            local M_VERB="cal_sharing" M_JSON="$as_json" M_MAX_SHARES="$max_shares"
+            _mail_py ;;
+    esac
 }
 
 
@@ -34096,6 +34484,16 @@ COMMANDS
                               mail_manage). First enable|disable turns
                               WebDAV files off unless --files on. Never
                               restarts Stalwart.
+  calendar create|rename|share|unshare|shares|sharing
+                              Calendars of hosted mailboxes and who they
+                              are shared with (--freebusy|--read|--write|
+                              --editor). mail_manage; an agent never widens
+                              its own access.
+  group create|add|remove|list|show|delete
+                              Groups of hosted addresses for shared
+                              calendars (a list is for mail fan-out).
+                              Group inbound mail off unless --mail.
+                              mail_manage.
   profile <addr> --apple [--out <file>]
                               Unsigned Apple .mobileconfig (Mail, plus
                               Calendar + Contacts when calendars are on and
@@ -35321,8 +35719,9 @@ EOF
 cmd_help_hostmail_calendar() {
     cat <<'EOF'
 CalDAV + CardDAV (calendars and contacts) for every hosted address, and
-WebDAV file storage. Owner/admin only — the "agents manage hosted mail"
-workspace toggle does not open it. GET|POST /cli/mail/dav.
+WebDAV file storage. status|enable|disable: Owner/admin only — the
+"agents manage hosted mail" workspace toggle does not open them.
+GET|POST /cli/mail/dav.
 
 The policy is per-account Stalwart permissions (x:Account/set
 permissions Merge): it never restarts Stalwart and never uses
@@ -35343,6 +35742,24 @@ USAGE
   k2 hostmail calendar status [--json]
   k2 hostmail calendar enable [--files on|off] [--json]
   k2 hostmail calendar disable [--files on|off] [--json]
+
+CALENDARS AND SHARING (mail-manage: owner/admin, or an agent whose
+workspace may manage hosted mail — never widening its own access)
+  k2 hostmail calendar create <owner-addr> <name> [--color <c>]
+  k2 hostmail calendar rename <owner-addr> <calendar> <new-name>
+  k2 hostmail calendar share <owner-addr> [--calendar <id|name>] --with <addr|group>
+                             --freebusy|--read|--write|--editor
+  k2 hostmail calendar unshare <owner-addr> [--calendar <id|name>] --with <addr|group>
+  k2 hostmail calendar shares <owner-addr>
+  k2 hostmail calendar sharing [--max-shares N]
+  Details: `k2 hostmail calendar share --help`. Groups: `k2 hostmail group`.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor
 EOF
 }
 
@@ -35384,6 +35801,106 @@ files?}. Owner/admin. Never restarts Stalwart. Resets on uninstall.
 
 USAGE
   k2 hostmail calendar disable [--files on|off] [--json]
+EOF
+}
+
+cmd_help_hostmail_group() {
+    cat <<'EOF'
+k2 hostmail group — groups of hosted addresses, for SHARED CALENDARS.
+A list (`k2 hostmail list`) is for mail fan-out; a group is for sharing
+calendars with several people at once. Groups live in the mail server
+(Stalwart `x:Account` @type Group); K2 keeps no copy.
+
+A group always has an address <name>@<domain>, so the name must be free
+(no mailbox, alias, list, other group or catch-all destination). Inbound
+mail to the group address is OFF unless --mail. Members are hosted
+addresses on this server. Members also see an IMAP "Shared Folders/<group>"
+tree in their mail app.
+
+Owner/admin, or an agent whose workspace may manage hosted mail. An agent
+can't widen its own access: it may not add an inbox its workspace can
+read to a group that has calendar shares (exit 3, owner_only).
+
+USAGE
+  k2 hostmail group create <name> [--domain <apex>] [--mail] [--json]
+  k2 hostmail group add <group> <addr> [<addr>…] [--json]
+  k2 hostmail group remove <group> <addr> [<addr>…] [--json]
+  k2 hostmail group list [--json]
+  k2 hostmail group show <group> [--json]
+  k2 hostmail group delete <group> [--json]
+
+<group> is its address (team@example.com) or its name when unique.
+--domain is needed when this server hosts more than one domain.
+delete also removes the group from every calendar share and takes its
+members out first.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor
+One owner mailbox owns the calendar; the group gets --write (add and
+edit events); only the few named with --editor may also delete the
+calendar. See `k2 hostmail calendar --help`.
+
+ROUTES
+  GET|POST /cli/mail/group · GET|POST /cli/mail/group/members ·
+  POST /cli/mail/group/delete
+EOF
+}
+
+cmd_help_hostmail_calendar_share() {
+    cat <<'EOF'
+Calendars of hosted mailboxes: create, rename, share. Owner/admin, or an
+agent whose workspace may manage hosted mail (mail-manage). An agent can't
+widen its own access: sharing a calendar with an inbox its workspace can
+read (or a group holding one) is owner-only (exit 3) unless it only
+narrows that share. Unsharing is always allowed.
+
+USAGE
+  k2 hostmail calendar create <owner-addr> <name> [--color <c>] [--json]
+  k2 hostmail calendar rename <owner-addr> <calendar> <new-name> [--color <c>] [--json]
+  k2 hostmail calendar share <owner-addr> [--calendar <id|name>] --with <addr|group>
+                             --freebusy|--read|--write|--editor [--json]
+  k2 hostmail calendar unshare <owner-addr> [--calendar <id|name>] --with <addr|group> [--json]
+  k2 hostmail calendar shares <owner-addr> [--json]
+  k2 hostmail calendar sharing [--max-shares N] [--json]
+
+RIGHTS (Stalwart calendar rights)
+  --freebusy  mayReadFreeBusy — busy times only
+  --read      + mayReadItems — see events
+  --write     + mayWriteAll + mayRSVP — add and edit events (in their own
+              calendar app this also removes events)
+  --editor    --write + mayDelete — may also delete the calendar itself
+  Never mayShare: a grantee can't re-share. Re-sharing with someone
+  replaces their rights.
+
+<calendar> defaults to the owner's default calendar. --with is a hosted
+address or a group (`k2 hostmail group`) on this server.
+create/rename need Stalwart 0.16.19 or later (older versions store the
+name on the admin account): run `k2 hostmail upgrade` first.
+A calendar holds at most maxShares grantees (Stalwart default 10); share
+with a group to go past it, or raise it with `sharing --max-shares N`.
+
+AGENTS
+  An agent with a `k2 mail access` grant on an inbox sees the calendars
+  shared to that inbox (directly or through a group) in `k2 calendar`,
+  limited by both the share and its grant level.
+
+TEAM CALENDAR
+  k2 hostmail group create team
+  k2 hostmail group add team a@example.com b@example.com
+  k2 hostmail calendar create owner@example.com "Team"
+  k2 hostmail calendar share owner@example.com --calendar Team --with team --write
+  k2 hostmail calendar share owner@example.com --calendar Team --with a@example.com --editor
+
+ROUTES
+  POST /cli/mail/calendar/manage {action:create|rename, owner, name, calendar?, color?}
+  POST /cli/mail/calendar/share {owner, calendar?, with, level}
+  POST /cli/mail/calendar/unshare {owner, calendar?, with}
+  GET  /cli/mail/calendar/shares?owner=
+  GET|POST /cli/mail/calendar/sharing {maxShares}
 EOF
 }
 

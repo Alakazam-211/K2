@@ -168,6 +168,23 @@ pub fn refuse_self_elevation(what: &str) -> CliResponse {
     )
 }
 
+/// 403 `owner_only`: an IT agent widening its OWN access (calendars S4:
+/// sharing a calendar with an inbox its workspace can read through
+/// `k2 mail access`, or putting such an inbox into a group that has
+/// calendar shares). Same rule as [`refuse_self_elevation`] (Rosson,
+/// 0.45.0: an IT agent is as capable as the owner, except loosening its
+/// own access), worded for access instead of sends.
+pub fn refuse_self_widening(what: &str) -> CliResponse {
+    err_json(
+        "403 Forbidden",
+        "owner_only",
+        format!(
+            "An agent can't widen its own access: {what} needs the owner. Ask your human \
+             (the owner runs it from a terminal outside a K2 agent session)."
+        ),
+    )
+}
+
 /// Credential gate for minting/rotating/showing an SMTP-capable secret
 /// for `row`. `Ok(creator)` = allowed (`creator` is recorded on the mark).
 pub fn credential_gate(

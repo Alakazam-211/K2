@@ -112,6 +112,17 @@
 //! | POST /cli/mail/calendar/create    | mail/calendar.rs       |
 //! | POST /cli/mail/calendar/update    | mail/calendar.rs       |
 //! | POST /cli/mail/calendar/delete    | mail/calendar.rs       |
+//! | GET  /cli/mail/group              | mail/calendar_share.rs |
+//! | POST /cli/mail/group              | mail/calendar_share.rs |
+//! | GET  /cli/mail/group/members      | mail/calendar_share.rs |
+//! | POST /cli/mail/group/members      | mail/calendar_share.rs |
+//! | POST /cli/mail/group/delete       | mail/calendar_share.rs |
+//! | POST /cli/mail/calendar/manage    | mail/calendar_share.rs |
+//! | POST /cli/mail/calendar/share     | mail/calendar_share.rs |
+//! | POST /cli/mail/calendar/unshare   | mail/calendar_share.rs |
+//! | GET  /cli/mail/calendar/shares    | mail/calendar_share.rs |
+//! | GET  /cli/mail/calendar/sharing   | mail/calendar_share.rs |
+//! | POST /cli/mail/calendar/sharing   | mail/calendar_share.rs |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -245,6 +256,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/calendar/show" => crate::mail::calendar::handle_show(params),
         "/cli/mail/calendar/freebusy" => crate::mail::calendar::handle_freebusy(params),
         "/cli/mail/calendar/wait" => crate::mail::calendar::handle_wait(params),
+        // Calendars S4: groups + sharing (mail-manage surface; the
+        // handlers refuse a change that widens the calling agent).
+        "/cli/mail/group" => crate::mail::calendar_share::handle_group_get(params),
+        "/cli/mail/group/members" => crate::mail::calendar_share::handle_group_members_get(params),
+        "/cli/mail/calendar/shares" => crate::mail::calendar_share::handle_shares(params),
+        "/cli/mail/calendar/sharing" => crate::mail::calendar_share::handle_sharing_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -320,7 +337,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Calendars S3: draft-level event writes are POST-only.
         | "/cli/mail/calendar/create"
         | "/cli/mail/calendar/update"
-        | "/cli/mail/calendar/delete" => CliResponse::method_not_allowed(),
+        | "/cli/mail/calendar/delete"
+        // Calendars S4: POST-only mutations.
+        | "/cli/mail/group/delete"
+        | "/cli/mail/calendar/manage"
+        | "/cli/mail/calendar/share"
+        | "/cli/mail/calendar/unshare" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -450,6 +472,15 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/calendar/create" => crate::mail::calendar::handle_create(body),
         "/cli/mail/calendar/update" => crate::mail::calendar::handle_update(body),
         "/cli/mail/calendar/delete" => crate::mail::calendar::handle_delete(body),
+        // Calendars S4: groups + sharing (mail-manage; self-widening by
+        // an agent is refused in the handlers).
+        "/cli/mail/group" => crate::mail::calendar_share::handle_group_create(body),
+        "/cli/mail/group/members" => crate::mail::calendar_share::handle_group_members(body),
+        "/cli/mail/group/delete" => crate::mail::calendar_share::handle_group_delete(body),
+        "/cli/mail/calendar/manage" => crate::mail::calendar_share::handle_manage(body),
+        "/cli/mail/calendar/share" => crate::mail::calendar_share::handle_share(body),
+        "/cli/mail/calendar/unshare" => crate::mail::calendar_share::handle_unshare(body),
+        "/cli/mail/calendar/sharing" => crate::mail::calendar_share::handle_sharing_post(body),
         _ => CliResponse::not_found(),
     }
 }
@@ -636,6 +667,18 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             // the offsite destination are not here (owner-only, later slices).
             | "/cli/mail/backup/plan"
             | "/cli/mail/backup/set"
+            // Calendars S4 (Rosson's 0.45.0 rule): groups and calendar
+            // sharing — an IT agent may change any calendar permission;
+            // the handlers refuse only a change that widens the calling
+            // agent's own access (agent_creds::refuse_self_widening).
+            | "/cli/mail/group"
+            | "/cli/mail/group/members"
+            | "/cli/mail/group/delete"
+            | "/cli/mail/calendar/manage"
+            | "/cli/mail/calendar/share"
+            | "/cli/mail/calendar/unshare"
+            | "/cli/mail/calendar/shares"
+            | "/cli/mail/calendar/sharing"
     )
 }
 
@@ -1001,6 +1044,91 @@ mod tests {
         assert_ne!(get.status, "405 Method Not Allowed");
         let post = dispatch_post(p, br#"{"action":"bogus"}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// Calendars S4 (Rosson's 0.45.0 rule): groups and calendar sharing
+    /// are on the mail-manage surface — owner/admin always, an IT agent
+    /// (mail-manage on) too, any other agent refused — and never on the
+    /// owner-only classifier. POST-only paths answer 405 on GET.
+    #[test]
+    fn calendar_sharing_routes_are_mail_manage_not_owner_only() {
+        let it_id = uuid::Uuid::new_v4().to_string();
+        let plain_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, mm) in [(&it_id, 1), (&plain_id, 0)] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, mail_manage_enabled) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![
+                        id,
+                        format!("s4-{}", &id[..12]),
+                        format!("/tmp/mail-s4-{}-{}", std::process::id(), &id[..12]),
+                        mm
+                    ],
+                )
+                .expect("insert project");
+            }
+        }
+        let principal = |id: &str| crate::session_token::HookPrincipal {
+            workspace_uuid: id.to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let (it, plain) = (principal(&it_id), principal(&plain_id));
+        let paths = [
+            "/cli/mail/group",
+            "/cli/mail/group/members",
+            "/cli/mail/group/delete",
+            "/cli/mail/calendar/manage",
+            "/cli/mail/calendar/share",
+            "/cli/mail/calendar/unshare",
+            "/cli/mail/calendar/shares",
+            "/cli/mail/calendar/sharing",
+        ];
+        for p in paths {
+            assert!(is_mail_manage_surface(p), "mail-manage surface: {p}");
+            assert!(!is_owner_level_mutation(p), "not owner-only: {p}");
+            assert!(crate::session_token::is_agent_verb(p), "agent verb (M5 gate): {p}");
+            assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin: {p}");
+            assert!(mail_manage_authorized(p, false, Some(&it)).is_ok(), "IT agent: {p}");
+            let refused = mail_manage_authorized(p, false, Some(&plain))
+                .err()
+                .unwrap_or_else(|| panic!("a plain agent must be refused on {p}"));
+            assert!(refused.body.contains("owner_only"), "{p}: {}", refused.body);
+            assert!(mail_manage_authorized(p, false, None).is_err(), "Member: {p}");
+            // Every POST path dispatches (bad JSON → 400, never 404).
+            if p != "/cli/mail/calendar/shares" {
+                let post = dispatch_post(p, b"not json");
+                assert_eq!(post.status, "400 Bad Request", "{p}: {}", post.body);
+            }
+        }
+        for p in [
+            "/cli/mail/group/delete",
+            "/cli/mail/calendar/manage",
+            "/cli/mail/calendar/share",
+            "/cli/mail/calendar/unshare",
+        ] {
+            let get = dispatch(p, &HashMap::new()).expect("mail path");
+            assert_eq!(get.status, "405 Method Not Allowed", "{p}: {}", get.body);
+        }
+        // GET reads exist (no 404 / 405).
+        for p in [
+            "/cli/mail/group",
+            "/cli/mail/group/members",
+            "/cli/mail/calendar/shares",
+            "/cli/mail/calendar/sharing",
+        ] {
+            let get = dispatch(p, &HashMap::new()).expect("mail path");
+            assert_ne!(get.status, "404 Not Found", "{p}");
+            assert_ne!(get.status, "405 Method Not Allowed", "{p}");
+        }
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&it_id, &plain_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
+                .expect("cleanup project");
+        }
     }
 
     /// Calendars S6 (CAL6): the Apple profile mints a credential for a

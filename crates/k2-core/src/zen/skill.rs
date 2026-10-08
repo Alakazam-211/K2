@@ -15,11 +15,12 @@ use super::schema::{
     MIN_CONTRAST, NUM_TOKENS, SCHEMES, SPEED_MAX_DS, STOPLIGHTS, STOPLIGHT_OFFSET_MAX, TEMPLATE_ID,
     TEMPLATE_WIDGET_KINDS, TERMINAL_PARTNER, TERMINAL_TOKENS, TOP_SLOT, WIDGET_KINDS, WIDGET_PROPS, WIDGET_SLOTS,
 };
-use super::{chrome_caps, BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
+use super::{chrome_caps, stdlib, BRIDGE_CAPS, BUILTIN_THEMES, BUILTIN_WIDGET_CAPS, DEFAULT_THEME, REQUIRED_CONTROLS};
+use crate::contract::{self, gen, Exposure};
 
 /// Frontmatter description line for the skill file.
 pub const SKILL_DESCRIPTION: &str =
-    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent), themes, tokens, font, motion, validate, reset; agents request, never grant";
+    "Build Zen Gardens (~/.k2/zen): k2 zen garden, place K2's built-in widgets (a whole Home or one agent) or your own sealed custom widgets (k2 zen widget), themes, tokens, font, motion, validate, reset; agents request, never grant";
 
 fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
@@ -78,11 +79,12 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
 - `gardens.json`: the Garden list. K2 writes it. **Never write gardens.json**; use `k2 zen garden`.\n\
 - `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
 - `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**\n\
-- `grants.json`: widget permissions (Zen v2). Only the K2 app writes it, when the\n\
-  human clicks Allow. **Never write grants.json**, never ask the human to paste\n\
-  into it, and never edit it to give yourself or a widget a permission. You may\n\
-  request a permission by telling the human what and why; the human grants it in\n\
-  the app. Built-in widgets get their caps from K2; nothing is grantable yet.\n\n\
+- `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n\
+- Widget permissions live in K2's daemon, signed, and only the human makes one by\n\
+  clicking Allow in the K2 app. **Never write grants.json**, `zen-grant.key` or\n\
+  `pins.json`, never ask the human to paste a permission anywhere, and never try to\n\
+  give yourself or a widget a permission. You may request one by telling the human\n\
+  what and why; they review it in the app.\n\n\
 ## Workflow\n\n\
 1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).\n\
 2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n\
@@ -343,37 +345,231 @@ left and the toggle top right. A Garden file may move them (Controls, bands and 
 but it can never drop one: a file that places any control must place both, and\n\
 validate refuses it otherwise. If one is hidden, covered or unusable, Zen drops to\n\
 safe mode, which draws the template's controls. The human can always leave with Exit\n\
-Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n\
-## Bridge verbs and caps\n\n\
-Every widget reaches K2 only through the Zen bridge; each verb needs a cap\n\
-the widget is granted. Caps: ",
+Zen Mode (Ctrl+Cmd+Z on macOS, Ctrl+Alt+Z on Linux and Windows).\n\n",
     );
-    s.push_str(&ticks(BRIDGE_CAPS));
+    s.push_str(&bridge_section());
     s.push_str(
-        ".\n\n\
-- `agents.list()`, `agents.subscribe(cb)`, `agents.home()`, `agents.setHome(id)`, `agents.local()`, `homes.list()`, `conversation.open(address)`, `conversation.close()`: `agents:read`\n\
-- `agents.add({anchor, toggle})`: `agents:add` (opens K2's Add agent picker for the widget's Home; the human picks)\n\
-- `presence.get(address)`, `presence.subscribe(cb)`: `presence:read`\n\
-- `thread.read(address, {beforeSeq, limit})`, `thread.subscribe(address, cb)`: `thread:read`\n\
-- `thread.post(address, text)`, `thread.answer(address, cardId, choice)`, `thread.void(address, cardId)`, `compose.draft(address, text)`: `thread:post`\n\
-- `gardens.create(name, template?)`, `gardens.rename(id, name)`, `gardens.delete(id)`: `gardens:manage` (the Garden switcher only, never a widget)\n\
-- `gardens.useTemplate(template, {force})`: `gardens:template` (the `garden-empty` widget's Start with the default; only the Garden it is on)\n\
-- `focusGroups.get()`, `focusGroups.set(id)`, `focusGroups.subscribe(cb)`: `agents:read` (the app's focus groups, for the Agents view)\n\
-- `app.open(page)` (`home`, `agents`, `projects` or `tickets`: switches the Garden's view in this window, inside Zen; Zen stays on), `app.current()`, `app.subscribeCurrent(fn)`, `app.badges()`, `app.subscribe(fn)`: `app:navigate` (the `nav-rail` widget)\n\
-- `gardens.list()`, `gardens.current()`, `gardens.switch(id)`, `zen.exit()`, `controls.bind(kind, element, gardenId?)`, `theme.get()`: no cap\n\n\
-Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's\n\
+        "Each `agents.list()` / `agents.subscribe(cb)` row has `activity`: what the agent's\n\
 server says it is doing (the daemon decides; K2 never guesses). `working`;\n\
 `monitoring` (the turn is done, only background work is left); `needs-you` (the\n\
 daemon's `waiting`: a permission prompt or a question in the terminal);\n\
 `unverifiable` (nothing heard for 30 minutes while the session is open; never\n\
 treat it as done); `idle`; or `null` when that server can't say. The Agents\n\
 widget's `status` prop keeps three values: `monitoring` shows with `working`, and\n\
-`unverifiable` with `idle`.\n\n\
-Built-in widgets get their caps from K2. In Zen v2, a user widget asks for caps in\n\
-its manifest and the human grants them in the K2 app. Agents request caps; they\n\
-never grant them.\n",
+`unverifiable` with `idle`. A custom widget's rows also say `unreachable` when\n\
+that agent's server is offline.\n\n\
+Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
+manifest and the human grants them in the K2 app. Agents request caps; they\n\
+never grant them.\n\n",
+    );
+    s.push_str(&custom_widgets_section());
+    s.push_str(&whats_available_section());
+    s
+}
+
+/// "Bridge verbs and caps" (UW42, UWA11): every verb, its cap and its one
+/// line come from the verb catalog, never a hand-written list.
+fn bridge_section() -> String {
+    let c = contract::catalog();
+    let mut s = format!(
+        "## Bridge verbs and caps\n\n\
+Every widget reaches K2 only through the Zen bridge; each verb needs a cap\n\
+the widget is granted. Caps: {}.\n\n\
+This list comes from K2's verb catalog (version {}). A verb marked\n\
+**custom widgets** is one a custom widget may call too (see Custom widgets);\n\
+the rest belong to K2's own widgets and controls.\n\n",
+        ticks(BRIDGE_CAPS),
+        c.catalog_version,
+    );
+    let rows = gen::bridge_rows(c);
+    let mut caps: Vec<Option<&str>> = c.caps.iter().map(|cap| Some(cap.name.as_str())).collect();
+    caps.push(None);
+    for cap in caps {
+        let group: Vec<_> = rows.iter().copied().filter(|v| v.cap.as_deref() == cap).collect();
+        if group.is_empty() {
+            continue;
+        }
+        match cap {
+            Some(name) => s.push_str(&format!("**`{name}`**\n\n")),
+            None => s.push_str("**no cap**\n\n"),
+        }
+        for v in group {
+            let custom = if v.exposed_to(Exposure::Widget) { " **custom widgets**" } else { "" };
+            s.push_str(&format!("- `{}`: {}{custom}\n", gen::signature(v), v.doc));
+        }
+        s.push('\n');
+    }
+    s
+}
+
+/// "Custom widgets" (UW42 as amended: UWA11, UWB2–UWB13, UWB21–UWB24).
+fn custom_widgets_section() -> String {
+    let c = contract::catalog();
+    let mut s = String::from(
+        "## Custom widgets (your own HTML, CSS and JS)\n\n\
+When the built-in widgets can't do what the human asks (\"make my agents look like a\n\
+game\", \"a diary\", \"a globe of my servers\"), write a **custom widget**: a small web\n\
+page in a folder, placed in a Garden. K2 runs it **sealed**: no network, no storage,\n\
+no popups, no files, no K2 internals. It talks to K2 only through the `k2` object,\n\
+and only with the caps the human allowed with a click.\n\n\
+### The folder\n\n\
+`~/.k2/zen/widgets/<name>/`, one flat folder (`<name>`: lower-case letters, digits,\n\
+`-` and `_`, up to 40; subfolders are ignored). K2 reads `manifest.json`, the entry\n\
+HTML, `*.js`, `*.css`, and `*.png *.jpg *.jpeg *.webp *.gif *.woff2` (no SVG). K2\n\
+inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` URL.\n\n\
+```json\n\
+{\n  \"schema\": 1,\n  \"name\": \"Agent Arcade\",\n  \"description\": \"Your agents as little characters.\",\n  \"entry\": \"index.html\",\n  \"caps\": [\"agents:read\", \"thread:read\", \"thread:post\"],\n  \"reasons\": {\"thread:post\": \"so you can talk to a character from the game\"},\n  \"requires\": {\"libs\": [\"three@0.170\"]}\n}\n\
+```\n\n\
+- `schema` 1; `name` 1–40 characters (shown to the human as the widget's own words);\n\
+  `description` up to 200; `entry` defaults to `index.html`.\n\
+- `caps`: only ",
+    );
+    s.push_str(&ticks(&c.caps_exposed_to(Exposure::Widget)));
+    s.push_str(
+        ". Any other cap is an error. An empty list is fine (a clock).\n\
+- `reasons`: one line (up to 140) per cap, in your words. K2 shows its own sentence too.\n\
+- `requires.libs`: libraries from K2's standard library (see What's available),\n\
+  inlined before your scripts. `id` is optional and must equal the folder name.\n\
+- `version`, `license`, `bindings` are accepted and ignored for now. `net` and `secrets`\n\
+  are errors: outside data comes in a later version.\n\n\
+### Placing it\n\n\
+```toml\n\
+[[widget]]\n\
+id = \"arcade\"\n\
+kind = \"custom\"\n\
+widget = \"agent-arcade\"   # the folder, or a built-in like \"k2:diary@1\"\n\
+column = 0\n\
+[widget.props]\n\
+home = \"Work\"             # what it asks to see: home = \"…\" or agent = \"…\"\n\
+```\n\n\
+`custom` is a content widget that fills its column (never a band, edge or menu). At most\n\
+6 custom widgets per page. `config` (a small table of strings, numbers and booleans)\n\
+reaches the widget as `k2.config`. A conversation widget can follow it:\n\
+`agents = \"arcade\"` on a `conversation` widget shows what it opens with\n\
+`k2.conversation.open(address)`.\n\n\
+### Permissions: you can't grant\n\n\
+The human picks what the widget may see when they allow it: one agent, a Home, several\n\
+Homes, every Home, one server, or every server. Until then K2 draws its own review card\n\
+in the widget's box and your code doesn't run. **You can't grant: tell the human to open\n\
+the Garden and click Review.** Never write grants.json, never call the grant route,\n\
+never ask the human to paste anything. Grants live in K2's daemon, signed; a hand-made\n\
+one is refused. Code changes keep the grant; asking for a new cap, or a different\n\
+`home`/`agent`, sends it back to review. Sending is on by default and the human can turn\n\
+it off; a runaway guard (more than 120 posts in 10 minutes, or 20 identical texts to one\n\
+agent) stops the widget and turns sending off until the human resumes it.\n\n\
+### The `k2` object\n\n\
+Run `k2 zen guide api` for every helper with an example and its errors. In short, by\n\
+cap (K2's sentence for each is what the human reads):\n\n",
+    );
+    for (cap, rows) in gen::widget_groups(c) {
+        match cap.and_then(|n| c.cap(n)) {
+            Some(row) => s.push_str(&format!(
+                "**`{}`**: \"{}\"\n\n",
+                row.name,
+                row.sentence.as_deref().unwrap_or(&row.label).replace("{where}", "<scope>")
+            )),
+            None => s.push_str("**no cap**\n\n"),
+        }
+        for v in rows {
+            let reach = match v.reach {
+                contract::Reach::Portable => "portable",
+                contract::Reach::Local => "local",
+            };
+            s.push_str(&format!("- `k2.{}` ({reach}): {}\n", gen::signature(v), v.doc));
+        }
+        s.push('\n');
+    }
+    s.push_str(
+        "Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),\n\
+`k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`, `k2.widget`,\n\
+`k2.asset(name)`, `k2.motion.reduced`. Every call returns a Promise; every subscribe\n\
+returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
+    );
+    s.push_str(&c.errors.iter().map(|e| format!("`{}`", e.code)).collect::<Vec<_>>().join(", "));
+    s.push_str(
+        ").\n\n\
+### Rules\n\n\
+- **`textContent` for anything an agent wrote, never `innerHTML`.** Agent text can hold markup.\n\
+- No inline handlers (`onclick=`): they don't run. Use `addEventListener` in a script file.\n\
+- No `fetch`, `XMLHttpRequest`, `WebSocket`, `localStorage`, `eval`, `new Function`,\n\
+  `<iframe>` or `import … from`: they're blocked, or validate refuses them.\n\
+- Follow the Garden's look: the `--zen-*` CSS variables are set in the frame, and\n\
+  `k2.theme.changed(cb)` fires when they change. Respect `k2.motion.reduced`.\n\n\
+### Workflow\n\n\
+1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`) copies a\n\
+   working example into `~/.k2/zen/widgets/<name>/`.\n\
+2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
+3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
+   it's done. A folder with errors keeps serving its last good version.\n\
+4. Tell the human it's ready and that they need to click **Review** on it to allow it.\n\
+5. `k2 zen widget list` shows each widget's state and grants; `k2 zen history --widget\n\
+   <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit;\n\
+   `k2 zen widget revoke` takes a grant away (taking power away is always allowed).\n\n\
+**The Diary** (`k2:diary@1`, the Diary Garden in New Garden) is the canonical example:\n\
+one agent at a time on a parchment page, replies written out in handwriting, a contents\n\
+page with search. Copy it with `k2 zen widget new my-diary --from k2:diary`; a\n\
+built-in widget itself never changes.\n\n\
+Files K2 owns here too: **never write grants.json**, `zen-grant.key` or `pins.json`.\n\n",
     );
     s
+}
+
+/// "What's available" (UWB25): the standard library, the limits and the
+/// examples, from `zen-lib.json` and the Diary.
+fn whats_available_section() -> String {
+    let m = stdlib::zen_lib_manifest();
+    let mut s = String::from("## What's available to a custom widget\n\n### Libraries (inside K2, pinned, offline)\n\n");
+    if m.libs.is_empty() {
+        s.push_str("This K2 ships no libraries yet; write plain JavaScript.\n\n");
+    } else {
+        s.push_str(
+            "Name them in the manifest's `requires.libs` as `\"<id>@<version>\"` (a version prefix\n\
+that ends at a dot works: `\"three@0.170\"`). Each defines a global.\n\n",
+        );
+        for l in &m.libs {
+            let how = match l.source {
+                stdlib::LibSource::Bundled => "bundled",
+                stdlib::LibSource::Download => "downloaded on first use, blocked under air-gap",
+            };
+            let notes = l.notes.as_deref().map(|n| format!(" {n}")).unwrap_or_default();
+            s.push_str(&format!(
+                "- `{}` ({}, {}): global `{}`, {}, {}.{notes}\n",
+                l.key(),
+                l.title,
+                l.license,
+                l.global,
+                how,
+                kb(l.total_bytes())
+            ));
+        }
+        s.push('\n');
+    }
+    s.push_str(&format!(
+        "Anything else: put the file in the widget's folder (it counts toward the code limit),\n\
+or name a pinned CDN file as `{{\"url\": …, \"integrity\": \"sha256-…\"}}` from {}; K2's daemon\n\
+fetches and checks it, the frame never touches the network, and air-gap blocks it.\n\n\
+### Limits\n\n\
+- Code (HTML + JS + CSS after inlining): 256 KB. Each asset 1 MB; all assets 2 MB; the\n\
+  bundled page 3 MB. Libraries: up to {} per widget, outside those limits.\n\
+- 6 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
+  64 KB per message, 8 live servers.\n\
+- WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs.\n\n\
+### Examples to copy\n\n\
+- `k2:diary` (the Diary): a full widget with page turns, handwriting and search.\n\
+- `hello`: a clock and a greeting; the smallest widget.\n\
+- `arcade`: agents as characters; click one to talk.\n\n",
+        m.cdn_hosts.join(", "),
+        kb(m.max_bytes_per_widget),
+    ));
+    s
+}
+
+fn kb(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{} MB", (bytes as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0)
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
 }
 
 /// "Controls, bands and menus" (prd-zen-freeform-chrome FC38): the chrome
@@ -477,4 +673,59 @@ controls, so it must also place a `zen-toggle` (the way out).\n\n",
 
 fn ticks(xs: &[&str]) -> String {
     xs.iter().map(|x| format!("`{x}`")).collect::<Vec<_>>().join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TUW5.2 (UWB2): skill v12 documents custom widgets from the catalog.
+    #[test]
+    fn skill_documents_every_custom_verb_with_its_cap() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN > 11, "custom widgets need a new skill version");
+        let body = generate_k2_zen_skill();
+        let c = contract::catalog();
+        for v in c.verbs_exposed_to(Exposure::Widget) {
+            let line = format!("- `k2.{}`", gen::signature(v));
+            assert!(body.contains(&line), "skill must list {line}");
+            if let Some(cap) = &v.cap {
+                // The verb's line sits under its cap's heading.
+                let head = body.find(&format!("**`{cap}`**: \"")).unwrap_or_else(|| panic!("no heading for {cap}"));
+                let at = body.find(&line).expect("line present");
+                assert!(at > head, "{} is listed under {cap}", v.verb);
+            }
+        }
+        for v in gen::bridge_rows(c) {
+            assert!(body.contains(&format!("- `{}`: {}", gen::signature(v), v.doc)), "bridge list has {}", v.verb);
+        }
+        for cap in c.caps_exposed_to(Exposure::Widget) {
+            assert!(body.contains(&format!("**`{cap}`**: \"")), "the cap {cap} with K2's sentence");
+        }
+        for must in [
+            "**You can't grant: tell the human to open\nthe Garden and click Review.**",
+            "Never write grants.json",
+            "never call the grant route",
+            "Run `k2 zen guide api`",
+            "`k2 zen widget new <name> --from k2:diary`",
+            "`k2 zen validate --widget <name>`",
+            "## What's available to a custom widget",
+            "**never write grants.json**, `zen-grant.key` or `pins.json`",
+            "textContent",
+        ] {
+            assert!(body.contains(must), "skill v12 must say {must:?}");
+        }
+        assert!(!body.contains("nothing is grantable yet"), "the v2 placeholder line is gone");
+        assert!(!body.contains("only the app writes it"), "grants live in the daemon now (UWB4)");
+    }
+
+    #[test]
+    fn whats_available_lists_every_library() {
+        let body = generate_k2_zen_skill();
+        for l in &stdlib::zen_lib_manifest().libs {
+            assert!(body.contains(&format!("`{}`", l.key())), "what's available lists {}", l.key());
+        }
+        for host in &stdlib::zen_lib_manifest().cdn_hosts {
+            assert!(body.contains(host.as_str()), "{host}");
+        }
+    }
 }

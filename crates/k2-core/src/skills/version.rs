@@ -102,7 +102,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// pages and pipeable example files.
 /// v11 = `agents.list()` / `agents.subscribe(cb)` rows carry the daemon's
 /// `activity` (prd-daemon-activity-and-thread-working-v1 S5).
-pub const SKILL_VERSION_ZEN: u32 = 11;
+/// v12 = custom widgets (prd-zen-user-widgets-v2 UW42, UWB2, UWB25): the
+/// folder, manifest, placing, "you can't grant", the `k2` object, and
+/// "what's available"; the verb lists come from the verb catalog. (If look
+/// versions lands first, the integrator gives this the next free number.)
+pub const SKILL_VERSION_ZEN: u32 = 12;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

@@ -1753,10 +1753,11 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
         assert!(body.contains(must), "skill must mention {must}");
     }
     assert!(!body.contains("`default` theme") && !body.contains("K2's `default`"), "the skill must not name a `default` theme");
-    assert_eq!(
-        k2_core::skills::version::SKILL_VERSION_ZEN,
-        11,
-        "k2-zen skill v11 (agents rows carry the daemon's `activity`; v10 was the `k2 zen guide` user guide; v9 made Zen controls widgets; v8 was `slot = \"top\"` for the nav rail)"
+    // UWB2: custom widgets took the next number after v11; the integrator
+    // assigns it at cherry-pick, so this asserts "after 11", not a number.
+    assert!(
+        k2_core::skills::version::SKILL_VERSION_ZEN > 11,
+        "k2-zen skill after v11 (v12 custom widgets; v11 agents rows carry the daemon's `activity`; v10 was the `k2 zen guide` user guide; v9 made Zen controls widgets; v8 was `slot = \"top\"` for the nav rail)"
     );
     // v11: the Agents rows' `activity` comes from the daemon.
     for must in [

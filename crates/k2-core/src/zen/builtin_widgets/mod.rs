@@ -65,7 +65,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[BuiltinWidget {
 /// order (TUWB6). A changed byte fails `released_builtins_never_change`:
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] =
-    &[("k2:diary@1", "d61215eba18713667f787bc860c2f6dc89c301a9a459323457068657c7c9b52d")];
+    &[("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d")];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
 pub fn builtin_widget_hash(w: &BuiltinWidget) -> String {

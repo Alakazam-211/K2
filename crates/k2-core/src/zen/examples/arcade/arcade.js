@@ -131,11 +131,25 @@
     if (ev.key === 'Escape' && picked) closeTalk()
   })
 
-  if (k2.can('agents.subscribe')) {
-    k2.agents.subscribe(draw)
-  } else {
-    empty.hidden = false
-    empty.textContent = 'Allow this widget to see your agents to start the game.'
-  }
-  k2.ready()
+  // K2 connects the frame after this script runs: wait for it before
+  // k2.can (false until then), k2.config or k2.motion. Calls wait on their own.
+  k2.connected.then(
+    () => {
+      if (k2.can('agents.subscribe')) {
+        k2.agents.subscribe(draw, (err) => {
+          empty.hidden = false
+          empty.textContent = 'The game can’t reach your agents right now.'
+          report(err)
+        })
+      } else {
+        empty.hidden = false
+        empty.textContent = 'The game can’t reach your agents right now.'
+      }
+      k2.ready()
+    },
+    () => {
+      empty.hidden = false
+      empty.textContent = 'The game can’t reach your agents right now.'
+    },
+  )
 })()

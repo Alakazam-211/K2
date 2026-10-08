@@ -19,8 +19,10 @@
     greeting.textContent = first ? 'Hello, ' + first.label + '.' : 'Hello.'
   }
 
-  if (k2.can('agents.subscribe')) {
-    k2.agents.subscribe(greet)
-  }
-  k2.ready()
+  // K2 connects the frame after this script runs: wait for it before
+  // k2.can (false until then), k2.config or k2.motion.
+  k2.connected.then(() => {
+    if (k2.can('agents.subscribe')) k2.agents.subscribe(greet)
+    k2.ready()
+  })
 })()

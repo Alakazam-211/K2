@@ -61,14 +61,14 @@ pub const GUIDE_EXAMPLES: &[&str] = &[
     "k2.thread.subscribe(row.address, (v) => drawPage(v.items, v.turn))",
     "const page = await k2.thread.read(row.address, {beforeSeq: first.seq})",
     "await k2.thread.post(row.address, 'How is it going?')",
-    "if (k2.can('thread.post')) showSendButton()",
+    "await k2.connected; if (k2.can('thread.post')) showSendButton()",
     "k2.theme.changed(({theme}) => paint(theme.vars))",
     "img.src = k2.asset('cat.png')                   // a file in the folder",
     "k2.ready()                                     // once, after first draw",
 ];
 
 /// Members of the frame's `k2` object that aren't catalog helpers.
-pub const RUNTIME_MEMBERS: &[&str] = &["call", "subscribe", "on", "can", "ready", "config", "widget", "asset", "motion"];
+pub const RUNTIME_MEMBERS: &[&str] = &["call", "subscribe", "on", "connected", "can", "ready", "config", "widget", "asset", "motion"];
 
 /// One rendered file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,7 +467,7 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
     let codes = c.errors.iter().map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(" | ");
     s.push_str(&format!("/** The shared error codes (UWA10). */\nexport type K2ErrorCode = {codes}\n\n"));
     s.push_str(
-        "/** A refused call rejects with this. */\nexport interface K2Error extends Error {\n  readonly name: 'K2Error'\n  readonly code: K2ErrorCode\n  readonly verb: string\n  readonly cap?: string\n  readonly room?: string\n  readonly feature?: string\n}\n\n",
+        "/** What `k2.connected` resolves with: the hello K2 sent this frame. */\nexport interface K2Hello {\n  readonly caps: string[]\n  readonly features: string[]\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly motion: { readonly reduced: boolean }\n}\n\n/** A refused call rejects with this. */\nexport interface K2Error extends Error {\n  readonly name: 'K2Error'\n  readonly code: K2ErrorCode\n  readonly verb: string\n  readonly cap?: string\n  readonly room?: string\n  readonly feature?: string\n}\n\n",
     );
     s.push_str(&format!(
         "/** Every widget verb: its arguments and what it answers (or pushes). */\nexport interface K2Verbs {{\n{}\n}}\n\n",
@@ -485,7 +485,7 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
         s.push_str("  }\n");
     }
     s.push_str(
-        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file. */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n",
+        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n",
     );
     Ok(s)
 }
@@ -575,9 +575,11 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
     for line in [
         "ALSO ON k2",
         "  k2.call(verb, ...args), k2.subscribe(verb, ...args, cb) (alias k2.on):",
-        "  the same verbs by name. k2.can(verb): advice for drawing; K2 still",
-        "  checks every call. k2.ready() once drawn. k2.config, k2.widget,",
-        "  k2.asset(name), k2.motion.reduced. A refused call rejects with K2Error",
+        "  the same verbs by name. await k2.connected first: K2 connects the frame",
+        "  after your top-level script runs, and until then k2.can is false and",
+        "  k2.config, k2.widget, k2.motion are empty (calls wait on their own).",
+        "  k2.can(verb): advice for drawing; K2 still checks every call.",
+        "  k2.ready() once drawn. k2.asset(name). A refused call rejects with K2Error",
         "  (.code, .message, .verb, .cap, .room, .feature). Subscribes return the",
         "  unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,",
         "  onError)) to hear a refused subscription (it ends; without onError K2",

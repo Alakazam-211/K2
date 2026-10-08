@@ -744,6 +744,21 @@ The frame's first script is `sdk/generated/k2-frame.js` (the shared runtime
 `K2_CONTRACT`), nonced with the bundle's nonce and outside the widget's code
 budget; at most 16 KB.
 
+**The hello comes after the widget's script.** The host posts it on the
+frame's `load`, so a widget's top-level code always runs before it. Calls
+and subscriptions made earlier wait for it. `k2.can()`, `k2.config`,
+`k2.widget` and `k2.motion` don't: until the hello they read `false` /
+empty. A widget awaits `k2.connected` (a Promise that resolves with the
+hello's `{caps, features, widget, config, motion}`, or rejects with K2Error
+`failed` "not connected" when no hello comes in 10 s) before it reads them:
+
+```js
+k2.connected.then(() => {
+  if (k2.can('agents.subscribe')) k2.agents.subscribe(draw)
+  k2.ready()
+}, () => showNote('K2 didn’t start this widget.'))
+```
+
 ### Limits (UW8, UW29, UWB8, UWB9, UWB13)
 
 Code (HTML + JS + CSS after inlining) 256 KB; each asset 1 MB, all assets

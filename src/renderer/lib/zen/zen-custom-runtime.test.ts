@@ -204,6 +204,45 @@ describe('TUWA6: the frame runtime', () => {
     expect(r.k2.can('foo.bar')).toBe(false)
   })
 
+  it('k2.connected: pending until the hello (which comes after the widget script), then resolves with it; can/config/motion follow', async () => {
+    const r = realm()
+    expect(typeof r.k2.connected.then).toBe('function')
+    let settled: unknown = 'pending'
+    r.k2.connected.then((h: unknown) => void (settled = h))
+    await tick()
+    // The widget's top level has run and K2 hasn't said hello: nothing yet.
+    expect(settled).toBe('pending')
+    expect(r.k2.can('agents.list')).toBe(false)
+    expect(r.k2.config).toEqual({})
+    expect(r.k2.widget).toBeNull()
+    connect(r)
+    const hello = await r.k2.connected
+    expect(hello).toEqual({
+      caps: ['agents:read'],
+      features: ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1'],
+      widget: { id: 'arcade', name: 'Agent Arcade', garden: 'g-test0001' },
+      config: { speed: 2 },
+      motion: { reduced: true },
+    })
+    expect(Object.isFrozen(hello)).toBe(true)
+    expect(settled).toBe(hello)
+    expect(r.k2.can('agents.list')).toBe(true)
+    expect(r.k2.config).toEqual({ speed: 2 })
+    expect(r.k2.motion).toEqual({ reduced: true })
+  })
+
+  it('k2.connected rejects with K2Error failed "not connected" when no hello comes in 10 s', async () => {
+    const r = realm()
+    r.runTimers()
+    const err = await r.k2.connected.then(
+      () => {
+        throw new Error('resolved')
+      },
+      (e: any) => e,
+    )
+    expect(err).toMatchObject({ name: 'K2Error', code: 'failed', message: 'not connected', verb: 'connected' })
+  })
+
   it('a refused call rejects with K2Error carrying the wire fields', async () => {
     const r = realm()
     const { heard, host } = connect(r)

@@ -32,28 +32,23 @@
   // @ts-check
   // K2's frame runtime: the `k2` object a custom Garden widget talks to K2
   // through (prd-zen-user-widgets-v2 UWA5, UW15, §7). Plain JavaScript, no
-  // dependencies, no compile step: K2 inlines it as the first nonced script
-  // of every sealed widget frame, so `window.k2` exists before the widget's
-  // own scripts run, and the widget can't load or replace it.
+  // dependencies. K2 inlines it as the first nonced script of every sealed
+  // widget frame, so `window.k2` exists before the widget's scripts run.
+  // contract-gen (UWA11) wraps it after the catalog's widget table
+  // (`K2_CONTRACT`) into `sdk/generated/k2-frame.js`; rerun it after an edit.
   //
-  // Delivery: `cargo run -p k2-core --bin contract-gen` (UWA11) wraps this
-  // body in a function after the catalog's widget table,
-  //   var K2_CONTRACT = {catalogVersion, errors, verbs: {verb: {cap, reach, kind, feature}}}
-  // and writes `sdk/generated/k2-frame.js`, which the renderer inlines. Rerun
-  // contract-gen after any edit here (the freshness tests check).
-  //
-  // One transport adapter in v2: the hello's MessagePort (cookie and server
-  // adapters are Cut B). The frame never holds a token.
-  //
-  // Protocol (host = K2's renderer, over the hello's private port):
+  // Transport: the hello's MessagePort. The frame never holds a token.
   //   frame → host {id, verb, args} · {sub, verb, args} · {unsub} · {ready}
   //                {pong} · {error: {message, stack?}} · {chord}
   //   host → frame {id, ok, value} · {id, ok: false, error} · {sub, value}
   //                {sub, error} · {ping}
-  // Calls made before the hello wait for it (it comes on the frame's load);
-  // with no hello in 10 s they reject with K2Error `failed` "not connected".
-  // A refused subscription gets `{sub, error}` once and ends: the runtime
-  // calls its onError (after cb) or, with none, reports it to K2.
+  // The hello comes on the frame's load, AFTER the widget's top-level script
+  // runs. Calls made before it wait; `k2.can`, `k2.config`, `k2.widget` and
+  // `k2.motion` don't, so a widget awaits `k2.connected` (resolves with the
+  // hello) before reading them. With no hello in 10 s, waiting calls and
+  // `k2.connected` reject with K2Error `failed` "not connected". A refused
+  // subscription gets `{sub, error}` once and ends: its onError (after cb)
+  // runs or, with none, K2 hears of it.
   ;(function () {
     'use strict'
 
@@ -93,11 +88,20 @@
     /** @type {Map<number, Sub>} */
     var subs = new Map()
 
-    // Messages sent before the hello (it comes on `load`) wait, in order; with
-    // none in CONNECT_MS they fail "not connected" (K2 shows "didn't start").
+    // Messages sent before the hello wait, in order; with none in CONNECT_MS
+    // they fail "not connected" (K2 shows "didn't start").
     var CONNECT_MS = 10000
     /** @type {unknown[] | null} */
     var early = []
+    /** @type {(v: unknown) => void} */
+    var helloed = function () {}
+    /** @type {(e: unknown) => void} */
+    var unhelloed = helloed
+    var connected = new Promise(function (res, rej) {
+      helloed = res
+      unhelloed = rej
+    })
+    connected.catch(function () {})
 
     /** @param {unknown} msg */
     function send(msg) {
@@ -113,6 +117,7 @@
     g.setTimeout(function () {
       if (port) return
       early = null
+      unhelloed(notConnected('connected'))
       pending.forEach(function (p) {
         p.reject(notConnected(p.verb))
       })
@@ -203,8 +208,7 @@
       }
     }
 
-    /** The theme the host pushes (`ThemeInfo`: {theme: {scheme, vars},
-     *  chrome, motion}): `--zen-*` variables and the scheme on :root (UW39). */
+    /** The pushed theme's `--zen-*` vars and scheme onto :root (UW39). */
     /** @param {unknown} v */
     function applyTheme(v) {
       if (!v || typeof v !== 'object') return
@@ -241,6 +245,7 @@
       var waiting = early || []
       early = null
       for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
+      helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
     }
     g.addEventListener('message', onHello)
 
@@ -254,8 +259,8 @@
     })
 
     var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
-    // Mirrors `zenForwardedChordForKey` (lib/zen/zen-shortcut.ts): trusted,
-    // non-repeating keys only; K2's host gates each one again (focus, 500 ms).
+    // Mirrors `zenForwardedChordForKey` (lib/zen/zen-shortcut.ts); the host
+    // gates each one again.
     /** @param {KeyboardEvent} e */
     function chordOf(e) {
       if (e.isTrusted === false || e.repeat) return null
@@ -291,7 +296,7 @@
     }
 
     /**
-     * Args can't be functions (MessagePort), so trailing ones are cb, onError?.
+     * Trailing function args are cb, onError?.
      * @param {string} verb
      * @param {unknown[]} rest
      */
@@ -319,6 +324,7 @@
       if (row.feature && hello.features.indexOf(row.feature) < 0) return false
       return true
     }
+    k2.connected = connected
     k2.ready = function () {
       send({ ready: true })
     }

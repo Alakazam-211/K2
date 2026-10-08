@@ -456,7 +456,7 @@
     state.subscribed = addr
     if (!addr) return
     if (!can('thread.subscribe')) {
-      state.views[addr] = { address: addr, phase: 'unavailable', note: 'Allow this Diary to read your conversations to see its pages.', items: [], hasMore: false }
+      state.views[addr] = { address: addr, phase: 'unavailable', note: 'This page can’t reach the agent’s words right now.', items: [], hasMore: false }
       draw()
       return
     }
@@ -700,16 +700,11 @@
     state.at = i >= 0 ? i : clamp(state.at, 0, Math.max(0, local.length - 1))
   }
 
-  function start() {
-    if (!k2) {
-      drawBlank('the diary is sealed', 'This page only works inside a K2 Garden.')
-      return
-    }
-    var cfg = k2.config || {}
-    state.reduced = !!(k2.motion && k2.motion.reduced)
-    dom.root.classList.toggle('reduced', state.reduced)
-    if (cfg.sound === true) setSound(true)
+  // The words for a diary that can't reach anyone: no permission to ask
+  // for (widgets need none), just a door that isn't open right now.
+  var UNREACHED = 'The diary can’t reach your agents right now.'
 
+  function wire() {
     grab(dom.prev, -1)
     grab(dom.next, 1)
     dom.whispers.addEventListener('click', function () { setSound(!state.sound) })
@@ -746,9 +741,19 @@
         turn(-1)
       }
     })
+  }
+
+  // Everything that reads k2.can, k2.config or k2.motion runs here, once K2
+  // has connected the frame: the hello comes on the frame's load, after
+  // this script's top level, and until then k2.can() is always false.
+  function begin() {
+    var cfg = k2.config || {}
+    state.reduced = !!(k2.motion && k2.motion.reduced)
+    dom.root.classList.toggle('reduced', state.reduced)
+    if (cfg.sound === true) setSound(true)
 
     if (!can('agents.subscribe')) {
-      drawBlank('the diary is sealed', 'Allow this Diary in K2 to see the agents on this computer.')
+      drawBlank('the diary is sealed', UNREACHED)
       ready()
       return
     }
@@ -765,6 +770,20 @@
         ready()
       },
     )
+  }
+
+  function start() {
+    if (!k2) {
+      drawBlank('the diary is sealed', 'This page only works inside a K2 Garden.')
+      return
+    }
+    wire()
+    drawBlank('the diary is waking', 'The ink is waking…')
+    // With no hello in 10 s, k2.connected rejects and K2 shows that the
+    // widget didn't start; the page says it can't reach anyone.
+    Promise.resolve(k2.connected).then(begin, function () {
+      drawBlank('the diary is sealed', UNREACHED)
+    })
   }
 
   start()

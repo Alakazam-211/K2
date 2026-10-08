@@ -132,6 +132,15 @@ export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:po
 /** The shared error codes (UWA10). */
 export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'failed'
 
+/** What `k2.connected` resolves with: the hello K2 sent this frame. */
+export interface K2Hello {
+  readonly caps: string[]
+  readonly features: string[]
+  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }
+  readonly config: Readonly<Record<string, string | number | boolean>>
+  readonly motion: { readonly reduced: boolean }
+}
+
 /** A refused call rejects with this. */
 export interface K2Error extends Error {
   readonly name: 'K2Error'
@@ -224,11 +233,13 @@ export interface K2 {
   ): () => void
   /** Alias of `subscribe`. */
   on: K2['subscribe']
-  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. K2 still checks every call. */
+  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` "not connected" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */
+  readonly connected: Promise<K2Hello>
+  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */
   can(verb: string): boolean
   /** Tell K2 you have drawn (call once). */
   ready(): void
-  /** The placement's `config` table from the Garden file. */
+  /** The placement's `config` table from the Garden file (empty until `connected`). */
   readonly config: Readonly<Record<string, string | number | boolean>>
   readonly widget: { readonly id: string; readonly name: string; readonly garden: string }
   /** A file in the widget's folder as a data: URL, or null. */

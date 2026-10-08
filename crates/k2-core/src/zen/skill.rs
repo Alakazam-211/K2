@@ -501,8 +501,20 @@ cap:\n\n",
     }
     s.push_str(
         "Also: `k2.call(verb, ...args)`, `k2.subscribe(verb, ...args, cb)` (alias `k2.on`),\n\
-`k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`, `k2.widget`,\n\
-`k2.asset(name)`, `k2.motion.reduced`. Every call returns a Promise; every subscribe\n\
+`k2.connected`, `k2.can(verb)`, `k2.ready()` (call once you have drawn), `k2.config`,\n\
+`k2.widget`, `k2.asset(name)`, `k2.motion.reduced`.\n\n\
+**`await k2.connected` before `k2.can`, `k2.config`, `k2.widget` or `k2.motion`.** K2\n\
+connects the frame after your top-level script runs; until then `k2.can()` is false and\n\
+the others are empty, so a widget that checks them at startup draws as if it had no\n\
+access. Calls and subscribes wait for the connection on their own. `k2.connected`\n\
+rejects (K2Error `failed`, \"not connected\") when K2 never connects the frame:\n\n\
+```js\n\
+k2.connected.then(() => {\n\
+  if (k2.can('agents.subscribe')) k2.agents.subscribe(draw)\n\
+  k2.ready()\n\
+}, () => showNote('K2 didn’t start this widget.'))\n\
+```\n\n\
+Every call returns a Promise; every subscribe\n\
 returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
     );
     s.push_str(&c.errors.iter().map(|e| format!("`{}`", e.code)).collect::<Vec<_>>().join(", "));

@@ -39574,7 +39574,7 @@ TEN EXAMPLES
   k2.thread.subscribe(row.address, (v) => drawPage(v.items, v.turn))
   const page = await k2.thread.read(row.address, {beforeSeq: first.seq})
   await k2.thread.post(row.address, 'How is it going?')
-  if (k2.can('thread.post')) showSendButton()
+  await k2.connected; if (k2.can('thread.post')) showSendButton()
   k2.theme.changed(({theme}) => paint(theme.vars))
   img.src = k2.asset('cat.png')                   // a file in the folder
   k2.ready()                                     // once, after first draw
@@ -39607,9 +39607,11 @@ Every call may also fail with cap_not_granted, verb_unavailable, failed.
 
 ALSO ON k2
   k2.call(verb, ...args), k2.subscribe(verb, ...args, cb) (alias k2.on):
-  the same verbs by name. k2.can(verb): advice for drawing; K2 still
-  checks every call. k2.ready() once drawn. k2.config, k2.widget,
-  k2.asset(name), k2.motion.reduced. A refused call rejects with K2Error
+  the same verbs by name. await k2.connected first: K2 connects the frame
+  after your top-level script runs, and until then k2.can is false and
+  k2.config, k2.widget, k2.motion are empty (calls wait on their own).
+  k2.can(verb): advice for drawing; K2 still checks every call.
+  k2.ready() once drawn. k2.asset(name). A refused call rejects with K2Error
   (.code, .message, .verb, .cap, .room, .feature). Subscribes return the
   unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,
   onError)) to hear a refused subscription (it ends; without onError K2

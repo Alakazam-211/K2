@@ -541,13 +541,20 @@ pub fn create_api_key(
     let cap_sbx = if caps.sandboxes { 1i64 } else { 0 };
     let cap_db = if caps.db { 1i64 } else { 0 };
 
+    // K2 vault (0148): the BYO credential goes into the vault; the row keeps
+    // only its reference.
+    let (anthropic_stored, anthropic_ref): (Option<&str>, Option<String>) =
+        match (anthropic_stored, crate::secret_refs::holder()) {
+            (Some(k), Some(h)) => (None, Some(h.store_api_key_credential(&id, k, provider_stored, base_url_stored)?)),
+            (other, _) => (other, None),
+        };
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
         "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
          allowed_workspaces, provider, base_url, \
-         cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         // Deliberately keep the raw key + LLM credential OUT of any error string.
         rusqlite::params![
             id,
@@ -562,6 +569,7 @@ pub fn create_api_key(
             cap_canon,
             cap_sbx,
             cap_db,
+            anthropic_ref,
         ],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
@@ -624,7 +632,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, label, scope, created_at, revoked_at, disabled_at, \
-                    (anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> ''), \
+                    ((anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> '') OR anthropic_secret_ref IS NOT NULL), \
                     allowed_workspaces, provider, base_url, \
                     cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
              FROM api_keys ORDER BY created_at DESC, id DESC",
@@ -684,7 +692,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref \
          FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![key_hash],
@@ -699,10 +707,11 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
             let cap_canon: i64 = row.get(7)?;
             let cap_sbx: i64 = row.get(8)?;
             let cap_db: i64 = row.get(9)?;
+            let anthropic_ref: Option<String> = row.get(10)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
-                anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
+                anthropic_key: crate::secret_refs::read(anthropic, anthropic_ref),
                 // W5 (0071) — raw provider metadata verbatim; interpreted by
                 // `staged_env_pairs` (NULL = anthropic; unknown = fail-closed).
                 provider,
@@ -738,7 +747,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref \
          FROM api_keys \
          WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![id],
@@ -753,9 +762,10 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
             let cap_canon: i64 = row.get(7)?;
             let cap_sbx: i64 = row.get(8)?;
             let cap_db: i64 = row.get(9)?;
+            let anthropic_ref: Option<String> = row.get(10)?;
             Ok(ApiPrincipal {
                 id,
-                anthropic_key: anthropic.filter(|k| !k.trim().is_empty()),
+                anthropic_key: crate::secret_refs::read(anthropic, anthropic_ref),
                 provider,
                 base_url,
                 scope,

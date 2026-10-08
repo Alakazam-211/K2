@@ -153,11 +153,13 @@ impl Destination {
         Destination { host: host.to_string(), kind: DestKind::Pinned(addrs) }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn host(&self) -> &str {
         &self.host
     }
 
     /// The addresses the connection may use (empty for an IP literal).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pinned(&self) -> &[SocketAddr] {
         match &self.kind {
             DestKind::Pinned(a) => a,

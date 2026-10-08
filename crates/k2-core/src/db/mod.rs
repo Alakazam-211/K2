@@ -1239,6 +1239,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0147_compute_nodes",
             include_str!("../../drizzle_sql/0147_compute_nodes.sql"),
         ),
+        // 0148 — K2 vault: LLM keys in the main DB become `k2v://`
+        // references (values move at first boot, plaintext nulled).
+        // Renumbered from 0145 at integration (0147 shipped first).
+        (
+            "0148_vault_secret_refs",
+            include_str!("../../drizzle_sql/0148_vault_secret_refs.sql"),
+        ),
         // 0149 — K2 vault: the per-agent "Allow managing server-wide
         // secrets" switch (prd-k2-vault-v1 §17). Renumbered from 0146 at
         // integration: 0147 shipped first, so 0144–0146 are retired.

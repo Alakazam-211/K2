@@ -49,10 +49,6 @@ impl FileSecretStore {
         Self { path, vault: None }
     }
 
-    /// The old JSON file as a map (adoption).
-    pub fn legacy_map(path: &std::path::Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-        Self { path: path.to_path_buf(), vault: None }.load()
-    }
 
     fn load(&self) -> Result<serde_json::Map<String, serde_json::Value>, String> {
         if !self.path.exists() {

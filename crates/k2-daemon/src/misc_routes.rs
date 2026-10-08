@@ -458,6 +458,25 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             .to_string(),
                     ),
                 );
+                // 0.45.2: which name the E2E listener's certificate serves
+                // (null = no listener). After a switch it must equal the
+                // configured subdomain; `k2 tunnel status` and Settings
+                // show a mismatch instead of a silent handshake failure.
+                // 0.45.2: the persisted re-launch-on-boot flag, so
+                // `k2 tunnel status` shows whether a reboot brings it back.
+                obj.insert(
+                    "autoStart".to_string(),
+                    serde_json::Value::Bool(
+                        k2_core::tunnel::config::load().map(|c| c.auto_start).unwrap_or(false),
+                    ),
+                );
+                obj.insert(
+                    "e2eListener".to_string(),
+                    match crate::tunnel_tls_listener::live_listener() {
+                        Some((port, sub)) => serde_json::json!({ "subdomain": sub, "port": port }),
+                        None => serde_json::Value::Null,
+                    },
+                );
             }
             CliResponse::ok_json(v.to_string())
         }
@@ -490,7 +509,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // PRD tunnel-disable-unpair — disable/enable/release are POST-only
         // mutations (dispatcher arms); a GET landing here gets an explicit
         // 405, never a silent no-op (feedback_post_only_route_guards).
-        "/cli/tunnel/disable" | "/cli/tunnel/enable" | "/cli/tunnel/release" => {
+        "/cli/tunnel/disable" | "/cli/tunnel/enable" | "/cli/tunnel/release"
+        | "/cli/tunnel/switch" => {
             CliResponse::method_not_allowed()
         }
         "/cli/companion/presets" => match k2_core::companion::cli_routes::list_presets() {

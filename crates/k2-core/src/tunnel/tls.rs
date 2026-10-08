@@ -112,6 +112,31 @@ pub fn register_ensure_https_listener(hook: Box<EnsureHttpsListener>) {
     let _ = ENSURE_HTTPS_LISTENER.set(hook);
 }
 
+/// Signature of the daemon-registered "retire the E2E listener" hook (the
+/// tunnel-identity-changed path, 0.45.2). Given the subdomain the listener
+/// SHOULD serve now (`None` = no listener wanted: E2E off, no subdomain,
+/// released), the daemon stops its listener and cert renewer when they
+/// serve any other name, and returns that old name. `None` when there was
+/// nothing to stop.
+pub type RetireHttpsListener = dyn Fn(Option<&str>) -> Option<String> + Send + Sync + 'static;
+
+static RETIRE_HTTPS_LISTENER: std::sync::OnceLock<Box<RetireHttpsListener>> =
+    std::sync::OnceLock::new();
+
+/// Register the daemon's "retire the E2E listener" hook (first write wins,
+/// like [`register_ensure_https_listener`]).
+pub fn register_retire_https_listener(hook: Box<RetireHttpsListener>) {
+    let _ = RETIRE_HTTPS_LISTENER.set(hook);
+}
+
+/// Stop the daemon's E2E listener (and its cert renewer) unless it already
+/// serves `desired`. Returns the subdomain of the listener that was
+/// stopped. A library/test context with no daemon hook has no listener,
+/// so this is a no-op there.
+pub fn retire_https_listener_unless(desired: Option<&str>) -> Option<String> {
+    RETIRE_HTTPS_LISTENER.get().and_then(|hook| hook(desired))
+}
+
 /// Ensure the daemon's E2E HTTPS listener is up and return its port, so a
 /// tunnel start on the E2E (now-default) path can obtain-then-serve rather
 /// than erroring when the port was never published.

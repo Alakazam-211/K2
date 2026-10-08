@@ -358,6 +358,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::LlmStatusChanged { .. }
         | SessionEvent::TunnelStatusChanged { .. }
         | SessionEvent::TunnelSubdomainsChanged { .. }
+        | SessionEvent::TunnelIdentityChanged { .. }
         | SessionEvent::PublishServicesChanged { .. }
         | SessionEvent::WorkspaceResourcesChanged { .. }
         | SessionEvent::AgentStatusChanged { .. } => None,
@@ -721,6 +722,13 @@ mod tests {
             SessionEvent::TunnelSubdomainsChanged {
                 primary: String::new(),
                 targets: std::collections::HashMap::new(),
+            },
+            SessionEvent::TunnelIdentityChanged {
+                previous_subdomain: Some("afs".into()),
+                subdomain: Some("k2n1-m4".into()),
+                public_url: Some("https://k2n1-m4.k2.dev".into()),
+                running: true,
+                ok: true,
             },
             SessionEvent::PublishServicesChanged { project_id: "p".into() },
             SessionEvent::WorkspaceResourcesChanged { workspace_id: "p".into() },

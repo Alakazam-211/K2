@@ -481,9 +481,65 @@ fn refresh_lock() -> &'static std::sync::Mutex<()> {
 pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String> {
     let _g = refresh_lock().lock().unwrap_or_else(|p| p.into_inner());
     let map = fetch_map(primary, token)?;
+    // Tunnel identity changed (0.45.2): once the daemon moved to another
+    // subdomain, a refresh still running for the OLD one (a loop that had
+    // not yet seen `stop()`) must not land the old name's map over the new
+    // one. The check runs under the same lock as `reset_for_primary`.
+    if let Some(expected) = expected_primary_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_deref()
+    {
+        if expected != map.primary {
+            let now = if expected.is_empty() {
+                "no subdomain".to_string()
+            } else {
+                format!("{expected}.{SUBDOMAIN_HOST}")
+            };
+            return Err(format!(
+                "discarded the routing map for {}.{SUBDOMAIN_HOST}: the tunnel now serves {now}",
+                map.primary
+            ));
+        }
+    }
     let n = map.targets.len();
     let changed = store(map);
     Ok((n, changed))
+}
+
+/// The primary label the routing cache must belong to, set by
+/// [`reset_for_primary`] when the tunnel identity changes. `None` until the
+/// first change (then any refresh may land, as before 0.45.2).
+fn expected_primary_slot() -> &'static std::sync::Mutex<Option<String>> {
+    use std::sync::{Mutex, OnceLock};
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Tunnel identity changed: drop every nested route of the old subdomain
+/// and start an empty map for `primary` (empty = no subdomain). Serialized
+/// with [`refresh_once`]; from now on a refresh for any other primary is
+/// discarded. Broadcasts `TunnelSubdomainsChanged` when the cache changed.
+/// Returns `changed`.
+pub fn reset_for_primary(primary: &str) -> bool {
+    let _g = refresh_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let primary = primary.trim().to_ascii_lowercase();
+    *expected_primary_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = Some(primary.clone());
+    store(SubdomainMap {
+        primary,
+        targets: HashMap::new(),
+    })
+}
+
+/// Test-only: forget the expected primary so later tests in this binary
+/// start from the pre-0.45.2 "accept any refresh" state.
+#[cfg(test)]
+pub(crate) fn clear_expected_primary_for_test() {
+    *expected_primary_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = None;
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -793,6 +849,7 @@ mod tests {
 
         // Known baseline: empty cache (result intentionally ignored — the
         // prior state is whatever the last test left; we only need EMPTY now).
+        clear_expected_primary_for_test();
         let _ = swap_and_changed(SubdomainMap::default());
 
         let first = refresh_once("rosson", "tok_refresh");

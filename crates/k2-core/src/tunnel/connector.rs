@@ -378,10 +378,37 @@ pub fn start(
 ) -> Result<TunnelStatus, String> {
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
 
-    // Idempotent: already supervising a live child.
+    // Idempotent: already supervising a live child — for the SAME tunnel
+    // identity. A live child for another identity (the subdomain/token on
+    // disk or in `subdomain_override` moved since it started) is restarted
+    // under the new one; returning the old status would keep frpc serving
+    // the old name (0.45.2: release + connect a new subdomain).
     if let Some(st) = guard.as_ref() {
         if st.running.load(Ordering::SeqCst) {
-            return Ok(status_from(st));
+            let mut desired = config::load()?;
+            if let Some(sub) = subdomain_override.as_deref() {
+                desired.subdomain = sub.to_string();
+            }
+            if super::identity::TunnelIdentity::of(&desired)
+                == super::identity::TunnelIdentity::of(&st.cfg)
+            {
+                return Ok(status_from(st));
+            }
+            crate::log_debug!(
+                "[tunnel] start: running tunnel serves {:?} but the config now says {:?} \
+                 — restarting under the new identity",
+                st.cfg.subdomain,
+                desired.subdomain
+            );
+            drop(guard);
+            stop()?;
+            guard = state().lock().unwrap_or_else(|p| p.into_inner());
+            // A concurrent start may have won the slot while it was free.
+            if let Some(st) = guard.as_ref() {
+                if st.running.load(Ordering::SeqCst) {
+                    return Ok(status_from(st));
+                }
+            }
         }
     }
 
@@ -438,14 +465,19 @@ pub fn start(
     // tagged `Ingress::Tunnel`), never the privileged main loopback
     // listener. Resolved through the daemon-registered seam; loud `Err`
     // on bind failure (no silent fallback to the main port).
+    //
+    // Persist FIRST (0.45.2): the ensure hook reads the subdomain from disk
+    // to name the cert and the listener, so a `subdomain_override` must be
+    // on disk before it runs — otherwise `start?subdomain=new` brought the
+    // listener up for the OLD name.
+    let mut to_save = cfg.clone();
+    to_save.local_port = None;
+    config::save(&to_save)?;
     let resolved_local_port = if e2e {
         super::tls::ensure_https_port(default_local_port)?
     } else {
         super::ingress::ensure_tunnel_ingress_port(default_local_port)?
     };
-    let mut to_save = cfg.clone();
-    to_save.local_port = None;
-    config::save(&to_save)?;
 
     // Resolve frpc + render config to disk (0600). `e2e` selects the proxy
     // type (https vs http) and was used above to pick `resolved_local_port`.
@@ -588,6 +620,16 @@ pub fn stop() -> Result<(), String> {
     // 6) Clear connector state so status() reports stopped.
     *guard = None;
     Ok(())
+}
+
+/// The config the RUNNING connector started with (`None` when stopped).
+/// The tunnel-identity path compares it with the config on disk.
+pub fn running_config() -> Option<TunnelConfig> {
+    let guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    match guard.as_ref() {
+        Some(st) if st.running.load(Ordering::SeqCst) => Some(st.cfg.clone()),
+        _ => None,
+    }
 }
 
 /// Current connector status.
@@ -2297,6 +2339,7 @@ mod tests {
                 token_sha256: super::super::unpair::token_fingerprint("tok-old"),
                 upstream_reported: true,
                 pending_token: None,
+                ..Default::default()
             })
             .expect("save tombstone");
 

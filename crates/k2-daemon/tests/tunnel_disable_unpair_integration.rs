@@ -288,6 +288,11 @@ async fn release_requires_confirm_then_deletes_identity_and_tombstones() {
             assert_eq!(v["subdomain"], serde_json::json!("unpairrel"), "{v}");
             assert_eq!(v["upstreamReported"], serde_json::json!(false), "{v}");
             assert_eq!(v["alreadyReleased"], serde_json::json!(false), "{v}");
+            // 0.45.2 holder rule: this device's tunnel was not connected,
+            // so it is not the holder — nothing sent, nothing queued.
+            assert_eq!(v["localOnly"], serde_json::json!(true), "{v}");
+            assert_eq!(v["queued"], serde_json::json!(false), "{v}");
+            assert_eq!(v["identityChange"]["previousSubdomain"], serde_json::json!("unpairrel"), "{v}");
 
             assert!(
                 !k2_core::tunnel::config::config_path().exists(),
@@ -298,7 +303,11 @@ async fn release_requires_confirm_then_deletes_identity_and_tombstones() {
             assert!(tomb.contains("unpairrel"), "tombstone names the subdomain\n{tomb}");
             assert!(
                 tomb.contains("\"upstream_reported\": false"),
-                "offline release must queue the revocation\n{tomb}"
+                "a non-holder release is never reported\n{tomb}"
+            );
+            assert!(
+                !tomb.contains("pending_token"),
+                "a non-holder release must not keep a bearer for a replay\n{tomb}"
             );
 
             // The tri-state: status + config view both report released.
@@ -331,6 +340,87 @@ async fn release_requires_confirm_then_deletes_identity_and_tombstones() {
             assert_eq!(r.status, 200, "re-release; body={}", r.body);
             let v = json(&r.body);
             assert_eq!(v["alreadyReleased"], serde_json::json!(true), "{v}");
+        });
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// (3) 0.45.2 field case: `k2 tunnel enable` on a box with
+//     `auto_start: false` said "enabled and running" but left the flag
+//     off, so the tunnel stayed dark after a reboot. `auto_start=1`
+//     persists it; no param leaves it (the app's Start button); `0` turns
+//     it off; garbage is a 400.
+// ─────────────────────────────────────────────────────────────────────
+
+fn auto_start_on_disk() -> bool {
+    k2_core::tunnel::config::load().expect("load tunnel.json").auto_start
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enable_persists_auto_start_when_asked_and_only_then() {
+    let _g = lock();
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        futures_block(async {
+            // Token-less so /enable never spawns a real frpc from a test.
+            k2_core::tunnel::config::save(&k2_core::tunnel::TunnelConfig {
+                subdomain: "autostart".to_string(),
+                enabled: false,
+                auto_start: false,
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed disabled, auto-start off");
+
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/tunnel/enable?auto_start=1&token={OWNER_TOKEN}"),
+                Some(""),
+            );
+            assert_eq!(r.status, 200, "enable; body={}", r.body);
+            let v = json(&r.body);
+            assert_eq!(v["enabled"], serde_json::json!(true), "{v}");
+            assert_eq!(v["autoStart"], serde_json::json!(true), "{v}");
+            assert!(auto_start_on_disk(), "auto_start=1 must persist in tunnel.json");
+
+            // The app's Start (no param) leaves the toggle's value alone.
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/tunnel/enable?token={OWNER_TOKEN}"),
+                Some(""),
+            );
+            assert_eq!(r.status, 200, "enable; body={}", r.body);
+            assert!(auto_start_on_disk(), "no param must not clear auto_start");
+
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/tunnel/enable?auto_start=0&token={OWNER_TOKEN}"),
+                Some(""),
+            );
+            assert_eq!(r.status, 200, "enable; body={}", r.body);
+            assert_eq!(json(&r.body)["autoStart"], serde_json::json!(false), "{}", r.body);
+            assert!(!auto_start_on_disk(), "auto_start=0 must persist off");
+
+            let r = http(
+                d.port,
+                "POST",
+                &format!("/cli/tunnel/enable?auto_start=maybe&token={OWNER_TOKEN}"),
+                Some(""),
+            );
+            assert_eq!(r.status, 400, "bad value must 400; body={}", r.body);
+            assert!(!auto_start_on_disk(), "a refused enable must not touch the flag");
+
+            // Status reports the flag for `k2 tunnel status`.
+            let r = http(
+                d.port,
+                "GET",
+                &format!("/cli/tunnel/status?token={OWNER_TOKEN}"),
+                None,
+            );
+            assert_eq!(json(&r.body)["autoStart"], serde_json::json!(false), "{}", r.body);
         });
     });
 }

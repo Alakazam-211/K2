@@ -48,6 +48,7 @@ pub mod cert_broker;
 pub mod config;
 pub mod connector;
 pub mod failover;
+pub mod identity;
 pub mod ingress;
 pub mod lease;
 pub mod render;
@@ -253,13 +254,25 @@ pub fn disable_tunnel() -> Result<TunnelStatus, String> {
 /// connector when the config is connectable; a not-yet-configured device
 /// just persists the flag and reports the (stopped) status — enabling is
 /// meaningful before pairing too.
+///
+/// `auto_start` (0.45.2): `Some(v)` persists the re-launch-on-boot flag
+/// (`auto_start` in `tunnel.json`, the same field the Settings "Re-launch
+/// tunnel on restart" toggle writes); `None` leaves it. Before 0.45.2
+/// `k2 tunnel enable` never touched it, so a box with `auto_start: false`
+/// printed "enabled and running" and then stayed dark after a reboot. The
+/// CLI now sends `Some(true)` unless `--no-auto-start`; the app's Start
+/// button sends nothing (the toggle owns it).
 pub fn enable_tunnel(
     subdomain: Option<String>,
     daemon_port: u16,
+    auto_start: Option<bool>,
 ) -> Result<TunnelStatus, String> {
     crate::airgap::refuse()?;
     let cfg = config::update(|c| {
         c.enabled = true;
+        if let Some(a) = auto_start {
+            c.auto_start = a;
+        }
         if let Some(s) = &subdomain {
             let s = s.trim();
             if !s.is_empty() {
@@ -448,7 +461,7 @@ mod tests {
                 start_err.contains("K2_AIRGAP=1"),
                 "start teaching error must name the env; got {start_err}"
             );
-            let enable_err = enable_tunnel(None, 9).expect_err("enable must refuse");
+            let enable_err = enable_tunnel(None, 9, Some(true)).expect_err("enable must refuse");
             assert!(
                 enable_err.contains("K2_AIRGAP=1"),
                 "enable teaching error must name the env; got {enable_err}"

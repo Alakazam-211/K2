@@ -2644,9 +2644,27 @@ async fn handle_one_request(
                 .get("subdomain")
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
+            // 0.45.2: optional `auto_start=1|0` persists the re-launch-on-
+            // boot flag (the CLI sends 1 unless --no-auto-start; the app's
+            // Start sends nothing — its toggle owns the flag). An
+            // unrecognized value is a 400, never a silent default.
+            let auto_start = match params.get("auto_start").map(|s| s.trim().to_ascii_lowercase()) {
+                None => None,
+                Some(v) if v.is_empty() => None,
+                Some(v) if matches!(v.as_str(), "1" | "true" | "on" | "yes") => Some(true),
+                Some(v) if matches!(v.as_str(), "0" | "false" | "off" | "no") => Some(false),
+                Some(v) => {
+                    let resp = crate::cli::CliResponse::bad_request(format!(
+                        "auto_start must be 1 or 0, got {v:?}"
+                    ));
+                    super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                        .await;
+                    return DispatchOutcome::Done;
+                }
+            };
             let daemon_port = state.port;
             let result = tokio::task::spawn_blocking(move || {
-                k2_core::tunnel::enable_tunnel(subdomain, daemon_port)
+                k2_core::tunnel::enable_tunnel(subdomain, daemon_port, auto_start)
             })
             .await
             .unwrap_or_else(|e| Err(format!("worker join: {e}")));
@@ -2658,10 +2676,17 @@ async fn handle_one_request(
                             public_url: status.public_url.clone(),
                         },
                     );
-                    crate::cli::CliResponse::ok_json(
-                        serde_json::to_string(&status)
-                            .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
-                    )
+                    let mut v = serde_json::to_value(&status)
+                        .unwrap_or_else(|_| serde_json::json!({}));
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "autoStart".to_string(),
+                            serde_json::Value::Bool(
+                                k2_core::tunnel::config::load().map(|c| c.auto_start).unwrap_or(false),
+                            ),
+                        );
+                    }
+                    crate::cli::CliResponse::ok_json(v.to_string())
                 }
                 Err(e) => crate::cli::CliResponse::bad_request(e),
             };
@@ -2697,31 +2722,35 @@ async fn handle_one_request(
                         .to_string(),
                 )
             } else {
-                let result =
-                    tokio::task::spawn_blocking(k2_core::tunnel::release_tunnel_identity)
-                        .await
-                        .unwrap_or_else(|e| Err(format!("worker join: {e}")));
-                match result {
-                    Ok(report) => {
-                        let _ = crate::session_events::emit(
-                            crate::session_events::SessionEvent::TunnelStatusChanged {
-                                running: false,
-                                public_url: None,
-                            },
-                        );
-                        k2_core::log_debug!(
-                            "[tunnel] identity RELEASED for subdomain {:?} (upstream_reported={})",
-                            report.subdomain,
-                            report.upstream_reported
-                        );
-                        crate::cli::CliResponse::ok_json(
-                            serde_json::to_string(&report)
-                                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
-                        )
-                    }
-                    Err(e) => crate::cli::CliResponse::bad_request(e),
-                }
+                // 0.45.2: `mode=forget` forgets locally (nothing upstream);
+                // a plain release reports upstream only when this device's
+                // tunnel is connected (the holder). Either way the daemon
+                // moves off the name (listener, cert renewer, routes).
+                crate::tunnel_identity_routes::handle_release(
+                    crate::tunnel_identity_routes::release_mode(&params),
+                    state.port,
+                )
+                .await
             };
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
+        // POST /cli/tunnel/switch — 0.45.2: move this device to another
+        // subdomain in one step (Settings picker, `k2 tunnel switch`). JSON
+        // body `{subdomain, token?, deviceId?, deviceLabel?, start?}`. Binds
+        // the new name, then moves the E2E listener, cert renewer, nested
+        // routes and frpc; a failed step rolls back to the old name. 200
+        // with the step report (`ok`, `rolledBack`, `steps[]`).
+        //
+        // Method gate + OWNER-ONLY: same tier as start/release (it changes
+        // what this machine exposes publicly).
+        "/cli/tunnel/switch" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            if !super::http::require_owner(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let resp = crate::tunnel_identity_routes::handle_switch(&body_bytes, state.port).await;
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
@@ -3072,20 +3101,21 @@ async fn handle_one_request(
                         let sub = upd.subdomain.clone();
                         let token_updated =
                             upd.token.as_deref().is_some_and(|t| !t.trim().is_empty());
-                        match k2_core::tunnel::set_config(upd) {
-                            Ok(view) => {
-                                let actor = post_actor.as_deref().unwrap_or("owner-token");
-                                k2_core::log_debug!(
-                                    "[tunnel] config updated by {actor} (subdomain={}, tokenUpdated={token_updated})",
-                                    sub.as_deref().unwrap_or("<unchanged>"),
-                                );
-                                crate::cli::CliResponse::ok_json(
-                                    serde_json::to_string(&view)
-                                        .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}")),
-                                )
-                            }
-                            Err(e) => crate::cli::CliResponse::bad_request(e),
+                        // 0.45.2: a write that changes the subdomain, token
+                        // or E2E flag moves the daemon to the new identity
+                        // (listener, cert renewer, routes; a running tunnel
+                        // restarts under it) — no daemon restart needed.
+                        let resp =
+                            crate::tunnel_identity_routes::handle_config_post(upd, state.port)
+                                .await;
+                        if resp.status == "200 OK" {
+                            let actor = post_actor.as_deref().unwrap_or("owner-token");
+                            k2_core::log_debug!(
+                                "[tunnel] config updated by {actor} (subdomain={}, tokenUpdated={token_updated})",
+                                sub.as_deref().unwrap_or("<unchanged>"),
+                            );
                         }
+                        resp
                     }
                     Err(e) => {
                         crate::cli::CliResponse::bad_request(format!("invalid JSON body: {e}"))

@@ -826,6 +826,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/tunnel/subdomains/claim", Member),
     post("/cli/tunnel/subdomains/refresh", Member),
     post("/cli/tunnel/subdomains/unclaim", Member),
+    post("/cli/tunnel/switch", NoLogin),
     get("/cli/usage/subscriptions", Member),
     post("/cli/usage/subscriptions/refresh", Member),
     get("/cli/usage/tokens", Owner),

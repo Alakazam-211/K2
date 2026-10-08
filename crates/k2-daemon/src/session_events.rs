@@ -292,6 +292,25 @@ pub enum SessionEvent {
         public_url: Option<String>,
     },
 
+    /// 0.45.2 — the K2 Connect tunnel IDENTITY changed (subdomain switch,
+    /// release / forget, a config write with a new subdomain or token). The
+    /// daemon has already moved the E2E listener, cert renewer, nested
+    /// routes and frpc to the new name. APP-LEVEL; clients reload the
+    /// tunnel config (Settings card, URLs drawer, server switcher labels).
+    ///
+    /// Wire: `{ "kind": "tunnel_identity_changed", "previousSubdomain":
+    /// string|null, "subdomain": string|null, "publicUrl": string|null,
+    /// "running": bool, "ok": bool }`.
+    TunnelIdentityChanged {
+        #[serde(rename = "previousSubdomain")]
+        previous_subdomain: Option<String>,
+        subdomain: Option<String>,
+        #[serde(rename = "publicUrl")]
+        public_url: Option<String>,
+        running: bool,
+        ok: bool,
+    },
+
     /// URLs drawer / K2 Connect settings — the K2 Connect tunnel's cached
     /// NESTED-subdomain routing map changed (the daemon-owned refresh loop
     /// landed a map that differs from the cached one; see
@@ -712,6 +731,7 @@ impl SessionEvent {
             SessionEvent::ReviewChanged { .. } => "review_changed",
             SessionEvent::TunnelStatusChanged { .. } => "tunnel_status_changed",
             SessionEvent::TunnelSubdomainsChanged { .. } => "tunnel_subdomains_changed",
+            SessionEvent::TunnelIdentityChanged { .. } => "tunnel_identity_changed",
             SessionEvent::PublishServicesChanged { .. } => "publish_services_changed",
             SessionEvent::WorkspaceResourcesChanged { .. } => "workspace_resources_changed",
             SessionEvent::TabTitleChanged { .. } => "tab_title_changed",

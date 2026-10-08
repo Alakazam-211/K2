@@ -11,6 +11,7 @@
   "review_changed": "workspace",
   "tunnel_status_changed": "app",
   "tunnel_subdomains_changed": "app",
+  "tunnel_identity_changed": "app",
   "publish_services_changed": "app",
   "workspace_resources_changed": "app",
   "tab_title_changed": "workspace",

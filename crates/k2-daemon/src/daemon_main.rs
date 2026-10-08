@@ -1341,10 +1341,13 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
                 return;
             }
             match k2_core::tunnel::unpair::replay_pending() {
-                Ok(true) => log_debug!(
+                Ok(k2_core::tunnel::unpair::ReplayOutcome::Reported) => log_debug!(
                     "[daemon/tunnel] queued release revocation replayed upstream"
                 ),
-                Ok(false) => { /* nothing pending — the common case */ }
+                Ok(k2_core::tunnel::unpair::ReplayOutcome::Dropped(why)) => log_debug!(
+                    "[daemon/tunnel] queued release revocation DROPPED (never sent again): {why}"
+                ),
+                Ok(k2_core::tunnel::unpair::ReplayOutcome::Nothing) => { /* the common case */ }
                 Err(e) => log_debug!(
                     "[daemon/tunnel] queued release revocation replay failed (will retry next boot): {e}"
                 ),

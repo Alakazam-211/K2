@@ -41,15 +41,34 @@ use tokio_rustls::TlsAcceptor;
 
 use k2_core::log_debug;
 
-/// The live HTTPS-listener port while the accept loop is up.
+/// The live E2E listener: its port, the subdomain its certificate names,
+/// and the tasks that serve it (accept loop + cert renewer).
 ///
-/// **Not** a `OnceLock`: the accept task can die (panic, OS close, FD
+/// **Not** a `OnceLock<u16>`: the accept task can die (panic, OS close, FD
 /// exhaustion) while the daemon process stays alive. A OnceLock would keep
 /// returning the **dead** port forever → frpc dials connection-refused →
-/// silent external outage (luzz 2026-07-29, nsi/acv class). We store
-/// `Option<u16>` so death can clear the record and [`ensure_spawned_blocking`]
-/// can re-bind. Still serialized by [`SPAWN_LOCK`] on spawn.
-static HTTPS_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
+/// silent external outage (luzz 2026-07-29, nsi/acv class).
+///
+/// **Keyed by subdomain** (0.45.2): the listener serves ONE name. Before
+/// 0.45.2 a tunnel start reused any live listener, so after "release `afs`,
+/// connect `k2n1-m4`" the daemon kept serving the `afs.k2.dev` certificate
+/// until a restart (Reggie's Mac mini: `CertificateUnknown` for every
+/// direct client). [`ensure_spawned_blocking`] now replaces a listener that
+/// serves another name, and [`retire_listener`] is the identity-changed
+/// hook. Serialized by [`SPAWN_LOCK`] on spawn.
+struct LiveListener {
+    /// Bumped on every spawn, so a dying accept task only clears the
+    /// record it owns (a port number can be reused by the next bind).
+    generation: u64,
+    port: u16,
+    /// Trimmed subdomain label exactly as the cert was requested for.
+    subdomain: String,
+    accept: tokio::task::JoinHandle<()>,
+    renewer: Option<tokio::task::JoinHandle<()>>,
+}
+
+static LIVE: OnceLock<Mutex<Option<LiveListener>>> = OnceLock::new();
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Serializes concurrent on-demand spawns so two simultaneous tunnel starts
 /// can't race into two listeners. Cheap — held only across the bind, not the
@@ -60,28 +79,98 @@ fn spawn_lock() -> &'static Mutex<()> {
     SPAWN_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn https_port_slot() -> &'static Mutex<Option<u16>> {
-    HTTPS_PORT.get_or_init(|| Mutex::new(None))
+fn live_slot() -> &'static Mutex<Option<LiveListener>> {
+    LIVE.get_or_init(|| Mutex::new(None))
 }
 
-fn recorded_https_port() -> Option<u16> {
-    *https_port_slot()
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// `(port, subdomain)` of the live listener record, if any.
+pub fn live_listener() -> Option<(u16, String)> {
+    live_slot()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .map(|l| (l.port, l.subdomain.clone()))
 }
 
-fn set_recorded_https_port(port: u16) {
-    *https_port_slot()
+/// The subdomain the running cert renewer works for (`None` when no
+/// renewer runs: no listener, or the self-signed dev hatch).
+pub fn live_renewer_subdomain() -> Option<String> {
+    live_slot()
         .lock()
-        .unwrap_or_else(|p| p.into_inner()) = Some(port);
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .filter(|l| l.renewer.as_ref().is_some_and(|r| !r.is_finished()))
+        .map(|l| l.subdomain.clone())
 }
 
-/// Clear the in-process port record + on-disk publish so ensure can re-bind.
-fn clear_recorded_https_port() {
-    *https_port_slot()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner()) = None;
+/// Clear the record + on-disk publish when the dying accept task still
+/// owns it (generation match), so ensure can re-bind.
+fn clear_if_generation(generation: u64) {
+    let mut slot = live_slot().lock().unwrap_or_else(|p| p.into_inner());
+    if slot.as_ref().is_some_and(|l| l.generation == generation) {
+        if let Some(l) = slot.take() {
+            if let Some(r) = l.renewer {
+                r.abort();
+            }
+        }
+        k2_core::tunnel::tls::clear_https_port();
+    }
+}
+
+/// A listener taken out of service by [`retire_listener`]: its tasks are
+/// already aborted; tests may await `accept` to see the socket closed.
+pub struct Retired {
+    pub subdomain: String,
+    pub port: u16,
+    pub accept: tokio::task::JoinHandle<()>,
+}
+
+/// Tunnel identity changed: stop the listener and its cert renewer unless
+/// they already serve `desired` (`None` = no listener wanted). Aborting the
+/// accept task drops the `TcpListener` (the port closes); connections
+/// already spliced finish on their own. Clears `tunnel-https.port`.
+pub fn retire_listener(desired: Option<&str>) -> Option<Retired> {
+    let mut slot = live_slot().lock().unwrap_or_else(|p| p.into_inner());
+    if let (Some(l), Some(want)) = (slot.as_ref(), desired) {
+        if same_name(&l.subdomain, want) {
+            return None;
+        }
+    }
+    let l = slot.take()?;
+    l.accept.abort();
+    if let Some(r) = l.renewer {
+        r.abort();
+    }
     k2_core::tunnel::tls::clear_https_port();
+    log_debug!(
+        "[daemon/e2e] tunnel identity changed — stopped the E2E listener on 127.0.0.1:{} \
+         and the cert renewer for {}.k2.dev (now: {})",
+        l.port,
+        l.subdomain,
+        desired.map(|d| format!("{d}.k2.dev")).unwrap_or_else(|| "no listener".into())
+    );
+    Some(Retired {
+        subdomain: l.subdomain,
+        port: l.port,
+        accept: l.accept,
+    })
+}
+
+/// Take the record out whatever it serves (dead accept loop, or another
+/// name), aborting its tasks. Used under [`spawn_lock`] before a re-bind.
+fn retire_any() {
+    let mut slot = live_slot().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(l) = slot.take() {
+        l.accept.abort();
+        if let Some(r) = l.renewer {
+            r.abort();
+        }
+        k2_core::tunnel::tls::clear_https_port();
+    }
 }
 
 /// Loopback TCP probe — true if *something* accepts on `127.0.0.1:port`.
@@ -175,17 +264,18 @@ pub async fn maybe_spawn(http_port: u16) -> Result<Option<u16>, String> {
 }
 
 /// Bind + spawn the E2E HTTPS listener for `subdomain`, provisioning its cert
-/// via the broker seam first, and record the chosen port in [`HTTPS_PORT`].
+/// via the broker seam first, and record it in [`LIVE`] (port, name, tasks).
 /// Idempotent guard lives in the callers; this is the actual bring-up.
 async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String> {
+    let subdomain = subdomain.trim().to_string();
     // Cert + key via the broker seam (broker-issued on the real path;
     // self-signed only under the explicit `K2_E2E_SELF_SIGNED` spike hatch).
     // On the real path a broker-unreachable failure surfaces HERE and is
     // returned — the caller logs it and the tunnel does NOT come up against
-    // an untrusted/missing cert (no silent cleartext fallback).
-    let (cert_pem, key_pem) =
-        k2_core::tunnel::tls::load_or_provision_cert(&subdomain)
-            .map_err(|e| format!("provision tunnel cert: {e}"))?;
+    // an untrusted/missing cert (no silent cleartext fallback). A cert on
+    // disk for ANOTHER name is never reused (`cert_covers`).
+    let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert(&subdomain)
+        .map_err(|e| format!("provision tunnel cert: {e}"))?;
     let server_config = k2_core::tunnel::tls::server_config(&cert_pem, &key_pem)
         .map_err(|e| format!("build rustls ServerConfig: {e}"))?;
 
@@ -206,9 +296,6 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
         .map_err(|e| format!("read HTTPS listener addr: {e}"))?
         .port();
 
-    // Record + publish the live port. Under SPAWN_LOCK on the ensure path so
-    // concurrent ensures don't bind two listeners.
-    set_recorded_https_port(https_port);
     k2_core::tunnel::tls::publish_https_port(https_port)
         .map_err(|e| format!("publish HTTPS port: {e}"))?;
 
@@ -220,44 +307,62 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
         http_port
     );
 
-    {
+    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let accept = {
         let cfg = shared_config.clone();
-        let bound_port = https_port;
         tokio::spawn(async move {
-            // If the accept task ends or panics, clear the recorded port so
-            // the next ensure/self-heal rebinds instead of returning a dead
-            // OnceLock-style port (luzz silent outage class).
-            struct ClearPortOnDrop {
+            // If the accept task ends or panics, clear the record so the
+            // next ensure/self-heal rebinds instead of returning a dead
+            // port (luzz silent outage class). Only this generation's
+            // record: a newer listener may own the slot already.
+            struct ClearOnDrop {
+                generation: u64,
                 port: u16,
             }
-            impl Drop for ClearPortOnDrop {
+            impl Drop for ClearOnDrop {
                 fn drop(&mut self) {
-                    // Only clear if we still own this generation — a newer
-                    // respawn may already have published a different port.
-                    if recorded_https_port() == Some(self.port) {
-                        log_debug!(
-                            "[daemon/e2e] E2E accept loop ended — clearing recorded \
-                             port {} so ensure can re-bind",
-                            self.port
-                        );
-                        clear_recorded_https_port();
-                    }
+                    log_debug!(
+                        "[daemon/e2e] E2E accept loop on port {} ended (generation {})",
+                        self.port,
+                        self.generation
+                    );
+                    clear_if_generation(self.generation);
                 }
             }
-            let _guard = ClearPortOnDrop { port: bound_port };
+            let _guard = ClearOnDrop { generation, port: https_port };
             accept_loop(listener, cfg, http_port).await;
-        });
-    }
+        })
+    };
 
     // Auto-renewal (PRD §6): re-issue ~30d pre-expiry and hot-swap the
     // config. Skipped under the self-signed spike hatch (a self-signed cert
     // has no broker to renew against; the spike is a local dev convenience).
-    if !k2_core::tunnel::cert_broker::self_signed_mode() {
+    let renewer = if !k2_core::tunnel::cert_broker::self_signed_mode() {
         let cfg = shared_config.clone();
         let sub = subdomain.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             cert_renewal_loop(sub, cfg).await;
+        }))
+    } else {
+        None
+    };
+
+    let previous = live_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .replace(LiveListener {
+            generation,
+            port: https_port,
+            subdomain,
+            accept,
+            renewer,
         });
+    // Callers retire first; a leftover here would serve a second listener.
+    if let Some(old) = previous {
+        old.accept.abort();
+        if let Some(r) = old.renewer {
+            r.abort();
+        }
     }
 
     Ok(https_port)
@@ -270,10 +375,13 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 /// before frpc forwards to it, instead of erroring when boot never published
 /// a port (e.g. the subdomain was configured after the daemon booted).
 ///
-/// Idempotent + serialized + **liveness-aware**:
-///   * if a listener is recorded **and** still accepts on loopback, return it;
-///   * if recorded but **dead** (accept task gone — luzz 2026-07-29), clear
-///     and re-bind (new ephemeral port);
+/// Idempotent + serialized + **liveness- and name-aware**:
+///   * if a listener is recorded, still accepts on loopback, **and serves
+///     the subdomain now in `tunnel.json`**, return it;
+///   * if recorded but **dead** (accept task gone — luzz 2026-07-29) or
+///     serving **another name** (subdomain switch, 0.45.2), stop it and
+///     re-bind for the configured name (new ephemeral port, cert for the
+///     new name);
 ///   * otherwise takes [`spawn_lock`], re-checks (double-checked locking),
 ///     and drives the async [`spawn_listener`] to completion on the provided
 ///     tokio runtime `handle` (we're on a blocking thread, so `block_on`).
@@ -284,27 +392,6 @@ fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Re
     if k2_core::airgap::enabled() {
         return Err(k2_core::airgap::TEACHING.to_string());
     }
-    // Fast path: recorded port still accepts → live.
-    if let Some(p) = recorded_https_port() {
-        if loopback_port_live(p) {
-            return Ok(p);
-        }
-        log_debug!(
-            "[daemon/e2e] recorded HTTPS port {p} is not accepting — will re-bind \
-             (listener death / silent external outage class)"
-        );
-    }
-
-    let _g = spawn_lock().lock().unwrap_or_else(|p| p.into_inner());
-    // Re-check under the lock — another ensure may have respawned while we
-    // waited, OR we need to clear a confirmed-dead record before re-bind.
-    if let Some(p) = recorded_https_port() {
-        if loopback_port_live(p) {
-            return Ok(p);
-        }
-        clear_recorded_https_port();
-    }
-
     let cfg = k2_core::tunnel::config::load().map_err(|e| format!("load tunnel config: {e}"))?;
     // Defensive: only the E2E path should reach here, but never bind a TLS
     // listener for an opted-out config.
@@ -326,21 +413,58 @@ fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Re
         );
     }
 
+    let serves_config = |live: Option<(u16, String)>| -> Option<u16> {
+        match live {
+            Some((p, sub)) if same_name(&sub, &subdomain) && loopback_port_live(p) => Some(p),
+            _ => None,
+        }
+    };
+    // Fast path: the live listener serves the configured name.
+    if let Some(p) = serves_config(live_listener()) {
+        return Ok(p);
+    }
+
+    let _g = spawn_lock().lock().unwrap_or_else(|p| p.into_inner());
+    // Re-check under the lock — another ensure may have respawned while we
+    // waited.
+    let live = live_listener();
+    if let Some(p) = serves_config(live.clone()) {
+        return Ok(p);
+    }
+    if let Some((p, sub)) = live {
+        if same_name(&sub, &subdomain) {
+            log_debug!(
+                "[daemon/e2e] recorded HTTPS port {p} is not accepting — will re-bind \
+                 (listener death / silent external outage class)"
+            );
+        } else {
+            log_debug!(
+                "[daemon/e2e] E2E listener on :{p} serves {sub}.k2.dev but the tunnel is \
+                 now {subdomain}.k2.dev — replacing it (subdomain switch)"
+            );
+        }
+        retire_any();
+    }
+
     // Drive the async bind/provision/spawn to completion from this blocking
     // thread. `block_on` on a borrowed Handle is valid from a non-runtime
     // thread (the connector calls us inside `spawn_blocking`).
     handle.block_on(spawn_listener(http_port, subdomain))
 }
 
-/// Install the k2-core seam so the (k2-core) tunnel connector can demand this
-/// (k2-daemon) listener on first connect without a layering inversion. Call
-/// once at boot, AFTER a tokio runtime exists — we capture its [`Handle`] so
-/// the blocking hook can drive the async bring-up. See
-/// [`k2_core::tunnel::tls::register_ensure_https_listener`].
+/// Install the k2-core seams so the (k2-core) tunnel connector and the
+/// tunnel-identity path can demand / retire this (k2-daemon) listener
+/// without a layering inversion. Call once at boot, AFTER a tokio runtime
+/// exists — we capture its [`Handle`] so the blocking hook can drive the
+/// async bring-up. See [`k2_core::tunnel::tls::register_ensure_https_listener`]
+/// and [`k2_core::tunnel::tls::register_retire_https_listener`].
 pub fn register_ensure_hook() {
     let handle = tokio::runtime::Handle::current();
     k2_core::tunnel::tls::register_ensure_https_listener(Box::new(move |http_port| {
         ensure_spawned_blocking(handle.clone(), http_port)
+    }));
+    k2_core::tunnel::tls::register_retire_https_listener(Box::new(|desired| {
+        retire_listener(desired).map(|r| r.subdomain)
     }));
 }
 
@@ -440,6 +564,20 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
 
     loop {
         tokio::time::sleep(CERT_CHECK_INTERVAL).await;
+
+        // Belt to the identity-changed abort (0.45.2): a renewer for a name
+        // the tunnel no longer serves must never request that name's cert
+        // (with the NEW bearer) and overwrite `tunnel-cert.pem`.
+        let configured = k2_core::tunnel::config::load()
+            .map(|c| c.subdomain)
+            .unwrap_or_default();
+        if !same_name(&configured, &subdomain) {
+            log_debug!(
+                "[daemon/e2e] cert renewer for {subdomain}.k2.dev stopping: the tunnel now \
+                 serves {configured:?}"
+            );
+            return;
+        }
 
         // Read the installed cert to decide whether we're inside the window.
         let cert_path = k2_core::tunnel::tls::cert_path();

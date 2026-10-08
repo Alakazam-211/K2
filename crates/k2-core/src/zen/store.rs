@@ -34,8 +34,12 @@ pub const GARDENS_DIR: &str = "gardens";
 /// The Garden list (G9). Daemon-written, atomic, never watched.
 pub const GARDENS_FILE: &str = "gardens.json";
 pub const HISTORY_DIR: &str = ".history";
-/// Reserved for v2 widget grants. v1 never reads or writes it.
+/// Never read or written: Zen v2 keeps widget grants as signed rows in the
+/// daemon's database (`zen::grants`, UWB4). No route may name it.
 pub const GRANTS_FILE: &str = "grants.json";
+/// The fingerprint keys for widget folders and grants (UW12).
+const WIDGETS_DIR_KEY: &str = "widgets/";
+const GRANTS_KEY: &str = "grants";
 /// User theme bundles: `themes/<name>/theme.toml` plus an optional image.
 pub const THEMES_DIR: &str = "themes";
 pub const THEME_FILE: &str = "theme.toml";
@@ -151,14 +155,23 @@ pub fn clean_garden_name(name: &str) -> Result<String, ZenError> {
 }
 
 /// The template a `garden/new` body names: `blank` (default) or `texting`,
-/// or a full template id.
+/// a Garden catalog `short` (its newest version, `diary`), or a full
+/// template id (any shipped version, `k2.diary@1`).
 pub fn template_choice(t: Option<&str>) -> Result<&'static str, ZenError> {
     match t.map(str::trim) {
         None | Some("") | Some("blank") | Some(schema::BLANK_TEMPLATE_ID) => Ok(schema::BLANK_TEMPLATE_ID),
         Some("texting") | Some(schema::TEMPLATE_ID) => Ok(schema::TEMPLATE_ID),
-        Some(other) => Err(ZenError::BadRequest(format!(
-            "unknown template '{other}'; use blank or texting"
-        ))),
+        Some(other) => {
+            if let Some(e) = super::garden_catalog::current_entries().into_iter().find(|e| e.meta.short == other) {
+                return Ok(e.template_id.as_str());
+            }
+            if let Some(id) = schema::template_ids().into_iter().find(|id| *id == other) {
+                return Ok(id);
+            }
+            let shorts: Vec<String> =
+                super::garden_catalog::template_list().into_iter().map(|t| t.short).collect();
+            Err(ZenError::BadRequest(format!("unknown template '{other}'; use {}", shorts.join(", "))))
+        }
     }
 }
 
@@ -183,6 +196,18 @@ pub enum ZenError {
     /// switch would replace (its own layout, widgets or theme tables), with
     /// no `force`. `keys` are the file's own top-level keys.
     GardenHasChanges { garden: String, keys: Vec<String> },
+    /// No widget folder (or built-in) of that name (404 `unknown_widget`).
+    UnknownWidget(String),
+    /// `widget/new` onto a folder that exists (409 `widget_exists`).
+    WidgetExists(String),
+    /// A widget with errors and no last good bundle (409 `widget_broken`).
+    WidgetBroken(String),
+    /// A grant for a bundle that changed while the dialog was open (409
+    /// `widget_changed`).
+    WidgetChanged(String),
+    /// A grant route called by anything but the owner token (403
+    /// `owner_only`, UWB3).
+    OwnerOnly(String),
     Io(String),
 }
 
@@ -209,6 +234,11 @@ impl std::fmt::Display for ZenError {
             | ZenError::NotFound(m)
             | ZenError::Conflict(m)
             | ZenError::GardenExists(m)
+            | ZenError::UnknownWidget(m)
+            | ZenError::WidgetExists(m)
+            | ZenError::WidgetBroken(m)
+            | ZenError::WidgetChanged(m)
+            | ZenError::OwnerOnly(m)
             | ZenError::Io(m) => f.write_str(m),
         }
     }
@@ -654,6 +684,24 @@ impl ZenFiles {
                     id: self.new_id(&list),
                     name: name.to_string(),
                     template: template.to_string(),
+                    created_at: at.clone(),
+                    seed_home: None,
+                };
+                self.write_stub_if_missing(&g)?;
+                list.push(g);
+            }
+            // Catalog Gardens marked `new_users` (the Diary, Rosson
+            // 2026-10-08), after Gardens 1 and 2, in catalog order. Only
+            // here, on a new computer's first list: never appended to an
+            // existing list, so a deleted one never comes back.
+            for e in super::garden_catalog::current_entries().into_iter().filter(|e| e.meta.new_users) {
+                if Self::name_taken(&list, &e.meta.label, None) {
+                    continue;
+                }
+                let g = GardenEntry {
+                    id: self.new_id(&list),
+                    name: e.meta.label.clone(),
+                    template: e.template_id.clone(),
                     created_at: at.clone(),
                     seed_home: None,
                 };
@@ -1135,7 +1183,7 @@ impl ZenFiles {
     /// What a file is checked over: a theme over its built-in parent,
     /// `zen.toml` over the global theme, a Garden over its own theme plus
     /// `zen.toml`.
-    fn base_for(&self, f: &ZenFile) -> Layer {
+    pub(crate) fn base_for(&self, f: &ZenFile) -> Layer {
         match f {
             ZenFile::Theme(name) => Self::theme_parent(name).clone(),
             ZenFile::Zen => self.theme_stack(&self.active_theme(None).name).2,
@@ -1368,6 +1416,13 @@ impl ZenFiles {
     /// is the first). The page is the Garden's template with its file's
     /// layout and widgets (G38); the theme stack ends with its file.
     pub fn resolve(&self, garden: Option<&str>) -> Result<J, ZenError> {
+        self.resolve_with(garden, &super::grants::GrantSnapshot::empty())
+    }
+
+    /// [`ZenFiles::resolve`] with the daemon's grants: each custom widget
+    /// carries its folder's state and its effective grant (UW38), and
+    /// Garden-file findings that need the folders join `errors`.
+    pub fn resolve_with(&self, garden: Option<&str>, grants: &super::grants::GrantSnapshot) -> Result<J, ZenError> {
         self.require()?;
         let (index, entry) = match garden {
             Some(sel) => self.garden(sel)?,
@@ -1423,9 +1478,17 @@ impl ZenFiles {
             theme_json["background"] = bg;
         }
         let garden_json = json!({ "id": id, "name": entry.name, "index": index + 1 });
+        let mut page_json = super::garden_page(&page.layer, &entry.template);
+        errors.extend(self.placement_diagnostics(
+            &gfile.label(),
+            &page_json,
+            page.layer.get("page.widgets"),
+            &page.positions,
+        ));
+        self.fill_custom_widgets(&id, &mut page_json, grants);
         let versioned = json!({
             "garden": garden_json,
-            "page": super::garden_page(&page.layer, &entry.template),
+            "page": page_json,
             "theme": theme_json,
             "chrome": rt.chrome,
             "motion": rt.motion,
@@ -1513,9 +1576,19 @@ impl ZenFiles {
                     errors.push(d);
                 }
             }
+            if let (ZenFile::Garden(id), true) = (f, c.is_clean()) {
+                let page = super::garden_page(&c.layer, &self.default_template(id));
+                errors.extend(self.placement_diagnostics(&f.label(), &page, c.layer.get("page.widgets"), &c.positions));
+            }
             errors.extend(c.errors);
             warnings.extend(c.warnings);
             checked.push(f.label());
+        }
+        if target.is_none() {
+            let (e, w, labels) = self.validate_all_widgets();
+            errors.extend(e);
+            warnings.extend(w);
+            checked.extend(labels);
         }
         Ok(json!({
             "ok": errors.is_empty(),
@@ -1532,8 +1605,17 @@ impl ZenFiles {
     /// the same fingerprint, so a caller emits `zen_changed` only when it
     /// moves (Z12): a Garden create, rename, reorder or delete moves it.
     pub fn refresh(&self) -> Result<String, ZenError> {
+        self.refresh_with(&super::grants::GrantSnapshot::empty())
+    }
+
+    /// [`ZenFiles::refresh`] that also covers every widget folder (keeping
+    /// its last good bundle and code history, UW11) and the daemon's grants
+    /// (UW12): a widget save, a grant and a revoke each move it once.
+    pub fn refresh_with(&self, grants: &super::grants::GrantSnapshot) -> Result<String, ZenError> {
         self.require()?;
         let mut state = serde_json::Map::new();
+        state.insert(WIDGETS_DIR_KEY.to_string(), self.refresh_widgets()?);
+        state.insert(GRANTS_KEY.to_string(), grants.fingerprint());
         state.insert(
             GARDENS_FILE.to_string(),
             serde_json::to_value(self.gardens()).map_err(|e| ZenError::Io(e.to_string()))?,
@@ -1801,9 +1883,27 @@ impl ZenFiles {
             "grants.json",
             true,
             if grants {
-                "present and ignored: Zen v1 has no grantable widgets, and only the K2 app may write it".into()
+                "present and ignored: widget grants live in K2's database, signed, and only your click in the K2 app makes one (k2 zen widget list)".into()
             } else {
-                "absent (Zen v1 grants nothing)".into()
+                "absent (widget grants live in K2's database; k2 zen widget list shows them)".into()
+            },
+        ));
+        let names = self.widget_names();
+        let broken: Vec<String> = names
+            .iter()
+            .filter_map(|n| {
+                let st = self.widget_status(n);
+                (st.state != super::widget_store::WidgetState::Ok)
+                    .then(|| format!("{} ({})", n, st.errors.first().map_or_else(String::new, |d| d.render())))
+            })
+            .collect();
+        checks.push(check(
+            "widgets",
+            broken.is_empty(),
+            if broken.is_empty() {
+                format!("{} widget folder(s), each bundles clean", names.len())
+            } else {
+                format!("with errors: {}", broken.join("; "))
             },
         ));
         let total: usize = self.all_files().iter().map(|f| self.snapshots(f).len()).sum();
@@ -1998,6 +2098,14 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
              #\n\
              # Theme tables ([colors.light], [font], [shape], ...) restyle this\n\
              # Garden only. Check with `k2 zen validate --garden {id}`.\n"
+        )
+    } else if let Some(e) = super::garden_catalog::garden_catalog().iter().find(|e| e.template_id == template) {
+        let label: String = e.meta.label.chars().filter(|c| !c.is_control()).collect();
+        format!(
+            "# This Garden is K2's ready-made \"{label}\" page ({template}). Theme\n\
+             # tables ([colors.light], [font], [shape], ...) restyle this Garden\n\
+             # only; [layout] and [[widget]] replace its widgets (the k2-zen skill\n\
+             # has the grammar). Check with `k2 zen validate --garden {id}`.\n"
         )
     } else {
         format!(

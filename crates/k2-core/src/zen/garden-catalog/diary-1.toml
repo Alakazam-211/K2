@@ -1,0 +1,72 @@
+# Garden catalog entry `k2.diary@1` (prd-zen-user-widgets-v2 UWB21–UWB25,
+# §15.4; Rosson 2026-10-07 and 2026-10-08).
+#
+# The Diary: write to one agent at a time on a parchment page; the reply
+# draws itself in handwriting. One custom widget, the built-in
+# `k2:diary@1`, fills the page; K2's own controls sit in the top band, as
+# on every Garden.
+#
+# Released files never change (a better page is diary-2.toml). The
+# [catalog] table is metadata, not part of the page.
+id = "k2.diary@1"
+schema = 1
+
+[catalog]
+short = "diary"
+label = "Diary"
+description = "Write to one agent at a time; replies appear in handwriting."
+order = 10
+# Rosson 2026-10-08: preinstalled for new users (setup seeds it once, after
+# Gardens 1 and 2; never appended to an existing user's Gardens).
+new_users = true
+
+[catalog.grant]
+widget = "k2:diary@1"
+caps = ["agents:read", "thread:read", "thread:post"]
+
+[layout]
+kind = "columns"
+
+[[layout.column]]
+widget = "diary"
+size = 100
+min-width = 360
+
+[[widget]]
+id = "diary"
+kind = "custom"
+widget = "k2:diary@1"
+column = 0
+
+# Chrome (prd-zen-freeform-chrome FC30): the same top band as Garden 1.
+[[widget]]
+kind = "garden-switcher"
+slot = "top"
+align = "start"
+
+[[widget]]
+kind = "usage"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "theme-picker"
+slot = "top"
+align = "end"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "top"
+align = "end"
+
+[[control]]
+kind = "garden-switcher"
+placement = "top-left"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "top-right"

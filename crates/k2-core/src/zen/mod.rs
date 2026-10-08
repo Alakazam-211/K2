@@ -44,6 +44,7 @@ pub mod schema;
 pub mod skill;
 pub mod stdlib;
 pub mod store;
+pub mod widget_store;
 pub mod widgets;
 
 use std::path::PathBuf;

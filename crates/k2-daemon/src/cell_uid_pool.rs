@@ -105,6 +105,16 @@ impl UidPool {
         }
     }
 
+    /// The currently-allocated uids, ascending.
+    pub fn allocated(&self) -> Vec<u32> {
+        self.in_use
+            .iter()
+            .enumerate()
+            .filter(|(_, used)| **used)
+            .map(|(i, _)| self.base + i as u32)
+            .collect()
+    }
+
     /// Count of currently-allocated uids (asserted by unit tests only).
     #[cfg(test)]
     pub fn in_use_count(&self) -> usize {
@@ -150,6 +160,14 @@ pub fn alloc() -> Option<u32> {
 pub fn free(uid: u32) {
     let mut pool = POOL.lock().unwrap_or_else(|p| p.into_inner());
     pool.free(uid);
+}
+
+/// The per-session uids currently allocated (a cell is booting or live).
+/// The stale-egress-table sweep never touches these uids' tables.
+#[allow(dead_code)] // reached only from the linux egress sweep
+pub fn allocated() -> Vec<u32> {
+    let pool = POOL.lock().unwrap_or_else(|p| p.into_inner());
+    pool.allocated()
 }
 
 #[cfg(test)]

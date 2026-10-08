@@ -893,6 +893,23 @@ async fn async_main() {
     // bus + activity_feed but never in the target's PTY.
     providers::register_all();
 
+    // 0.45.1 (quiet-gate PRD §6.1): a crashed cell or a killed daemon can
+    // leave `inet k2sandbox_<uid>` egress tables behind, and an old-style
+    // table blackholed every refused localhost connection on the host.
+    // No cell is live yet at boot, so delete every table whose uid owns no
+    // process. Only sandbox builds running as root (the only ones that can
+    // install these tables) touch nft at all.
+    #[cfg(all(target_os = "linux", feature = "sandbox-microvm"))]
+    if unsafe { libc::geteuid() } == 0 {
+        match cell_egress::sweep_stale_tables() {
+            Ok(removed) if !removed.is_empty() => {
+                log_debug!("[sandbox] boot: removed stale egress tables for uids {removed:?}")
+            }
+            Ok(_) => {}
+            Err(e) => log_debug!("[sandbox] boot: stale egress-table sweep failed: {e}"),
+        }
+    }
+
     // Phase 2 Unit 1 — register daemon-side companion bridges so
     // k2so-core's companion module can run without Tauri being
     // present. The terminal/settings/event bridges all read from

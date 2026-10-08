@@ -102,9 +102,8 @@ fn sas_eq(a: &str, b: &str) -> bool {
 }
 
 /// Apply an inbound pair request to `store`. Creates a `Pending` peer when
-/// the fingerprint is unknown; for an already-known peer it does NOT change
-/// trust (a `Trusted`/`Blocked` peer is untouched; a `Pending` peer's
-/// cosmetic label/subdomain are refreshed). NEVER promotes — promotion is
+/// the fingerprint is unknown; an already-known peer's row is never changed
+/// (any trust state). NEVER promotes — promotion is
 /// [`apply_pair_confirm`] only.
 ///
 /// `local_fp` is THIS daemon's fingerprint (for the SAS). Returns the
@@ -133,15 +132,9 @@ pub fn apply_pair_request(
     let sas = sas_code(local_fp, &fp);
 
     let (trust, created) = match store.get(&fp) {
-        Some(existing) => {
-            let trust = existing.trust;
-            // Only a still-Pending peer gets its cosmetic fields refreshed;
-            // never re-pin (and thus reset epoch/caps) a Trusted/Blocked peer.
-            if trust == PeerTrust::Pending {
-                store.upsert(fresh);
-            }
-            (trust, false)
-        }
+        // 0.45.2: an existing row is never rewritten by a request, Pending
+        // included (its address must not move before the owner confirms).
+        Some(existing) => (existing.trust, false),
         None => {
             store.upsert(fresh); // lands as Pending (FederationPeer::pin default)
             (PeerTrust::Pending, true)

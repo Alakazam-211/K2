@@ -50,18 +50,15 @@ fn json_err(status: &'static str, msg: impl std::fmt::Display) -> CliResponse {
 // P2 — pairing
 // ─────────────────────────────────────────────────────────────────────
 
-/// `POST /cli/federation/pair/request` — UNAUTH body. A peer presents its
-/// identity; we create (or re-see) a `Pending` row keyed by the fingerprint
-/// derived from the presented key. Returns the fingerprint + SAS the owner
-/// compares out-of-band. Creates ONLY `Pending` — never trusts.
+/// `POST /cli/federation/pair/request` — UNAUTH, the pre-0.45.2 (v1)
+/// pairing. Since 0.45.2 it never writes the peer store: it answers the v1
+/// code only for a peer already Trusted from a v1 pairing, and 409
+/// `pairing_v2_required` for anything else (unknown key or a Pending row).
 pub fn handle_pair_request(body: &[u8]) -> CliResponse {
+    // label / subdomain / baseUrl in the body are ignored (0.45.2): this
+    // route never writes an address.
     #[derive(serde::Deserialize)]
     struct Req {
-        label: Option<String>,
-        subdomain: Option<String>,
-        /// F3: `--url` / `baseUrl` (LAN/Tailscale). Alias `url` for CLI.
-        #[serde(default, alias = "baseUrl", alias = "url")]
-        base_url: Option<String>,
         public_key_pem: String,
     }
     let req: Req = match serde_json::from_slice(body) {
@@ -72,7 +69,7 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
         Ok(fp) => fp,
         Err(e) => return json_err("500 Internal Server Error", format!("local fingerprint: {e}")),
     };
-    let mut store = match PeerStore::load() {
+    let store = match PeerStore::load() {
         Ok(s) => s,
         Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
     };
@@ -83,8 +80,29 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
         Ok(fp) => fp,
         Err(e) => return CliResponse::bad_request(format!("bad public key: {e}")),
     };
-    if store.get(&presented_fp).is_none() {
-        return CliResponse {
+    // This public route NEVER writes the store. The only thing it still
+    // answers is the v1 code for a peer already Trusted from a pairing made
+    // before 0.45.2 (an old app re-confirming). A Pending row (v1 or one a v2
+    // pairing just pinned) is never touched: rewriting its address here would
+    // let anyone who knows the public key move it before the owner confirms.
+    match store.get(&presented_fp) {
+        Some(p)
+            if p.trust == k2_core::federation::PeerTrust::Trusted
+                && p.pairing_version < k2_core::federation::pairing_v2::PAIRING_VERSION =>
+        {
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "fingerprint": presented_fp,
+                    "sas": pairing::sas_code(&local_fp, &presented_fp),
+                    "trust": "trusted",
+                    "created": false,
+                    "local_fingerprint": local_fp,
+                    "pairing_version": p.pairing_version,
+                })
+                .to_string(),
+            )
+        }
+        _ => CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
             body: serde_json::json!({
@@ -93,31 +111,8 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
                 "code": "pairing_v2_required",
             })
             .to_string(),
-        };
+        },
     }
-    let pair_req = pairing::PairRequest {
-        label: req.label.unwrap_or_default(),
-        subdomain: req.subdomain.unwrap_or_default(),
-        base_url: req.base_url.unwrap_or_default(),
-        public_key_pem: req.public_key_pem,
-    };
-    let outcome = match pairing::apply_pair_request(&mut store, &pair_req, &local_fp) {
-        Ok(o) => o,
-        Err(e) => return CliResponse::bad_request(e),
-    };
-    if let Err(e) = store.save() {
-        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
-    }
-    CliResponse::ok_json(
-        serde_json::json!({
-            "fingerprint": outcome.fingerprint,
-            "sas": outcome.sas,
-            "trust": "pending",
-            "created": outcome.created,
-            "local_fingerprint": local_fp,
-        })
-        .to_string(),
-    )
 }
 
 /// `POST /cli/federation/pair/confirm` — OWNER-gated (dispatcher enforces).
@@ -2012,6 +2007,50 @@ mod tests {
             assert!(req.body.contains("pairing_v2_required"), "{}", req.body);
             assert!(req.body.contains("Update the server"), "{}", req.body);
             assert!(PeerStore::load().unwrap().list().is_empty(), "nothing pinned");
+        });
+    }
+
+    #[test]
+    fn a_v1_pair_request_never_rewrites_a_pinned_row() {
+        with_temp_home(|| {
+            // A v2 pairing is in progress: the initiator is pinned Pending.
+            let (offer, fp) = remote_offer("alpha", "");
+            let resp = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer.clone() })));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let before = std::fs::read(k2_core::federation::peers::store_path()).expect("store bytes");
+
+            // Someone who knows the public key posts another address.
+            let req = handle_pair_request(&body(serde_json::json!({
+                "label": "evil",
+                "subdomain": "evil",
+                "baseUrl": "http://10.9.9.9:38471",
+                "public_key_pem": offer.public_key_pem,
+            })));
+            assert_eq!(req.status, "409 Conflict", "{}", req.body);
+            assert!(req.body.contains("pairing_v2_required"), "{}", req.body);
+            let after = std::fs::read(k2_core::federation::peers::store_path()).expect("store bytes");
+            assert_eq!(before, after, "the Pending v2 row must stay byte-identical");
+            let p = PeerStore::load().unwrap().get(&fp).cloned().unwrap();
+            assert_eq!(p.subdomain, "alpha");
+            assert_eq!(p.pairing_version, 2);
+
+            // A Trusted v1 row gets its v1 code back, still without a write.
+            let old_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut v1 = FederationPeer::pin("old", "old", old_key.public_key_pem()).unwrap();
+            v1.pairing_version = 1;
+            v1.trust = PeerTrust::Trusted;
+            let mut store = PeerStore::load().unwrap();
+            let v1_fp = store.upsert(v1);
+            store.save().unwrap();
+            let before = std::fs::read(k2_core::federation::peers::store_path()).expect("store bytes");
+            let req = handle_pair_request(&body(serde_json::json!({
+                "subdomain": "moved", "public_key_pem": old_key.public_key_pem(),
+            })));
+            assert_eq!(req.status, "200 OK", "{}", req.body);
+            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+            assert_eq!(v["trust"], "trusted");
+            assert_eq!(v["fingerprint"], v1_fp.as_str());
+            assert_eq!(std::fs::read(k2_core::federation::peers::store_path()).unwrap(), before);
         });
     }
 

@@ -422,10 +422,13 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     }
 
     // Holder evidence, read BEFORE the stop: this device's connector is up
-    // under exactly this identity. A device whose tunnel is not connected
-    // (an old machine with a stale copy of a migrated box's tunnel.json)
-    // cannot know it holds the name, so it never reports a release.
-    let holder = super::connector::running_config().is_some_and(|r| {
+    // under exactly this identity AND frps accepted its proxy in the current
+    // frpc run (`start proxy success` in this run's log). frpc running is
+    // not enough: a stale copy of a migrated box's tunnel.json (same token,
+    // another device) runs frpc too, but frps refuses its proxy ("proxy
+    // already exists"). Such a device cannot know it holds the name, so it
+    // never reports a release.
+    let holder = super::connector::registered_config().is_some_and(|r| {
         super::identity::TunnelIdentity::of(&r) == super::identity::TunnelIdentity::of(&cfg)
     });
 
@@ -790,29 +793,46 @@ mod tests {
         }
     }
 
-    fn true_bin() -> std::path::PathBuf {
-        for cand in ["/usr/bin/true", "/bin/true"] {
-            let p = std::path::PathBuf::from(cand);
-            if p.exists() {
-                return p;
-            }
-        }
-        panic!("no `true` binary at /usr/bin/true or /bin/true");
+    /// frps accepted the proxy (frp's log shape: `[<proxy>] start proxy success`).
+    const PROXY_OK: &str = "[I] [proxy/proxy_wrapper.go:204] [0a1b2c3d] [k2so-rosson] start proxy success";
+    /// frps refused it: another device registered the name first.
+    const PROXY_TAKEN: &str =
+        "[W] [proxy/proxy_wrapper.go:180] [0a1b2c3d] [k2so-rosson] start error: proxy [k2so-rosson] already exists";
+
+    /// A fake `frpc` (named so, so `stop()`'s pattern reap matches it) that
+    /// prints `line` once and then stays up.
+    fn fake_frpc(line: &str) -> std::path::PathBuf {
+        let dir = crate::test_env::unique_temp_path("fake-frpc");
+        std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
+        let script = dir.join("frpc");
+        crate::test_env::write_executable(&script, &format!("#!/bin/sh\necho '{line}'\nexec sleep 60\n"));
+        script
     }
 
-    /// Seed `cfg` and bring the connector up under it (fake frpc, E2E off,
-    /// lease off) — the "this device's tunnel is connected" state.
-    fn start_connected(cfg: TunnelConfig) {
+    /// Seed `cfg` and bring the connector up under it (fake frpc printing
+    /// `line`, E2E off, lease off) — frpc RUNNING.
+    fn start_frpc(cfg: TunnelConfig, line: &str) {
         config::save(&TunnelConfig { e2e: false, ..cfg }).expect("seed identity");
         super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46123)));
         let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
         let st = super::super::connector::start(
             None,
             57839,
-            &super::super::connector::FrpcBinary::Explicit(true_bin()),
+            &super::super::connector::FrpcBinary::Explicit(fake_frpc(line)),
         )
         .expect("start fake tunnel");
         assert!(st.running, "fake tunnel must be running");
+    }
+
+    /// The "this device's tunnel is connected AND frps accepted its proxy"
+    /// state: waits until the success line was seen.
+    fn start_connected(cfg: TunnelConfig) {
+        start_frpc(cfg, PROXY_OK);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !super::super::connector::proxy_registered() {
+            assert!(std::time::Instant::now() < deadline, "the fake frpc's success line was never seen");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     fn live_identity() -> TunnelConfig {
@@ -892,6 +912,48 @@ mod tests {
             assert!(!config::config_path().exists());
             assert_eq!(replay_pending().expect("replay"), ReplayOutcome::Nothing);
             assert_eq!(cp.hits(), 0);
+        });
+    }
+
+    #[test]
+    fn release_while_frpc_runs_but_the_proxy_was_refused_sends_nothing() {
+        // A stale copy of a migrated box: same token, frpc running, but frps
+        // refused the proxy because the live box holds the name.
+        with_temp_home(|| {
+            let cp = CountingControlPlane::start(200);
+            start_frpc(live_identity(), PROXY_TAKEN);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let log = std::fs::read_to_string(super::super::connector::frpc_log_path()).unwrap_or_default();
+                if log.contains("already exists") {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "the fake frpc never logged its refusal");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            assert!(super::super::connector::status().running, "frpc is running");
+            assert!(!super::super::connector::proxy_registered(), "but the proxy is not registered");
+
+            let report = perform_release().expect("release");
+            assert!(report.local_only, "refused proxy → not the holder → local only: {report:?}");
+            assert!(!report.upstream_reported && !report.queued);
+            assert_eq!(cp.hits(), 0, "no POST /tunnel/release from a device whose proxy was refused");
+            let t = load().expect("load").expect("tombstone");
+            assert!(!t.holder_at_release && t.local_only);
+            assert_eq!(t.pending_token, None);
+        });
+    }
+
+    #[test]
+    fn release_while_frpc_runs_without_a_success_line_sends_nothing() {
+        with_temp_home(|| {
+            let cp = CountingControlPlane::start(200);
+            start_frpc(live_identity(), "[I] [service.go:299] login to server success, get run id [x]");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(super::super::connector::status().running);
+            let report = perform_release().expect("release");
+            assert!(report.local_only, "{report:?}");
+            assert_eq!(cp.hits(), 0, "logged in is not registered: no POST");
         });
     }
 

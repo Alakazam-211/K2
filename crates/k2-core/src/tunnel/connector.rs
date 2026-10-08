@@ -21,7 +21,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -215,6 +215,64 @@ const LOCAL_TARGET_PROBE_EVERY: u32 = 10;
 /// TCP connect budget when probing `127.0.0.1:<localPort>` for self-heal.
 const LOCAL_TARGET_PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 
+/// Whether frps accepted THIS run's proxy (0.45.2). A running frpc is not
+/// proof that this device holds the name: a stale copy of a migrated box's
+/// identity also runs frpc, but frps refuses its proxy ("proxy already
+/// exists") because the live box registered it first. The pump threads feed
+/// every frpc log line here; frpc prefixes each proxy line with the proxy
+/// name in brackets (`[k2so-<sub>] start proxy success`).
+///
+/// Every spawn starts a new run ([`Self::begin_run`]) and clears the flag, so
+/// a respawn or a relay rotation must register again. A late line from a
+/// previous child is ignored (its run number is stale). A later
+/// `start error` for our proxy (frpc re-logged in and the name was taken)
+/// clears it.
+pub(crate) struct ProxyRegistration {
+    proxy_name: String,
+    /// The current child's run number (0 = never spawned).
+    run: AtomicU64,
+    /// The run whose log said `start proxy success` (0 = none).
+    registered_run: AtomicU64,
+}
+
+impl ProxyRegistration {
+    pub(crate) fn new(cfg: &TunnelConfig) -> Self {
+        let sub = cfg.subdomain.trim();
+        let proxy_name = if sub.is_empty() { "k2so-daemon".to_string() } else { format!("k2so-{sub}") };
+        Self { proxy_name, run: AtomicU64::new(0), registered_run: AtomicU64::new(0) }
+    }
+
+    /// A child is about to be spawned: a new run, not registered.
+    pub(crate) fn begin_run(&self) -> u64 {
+        let run = self.run.fetch_add(1, Ordering::SeqCst) + 1;
+        self.registered_run.store(0, Ordering::SeqCst);
+        run
+    }
+
+    /// One frpc log line from the child of `run`.
+    pub(crate) fn observe_line(&self, run: u64, line: &str) {
+        if self.run.load(Ordering::SeqCst) != run {
+            return; // a previous child's late output
+        }
+        if !line.contains(&format!("[{}]", self.proxy_name)) {
+            return;
+        }
+        if line.contains("start proxy success") {
+            self.registered_run.store(run, Ordering::SeqCst);
+        } else if line.contains("start error") || line.contains("already exists") {
+            let _ = self
+                .registered_run
+                .compare_exchange(run, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
+    /// frps accepted the current run's proxy.
+    pub(crate) fn is_registered(&self) -> bool {
+        let run = self.run.load(Ordering::SeqCst);
+        run != 0 && self.registered_run.load(Ordering::SeqCst) == run
+    }
+}
+
 /// Live connector state — the supervised child + the desired-state flag.
 struct ConnectorState {
     /// The currently-running config.
@@ -234,6 +292,9 @@ struct ConnectorState {
     /// the configured primary. A single-relay config never rotates, so
     /// this stays the legacy endpoint and status is unchanged.
     current_relay: Arc<Mutex<RelayEndpoint>>,
+    /// Whether frps accepted the current child's proxy (holder evidence
+    /// for a release).
+    proxy: Arc<ProxyRegistration>,
 }
 
 static STATE: OnceLock<Mutex<Option<ConnectorState>>> = OnceLock::new();
@@ -526,6 +587,7 @@ pub fn start(
     // was just rendered above); the supervise loop republishes it on every
     // rotation so status() always names the relay actually being dialed.
     let current_relay = Arc::new(Mutex::new(cfg.relay_list()[0].clone()));
+    let proxy = Arc::new(ProxyRegistration::new(&cfg));
     spawn_supervised(
         frpc,
         child.clone(),
@@ -535,6 +597,7 @@ pub fn start(
         resolved_port_slot.clone(),
         default_local_port,
         e2e,
+        proxy.clone(),
     )?;
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
@@ -557,6 +620,7 @@ pub fn start(
         child,
         running,
         current_relay,
+        proxy,
     };
     let status = status_from(&st);
     *guard = Some(st);
@@ -630,6 +694,24 @@ pub fn running_config() -> Option<TunnelConfig> {
         Some(st) if st.running.load(Ordering::SeqCst) => Some(st.cfg.clone()),
         _ => None,
     }
+}
+
+/// The config the running connector started with, ONLY when frps also
+/// accepted its proxy for the current frpc run ([`ProxyRegistration`]).
+/// This is the holder evidence a release needs: frpc running alone is not.
+pub fn registered_config() -> Option<TunnelConfig> {
+    let guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    match guard.as_ref() {
+        Some(st) if st.running.load(Ordering::SeqCst) && st.proxy.is_registered() => {
+            Some(st.cfg.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether frps accepted the running connector's proxy (false when stopped).
+pub fn proxy_registered() -> bool {
+    registered_config().is_some()
 }
 
 /// Current connector status.
@@ -1186,6 +1268,7 @@ fn spawn_supervised(
     resolved_local_port: Arc<AtomicU16>,
     daemon_http_port: u16,
     e2e: bool,
+    proxy: Arc<ProxyRegistration>,
 ) -> Result<(), String> {
     // Mid-session watchdog only in multi-relay mode: it exists to drive
     // ROTATION. Solo still polls for stop (orphan fix) but never arms a
@@ -1197,7 +1280,7 @@ fn spawn_supervised(
     // First spawn happens synchronously so `start()` fails loud if the
     // very first launch can't even exec.
     let mut watch = new_watch();
-    let first = spawn_once(&frpc, watch.clone())?;
+    let first = spawn_once(&frpc, watch.clone(), &proxy)?;
     *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(first);
 
     let frpc_thread = frpc.clone();
@@ -1247,7 +1330,7 @@ fn spawn_supervised(
                             return;
                         }
                         watch = new_watch();
-                        match spawn_once(&frpc_thread, watch.clone()) {
+                        match spawn_once(&frpc_thread, watch.clone(), &proxy) {
                             Ok(c) => c,
                             Err(e) => {
                                 crate::log_debug!("[tunnel] respawn failed: {e}");
@@ -1453,7 +1536,7 @@ fn spawn_supervised(
                     return;
                 }
                 watch = new_watch();
-                match spawn_once(&frpc_thread, watch.clone()) {
+                match spawn_once(&frpc_thread, watch.clone(), &proxy) {
                     Ok(c) => {
                         *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(c);
                     }
@@ -1669,8 +1752,14 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
 /// into the append-mode log. When a `watch` is given (multi-relay mode),
 /// every line is ALSO fed to the mid-session watchdog — a tee, so the
 /// `~/.k2/frpc.log` contract is untouched. Returns the child handle.
-fn spawn_once(frpc: &Path, watch: Option<Arc<SessionWatch>>) -> Result<Child, String> {
+fn spawn_once(
+    frpc: &Path,
+    watch: Option<Arc<SessionWatch>>,
+    proxy: &Arc<ProxyRegistration>,
+) -> Result<Child, String> {
     let cfg_path = frpc_config_path();
+    // A new run: not registered until this child logs success.
+    let run = proxy.begin_run();
     let log = open_log()?;
     let log_err = log
         .try_clone()
@@ -1697,10 +1786,10 @@ fn spawn_once(frpc: &Path, watch: Option<Arc<SessionWatch>>) -> Result<Child, St
     // never fill and block the child. We do NOT log the rendered config
     // or token — only frpc's own output (which never echoes the meta).
     if let Some(out) = child.stdout.take() {
-        pump(out, log, watch.clone());
+        pump(out, log, watch.clone(), (proxy.clone(), run));
     }
     if let Some(err) = child.stderr.take() {
-        pump(err, log_err, watch);
+        pump(err, log_err, watch, (proxy.clone(), run));
     }
     Ok(child)
 }
@@ -1709,6 +1798,7 @@ fn pump(
     reader: impl std::io::Read + Send + 'static,
     mut sink: std::fs::File,
     watch: Option<Arc<SessionWatch>>,
+    proxy: (Arc<ProxyRegistration>, u64),
 ) {
     use std::io::Write;
     std::thread::spawn(move || {
@@ -1720,6 +1810,7 @@ fn pump(
                     if let Some(w) = &watch {
                         w.observe_line(&l);
                     }
+                    proxy.0.observe_line(proxy.1, &l);
                 }
                 Err(_) => break,
             }
@@ -2410,6 +2501,97 @@ mod tests {
             let st = status();
             assert!(!st.enabled, "status must show the persisted disable");
             stop().expect("stop is idempotent after the gate exit");
+        });
+    }
+
+    #[test]
+    fn proxy_registration_tracks_only_the_current_run() {
+        let reg = ProxyRegistration::new(&TunnelConfig {
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        });
+        assert!(!reg.is_registered(), "never spawned");
+        let r1 = reg.begin_run();
+        reg.observe_line(r1, "[I] [service.go:299] login to server success, get run id [x]");
+        assert!(!reg.is_registered(), "login alone is not registration");
+        reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-other] start proxy success");
+        assert!(!reg.is_registered(), "another proxy's success does not count");
+        reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson2] start proxy success");
+        assert!(!reg.is_registered(), "a longer name sharing the prefix does not count");
+        reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
+        assert!(reg.is_registered());
+        // A later refusal for our proxy (re-login, name taken) clears it.
+        reg.observe_line(r1, "[W] [proxy_wrapper.go:180] [x] [k2so-rosson] start error: proxy [k2so-rosson] already exists");
+        assert!(!reg.is_registered());
+        reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
+        assert!(reg.is_registered());
+        // A respawn clears it; the previous child's late output is ignored.
+        let r2 = reg.begin_run();
+        assert!(!reg.is_registered(), "a new run starts unregistered");
+        reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
+        assert!(!reg.is_registered(), "a stale run's success must not count");
+        reg.observe_line(r2, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
+        assert!(reg.is_registered());
+    }
+
+    #[test]
+    fn a_respawn_clears_the_proxy_registration() {
+        with_temp_home(|| {
+            // Run 1 registers then exits; every later run is refused.
+            let dir = crate::test_env::unique_temp_path("fake-frpc");
+            std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
+            let counter = dir.join("runs");
+            let script = dir.join("frpc");
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\n\
+                     n=$(cat '{c}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '{c}'\n\
+                     if [ \"$n\" = 1 ]; then\n\
+                     \techo '[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success'\n\
+                     \tsleep 1\n\
+                     \texit 1\n\
+                     fi\n\
+                     echo '[W] [proxy_wrapper.go:180] [x] [k2so-rosson] start error: proxy [k2so-rosson] already exists'\n\
+                     exec sleep 60\n",
+                    c = counter.display()
+                ),
+            );
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46124)));
+            let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+            start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !proxy_registered() {
+                assert!(Instant::now() < deadline, "run 1's success line was never seen");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                let runs = std::fs::read_to_string(&counter).unwrap_or_default();
+                let refused = std::fs::read_to_string(frpc_log_path())
+                    .unwrap_or_default()
+                    .contains("already exists");
+                if runs.trim() == "2" && refused {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the supervisor never respawned (runs={runs:?})");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(status().running, "the respawned frpc runs");
+            assert!(!proxy_registered(), "a respawn must clear the registration");
+            assert!(registered_config().is_none());
+
+            stop().expect("stop");
+            assert!(!proxy_registered());
+            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 

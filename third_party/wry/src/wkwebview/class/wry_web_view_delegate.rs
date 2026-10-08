@@ -16,6 +16,12 @@ use objc2_web_kit::{WKScriptMessage, WKScriptMessageHandler, WKUserContentContro
 
 pub const IPC_MESSAGE_HANDLER_NAME: &str = "ipc";
 
+/// K2 patch (UW34): the IPC handler only hears the main frame.
+#[inline]
+pub(crate) fn accept_ipc_from_frame(is_main_frame: bool) -> bool {
+  is_main_frame
+}
+
 pub struct WryWebViewDelegateIvars {
   pub controller: Retained<WKUserContentController>,
   pub ipc_handler: Box<dyn Fn(Request<String>)>,
@@ -43,11 +49,22 @@ define_class!(
         let _span = tracing::info_span!(parent: None, "wry::ipc::handle").entered();
 
         let ipc_handler = &this.ivars().ipc_handler;
+        let frame_info = msg.frameInfo();
+        // K2 patch (prd-zen-user-widgets-v2 UW34 / prd-html-frame-csp F12):
+        // IPC comes from the main frame only. WKUserContentController
+        // exposes `window.webkit.messageHandlers.ipc` to EVERY frame, so a
+        // sealed widget or HTML-file frame could post here, and the request
+        // URI below would be its frame's URL. Drop anything a subframe sends
+        // before it reaches the handler.
+        if !accept_ipc_from_frame(frame_info.isMainFrame()) {
+          #[cfg(feature = "tracing")]
+          tracing::warn!("WebView dropped an IPC message from a subframe.");
+          return;
+        }
         let body = msg.body();
         if let Ok(body) = body.downcast::<NSString>() {
           let js_utf8 = body.UTF8String();
 
-          let frame_info = msg.frameInfo();
           let request = frame_info.request();
           // about:srcdoc and some macOS 27 callbacks hand a nil NSURL.
           // Unwrapping aborts the main thread inside didReceiveScriptMessage.

@@ -726,6 +726,13 @@ impl InnerWebView {
       .user_content_manager()
       .expect("WebView does not have UserContentManager");
 
+    // K2 note (prd-zen-user-widgets-v2 UW34): the macOS delegate drops IPC
+    // from subframes. WebKitGTK's UI-process API can't do the same: the
+    // `script-message-received` signal carries only the JS value, no frame
+    // (webkit2gtk 2.0.2 / v2_40), and `uri` below is always the main
+    // frame's. On Linux the gate for a subframe stays Tauri's invoke key,
+    // which only the main frame is given; the S6 hostile-widget probe on
+    // WebKitGTK checks that a sealed frame's postMessage does nothing.
     // Connect before registering as recommended by the docs
     manager.connect_script_message_received(None, move |_m, msg| {
       #[cfg(feature = "tracing")]

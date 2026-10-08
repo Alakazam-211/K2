@@ -16165,7 +16165,7 @@ cmd_schema() {
     {
       "name": "domain refresh",
       "usage": "k2 domain refresh [<apex>] [--json]",
-      "description": "Check again with k2.dev (re-bind) so a pending_ns domain flips to active once its nameservers point at k2.dev. No apex = every pending domain. Owner/admin; agents exit 3.",
+      "description": "Check now with k2.dev (re-bind) so a pending_ns domain flips to active once its nameservers point at k2.dev. The server also re-checks pending domains by itself. No apex = every pending domain. Owner/admin; agents exit 3.",
       "args": [{"name": "apex", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON response."}]
     },
@@ -36172,8 +36172,12 @@ USAGE_CODES = frozenset({
 PENDING_NS_CODES = frozenset({"zone_pending_ns"})
 PENDING_NS_HINT = (
     "Pending: this zone's nameservers don't point at k2.dev yet — set them at "
-    "the registrar (k2 domain list shows which), then k2 domain refresh <apex>"
+    "the registrar (k2 domain list shows which). The server re-checks by itself; "
+    "to check now: k2 domain refresh <apex>"
 )
+# DN12c: k2.dev holds the zone read-only (winddown / suspended). A plan or
+# account matter for a human (exit 3), not a Settings toggle.
+READONLY_CODES = frozenset({"zone_readonly"})
 
 def die(err, exit_code=None):
     if isinstance(err, str):
@@ -36186,7 +36190,7 @@ def die(err, exit_code=None):
         hint = (hint + " — " if hint else "") + DNS_GATED_HINT
     sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
     if exit_code is None:
-        if code in GATED_CODES or code in PENDING_NS_CODES:
+        if code in GATED_CODES or code in PENDING_NS_CODES or code in READONLY_CODES:
             exit_code = 3
         elif code in USAGE_CODES:
             exit_code = 2
@@ -36264,9 +36268,11 @@ if verb == "list":
             status,
             z.get("id") or "",
         ))
-        if status == "pending_ns":
+        # k2.dev's list carries the raw word (`pending`); the box says `pending_ns`.
+        if status in ("pending_ns", "pending", "error"):
             ns = [str(n) for n in (z.get("nameservers") or []) if n]
-            print("  Pending: point nameservers to %s (record writes refused until active)" % (
+            print("  Pending: point nameservers to %s (record writes refused until active; "
+                  "this server re-checks by itself)" % (
                 ", ".join(ns) if ns else "the k2.dev nameservers (k2 domain list shows them)"))
     sys.exit(0)
 
@@ -36807,9 +36813,19 @@ def is_pending(row):
 def dns_label(row):
     if is_pending(row):
         return "pending"
+    if row.get("readOnly"):
+        return "readonly"
     return "write" if row.get("dnsWrite") else "byo"
 
 def pending_lines(row, indent="  "):
+    apex = (row.get("apex") or "<apex>") if isinstance(row, dict) else "<apex>"
+    if isinstance(row, dict) and row.get("zoneMissing"):
+        # DN12d: the zone id was not in k2.dev's last list for this server.
+        print("%sNot found on k2.dev for this server (removed, or moved to another "
+              "account) — k2 domain refresh %s, or remove and add it again" % (indent, apex))
+    if isinstance(row, dict) and row.get("readOnly"):
+        print("%sRead-only: %s on k2.dev — records serve, writes are refused (zone_readonly)" % (
+            indent, row.get("status") or "on hold"))
     if not is_pending(row):
         return
     ns = [str(n) for n in (row.get("nameservers") or []) if n]
@@ -36817,7 +36833,8 @@ def pending_lines(row, indent="  "):
         indent, ", ".join(ns) if ns else "the k2.dev nameservers (see your k2.dev dashboard)"))
     if row.get("created"):
         print("%sAuto-added to your k2.dev account" % indent)
-    print("%sthen: k2 domain refresh %s" % (indent, row.get("apex") or "<apex>"))
+    print("%sThis server re-checks with k2.dev by itself; to check now: k2 domain refresh %s" % (
+        indent, apex))
 
 def renew_suffix(row):
     # K2-issued certificate renewal (daemon renews 30 days before expiry).
@@ -36832,6 +36849,8 @@ def renew_suffix(row):
 def state_words(row):
     if is_pending(row):
         return "pending nameservers"
+    if row.get("readOnly"):
+        return "K2-hosted DNS (read-only: %s on k2.dev)" % (row.get("status") or "on hold")
     return "K2-hosted DNS (writable)" if row.get("dnsWrite") else "BYO DNS (inventory only)"
 
 if verb == "add":
@@ -37196,8 +37215,12 @@ USAGE
 
 A domain k2.dev holds but whose nameservers don't point at k2.dev yet
 lists as "pending" with the nameservers to set at your registrar. DNS
-record writes are refused (zone_pending_ns) until `k2 domain refresh`
-sees it active.
+record writes are refused (zone_pending_ns) until the zone is active.
+The server re-checks pending domains with k2.dev by itself (every
+minute at first, backing off to daily for long-pending ones) and once
+more before refusing a write; `k2 domain refresh` checks right now.
+A zone k2.dev winds down or suspends lists as "readonly"; writes are
+refused with zone_readonly.
 
 See also: k2 dns (records on attached K2-hosted zones), k2 cert (certs
 for attached hostnames), k2 hostmail domain (mail).
@@ -37217,8 +37240,10 @@ EOF
 
 cmd_help_domain_refresh() {
     cat <<'EOF'
-Check again with k2.dev: re-bind an attached apex so a pending zone
-(nameservers not yet pointed at k2.dev) flips to active. With no apex,
+Check now with k2.dev: re-bind an attached apex so a pending zone
+(nameservers not yet pointed at k2.dev) flips to active. The server
+also re-checks pending domains by itself, so this is only needed to
+skip the wait. With no apex,
 checks every pending domain. Owner/admin; agents exit 3.
 
 USAGE

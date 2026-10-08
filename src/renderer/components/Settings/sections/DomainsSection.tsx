@@ -6,6 +6,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
 import { primaryScope } from '@/kessel/server-scope'
+import { onDomainsChanged } from '@/stores/session-events'
 
 type CertState = { state: string; issuer?: string; expiresAt?: string | null }
 
@@ -25,6 +26,12 @@ export type DomainRow = {
   nameservers?: string[]
   /** k2.dev auto-added the zone to this account on bind. */
   created?: boolean
+  /** `winddown` / `suspended` on k2.dev: records serve, no writes. */
+  readOnly?: boolean
+  /** The zone was not in k2.dev's last zones list for this server (DN12d). */
+  zoneMissing?: boolean
+  /** Unix seconds of the server's last check with k2.dev, if any since boot. */
+  checkedAt?: number | null
   names: DomainNameRow[]
 }
 
@@ -119,7 +126,8 @@ export function PendingNameservers({
     >
       <p className="text-[10px] text-[var(--color-text-muted)] mb-1 leading-relaxed">
         Point this domain&apos;s nameservers to these at your registrar. DNS records
-        can&apos;t be changed until k2.dev sees them.
+        can&apos;t be changed until k2.dev sees them. This server checks with k2.dev
+        by itself and updates here when it does.
       </p>
       {ns.length === 0 ? (
         <p className="text-[10px] text-[var(--color-text-muted)]">
@@ -147,8 +155,13 @@ export function PendingNameservers({
 
 function dnsLabel(d: DomainRow): string {
   if (isPendingNs(d)) return 'Pending nameservers'
+  if (d.readOnly) return `K2-hosted DNS (read-only: ${d.status ?? 'on hold'} on k2.dev)`
   return d.dnsWrite ? 'K2-hosted DNS (writable)' : 'BYO DNS (inventory only)'
 }
+
+/** Copy for a zone missing from k2.dev's list for this server (DN12d). */
+export const ZONE_MISSING_COPY =
+  'Not found on k2.dev for this server. The zone may have been removed or moved to another account. Check again, or remove and attach it again.'
 
 export const DOMAINS_MANIFEST: SettingEntry[] = [
   {
@@ -200,6 +213,16 @@ export function DomainsSection(): React.JSX.Element {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // DN12e: the daemon re-checks pending zones by itself (and other clients
+  // attach / remove); repaint when it says the inventory changed.
+  useEffect(
+    () =>
+      onDomainsChanged(primaryScope(), () => {
+        void refresh()
+      }),
+    [refresh],
+  )
 
   const addApex = async () => {
     const v = apex.trim()
@@ -403,6 +426,26 @@ export function DomainsSection(): React.JSX.Element {
                 Remove
               </button>
             </div>
+            {d.zoneMissing && (
+              <div
+                className="mt-1 ml-2 px-2 py-2 border border-[var(--color-border)]"
+                data-testid={`zone-missing-${d.apex}`}
+              >
+                <p className="text-[10px] text-[var(--color-status-error)] leading-relaxed">
+                  {ZONE_MISSING_COPY}
+                </p>
+                {!isPendingNs(d) && (
+                  <button
+                    type="button"
+                    onClick={() => void checkAgain(d.apex)}
+                    disabled={busy}
+                    className="mt-2 px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40 no-drag cursor-pointer"
+                  >
+                    Check again
+                  </button>
+                )}
+              </div>
+            )}
             {isPendingNs(d) && (
               <PendingNameservers
                 domain={d}

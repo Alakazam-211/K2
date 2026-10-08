@@ -411,6 +411,11 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // remote Settings→Email page refetches live.
         SessionEvent::MailChanged { .. } => None,
 
+        // prd-dns-pending-and-cutover-safety-v1 DN12e — APP-LEVEL: custom
+        // domains are host-wide (Settings → K2 Server → Domains), not tied
+        // to one workspace.
+        SessionEvent::DomainsChanged { .. } => None,
+
         // Remote Session Layer 0 — APP-LEVEL: denial audit is
         // daemon-global owner visibility (no workspace scope).
         SessionEvent::RemoteSessionAccessDenied { .. } => None,
@@ -776,6 +781,7 @@ mod tests {
                 has_brief: false,
             },
             SessionEvent::MailChanged { reason: "send-decided".into() },
+            SessionEvent::DomainsChanged { reason: "status_changed".into(), apex: Some("example.com".into()) },
             SessionEvent::RemoteSessionAccessDenied {
                 principal_label: "owner".into(),
                 reason: "off".into(),

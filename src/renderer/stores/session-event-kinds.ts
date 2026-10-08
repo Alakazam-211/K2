@@ -99,6 +99,10 @@ export const SESSION_EVENT_ROUTES = {
   },
   // Home 0.43.2 (Q7): Settings → Email refetches on it (`onMailChanged`).
   mail_changed: { class: 'app', app: true },
+  // prd-dns-pending-and-cutover-safety-v1 DN12e: Settings → Domains
+  // refetches on it (`onDomainsChanged`). Not carried: Settings reads the
+  // window's own server.
+  domains_changed: { class: 'app', app: true },
   remote_session_access_denied: {
     class: 'app',
     ignored: 'Owner audit of a refused remote drive; no client surface shows it yet.',

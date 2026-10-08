@@ -638,6 +638,21 @@ pub enum SessionEvent {
     /// that no client listened).
     MailChanged { reason: String },
 
+    /// prd-dns-pending-and-cutover-safety-v1 P1 (DN12e) — the host's
+    /// custom-domain inventory (`domain_bindings`) changed: an apex was
+    /// attached or removed, a manual check ran, the box's own pending-zone
+    /// re-check saw k2.dev flip a zone (`pending_ns` → `active`, or to a
+    /// read-only `winddown`/`suspended`), or a bound zone went missing from
+    /// k2.dev's list. APP-LEVEL refetch signal: Settings → K2 Server →
+    /// Domains re-reads `GET /cli/domains`.
+    ///
+    /// Wire: `{ "kind": "domains_changed", "reason": string, "apex":
+    /// string|null }`. `reason` is one of `attached` | `removed` |
+    /// `refreshed` | `status_changed` | `zone_missing`. `apex` names the
+    /// one domain that changed, null when several did. No records, no
+    /// nameservers, no zone ids on the bus.
+    DomainsChanged { reason: String, apex: Option<String> },
+
     /// Remote Session Layer 0 — a drive attempt was denied (master switch
     /// OFF → `REMOTE_SESSIONS_DISABLED`, or ON without grant → `NO_GRANT`).
     /// APP-LEVEL: owner visibility across every connected client. Wire:
@@ -717,6 +732,7 @@ impl SessionEvent {
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
+            SessionEvent::DomainsChanged { .. } => "domains_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
             SessionEvent::FsChanged { .. } => "fs_changed",
         }
@@ -812,6 +828,14 @@ pub fn emit(event: SessionEvent) -> Result<usize, broadcast::error::SendError<Se
 /// ProjectsChanged convention): consumers re-query the ledger.
 pub fn emit_token_usage_changed() {
     let _ = emit(SessionEvent::TokenUsageChanged {});
+}
+
+/// Best-effort: the custom-domain inventory changed (refetch signal).
+pub fn emit_domains_changed(reason: &str, apex: Option<&str>) {
+    let _ = emit(SessionEvent::DomainsChanged {
+        reason: reason.to_string(),
+        apex: apex.map(str::to_string),
+    });
 }
 
 /// Best-effort: the LLM login wallet changed (refetch signal).
@@ -1704,6 +1728,30 @@ mod tests {
             plain.get("sandbox_backend").is_none(),
             "a non-sandbox SessionAdded must omit sandbox_backend (byte-identical to pre-P3c): {plain:?}",
         );
+    }
+
+    /// prd-dns-pending-and-cutover-safety-v1 DN12e FROZEN WIRE CONTRACT:
+    /// `{ "kind": "domains_changed", "reason": string, "apex": string|null }`.
+    /// Settings → Domains refetches on it; a tag/field drift fails loudly.
+    #[test]
+    fn domains_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::DomainsChanged {
+            reason: "status_changed".into(),
+            apex: Some("example.com".into()),
+        });
+        assert_eq!(json["kind"], "domains_changed");
+        assert_eq!(json["reason"], "status_changed");
+        assert_eq!(json["apex"], "example.com");
+        assert_keys(&json, &["kind", "reason", "apex"]);
+
+        // Several domains at once: the key stays, as null.
+        let many = as_json(&SessionEvent::DomainsChanged {
+            reason: "zone_missing".into(),
+            apex: None,
+        });
+        assert_eq!(many["kind"], "domains_changed");
+        assert!(many["apex"].is_null(), "{many}");
+        assert_keys(&many, &["kind", "reason", "apex"]);
     }
 
     /// Files-drawer multi-writer FROZEN WIRE CONTRACT:

@@ -126,6 +126,7 @@ impl DnsHttpClient for ReqwestDnsClient {
 }
 
 /// Convenience: production client + token load + request.
+#[cfg(not(test))]
 pub fn proxy_request(
     method: &str,
     path: &str,
@@ -134,6 +135,77 @@ pub fn proxy_request(
 ) -> Result<DnsHttpResponse, String> {
     let token = tunnel_bearer_token()?;
     ReqwestDnsClient.request(method, path, &token, agent, body)
+}
+
+/// Tests never dial k2.dev (prd-dns-pending-and-cutover-safety-v1 DN12f):
+/// every `proxy_request` on this thread answers from the fake installed
+/// with [`set_fake_dns_api`]. With none installed the call reads as an
+/// unpaired box (no tunnel token), whatever `~/.k2/tunnel.json` says.
+#[cfg(test)]
+pub fn proxy_request(
+    method: &str,
+    path: &str,
+    agent: Option<&str>,
+    body: Option<&str>,
+) -> Result<DnsHttpResponse, String> {
+    let _ = agent;
+    let _ = tunnel_bearer_token; // keep the production helper live under cfg(test)
+    test_fake::call(method, path, body)
+}
+
+#[cfg(test)]
+pub(crate) use test_fake::{fake_dns_api_calls, set_fake_dns_api, FakeDnsApiGuard};
+
+#[cfg(test)]
+mod test_fake {
+    use super::DnsHttpResponse;
+    use std::cell::RefCell;
+
+    type Responder = Box<dyn Fn(&str, &str, Option<&str>) -> Result<DnsHttpResponse, String>>;
+
+    thread_local! {
+        static RESPONDER: RefCell<Option<Responder>> = const { RefCell::new(None) };
+        static CALLS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn call(
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<DnsHttpResponse, String> {
+        CALLS.with(|c| c.borrow_mut().push((method.to_string(), path.to_string())));
+        RESPONDER.with(|r| match r.borrow().as_ref() {
+            Some(f) => f(method, path, body),
+            None => Err(
+                "no tunnel token in ~/.k2/tunnel.json (test: no fake DNS API installed)".into(),
+            ),
+        })
+    }
+
+    /// Clears the fake and its call log on drop.
+    pub(crate) struct FakeDnsApiGuard;
+
+    impl Drop for FakeDnsApiGuard {
+        fn drop(&mut self) {
+            RESPONDER.with(|r| *r.borrow_mut() = None);
+            CALLS.with(|c| c.borrow_mut().clear());
+        }
+    }
+
+    /// Every `proxy_request` on this thread answers `f(method, path, body)`.
+    pub(crate) fn set_fake_dns_api(
+        f: impl Fn(&str, &str, Option<&str>) -> Result<DnsHttpResponse, String> + 'static,
+    ) -> FakeDnsApiGuard {
+        RESPONDER.with(|r| *r.borrow_mut() = Some(Box::new(f)));
+        CALLS.with(|c| c.borrow_mut().clear());
+        FakeDnsApiGuard
+    }
+
+    /// `(method, path)` of every `proxy_request` on this thread since the
+    /// fake was installed.
+    pub(crate) fn fake_dns_api_calls() -> Vec<(String, String)> {
+        CALLS.with(|c| c.borrow().clone())
+    }
 }
 
 // ── Response mapping (status → CliResponse-friendly) ─────────────────
@@ -284,8 +356,8 @@ pub const ZONE_PENDING_NS: &str = "zone_pending_ns";
 
 /// Default teaching text when k2.dev sends `zone_pending_ns` without a hint.
 pub const ZONE_PENDING_NS_HINT: &str = "Pending: this zone's nameservers do not point at \
-k2.dev yet — set them at the registrar, then `k2 domain refresh <apex>`. DNS record writes \
-open once the zone is active.";
+k2.dev yet — set them at the registrar. This server re-checks with k2.dev by itself and DNS \
+record writes open once the zone is active (to check now: `k2 domain refresh <apex>`).";
 
 fn parse_error_code(body: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -317,14 +389,17 @@ fn parse_error_hint(body: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex, OnceLock};
 
     /// Serialize env mutations (K2_DNS_API_BASE / HOME) across dns proxy tests.
-    fn env_lock() -> &'static Mutex<()> {
+    /// The one lock for tests that set `K2_DNS_API_BASE` (process-global
+    /// env). `dns::routes` tests take it too; two separate locks let them
+    /// swap mock servers mid-test.
+    pub(crate) fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
     }

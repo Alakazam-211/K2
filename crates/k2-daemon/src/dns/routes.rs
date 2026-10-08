@@ -284,11 +284,13 @@ pub fn handle_record_add(params: &HashMap<String, String>) -> CliResponse {
         .or_else(|| params.get("prio"))
         .and_then(|s| s.parse::<u64>().ok());
 
-    let zone_id = match resolve_zone_id(params) {
-        Ok(id) => id,
+    let (zone_id, zones) = match resolve_zone(params) {
+        Ok(z) => z,
         Err(r) => return r,
     };
-    if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+    if let Err(r) =
+        crate::domains::routes::require_zone_attached_for_write_with(&zone_id, zones.as_deref())
+    {
         return r;
     }
 
@@ -354,9 +356,12 @@ pub fn handle_record_remove(params: &HashMap<String, String>) -> CliResponse {
         || params.get("zone_id").is_some()
         || params.get("domain").is_some()
     {
-        match resolve_zone_id(params) {
-            Ok(zone_id) => {
-                if let Err(r) = crate::domains::routes::require_zone_attached_for_write(&zone_id) {
+        match resolve_zone(params) {
+            Ok((zone_id, zones)) => {
+                if let Err(r) = crate::domains::routes::require_zone_attached_for_write_with(
+                    &zone_id,
+                    zones.as_deref(),
+                ) {
                     return r;
                 }
             }
@@ -386,7 +391,20 @@ pub fn handle_verify(params: &HashMap<String, String>) -> CliResponse {
     }
     let agent = agent_name(params);
     let path = format!("/api/dns/zones/{zone_id}/verify");
-    proxy_to_cli("POST", &path, agent.as_deref(), Some("{}"))
+    let resp = proxy_to_cli("POST", &path, agent.as_deref(), Some("{}"));
+    // P2: keep the local row in step with what verify just found (a
+    // delegated zone flips active on k2.dev in the same call).
+    if resp.status.starts_with("200") {
+        let status = serde_json::from_str::<serde_json::Value>(&resp.body)
+            .ok()
+            .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_string));
+        if let Some(status) = status {
+            if let Err(e) = crate::domains::pending_watch::store_verify_status(&zone_id, &status) {
+                k2_core::log_debug!("[dns] verify {zone_id}: could not store status '{status}': {e}");
+            }
+        }
+    }
+    resp
 }
 
 // ── Owner-only zone lifecycle (local reject for agents) ───────────────
@@ -406,6 +424,14 @@ pub fn handle_zones_delete(_params: &HashMap<String, String>) -> CliResponse {
 // ── Zone id resolution ────────────────────────────────────────────────
 
 fn resolve_zone_id(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+    resolve_zone(params).map(|(id, _)| id)
+}
+
+/// Zone id plus, when it was looked up by domain, the zones list that
+/// lookup fetched (P2 reuses it: zero extra calls).
+type ResolvedZone = (String, Option<Vec<crate::domains::pending_watch::RemoteZone>>);
+
+fn resolve_zone(params: &HashMap<String, String>) -> Result<ResolvedZone, CliResponse> {
     if let Some(z) = params
         .get("zone")
         .or_else(|| params.get("zone_id"))
@@ -416,13 +442,13 @@ fn resolve_zone_id(params: &HashMap<String, String>) -> Result<String, CliRespon
         // If it looks like a domain (contains a dot) and no explicit zone id
         // key was used, treat as domain lookup. Prefer explicit zone/zone_id.
         if params.get("zone").is_some() || params.get("zone_id").is_some() {
-            return Ok(z.to_string());
+            return Ok((z.to_string(), None));
         }
         if params.get("id").is_some() && !z.contains('.') {
-            return Ok(z.to_string());
+            return Ok((z.to_string(), None));
         }
         if !z.contains('.') {
-            return Ok(z.to_string());
+            return Ok((z.to_string(), None));
         }
         // fall through to domain lookup using `z`
         return resolve_zone_id_by_domain(params, z);
@@ -444,7 +470,7 @@ fn resolve_zone_id(params: &HashMap<String, String>) -> Result<String, CliRespon
 fn resolve_zone_id_by_domain(
     params: &HashMap<String, String>,
     domain: &str,
-) -> Result<String, CliResponse> {
+) -> Result<ResolvedZone, CliResponse> {
     let agent = agent_name(params);
     let resp = match proxy_request("GET", "/api/dns/zones", agent.as_deref(), None) {
         Ok(r) => r,
@@ -471,23 +497,10 @@ fn resolve_zone_id_by_domain(
             &format!("parse zones list: {e}"),
         )
     })?;
-    let domain_lc = domain.trim().to_ascii_lowercase();
-    let zones = v
-        .get("zones")
-        .and_then(|z| z.as_array())
-        .cloned()
-        .unwrap_or_default();
-    for z in zones {
-        let d = z
-            .get("domain")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if d == domain_lc {
-            if let Some(id) = z.get("id").and_then(|x| x.as_str()) {
-                return Ok(id.to_string());
-            }
-        }
+    let domain_lc = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let zones = crate::domains::pending_watch::zones_from_value(&v);
+    if let Some(id) = zones.iter().find(|z| z.domain == domain_lc).map(|z| z.id.clone()) {
+        return Ok((id, Some(zones)));
     }
     Err(error_response(
         "404 Not Found",
@@ -695,9 +708,7 @@ mod tests {
         });
 
         // Serialize with other tests that mutate K2_DNS_API_BASE.
-        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        let _g = ENV_LOCK
-            .get_or_init(|| std::sync::Mutex::new(()))
+        let _g = crate::dns::proxy::tests::env_lock()
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var_os(crate::dns::proxy::DNS_API_BASE_ENV);
@@ -871,5 +882,296 @@ mod tests {
         k2_core::domains::remove_binding(&conn, "pending-write.example").expect("cleanup");
         drop(conn);
         cleanup(id);
+    }
+
+    // ── P2 (prd-dns-pending-and-cutover-safety-v1): re-check before refusing ──
+
+    use crate::dns::proxy::{fake_dns_api_calls, set_fake_dns_api, DnsHttpResponse};
+
+    struct P2Ws {
+        id: &'static str,
+        params: HashMap<String, String>,
+    }
+
+    impl Drop for P2Ws {
+        fn drop(&mut self) {
+            cleanup(self.id);
+        }
+    }
+
+    /// A dns_manage-enabled workspace principal plus a stored binding.
+    fn p2_setup(id: &'static str, path: &str, apex: &str, zone_id: &str, status: &str, dns_write: bool) -> P2Ws {
+        let _ = k2_core::db::init_for_tests();
+        seed_project(id, path, apex);
+        enable_dns(path);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding_zone(
+                &conn,
+                apex,
+                &k2_core::domains::BoundZone {
+                    zone_id: Some(zone_id.into()),
+                    status: Some(status.into()),
+                    nameservers: vec!["ns1.k2.dev".into(), "ns2.k2.dev".into()],
+                    dns_write,
+                    auto_created: true,
+                },
+            )
+            .expect("seed binding");
+        }
+        let principal = HookPrincipal {
+            workspace_uuid: id.to_string(),
+            agent_address: format!("agent-{apex}"),
+        };
+        let mut params = HashMap::new();
+        crate::caller_workspace::stamp_principal(&mut params, &principal);
+        params.insert("type".into(), "MX".into());
+        params.insert("name".into(), "@".into());
+        params.insert("value".into(), "aspmx.l.google.com".into());
+        params.insert("priority".into(), "1".into());
+        P2Ws { id, params }
+    }
+
+    fn binding_of(apex: &str) -> k2_core::domains::DomainBinding {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::get_binding(&conn, apex)
+            .expect("db")
+            .unwrap_or_else(|| panic!("{apex} row missing"))
+    }
+
+    fn drop_binding(apex: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::remove_binding(&conn, apex).expect("cleanup");
+    }
+
+    fn reply(status: u16, body: &str) -> Result<DnsHttpResponse, String> {
+        Ok(DnsHttpResponse { status, body: body.into() })
+    }
+
+    fn code_of(resp: &CliResponse) -> String {
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json body");
+        v.pointer("/error/code")
+            .and_then(|c| c.as_str())
+            .unwrap_or_else(|| panic!("no error.code: {}", resp.body))
+            .to_string()
+    }
+
+    /// The fake k2.dev: the zones list says `zone_status` for `zone_id`;
+    /// a record POST answers 201.
+    fn fake_k2dev(zone_id: &'static str, domain: &'static str, zone_status: &'static str) -> crate::dns::proxy::FakeDnsApiGuard {
+        set_fake_dns_api(move |method, path, _body| {
+            if method == "GET" && path == "/api/dns/zones" {
+                return reply(
+                    200,
+                    &serde_json::json!({
+                        "zones": [{ "id": zone_id, "domain": domain, "status": zone_status }],
+                        "capability": { "allowed": true }
+                    })
+                    .to_string(),
+                );
+            }
+            if method == "POST" && path == format!("/api/dns/zones/{zone_id}/records") {
+                return reply(201, r#"{"record":{"id":"r-new","type":"MX"},"propagation":"~10s"}"#);
+            }
+            Err(format!("unexpected fake DNS API call {method} {path}"))
+        })
+    }
+
+    #[test]
+    fn write_on_stale_pending_refreshes_then_proceeds() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-stale.example";
+        let mut ws = p2_setup(
+            "a7a7a7a7-a7a7-a7a7-a7a7-a7a7a7a7a7a7",
+            "/tmp/k2-dns-p2-stale",
+            apex,
+            "zone-p2-stale",
+            "pending_ns",
+            false,
+        );
+        ws.params.insert("zone".into(), "zone-p2-stale".into());
+        let _fake = fake_k2dev("zone-p2-stale", "p2-stale.example", "active");
+
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "201 Created", "{}", resp.body);
+        let b = binding_of(apex);
+        assert_eq!(b.status.as_deref(), Some("active"), "row refreshed");
+        assert!(b.dns_write);
+        assert_eq!(
+            fake_dns_api_calls(),
+            vec![
+                ("GET".to_string(), "/api/dns/zones".to_string()),
+                ("POST".to_string(), "/api/dns/zones/zone-p2-stale/records".to_string()),
+            ],
+            "exactly one re-check GET, then the write"
+        );
+        // Now active: the next write makes no re-check.
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "201 Created", "{}", resp.body);
+        assert_eq!(
+            fake_dns_api_calls().iter().filter(|c| c.0 == "GET").count(),
+            1,
+            "an active row is not re-checked"
+        );
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn write_by_domain_reuses_the_zones_list() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-domain.example";
+        let mut ws = p2_setup(
+            "a8a8a8a8-a8a8-a8a8-a8a8-a8a8a8a8a8a8",
+            "/tmp/k2-dns-p2-domain",
+            apex,
+            "zone-p2-domain",
+            "pending_ns",
+            false,
+        );
+        ws.params.insert("domain".into(), apex.into());
+        let _fake = fake_k2dev("zone-p2-domain", "p2-domain.example", "delegated");
+
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "201 Created", "{}", resp.body);
+        assert_eq!(binding_of(apex).status.as_deref(), Some("active"));
+        assert_eq!(
+            fake_dns_api_calls(),
+            vec![
+                ("GET".to_string(), "/api/dns/zones".to_string()),
+                ("POST".to_string(), "/api/dns/zones/zone-p2-domain/records".to_string()),
+            ],
+            "the by-domain lookup's list is reused: zero extra calls"
+        );
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn write_on_still_pending_refuses() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-still.example";
+        let mut ws = p2_setup(
+            "a9a9a9a9-a9a9-a9a9-a9a9-a9a9a9a9a9a9",
+            "/tmp/k2-dns-p2-still",
+            apex,
+            "zone-p2-still",
+            "pending_ns",
+            false,
+        );
+        ws.params.insert("zone".into(), "zone-p2-still".into());
+        let _fake = fake_k2dev("zone-p2-still", "p2-still.example", "pending");
+
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(code_of(&resp), "zone_pending_ns");
+        assert!(resp.body.contains("re-checks with k2.dev by itself"), "{}", resp.body);
+        assert!(binding_of(apex).is_pending_ns());
+        assert_eq!(
+            fake_dns_api_calls(),
+            vec![("GET".to_string(), "/api/dns/zones".to_string())],
+            "one re-check, no write"
+        );
+
+        // Remove (by record id + zone) takes the same path.
+        ws.params.insert("id".into(), "rec-1".into());
+        let rm = handle_record_remove(&ws.params);
+        assert_eq!(rm.status, "403 Forbidden", "{}", rm.body);
+        assert_eq!(code_of(&rm), "zone_pending_ns");
+        assert!(
+            !fake_dns_api_calls().iter().any(|c| c.0 == "DELETE"),
+            "no delete proxied: {:?}",
+            fake_dns_api_calls()
+        );
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn refresh_with_no_tunnel_keeps_row() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-unpaired.example";
+        let mut ws = p2_setup(
+            "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1",
+            "/tmp/k2-dns-p2-unpaired",
+            apex,
+            "zone-p2-unpaired",
+            "pending_ns",
+            false,
+        );
+        ws.params.insert("zone".into(), "zone-p2-unpaired".into());
+        // No fake: the test seam reads as an unpaired box.
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(code_of(&resp), "zone_pending_ns");
+        let b = binding_of(apex);
+        assert!(b.is_pending_ns(), "row kept when k2.dev can't be asked");
+        assert!(!b.dns_write);
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn winddown_zone_is_zone_readonly_without_a_call() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-winddown.example";
+        let mut ws = p2_setup(
+            "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2",
+            "/tmp/k2-dns-p2-winddown",
+            apex,
+            "zone-p2-winddown",
+            "winddown",
+            false,
+        );
+        ws.params.insert("zone".into(), "zone-p2-winddown".into());
+        let _fake = fake_k2dev("zone-p2-winddown", "p2-winddown.example", "active");
+        let resp = handle_record_add(&ws.params);
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(code_of(&resp), "zone_readonly", "not zone_not_attached");
+        assert!(resp.body.contains("winddown on k2.dev"), "{}", resp.body);
+        assert!(fake_dns_api_calls().is_empty(), "{:?}", fake_dns_api_calls());
+        // A read-only zone still serves: reads stay open.
+        if let Err(r) = crate::domains::routes::require_zone_attached_for_read("zone-p2-winddown") {
+            panic!("winddown zone must be readable: {}", r.body);
+        }
+        drop_binding(apex);
+    }
+
+    #[test]
+    fn dns_verify_active_updates_local_row() {
+        let _lock = crate::domains::bind::pending_rows_test_lock();
+        let apex = "p2-verify.example";
+        let mut ws = p2_setup(
+            "b3b3b3b3-b3b3-b3b3-b3b3-b3b3b3b3b3b3",
+            "/tmp/k2-dns-p2-verify",
+            apex,
+            "zone-p2-verify",
+            "pending_ns",
+            false,
+        );
+        ws.params.insert("zone".into(), "zone-p2-verify".into());
+        let delegated = std::rc::Rc::new(std::cell::Cell::new(false));
+        let d = delegated.clone();
+        let _fake = set_fake_dns_api(move |method, path, _| {
+            if method == "POST" && path == "/api/dns/zones/zone-p2-verify/verify" {
+                return if d.get() {
+                    reply(200, r#"{"delegated":true,"seen_nameservers":["ns1.k2.dev","ns2.k2.dev"],"status":"active"}"#)
+                } else {
+                    reply(200, r#"{"delegated":false,"seen_nameservers":["ns1.godaddy.com"],"status":"pending","hint":"still propagating"}"#)
+                };
+            }
+            Err(format!("unexpected fake DNS API call {method} {path}"))
+        });
+
+        let resp = handle_verify(&ws.params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert!(binding_of(apex).is_pending_ns(), "not delegated yet: still pending");
+
+        delegated.set(true);
+        let resp = handle_verify(&ws.params);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let b = binding_of(apex);
+        assert_eq!(b.status.as_deref(), Some("active"), "verify stores the status");
+        assert!(b.dns_write);
+        drop_binding(apex);
     }
 }

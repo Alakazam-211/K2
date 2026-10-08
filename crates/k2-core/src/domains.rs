@@ -48,6 +48,11 @@ pub const ZONE_STATUS_ACTIVE: &str = "active";
 /// Control-plane zone status: zone exists in the k2.dev account but the
 /// registrar nameservers do not point at k2.dev yet. No record writes.
 pub const ZONE_STATUS_PENDING_NS: &str = "pending_ns";
+/// Control-plane zone status: the zone is winding down (plan ended).
+/// Records still serve, but no writes.
+pub const ZONE_STATUS_WINDDOWN: &str = "winddown";
+/// Control-plane zone status: suspended by k2.dev. No writes.
+pub const ZONE_STATUS_SUSPENDED: &str = "suspended";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +78,14 @@ impl DomainBinding {
     /// not point at k2.dev yet (record writes are refused).
     pub fn is_pending_ns(&self) -> bool {
         self.status.as_deref() == Some(ZONE_STATUS_PENDING_NS)
+    }
+
+    /// True when k2.dev holds the zone read-only (`winddown` / `suspended`).
+    pub fn is_readonly(&self) -> bool {
+        matches!(
+            self.status.as_deref(),
+            Some(ZONE_STATUS_WINDDOWN) | Some(ZONE_STATUS_SUSPENDED)
+        )
     }
 }
 
@@ -209,6 +222,27 @@ pub fn upsert_binding_zone(
         ],
     )?;
     Ok(get_binding(conn, apex)?.expect("just upserted"))
+}
+
+/// Store a fresh control-plane status on a bound row (prd-dns-pending-and-
+/// cutover-safety-v1 P1/P2: the box's own re-check). Touches only `status`
+/// and `dns_write`; nameservers, `auto_created` and `created_at` stay. The
+/// row must still carry `zone_id` (a row re-bound to another zone in the
+/// meantime is left alone). Returns true when the row changed.
+pub fn set_zone_status(
+    conn: &Connection,
+    apex: &str,
+    zone_id: &str,
+    status: &str,
+    dns_write: bool,
+) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE domain_bindings SET status = ?3, dns_write = ?4 \
+         WHERE apex = ?1 AND zone_id = ?2 \
+           AND (status IS NOT ?3 OR dns_write != ?4)",
+        params![apex, zone_id, status, if dns_write { 1 } else { 0 }],
+    )?;
+    Ok(n > 0)
 }
 
 /// Remove apex and cascade hostnames. Returns whether a row existed.
@@ -368,6 +402,47 @@ mod tests {
         assert!(!zone_attached_for_write(&conn, "zone-hosted-nope").unwrap());
         assert!(zone_attached_for_write(&conn, "zone-hosted").unwrap());
         assert!(!apex_attached_for_write(&conn, "missing.example").unwrap());
+    }
+
+    #[test]
+    fn set_zone_status_touches_only_status_and_write() {
+        let conn = fresh();
+        let b = upsert_binding_zone(
+            &conn,
+            "szs.example",
+            &BoundZone {
+                zone_id: Some("z-szs".into()),
+                status: Some(ZONE_STATUS_PENDING_NS.into()),
+                nameservers: vec!["ns1.k2.dev".into()],
+                dns_write: false,
+                auto_created: true,
+            },
+        )
+        .unwrap();
+        assert!(b.is_pending_ns());
+        assert!(!b.is_readonly());
+        // Wrong zone id: untouched.
+        assert!(!set_zone_status(&conn, "szs.example", "z-other", ZONE_STATUS_ACTIVE, true).unwrap());
+        assert!(get_binding(&conn, "szs.example").unwrap().unwrap().is_pending_ns());
+        // Flip.
+        assert!(set_zone_status(&conn, "szs.example", "z-szs", ZONE_STATUS_ACTIVE, true).unwrap());
+        let after = get_binding(&conn, "szs.example").unwrap().unwrap();
+        assert_eq!(after.status.as_deref(), Some(ZONE_STATUS_ACTIVE));
+        assert!(after.dns_write);
+        assert_eq!(after.nameservers, vec!["ns1.k2.dev".to_string()]);
+        assert!(after.auto_created);
+        assert_eq!(after.created_at, b.created_at);
+        // Same values again: no change reported.
+        assert!(!set_zone_status(&conn, "szs.example", "z-szs", ZONE_STATUS_ACTIVE, true).unwrap());
+        // Read-only states.
+        assert!(set_zone_status(&conn, "szs.example", "z-szs", ZONE_STATUS_WINDDOWN, false).unwrap());
+        let ro = get_binding(&conn, "szs.example").unwrap().unwrap();
+        assert!(ro.is_readonly());
+        assert!(!ro.dns_write);
+        assert!(set_zone_status(&conn, "szs.example", "z-szs", ZONE_STATUS_SUSPENDED, false).unwrap());
+        assert!(get_binding(&conn, "szs.example").unwrap().unwrap().is_readonly());
+        // Missing row: nothing.
+        assert!(!set_zone_status(&conn, "nope.example", "z-szs", ZONE_STATUS_ACTIVE, true).unwrap());
     }
 
     #[test]

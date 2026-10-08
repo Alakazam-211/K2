@@ -863,6 +863,11 @@ mod tests {
         })
         .is_none(), "the compat title event never reaches apps (A37)");
         assert!(send(&SessionEvent::MailChanged { reason: "x".into() }).is_none());
+        assert!(
+            send(&SessionEvent::DomainsChanged { reason: "status_changed".into(), apex: Some("x.example".into()) })
+                .is_none(),
+            "custom domains never reach app guests"
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&wt);
     }

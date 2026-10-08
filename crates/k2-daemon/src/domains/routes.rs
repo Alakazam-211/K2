@@ -124,6 +124,22 @@ fn domain_json(conn: &rusqlite::Connection, b: &DomainBinding) -> serde_json::Va
         "nameservers": b.nameservers,
         // k2.dev auto-added the zone to this account on bind.
         "created": b.auto_created,
+        // `winddown` / `suspended` on k2.dev: records serve, no writes.
+        "readOnly": b.is_readonly(),
+        // DN12d: the zone id was not in k2.dev's last zones list for this
+        // server (row kept). In memory only; false for BYO rows.
+        "zoneMissing": b.zone_id.is_some() && crate::domains::pending_watch::zone_missing(&b.apex),
+        // Last time this box read k2.dev's zones list (P1/P2), unix secs.
+        "checkedAt": b
+            .zone_id
+            .as_ref()
+            .and_then(|_| crate::domains::pending_watch::last_check()),
+        // The box's last failed re-check of a pending zone, if any since
+        // the last good one (e.g. k2.dev unreachable).
+        "checkError": b
+            .is_pending_ns()
+            .then(crate::domains::pending_watch::last_error)
+            .flatten(),
         "names": names.iter().map(name_json).collect::<Vec<_>>(),
     })
 }
@@ -136,9 +152,19 @@ pub fn pending_ns_hint(b: &DomainBinding) -> String {
         b.nameservers.join(", ")
     };
     format!(
-        "Pending: point nameservers to {ns} at the registrar for {apex}, then check again \
-(Settings → K2 Server → Domains → Check again, or `k2 domain refresh {apex}`). \
-DNS record writes open once the zone is active.",
+        "Pending: point nameservers to {ns} at the registrar for {apex}. This server re-checks \
+with k2.dev by itself and opens DNS record writes once the zone is active (to check now: \
+Settings → K2 Server → Domains → Check again, or `k2 domain refresh {apex}`).",
+        apex = b.apex
+    )
+}
+
+/// Teaching text for a `winddown` / `suspended` zone (DN12c).
+pub fn zone_readonly_hint(b: &DomainBinding) -> String {
+    let state = b.status.as_deref().unwrap_or("read-only");
+    format!(
+        "{apex} is {state} on k2.dev, so its DNS records are read-only. The owner can check the \
+plan in the k2.dev dashboard, then `k2 domain refresh {apex}`.",
         apex = b.apex
     )
 }
@@ -269,6 +295,9 @@ pub fn handle_refresh(params: &HashMap<String, String>) -> CliResponse {
         if matches!(outcome, BindOutcome::NoTunnel) {
             checked = false;
         }
+        if matches!(outcome, BindOutcome::Bound(_)) {
+            crate::domains::pending_watch::clear_missing(apex);
+        }
         let row = match store_bind_outcome(&conn, apex, outcome, false) {
             Ok(Some(b)) => Some(b),
             Ok(None) => get_binding(&conn, apex).ok().flatten(),
@@ -276,6 +305,17 @@ pub fn handle_refresh(params: &HashMap<String, String>) -> CliResponse {
         };
         if let Some(b) = row {
             domains.push(domain_json(&conn, &b));
+        }
+    }
+    drop(conn);
+    if checked && !outcomes.is_empty() {
+        // P1: the loop re-reads the rows (a row still pending keeps its
+        // schedule; nothing pending parks it). Other clients repaint.
+        crate::domains::pending_watch::wake();
+        let one = if outcomes.len() == 1 { Some(outcomes[0].0.as_str()) } else { None };
+        crate::session_events::emit_domains_changed("refreshed", one);
+        if outcomes.iter().any(|(_, o)| matches!(o, BindOutcome::Bound(z) if z.status.as_deref() == Some(k2_core::domains::ZONE_STATUS_ACTIVE))) {
+            crate::domains::renew::wake();
         }
     }
     let mut body = serde_json::json!({
@@ -311,6 +351,9 @@ pub fn handle_attach(params: &HashMap<String, String>) -> CliResponse {
         return r;
     }
 
+    if matches!(outcome, BindOutcome::Bound(_)) {
+        crate::domains::pending_watch::clear_missing(&apex);
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     match store_bind_outcome(&conn, &apex, &outcome, true) {
@@ -319,13 +362,19 @@ pub fn handle_attach(params: &HashMap<String, String>) -> CliResponse {
             "bind_failed",
             &format!("unexpected bind outcome for '{apex}': {outcome:?}"),
         ),
-        Ok(Some(b)) => CliResponse::ok_json(
-            serde_json::json!({
+        Ok(Some(b)) => {
+            let body = serde_json::json!({
                 "ok": true,
                 "domain": domain_json(&conn, &b),
             })
-            .to_string(),
-        ),
+            .to_string();
+            drop(conn);
+            // P1 / DN12a: a new pending row starts the 1-minute step now
+            // instead of waiting out a parked loop.
+            crate::domains::pending_watch::wake();
+            crate::session_events::emit_domains_changed("attached", Some(&apex));
+            CliResponse::ok_json(body)
+        }
         Err(e) => error_response("500 Internal Server Error", "db", &e.to_string()),
     }
 }
@@ -368,9 +417,12 @@ pub fn handle_remove(params: &HashMap<String, String>) -> CliResponse {
     }
 
     match remove_binding(&conn, &apex) {
-        Ok(_) => CliResponse::ok_json(
-            serde_json::json!({ "ok": true, "removed": apex }).to_string(),
-        ),
+        Ok(_) => {
+            drop(conn);
+            crate::domains::pending_watch::clear_missing(&apex);
+            crate::session_events::emit_domains_changed("removed", Some(&apex));
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "removed": apex }).to_string())
+        }
         Err(e) => error_response("500 Internal Server Error", "db", &e.to_string()),
     }
 }
@@ -687,23 +739,58 @@ fn zone_not_attached() -> CliResponse {
 }
 
 /// Belt used by `/cli/dns/*` record writes (A6). A `pending_ns` zone
-/// (A8.1) refuses with `zone_pending_ns` + the nameservers to set.
+/// (A8.1) refuses with `zone_pending_ns` + the nameservers to set; a
+/// `winddown` / `suspended` zone refuses with `zone_readonly` (DN12c).
+/// Production callers use [`require_zone_attached_for_write_with`].
+#[cfg(test)]
 pub fn require_zone_attached_for_write(zone_id: &str) -> Result<(), CliResponse> {
+    require_zone_attached_for_write_with(zone_id, None)
+}
+
+/// [`require_zone_attached_for_write`] with P2 (prd-dns-pending-and-
+/// cutover-safety-v1): when the local row still reads `pending_ns`, ask
+/// k2.dev once before refusing, store the answer, then decide. `zones` is
+/// a zones list the caller already fetched (a by-domain lookup): zero
+/// extra calls. Otherwise one `GET /api/dns/zones`. The DB lock is never
+/// held across that call. If k2.dev can't be asked (unpaired, air-gap,
+/// down) the row is kept and the refusal stands.
+pub fn require_zone_attached_for_write_with(
+    zone_id: &str,
+    zones: Option<&[crate::domains::pending_watch::RemoteZone]>,
+) -> Result<(), CliResponse> {
+    let row = read_zone_row(zone_id)?;
+    if row.as_ref().is_some_and(DomainBinding::is_pending_ns) {
+        if let Err(e) = crate::domains::pending_watch::recheck_now(zones) {
+            k2_core::log_debug!(
+                "[domains] pending zone {zone_id}: re-check before write failed ({e}) — keeping the stored status"
+            );
+        }
+        return decide_write(read_zone_row(zone_id)?);
+    }
+    decide_write(row)
+}
+
+fn read_zone_row(zone_id: &str) -> Result<Option<DomainBinding>, CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match get_binding_by_zone_id(&conn, zone_id) {
-        Ok(Some(b)) if b.is_pending_ns() => Err(error_response(
+    get_binding_by_zone_id(&conn, zone_id)
+        .map_err(|e| error_response("500 Internal Server Error", "db", &e.to_string()))
+}
+
+fn decide_write(row: Option<DomainBinding>) -> Result<(), CliResponse> {
+    match row {
+        Some(b) if b.is_pending_ns() => Err(error_response(
             "403 Forbidden",
             "zone_pending_ns",
             &pending_ns_hint(&b),
         )),
-        Ok(Some(b)) if b.dns_write => Ok(()),
-        Ok(_) => Err(zone_not_attached()),
-        Err(e) => Err(error_response(
-            "500 Internal Server Error",
-            "db",
-            &e.to_string(),
+        Some(b) if b.is_readonly() => Err(error_response(
+            "403 Forbidden",
+            "zone_readonly",
+            &zone_readonly_hint(&b),
         )),
+        Some(b) if b.dns_write => Ok(()),
+        _ => Err(zone_not_attached()),
     }
 }
 
@@ -714,7 +801,8 @@ pub fn require_zone_attached_for_read(zone_id: &str) -> Result<(), CliResponse> 
     let db = k2_core::db::shared();
     let conn = db.lock();
     match get_binding_by_zone_id(&conn, zone_id) {
-        Ok(Some(b)) if b.dns_write || b.is_pending_ns() => Ok(()),
+        // A read-only (winddown/suspended) zone still serves; it may be read.
+        Ok(Some(b)) if b.dns_write || b.is_pending_ns() || b.is_readonly() => Ok(()),
         Ok(_) => Err(zone_not_attached()),
         Err(e) => Err(error_response(
             "500 Internal Server Error",
@@ -1017,6 +1105,57 @@ mod tests {
             panic!("active zone must accept writes: {}", r.body);
         }
         drop_binding(apex);
+    }
+
+    /// DN12a/e: attach, refresh and remove announce `domains_changed`
+    /// (other clients repaint), and the list carries the new fields.
+    #[test]
+    fn attach_refresh_remove_emit_domains_changed() {
+        init();
+        let _lock = pending_rows_test_lock();
+        let apex = "dc-events.example";
+        let mut rx = crate::session_events::subscribe();
+        let frames = |rx:&mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>| {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                if let crate::session_events::SessionEvent::DomainsChanged { reason, apex: Some(a) } = ev {
+                    if a == apex {
+                        out.push(reason);
+                    }
+                }
+            }
+            out
+        };
+        let pending = r#"{"ok":true,"zoneId":"zone-dc-events","status":"pending_ns","nameservers":["ns1.k2.dev"],"dnsWrite":false,"created":true}"#;
+        let _g = set_fake_bind(reply(200, pending));
+        let r = attach(apex);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r);
+        assert_eq!(v["domain"]["readOnly"], false);
+        assert_eq!(v["domain"]["zoneMissing"], false);
+        assert!(v["domain"].get("checkedAt").is_some(), "{v}");
+        assert_eq!(frames(&mut rx), vec!["attached".to_string()]);
+
+        replace_fake_bind(reply(
+            200,
+            r#"{"ok":true,"zoneId":"zone-dc-events","status":"winddown","dnsWrite":false}"#,
+        ));
+        let r = refresh(Some(apex));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r);
+        assert_eq!(v["domain"]["status"], "winddown");
+        assert_eq!(v["domain"]["readOnly"], true);
+        assert_eq!(frames(&mut rx), vec!["refreshed".to_string()]);
+        // DN12c: a winddown zone refuses writes with zone_readonly.
+        let w = require_zone_attached_for_write("zone-dc-events").expect_err("winddown refuses");
+        assert_eq!(error_code(&w), "zone_readonly");
+
+        replace_fake_bind(reply(200, r#"{"ok":true}"#));
+        let mut params = HashMap::new();
+        params.insert("apex".into(), apex.into());
+        let r = handle_remove(&params);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(frames(&mut rx), vec!["removed".to_string()]);
     }
 
     #[test]

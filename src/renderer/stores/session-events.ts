@@ -245,6 +245,19 @@ export interface MailChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — the host's custom-domain inventory changed
+ *  (prd-dns-pending-and-cutover-safety-v1 DN12e): attach / remove, a manual
+ *  check, the daemon's own pending-zone re-check flipping a zone, or a zone
+ *  missing from k2.dev's list. Refetch signal. Consumer: Settings → K2
+ *  Server → Domains (`onDomainsChanged`). `reason` is `attached` |
+ *  `removed` | `refreshed` | `status_changed` | `zone_missing`; `apex` is
+ *  null when several domains changed. */
+export interface DomainsChangedEvent {
+  kind: 'domains_changed'
+  reason: string
+  apex: string | null
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -578,6 +591,7 @@ export type SessionEventMessage =
   | ReviewQueueChangedEvent
   | ReviewChangedEvent
   | MailChangedEvent
+  | DomainsChangedEvent
   | RemoteSessionAccessDeniedEvent
 
 export interface SessionEventHandlers {
@@ -1043,6 +1057,8 @@ type FsChangedHandler = (e: FsChangedEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
 type MailChangedHandler = (reason: string) => void
+// DN12e — Settings → Domains' refetch signal.
+type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1082,6 +1098,7 @@ interface AppBusHandlers {
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
   fsChanged: Set<FsChangedHandler>
   mailChanged: Set<MailChangedHandler>
+  domainsChanged: Set<DomainsChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
@@ -1120,6 +1137,7 @@ function createBusState(scopeId: string): BusState {
       llmAccountsChanged: new Set(),
       fsChanged: new Set(),
       mailChanged: new Set(),
+      domainsChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       hooksInstallFailed: new Set(),
@@ -1343,6 +1361,14 @@ export function onMailChanged(scope: ServerScope, fn: MailChangedHandler): Unsub
   return addHandler(busFor(scope).handlers.mailChanged, fn)
 }
 
+/** prd-dns-pending-and-cutover-safety-v1 DN12e — subscribe to APP-LEVEL
+ *  `domains_changed` on `scope`'s server (custom domains attached, removed,
+ *  re-checked, or flipped by the daemon's own pending-zone re-check).
+ *  Refetch signal; Settings → K2 Server → Domains is the consumer. */
+export function onDomainsChanged(scope: ServerScope, fn: DomainsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.domainsChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1480,6 +1506,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
+  domains_changed: (h, m) => {
+    for (const fn of h.domainsChanged) fn(m)
+  },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()
   },
@@ -1527,6 +1556,7 @@ export interface AppBus {
   onLlmAccountsChanged(fn: LlmAccountsChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
+  onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
   onHooksInstallFailed(fn: HooksInstallFailedHandler): UnsubscribeFn
   onActivityChanged(fn: ActivityChangedHandler): UnsubscribeFn
@@ -1570,6 +1600,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onLlmAccountsChanged: (fn) => onLlmAccountsChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
+    onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
     onHooksInstallFailed: (fn) => onHooksInstallFailed(scope, fn),
     onActivityChanged: (fn) => onActivityChanged(scope, fn),

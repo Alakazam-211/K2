@@ -4,6 +4,7 @@
 
 pub mod acme;
 pub mod bind;
+pub mod pending_watch;
 pub mod renew;
 pub mod routes;
 pub mod status;

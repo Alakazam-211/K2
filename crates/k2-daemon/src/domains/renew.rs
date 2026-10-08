@@ -691,8 +691,45 @@ pub fn leaf_from_store(name: &str) -> Option<LeafInfo> {
     crate::domains::status::pem_leaf_info(&pem.chain_pem)
 }
 
+/// Wake flag for the renewer's sleep (prd-dns-pending-and-cutover-safety-v1
+/// DN12b): set by [`wake`], cleared by the renewer when it wakes.
+fn wake_signal() -> &'static (Mutex<bool>, std::sync::Condvar) {
+    static W: std::sync::OnceLock<(Mutex<bool>, std::sync::Condvar)> = std::sync::OnceLock::new();
+    W.get_or_init(|| (Mutex::new(false), std::sync::Condvar::new()))
+}
+
+/// Ask the renewer to scan now instead of at its next hourly tick. Called
+/// when a pending zone turns active, so DNS-01 names that were skipped as
+/// `pending_ns` are picked up within seconds. Cheap; safe from any thread.
+pub fn wake() {
+    let (m, cv) = wake_signal();
+    *m.lock().unwrap_or_else(|p| p.into_inner()) = true;
+    cv.notify_all();
+}
+
+/// Sleep up to `d`; return early (and clear the flag) on [`wake`]. Returns
+/// true when woken.
+fn sleep_or_wake(d: std::time::Duration) -> bool {
+    let (m, cv) = wake_signal();
+    let mut flag = m.lock().unwrap_or_else(|p| p.into_inner());
+    let deadline = std::time::Instant::now() + d;
+    while !*flag {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        flag = cv
+            .wait_timeout(flag, deadline - now)
+            .map(|(g, _)| g)
+            .unwrap_or_else(|p| p.into_inner().0);
+    }
+    *flag = false;
+    true
+}
+
 /// Start the background renewer (one detached thread for the life of the
-/// daemon; a panic is contained per scan). No-op in tests.
+/// daemon; a panic is contained per scan). Sleeps are interruptible by
+/// [`wake`]. No-op in tests.
 pub fn spawn() {
     if cfg!(test) {
         return;
@@ -700,13 +737,17 @@ pub fn spawn() {
     let _ = std::thread::Builder::new()
         .name("k2-cert-renew".into())
         .spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(FIRST_SCAN_AFTER_SECS));
+            if sleep_or_wake(std::time::Duration::from_secs(FIRST_SCAN_AFTER_SECS)) {
+                log_debug!("[domains/renew] woken early (a domain changed) — scanning now");
+            }
             loop {
                 let r = std::panic::catch_unwind(|| scan(&mut LiveScan));
                 if r.is_err() {
                     log_debug!("[domains/renew] scan panicked — retrying next scan");
                 }
-                std::thread::sleep(std::time::Duration::from_secs(SCAN_EVERY_SECS));
+                if sleep_or_wake(std::time::Duration::from_secs(SCAN_EVERY_SECS)) {
+                    log_debug!("[domains/renew] woken early (a domain changed) — scanning now");
+                }
             }
         });
 }
@@ -1083,6 +1124,28 @@ mod tests {
             };
             Ok(cn::RunReport { names: outs, reload })
         }
+    }
+
+    /// DN12b: the renewer's sleep is interruptible. A wake before the sleep
+    /// starts is not lost (it ends the next sleep at once), and a wake from
+    /// another thread ends a long sleep. (Other tests may also call `wake`,
+    /// so this only asserts what a stray wake can't fake: a 30 s sleep that
+    /// returns in well under 5 s was woken.)
+    #[test]
+    fn renewer_sleep_is_interruptible_by_wake() {
+        wake();
+        let t = std::time::Instant::now();
+        assert!(sleep_or_wake(std::time::Duration::from_secs(30)), "pending wake ends the sleep");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        // A wake from another thread interrupts a long sleep.
+        let h = std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            wake();
+        });
+        let t = std::time::Instant::now();
+        assert!(sleep_or_wake(std::time::Duration::from_secs(30)));
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        h.join().expect("waker thread");
     }
 
     #[test]

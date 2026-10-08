@@ -1324,6 +1324,13 @@ async fn async_main() {
     // never copies data, never sudo.
     mail::backup::spawn_observer();
 
+    // prd-dns-pending-and-cutover-safety-v1 P1: re-check `pending_ns`
+    // custom domains with k2.dev by itself (one read-only GET per tick,
+    // 1 min → daily by age), so a zone k2.dev flipped active opens record
+    // writes without `k2 domain refresh`. Parks while nothing is pending;
+    // attach/refresh wake it. Skips under air-gap / unpaired.
+    domains::pending_watch::spawn();
+
     // P19: re-assert CLI folder trust after ready (never blocks the gate;
     // worktree cwds not in projects.path are covered by spawn P16).
     tokio::spawn(async move {

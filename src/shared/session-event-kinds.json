@@ -28,6 +28,7 @@
   "feedback_changed": "app",
   "ticket_changed": "app",
   "mail_changed": "app",
+  "domains_changed": "app",
   "remote_session_access_denied": "app",
   "fs_changed": "app",
   "zen_changed": "app",

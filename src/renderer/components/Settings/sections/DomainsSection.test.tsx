@@ -12,7 +12,23 @@ vi.mock('@/kessel/daemon-ws', () => ({
 }))
 vi.mock('@/kessel/server-scope', () => ({ primaryScope: () => 'local' }))
 
-import { DomainsSection, OWNED_ELSEWHERE_COPY, type DomainRow } from './DomainsSection'
+// DN12e: capture the `domains_changed` subscription so a test can fire it.
+const domainsChangedHandlers = new Set<(e: unknown) => void>()
+vi.mock('@/stores/session-events', () => ({
+  onDomainsChanged: vi.fn((_scope: unknown, fn: (e: unknown) => void) => {
+    domainsChangedHandlers.add(fn)
+    return () => {
+      domainsChangedHandlers.delete(fn)
+    }
+  }),
+}))
+
+import {
+  DomainsSection,
+  OWNED_ELSEWHERE_COPY,
+  ZONE_MISSING_COPY,
+  type DomainRow,
+} from './DomainsSection'
 
 const PENDING: DomainRow = {
   apex: 'pending.example',
@@ -160,5 +176,55 @@ describe('DomainsSection — A8.1 pending nameservers', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
     expect(await screen.findByText(/Domain linking isn't live on k2.dev yet/)).toBeTruthy()
+  })
+})
+
+describe('DomainsSection — the daemon re-checks pending domains (prd-dns-pending P1, DN12)', () => {
+  it('a domains_changed frame refetches and the pending row flips with no click', async () => {
+    listRows = [PENDING]
+    render(<DomainsSection />)
+    await screen.findByTestId('pending-ns-pending.example')
+    expect(domainsChangedHandlers.size).toBe(1)
+    const gets = () => calls.filter((c) => c.method === 'GET' && c.path === '/cli/domains').length
+    const before = gets()
+
+    // The daemon's own check saw k2.dev flip the zone.
+    listRows = [ACTIVE]
+    for (const fn of domainsChangedHandlers) fn({ kind: 'domains_changed', reason: 'status_changed', apex: 'pending.example' })
+    await waitFor(() => expect(screen.queryByTestId('pending-ns-pending.example')).toBeNull())
+    expect(screen.getByText(/K2-hosted DNS \(writable\)/)).toBeTruthy()
+    expect(gets()).toBe(before + 1)
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('unsubscribes on unmount', async () => {
+    listRows = [ACTIVE]
+    const { unmount } = render(<DomainsSection />)
+    await screen.findByText(/K2-hosted DNS \(writable\)/)
+    expect(domainsChangedHandlers.size).toBe(1)
+    unmount()
+    expect(domainsChangedHandlers.size).toBe(0)
+  })
+
+  it('a zone missing from k2.dev shows the not-found note with Check again', async () => {
+    listRows = [{ ...ACTIVE, zoneMissing: true }]
+    render(<DomainsSection />)
+    const block = await screen.findByTestId('zone-missing-pending.example')
+    expect(within(block).getByText(ZONE_MISSING_COPY)).toBeTruthy()
+    expect(within(block).getByRole('button', { name: 'Check again' })).toBeTruthy()
+  })
+
+  it('a pending row missing from k2.dev shows the note once and one Check again', async () => {
+    listRows = [{ ...PENDING, zoneMissing: true }]
+    render(<DomainsSection />)
+    await screen.findByTestId('zone-missing-pending.example')
+    expect(screen.getAllByRole('button', { name: 'Check again' })).toHaveLength(1)
+  })
+
+  it('a winddown zone reads as read-only', async () => {
+    listRows = [{ ...ACTIVE, status: 'winddown', dnsWrite: false, readOnly: true }]
+    render(<DomainsSection />)
+    expect(await screen.findByText(/K2-hosted DNS \(read-only: winddown on k2.dev\)/)).toBeTruthy()
+    expect(screen.queryByTestId('zone-missing-pending.example')).toBeNull()
   })
 })

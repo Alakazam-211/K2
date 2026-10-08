@@ -45,6 +45,16 @@ fn json_status(status: &'static str, body: serde_json::Value) -> CliResponse {
 // Receiver
 // ─────────────────────────────────────────────────────────────────────
 
+/// The refusal the public route sends. Unknown sender, untrusted sender and
+/// a bad signature all read `rejected` (no hint which fingerprints are
+/// pinned); the detail goes to the debug log only.
+fn refused(e: &notice::NoticeError) -> CliResponse {
+    log_debug!("[federation/address] notice refused: {} ({e})", e.code());
+    let code = e.public_code();
+    let error = if code == "rejected" { "rejected".to_string() } else { e.to_string() };
+    json_status(e.status(), serde_json::json!({ "error": error, "code": code }))
+}
+
 /// `POST /cli/federation/address`. See the module doc.
 pub fn handle_address_notice(body: &[u8]) -> CliResponse {
     // The peer-store transaction lock makes load → apply → save one step, so
@@ -59,8 +69,23 @@ pub fn handle_address_notice(body: &[u8]) -> CliResponse {
             )
         }
     };
+    // Decode and verify the signature on a snapshot BEFORE taking the store
+    // lock: an unauthenticated body never waits on, or holds, the lock.
+    let snapshot = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => {
+            return json_status(
+                "500 Internal Server Error",
+                serde_json::json!({ "error": format!("peer store: {e}"), "code": "store_error" }),
+            )
+        }
+    };
+    let verified = match notice::verify_notice(&snapshot, body, &local, Utc::now()) {
+        Ok(v) => v,
+        Err(e) => return refused(&e),
+    };
     let tx = PeerStore::transact(|store| {
-        let applied = notice::apply(store, body, &local, Utc::now())?;
+        let applied = notice::apply_verified(store, &verified, &local, Utc::now())?;
         let label = store
             .get(&applied.fingerprint)
             .map(|p| p.label.clone())
@@ -76,10 +101,7 @@ pub fn handle_address_notice(body: &[u8]) -> CliResponse {
                 serde_json::json!({ "error": format!("peer store: {e}"), "code": "store_error" }),
             )
         }
-        Ok(Err(e)) => {
-            log_debug!("[federation/address] notice refused: {} ({e})", e.code());
-            return json_status(e.status(), serde_json::json!({ "error": e.to_string(), "code": e.code() }));
-        }
+        Ok(Err(e)) => return refused(&e),
         Ok(Ok(v)) => v,
     };
     let describe = |a: &notice::PeerAddress| {
@@ -324,15 +346,43 @@ mod tests {
             sn.fingerprint = fp_of(&stranger);
             sn.seq = 99;
             let sbody = serde_json::to_vec(&notice::sign(&sn, &stranger).expect("sign")).expect("enc");
-            let r = handle_address_notice(&sbody);
-            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-            assert!(r.body.contains("unknown_peer"), "{}", r.body);
+            let unknown = handle_address_notice(&sbody);
+            assert_eq!(unknown.status, "403 Forbidden", "{}", unknown.body);
             let after = PeerStore::load().expect("load");
             assert_eq!(after.list().len(), 1);
             assert_eq!(after.get(&f).expect("peer").subdomain, "k2n1-m4");
 
-            // Garbage: 400.
+            // A bad signature (the pinned peer's fingerprint, another key).
+            let mut forged = sn.clone();
+            forged.fingerprint = f.clone();
+            forged.seq = 100;
+            let mut fbody: serde_json::Value =
+                serde_json::to_value(notice::sign(&sn, &stranger).expect("sign")).expect("val");
+            fbody["notice"] = serde_json::to_value(&forged).expect("val");
+            let bad_sig = handle_address_notice(fbody.to_string().as_bytes());
+
+            // An untrusted (Pending) sender with a valid signature.
+            let pending_key = keypair();
+            let mut store = PeerStore::load().expect("load");
+            let pf = store.upsert(FederationPeer::pin("pend", "pend", pending_key.public_key_pem()).expect("pin"));
+            store.save().expect("save");
+            let mut pn = n.clone();
+            pn.fingerprint = pf;
+            pn.old_address = PeerAddress::new("pend", "");
+            pn.seq = 5;
+            let pbody = serde_json::to_vec(&notice::sign(&pn, &pending_key).expect("sign")).expect("enc");
+            let untrusted = handle_address_notice(&pbody);
+
+            // All three read the same: no hint which fingerprints are pinned.
+            for r in [&unknown, &bad_sig, &untrusted] {
+                assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+                assert_eq!(r.body, r#"{"code":"rejected","error":"rejected"}"#, "{}", r.body);
+            }
+
+            // Garbage: 400. Oversized: 400 before any parsing.
             assert_eq!(handle_address_notice(b"{").status, "400 Bad Request");
+            let big = vec![b' '; notice::MAX_NOTICE_BYTES + 1];
+            assert_eq!(handle_address_notice(&big).status, "400 Bad Request");
         });
     }
 

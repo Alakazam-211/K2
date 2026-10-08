@@ -225,6 +225,16 @@ impl NoticeError {
         }
     }
 
+    /// What the public route says: unknown sender, untrusted sender and a
+    /// bad signature are one `rejected`, so the route never reveals which
+    /// fingerprints this server has pinned. The detail is for the debug log.
+    pub fn public_code(&self) -> &'static str {
+        match self {
+            Self::UnknownPeer | Self::NotTrusted | Self::Key(_) | Self::BadSignature => "rejected",
+            other => other.code(),
+        }
+    }
+
     /// Stable machine code.
     pub fn code(&self) -> &'static str {
         match self {
@@ -438,6 +448,32 @@ pub fn apply(
     local: &LocalIdentity,
     now: DateTime<Utc>,
 ) -> Result<Applied, NoticeError> {
+    let verified = verify_notice(store, body, local, now)?;
+    apply_verified(store, &verified, local, now)
+}
+
+/// Largest notice body the receiver reads.
+pub const MAX_NOTICE_BYTES: usize = 8 * 1024;
+
+/// A notice whose signature verified against the key pinned for its sender.
+#[derive(Debug, Clone)]
+pub struct VerifiedNotice {
+    signed: SignedAddressNotice,
+    pinned_pem: String,
+}
+
+/// Step 1 of [`apply`], done on a snapshot of the store and outside any
+/// lock: decode, version, the sender's pinned key, signature, trust,
+/// recipient and time window. Changes nothing.
+pub fn verify_notice(
+    store: &PeerStore,
+    body: &[u8],
+    local: &LocalIdentity,
+    now: DateTime<Utc>,
+) -> Result<VerifiedNotice, NoticeError> {
+    if body.len() > MAX_NOTICE_BYTES {
+        return Err(NoticeError::Decode(format!("body over {MAX_NOTICE_BYTES} bytes")));
+    }
     let signed: SignedAddressNotice =
         serde_json::from_slice(body).map_err(|e| NoticeError::Decode(e.to_string()))?;
     let n = &signed.notice;
@@ -445,7 +481,7 @@ pub fn apply(
         return Err(NoticeError::UnsupportedVersion(n.v));
     }
     // The key comes ONLY from the row already pinned for this fingerprint.
-    let peer = store.get(&n.fingerprint).ok_or(NoticeError::UnknownPeer)?.clone();
+    let peer = store.get(&n.fingerprint).ok_or(NoticeError::UnknownPeer)?;
     verify(&signed, &peer.public_key_pem)?;
     if peer.trust != PeerTrust::Trusted {
         return Err(NoticeError::NotTrusted);
@@ -461,6 +497,27 @@ pub fn apply(
     }
     if issued < now - Duration::days(MAX_AGE_DAYS) {
         return Err(NoticeError::Stale);
+    }
+    let pinned_pem = peer.public_key_pem.clone();
+    Ok(VerifiedNotice { signed, pinned_pem })
+}
+
+/// Step 2 of [`apply`], under the store's transaction lock: the sender must
+/// still be pinned Trusted with the same key it was verified against; then
+/// replay, address validation, conflicts and the change itself.
+pub fn apply_verified(
+    store: &mut PeerStore,
+    verified: &VerifiedNotice,
+    local: &LocalIdentity,
+    now: DateTime<Utc>,
+) -> Result<Applied, NoticeError> {
+    let n = &verified.signed.notice;
+    let peer = store.get(&n.fingerprint).ok_or(NoticeError::UnknownPeer)?.clone();
+    if peer.public_key_pem != verified.pinned_pem {
+        return Err(NoticeError::BadSignature);
+    }
+    if peer.trust != PeerTrust::Trusted {
+        return Err(NoticeError::NotTrusted);
     }
     if n.seq <= peer.address_seq {
         return Err(NoticeError::Replay { seq: n.seq, last: peer.address_seq });

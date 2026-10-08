@@ -8871,8 +8871,28 @@ async fn handle_one_request(
                     // NO token gate: the notice is signed by the peer's
                     // federation key and verified against the key already
                     // pinned for its fingerprint (inside the handler). It can
-                    // only move that one peer's address.
-                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    // only move that one peer's address. Public: the body
+                    // is capped (a notice is well under 1 KiB).
+                    let body = match super::http::read_post_body_capped(
+                        &mut *stream,
+                        &mut buf,
+                        k2_core::federation::address_notice::MAX_NOTICE_BYTES,
+                    )
+                    .await
+                    {
+                        Ok(b) => b,
+                        Err(refused) => {
+                            super::http::refuse_body_too_large(
+                                &mut *stream,
+                                &refused,
+                                "413 Payload Too Large",
+                                "application/json",
+                                r#"{"error":"address notice over 8 KiB","code":"too_large"}"#,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
                     tokio::task::spawn_blocking(move || {
                         crate::federation_address::handle_address_notice(&body)
                     })

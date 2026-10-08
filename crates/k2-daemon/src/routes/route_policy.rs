@@ -446,6 +446,17 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/bans/clear", Admin),
     both("/cli/mail/bans/migrate", Admin),
     post("/cli/mail/bans/migrate/restore", Admin),
+    // Calendars S3: agent calendar verbs, gated by k2 mail access levels
+    // in the handlers (read: GET; draft: POST) — Member floor like
+    // messages/draft.
+    post("/cli/mail/calendar/create", Member),
+    post("/cli/mail/calendar/delete", Member),
+    get("/cli/mail/calendar/events", Member),
+    get("/cli/mail/calendar/freebusy", Member),
+    get("/cli/mail/calendar/list", Member),
+    get("/cli/mail/calendar/show", Member),
+    post("/cli/mail/calendar/update", Member),
+    get("/cli/mail/calendar/wait", Member),
     both("/cli/mail/catchall", Admin),
     both("/cli/mail/cert/names", Admin),
     both("/cli/mail/cert/owner", Admin),

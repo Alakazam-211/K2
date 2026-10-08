@@ -54,6 +54,11 @@ assert_eq "msg → tool id" "$(_cli_tool_id_for_verb msg)" "msg"
 assert_eq "talk → msg tool" "$(_cli_tool_id_for_verb talk)" "msg"
 assert_eq "mail → mail" "$(_cli_tool_id_for_verb mail)" "mail"
 assert_eq "hostmail → mail" "$(_cli_tool_id_for_verb hostmail)" "mail"
+# Calendars S3 (CAL23.4): calendar/cal MUST ride the mail id tool — an
+# unmapped verb is "open" and re-sources the owner token in a scoped cell.
+assert_eq "calendar → mail" "$(_cli_tool_id_for_verb calendar)" "mail"
+assert_eq "cal → mail" "$(_cli_tool_id_for_verb cal)" "mail"
+assert_eq "calendar mode id" "$(_cli_tool_default_mode "$(_cli_tool_id_for_verb calendar)")" "id"
 assert_eq "db → db" "$(_cli_tool_id_for_verb db)" "db"
 assert_eq "store → store" "$(_cli_tool_id_for_verb store)" "store"
 assert_eq "sessions → sessions-spawn" "$(_cli_tool_id_for_verb sessions)" "sessions-spawn"
@@ -246,6 +251,39 @@ else
         fail=$((fail + 1))
     fi
 fi
+
+# Calendars S3 (CAL23.4): `k2 calendar` / `k2 cal` from a scoped cell must
+# carry the SCOPED token too — never the disk owner token.
+for cal_verb in calendar cal; do
+    rm -f "$WORK/last_req.json"
+    set +e
+    env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2SO_PORT \
+        K2_PORT="$STUB_PORT" \
+        K2_HOOK_TOKEN="$SCOPED" \
+        K2_HOOK_SOCK="$FAKE_SOCK" \
+        K2_PROJECT_PATH="$WORK" \
+        "$K2_CLI" "$cal_verb" list --json >/dev/null 2>"$WORK/cal.err"
+    cal_rc=$?
+    set -e
+    if [ ! -f "$WORK/last_req.json" ]; then
+        echo "  FAIL: stub saw no $cal_verb request (rc=$cal_rc err=$(cat "$WORK/cal.err" 2>/dev/null))" >&2
+        fail=$((fail + 1))
+    else
+        cal_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$WORK/last_req.json")"
+        assert_eq "$cal_verb list hits the calendar route" "$cal_path" "/cli/mail/calendar/list"
+        tok="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("token_query",""))' "$WORK/last_req.json")"
+        assert_eq "$cal_verb TCP token is scoped (not owner)" "$tok" "$SCOPED"
+    fi
+    set +e
+    env -u K2SO_HOOK_SOCK -u K2SO_HOOK_TOKEN -u K2_HOOK_TOKEN -u K2SO_PORT \
+        K2_PORT="$STUB_PORT" \
+        K2_HOOK_SOCK="$FAKE_SOCK" \
+        K2_PROJECT_PATH="$WORK" \
+        "$K2_CLI" "$cal_verb" list --json >/dev/null 2>"$WORK/cal_no_passport.err"
+    cal_e3=$?
+    set -e
+    assert_eq "e2e $cal_verb ID+sock+no-passport exit 3" "$cal_e3" "3"
+done
 
 # Exit-3 path end-to-end (no SCOPED token in env)
 set +e

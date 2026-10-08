@@ -71,7 +71,9 @@ cmds = doc["commands"]
 if not isinstance(cmds, list) or len(cmds) < 100:
     problems.append("commands is not a list of 100+ (got %r)" % type(cmds).__name__)
 names = [c["name"] for c in cmds]
-for need in ("agent context add", "agent context catalog", "mail draft", "--schema"):
+for need in ("agent context add", "agent context catalog", "mail draft", "--schema",
+             "calendar list", "calendar events", "calendar show", "calendar freebusy",
+             "calendar wait", "calendar create", "calendar update", "calendar delete"):
     if need not in names:
         problems.append("missing command %r" % need)
 

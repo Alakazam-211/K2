@@ -513,6 +513,30 @@ pub fn readable_hosted(project_id: &str) -> Vec<(String, String)> {
     .unwrap_or_default()
 }
 
+/// Calendars S3 (CAL19): the ACTIVE hosted addresses this workspace
+/// OWNS (`owner_project_id == project_id`) — the default inbox when
+/// `k2 calendar` gets no `<address>`. Grants are deliberately NOT
+/// included (a granted inbox must be named). Callers apply the 0 / 1 /
+/// more-than-1 rule and then pass the address through the normal masked
+/// gate (`can_read`/`can_draft`), so the owner's own `primary_level`
+/// still applies. A read error is an error, never an empty list.
+pub fn primary_hosted(project_id: &str) -> Result<Vec<String>, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT address FROM mail_addresses \
+             WHERE status = 'active' AND owner_project_id = ?1 \
+             ORDER BY created_at, address",
+        )
+        .map_err(|e| format!("list hosted inboxes: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("list hosted inboxes: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("list hosted inboxes: {e}"))
+}
+
 /// Every LINKED inbox a workspace can DRAFT INTO (effective level ≥
 /// draft). Used by compose-draft's implicit `--from` resolver: 0 →
 /// teach, 1 → implicit, N → require `--from`. Does **not** include

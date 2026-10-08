@@ -50,6 +50,9 @@
 //! - [`domains`] — S2 domain onboarding: zone-file parsing, the DNS
 //!   record table, SPF split-config, add/remove/list/show ops (behind
 //!   the `DomainEngine` trait so tests never touch a network).
+//! - [`calendar`] — `k2 calendar` (calendars S3): agent calendar
+//!   read/write on hosted inboxes over JMAP for Calendars, gated by the
+//!   `k2 mail access` levels (read = read, draft = write without email).
 //! - [`app_password`] — extra labeled secrets on a minted User
 //!   (`x:AppPassword`); mail_manage extra-gate like quota; lookup is
 //!   password-rotate (any active hosted row).
@@ -111,6 +114,7 @@ pub mod agent_creds;
 pub mod alias;
 pub mod app_password;
 pub mod bans;
+pub mod calendar;
 pub mod catchall;
 pub mod cert_names;
 pub mod cert_owner;

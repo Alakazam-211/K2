@@ -104,6 +104,14 @@
 //! | GET  /cli/mail/bans/migrate       | mail/bans.rs (status)  |
 //! | POST /cli/mail/bans/migrate       | mail/bans.rs           |
 //! | POST /cli/mail/bans/migrate/restore | mail/bans.rs         |
+//! | GET  /cli/mail/calendar/list      | mail/calendar.rs       |
+//! | GET  /cli/mail/calendar/events    | mail/calendar.rs       |
+//! | GET  /cli/mail/calendar/show      | mail/calendar.rs       |
+//! | GET  /cli/mail/calendar/freebusy  | mail/calendar.rs       |
+//! | GET  /cli/mail/calendar/wait      | mail/calendar.rs       |
+//! | POST /cli/mail/calendar/create    | mail/calendar.rs       |
+//! | POST /cli/mail/calendar/update    | mail/calendar.rs       |
+//! | POST /cli/mail/calendar/delete    | mail/calendar.rs       |
 //!
 //! (Family name is `mail`, deliberately NOT `inbox` — that collides
 //! with K2's internal `/cli/inbox/*` queue, PRD §11.)
@@ -228,6 +236,15 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // no side effects). The mode write is POST /cli/mail/backup/set.
         "/cli/mail/backup" => crate::mail::backup::handle_status_get(params),
         "/cli/mail/backup/plan" => crate::mail::backup::handle_plan(params),
+        // Calendars S3: AGENT calendar reads (read level via k2 mail
+        // access; NOT owner or mail_manage surfaces). `wait` long-polls —
+        // the dispatcher already runs every /cli/mail/ GET in
+        // spawn_blocking.
+        "/cli/mail/calendar/list" => crate::mail::calendar::handle_list(params),
+        "/cli/mail/calendar/events" => crate::mail::calendar::handle_events(params),
+        "/cli/mail/calendar/show" => crate::mail::calendar::handle_show(params),
+        "/cli/mail/calendar/freebusy" => crate::mail::calendar::handle_freebusy(params),
+        "/cli/mail/calendar/wait" => crate::mail::calendar::handle_wait(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -299,7 +316,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/allowlist/add"
         | "/cli/mail/allowlist/remove"
         | "/cli/mail/bans/migrate/restore"
-        | "/cli/mail/backup/set" => CliResponse::method_not_allowed(),
+        | "/cli/mail/backup/set"
+        // Calendars S3: draft-level event writes are POST-only.
+        | "/cli/mail/calendar/create"
+        | "/cli/mail/calendar/update"
+        | "/cli/mail/calendar/delete" => CliResponse::method_not_allowed(),
 
         _ => CliResponse::not_found(),
     };
@@ -423,6 +444,12 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/profile" => crate::mail::profile::handle_profile(body),
         // S8 B1: choose the box's backup mode (mail-manage; nothing runs yet).
         "/cli/mail/backup/set" => crate::mail::backup::handle_set(body),
+        // Calendars S3: agent event writes (draft level via k2 mail
+        // access; never email). Each handler also refuses a GET-shaped
+        // call itself — the 405 above is the GET chain's answer.
+        "/cli/mail/calendar/create" => crate::mail::calendar::handle_create(body),
+        "/cli/mail/calendar/update" => crate::mail::calendar::handle_update(body),
+        "/cli/mail/calendar/delete" => crate::mail::calendar::handle_delete(body),
         _ => CliResponse::not_found(),
     }
 }

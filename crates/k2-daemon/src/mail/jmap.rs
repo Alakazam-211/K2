@@ -2228,6 +2228,110 @@ impl StalwartClient {
         parse_method_response(method, &resp)
     }
 
+    /// Calendars S3 (CAL16): one JMAP-for-Calendars call on the mailbox
+    /// `accountId` (delegated ApiKey, S0.1). Mirrors [`Self::sieve_call`]
+    /// with [`JMAP_CALENDARS_USING`]. `account_id` is ALWAYS the account
+    /// K2 resolved from the address row; a client-supplied `accountId` in
+    /// `args` is overwritten here (CAL16: the admin key can address any
+    /// account, so K2's access check is the only guard).
+    fn calendars_call(
+        &self,
+        account_id: &str,
+        method: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["accountId"] = serde_json::Value::String(account_id.to_string());
+        let api_url = self.discover_api_url()?;
+        let resp = self.post_json_url(&api_url, &calendars_envelope(method, args))?;
+        parse_method_response(method, &resp)
+    }
+
+    /// `Calendar/get` (all calendars of the account) → the raw `list`.
+    /// The first call on an account with no calendar makes Stalwart
+    /// create its default one (`groupware/src/cache/calcard.rs:112-124`).
+    pub(crate) fn calendar_list(&self, account_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let args = self.calendars_call(
+            account_id,
+            "Calendar/get",
+            serde_json::json!({ "ids": null, "properties": CALENDAR_PROPERTIES }),
+        )?;
+        Ok(args.get("list").and_then(|v| v.as_array()).cloned().unwrap_or_default())
+    }
+
+    /// `Principal/getAvailability` for the account's OWN principal over
+    /// `[utc_start, utc_end)` (`Z` UTCDates — real instants here, unlike
+    /// the query filter) → the raw `list` of `{utcStart, utcEnd,
+    /// busyStatus}`. Stalwart's busy rules: subscribed calendars with
+    /// availability on; cancelled, free and secret events skipped
+    /// (0.16.20 `jmap/src/principal/availability.rs`).
+    pub(crate) fn principal_availability(
+        &self,
+        account_id: &str,
+        utc_start: &str,
+        utc_end: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let args = self.calendars_call(
+            account_id,
+            "Principal/getAvailability",
+            serde_json::json!({ "id": account_id, "utcStart": utc_start, "utcEnd": utc_end }),
+        )?;
+        Ok(args.get("list").and_then(|v| v.as_array()).cloned().unwrap_or_default())
+    }
+
+    /// `CalendarEvent/query` → ids (`args` = filter/sort/limit/
+    /// expandRecurrences/timeZone, built by `mail::calendar`).
+    pub(crate) fn calendar_event_query(
+        &self,
+        account_id: &str,
+        args: serde_json::Value,
+    ) -> Result<Vec<String>, String> {
+        let reply = self.calendars_call(account_id, "CalendarEvent/query", args)?;
+        Ok(parse_query_ids(&reply))
+    }
+
+    /// `CalendarEvent/get` → the whole method response (`list`,
+    /// `notFound`, `state`). `ids: []` is the cheap way to read `state`.
+    pub(crate) fn calendar_event_get(
+        &self,
+        account_id: &str,
+        ids: &[String],
+        properties: Option<&[&str]>,
+    ) -> Result<serde_json::Value, String> {
+        let mut args = serde_json::json!({ "ids": ids });
+        if let Some(p) = properties {
+            args["properties"] = serde_json::json!(p);
+        }
+        self.calendars_call(account_id, "CalendarEvent/get", args)
+    }
+
+    /// `CalendarEvent/changes` since `since_state` → the method response
+    /// (`created`/`updated`/`destroyed`/`newState`/`hasMoreChanges`).
+    pub(crate) fn calendar_event_changes(
+        &self,
+        account_id: &str,
+        since_state: &str,
+    ) -> Result<serde_json::Value, String> {
+        self.calendars_call(
+            account_id,
+            "CalendarEvent/changes",
+            serde_json::json!({ "sinceState": since_state, "maxChanges": 256 }),
+        )
+    }
+
+    /// `CalendarEvent/set` for the DRAFT level (CAL4/CAL20): this wrapper
+    /// ALWAYS forces `sendSchedulingMessages: false`, whatever the caller
+    /// built — S3 never sends iTIP mail (S0.2). Invites (S5) will be a
+    /// separate, governed path. Returns the method response; a non-empty
+    /// `notCreated`/`notUpdated`/`notDestroyed` is the caller's to read.
+    pub(crate) fn calendar_event_set_no_scheduling(
+        &self,
+        account_id: &str,
+        mut args: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        args["sendSchedulingMessages"] = serde_json::Value::Bool(false);
+        self.calendars_call(account_id, "CalendarEvent/set", args)
+    }
+
     /// S4 — the target account's Inbox mailbox id (`Mailbox/query`
     /// filtered on the RFC 8621 `role: "inbox"`). Every read/wait
     /// query scopes to it.
@@ -2753,6 +2857,40 @@ const JMAP_SIEVE_USING: [&str; 2] = [
     "urn:ietf:params:jmap:core",
     "urn:ietf:params:jmap:sieve",
 ];
+
+/// Calendars S3 (CAL16): `using` for JMAP for Calendars calls.
+/// Stalwart 0.16.20 gates Calendar/* and CalendarEvent/* on
+/// `…:calendars` and `Principal/getAvailability` on `…:principals`
+/// (`jmap-proto/src/request/method.rs:58-63`); a missing capability is a
+/// per-call `unknownMethod` (`jmap/src/api/request.rs:108-121`). Both are
+/// known URNs, so the extra entry never fails the request.
+pub(crate) const JMAP_CALENDARS_USING: [&str; 3] = [
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:calendars",
+    "urn:ietf:params:jmap:principals",
+];
+
+/// `Calendar/get` properties `k2 calendar list` reads (named, because
+/// 0.16.20's default set omits some — `calendar/get.rs:49-59`).
+const CALENDAR_PROPERTIES: [&str; 10] = [
+    "id",
+    "name",
+    "description",
+    "color",
+    "sortOrder",
+    "isDefault",
+    "isSubscribed",
+    "isVisible",
+    "includeInAvailability",
+    "timeZone",
+];
+
+fn calendars_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "using": JMAP_CALENDARS_USING,
+        "methodCalls": [[method, args, "0"]],
+    })
+}
 
 fn sieve_envelope(method: &str, args: serde_json::Value) -> serde_json::Value {
     serde_json::json!({

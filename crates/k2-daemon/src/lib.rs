@@ -1,24 +1,11 @@
-//! Thin library surface for the k2so-daemon binary.
+//! The k2-daemon library: the whole daemon.
 //!
-//! The crate's primary artifact remains the `k2so-daemon` binary
-//! (see `src/main.rs`). This lib exists so integration tests in
-//! `crates/k2so-daemon/tests/*.rs` can reach internal modules like
-//! `sessions_ws` without duplicating the code — the binary's own
-//! `mod` declarations are unchanged and sit above `main.rs`.
-//!
-//! **Important:** `lib.rs` and `main.rs` are TWO INDEPENDENT
-//! compilations of the same `src/*.rs` files. `main.rs` declares the
-//! whole module tree privately (`mod foo;`); this lib re-declares a
-//! curated set as `pub mod foo;` pointing at the same files. Adding a
-//! module / type here therefore changes only the test-facing library —
-//! it has ZERO effect on the production binary, whose `mod` graph in
-//! `main.rs` is the source of truth. (#630 added the full module set +
-//! [`DaemonState`]/[`BANNER`] here so the route DISPATCHER —
-//! `routes::dispatcher::dispatch` — and every `crate::*` handler it
-//! reaches can compile inside the lib, letting the auth-route
-//! integration harness drive real HTTP requests through the real
-//! dispatch + gate + handler stack. No runtime behavior is added or
-//! changed: these are the same source files the binary already builds.)
+//! `src/main.rs` is a two-line shim that calls [`daemon_main::run`]. Since
+//! 0.45.1 there is ONE module graph (it used to be compiled twice: privately
+//! by `main.rs` and publicly here), so every static exists once and every
+//! unit test runs once. Integration tests in `tests/*.rs` reach modules
+//! through this library, and [`test_harness`] runs the real dispatcher
+//! in-process.
 
 // ── Full module tree (mirrors `main.rs`'s private `mod` graph) ──────
 // Declared `pub` so the route dispatcher's `crate::*` references all
@@ -212,6 +199,8 @@ pub mod chat_overlay_ws;
 pub mod skin_hydra;
 pub mod skin_routes;
 pub mod skin_gateway;
+// The boot sequence (was the body of `main.rs`).
+pub mod daemon_main;
 
 #[cfg(test)]
 mod test_support;
@@ -225,22 +214,16 @@ use tokio::sync::broadcast;
 
 use crate::events::{WireEvent, EVENT_CHANNEL_CAP};
 
-/// Build/identity banner. Mirrors `main.rs`'s `BANNER` (referenced by
-/// the `/ping` route in the dispatcher). Defined here so the dispatcher
-/// compiles inside the lib for the #630 harness.
+/// Build/identity banner (logged at boot, served by `/ping`).
 pub const BANNER: &str = concat!(
-    "k2so-daemon ",
+    "k2-daemon ",
     env!("CARGO_PKG_VERSION"),
-    " — scaffolding build (tokio)",
+    " (tokio)",
 );
 
 /// Shared per-process state pulled into every connection task. Cheap to
 /// clone: all fields are either `Copy`, `&'static`, or `Arc`-wrapped.
 ///
-/// Mirrors the `DaemonState` defined in `main.rs`. The two are distinct
-/// types in distinct crate compilations, but field-for-field identical;
-/// the dispatcher references `crate::DaemonState`, which resolves to
-/// THIS definition when compiled into the lib.
 #[derive(Clone)]
 pub struct DaemonState {
     pub token: Arc<String>,

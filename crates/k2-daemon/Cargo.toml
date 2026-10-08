@@ -8,6 +8,9 @@ description = "K2 persistent-agent daemon: launchd-managed device-local process 
 [[bin]]
 name = "k2-daemon"
 path = "src/main.rs"
+# `main.rs` only calls `k2_daemon::daemon_main::run()`; every unit test
+# lives in (and runs once from) the library.
+test = false
 
 # Hostmail root door. Not setuid. User k2 runs it only via sudo -n.
 # Not feature-gated: provision installs the release bin beside the daemon.
@@ -31,10 +34,8 @@ name = "k2-vmm-worker"
 path = "src/bin/k2-vmm-worker.rs"
 required-features = ["sandbox-microvm"]
 
-# Thin library surface so integration tests (crates/k2so-daemon/tests/*)
-# can reach modules like `sessions_ws` directly. The daemon has always
-# been a binary — this lib entry just re-exports the internal modules
-# for the test binaries. Production artifacts unchanged.
+# The daemon itself. `src/main.rs` is a shim over `daemon_main::run()`;
+# integration tests (crates/k2-daemon/tests/*) reach modules through it.
 [lib]
 name = "k2_daemon"
 path = "src/lib.rs"

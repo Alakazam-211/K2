@@ -61,6 +61,11 @@ jobs:
       - name: Vitest
         run: bunx vitest run --reporter=dot
 
+      # prd-zen-user-widgets-v2 UW41, TUWA11: the widget CLI's offline
+      # half (no grant verb, usage errors, the generated guide api page).
+      - name: k2 zen widget CLI (no daemon)
+        run: bash tests/cli/zen_widget_offline.sh
+
       # Hosted SPA production build (vite.config.web.ts). Build-only — no R2
       # publish. Catches Vite graph / asset / CSS regressions typecheck misses.
       - name: Vite build hosted web
@@ -92,6 +97,19 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: cargo check -p k2-core -p k2-daemon --all-targets
+
+      # Zen v2 (prd-zen-user-widgets-v2 UWB28): the steps above only
+      # compile, so the verb catalog's lint, the generated-file freshness
+      # check and the catalog-vs-ROUTES tests never failed a build. Run
+      # them (plus k2-core's Zen tests) until the 0.45.1 "nextest in CI"
+      # item replaces this step. Stale generated files: run
+      # `cargo run -p k2-core --bin contract-gen`.
+      - name: cargo test verb catalog + Zen
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo test -p k2-core --lib -- contract:: zen::
+          cargo test -p k2-daemon --test contract_routes
 
       # Custom/enterprise air-gap compile (`--features airgap`). Compiles
       # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot

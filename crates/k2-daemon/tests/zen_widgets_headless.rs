@@ -346,10 +346,19 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let (s, v) = call(port, "POST", &format!("/cli/zen/widget/grant?token={session}"), Some("{}"));
         assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{role}: {v}");
     }
-    // 65 KB body → 413.
-    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024));
-    let (s, _) = Conn::try_open(port).expect("connect").request("POST", &format!("/cli/zen/widget/new?token={tok}"), Some(&big));
-    assert_eq!(s, 413);
+    // 65 KB body → 413. The daemon refuses on the declared length as soon
+    // as the head ends and closes; send only the head, so the test never
+    // races that close with a 65 KB write (on Linux the unread body turns
+    // the close into a reset and write_all fails before the 413 is read).
+    let big_len = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024)).len();
+    let mut c = Conn::try_open(port).expect("connect");
+    let head = format!(
+        "POST /cli/zen/widget/new?token={tok} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {big_len}\r\n\r\n"
+    );
+    c.reader.get_mut().write_all(head.as_bytes()).expect("write head");
+    let mut status_line = String::new();
+    c.reader.read_line(&mut status_line).expect("read 413 status line");
+    assert!(status_line.starts_with("HTTP/1.1 413"), "65 KB declared body: {status_line:?}");
     task.abort();
 }
 

@@ -1,0 +1,35 @@
+{
+  "name": "k2-zen-lib-vendor",
+  "private": true,
+  "description": "Pinned npm packages for scripts/vendor-zen-lib.sh (never installed by the app build). Exact versions only; the lock next to this file pins every tarball's integrity.",
+  "dependencies": {
+    "@fontsource/caveat": "5.3.0",
+    "@highlightjs/cdn-assets": "11.12.0",
+    "animejs": "4.5.0",
+    "cannon-es": "0.20.0",
+    "chart.js": "4.5.1",
+    "d3": "7.9.0",
+    "dompurify": "3.4.16",
+    "echarts": "6.1.0",
+    "globe.gl": "2.46.2",
+    "howler": "2.2.4",
+    "htm": "3.1.1",
+    "kaplay": "3001.0.19",
+    "katex": "0.18.9",
+    "leaflet": "1.9.4",
+    "lit": "3.3.3",
+    "lottie-web": "5.13.0",
+    "marked": "18.0.14",
+    "matter-js": "0.20.0",
+    "perfect-freehand": "1.2.3",
+    "phaser": "4.2.1",
+    "pixi.js": "8.21.0",
+    "preact": "10.29.8",
+    "roughjs": "4.6.6",
+    "three": "0.186.0",
+    "tone": "15.1.22"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

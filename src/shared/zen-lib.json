@@ -1,6 +1,514 @@
 {
   "schema": 1,
   "maxBytesPerWidget": 8388608,
-  "cdnHosts": ["cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com"],
-  "libs": []
+  "cdnHosts": [
+    "cdnjs.cloudflare.com",
+    "cdn.jsdelivr.net",
+    "unpkg.com"
+  ],
+  "libs": [
+    {
+      "id": "three",
+      "version": "0.186.0",
+      "title": "three.js",
+      "global": "THREE",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright © 2010-2026 three.js authors",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "three.js",
+          "bytes": 981964,
+          "sha256": "3e8e4f010b93d8309a0534a0e53722813962da1cafa58645d1eabe375a9fc832"
+        }
+      ],
+      "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=THREE --minify --target=es2020,safari15 --legal-comments=eof (three.js; entry in scripts/zen-lib/libs.ts)",
+      "notes": "THREE also carries common add-ons: OrbitControls, MapControls, TrackballControls, PointerLockControls, DragControls, TransformControls, GLTFLoader, OBJLoader, MTLLoader, STLLoader, SVGLoader, FontLoader, TextGeometry, RoundedBoxGeometry, ConvexGeometry, EffectComposer, RenderPass, ShaderPass, UnrealBloomPass, OutlinePass, FXAAPass, OutputPass, CSS2DRenderer, CSS3DRenderer, Sky, SimplexNoise, ImprovedNoise, BufferGeometryUtils, SkeletonUtils. Load models and textures from data: URLs (k2.asset), never http."
+    },
+    {
+      "id": "globe.gl",
+      "version": "2.46.2",
+      "title": "globe.gl",
+      "global": "Globe",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2019 Vasco Asturiano",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "globe.gl.min.js",
+          "bytes": 1885160,
+          "sha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c"
+        }
+      ],
+      "notes": "Carries its own copy of three.js inside. Its example earth textures are web URLs, which a sealed widget cannot load: pass your own image as a data: URL (globeImageUrl(k2.asset(\"earth.jpg\")))."
+    },
+    {
+      "id": "cannon-es",
+      "version": "0.20.0",
+      "title": "cannon-es",
+      "global": "CANNON",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2015 cannon.js Authors",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "cannon-es.js",
+          "bytes": 123989,
+          "sha256": "6795d934632fc000130d23ed44793933aa4be6333813d89c151219f0b169c894"
+        }
+      ],
+      "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=CANNON --minify --target=es2020,safari15 --legal-comments=eof (cannon-es.js; entry in scripts/zen-lib/libs.ts)"
+    },
+    {
+      "id": "pixi.js",
+      "version": "8.21.0",
+      "title": "PixiJS",
+      "global": "PIXI",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2013-2023 Mathew Groves, Chad Engler",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "pixi.min.js",
+          "bytes": 828284,
+          "sha256": "47c542b4038968bece0effdc8025c5c7df8f5a5b717ebddc58617f22571cf77d"
+        },
+        {
+          "name": "unsafe-eval.min.js",
+          "bytes": 15701,
+          "sha256": "fa8d42a545150a1f38ea98a5aff6da5b4ef1b2fcc0e917a90bad962a6d08b03d"
+        }
+      ],
+      "notes": "Ships with PixiJS's no-eval add-on already loaded, so it runs under the widget security policy."
+    },
+    {
+      "id": "phaser",
+      "version": "4.2.1",
+      "title": "Phaser",
+      "global": "Phaser",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2026 Richard Davey, Phaser Studio Inc.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "phaser.min.js",
+          "bytes": 1375976,
+          "sha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de"
+        }
+      ],
+      "notes": "Load images and audio from data: URLs (this.load.image(\"cat\", k2.asset(\"cat.png\")))."
+    },
+    {
+      "id": "kaplay",
+      "version": "3001.0.19",
+      "title": "KAPLAY",
+      "global": "kaplay",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2025, KAPLAY Team and contributers",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "kaplay.js",
+          "bytes": 189050,
+          "sha256": "710f0696e0a867f530c1be204464e288d5326870f2de5c0fd114e7c33315a933"
+        }
+      ]
+    },
+    {
+      "id": "matter-js",
+      "version": "0.20.0",
+      "title": "Matter.js",
+      "global": "Matter",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) Liam Brummitt and contributors.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "matter.min.js",
+          "bytes": 83476,
+          "sha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae"
+        }
+      ]
+    },
+    {
+      "id": "d3",
+      "version": "7.9.0",
+      "title": "D3",
+      "global": "d3",
+      "license": "ISC",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2010-2023 Mike Bostock",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "d3.min.js",
+          "bytes": 279706,
+          "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
+        }
+      ],
+      "notes": "d3.json/d3.csv fetch over the network and are blocked; parse inline data with d3.csvParse."
+    },
+    {
+      "id": "chart.js",
+      "version": "4.5.1",
+      "title": "Chart.js",
+      "global": "Chart",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2014-2024 Chart.js Contributors",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "chart.umd.min.js",
+          "bytes": 208480,
+          "sha256": "84d0e233daba702b8f77d669d8c137cad36d441a10f200b6f2d3ab553bdfcf6b"
+        }
+      ]
+    },
+    {
+      "id": "echarts",
+      "version": "6.1.0",
+      "title": "Apache ECharts",
+      "global": "echarts",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2017-2026 The Apache Software Foundation; This product includes software developed at The Apache Software Foundation (https://www.apache.org/).",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "echarts.min.js",
+          "bytes": 1121883,
+          "sha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
+        }
+      ]
+    },
+    {
+      "id": "animejs",
+      "version": "4.5.0",
+      "title": "Anime.js",
+      "global": "anime",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2025 Julian Garnier",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "anime.umd.min.js",
+          "bytes": 118043,
+          "sha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b"
+        }
+      ]
+    },
+    {
+      "id": "lottie-web",
+      "version": "5.13.0",
+      "title": "Lottie",
+      "global": "lottie",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2015 Bodymovin",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "lottie.min.js",
+          "bytes": 305704,
+          "sha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac"
+        }
+      ],
+      "notes": "Pass the animation as animationData (an object), not a path. Animations that use expressions need eval and do not run."
+    },
+    {
+      "id": "perfect-freehand",
+      "version": "1.2.3",
+      "title": "perfect-freehand",
+      "global": "PerfectFreehand",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2021 Stephen Ruiz Ltd",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "perfect-freehand.js",
+          "bytes": 5135,
+          "sha256": "1d4ef35cc06f113a2e533196bf62680a411b9866e19aae5cded31a928d3ca533"
+        }
+      ],
+      "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=PerfectFreehand --minify --target=es2020,safari15 --legal-comments=eof (perfect-freehand.js; entry in scripts/zen-lib/libs.ts)",
+      "notes": "PerfectFreehand.getStroke(points, options) returns the outline polygon; draw it as an SVG path or on a canvas."
+    },
+    {
+      "id": "roughjs",
+      "version": "4.6.6",
+      "title": "Rough.js",
+      "global": "rough",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2019 Preet Shihn",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "rough.js",
+          "bytes": 27762,
+          "sha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194"
+        }
+      ]
+    },
+    {
+      "id": "howler",
+      "version": "2.2.4",
+      "title": "howler.js",
+      "global": "Howler",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2013-2020 James Simpson and GoldFire Studios, Inc.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "howler.min.js",
+          "bytes": 36173,
+          "sha256": "736c339444c88baad593e24afdf1d6e8f574019b4e37a110ecb453ff745ffd41"
+        }
+      ],
+      "notes": "Also defines Howl. Sounds play from data: URLs. Audio files are not widget assets in this version, so keep short sounds as base64 in a script, or synthesize them with Tone.js."
+    },
+    {
+      "id": "tone",
+      "version": "15.1.22",
+      "title": "Tone.js",
+      "global": "Tone",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2014-2020 Yotam Mann",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "Tone.js",
+          "bytes": 345468,
+          "sha256": "6b1d53712892f2ef423d7b2dd2bbb122c4520205cfa7404a97b0d354bd8a883c"
+        }
+      ],
+      "notes": "Limited: AudioWorklet modules can't load in a sealed widget (they need blob: scripts), so worklet-based nodes (Tone.Worklet and nodes built on it) fail. Oscillators, synths, effects and the Transport work."
+    },
+    {
+      "id": "leaflet",
+      "version": "1.9.4",
+      "title": "Leaflet",
+      "global": "L",
+      "license": "BSD-2-Clause",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2010-2023, Volodymyr Agafonkin",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "leaflet.js",
+          "bytes": 147517,
+          "sha256": "dc71f8a6880bc3ca1bd9fa8dc5f1af48c702dc510b0a78240a07c5feed7ce935"
+        },
+        {
+          "name": "leaflet-style.js",
+          "bytes": 21351,
+          "sha256": "9284948b86925e44a1f461685ea69275cb71fb5070b57b9e1084c927874bd02c"
+        },
+        {
+          "name": "leaflet-k2.js",
+          "bytes": 6385,
+          "sha256": "e9ec0cef4ef68846b6888b0b06d47bb1a69e3053776b004e4f874ffc5712332c"
+        }
+      ],
+      "notes": "Limited: no map tiles (they come from the network). Use local image overlays (L.imageOverlay with a data: URL), GeoJSON and vector layers."
+    },
+    {
+      "id": "marked",
+      "version": "18.0.14",
+      "title": "marked",
+      "global": "marked",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/)",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "marked.umd.js",
+          "bytes": 46855,
+          "sha256": "d577478a6e64341800388a528847255715d04ad35fcc03fdd9b1290c37acd592"
+        }
+      ],
+      "notes": "marked does not sanitize: pass its HTML through DOMPurify.sanitize before showing agent text."
+    },
+    {
+      "id": "dompurify",
+      "version": "3.4.16",
+      "title": "DOMPurify",
+      "global": "DOMPurify",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "(c) Cure53 and other contributors",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "purify.min.js",
+          "bytes": 28853,
+          "sha256": "a3ed9c178c8c68079c073cd3b76e9af177d2e246274e397e443c70e21cdf63f3"
+        }
+      ],
+      "notes": "Dual-licensed MPL-2.0 OR Apache-2.0 upstream; K2 ships it under Apache-2.0."
+    },
+    {
+      "id": "highlight.js",
+      "version": "11.12.0",
+      "title": "highlight.js",
+      "global": "hljs",
+      "license": "BSD-3-Clause",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2006, Ivan Sagalaev.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "highlight.min.js",
+          "bytes": 129257,
+          "sha256": "0c0c3108d9e23bc37f474063432137b4d3319fc742cc25ec36ba006f305caca5"
+        },
+        {
+          "name": "highlight-style.js",
+          "bytes": 2918,
+          "sha256": "003b13c8db872b84da92a9890f03c2c4994c3e31fc4db29d0018aaae1c6c7c81"
+        }
+      ],
+      "notes": "The common languages are built in. GitHub light and dark themes follow the Garden scheme."
+    },
+    {
+      "id": "katex",
+      "version": "0.18.9",
+      "title": "KaTeX",
+      "global": "katex",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2013-2020 Khan Academy and other contributors",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "katex.min.js",
+          "bytes": 272755,
+          "sha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2"
+        },
+        {
+          "name": "auto-render.min.js",
+          "bytes": 3486,
+          "sha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4"
+        },
+        {
+          "name": "katex-style.js",
+          "bytes": 369255,
+          "sha256": "4f6b011942fe4bd107178613250721ec0a34f2f5a1e640a9838fbedc02fda317"
+        }
+      ],
+      "notes": "Fonts are inlined (woff2). Also defines renderMathInElement (auto-render)."
+    },
+    {
+      "id": "preact",
+      "version": "10.29.8",
+      "title": "Preact + htm",
+      "global": "preact",
+      "license": "MIT AND Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2015-present Jason Miller; htm: Copyright 2018 Google Inc.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "preact-htm.js",
+          "bytes": 17187,
+          "sha256": "b59c65de67cd5ff55e680a328617baba681873092fa99f8cc8a3bc9a93d714d9"
+        }
+      ],
+      "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=preact --minify --target=es2020,safari15 --legal-comments=eof (preact-htm.js; entry in scripts/zen-lib/libs.ts)",
+      "notes": "preact.html is htm bound to preact.h: preact.render(preact.html`<b>hi</b>`, root). Hooks are on preact too (useState, useEffect, …)."
+    },
+    {
+      "id": "lit",
+      "version": "3.3.3",
+      "title": "Lit",
+      "global": "Lit",
+      "license": "BSD-3-Clause",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2017 Google LLC. All rights reserved.",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "lit.js",
+          "bytes": 23533,
+          "sha256": "d67cea30f72127e7773c2145df9009efc8cb750e5c468cbd4399c2ddc8126560"
+        }
+      ],
+      "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=Lit --minify --target=es2020,safari15 --legal-comments=eof (lit.js; entry in scripts/zen-lib/libs.ts)",
+      "notes": "Lit.html, Lit.css, Lit.LitElement, Lit.render, and the classMap, styleMap, repeat, when, map, ifDefined, live and ref directives."
+    },
+    {
+      "id": "font-caveat",
+      "version": "5.3.0",
+      "title": "Caveat (handwriting font)",
+      "global": "K2Fonts",
+      "license": "OFL-1.1",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat)",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "caveat-style.js",
+          "bytes": 185821,
+          "sha256": "1408f694a8ae389c2dcf7f40362bee647876f5980006963ec97e6ac1db119998"
+        },
+        {
+          "name": "caveat-k2.js",
+          "bytes": 67,
+          "sha256": "d3fa2cb0b45044b304e517533bae666956b201e7469612a8b6ce10b7b18ba149"
+        }
+      ],
+      "notes": "Adds the font family 'Caveat' (weights 400 and 700, Latin). Use font-family: Caveat; K2Fonts.caveat holds the name."
+    },
+    {
+      "id": "babylonjs",
+      "version": "8.52.1",
+      "title": "Babylon.js",
+      "global": "BABYLON",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2023 The Babylon.js team",
+      "source": "download",
+      "files": [
+        {
+          "name": "babylon.js",
+          "bytes": 7878183,
+          "sha256": "5e8ae4bb05afa98a9001ba3a180f3d30bdeeb9234310961d4eb82feff5fcadf1",
+          "url": "https://cdn.jsdelivr.net/npm/babylonjs@8.52.1/babylon.js"
+        }
+      ],
+      "notes": "Downloaded once by K2 on first use (about 7.9 MB), then cached; refused on air-gapped computers. Babylon 9 (8.6 MB) is over the 8 MB per-widget library limit, so 8.52.1 is pinned. Leaves about 0.5 MB for other libraries in the same widget."
+    },
+    {
+      "id": "plotly.js-dist-min",
+      "version": "4.1.1",
+      "title": "Plotly",
+      "global": "Plotly",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2016-2024 Plotly Technologies Inc.",
+      "source": "download",
+      "files": [
+        {
+          "name": "plotly.min.js",
+          "bytes": 4815814,
+          "sha256": "3b6e15d45dbb7fca5bd2094291e961ddc5472cd887009e6009a56dab668d721f",
+          "url": "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@4.1.1/plotly.min.js"
+        }
+      ],
+      "notes": "Downloaded once by K2 on first use (about 4.8 MB), then cached; refused on air-gapped computers."
+    }
+  ]
 }

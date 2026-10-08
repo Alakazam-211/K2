@@ -76,3 +76,57 @@ that pointer.
 | **Upstream** | [tao](https://github.com/tauri-apps/tao) |
 | **License** | **Apache-2.0** (Copyright 2021-2023 Tauri Programme within The Commons Conservancy) — full text in `third_party/tao/LICENSE` and `third_party/tao/LICENSE.spdx` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |
+
+## Third-party: Mermaid (MIT)
+
+The file viewer draws Mermaid diagrams with a vendored build of **Mermaid**.
+
+| | |
+|--|--|
+| **What** | `src/renderer/public/vendor/mermaid.min.js` (Mermaid 11.16.0, prebuilt, loaded by `components/FileViewerPane/DiagramViewer.tsx`) |
+| **Upstream** | [mermaid](https://github.com/mermaid-js/mermaid) |
+| **License** | **MIT** (Copyright (c) 2014 - 2022 Knut Sveidqvist) — full text in `src/renderer/public/vendor/mermaid.LICENSE.txt`. The prebuilt file also carries Mermaid's own dependencies (among them d3, dagre-d3-es, cytoscape, khroma, DOMPurify, KaTeX, marked), each under its own permissive licence. |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. Mermaid does **not** relicense the product. |
+
+## Third-party: Zen widget library
+
+<!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->
+
+Libraries a Garden widget can ask for with `requires.libs` (the Zen widget
+standard library). K2 inlines each one into the sealed widget frame; the frame
+itself never touches the network. Each library folder keeps its full licence
+text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).
+
+| Library | Version | Licence | Copyright | Where |
+|--|--|--|--|--|
+| three.js (`three`) | 0.186.0 | MIT | Copyright © 2010-2026 three.js authors | shipped in the app, `src/renderer/zen-lib/three@0.186.0/` |
+| globe.gl (`globe.gl`) | 2.46.2 | MIT | Copyright (c) 2019 Vasco Asturiano | shipped in the app, `src/renderer/zen-lib/globe.gl@2.46.2/` |
+| cannon-es (`cannon-es`) | 0.20.0 | MIT | Copyright (c) 2015 cannon.js Authors | shipped in the app, `src/renderer/zen-lib/cannon-es@0.20.0/` |
+| PixiJS (`pixi.js`) | 8.21.0 | MIT | Copyright (c) 2013-2023 Mathew Groves, Chad Engler | shipped in the app, `src/renderer/zen-lib/pixi.js@8.21.0/` |
+| Phaser (`phaser`) | 4.2.1 | MIT | Copyright (c) 2026 Richard Davey, Phaser Studio Inc. | shipped in the app, `src/renderer/zen-lib/phaser@4.2.1/` |
+| KAPLAY (`kaplay`) | 3001.0.19 | MIT | Copyright (c) 2025, KAPLAY Team and contributers | shipped in the app, `src/renderer/zen-lib/kaplay@3001.0.19/` |
+| Matter.js (`matter-js`) | 0.20.0 | MIT | Copyright (c) Liam Brummitt and contributors. | shipped in the app, `src/renderer/zen-lib/matter-js@0.20.0/` |
+| D3 (`d3`) | 7.9.0 | ISC | Copyright 2010-2023 Mike Bostock | shipped in the app, `src/renderer/zen-lib/d3@7.9.0/` |
+| Chart.js (`chart.js`) | 4.5.1 | MIT | Copyright (c) 2014-2024 Chart.js Contributors | shipped in the app, `src/renderer/zen-lib/chart.js@4.5.1/` |
+| Apache ECharts (`echarts`) | 6.1.0 | Apache-2.0 | Copyright 2017-2026 The Apache Software Foundation; This product includes software developed at The Apache Software Foundation (https://www.apache.org/). | shipped in the app, `src/renderer/zen-lib/echarts@6.1.0/` |
+| Anime.js (`animejs`) | 4.5.0 | MIT | Copyright (c) 2025 Julian Garnier | shipped in the app, `src/renderer/zen-lib/animejs@4.5.0/` |
+| Lottie (`lottie-web`) | 5.13.0 | MIT | Copyright (c) 2015 Bodymovin | shipped in the app, `src/renderer/zen-lib/lottie-web@5.13.0/` |
+| perfect-freehand (`perfect-freehand`) | 1.2.3 | MIT | Copyright (c) 2021 Stephen Ruiz Ltd | shipped in the app, `src/renderer/zen-lib/perfect-freehand@1.2.3/` |
+| Rough.js (`roughjs`) | 4.6.6 | MIT | Copyright (c) 2019 Preet Shihn | shipped in the app, `src/renderer/zen-lib/roughjs@4.6.6/` |
+| howler.js (`howler`) | 2.2.4 | MIT | Copyright (c) 2013-2020 James Simpson and GoldFire Studios, Inc. | shipped in the app, `src/renderer/zen-lib/howler@2.2.4/` |
+| Tone.js (`tone`) | 15.1.22 | MIT | Copyright (c) 2014-2020 Yotam Mann | shipped in the app, `src/renderer/zen-lib/tone@15.1.22/` |
+| Leaflet (`leaflet`) | 1.9.4 | BSD-2-Clause | Copyright (c) 2010-2023, Volodymyr Agafonkin | shipped in the app, `src/renderer/zen-lib/leaflet@1.9.4/` |
+| marked (`marked`) | 18.0.14 | MIT | Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/) | shipped in the app, `src/renderer/zen-lib/marked@18.0.14/` |
+| DOMPurify (`dompurify`) | 3.4.16 | Apache-2.0 | (c) Cure53 and other contributors | shipped in the app, `src/renderer/zen-lib/dompurify@3.4.16/` |
+| highlight.js (`highlight.js`) | 11.12.0 | BSD-3-Clause | Copyright (c) 2006, Ivan Sagalaev. | shipped in the app, `src/renderer/zen-lib/highlight.js@11.12.0/` |
+| KaTeX (`katex`) | 0.18.9 | MIT | Copyright (c) 2013-2020 Khan Academy and other contributors | shipped in the app, `src/renderer/zen-lib/katex@0.18.9/` |
+| Preact + htm (`preact`) | 10.29.8 | MIT AND Apache-2.0 | Copyright (c) 2015-present Jason Miller; htm: Copyright 2018 Google Inc. | shipped in the app, `src/renderer/zen-lib/preact@10.29.8/` |
+| Lit (`lit`) | 3.3.3 | BSD-3-Clause | Copyright (c) 2017 Google LLC. All rights reserved. | shipped in the app, `src/renderer/zen-lib/lit@3.3.3/` |
+| Caveat (handwriting font) (`font-caveat`) | 5.3.0 | OFL-1.1 | Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat) | shipped in the app, `src/renderer/zen-lib/font-caveat@5.3.0/` |
+| Babylon.js (`babylonjs`) | 8.52.1 | Apache-2.0 | Copyright 2023 The Babylon.js team | downloaded on first use by this computer's K2 (not shipped); licence kept at `src/renderer/zen-lib/babylonjs@8.52.1/LICENSE.txt` |
+| Plotly (`plotly.js-dist-min`) | 4.1.1 | MIT | Copyright (c) 2016-2024 Plotly Technologies Inc. | downloaded on first use by this computer's K2 (not shipped); licence kept at `src/renderer/zen-lib/plotly.js-dist-min@4.1.1/LICENSE.txt` |
+
+K2 code remains **FSL-1.1-Apache-2.0**. These libraries keep their own
+licences and do **not** relicense K2.
+
+<!-- zen-lib:end -->

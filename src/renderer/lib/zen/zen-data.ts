@@ -107,6 +107,9 @@ import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
 import { exitZen } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
+import { ZEN_CUSTOM_KIND } from './zen-page'
+import { useZenServerRosters, zenScopeRows } from './zen-custom-scope'
+import { zenGrantNeedsReview, type ZenCustomWidgetPayload, type ZenScope } from './zen-custom-types'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
@@ -210,10 +213,12 @@ export interface ZenThreadView {
   turn?: ZenThreadTurn | null
 }
 
-/** `thread.post` options: files on this computer, or browser files. */
+/** `thread.post` options: files on this computer, or browser files. A
+ *  custom widget's post carries `origin` instead (never files, UWB12a). */
 export interface ZenPostOptions {
   paths?: string[]
   files?: File[]
+  origin?: { widget: string; garden: string }
 }
 
 // ── Internal state ─────────────────────────────────────────────────────────
@@ -278,8 +283,12 @@ export interface ZenView {
   homeId: string | null
   /** Single-agent mode: a row address, handle or name (the `agent` prop). */
   agent: string | null
-  /** `workspaces`: this server's workspaces (the Agents view), not a Home. */
-  source?: 'home' | 'workspaces'
+  /** `workspaces`: this server's workspaces (the Agents view), not a Home.
+   *  `scope`: a custom widget's granted scope (prd-zen-user-widgets-v2
+   *  UWB7): its rows now, never a loose or window-Home fallback. */
+  source?: 'home' | 'workspaces' | 'scope'
+  /** `source: 'scope'`: the grant's scope; null = not granted (no rows). */
+  scope?: ZenScope | null
 }
 
 /** One focus group as the Agents view's dropdown shows it. */
@@ -559,6 +568,40 @@ function looseView(gardenId: string, widgetId: string): ZenView {
   return { key: zenGardenHomeKey(gardenId, widgetId), gardenId, widgetId, homeId: null, agent: null }
 }
 
+/** A custom widget's view (UWB7, UW48): its granted scope, only while the
+ *  grant holds (granted or partial); otherwise no rows at all. */
+function customView(gardenId: string, w: ZenWidgetDecl): ZenView {
+  const grant = w.custom?.grant ?? null
+  const usable = grant !== null && !zenGrantNeedsReview(grant, w.custom?.requested ?? []) && grant.state !== 'none'
+  return {
+    key: zenGardenHomeKey(gardenId, w.id),
+    gardenId,
+    widgetId: w.id,
+    homeId: null,
+    agent: null,
+    source: 'scope',
+    scope: usable ? grant.scope : null,
+  }
+}
+
+/** A custom widget's view from its payload (the frame host's binding check). */
+export function zenCustomViewFor(gardenId: string, widget: ZenCustomWidgetPayload): ZenView {
+  return customView(gardenId, {
+    id: widget.id,
+    kind: ZEN_CUSTOM_KIND,
+    column: widget.column,
+    props: {},
+    caps: [...widget.caps],
+    source: 'user',
+    custom: widget,
+  })
+}
+
+/** A custom placement a Conversation may follow: it asks for agents:read (UW40). */
+function followsCustom(w: ZenWidgetDecl): boolean {
+  return w.kind === ZEN_CUSTOM_KIND && (w.custom?.requested.includes('agents:read') ?? false)
+}
+
 /** What `widgetId` on `page` shows. Template controls act for the first
  *  Agents widget; a Conversation pinned with `agent` (and `home`) shows
  *  that one agent, else it follows its `agents` prop or the first Agents
@@ -571,9 +614,13 @@ export function zenViewFor(page: ZenResolvedPage, gardenId: string, widgetId: st
     return first ? agentsView(gardenId, first) : null
   }
   if (w.kind === 'agents') return agentsView(gardenId, w)
+  if (w.kind === ZEN_CUSTOM_KIND) return customView(gardenId, w)
   if (w.kind === 'conversation') {
     if (propString(w.props, 'agent')) return homeView(gardenId, w)
     const named = propString(w.props, 'agents')
+    // UW40: it may follow a custom widget that reads agents (always named).
+    const custom = named ? page.widgets.find((x) => x.id === named && followsCustom(x)) : undefined
+    if (custom) return customView(gardenId, custom)
     const follow =
       (named ? page.widgets.find((x) => x.id === named && x.kind === 'agents') : undefined) ?? firstAgentsWidget(page)
     return follow ? agentsView(gardenId, follow) : looseView(gardenId, w.id)
@@ -626,6 +673,7 @@ function anyRow(address: string): HomeRow | null {
 
 /** The view's rows, in Home order (the Agents view: the Agents page's). */
 function viewRows(view: ZenView): HomeRow[] {
+  if (view.source === 'scope') return zenScopeRows(view.scope ?? null).rows
   if (view.source === 'workspaces') {
     const rows = workspaceRows()
     return view.agent ? rows.filter((r) => matchesAgent(r, view.agent as string)) : rows
@@ -782,9 +830,15 @@ export function zenAgentRows(view: ZenView | null): ZenAgentRow[] {
 
 function syncViewHomes(): void {
   const ids = new Set<string>()
+  const allHomes = (): string[] => useHomesStore.getState().homes.map((h) => h.id)
   for (const l of rowListeners) {
     const v = l.view()
     if (v?.homeId) ids.add(v.homeId)
+    // A custom widget's scope: the Homes it shows get Home's row-status poll too.
+    const s = v?.source === 'scope' ? v.scope : null
+    if (s && 'home' in s) ids.add(s.home)
+    else if (s && 'homes' in s) for (const id of s.homes) ids.add(id)
+    else if (s && ('allHomes' in s || 'allServers' in s)) for (const id of allHomes()) ids.add(id)
   }
   const next = [...ids].sort()
   const prev = zenViewHomes.getState().homeIds
@@ -831,6 +885,8 @@ function startLive(): void {
   unsubs.push(useZenGardensStore.subscribe(on))
   // Pictures land in the Home avatar cache after the rows first paint.
   unsubs.push(useHomeAvatarStore.subscribe(on))
+  // A custom widget's server scope fills in as other servers answer.
+  unsubs.push(useZenServerRosters.subscribe(on))
   // Open rooms' own activity slices (Z39): re-subscribe when rooms change.
   const roomSubs = new Map<string, () => void>()
   const syncRooms = (): void => {
@@ -953,7 +1009,7 @@ function findRow(view: ZenView, address: string): { row: HomeRow; index: number 
   const rows = viewRows(view)
   const index = rows.findIndex((r) => r.address === address)
   if (index >= 0) return { row: rows[index], index }
-  if (view.homeId === null && view.source !== 'workspaces') {
+  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'scope') {
     const loose = anyRow(address)
     if (loose) return { row: loose, index: 0 }
   }
@@ -987,15 +1043,19 @@ function syncFeeds(): void {
 export async function openZenConversation(
   view: ZenView,
   address: string,
-  opts: { where?: 'zen' | 'agents' } = {},
+  opts: { where?: 'zen' | 'agents'; select?: boolean } = {},
 ): Promise<ZenAgentRow> {
   const { row, index } = findRow(view, address)
   if (opts.where === 'agents') {
     await openInAgents(row)
     return rowFor(row, index, view)
   }
+  // `select: false` (a custom widget reading or writing any bound agent's
+  // Thread, UWB10) resolves the conversation without picking it: the view's
+  // selection, the window's room and its active workspace stay as they are.
+  const select = opts.select !== false
   // The loose view lists only its pick: select first, so the row is its own.
-  selection.set(view.key, address)
+  if (select) selection.set(view.key, address)
   const current = rowFor(row, index, view)
   const gen = ++generation
   const base = { address, hostKey: current.hostKey, scope: null, threadAddr: null, workspacePath: '', generation: gen }
@@ -1027,8 +1087,10 @@ export async function openZenConversation(
       return rowFor(row, index, view)
     }
     // MS2: the window's own room (no window switch).
-    homeRooms.showPrimary()
-    useProjectsStore.getState().setActiveProject(ws.id)
+    if (select) {
+      homeRooms.showPrimary()
+      useProjectsStore.getState().setActiveProject(ws.id)
+    }
     scope = primaryRoom().scope
     workspacePath = ws.path
     projectId = ws.id
@@ -1040,22 +1102,42 @@ export async function openZenConversation(
       setConversation({ ...base, phase: 'unavailable', note: `Update ${where} to message this agent here.` })
       return rowFor(row, index, view)
     }
-    // In place, whatever "Open agents from other servers here" says.
-    const entry = await homeRooms.open(row, current.hostKey)
-    if (stale()) return rowFor(row, index, view)
-    if (entry.phase !== 'open' || !entry.room) {
-      const note =
-        entry.phase === 'not-found'
-          ? `${row.label} is not on ${where} any more.`
-          : entry.phase === 'switched'
-            ? `Update ${where} to message this agent here.`
-            : `Couldn’t open ${row.label}${entry.error ? `: ${entry.error}` : '.'}`
-      setConversation({ ...base, phase: 'failed', note })
-      return rowFor(row, index, view)
-    }
     scope = scopeForHost(current.hostKey)
-    workspacePath = entry.room.cwd()
-    projectId = entry.room.activeProjectId()
+    if (!select) {
+      // Not picked: no room is opened or shown; one `projects/list` with
+      // your login there finds the workspace (UWB8: your role applies).
+      let ws: LocalWorkspace & { path: string } | null = null
+      try {
+        ws = findWorkspaceForRow(parseRemoteWorkspaces(await daemonCliGet<unknown>(scope, 'projects/list')), row)
+      } catch (err) {
+        if (stale()) return rowFor(row, index, view)
+        setConversation({ ...base, phase: 'failed', note: `Couldn’t reach ${where}: ${err instanceof Error ? err.message : String(err)}` })
+        return rowFor(row, index, view)
+      }
+      if (stale()) return rowFor(row, index, view)
+      if (!ws) {
+        setConversation({ ...base, phase: 'unavailable', note: `${row.label} is not on ${where} any more.` })
+        return rowFor(row, index, view)
+      }
+      workspacePath = ws.path
+      projectId = ws.id
+    } else {
+      // In place, whatever "Open agents from other servers here" says.
+      const entry = await homeRooms.open(row, current.hostKey)
+      if (stale()) return rowFor(row, index, view)
+      if (entry.phase !== 'open' || !entry.room) {
+        const note =
+          entry.phase === 'not-found'
+            ? `${row.label} is not on ${where} any more.`
+            : entry.phase === 'switched'
+              ? `Update ${where} to message this agent here.`
+              : `Couldn’t open ${row.label}${entry.error ? `: ${entry.error}` : '.'}`
+        setConversation({ ...base, phase: 'failed', note })
+        return rowFor(row, index, view)
+      }
+      workspacePath = entry.room.cwd()
+      projectId = entry.room.activeProjectId()
+    }
   }
   if (existing && existing.phase === 'ready' && existing.scope === scope && existing.workspacePath === workspacePath) {
     // Already resolved: keep the feed (same generation), just re-show.
@@ -1133,6 +1215,27 @@ function parseLocalWorkspaces(raw: unknown): LocalWorkspace[] {
     out.push({ id: w.id, name: w.name, handle: typeof w.handle === 'string' ? w.handle : null })
   }
   return out
+}
+
+/** Another server's workspaces with their paths (a custom widget's
+ *  conversation that isn't picked, UWB10). */
+function parseRemoteWorkspaces(raw: unknown): Array<LocalWorkspace & { path: string }> {
+  const list = Array.isArray(raw) ? raw : isObj(raw) && Array.isArray(raw.projects) ? raw.projects : null
+  if (!list) throw new Error('projects/list: not a list')
+  const out: Array<LocalWorkspace & { path: string }> = []
+  for (const w of list) {
+    if (!isObj(w) || typeof w.id !== 'string' || typeof w.name !== 'string' || typeof w.path !== 'string') continue
+    out.push({ id: w.id, name: w.name, handle: typeof w.handle === 'string' ? w.handle : null, path: w.path })
+  }
+  return out
+}
+
+/** A custom widget's Thread verbs on any bound agent (UWB10): the
+ *  conversation resolved (once) without picking it. */
+export async function ensureZenConversation(view: ZenView, address: string): Promise<void> {
+  const c = conversations.get(address)
+  if (c && (c.phase === 'ready' || c.phase === 'opening')) return
+  await openZenConversation(view, address, { select: false })
 }
 
 /** This computer's workspaces: the window's own list when it is on this
@@ -1247,7 +1350,13 @@ export async function postZenThread(
   if (!body) throw new Error('Nothing to send.')
   // Z37: typing or sending counts as input on a pinned room.
   if (!isConnectedHost(c.hostKey)) homeRooms.input(address)
-  const result = await postThreadCompose(c.scope, c.threadAddr, body)
+  // UWB12a: a widget's post says which widget sent it ("You · via <widget>",
+  // no compose history), on a server that stores it; older servers get a
+  // plain compose post.
+  const origin = opts.origin && c.scope.serverSupports('thread-widget-origin') ? opts.origin : undefined
+  const result = origin
+    ? await postThreadCompose(c.scope, c.threadAddr, body, null, { origin })
+    : await postThreadCompose(c.scope, c.threadAddr, body)
   if (!result.ok) throw new Error(result.error)
   if (result.item) {
     if (setPreview(address, previewFromItem(result.item))) emitRows()
@@ -1403,7 +1512,11 @@ export function installZenDataVerbs(): () => void {
         Array.isArray(o.files) && typeof File !== 'undefined'
           ? o.files.filter((f): f is File => f instanceof File)
           : undefined
-      return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', { paths, files })
+      const origin =
+        isObj(o.origin) && typeof o.origin.widget === 'string' && typeof o.origin.garden === 'string'
+          ? { widget: o.origin.widget, garden: o.origin.garden }
+          : undefined
+      return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', { paths, files, origin })
     }),
     registerZenVerb('thread.answer', (_ctx, address, cardId, answer) => {
       const payload =

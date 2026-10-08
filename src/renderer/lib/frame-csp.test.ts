@@ -232,3 +232,51 @@ describe('frameSrcDoc — always emits the CSP first', () => {
     expect(parseCsp(frameCsp('inert')).get('script-src')).toEqual(["'none'"])
   })
 })
+
+// prd-zen-user-widgets-v2 TUW3.1 (UW13, UW46, UWB14): the custom widget profile.
+describe('frameCsp — widget profile', () => {
+  const NONCE = 'q83vFzPq1N3V0aZ8k2LmTw'
+  const policy = parseCsp(frameCsp('widget', { nonce: NONCE }))
+
+  it('scripts: only the nonce (and wasm), never unsafe-inline or eval', () => {
+    expect(policy.get('script-src')).toEqual([`'nonce-${NONCE}'`, "'wasm-unsafe-eval'"])
+    expect(policy.get('script-src')).not.toContain("'unsafe-inline'")
+    expect(policy.get('script-src')).not.toContain("'unsafe-eval'")
+  })
+
+  it('no network: connect-src is data: and blob: only, so loopback, LAN, ipc and the web are refused', () => {
+    expect(policy.get('connect-src')).toEqual(['data:', 'blob:'])
+    for (const url of LOOPBACK_AND_PRIVATE) {
+      for (const d of ['connect-src', 'img-src', 'font-src', 'media-src', 'frame-src', 'object-src', 'manifest-src']) {
+        expect(allowsUrl(effective(policy, d), url), `${d} ${url}`).toBe(false)
+      }
+    }
+    expect(allowsUrl(effective(policy, 'connect-src'), 'data:text/plain,hi')).toBe(true)
+  })
+
+  it('workers only from blob:; no frames, objects, forms or base', () => {
+    expect(policy.get('worker-src')).toEqual(['blob:'])
+    for (const d of ['frame-src', 'child-src', 'object-src', 'manifest-src', 'form-action', 'base-uri']) {
+      expect(policy.get(d), d).toEqual(["'none'"])
+    }
+    expect(policy.get('default-src')).toEqual(["'none'"])
+  })
+
+  it('the sandbox is exactly allow-scripts (null origin, no popups, modals, forms or top navigation)', () => {
+    expect(frameSandbox('widget')).toBe('allow-scripts')
+  })
+
+  it('refuses a missing or malformed nonce (it is CSP source text)', () => {
+    expect(() => frameCsp('widget')).toThrow(/nonce/)
+    expect(() => frameCsp('widget', { nonce: "abc' 'unsafe-inline" })).toThrow(/nonce/)
+    expect(() => frameCsp('widget', { nonce: 'short' })).toThrow(/nonce/)
+  })
+
+  it('the prelude goes after the meta and before every byte of the widget', () => {
+    const out = frameSrcDoc('<!doctype html><html><head><script nonce="x">w()</script>', 'widget', {
+      nonce: NONCE,
+      prelude: '<script nonce="P">k2()</script>',
+    })
+    expect(out.startsWith(`<!doctype html>${frameCspMeta('widget', { nonce: NONCE })}<script nonce="P">k2()</script><html>`)).toBe(true)
+  })
+})

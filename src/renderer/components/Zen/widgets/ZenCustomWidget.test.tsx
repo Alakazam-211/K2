@@ -10,11 +10,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({
   posts: [] as Array<{ hostKey: string; route: string; body: unknown }>,
   postImpl: null as null | ((route: string, body: unknown) => unknown),
+  gets: [] as string[],
+  bundleError: null as string | null,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (_s: unknown, route: string) => {
-    throw new Error(`unexpected GET ${route}`)
+  daemonCliGet: vi.fn(async (_s: unknown, route: string, params?: { widget?: string }) => {
+    h.gets.push(route)
+    if (route !== 'zen/widget/bundle') throw new Error(`unexpected GET ${route}`)
+    if (h.bundleError) throw new Error(h.bundleError)
+    return {
+      ok: true,
+      widget: params?.widget,
+      hash: 'hash-1',
+      nonce: 'q83vFzPq1N3V0aZ8k2LmTw',
+      html: '<!doctype html><html><body><script nonce="q83vFzPq1N3V0aZ8k2LmTw">k2.ready()</script></body></html>',
+      bytes: 120,
+    }
   }),
   daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body?: unknown) => {
     h.posts.push({ hostKey: scope.hostKey, route, body })
@@ -121,6 +133,8 @@ beforeEach(() => {
   useZenGardensStore.setState({ gardens: [{ id: 'g-test0001', name: 'Arcade', template: 'k2.blank@1', index: 1 } as never] })
   h.posts = []
   h.postImpl = null
+  h.gets = []
+  h.bundleError = null
   __resetZenCustomRunForTests()
 })
 
@@ -282,6 +296,48 @@ describe('UW25: the corner menu', () => {
     mount(payload({ requested: ['agents:read', 'presence:read'], caps: ['agents:read'], grant: granted({ state: 'partial', caps: ['agents:read'] }) }))
     expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()
     expect(q('[data-zen-custom-strip="partial"]').textContent).toContain('It now also asks to see who is looking.')
+  })
+})
+
+describe('TUW3.1: the sealed frame', () => {
+  it('a granted widget loads its bundle into a widget-profile frame: allow-scripts, nonce CSP, K2’s runtime first', async () => {
+    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="zen-custom-frame"]')).not.toBeNull())
+    const f = q('[data-testid="zen-custom-frame"]')
+    expect(h.gets).toEqual(['zen/widget/bundle'])
+    expect(f.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(f.getAttribute('data-frame-profile')).toBe('widget')
+    const doc = f.getAttribute('srcdoc') ?? ''
+    expect(doc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'nonce-q83vFzPq1N3V0aZ8k2LmTw\' \'wasm-unsafe-eval\'')).toBe(true)
+    // K2's runtime runs before the widget's own first script.
+    expect(doc.indexOf('__K2_VERBS__')).toBeGreaterThan(0)
+    expect(doc.indexOf('__K2_VERBS__')).toBeLessThan(doc.indexOf('k2.ready()'))
+    expect(doc).not.toContain('allow-same-origin')
+  })
+
+  it('an older daemon (no bundle route) shows K2’s update card, no frame', async () => {
+    h.bundleError = 'unknown zen route'
+    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    await vi.waitFor(() => expect(document.querySelector('[data-zen-custom-card="older-daemon"]')).not.toBeNull())
+    expect(q('[data-zen-custom-card="older-daemon"]').textContent).toBe(
+      'K2 on this computer is older than this app. Update it to run custom widgets.',
+    )
+  })
+
+  it('409 widget_broken shows the broken card', async () => {
+    h.bundleError = 'widget_broken'
+    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    await vi.waitFor(() => expect(document.querySelector('[data-zen-custom-card="broken"]')).not.toBeNull())
+  })
+
+  it('a stopped widget shows its card and Reload; other boxes are untouched (TUW3.6)', async () => {
+    const { stopZenWidget } = await import('@/lib/zen/zen-custom-run')
+    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    act(() => stopZenWidget('g-test0001/arcade', 'not-responding'))
+    expect(q('[data-zen-custom-card="stopped-not-responding"]').textContent).toContain('This widget stopped responding.')
+    expect(document.querySelector('[data-testid="zen-custom-frame"]')).toBeNull()
+    act(() => void fireEvent.click(q('[data-zen-custom-action="reload"]')))
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="zen-custom-frame"]')).not.toBeNull())
   })
 })
 

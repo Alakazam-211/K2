@@ -33,11 +33,13 @@ const SPIKE_FRAMES: Record<string, { reason: string; gate: RegExp }> = {
 }
 
 /** Surfaces that must use HtmlFrame, and the profile each must ask for. */
-const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' }> = [
+const SURFACES: ReadonlyArray<{ file: string; profile: 'scripted' | 'inert' | 'widget' }> = [
   { file: 'components/FileViewerPane/FileViewerPane.tsx', profile: 'scripted' },
   { file: 'components/Projects/ProjectDashboard.tsx', profile: 'scripted' },
   { file: 'components/AgentPane/AgentInboxPane.tsx', profile: 'inert' },
   { file: 'components/Feedback/BriefFrame.tsx', profile: 'inert' },
+  // prd-zen-user-widgets-v2 TUW3.1: agent-written Garden widgets, sealed.
+  { file: 'components/Zen/widgets/ZenCustomFrame.tsx', profile: 'widget' },
 ]
 
 const FRAME_PATTERNS: ReadonlyArray<[string, RegExp]> = [
@@ -135,6 +137,32 @@ describe('HtmlFrame — rendered attributes', () => {
     expect(f!.getAttribute('srcdoc')).toBe(
       `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="${frameCsp('scripted')}"><script>1</script>`,
     )
+  })
+
+  it('widget: allow-scripts only, the nonce CSP first, then K2’s prelude, then the widget; frameRef and onLoad get the element', () => {
+    const nonce = 'q83vFzPq1N3V0aZ8k2LmTw'
+    const refs: Array<HTMLIFrameElement | null> = []
+    const loads: HTMLIFrameElement[] = []
+    const { container } = render(
+      <HtmlFrame
+        title="w"
+        html="<!doctype html><p>hi</p>"
+        profile="widget"
+        nonce={nonce}
+        prelude={`<script nonce="${nonce}">k2()</script>`}
+        frameRef={(el) => refs.push(el)}
+        onLoad={(el) => loads.push(el)}
+      />,
+    )
+    const f = container.querySelector('iframe')
+    expect(f).not.toBeNull()
+    expect(f!.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(f!.getAttribute('srcdoc')).toBe(
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${frameCsp('widget', { nonce })}"><script nonce="${nonce}">k2()</script><p>hi</p>`,
+    )
+    expect(refs[0]).toBe(f)
+    f!.dispatchEvent(new Event('load'))
+    expect(loads).toEqual([f])
   })
 
   it('inert: empty sandbox and the no-script CSP', () => {

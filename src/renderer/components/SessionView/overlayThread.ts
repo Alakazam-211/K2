@@ -194,13 +194,18 @@ export async function postThreadCompose(
   addr: string,
   text: string,
   command?: string | null,
+  /** prd-zen-user-widgets-v2 UWB12a: a custom Garden widget's post names
+   *  its widget (shown "You · via <widget>", kept out of compose history).
+   *  Only sent to a server that reports `thread-widget-origin`. */
+  extra?: { origin?: { widget: string; garden: string } },
 ): Promise<ThreadComposeResult> {
-  const body: { addr: string; text: string; via: string; command?: string } = {
+  const body: { addr: string; text: string; via: string; command?: string; origin?: { widget: string; garden: string } } = {
     addr,
     text,
     via: 'compose',
   }
   if (command) body.command = command
+  if (extra?.origin) body.origin = { widget: extra.origin.widget, garden: extra.origin.garden }
   let resp: Record<string, unknown>
   try {
     resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)

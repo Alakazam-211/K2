@@ -166,6 +166,24 @@ async fn assign_runs_and_reports_logs_exit_and_a_verified_receipt() {
     assert_eq!(receipt.log.bytes, 7);
 }
 
+/// A grant's disk ceiling is not a reservation: a job whose ceiling is far
+/// bigger than the free disk still starts (only the node's floor gates a
+/// start). Found on a 28 GB-free Linux box with the 60 GB default grant.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disk_ceiling_larger_than_free_disk_still_runs() {
+    let mut fake = Fake::start().await;
+    let _n = start_node(&fake, "e2e-disk-ceiling", "", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let mut p = plan("jd", &["/bin/sh", "-c", "echo fits"]);
+    p.limits.disk_bytes = 1 << 60;
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "jd").await;
+    assert!(states_of(&fr, "jd").iter().all(|s| s.state != JobState::Queued), "never sent back to the queue: {:?}", states_of(&fr, "jd"));
+    assert_eq!(job_done_exit(&fr, "jd"), (JobState::Done, Some(0), None));
+    assert_eq!(text(&logs_of(&fr, "jd"), LogStream::Out), "fits\n");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn job_env_is_scrubbed_and_home_is_the_job_home() {
     let mut fake = Fake::start().await;

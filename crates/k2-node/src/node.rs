@@ -590,7 +590,11 @@ impl Node {
             workspace_id: &a.plan.workspace_id,
             cpu_millis: a.plan.limits.cpu_millis,
             mem_bytes: a.plan.limits.mem_bytes,
-            disk_bytes: a.plan.limits.disk_bytes,
+            // `limits.disk_bytes` is the grant's ceiling for this job, not
+            // space it needs free right now; a start only needs the node's
+            // floor (checked in `node_refusal`). Requiring the ceiling free
+            // refused every job on a node with less than 60 GB free.
+            disk_bytes: 0,
             exclusive: a.plan.exclusive,
             needs_git: a.plan.src.is_some(),
         };

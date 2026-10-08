@@ -134,28 +134,26 @@ pub fn handle_pair_confirm(body: &[u8]) -> CliResponse {
         Ok(fp) => fp,
         Err(e) => return json_err("500 Internal Server Error", format!("local fingerprint: {e}")),
     };
-    let mut store = match PeerStore::load() {
-        Ok(s) => s,
-        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
-    };
     // v2 code when a v2 pairing is waiting; the v1 code only for a peer
     // that is already Trusted from a pairing before 0.45.2.
-    let kind = match k2_core::federation::pairing_v2::confirm(
-        &mut store,
-        &local_fp,
-        &req.fingerprint,
-        &req.sas,
-        &req.capabilities,
-        chrono::Utc::now(),
-    ) {
-        Ok(k) => k,
+    let tx = PeerStore::transact(|store| {
+        let kind = k2_core::federation::pairing_v2::confirm(
+            store,
+            &local_fp,
+            &req.fingerprint,
+            &req.sas,
+            &req.capabilities,
+            chrono::Utc::now(),
+        )?;
+        let version = store.get(&req.fingerprint).map(|p| p.pairing_version).unwrap_or_default();
+        Ok::<_, String>(((kind, version), true))
+    });
+    let (kind, pairing_version) = match tx {
+        Err(e) => return json_err("500 Internal Server Error", format!("peer store: {e}")),
         // Code mismatch / expired / blocked / unknown → fail-closed 403.
-        Err(e) => return json_err("403 Forbidden", e),
+        Ok(Err(e)) => return json_err("403 Forbidden", e),
+        Ok(Ok(v)) => v,
     };
-    if let Err(e) = store.save() {
-        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
-    }
-    let pairing_version = store.get(&req.fingerprint).map(|p| p.pairing_version).unwrap_or_default();
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -255,26 +253,26 @@ pub fn handle_pair_v2_respond(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let mut store = match PeerStore::load() {
-        Ok(s) => s,
-        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
-    };
-    let answer = match k2_core::federation::pairing_v2::respond(
-        &mut store,
-        &parsed.offer,
-        &pem,
-        &parsed.addr.label.unwrap_or_default(),
-        &pick(parsed.addr.subdomain, sub),
-        &pick(parsed.addr.base_url, base),
-        chrono::Utc::now(),
-    ) {
-        Ok(a) => a,
-        Err(e) => return pair_v2_err(e),
-    };
-    if let Err(e) = store.save() {
-        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
+    let label = parsed.addr.label.unwrap_or_default();
+    let subdomain = pick(parsed.addr.subdomain, sub);
+    let base_url = pick(parsed.addr.base_url, base);
+    let tx = PeerStore::transact(|store| {
+        k2_core::federation::pairing_v2::respond(
+            store,
+            &parsed.offer,
+            &pem,
+            &label,
+            &subdomain,
+            &base_url,
+            chrono::Utc::now(),
+        )
+        .map(|a| (a, true))
+    });
+    match tx {
+        Err(e) => json_err("500 Internal Server Error", format!("peer store: {e}")),
+        Ok(Err(e)) => pair_v2_err(e),
+        Ok(Ok(answer)) => CliResponse::ok_json(serde_json::json!({ "answer": answer }).to_string()),
     }
-    CliResponse::ok_json(serde_json::json!({ "answer": answer }).to_string())
 }
 
 /// `POST /cli/federation/pair/v2/reveal` (owner/admin). Body: the answer
@@ -297,23 +295,21 @@ pub fn handle_pair_v2_reveal(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(format!("bad pair answer: {e}")),
         },
     };
-    let mut store = match PeerStore::load() {
-        Ok(s) => s,
-        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    let tx = PeerStore::transact(|store| {
+        k2_core::federation::pairing_v2::reveal(
+            store,
+            &parsed.answer,
+            parsed.peer_subdomain.as_deref(),
+            parsed.peer_base_url.as_deref(),
+            chrono::Utc::now(),
+        )
+        .map(|r| (r, true))
+    });
+    let r = match tx {
+        Err(e) => return json_err("500 Internal Server Error", format!("peer store: {e}")),
+        Ok(Err(e)) => return pair_v2_err(e),
+        Ok(Ok(r)) => r,
     };
-    let r = match k2_core::federation::pairing_v2::reveal(
-        &mut store,
-        &parsed.answer,
-        parsed.peer_subdomain.as_deref(),
-        parsed.peer_base_url.as_deref(),
-        chrono::Utc::now(),
-    ) {
-        Ok(r) => r,
-        Err(e) => return pair_v2_err(e),
-    };
-    if let Err(e) = store.save() {
-        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
-    }
     CliResponse::ok_json(
         serde_json::json!({ "reveal": r.reveal, "sas": r.sas, "peer_fingerprint": r.peer_fingerprint })
             .to_string(),

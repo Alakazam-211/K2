@@ -32,6 +32,10 @@ use sha2::{Digest, Sha256};
 /// peers rather than silently trusting reinterpreted bytes.
 pub const STORE_VERSION: u32 = 1;
 
+/// Serializes every load-mutate-save of the peer store in this process
+/// ([`PeerStore::transact`]).
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// `~/.k2/` — honors `$HOME` so tests redirect it to a tempdir (matches
 /// `tunnel::tls::k2_dir` / `config::config_dir`).
 fn k2_dir() -> PathBuf {
@@ -218,9 +222,39 @@ impl PeerStore {
         })
     }
 
-    /// Persist the store atomically (tmp+rename) with 0600 perms. Mirrors
-    /// the other `~/.k2` secret stores' write discipline.
+    /// **The one way to change the persisted store** (0.45.2): under ONE
+    /// process-wide lock, load the store, run `f`, and save only when `f`
+    /// returns `Ok((value, true))`. `Ok((value, false))` and `Err` write
+    /// nothing. The outer `Err` is a load/save failure; the inner result is
+    /// `f`'s own. Every writer goes through here, so two writers (threads of
+    /// one daemon) can never lose each other's update.
+    pub fn transact<T, E>(
+        f: impl FnOnce(&mut PeerStore) -> Result<(T, bool), E>,
+    ) -> Result<Result<T, E>, String> {
+        let _g = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut store = Self::load()?;
+        match f(&mut store) {
+            Ok((value, true)) => {
+                store.write_file()?;
+                Ok(Ok(value))
+            }
+            Ok((value, false)) => Ok(Ok(value)),
+            Err(e) => Ok(Err(e)),
+        }
+    }
+
+    /// Persist this whole store (tests seed fixtures with it). Production
+    /// code changes the store only through [`Self::transact`].
+    #[cfg(any(test, feature = "test-util"))]
     pub fn save(&self) -> Result<(), String> {
+        let _g = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        self.write_file()
+    }
+
+    /// Atomic write: a uniquely named temp file (0600), fsync, rename over
+    /// the store, then fsync the directory. Callers hold [`STORE_LOCK`].
+    fn write_file(&self) -> Result<(), String> {
+        use std::io::Write;
         let stored = StoredPeers {
             version: STORE_VERSION,
             peers: self.peers.clone(),
@@ -230,14 +264,28 @@ impl PeerStore {
         let dir = k2_dir();
         fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
         let path = store_path();
-        let tmp = dir.join(format!("federation-peers.json.tmp.{}", std::process::id()));
-        fs::write(&tmp, &json).map_err(|e| format!("write {}: {e}", tmp.display()))?;
-        restrict_mode(&tmp)?;
-        fs::rename(&tmp, &path).map_err(|e| {
+        let tmp = dir.join(format!("federation-peers.json.tmp.{}", uuid::Uuid::new_v4()));
+        let written = (|| {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .map_err(|e| format!("create {}: {e}", tmp.display()))?;
+            restrict_mode(&tmp)?;
+            f.write_all(&json).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+            f.sync_all().map_err(|e| format!("fsync {}: {e}", tmp.display()))?;
+            fs::rename(&tmp, &path).map_err(|e| format!("rename into place {}: {e}", path.display()))
+        })();
+        if let Err(e) = written {
             let _ = fs::remove_file(&tmp);
-            format!("rename into place {}: {e}", path.display())
-        })?;
+            return Err(e);
+        }
         restrict_mode(&path)?;
+        #[cfg(unix)]
+        if let Ok(d) = fs::File::open(&dir) {
+            // Persist the rename itself; a failure here leaves a valid file.
+            let _ = d.sync_all();
+        }
         Ok(())
     }
 
@@ -613,6 +661,60 @@ mod tests {
             let expected = fingerprint_of_spki_der(&kp.public_key_der());
             let got = local_fingerprint().expect("local fp");
             assert_eq!(got, expected, "local fp must derive from the federation identity");
+        });
+    }
+
+    #[test]
+    fn concurrent_transactions_lose_no_update() {
+        with_temp_home(|| {
+            let pems: Vec<String> = (0..16).map(|_| fresh_peer_pem()).collect();
+            let handles: Vec<_> = pems
+                .clone()
+                .into_iter()
+                .enumerate()
+                .map(|(i, pem)| {
+                    std::thread::spawn(move || {
+                        PeerStore::transact(|s| {
+                            let peer = FederationPeer::pin(format!("p{i}"), format!("p{i}"), pem)?;
+                            Ok::<_, String>((s.upsert(peer), true))
+                        })
+                        .expect("load/save")
+                        .expect("tx")
+                    })
+                })
+                .collect();
+            let fps: Vec<String> = handles.into_iter().map(|h| h.join().expect("join")).collect();
+            let store = PeerStore::load().expect("load");
+            assert_eq!(store.list().len(), 16, "every concurrent writer's row must survive");
+            for fp in &fps {
+                assert!(store.get(fp).is_some(), "lost update for {fp}");
+            }
+            let leftovers: Vec<String> = fs::read_dir(k2_dir())
+                .expect("readdir")
+                .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with("federation-peers.json.tmp"))
+                .collect();
+            assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+        });
+    }
+
+    #[test]
+    fn a_transaction_that_does_not_ask_to_write_writes_nothing() {
+        with_temp_home(|| {
+            let out = PeerStore::transact(|s| {
+                s.upsert(FederationPeer::pin("p", "p", fresh_peer_pem()).expect("pin"));
+                Ok::<_, String>(((), false))
+            })
+            .expect("io");
+            assert_eq!(out, Ok(()));
+            assert!(!store_path().exists(), "no write requested → no file");
+            let err = PeerStore::transact(|s| {
+                s.upsert(FederationPeer::pin("p", "p", fresh_peer_pem()).expect("pin"));
+                Err::<((), bool), _>("refused".to_string())
+            })
+            .expect("io");
+            assert_eq!(err, Err("refused".to_string()));
+            assert!(!store_path().exists(), "an error writes nothing");
         });
     }
 }

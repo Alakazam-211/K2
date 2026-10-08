@@ -260,6 +260,8 @@ pub struct Applied {
     pub conflicts: Vec<&'static str>,
     pub previous: PeerAddress,
     pub current: PeerAddress,
+    /// The row changed (address and/or accepted seq) and must be saved.
+    pub wrote: bool,
 }
 
 fn label_of(s: &str) -> String {
@@ -344,11 +346,14 @@ pub fn apply(store: &mut PeerStore, body: &[u8], now: DateTime<Utc>) -> Result<A
         return Err(NoticeError::AddressMismatch);
     }
 
-    let row = store.get_mut(&n.fingerprint).ok_or(NoticeError::UnknownPeer)?;
-    row.subdomain = current.subdomain.clone();
-    row.base_url = current.base_url.clone();
-    row.address_seq = n.seq;
-    if !changed.is_empty() {
+    // Nothing to change (the peer already has this address): a no-op that
+    // writes nothing, not even the seq.
+    let wrote = !changed.is_empty();
+    if wrote {
+        let row = store.get_mut(&n.fingerprint).ok_or(NoticeError::UnknownPeer)?;
+        row.subdomain = current.subdomain.clone();
+        row.base_url = current.base_url.clone();
+        row.address_seq = n.seq;
         row.address_updated_at = Some(now);
     }
     Ok(Applied {
@@ -358,6 +363,7 @@ pub fn apply(store: &mut PeerStore, body: &[u8], now: DateTime<Utc>) -> Result<A
         conflicts,
         previous,
         current,
+        wrote,
     })
 }
 
@@ -838,6 +844,20 @@ mod tests {
         assert_eq!(after.base_url, before.base_url);
         // Another peer is untouched.
         assert_eq!(store.get(&fo).expect("other"), &other_before);
+    }
+
+    #[test]
+    fn a_notice_that_changes_nothing_writes_nothing() {
+        let k = keypair();
+        let mut store = PeerStore::default();
+        let f = trusted(&mut store, &k, "k2n1-m4", "");
+        let before = store.get(&f).expect("peer").clone();
+        // The peer already stores the new address.
+        let s = sign(&notice(&k, ("afs", ""), ("k2n1-m4", ""), 7, Utc::now()), &k).expect("sign");
+        let a = apply(&mut store, &body(&s), Utc::now()).expect("no-op is accepted");
+        assert!(!a.wrote, "{a:?}");
+        assert!(a.changed.is_empty());
+        assert_eq!(store.get(&f).expect("peer"), &before, "not even the seq moves");
     }
 
     #[test]

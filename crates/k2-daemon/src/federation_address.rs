@@ -47,38 +47,32 @@ fn json_status(status: &'static str, body: serde_json::Value) -> CliResponse {
 
 /// `POST /cli/federation/address`. See the module doc.
 pub fn handle_address_notice(body: &[u8]) -> CliResponse {
-    // One writer at a time on the peer store for this route (load → apply →
-    // save), so two notices from the same peer cannot both pass the seq check.
-    static APPLY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = APPLY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-
-    let mut store = match PeerStore::load() {
-        Ok(s) => s,
+    // The peer-store transaction lock makes load → apply → save one step, so
+    // two notices from the same peer cannot both pass the seq check. A
+    // notice that changes nothing writes nothing.
+    let tx = PeerStore::transact(|store| {
+        let applied = notice::apply(store, body, Utc::now())?;
+        let label = store
+            .get(&applied.fingerprint)
+            .map(|p| p.label.clone())
+            .filter(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| applied.fingerprint.chars().take(16).collect());
+        let write = applied.wrote;
+        Ok::<_, notice::NoticeError>(((applied, label), write))
+    });
+    let (applied, label) = match tx {
         Err(e) => {
             return json_status(
                 "500 Internal Server Error",
-                serde_json::json!({ "error": format!("load peer store: {e}"), "code": "store_error" }),
+                serde_json::json!({ "error": format!("peer store: {e}"), "code": "store_error" }),
             )
         }
-    };
-    let applied = match notice::apply(&mut store, body, Utc::now()) {
-        Ok(a) => a,
-        Err(e) => {
+        Ok(Err(e)) => {
             log_debug!("[federation/address] notice refused: {} ({e})", e.code());
             return json_status(e.status(), serde_json::json!({ "error": e.to_string(), "code": e.code() }));
         }
+        Ok(Ok(v)) => v,
     };
-    if let Err(e) = store.save() {
-        return json_status(
-            "500 Internal Server Error",
-            serde_json::json!({ "error": format!("save peer store: {e}"), "code": "store_error" }),
-        );
-    }
-    let label = store
-        .get(&applied.fingerprint)
-        .map(|p| p.label.clone())
-        .filter(|l| !l.trim().is_empty())
-        .unwrap_or_else(|| applied.fingerprint.chars().take(16).collect());
     let describe = |a: &notice::PeerAddress| {
         match (a.subdomain.is_empty(), a.base_url.is_empty()) {
             (false, false) => format!("{} {}", a.subdomain, a.base_url),

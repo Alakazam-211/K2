@@ -1476,7 +1476,7 @@ impl StalwartClient {
             "x:Account/get",
             serde_json::json!({
                 "ids": ids,
-                "properties": ["name", "roles", "permissions"],
+                "properties": ["@type", "name", "roles", "permissions"],
             }),
         )?;
         resp.get("list")
@@ -6905,7 +6905,7 @@ mod s3_account_tests {
         assert_eq!(get["methodCalls"][0][1]["ids"], serde_json::json!(["e", "zz"]));
         assert_eq!(
             get["methodCalls"][0][1]["properties"],
-            serde_json::json!(["name", "roles", "permissions"])
+            serde_json::json!(["@type", "name", "roles", "permissions"])
         );
 
         let perms = serde_json::json!({

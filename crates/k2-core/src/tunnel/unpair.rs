@@ -306,9 +306,11 @@ pub fn perform_release() -> Result<ReleaseReport, String> {
     //    A failed delete is an ERROR — a release that leaves the bearer on
     //    disk must not report success. (The tombstone is already down, so
     //    even the failure state is gate-blocked.)
+    config::clear_vault_token()?;
     for path in [
         config::config_path(),
         super::connector::frpc_config_path(),
+        super::connector::legacy_frpc_config_path(),
         super::tls::key_path(),
         super::tls::cert_path(),
     ] {

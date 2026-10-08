@@ -918,6 +918,20 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         return usage("--dest vault only");
     }
     let prompt = opt_param(params, "prompt");
+    // VS13: the prompt is plain text, at most 200 characters.
+    if prompt.as_deref().is_some_and(|p| p.chars().count() > 200) {
+        return usage("--prompt is at most 200 characters");
+    }
+    // K2 vault (prd-k2-vault-v1 §10.1, KV9): the proposal. Agents propose
+    // exact hosts only (VS4); people can change everything on the card.
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => return error_json("503 Service Unavailable", e.code, e.hint),
+    };
+    let proposal = match secret_proposal(params) {
+        Ok(p) => p,
+        Err(e) => return error_json("400 Bad Request", e.code, e.hint),
+    };
     let resolved = match resolve_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
@@ -927,6 +941,24 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
+    // VS13: at most 3 pending secret cards per chat.
+    match vault.pending_requests_in(&resolved.conversation_id) {
+        Ok(n) if n >= k2_vault::vault::GUEST_PENDING_MAX => {
+            return error_json(
+                "409 Conflict",
+                "too_many_pending_cards",
+                "this chat already has 3 secret cards waiting; wait for an answer first",
+            )
+        }
+        Ok(_) => {}
+        Err(e) => return error_json("500 Internal Server Error", e.code, e.hint),
+    }
+    let ttl_secs = match opt_param(params, "ttl").as_deref().map(parse_ttl) {
+        Some(Ok(t)) => Some(t),
+        Some(Err(h)) => return usage(h),
+        None => None,
+    };
+    let session_id = params.get("cell_session_id").cloned();
     let db = k2_core::db::shared();
     let conn = db.lock();
     match overlay::post_secret(
@@ -937,10 +969,39 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         &resolved.addr,
         name.trim(),
         prompt.as_deref(),
+        proposal.clone(),
     ) {
         Ok((item, links)) => {
-            crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
+            let req = k2_vault::vault::SecretRequest {
+                card_id: item.id.clone(),
+                conversation: resolved.conversation_id.clone(),
+                session_id: session_id.clone(),
+                workspace_id: resolved.project_id.clone(),
+                requested_by: from.clone(),
+                name: name.trim().to_string(),
+                kind: proposal.kind.as_deref().map(k2_vault::Kind::parse).and_then(Result::ok).unwrap_or(k2_vault::Kind::ApiKey),
+                proposed_scope: proposal.scope.clone().unwrap_or_else(|| "workspace".into()),
+                proposed_hosts: proposal.hosts.clone(),
+                proposed_delivery: proposal
+                    .delivery
+                    .as_deref()
+                    .map(k2_vault::Delivery::parse)
+                    .and_then(Result::ok)
+                    .unwrap_or(k2_vault::Delivery::Fetch),
+                prompt: prompt.clone().unwrap_or_default(),
+                ttl_secs,
+                status: String::new(),
+                answered_by: None,
+                secret_id: None,
+                created_at: String::new(),
+                answered_at: None,
+            };
+            if let Err(e) = vault.request_create(req) {
+                let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into());
+                return error_json("400 Bad Request", e.code, e.hint);
+            }
+            crate::overlay_ws::emit_links(&links, &item.doc);
             crate::thread_activity::note_reply(&resolved.conversation_id);
             let secret = item.doc.secret.as_ref();
             CliResponse::ok_json(with_moved_from(
@@ -962,6 +1023,51 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// The card's proposal from `--scope/--for/--delivery/--kind` (KV9).
+fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretProposal, k2_vault::VaultError> {
+    let scope = opt_param(params, "scope").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(s) = &scope {
+        if !matches!(s.as_str(), "workspace" | "server" | "session") {
+            return Err(k2_vault::VaultError::bad_request("bad_scope", "--scope is workspace, server or session"));
+        }
+    }
+    let raw_hosts = opt_param(params, "for").or_else(|| opt_param(params, "hosts")).unwrap_or_default();
+    let list: Vec<String> = if raw_hosts.trim_start().starts_with('[') {
+        serde_json::from_str(&raw_hosts).map_err(|_| k2_vault::VaultError::bad_request("bad_host", "hosts must be a list"))?
+    } else {
+        raw_hosts.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect()
+    };
+    let hosts = k2_vault::hosts::normalise_list(&list, false)?;
+    let delivery = opt_param(params, "delivery").map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+    if let Some(d) = &delivery {
+        if !matches!(d.as_str(), "fetch" | "file" | "env") {
+            return Err(k2_vault::VaultError::bad_request("bad_delivery", "--delivery is fetch, file or env"));
+        }
+    }
+    let kind = opt_param(params, "kind").map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    if let Some(k) = &kind {
+        k2_vault::Kind::parse(k)?;
+    }
+    Ok(overlay::SecretProposal { scope, hosts, delivery, kind })
+}
+
+/// `--ttl 24h` / `90m` / `3600` → seconds (chat secrets).
+fn parse_ttl(s: &str) -> Result<i64, &'static str> {
+    let s = s.trim();
+    let (num, mult) = match s.chars().last() {
+        Some('h') => (&s[..s.len() - 1], 3600),
+        Some('m') => (&s[..s.len() - 1], 60),
+        Some('d') => (&s[..s.len() - 1], 86400),
+        Some('s') => (&s[..s.len() - 1], 1),
+        _ => (s, 1),
+    };
+    let n: i64 = num.parse().map_err(|_| "--ttl is like 24h, 90m or 3600")?;
+    if n <= 0 {
+        return Err("--ttl must be positive");
+    }
+    Ok(n * mult)
+}
+
 fn card_id_of(params: &HashMap<String, String>) -> String {
     let id = str_param(params, "id");
     if id.is_empty() {
@@ -971,7 +1077,130 @@ fn card_id_of(params: &HashMap<String, String>) -> String {
     }
 }
 
-fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
+/// The person answering a secret card, in vault terms. Passports (agents
+/// and K2 shell tabs) are refused (KV8).
+fn card_answerer(params: &HashMap<String, String>, resolved: &ResolvedOverlay, session_author: &str) -> Result<k2_vault::Actor, CliResponse> {
+    let passport = principal_is_bound(params)
+        || crate::caller_workspace::principal_from_params(params).is_some()
+        || params.contains_key("cell_session_id");
+    if passport {
+        return Err(error_json(
+            "403 Forbidden",
+            "secret_card_human_only",
+            "secret cards are answered by a person, never by an agent or a K2 terminal",
+        ));
+    }
+    if let Some(pass) = request_skin() {
+        return Ok(k2_vault::Actor::Guest { username: pass.username.clone(), workspace_id: resolved.project_id.clone() });
+    }
+    if session_author == "owner" {
+        return Ok(k2_vault::Actor::Owner);
+    }
+    let role = match k2_core::connect_users::role_for_user(session_author) {
+        Some(k2_core::connect_users::Role::Owner) => k2_vault::Role::Owner,
+        Some(k2_core::connect_users::Role::Admin) => k2_vault::Role::Admin,
+        Some(_) => k2_vault::Role::Member,
+        None => return Err(forbidden("that login no longer exists")),
+    };
+    Ok(k2_vault::Actor::Login { username: session_author.to_string(), role })
+}
+
+fn vault_error(e: &k2_vault::VaultError) -> CliResponse {
+    let status = match e.status {
+        400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        409 => "409 Conflict",
+        503 => "503 Service Unavailable",
+        _ => "500 Internal Server Error",
+    };
+    error_json(status, e.code, &e.hint)
+}
+
+/// A secret card answer: value → vault; the card turns `set` with the
+/// reference; the agent's inject line names the reference, never a value.
+fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverlay, card_id: &str, session_author: &str) -> CliResponse {
+    let actor = match card_answerer(params, resolved, session_author) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => return vault_error(&e),
+    };
+    let req = match vault.request_get(card_id) {
+        Ok(r) => r,
+        Err(e) => return vault_error(&e),
+    };
+    if req.workspace_id != resolved.project_id || req.conversation != resolved.conversation_id {
+        return forbidden("that card belongs to another chat");
+    }
+    let Some(value) = opt_param(params, "secret").or_else(|| opt_param(params, "value")) else {
+        return usage("secret value required");
+    };
+    let hosts = match opt_param(params, "hosts") {
+        None => None,
+        Some(h) if h.trim_start().starts_with('[') => match serde_json::from_str::<Vec<String>>(&h) {
+            Ok(v) => Some(v),
+            Err(_) => return usage("hosts must be a list"),
+        },
+        Some(h) => Some(h.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()),
+    };
+    let delivery = match opt_param(params, "delivery").map(|d| k2_vault::Delivery::parse(&d)) {
+        Some(Ok(d)) => Some(d),
+        Some(Err(e)) => return vault_error(&e),
+        None => None,
+    };
+    let ans = k2_vault::vault::CardAnswer {
+        scope: opt_param(params, "scope"),
+        hosts,
+        delivery,
+        confirmed_warnings: opt_param(params, "confirm").is_some_and(|c| c == "1" || c == "true"),
+    };
+    let result = match vault.request_answer(card_id, k2_vault::SecretBytes::from_string(value), &ans, &actor) {
+        Ok(r) => r,
+        Err(e) => return vault_error(&e),
+    };
+    let m = &result.meta;
+    let reference = crate::vault::display_ref(m).unwrap_or_else(|| result.reference.clone());
+    let sites: Vec<String> = m
+        .hosts
+        .iter()
+        .map(|h| h.split("://").nth(1).and_then(|x| x.rsplit_once(':')).map(|x| x.0.to_string()).unwrap_or_else(|| h.clone()))
+        .collect();
+    let inject_line = format!(
+        "secret {} set → {} ({}{}). Use: {}",
+        m.name,
+        reference,
+        m.default_delivery,
+        if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
+        crate::vault_routes::use_hint(m),
+    );
+    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line) {
+        Ok(cb) => cb,
+        Err(e) => return error_json("409 Conflict", "card_not_pending", e),
+    };
+    fire_card_callbacks(&resolved.addr, vec![cb.clone()], true);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "id": cb.doc_id,
+            "seq": cb.seq,
+            "kind": cb.doc.kind,
+            "status": "set",
+            "name": m.name,
+            "ref": reference,
+            "trimmed": result.trimmed,
+            "agentCanSee": m.agent_can_see(),
+            "conversation_id": resolved.conversation_id,
+            "addr": resolved.addr,
+        })
+        .to_string(),
+    )
+}
+
+fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     let addr = str_param(params, "addr");
     let card_id = card_id_of(params);
     if addr.is_empty() {
@@ -991,13 +1220,12 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
     }
-    let answer = opt_param(params, "answer").or_else(|| opt_param(params, "option"));
-    let secret = opt_param(params, "secret").or_else(|| opt_param(params, "value"));
     // KV8: only a person answers a secret card. Any session passport
     // (agent harness, plain shell tab, API cell) is refused, whichever
     // door it came through (TCP passport or the cell socket).
     if principal.is_some() {
-        let is_secret_card = secret.is_some()
+        let is_secret_card = opt_param(params, "secret").is_some()
+            || opt_param(params, "value").is_some()
             || match overlay::card_is_secret(&resolved.conversation_id, &card_id) {
                 Ok(b) => b,
                 Err(e) => return card_error(e),
@@ -1006,13 +1234,20 @@ fn handle_answer(params: &HashMap<String, String>) -> CliResponse {
             return secret_card_human_only();
         }
     }
-    let secret_bytes = secret.as_deref().map(str::as_bytes);
+    // Secret cards are answered into the K2 vault (prd-k2-vault-v1 §10.1).
+    if crate::vault::get().is_ok_and(|v| v.request_get(&card_id).is_ok()) {
+        return answer_secret_card(params, &resolved, &card_id, session_author);
+    }
+    if opt_param(params, "secret").is_some() || opt_param(params, "value").is_some() {
+        return error_json("409 Conflict", "card_not_pending", "that card isn't waiting for a secret");
+    }
+    let answer = opt_param(params, "answer").or_else(|| opt_param(params, "option"));
     match overlay::answer_card(
         &resolved.conversation_id,
         &resolved.project_id,
         &card_id,
         answer.as_deref(),
-        secret_bytes,
+        None,
     ) {
         Ok(cb) => {
             // TW1: a person answering a card starts a Thread turn (an
@@ -1088,6 +1323,9 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
     }
     match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id) {
         Ok(cb) => {
+            if cb.doc.secret.is_some() {
+                void_vault_request(&card_id);
+            }
             fire_card_callbacks(&resolved.addr, vec![cb.clone()], !principal_is_bound(params));
             let status = cb
                 .doc
@@ -1110,6 +1348,15 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
             ))
         }
         Err(e) => card_error(e),
+    }
+}
+
+/// A secret card voided in the Thread: its vault request goes too.
+fn void_vault_request(card_id: &str) {
+    if let Ok(v) = crate::vault::get() {
+        if let Err(e) = v.request_void(card_id, &k2_vault::Actor::System("thread".into())) {
+            k2_core::log_debug!("[vault] void request {card_id}: {}", e.code);
+        }
     }
 }
 
@@ -1247,7 +1494,14 @@ fn deliver_thread_to_pty(
 
 fn apply_human_prose(conversation_id: &str, project_id: &str, addr: &str, text: &str) {
     match overlay::apply_prose(conversation_id, project_id, text) {
-        Ok(cbs) if !cbs.is_empty() => fire_card_callbacks(addr, cbs, false),
+        Ok(cbs) if !cbs.is_empty() => {
+            for cb in &cbs {
+                if cb.doc.secret.is_some() {
+                    void_vault_request(&cb.doc_id);
+                }
+            }
+            fire_card_callbacks(addr, cbs, false)
+        }
         Ok(_) => {}
         Err(e) => k2_core::log_debug!("[overlay] apply_prose failed: {e}"),
     }
@@ -1389,7 +1643,7 @@ pub fn dispatch_post_as(
         "/cli/thread/post" => handle_post(&params, session_author),
         "/cli/thread/ask" => handle_ask(&params),
         "/cli/thread/secret" => handle_secret(&params),
-        "/cli/thread/answer" => handle_answer(&params),
+        "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params),
         _ => CliResponse::not_found(),
     }
@@ -1474,6 +1728,9 @@ mod tests {
     use rusqlite::params;
 
     fn seed(handle: &str) -> (String, String) {
+        // Secret cards live in the vault: every overlay test has the
+        // shared test vault (temp dir, fake key store).
+        crate::vault::ensure_test_vault();
         let db = k2_core::db::shared();
         let conn = db.lock();
         let id = uuid::Uuid::new_v4().to_string();
@@ -2389,7 +2646,9 @@ mod tests {
     }
 
     #[test]
-    fn secret_submit_vault_and_never_in_json() {
+    fn secret_card_answer_goes_to_the_vault_and_never_in_json() {
+        use k2_vault::SecretStore as _;
+        let vault = crate::vault::ensure_test_vault();
         let handle = format!("ovlsec{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -2402,6 +2661,7 @@ mod tests {
                 "addr": handle,
                 "name": "API_TOKEN",
                 "prompt": "Paste the Grok token",
+                "for": "api.x.ai",
                 "from": "k2",
             })
             .to_string()
@@ -2411,63 +2671,61 @@ mod tests {
         let body = json_body(&posted);
         assert_eq!(body["name"], "API_TOKEN", "{body}");
         assert_eq!(body["status"], "pending", "{body}");
-        assert!(body.get("secret").is_none() || body["secret"].as_str().is_none());
-        assert!(
-            !posted.body.contains(secret_val),
-            "create must not echo a value: {}",
-            posted.body
-        );
         let id = body["id"].as_str().expect("id").to_string();
+        let req = vault.request_get(&id).expect("vault request");
+        assert_eq!(req.proposed_hosts, vec!["https://api.x.ai:443".to_string()]);
+
+        // An agent or K2 terminal can't answer (KV8).
+        let mut passport = HashMap::new();
+        passport.insert("cell_session_id".to_string(), "sess-x".to_string());
+        let refused = dispatch_post(
+            "/cli/thread/answer",
+            &passport,
+            serde_json::json!({ "addr": handle, "id": id, "secret": secret_val }).to_string().as_bytes(),
+        );
+        assert_eq!(refused.status, "403 Forbidden", "{}", refused.body);
+        assert!(refused.body.contains("secret_card_human_only"), "{}", refused.body);
 
         let set = dispatch_post(
             "/cli/thread/answer",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle,
-                "id": id,
-                "secret": secret_val,
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": handle, "id": id, "secret": secret_val }).to_string().as_bytes(),
         );
         assert_eq!(set.status, "200 OK", "{}", set.body);
         let set_body = json_body(&set);
         assert_eq!(set_body["status"], "set", "{set_body}");
-        assert!(
-            !set.body.contains(secret_val),
-            "answer JSON must not contain secret: {}",
-            set.body
+        assert_eq!(set_body["ref"], format!("k2v://ws/{handle}/API_TOKEN"), "{set_body}");
+        assert!(!set.body.contains(secret_val), "answer JSON must not contain secret: {}", set.body);
+        let got = vault
+            .resolve(
+                &k2_vault::Selector::user(k2_vault::Scope::workspace(project_id.clone()), "API_TOKEN"),
+                k2_vault::Use::System,
+                &k2_vault::Requester::System("test".into()),
+            )
+            .expect("vault holds it");
+        assert_eq!(got.value.expose(), secret_val.as_bytes());
+        assert!(got.meta.human_given);
+        // A second answer is refused (no overwrite).
+        let again = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": id, "secret": "other" }).to_string().as_bytes(),
         );
-        assert!(
-            k2_core::overlay::vault::exists(&project_id, "API_TOKEN"),
-            "vault must hold the bytes"
-        );
-        let got =
-            k2_core::overlay::vault::debug_read(&project_id, "API_TOKEN").expect("vault read");
-        assert_eq!(got, secret_val.as_bytes());
-        let snap = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET"),
-        );
+        assert_eq!(again.status, "409 Conflict", "{}", again.body);
+        let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET"));
         let snap_s = snap.to_string();
-        assert!(
-            !snap_s.contains(secret_val),
-            "GET snapshot must not contain secret: {snap_s}"
-        );
+        assert!(!snap_s.contains(secret_val), "GET snapshot must not contain secret: {snap_s}");
         assert!(
             !k2_core::overlay::store::debug_docs_contain(secret_val).expect("scan"),
             "redb docs must not contain secret bytes"
         );
         let injects = recorded_injects();
         assert!(
-            injects
-                .iter()
-                .any(|l| l == &format!("[thread:{handle}] secret API_TOKEN set")),
+            injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}] secret API_TOKEN set → k2v://ws/{handle}/API_TOKEN (fetch; api.x.ai)"))),
             "set inject: {injects:?}"
         );
-        assert!(
-            injects.iter().all(|l| !l.contains(secret_val)),
-            "inject must never carry secret bytes: {injects:?}"
-        );
+        assert!(injects.iter().all(|l| !l.contains(secret_val)), "inject must never carry secret bytes: {injects:?}");
+        assert!(!k2_core::overlay::vault::exists(&project_id, "API_TOKEN"), "nothing in the old folder");
 
         let handle2 = format!("ovlvoid{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id2, _) = seed(&handle2);
@@ -2475,46 +2733,44 @@ mod tests {
         let pending = dispatch_post(
             "/cli/thread/secret",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle2,
-                "name": "OTHER_TOKEN",
-                "from": "k2",
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": handle2, "name": "OTHER_TOKEN", "from": "k2" }).to_string().as_bytes(),
         );
         assert_eq!(pending.status, "200 OK", "{}", pending.body);
         let pid = json_body(&pending)["id"].as_str().expect("id").to_string();
         let voided = dispatch_post(
             "/cli/thread/post",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle2,
-                "text": "I'll paste later",
-                "from": "owner",
-                "via": "compose",
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": handle2, "text": "I'll paste later", "from": "owner", "via": "compose" })
+                .to_string()
+                .as_bytes(),
         );
         assert_eq!(voided.status, "200 OK", "{}", voided.body);
-        let snap2 = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read void"),
+        let snap2 = json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read void"));
+        let secret_item = snap2["items"].as_array().expect("items").iter().find(|i| i["id"] == pid).expect("secret card");
+        assert_eq!(secret_item["doc"]["secret"]["status"], "voided", "chat instead must void secret: {snap2}");
+        assert_eq!(vault.request_get(&pid).expect("req").status, "void");
+        let _ = project_id2;
+    }
+
+    #[test]
+    fn secret_cards_refuse_agent_wildcards_and_long_prompts() {
+        crate::vault::ensure_test_vault();
+        let handle = format!("ovlwc{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let wc = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "name": "K", "for": "*.stripe.com", "from": "k2" }).to_string().as_bytes(),
         );
-        let secret_item = snap2["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .find(|i| i["id"] == pid)
-            .expect("secret card");
-        assert_eq!(
-            secret_item["doc"]["secret"]["status"], "voided",
-            "chat instead must void secret: {snap2}"
+        assert_eq!(wc.status, "400 Bad Request", "{}", wc.body);
+        assert!(wc.body.contains("wildcard_not_allowed"), "{}", wc.body);
+        let long = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "name": "K", "prompt": "x".repeat(201), "from": "k2" }).to_string().as_bytes(),
         );
-        assert!(
-            !k2_core::overlay::vault::exists(&project_id2, "OTHER_TOKEN"),
-            "vault empty after chat-instead void"
-        );
+        assert_eq!(long.status, "400 Bad Request", "{}", long.body);
     }
 
     #[test]
@@ -2889,6 +3145,7 @@ mod tests {
 
     #[test]
     fn skin_secret_answer_omits_value() {
+        crate::vault::ensure_test_vault();
         let handle = format!("ovlsksec{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -2900,6 +3157,7 @@ mod tests {
                 "addr": handle,
                 "name": "API_TOKEN",
                 "prompt": "Paste the token",
+                "for": "api.example.com",
                 "from": "k2",
             })
             .to_string()

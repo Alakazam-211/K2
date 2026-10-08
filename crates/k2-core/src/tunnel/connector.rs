@@ -181,7 +181,23 @@ fn is_executable(p: &Path) -> bool {
 /// Path the rendered frpc config is written to. `pub(crate)` so a
 /// Release ([`super::unpair`]) can delete it — the rendered TOML embeds
 /// the bearer token, so it is identity material too.
+///
+/// K2 vault (§10.4): outside tests it lives in a private runtime
+/// directory (Linux `$XDG_RUNTIME_DIR/k2` or `/dev/shm/k2-<uid>`, macOS
+/// the per-user temp dir), not in `~/.k2`, so home backups and clones
+/// never carry the rendered token.
 pub(crate) fn frpc_config_path() -> PathBuf {
+    #[cfg(not(test))]
+    {
+        if let Some(d) = crate::runtime_dir::private_runtime_dir() {
+            return d.join("frpc.toml");
+        }
+    }
+    legacy_frpc_config_path()
+}
+
+/// The pre-vault location (`~/.k2/frpc.toml`): reaped and removed.
+pub(crate) fn legacy_frpc_config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".k2")
@@ -483,6 +499,11 @@ pub fn start(
     // remote access. We reach here only when no live child is tracked
     // (guard returned early otherwise), so every match is genuinely stale.
     reap_stray_frpc(&frpc_config_path());
+    let legacy = legacy_frpc_config_path();
+    if legacy != frpc_config_path() {
+        reap_stray_frpc(&legacy);
+        let _ = std::fs::remove_file(&legacy);
+    }
 
     // Spawn + supervise. The supervisor gets the config + render inputs so
     // it can rotate relays (re-render frpc.toml, respawn) on repeated
@@ -563,6 +584,9 @@ pub fn stop() -> Result<(), String> {
         stray_frpc_pattern(&cfg_path)
     );
     reap_stray_frpc(&cfg_path);
+    if legacy_frpc_config_path() != cfg_path {
+        reap_stray_frpc(&legacy_frpc_config_path());
+    }
     // 4) Short settle + second reap — SIGTERM from pkill may not have
     //    reaped yet; a second pass catches late-dying children.
     std::thread::sleep(Duration::from_millis(150));

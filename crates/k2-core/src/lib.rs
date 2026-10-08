@@ -53,6 +53,8 @@ pub mod agent_hooks;
 // Phase 2.5e; downstream callers (daemon CLI + Tauri commands) use
 // the canonical post-relocation paths directly.
 pub mod app_settings;
+/// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
+pub mod runtime_dir;
 pub mod chat_history;
 pub mod chat_continue;
 pub mod chat_overlay;

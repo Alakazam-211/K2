@@ -3910,6 +3910,7 @@ version = "0.45.3"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "dirs 5.0.1",
  "flate2",
@@ -3923,12 +3924,16 @@ dependencies = [
  "k2-core",
  "k2-node",
  "k2-node-proto",
+ "k2-vault",
  "lettre",
  "libc",
  "mail-parser",
  "minisign-verify",
  "nix 0.29.0",
  "notify",
+ "objc2",
+ "objc2-foundation",
+ "objc2-local-authentication",
  "p256",
  "parking_lot",
  "pg_query",
@@ -3938,6 +3943,7 @@ dependencies = [
  "rustls 0.23.38",
  "rustls-pemfile",
  "seccompiler",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3949,6 +3955,7 @@ dependencies = [
  "uuid",
  "vte",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -4892,6 +4899,17 @@ dependencies = [
  "bitflags 2.11.1",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-local-authentication"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
+dependencies = [
+ "block2",
+ "objc2",
+ "objc2-foundation",
 ]
 
 [[package]]

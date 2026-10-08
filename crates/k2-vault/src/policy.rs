@@ -31,7 +31,7 @@ pub struct AgentActor {
     pub session_id: Option<String>,
     /// A plain K2 shell tab (a person typing in K2) — still agent-level.
     pub shell: bool,
-    /// "Allow managing server-wide secrets" (0146).
+    /// "Allow managing server-wide secrets" (0149).
     pub vault_manage: bool,
 }
 

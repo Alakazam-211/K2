@@ -1239,6 +1239,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0147_compute_nodes",
             include_str!("../../drizzle_sql/0147_compute_nodes.sql"),
         ),
+        // 0149 — K2 vault: the per-agent "Allow managing server-wide
+        // secrets" switch (prd-k2-vault-v1 §17). Renumbered from 0146 at
+        // integration: 0147 shipped first, so 0144–0146 are retired.
+        (
+            "0149_vault_manage",
+            include_str!("../../drizzle_sql/0149_vault_manage.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1899,7 +1906,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0147_compute_nodes",
+            last_name, "0149_vault_manage",
             "unexpected last migration name: {last_name}"
         );
     }

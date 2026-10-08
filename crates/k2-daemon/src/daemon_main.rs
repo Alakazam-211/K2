@@ -410,6 +410,13 @@ async fn async_main() {
         Err(e) => log_debug!("[daemon/users] ERROR: viewer-role migration: {e}"),
     }
 
+    // K2 vault (prd-k2-vault-v1 §5.1, VS14): open ~/.k2/vault/vault.db
+    // here — the serve path, after the single-instance lock, before any
+    // route serves — and bind ~/.k2/vault.sock (the person channel, VS2).
+    // A vault that can't open leaves the daemon running; status says why.
+    crate::vault::boot(&k2so_dir);
+    crate::vault::human::serve(&k2so_dir);
+
     // P5.3: clear stale heartbeat leases left behind by a daemon that
     // crashed mid-spawn. Without this, a row's `in_flight_started_at`
     // would stay set forever under `concurrency_policy='forbid'` and

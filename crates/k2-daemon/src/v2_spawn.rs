@@ -1260,6 +1260,14 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             workspace_api_key.as_deref(),
             owner,
         );
+        // K2 vault (KV19): this session's file/env secrets (env only in a
+        // sandboxed cell).
+        crate::vault::spawn::materialize(
+            &mut cfg.env,
+            &workspace_uuid,
+            &session_id_for_response.to_string(),
+            matches!(cfg.sandbox, k2_core::terminal::SandboxSpec::Microvm),
+        );
         if minted {
             log_debug!(
                 "[hook-scoped] injected scoped K2_HOOK_TOKEN + K2_HOOK_SOCK for session={}",

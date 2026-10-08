@@ -1208,3 +1208,166 @@ async fn connect_ip_spray_does_not_429_skin_login() {
         );
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// LM1/LM2 (prd-lan-mode-toggle-tls-docs-v1 §11) — the throttle key never
+// comes from a client-written header on the tunnel, and full tables never
+// deny unrelated new clients.
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attested_login_keys_on_signed_ip_not_forwarded_headers() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let signer = seed("lmone0", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let real = "198.51.100.30";
+        for i in 1..=5 {
+            let forged_cf = format!("CF-Connecting-IP: 203.0.113.{i}");
+            let forged_xff = format!("X-Forwarded-For: 203.0.113.{}", 100 + i);
+            let body = format!(r#"{{"username":"lmone{i}","password":"WRONG"}}"#);
+            let r = attested_login(
+                &d,
+                &signer,
+                &body,
+                now(),
+                &random_nonce(),
+                real,
+                SUB,
+                &[&forged_cf, &forged_xff],
+            );
+            assert_eq!(r.status, 401, "attested attempt {i}; body={}", r.body);
+        }
+        let r = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"lmone6","password":"WRONG"}"#,
+            now(),
+            &random_nonce(),
+            real,
+            SUB,
+            &["CF-Connecting-IP: 203.0.113.250", "X-Forwarded-For: 203.0.113.251"],
+        );
+        assert_rate_limited(
+            &r,
+            "6th attested login from one signed IP despite rotating forged headers",
+        );
+        let last = audit_events_for("login").pop().expect("rate_limited audit");
+        assert_eq!(last["outcome"], "rate_limited", "{last}");
+        assert_eq!(last["ip"], real, "audit carries the signed IP: {last}");
+
+        // Another signed IP is its own bucket even when it forges the
+        // limited IP in every forwarded header.
+        let forged_cf = format!("CF-Connecting-IP: {real}");
+        let forged_xff = format!("X-Forwarded-For: {real}");
+        let other = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"lmone7","password":"WRONG"}"#,
+            now(),
+            &random_nonce(),
+            "198.51.100.31",
+            SUB,
+            &[&forged_cf, &forged_xff],
+        );
+        assert_eq!(other.status, 401, "other signed IP is not limited; body={}", other.body);
+        assert_eq!(
+            k2_daemon::login_throttle::tracked_keys(),
+            (2, 0),
+            "exactly the two signed IPs are tracked; no header-derived bucket"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn any_mode_unattested_tunnel_logins_share_tunnel_bucket_not_splice_peer() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let _s = seed("lmtwo", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        set_ingress_mode("any");
+        let forged = ["X-Forwarded-For: 203.0.113.9", "CF-Connecting-IP: 203.0.113.9"];
+        let used = k2_daemon::login_throttle::LIMIT + 2;
+        for i in 1..=used {
+            let body = format!(r#"{{"username":"lmtwo{i}","password":"WRONG"}}"#);
+            let r = http(d.tunnel_port, "POST", LOGIN, Some(&body), &forged);
+            assert_eq!(
+                r.status, 401,
+                "any-mode tunnel attempt {i} must not hit the old 5/300s splice-peer cap; body={}",
+                r.body
+            );
+        }
+        assert_eq!(
+            k2_daemon::login_throttle::tracked_keys(),
+            (1, 0),
+            "only the shared tunnel bucket is tracked (not 127.0.0.1, not the header)"
+        );
+        // The shared bucket still caps at its own limit.
+        for _ in used..k2_daemon::login_throttle::TUNNEL_SHARED_LIMIT {
+            assert_eq!(
+                k2_daemon::login_throttle::check_and_record_with_limit(
+                    k2_daemon::login_throttle::TUNNEL_SHARED_KEY,
+                    k2_daemon::login_throttle::TUNNEL_SHARED_LIMIT,
+                    now(),
+                ),
+                k2_daemon::login_throttle::Verdict::Allow
+            );
+        }
+        let r = http(
+            d.tunnel_port,
+            "POST",
+            LOGIN,
+            Some(r#"{"username":"lmtwo-last","password":"WRONG"}"#),
+            &[],
+        );
+        assert_rate_limited(&r, "shared tunnel bucket over its limit");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_throttle_tables_do_not_429_new_clients() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let signer = seed("lmfull", "password123", Role::Member);
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let cap = k2_daemon::login_throttle::CAPACITY;
+        let t = now();
+        for i in 0..(cap + 1_000) {
+            let ip = format!("10.{}.{}.{}", (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
+            k2_daemon::login_throttle::check_and_record(&ip, t);
+            k2_daemon::login_throttle::check_and_record(
+                &k2_daemon::login_throttle::skin_ip_key(&ip),
+                t,
+            );
+        }
+        let (connect, skin) = k2_daemon::login_throttle::tracked_keys();
+        assert_eq!(connect, cap, "Connect table bounded at capacity");
+        assert_eq!(skin, cap, "skin table bounded at capacity");
+
+        let r = attested_login(
+            &d,
+            &signer,
+            r#"{"username":"lmfull","password":"WRONG"}"#,
+            now(),
+            &random_nonce(),
+            "198.51.100.40",
+            SUB,
+            &[],
+        );
+        assert_eq!(r.status, 401, "fresh Connect client after a flood; body={}", r.body);
+
+        let skin_r = http(
+            d.port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"guest","password":"WRONG"}"#),
+            &["X-Forwarded-For: 198.51.100.41"],
+        );
+        assert_eq!(skin_r.status, 401, "fresh skin client after a flood; body={}", skin_r.body);
+        let (connect, skin) = k2_daemon::login_throttle::tracked_keys();
+        assert!(connect <= cap && skin <= cap, "still bounded: {connect}/{skin}");
+    });
+}

@@ -4442,6 +4442,157 @@ async fn skin_loopback_sixth_login_without_forwarded_header_is_not_429() {
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// LM1 (prd-lan-mode-toggle-tls-docs-v1 §11) — skin login throttle keys.
+// ─────────────────────────────────────────────────────────────────────
+
+fn skin_locked_until(username: &str) -> Option<i64> {
+    let path = k2_core::paths::k2_home().join("skin.db");
+    assert!(path.is_file(), "skin.db must exist after a skin login");
+    let conn = rusqlite::Connection::open(&path).expect("open skin.db");
+    conn.query_row(
+        "SELECT locked_until FROM login_lockouts WHERE username = ?1",
+        params![username],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .optional()
+    .expect("query login_lockouts")
+    .flatten()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tunnel_skin_login_forged_forwarded_headers_create_no_bucket() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let tunnel = daemon.tunnel_port;
+        // Same forged client IP well past the per-IP limit: no 429.
+        for i in 1..=(k2_daemon::login_throttle::LIMIT + 2) {
+            let r = http_host_ex(
+                tunnel,
+                "POST",
+                "/cli/skin/login",
+                Some(&format!(r#"{{"username":"lmsame{i}","password":"WRONG"}}"#)),
+                "127.0.0.1",
+                "CF-Connecting-IP: 203.0.113.7\r\nX-Forwarded-For: 203.0.113.7\r\n",
+            );
+            assert_eq!(r.status, 401, "tunnel skin attempt {i}; body={}", r.body);
+        }
+        // Rotating forged client IPs: still no bucket created.
+        for i in 1..=10 {
+            let r = http_host_ex(
+                tunnel,
+                "POST",
+                "/cli/skin/login",
+                Some(&format!(r#"{{"username":"lmrot{i}","password":"WRONG"}}"#)),
+                "127.0.0.1",
+                &format!("CF-Connecting-IP: 198.18.0.{i}\r\nX-Forwarded-For: 198.18.1.{i}\r\n"),
+            );
+            assert_eq!(r.status, 401, "tunnel skin rotating attempt {i}; body={}", r.body);
+        }
+        assert_eq!(
+            k2_daemon::login_throttle::tracked_keys(),
+            (0, 0),
+            "forged headers on the tunnel must not create throttle buckets"
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tunnel_skin_login_still_locks_username_after_three_failures() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let tunnel = daemon.tunnel_port;
+        let handle = format!("lmlock{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        seed_thread_addr(&handle);
+        add_user(port, "lockguest");
+        let rooms = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/rooms?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"lockguest","rooms":["{handle}"]}}"#)),
+        );
+        assert_eq!(rooms.status, 200, "rooms; {}", rooms.body);
+        set_password(port, "lockguest", "s3cret-horse");
+        let good = r#"{"username":"lockguest","password":"s3cret-horse"}"#;
+        let bad = r#"{"username":"lockguest","password":"WRONG"}"#;
+
+        let ok = http_host_ex(tunnel, "POST", "/cli/skin/login", Some(good), "127.0.0.1", "");
+        assert_eq!(ok.status, 200, "correct password over the tunnel; body={}", ok.body);
+        for i in 1..=3 {
+            let r = http_host_ex(
+                tunnel,
+                "POST",
+                "/cli/skin/login",
+                Some(bad),
+                "127.0.0.1",
+                &format!("X-Forwarded-For: 198.18.2.{i}\r\n"),
+            );
+            assert_eq!(r.status, 401, "wrong password {i}; body={}", r.body);
+        }
+        assert!(
+            skin_locked_until("lockguest").is_some(),
+            "three failures over the tunnel must lock the username"
+        );
+        let locked = http_host_ex(tunnel, "POST", "/cli/skin/login", Some(good), "127.0.0.1", "");
+        assert_eq!(locked.status, 401, "locked username refuses the right password; body={}", locked.body);
+        let locked_lo = http(port, "POST", "/cli/skin/login", Some(good));
+        assert_eq!(
+            locked_lo.status, 401,
+            "the username lockout applies on loopback too; body={}",
+            locked_lo.body
+        );
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn loopback_skin_login_keys_on_rightmost_forwarded_hop_never_cf_header() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_daemon::login_throttle::reset();
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        for i in 1..=5 {
+            let r = http_host_ex(
+                port,
+                "POST",
+                "/cli/skin/login",
+                Some(&format!(r#"{{"username":"lmrm{i}","password":"WRONG"}}"#)),
+                "127.0.0.1",
+                &format!("X-Forwarded-For: 203.0.113.{i}, 1.2.3.5"),
+            );
+            assert_eq!(r.status, 401, "attempt {i}; body={}", r.body);
+        }
+        let r = http_host_ex(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"lmrm6","password":"WRONG"}"#),
+            "127.0.0.1",
+            "X-Forwarded-For: 203.0.113.99, 1.2.3.5",
+        );
+        assert_skin_rate_limited(&r, "6th skin login from proxy hop 1.2.3.5 (left hops rotated)");
+
+        k2_daemon::login_throttle::reset();
+        for i in 1..=(k2_daemon::login_throttle::LIMIT + 1) {
+            let r = http_host_ex(
+                port,
+                "POST",
+                "/cli/skin/login",
+                Some(&format!(r#"{{"username":"lmcf{i}","password":"WRONG"}}"#)),
+                "127.0.0.1",
+                "CF-Connecting-IP: 1.2.3.6",
+            );
+            assert_eq!(r.status, 401, "CF-Connecting-IP never keys the bucket; attempt {i}; body={}", r.body);
+        }
+        assert_eq!(k2_daemon::login_throttle::tracked_keys(), (0, 0));
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
     let _g = lock();

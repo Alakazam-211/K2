@@ -181,66 +181,338 @@ fn tunnel_root_redirect_location() -> Option<String> {
     app_web_root_location(&cfg.subdomain)
 }
 
-/// T2 — Connect login IP key: attested `att.ip` when present and not `-`,
-/// else the socket peer, else `-` (one shared junk bucket, still capped).
-fn login_throttle_ip(
-    attested: Option<&k2_core::edge_attest::Attestation>,
-    stream: &tokio::net::TcpStream,
-) -> String {
-    if let Some(att) = attested {
-        let ip = att.ip.trim();
-        if !ip.is_empty() && ip != "-" {
-            return ip.to_string();
-        }
-    }
-    stream
-        .peer_addr()
-        .ok()
-        .map(|a| a.ip().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "-".to_string())
+// ── Login throttle keys (LM1/LM2, prd-lan-mode-toggle-tls-docs-v1) ──────
+//
+// What each listener can truly know about the client:
+//
+// - `Loopback` — the peer is this machine. A local reverse proxy (Caddy,
+//   a BYO BFF, `tailscale serve`) is the only party that can name the real
+//   client, and it does so by APPENDING to `X-Forwarded-For`. Only the
+//   RIGHT-MOST hop is the proxy's own observation; everything to its left
+//   (and any `CF-Connecting-IP`, which generic proxies pass through
+//   untouched) may be client-written.
+// - `Lan` — the socket peer IS the client (or a LAN proxy). Forwarded
+//   headers are client-writable, so they are honoured only when the peer
+//   is listed in `K2_LOGIN_TRUSTED_PROXIES`.
+// - `Tunnel` — every request arrives from the local TLS splice / frpc on
+//   127.0.0.1, and the relay is TLS passthrough, so nothing in the request
+//   identifies the client and nobody upstream strips headers. The ONLY
+//   trustworthy client address is the one inside a verified K2 edge
+//   attestation (`X-K2-Edge-Sig`, signed `ip=` field). Forwarded headers on
+//   this listener are always ignored.
+
+/// Env var: comma/space-separated IPs of LAN reverse proxies whose
+/// right-most `X-Forwarded-For` hop may key the login throttle.
+const TRUSTED_PROXIES_ENV: &str = "K2_LOGIN_TRUSTED_PROXIES";
+
+/// Which per-IP bucket (if any) a login attempt counts against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ThrottleKey {
+    /// A client address the listener can vouch for (5 / 300 s).
+    Client(String),
+    /// Unattested tunnel Connect login (`connectLoginIngress=any`): one
+    /// shared bucket with the higher LM2 limit.
+    TunnelShared,
+    /// No per-IP cap (the per-username 3 / 15 min lockout still applies).
+    Uncapped,
 }
 
-/// Skin login IP: `CF-Connecting-IP`, else left-most `X-Forwarded-For`,
-/// else the socket peer. `None` skips the cap — loopback peer with no
-/// forwarded header (typical frpc: do not lock all guests on 127.0.0.1;
-/// do not pretend we capped them). Loopback + a real forwarded client IP
-/// is capped on that client IP.
-fn skin_login_throttle_ip(
-    headers_blob: &str,
-    stream: &tokio::net::TcpStream,
-) -> Option<String> {
-    if let Some(ip) = forwarded_client_ip(headers_blob) {
-        return Some(ip);
+impl ThrottleKey {
+    /// `(table key, limit, audit ip)` for the Connect door.
+    fn connect_bucket(&self) -> Option<(String, usize, String)> {
+        match self {
+            ThrottleKey::Client(ip) => {
+                Some((ip.clone(), crate::login_throttle::LIMIT, ip.clone()))
+            }
+            ThrottleKey::TunnelShared => Some((
+                crate::login_throttle::TUNNEL_SHARED_KEY.to_string(),
+                crate::login_throttle::TUNNEL_SHARED_LIMIT,
+                "-".to_string(),
+            )),
+            ThrottleKey::Uncapped => None,
+        }
     }
-    let peer = stream.peer_addr().ok()?.ip();
-    if peer.is_loopback() {
+
+    /// Table key for the skin door (only client keys are capped there).
+    fn skin_bucket(&self) -> Option<String> {
+        match self {
+            ThrottleKey::Client(ip) => Some(crate::login_throttle::skin_ip_key(ip)),
+            ThrottleKey::TunnelShared | ThrottleKey::Uncapped => None,
+        }
+    }
+}
+
+/// Parse one forwarded hop: a bare IP, `v4:port`, `[v6]` or `[v6]:port`,
+/// optionally quoted. IPv4-mapped IPv6 collapses to IPv4. Garbage → `None`.
+fn parse_hop_ip(hop: &str) -> Option<std::net::IpAddr> {
+    let s = hop.trim().trim_matches('"');
+    if s.is_empty() {
         return None;
     }
-    Some(peer.to_string())
+    let ip = s
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .or_else(|| s.parse::<std::net::SocketAddr>().ok().map(|a| a.ip()))
+        .or_else(|| {
+            s.strip_prefix('[')
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|r| r.parse::<std::net::IpAddr>().ok())
+        })?;
+    Some(ip.to_canonical())
 }
 
-/// Prefer Cloudflare's connecting IP; otherwise the left-most XFF hop.
-fn forwarded_client_ip(headers_blob: &str) -> Option<String> {
-    if let Some(v) = super::http::extract_header(headers_blob, "CF-Connecting-IP") {
-        if let Some(ip) = first_hop_ip(v) {
-            return Some(ip);
+/// The right-most `X-Forwarded-For` hop (last header line, last entry) —
+/// the hop the nearest proxy appended. Never `CF-Connecting-IP`.
+fn rightmost_forwarded_ip(headers_blob: &str) -> Option<std::net::IpAddr> {
+    let mut last: Option<&str> = None;
+    for line in headers_blob.lines() {
+        let Some(colon) = line.find(':') else { continue };
+        let (name, rest) = line.split_at(colon);
+        if name.trim().eq_ignore_ascii_case("x-forwarded-for") {
+            let v = rest[1..].trim();
+            if !v.is_empty() {
+                last = Some(v);
+            }
         }
     }
-    if let Some(v) = super::http::extract_header(headers_blob, "X-Forwarded-For") {
-        if let Some(ip) = first_hop_ip(v) {
-            return Some(ip);
-        }
-    }
-    None
+    parse_hop_ip(last?.rsplit(',').next()?)
 }
 
-fn first_hop_ip(value: &str) -> Option<String> {
-    let ip = value.split(',').next().unwrap_or(value).trim();
-    if ip.is_empty() {
-        None
-    } else {
-        Some(ip.to_string())
+/// `K2_LOGIN_TRUSTED_PROXIES`, parsed. Unparsable entries are skipped.
+fn trusted_proxies_from_env() -> Vec<std::net::IpAddr> {
+    std::env::var(TRUSTED_PROXIES_ENV)
+        .map(|v| {
+            v.split(|c: char| c == ',' || c.is_whitespace())
+                .filter_map(parse_hop_ip)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn peer_ip(stream: &tokio::net::TcpStream) -> Option<std::net::IpAddr> {
+    stream.peer_addr().ok().map(|a| a.ip().to_canonical())
+}
+
+/// The client a trusted proxy reported, if the peer is one we trust to
+/// report it: a loopback peer on the `Loopback` listener, or a LAN peer
+/// listed in `trusted`. A forwarded hop that is itself loopback means the
+/// proxy does not know the client either (e.g. a proxy behind the tunnel
+/// splice) — treated as no forwarded client at all.
+fn proxied_client(
+    ingress: Ingress,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> Option<std::net::IpAddr> {
+    let peer_trusted = match ingress {
+        Ingress::Loopback => peer.is_some_and(|p| p.is_loopback()),
+        Ingress::Lan => peer.is_some_and(|p| trusted.contains(&p)),
+        Ingress::Tunnel => false,
+    };
+    if !peer_trusted {
+        return None;
+    }
+    rightmost_forwarded_ip(headers_blob).filter(|ip| !ip.is_loopback())
+}
+
+/// T2/LM1/LM2 — Connect `/cli/auth/login` bucket.
+///
+/// - `Loopback` → uncapped (T3: desktop app, CLI, local agents).
+/// - `Tunnel` → the edge-attested client IP; an attestation without a
+///   usable IP, or an unattested `any`-mode login, → the shared tunnel
+///   bucket (never the splice peer `127.0.0.1`, never a forwarded header).
+/// - `Lan` → the socket peer, or a trusted LAN proxy's right-most hop.
+fn login_throttle_key(
+    ingress: Ingress,
+    attested_ip: Option<&str>,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> ThrottleKey {
+    match ingress {
+        Ingress::Loopback => ThrottleKey::Uncapped,
+        Ingress::Tunnel => match attested_ip.and_then(parse_hop_ip) {
+            Some(ip) => ThrottleKey::Client(ip.to_string()),
+            None => ThrottleKey::TunnelShared,
+        },
+        Ingress::Lan => match proxied_client(ingress, peer, headers_blob, trusted).or(peer) {
+            Some(ip) => ThrottleKey::Client(ip.to_string()),
+            None => ThrottleKey::Client("-".to_string()),
+        },
+    }
+}
+
+/// LM1 — skin `/cli/skin/login` bucket.
+///
+/// - `Loopback` → a local proxy's right-most `X-Forwarded-For` hop; with
+///   none, uncapped (typical skin gateway helper / frpc: do not lock every
+///   guest on 127.0.0.1, do not pretend we capped them).
+/// - `Lan` → the socket peer, or a trusted LAN proxy's right-most hop.
+/// - `Tunnel` → uncapped: the edge does not attest skin logins, and any
+///   forwarded header here is client-written. A shared bucket would let
+///   anyone 429 every app guest; the per-username lockout still applies.
+fn skin_login_throttle_key(
+    ingress: Ingress,
+    peer: Option<std::net::IpAddr>,
+    headers_blob: &str,
+    trusted: &[std::net::IpAddr],
+) -> ThrottleKey {
+    match ingress {
+        Ingress::Tunnel => ThrottleKey::Uncapped,
+        Ingress::Loopback => match proxied_client(ingress, peer, headers_blob, trusted) {
+            Some(ip) => ThrottleKey::Client(ip.to_string()),
+            None => ThrottleKey::Uncapped,
+        },
+        Ingress::Lan => match proxied_client(ingress, peer, headers_blob, trusted).or(peer) {
+            Some(ip) => ThrottleKey::Client(ip.to_string()),
+            None => ThrottleKey::Client("-".to_string()),
+        },
+    }
+}
+
+#[cfg(test)]
+mod login_throttle_key_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("test ip")
+    }
+
+    const LO: &str = "127.0.0.1";
+
+    #[test]
+    fn tunnel_skin_ignores_every_forwarded_header() {
+        for headers in [
+            "CF-Connecting-IP: 203.0.113.1\r\n",
+            "X-Forwarded-For: 203.0.113.2\r\n",
+            "X-Forwarded-For: 203.0.113.3, 198.51.100.4\r\nCF-Connecting-IP: 203.0.113.5\r\n",
+            "",
+        ] {
+            assert_eq!(
+                skin_login_throttle_key(Ingress::Tunnel, Some(ip(LO)), headers, &[]),
+                ThrottleKey::Uncapped,
+                "tunnel skin login must not key on {headers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_connect_uses_attested_ip_not_headers() {
+        let h = "X-Forwarded-For: 203.0.113.9\r\nCF-Connecting-IP: 203.0.113.8\r\n";
+        assert_eq!(
+            login_throttle_key(Ingress::Tunnel, Some("198.51.100.20"), Some(ip(LO)), h, &[]),
+            ThrottleKey::Client("198.51.100.20".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Tunnel, Some("-"), Some(ip(LO)), h, &[]),
+            ThrottleKey::TunnelShared,
+            "attestation without an IP falls to the shared tunnel bucket"
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Tunnel, None, Some(ip(LO)), h, &[]),
+            ThrottleKey::TunnelShared,
+            "unattested (any-mode) tunnel login never keys on 127.0.0.1 or a header"
+        );
+    }
+
+    #[test]
+    fn loopback_skin_uses_rightmost_xff_only() {
+        assert_eq!(
+            skin_login_throttle_key(
+                Ingress::Loopback,
+                Some(ip(LO)),
+                "X-Forwarded-For: 203.0.113.50, 198.51.100.7\r\n",
+                &[]
+            ),
+            ThrottleKey::Client("198.51.100.7".into())
+        );
+        assert_eq!(
+            skin_login_throttle_key(
+                Ingress::Loopback,
+                Some(ip(LO)),
+                "X-Forwarded-For: 203.0.113.50\r\nX-Forwarded-For: 198.51.100.8\r\n",
+                &[]
+            ),
+            ThrottleKey::Client("198.51.100.8".into()),
+            "last header line wins"
+        );
+        assert_eq!(
+            skin_login_throttle_key(
+                Ingress::Loopback,
+                Some(ip(LO)),
+                "CF-Connecting-IP: 203.0.113.51\r\n",
+                &[]
+            ),
+            ThrottleKey::Uncapped,
+            "CF-Connecting-IP is never trusted"
+        );
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: junk\r\n", &[]),
+            ThrottleKey::Uncapped
+        );
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "X-Forwarded-For: 127.0.0.1\r\n", &[]),
+            ThrottleKey::Uncapped,
+            "a proxy that only saw the splice does not know the client"
+        );
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Loopback, Some(ip(LO)), "", &[]),
+            ThrottleKey::Uncapped
+        );
+    }
+
+    #[test]
+    fn lan_uses_peer_unless_peer_is_a_trusted_proxy() {
+        let h = "X-Forwarded-For: 203.0.113.60\r\nCF-Connecting-IP: 203.0.113.61\r\n";
+        let peer = Some(ip("192.168.1.40"));
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Lan, peer, h, &[]),
+            ThrottleKey::Client("192.168.1.40".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Lan, None, peer, h, &[]),
+            ThrottleKey::Client("192.168.1.40".into())
+        );
+        let trusted = [ip("192.168.1.40")];
+        assert_eq!(
+            skin_login_throttle_key(Ingress::Lan, peer, h, &trusted),
+            ThrottleKey::Client("203.0.113.60".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Lan, None, peer, h, &trusted),
+            ThrottleKey::Client("203.0.113.60".into())
+        );
+        assert_eq!(
+            login_throttle_key(Ingress::Lan, None, peer, "", &trusted),
+            ThrottleKey::Client("192.168.1.40".into()),
+            "trusted proxy with no header keys on the proxy itself"
+        );
+    }
+
+    #[test]
+    fn loopback_connect_stays_uncapped() {
+        assert_eq!(
+            login_throttle_key(
+                Ingress::Loopback,
+                None,
+                Some(ip(LO)),
+                "X-Forwarded-For: 203.0.113.70\r\n",
+                &[]
+            ),
+            ThrottleKey::Uncapped
+        );
+    }
+
+    #[test]
+    fn hop_parsing_handles_ports_brackets_and_mapped_v6() {
+        assert_eq!(parse_hop_ip(" 198.51.100.1:443 "), Some(ip("198.51.100.1")));
+        assert_eq!(parse_hop_ip("[2001:db8::1]:443"), Some(ip("2001:db8::1")));
+        assert_eq!(parse_hop_ip("[2001:db8::2]"), Some(ip("2001:db8::2")));
+        assert_eq!(parse_hop_ip("\"2001:db8::3\""), Some(ip("2001:db8::3")));
+        assert_eq!(parse_hop_ip("::ffff:198.51.100.2"), Some(ip("198.51.100.2")));
+        assert_eq!(parse_hop_ip("unknown"), None);
+        assert_eq!(parse_hop_ip(""), None);
     }
 }
 
@@ -2785,12 +3057,21 @@ async fn handle_one_request(
                 .unwrap_or(false);
             let web_mode = web_client_header || web_from_body;
             // T1 — per-IP cap AFTER the 144 unsigned-tunnel 404, BEFORE
-            // argon2. Loopback is skipped (T3). LAN + dash-attested are
-            // capped. Unsigned tunnel never reaches this arm (404, not 429).
-            if ingress != Ingress::Loopback {
-                let throttle_ip = login_throttle_ip(attested.as_ref(), stream);
-                if crate::login_throttle::check_and_record(
-                    &throttle_ip,
+            // argon2. Loopback is skipped (T3). LAN keys on the peer;
+            // attested tunnel on the edge-signed IP; `any`-mode unattested
+            // tunnel on the shared tunnel bucket (LM2). Forwarded headers
+            // never pick the bucket on the tunnel (LM1).
+            let throttle_key = login_throttle_key(
+                ingress,
+                attested.as_ref().map(|a| a.ip.as_str()),
+                peer_ip(stream),
+                &headers_blob,
+                &trusted_proxies_from_env(),
+            );
+            if let Some((bucket, limit, throttle_ip)) = throttle_key.connect_bucket() {
+                if crate::login_throttle::check_and_record_with_limit(
+                    &bucket,
+                    limit,
                     k2_core::edge_attest::now_unix(),
                 ) == crate::login_throttle::Verdict::Limited
                 {
@@ -2897,12 +3178,19 @@ async fn handle_one_request(
                 .unwrap_or_default();
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             // Same 5/300s delay as Connect, BEFORE dummy argon2 /
-            // `check_and_record_login`. Skin keys are `"skin:" + ip` so a
-            // Connect spray does not 429 skin guests. 429 does not bump
-            // `login_lockouts` and does not sleep 500ms.
-            if let Some(throttle_ip) = skin_login_throttle_ip(&headers_blob, stream) {
+            // `check_and_record_login`. Skin keys are `"skin:" + ip` in
+            // their own table so a Connect spray does not 429 skin guests.
+            // 429 does not bump `login_lockouts` and does not sleep 500ms.
+            // The bucket never comes from a header on the tunnel (LM1).
+            let throttle_key = skin_login_throttle_key(
+                ingress,
+                peer_ip(stream),
+                &headers_blob,
+                &trusted_proxies_from_env(),
+            );
+            if let Some(bucket) = throttle_key.skin_bucket() {
                 if crate::login_throttle::check_and_record(
-                    &crate::login_throttle::skin_ip_key(&throttle_ip),
+                    &bucket,
                     k2_core::edge_attest::now_unix(),
                 ) == crate::login_throttle::Verdict::Limited
                 {

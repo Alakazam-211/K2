@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- K2 Daemon.app (nested helper) entitlements, separate from the app's
+	     (K2 vault KV6 / VS14). The daemon holds the vault's box key in the
+	     Keychain, so it gets only what it needs:
+
+	     - No JIT / unsigned-executable-memory (those are for the app's
+	       WebKit content processes).
+	     - No audio input (Dictation is an app feature).
+	     - NEVER `get-task-allow` or `allow-dyld-environment-variables`:
+	       either would let another process of this user read or steer the
+	       daemon's memory. The release script refuses a daemon signed with
+	       them.
+
+	     Kept: library validation off. The daemon has always been signed
+	     with it; dropping it needs a signed-build check that every dylib
+	     it loads is ours (smoke list: K2 Daemon.app entitlements). While it
+	     stays, the vault's macOS copy doesn't claim more than "the
+	     Keychain asks before another app reads the key". -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

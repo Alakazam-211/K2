@@ -82,7 +82,10 @@ echo "  k2-menubar copied into the bundle."
 # ── Step 3: Sign (inner binaries first, then the bundle) ──
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
-k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$ENTITLEMENTS" || exit 1
+# K2 vault KV6/VS14: the daemon helper has its own, smaller entitlements.
+DAEMON_ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
+[ -f "$DAEMON_ENTITLEMENTS" ] || { echo "FATAL: daemon entitlements not found at $DAEMON_ENTITLEMENTS" >&2; exit 1; }
+k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 FRPC_BIN="$APP/Contents/MacOS/frpc"

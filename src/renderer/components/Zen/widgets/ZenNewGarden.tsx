@@ -22,6 +22,7 @@
 // back to the field with the reason.
 
 import { useEffect, useRef, useState } from 'react'
+import { ZEN_OPEN_NEW_GARDEN_EVENT } from '@/lib/zen/zen-sync'
 import type { ZenGardenTemplate, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenGardenNewRequest, ZenScope, ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
 import { loadZenTemplates, useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
@@ -91,8 +92,33 @@ function startChoices(list: readonly ZenTemplateInfo[]): Array<{ start: string; 
   return starts.map((t) => ({ start: t.short, ask: t.short === 'blank', title: t.label, detail: t.description }))
 }
 
-export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDone(): void }): React.JSX.Element {
-  const [step, setStep] = useState<'closed' | 'name' | 'start' | 'grant'>('closed')
+/** Calls `open(short)` when the What's new card's "See it in New Garden"
+ *  fires `k2:zen-open-new-garden` in this window (zen-sync GS43). */
+export function useZenOpenNewGardenRequest(enabled: boolean, open: (short: string) => void): void {
+  const openRef = useRef(open)
+  openRef.current = open
+  useEffect(() => {
+    if (!enabled) return
+    const on = (e: Event): void => {
+      const short = (e as CustomEvent<{ short?: unknown }>).detail?.short
+      if (typeof short === 'string' && short) openRef.current(short)
+    }
+    window.addEventListener(ZEN_OPEN_NEW_GARDEN_EVENT, on)
+    return () => window.removeEventListener(ZEN_OPEN_NEW_GARDEN_EVENT, on)
+  }, [enabled])
+}
+
+export function ZenNewGarden({
+  bridge,
+  onDone,
+  highlight = null,
+}: {
+  bridge: ZenWidgetBridge
+  onDone(): void
+  /** A catalog short to open on and highlight ("See it in New Garden"). */
+  highlight?: string | null
+}): React.JSX.Element {
+  const [step, setStep] = useState<'closed' | 'name' | 'start' | 'grant'>(highlight ? 'name' : 'closed')
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,6 +136,13 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
     if (step === 'name') inputRef.current?.focus()
     if (step === 'start') firstChoiceRef.current?.focus()
   }, [step])
+
+  // Asked to show a catalog entry: open on the name step, catalog fresh.
+  useEffect(() => {
+    if (!highlight) return
+    setStep((s) => (s === 'closed' ? 'name' : s))
+    void loadZenTemplates()
+  }, [highlight])
 
   const reset = (): void => {
     setStep('closed')
@@ -364,9 +397,10 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
               disabled={busy}
               data-zen-new-garden-choice={t.short}
               data-zen-new-garden-catalog=""
+              data-zen-new-garden-highlight={t.short === highlight ? '' : undefined}
               onClick={() => pickCatalog(t)}
               className="flex w-full flex-col items-start text-left cursor-pointer disabled:cursor-default"
-              style={choiceStyle(false)}
+              style={choiceStyle(t.short === highlight)}
             >
               <span className="flex items-center" style={{ fontWeight: 600, gap: 6 }}>
                 {t.label}

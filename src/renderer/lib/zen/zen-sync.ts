@@ -385,6 +385,12 @@ export function zenNewCatalogShorts(news: ZenNews | null): string[] {
   return news ? news.items.flatMap((i) => (i.kind === 'catalog' ? [i.short] : [])) : []
 }
 
+/** Fired when the What's new card's "See it in New Garden" asks Zen's
+ *  New Garden to open with this catalog entry highlighted
+ *  (`detail: {short}`). The Garden switcher (band pill or menu section)
+ *  listens (`useZenOpenNewGardenRequest`, ZenNewGarden.tsx). */
+export const ZEN_OPEN_NEW_GARDEN_EVENT = 'k2:zen-open-new-garden'
+
 /** The catalog's "New" badges follow the loaded news: B4's catalog draws
  *  whatever `setZenCatalogBadge` sets, and this module is the one that
  *  knows what's new. Badges this module set and the news no longer lists

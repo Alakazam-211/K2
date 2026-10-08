@@ -40,6 +40,7 @@ vi.mock('@/lib/daemon-cli', () => ({
     if (route === 'whats_new') return { current_version: '0.45.1', last_seen_version: '0.45.0', has_new: true, content: '## 0.45.1 — Gardens\n\nBody.\n' }
     if (route === 'zen/news') return h.news
     if (route === 'zen/sync') return h.sync
+    if (route === 'zen/templates') return { ok: true, templates: TEMPLATES }
     throw new Error(`unexpected GET ${route}`)
   }),
   daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body?: unknown) => {
@@ -59,13 +60,35 @@ import WhatsNewModal from './WhatsNewModal'
 import { ZenGardenNewsCard } from './ZenGardenNewsCard'
 import { ZenGardenSyncControls } from '@/components/Settings/sections/ZenGardenSyncControls'
 import { ZenSyncPreviewBar } from '@/components/Zen/ZenSyncPreviewBar'
-import { ZenNewGarden } from '@/components/Zen/widgets/ZenNewGarden'
+import { useZenOpenNewGardenRequest, ZenNewGarden } from '@/components/Zen/widgets/ZenNewGarden'
+import { __resetZenTemplatesForTests, useZenCatalogBadges } from '@/lib/zen/zen-templates'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
-import { __resetZenSyncForTests, parseZenNews, useZenSyncPreviewStore, useZenSyncStore } from '@/lib/zen/zen-sync'
+import {
+  __resetZenSyncForTests,
+  parseZenNews,
+  useZenSyncPreviewStore,
+  useZenSyncStore,
+  ZEN_OPEN_NEW_GARDEN_EVENT,
+} from '@/lib/zen/zen-sync'
+import { useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const TEMPLATES = [
+  { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: '', section: 'start', needsGrant: null, newUsers: true },
+  { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: '', section: 'start', needsGrant: null, newUsers: true },
+  {
+    id: 'k2.diary@1',
+    short: 'diary',
+    label: 'Diary',
+    description: 'Write to one agent at a time.',
+    section: 'catalog',
+    needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'] },
+    newUsers: true,
+  },
+]
 
 const DIARY = {
   id: 'catalog:diary',
@@ -126,6 +149,7 @@ beforeEach(() => {
   Object.defineProperty(window.navigator, 'platform', { value: 'MacIntel', configurable: true })
   __resetZenAvailableForTests()
   __resetZenSyncForTests()
+  __resetZenTemplatesForTests()
   useSettingsStore.setState({ settingsOpen: false })
   setWidth(1280)
 })
@@ -259,16 +283,36 @@ describe('preview bar (GS34) and the New badge (GS43b)', () => {
     await waitFor(() => expect(useZenSyncPreviewStore.getState().preview).toBeNull())
   })
 
-  it('New Garden marks an entry with unseen catalog news', async () => {
-    // The two starts carry the badge the same way a catalog row does.
-    useZenSyncStore.setState({ news: parseZenNews({ items: [{ ...DIARY, id: 'catalog:texting', short: 'texting' }], copiesWithNewerDefault: 0 }) })
+  it('New Garden marks an entry with unseen catalog news (B4\'s catalog badge, driven by the news)', async () => {
+    useZenSyncStore.setState({ news: parseZenNews({ items: [DIARY], copiesWithNewerDefault: 0 }) })
+    expect(useZenCatalogBadges.getState().badges).toEqual({ diary: 'New' })
     const bridge = { gardens: { list: () => [], create: vi.fn(async () => undefined) } } as unknown as ZenWidgetBridge
     render(<ZenNewGarden bridge={bridge} onDone={() => undefined} />)
     await act(async () => void fireEvent.click(el('[data-zen-new-garden]')))
     const input = el('[data-zen-new-garden-name]') as HTMLInputElement
     await act(async () => void fireEvent.change(input, { target: { value: 'Mine' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
-    expect(el('[data-zen-new-garden-choice="texting"]').querySelector('[data-zen-new-badge]')?.textContent).toBe('New')
-    expect(el('[data-zen-new-garden-choice="blank"]').querySelector('[data-zen-new-badge]')).toBeNull()
+    await waitFor(() => expect(el('[data-zen-new-garden-choice="diary"]').querySelector('[data-zen-catalog-badge="diary"]')?.textContent).toBe('New'))
+    expect(el('[data-zen-new-garden-choice="texting"]').querySelector('[data-zen-catalog-badge]')).toBeNull()
+    // Seen news clears the badge this module set.
+    useZenSyncStore.setState({ news: parseZenNews({ items: [], copiesWithNewerDefault: 0 }) })
+    expect(useZenCatalogBadges.getState().badges).toEqual({})
+  })
+
+  it('"See it in New Garden" opens New Garden with that entry highlighted', async () => {
+    const bridge = { gardens: { list: () => [], create: vi.fn(async () => undefined) } } as unknown as ZenWidgetBridge
+    function Switcher(): React.JSX.Element {
+      const [highlight, setHighlight] = useState<string | null>(null)
+      useZenOpenNewGardenRequest(true, setHighlight)
+      return <ZenNewGarden key={highlight ?? ''} bridge={bridge} onDone={() => undefined} highlight={highlight} />
+    }
+    render(<Switcher />)
+    el('[data-zen-new-garden]')
+    await act(async () => void window.dispatchEvent(new CustomEvent(ZEN_OPEN_NEW_GARDEN_EVENT, { detail: { short: 'diary' } })))
+    const input = el('[data-zen-new-garden-name]') as HTMLInputElement
+    await act(async () => void fireEvent.change(input, { target: { value: 'Mine' } }))
+    await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
+    await waitFor(() => expect(el('[data-zen-new-garden-choice="diary"]').hasAttribute('data-zen-new-garden-highlight')).toBe(true))
+    expect(el('[data-zen-new-garden-choice="texting"]').hasAttribute('data-zen-new-garden-highlight')).toBe(false)
   })
 })

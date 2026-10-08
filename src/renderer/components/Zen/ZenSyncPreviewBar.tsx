@@ -112,26 +112,3 @@ export function useZenSyncPreviewBar(gardenId: string | null): React.JSX.Element
   const name = gardens.find((g) => g.id === preview.gardenId)?.name ?? 'this Garden'
   return <ZenSyncPreviewBar gardenId={preview.gardenId} gardenName={name} part={preview.part} />
 }
-
-/** The "New" badge on a catalog entry with unseen news in New Garden
- *  (GS43b). K2's own mark, in the Zen tokens. */
-export function ZenNewBadge(): React.JSX.Element {
-  return (
-    <span
-      data-zen-new-badge=""
-      style={{
-        marginLeft: 6,
-        padding: '0 6px',
-        fontSize: '0.75em',
-        fontWeight: 600,
-        lineHeight: 1.6,
-        borderRadius: 999,
-        color: 'var(--zen-accent-text, var(--zen-surface))',
-        background: 'var(--zen-accent)',
-        verticalAlign: 'middle',
-      }}
-    >
-      New
-    </span>
-  )
-}

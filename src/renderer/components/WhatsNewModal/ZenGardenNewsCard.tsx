@@ -27,12 +27,11 @@ import {
   useZenSyncStore,
   zenNewsCardModel,
   zenNewsCardText,
+  ZEN_OPEN_NEW_GARDEN_EVENT,
   type ZenNewsItem,
 } from '@/lib/zen/zen-sync'
 
-/** Fired when "See it in New Garden" asks Zen's New Garden to open with
- *  this catalog entry highlighted (`detail: {short}`). */
-export const ZEN_OPEN_NEW_GARDEN_EVENT = 'k2:zen-open-new-garden'
+export { ZEN_OPEN_NEW_GARDEN_EVENT }
 
 function useViewportWidth(): number {
   const [w, setW] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))

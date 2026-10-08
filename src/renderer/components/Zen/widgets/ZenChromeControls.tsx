@@ -29,7 +29,7 @@ import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { ZEN_SWITCHER_COMPACT_MAX } from '@/lib/zen/zen-overflow'
 import { useZenBind, useZenK2Overlay, ZenChromePlaceContext, ZenRowCompactContext } from '../ZenTemplateControls'
-import { ZenNewGarden } from './ZenNewGarden'
+import { useZenOpenNewGardenRequest, ZenNewGarden } from './ZenNewGarden'
 
 /** One Garden in a list (the switcher's menu, or a `menu`'s Gardens
  *  section): bound as `garden-option` with its Garden id and ⌥⌘N hint. */
@@ -91,10 +91,20 @@ export const ZEN_DROPDOWN_STYLE: React.CSSProperties = {
 /** The Garden switcher (G25): a pill naming this window's Garden. */
 export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  // A catalog short "See it in New Garden" asked for (What's new card).
+  const [highlight, setHighlight] = useState<string | null>(null)
   const place = useContext(ZenChromePlaceContext)
   const compact = useContext(ZenRowCompactContext)
   const trigger = useZenBind(bridge, 'garden-switcher')
-  const close = useCallback(() => setOpen(false), [])
+  const close = useCallback(() => {
+    setOpen(false)
+    setHighlight(null)
+  }, [])
+  const manage = bridge.caps.has('gardens:manage')
+  useZenOpenNewGardenRequest(manage, (short) => {
+    setHighlight(short)
+    setOpen(true)
+  })
   const menu = useAnchoredMenu<HTMLDivElement>({
     open,
     onClose: close,
@@ -123,7 +133,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
         aria-haspopup="menu"
         aria-expanded={open}
         title="Switch Garden"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? close() : setOpen(true))}
         data-zen-garden-pill=""
         data-zen-soft-button=""
         data-zen-compact={compact ? '' : undefined}
@@ -165,10 +175,10 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
             {gardens.map((g) => (
               <GardenChoice key={g.id} bridge={bridge} garden={g} selected={g.id === current?.id} onPicked={close} />
             ))}
-            {bridge.caps.has('gardens:manage') && (
+            {manage && (
               <>
                 <div role="separator" aria-hidden style={{ height: 1, margin: '3px 6px', background: 'var(--zen-border)' }} />
-                <ZenNewGarden bridge={bridge} onDone={close} />
+                <ZenNewGarden key={highlight ?? ''} bridge={bridge} onDone={close} highlight={highlight} />
               </>
             )}
           </div>,

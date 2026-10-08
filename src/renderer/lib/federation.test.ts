@@ -88,6 +88,10 @@ function installFetch(opts: {
   remoteProjects?: unknown[]
   /** Make the REMOTE `projects/list` fail with a 500 (reverse soft-fails). */
   failRemoteProjects?: boolean
+  /** The REMOTE is a 0.45.1 server: it has no pairing-v2 routes (404). */
+  remoteTooOld?: boolean
+  /** The code the REMOTE computes at `pair/v2/verify` (default matches). */
+  remoteSas?: string
 }): Recorded[] {
   const recorded: Recorded[] = []
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -135,6 +139,36 @@ function installFetch(opts: {
         }
       }
       return ok({ fingerprint: 'PFP', sas: '424242' })
+    }
+    if (path === '/cli/federation/pair/v2/init') {
+      const b = (body ?? {}) as Record<string, string>
+      return ok({
+        offer: {
+          v: 2,
+          session: 'S1',
+          fingerprint: 'LOCALFP',
+          public_key_pem: 'LOCALPEM',
+          commitment: 'C'.repeat(64),
+          subdomain: b.subdomain ?? '',
+          base_url: b.baseUrl ?? '',
+        },
+      })
+    }
+    if (path === '/cli/federation/pair/v2/respond') {
+      if (opts.remoteTooOld) return { ok: false, status: 404, text: async () => '{"error":"not found"}' }
+      return ok({
+        answer: { v: 2, session: 'S1', fingerprint: 'REMOTEFP', public_key_pem: 'REMOTEPEM', nonce: 'B'.repeat(64) },
+      })
+    }
+    if (path === '/cli/federation/pair/v2/reveal') {
+      return ok({
+        reveal: { v: 2, session: 'S1', fingerprint: 'LOCALFP', nonce: 'A'.repeat(64) },
+        sas: '424242',
+        peer_fingerprint: 'REMOTEFP',
+      })
+    }
+    if (path === '/cli/federation/pair/v2/verify') {
+      return ok({ sas: opts.remoteSas ?? '424242', peer_fingerprint: 'LOCALFP' })
     }
     if (path === '/cli/federation/pair/confirm') {
       return ok({ ok: true })
@@ -253,28 +287,56 @@ describe('autoPairWithHost', () => {
     vi.unstubAllGlobals()
   })
 
-  it('establishes MUTUAL trust: pins local on remote and remote on local with the right subdomains', async () => {
+  it('establishes MUTUAL trust with one pairing-v2 exchange and the right subdomains', async () => {
     const rec = installFetch({ localPeers: [], remotePeers: [] })
     await autoPairWithHost('rpm.k2.dev')
 
-    const pairReqs = rec.filter((r) => r.url.includes('/cli/federation/pair/request'))
-    expect(pairReqs).toHaveLength(2)
+    const steps = rec.filter((r) => r.url.includes('/cli/federation/pair/'))
+    const at = (r: Recorded) => (r.url.startsWith(LOCAL_BASE) ? 'local' : 'remote')
+    expect(steps.map((r) => `${at(r)} ${new URL(r.url).pathname}`)).toEqual([
+      'local /cli/federation/pair/v2/init',
+      'remote /cli/federation/pair/v2/respond',
+      'local /cli/federation/pair/v2/reveal',
+      'remote /cli/federation/pair/v2/verify',
+      'remote /cli/federation/pair/confirm',
+      'local /cli/federation/pair/confirm',
+    ])
+    expect(steps[1].url.startsWith(REMOTE_BASE)).toBe(true)
+    // The old fingerprint-only route is never used.
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/request'))).toBe(false)
 
-    // (a) REMOTE side pins LOCAL's key under LOCAL's own subdomain.
-    const onRemote = pairReqs.find((r) => r.url.startsWith(REMOTE_BASE))
-    expect(onRemote?.body).toMatchObject({ public_key_pem: 'LOCALPEM', subdomain: 'mybox' })
+    // (a) REMOTE pins LOCAL under LOCAL's own subdomain (carried in the offer).
+    expect(steps[0].body).toMatchObject({ subdomain: 'mybox' })
+    expect(steps[1].body).toMatchObject({ offer: { fingerprint: 'LOCALFP', subdomain: 'mybox' } })
+    // (b) LOCAL pins REMOTE under the host-derived subdomain (`rpm.k2.dev` → `rpm`).
+    expect(steps[2].body).toMatchObject({ answer: { fingerprint: 'REMOTEFP' }, peer_subdomain: 'rpm' })
+    // Each side confirms the other's key with the code both computed.
+    expect(steps[4].body).toEqual({ fingerprint: 'LOCALFP', sas: '424242' })
+    expect(steps[5].body).toEqual({ fingerprint: 'REMOTEFP', sas: '424242' })
+  })
 
-    // (b) LOCAL side pins REMOTE's key under the host-derived subdomain
-    //     (`rpm.k2.dev` → `rpm`) so the daemon send-gate matches.
-    const onLocal = pairReqs.find((r) => r.url.startsWith(LOCAL_BASE))
-    expect(onLocal?.body).toMatchObject({ public_key_pem: 'REMOTEPEM', subdomain: 'rpm' })
+  it('refuses to trust anything when the two codes differ', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [], remoteSas: '000111' })
+    await expect(autoPairWithHost('rpm.k2.dev')).rejects.toThrow(/different pairing codes/i)
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/confirm'))).toBe(false)
+  })
 
-    // Each pair/request is followed by an owner pair/confirm echoing the SAS.
-    const confirms = rec.filter((r) => r.url.includes('/cli/federation/pair/confirm'))
-    expect(confirms).toHaveLength(2)
-    for (const c of confirms) {
-      expect(c.body).toMatchObject({ fingerprint: 'PFP', sas: '424242' })
-    }
+  it('tells the user to update an older remote server (no pairing-v2 route)', async () => {
+    const rec = installFetch({ localPeers: [], remotePeers: [], remoteTooOld: true })
+    await expect(autoPairWithHost('rpm.k2.dev')).rejects.toThrow(
+      /older K2 .*Update "rpm\.k2\.dev" to K2 0\.45\.2 or later/,
+    )
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/confirm'))).toBe(false)
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/request'))).toBe(false)
+  })
+
+  it('re-pairs already trusted peers when asked (upgrade a v1 pairing)', async () => {
+    const rec = installFetch({
+      localPeers: [{ fingerprint: 'REMOTEFP', trust: 'trusted', pairing_version: 1 }],
+      remotePeers: [{ fingerprint: 'LOCALFP', trust: 'trusted', pairing_version: 1 }],
+    })
+    await autoPairWithHost('rpm.k2.dev', { repair: true })
+    expect(rec.filter((r) => r.url.includes('/cli/federation/pair/confirm'))).toHaveLength(2)
   })
 
   it('is idempotent — no pairing when both directions are already trusted', async () => {
@@ -322,24 +384,23 @@ describe('autoPairWithHost', () => {
     })
     await autoPairWithHost('192.168.1.50')
 
-    const pairReqs = rec.filter((r) => r.url.includes('/cli/federation/pair/request'))
-    expect(pairReqs).toHaveLength(2)
-    const onLocal = pairReqs.find((r) => r.url.startsWith(LOCAL_BASE))
-    expect(onLocal?.body).toMatchObject({
-      public_key_pem: 'REMOTEPEM',
-      subdomain: '192.168.1.50:38471',
-      baseUrl: 'http://192.168.1.50:38471',
+    // LOCAL pins the REMOTE under the saved LAN host:port (reveal step).
+    const reveal = rec.find((r) => r.url.includes('/cli/federation/pair/v2/reveal'))
+    expect(reveal?.url.startsWith(LOCAL_BASE)).toBe(true)
+    expect(reveal?.body).toMatchObject({
+      peer_subdomain: '192.168.1.50:38471',
+      peer_base_url: 'http://192.168.1.50:38471',
     })
-    expect(JSON.stringify(onLocal?.body)).not.toMatch(/k2\.dev/)
+    expect(JSON.stringify(reveal?.body)).not.toMatch(/k2\.dev/)
 
-    const onRemote = pairReqs.find((r) => r.url.startsWith('http://192.168.1.50:38471'))
-    expect(onRemote?.body).toMatchObject({
-      public_key_pem: 'LOCALPEM',
-      baseUrl: 'http://192.168.1.40:38471',
-    })
-    expect(onRemote?.body).not.toHaveProperty('subdomain')
-    expect(JSON.stringify(onRemote?.body)).not.toMatch(/k2\.dev/)
-    expect(JSON.stringify(onRemote?.body)).not.toMatch(/127\.0\.0\.1|localhost/)
+    // The REMOTE pins LOCAL from the offer: LAN URL, no subdomain.
+    const init = rec.find((r) => r.url.includes('/cli/federation/pair/v2/init'))
+    expect(init?.body).toEqual({ baseUrl: 'http://192.168.1.40:38471' })
+    const respond = rec.find((r) => r.url.includes('/cli/federation/pair/v2/respond'))
+    expect(respond?.url.startsWith('http://192.168.1.50:38471')).toBe(true)
+    expect(respond?.body).toMatchObject({ offer: { base_url: 'http://192.168.1.40:38471', subdomain: '' } })
+    expect(JSON.stringify(respond?.body)).not.toMatch(/k2\.dev/)
+    expect(JSON.stringify(respond?.body)).not.toMatch(/127\.0\.0\.1|localhost/)
   })
 
   it('fails loud when pairing to a LAN host and this Mac has no advertised URL', async () => {
@@ -359,7 +420,7 @@ describe('autoPairWithHost', () => {
     await expect(autoPairWithHost('192.168.1.50')).rejects.toThrow(
       /no advertised LAN URL|Enable LAN listen|advertise URL|air-gap Caddy/i,
     )
-    expect(rec.some((r) => r.url.includes('/cli/federation/pair/request'))).toBe(false)
+    expect(rec.some((r) => r.url.includes('/cli/federation/pair/'))).toBe(false)
   })
 })
 

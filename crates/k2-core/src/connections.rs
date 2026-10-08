@@ -834,7 +834,17 @@ pub fn connections_for_actor(
                 // PR2: always surface the user form `agent::host` (normalize
                 // on read so pre-existing `@` rows list canonically).
                 let address = display_remote_addr(&r.agent, &r.host);
+                // 0.45.2: the peer was paired with the older fingerprint-only
+                // code (still works; re-pair recommended).
+                let repair_recommended = peer_fp.as_deref().is_some_and(|fp| {
+                    crate::federation::PeerStore::load().ok().is_some_and(|s| {
+                        s.get(fp).is_some_and(|p| {
+                            p.pairing_version < crate::federation::pairing_v2::PAIRING_VERSION
+                        })
+                    })
+                });
                 connections.push(serde_json::json!({
+                    "repairRecommended": repair_recommended,
                     "remote": true,
                     "address": address,
                     "host": r.host,

@@ -41,8 +41,10 @@ pub mod identity;
 pub mod ingress;
 pub mod outbox;
 pub mod pairing;
+pub mod pairing_v2;
 pub mod peers;
 pub mod roster;
+pub mod sas;
 pub mod seen;
 pub mod tray;
 

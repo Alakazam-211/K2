@@ -60,6 +60,7 @@ import {
   federatedPeerHost,
   isTrustedPeerHost,
   listFederationPeers,
+  REPAIR_RECOMMENDED_HINT,
   savedHostBaseUrl,
   type FederationPeer,
 } from '@/lib/federation'
@@ -612,7 +613,10 @@ function ActiveHostPeersPanel({
     setPairBusyHost(h.id)
     setPairMsg(null)
     try {
-      await autoPairWithHost(h.hostname)
+      // An explicit Pair click pairs again even when already trusted, so a
+      // peer paired with the older code is upgraded (re-pair keeps its
+      // address and permissions).
+      await autoPairWithHost(h.hostname, { repair: true })
       setPairMsg({
         ok: true,
         text: `Paired ${hostLabel} ↔ ${h.label || h.hostname}.`,
@@ -676,6 +680,15 @@ function ActiveHostPeersPanel({
                 <span className="text-xs text-[var(--color-text-primary)] font-medium truncate">
                   {p.label || p.subdomain || p.fingerprint.slice(0, 12)}
                 </span>
+                {p.repair_recommended && (
+                  <span
+                    className="text-[9px] uppercase tracking-wider font-semibold flex-shrink-0 ml-auto"
+                    style={{ color: 'var(--color-status-warn-amber-bright)' }}
+                    title={REPAIR_RECOMMENDED_HINT}
+                  >
+                    Re-pair recommended
+                  </span>
+                )}
                 <span
                   className="text-[9px] uppercase tracking-wider font-semibold flex-shrink-0"
                   style={{ color: trustColor(p.trust) }}
@@ -688,6 +701,11 @@ function ActiveHostPeersPanel({
                   ? (p.base_url || p.baseUrl)
                   : federatedPeerHost(p) || p.fingerprint.slice(0, 24) + '…'}
               </div>
+              {p.repair_recommended && (
+                <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                  {REPAIR_RECOMMENDED_HINT}
+                </div>
+              )}
             </div>
           ))}
         </div>

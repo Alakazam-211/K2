@@ -37,7 +37,16 @@ export interface FederationPeer {
   baseUrl?: string
   trust: PeerTrust
   capabilities: string[]
+  /** 0.45.2: 1 = paired with the old fingerprint-only code, 2 = the
+   *  commit-then-reveal code. Absent on older servers. */
+  pairing_version?: number
+  /** 0.45.2: true for a v1 pairing — still works, re-pair recommended. */
+  repair_recommended?: boolean
 }
+
+/** Copy for a peer paired with the old code (0.45.2). */
+export const REPAIR_RECOMMENDED_HINT =
+  'Paired with the older pairing code. It still works; pair again to use the safer code.'
 
 /** One agent a peer exposes (mirrors `federation::RosterAgent`). */
 export interface RosterAgent {
@@ -407,27 +416,88 @@ async function peersFor(creds: DaemonCreds): Promise<FederationPeer[]> {
  *  TRUSTS the presented key. The SAS is read from the request response and
  *  immediately echoed to confirm — safe only because the same owner controls
  *  both ends (no human SAS comparison). */
-async function pairAndConfirm(
-  creds: DaemonCreds,
-  publicKeyPem: string,
-  subdomain: string,
-  baseUrl?: string,
-): Promise<void> {
-  const body: Record<string, string> = { public_key_pem: publicKeyPem }
-  if (subdomain) body.subdomain = subdomain
-  if (baseUrl) body.baseUrl = baseUrl
-  const req = await cliPost<{ fingerprint?: string; sas?: string }>(
-    creds,
-    'federation/pair/request',
-    body,
-  )
-  if (!req?.fingerprint || !req?.sas) {
-    throw new Error('pair/request did not return a fingerprint + SAS')
+interface PairV2Offer {
+  v: number
+  session: string
+  fingerprint: string
+  public_key_pem: string
+  commitment: string
+  label?: string
+  subdomain?: string
+  base_url?: string
+}
+
+interface PairV2Answer {
+  v: number
+  session: string
+  fingerprint: string
+  public_key_pem: string
+  nonce: string
+  label?: string
+  subdomain?: string
+  base_url?: string
+}
+
+/** Pairing v2 (0.45.2): one commit-then-reveal exchange pins each server on
+ *  the other, then both owners' confirms land with each server's own code.
+ *  This app holds both owner logins, so it carries the four steps and
+ *  compares the two codes itself: a mismatch means a key was changed in
+ *  transit, and nothing is trusted. Returns the code. */
+async function pairV2(
+  host: string,
+  localC: DaemonCreds,
+  remoteC: DaemonCreds,
+  local: { fingerprint: string; subdomain: string; baseUrl?: string },
+  remote: { fingerprint: string; subdomain: string; baseUrl?: string },
+): Promise<string> {
+  const initBody: Record<string, string> = {}
+  if (local.subdomain) initBody.subdomain = local.subdomain
+  if (local.baseUrl) initBody.baseUrl = local.baseUrl
+  const init = await cliPost<{ offer?: PairV2Offer }>(localC, 'federation/pair/v2/init', initBody)
+  if (!init?.offer || init.offer.fingerprint !== local.fingerprint) {
+    throw new Error('This server did not start the pairing (no offer for its own key).')
   }
-  await cliPost(creds, 'federation/pair/confirm', {
-    fingerprint: req.fingerprint,
-    sas: req.sas,
-  })
+  let answer: PairV2Answer | undefined
+  try {
+    const r = await cliPost<{ answer?: PairV2Answer }>(remoteC, 'federation/pair/v2/respond', {
+      offer: init.offer,
+    })
+    answer = r?.answer
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/^not found$|\b404\b/i.test(msg.trim())) {
+      throw new Error(
+        `"${host}" runs an older K2 that can't use the new pairing code. ` +
+          `Update "${host}" to K2 0.45.2 or later, then pair again.`,
+      )
+    }
+    throw e
+  }
+  if (!answer || answer.fingerprint !== remote.fingerprint) {
+    throw new Error(`"${host}" answered the pairing with an unexpected key. Nothing was paired.`)
+  }
+  const revealBody: Record<string, unknown> = { answer }
+  if (remote.subdomain) revealBody.peer_subdomain = remote.subdomain
+  if (remote.baseUrl) revealBody.peer_base_url = remote.baseUrl
+  const rev = await cliPost<{ reveal?: unknown; sas?: string; peer_fingerprint?: string }>(
+    localC,
+    'federation/pair/v2/reveal',
+    revealBody,
+  )
+  const ver = await cliPost<{ sas?: string; peer_fingerprint?: string }>(
+    remoteC,
+    'federation/pair/v2/verify',
+    { reveal: rev?.reveal },
+  )
+  if (!rev?.sas || !ver?.sas || rev.sas !== ver.sas) {
+    throw new Error(
+      `The two servers computed different pairing codes, so a key was changed between them. ` +
+        `Nothing was trusted. Check the network path to "${host}" and pair again.`,
+    )
+  }
+  await cliPost(remoteC, 'federation/pair/confirm', { fingerprint: local.fingerprint, sas: ver.sas })
+  await cliPost(localC, 'federation/pair/confirm', { fingerprint: remote.fingerprint, sas: rev.sas })
+  return rev.sas
 }
 
 /** Strip a leftover `.k2.dev` glued onto a LAN IPv4[:port] (`10.2.40.28:38471.k2.dev`).
@@ -580,7 +650,12 @@ function advertisedLanBaseUrl(creds: DaemonCreds, pub: FederationPubkey): string
  * (and leaves no half-pair beyond what each confirm already committed) if any
  * step errors. Cloud↔cloud: sign into server A, pair tile for server B.
  */
-export async function autoPairWithHost(host: string): Promise<void> {
+export async function autoPairWithHost(
+  host: string,
+  /** `repair`: pair again even when both sides already trust each other
+   *  (upgrades a v1 pairing to the commit-then-reveal code). */
+  opts?: { repair?: boolean },
+): Promise<void> {
   // Distinguish an AUTH failure (403 — not an owner/admin, or not signed in)
   // from federation-off / unreachable (404 / network) so the copy is accurate.
   const isAuthErr = (m: string) => /403|forbidden|invalid or missing auth token/i.test(m)
@@ -636,30 +711,27 @@ export async function autoPairWithHost(host: string): Promise<void> {
   const localTrustsRemote = localPeers.some(
     (p) => p.fingerprint === remotePub.fingerprint && p.trust === 'trusted',
   )
-  if (remoteTrustsLocal && localTrustsRemote) return
+  if (remoteTrustsLocal && localTrustsRemote && !opts?.repair) return
 
-  // 3. Make the REMOTE trust LOCAL (pin local's key + URL to dial back).
-  if (!remoteTrustsLocal) {
-    await pairAndConfirm(
-      remoteC,
-      localPub.public_key_pem,
-      localPub.subdomain,
-      localLanUrl || undefined,
-    )
-  }
-  // 4. Make LOCAL trust the REMOTE. LAN: pin saved http://host:port (F4/F10).
-  //    Connect: pin host-derived subdomain so send-gate matches agent::host.
-  if (!localTrustsRemote) {
-    const remoteSub = remoteIsLan
-      ? `${saved!.hostname}${saved!.port && saved!.port !== 80 ? `:${saved!.port}` : ''}`
-      : subdomainForHost(host, remotePub.subdomain)
-    await pairAndConfirm(
-      localC,
-      remotePub.public_key_pem,
-      remoteSub,
-      remoteIsLan ? remoteSavedBase : undefined,
-    )
-  }
+  // 3. One pairing-v2 exchange makes each side trust the other. The REMOTE
+  //    pins LOCAL's key + the URL to dial back; LOCAL pins the REMOTE under
+  //    the saved http://host:port (LAN, F4/F10) or the host-derived Connect
+  //    subdomain so the send-gate matches agent::host. A side that already
+  //    trusts the other keeps its row (address, permissions).
+  const remoteSub = remoteIsLan
+    ? `${saved!.hostname}${saved!.port && saved!.port !== 80 ? `:${saved!.port}` : ''}`
+    : subdomainForHost(host, remotePub.subdomain)
+  await pairV2(
+    host,
+    localC,
+    remoteC,
+    { fingerprint: localPub.fingerprint, subdomain: localPub.subdomain, baseUrl: localLanUrl || undefined },
+    {
+      fingerprint: remotePub.fingerprint,
+      subdomain: remoteSub,
+      baseUrl: remoteIsLan ? remoteSavedBase : undefined,
+    },
+  )
 }
 
 /**

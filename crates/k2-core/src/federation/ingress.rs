@@ -325,6 +325,38 @@ mod tests {
     }
 
     #[test]
+    fn a_v1_paired_peer_from_an_old_store_still_delivers() {
+        // A federation-peers.json written before 0.45.2 has no
+        // pairing_version: the peer loads as v1 and keeps exchanging messages.
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let key = load_or_create().expect("keypair");
+            let pem = key.public_key_pem();
+            let fp = crate::federation::peers::fingerprint_of_spki_pem(&pem).expect("fp");
+            let legacy = serde_json::json!({
+                "version": 1,
+                "peers": [{
+                    "fingerprint": fp,
+                    "label": "old",
+                    "subdomain": "peer",
+                    "public_key_pem": pem,
+                    "trust": "trusted",
+                    "capabilities": [CAP_INBOUND],
+                    "epoch": 0,
+                    "added_at": "2026-07-01T00:00:00Z"
+                }]
+            });
+            std::fs::write(crate::federation::peers::store_path(), legacy.to_string()).expect("write legacy store");
+            let store = PeerStore::load().expect("load legacy store");
+            assert_eq!(store.get(&fp).expect("peer").pairing_version, 1, "missing field = v1");
+            let bytes = seal(&signal_to("bob", "still here"), &key, "peer", 8).expect("seal");
+            let out = ingest(&bytes, &store, &NonceCache::new(), "local", DEFAULT_SKEW_SECS)
+                .expect("a v1 peer must still pass the gate");
+            assert_eq!(out.peer_fingerprint, fp);
+        });
+    }
+
+    #[test]
     fn rejects_unknown_peer() {
         with_temp_home(|| {
             let key = load_or_create().expect("keypair");

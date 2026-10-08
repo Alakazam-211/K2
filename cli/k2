@@ -1249,7 +1249,7 @@ print("NONE\t%s" % (", ".join(known) if known else ""))
             printf '%s\n' "${fp:-forbidden}" >&2
             return 3 ;;
         NOFED|ERR)
-            echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-request)." >&2
+            echo "federation is off or unreachable on $host — enable it and pair first (k2 fed enable / k2 fed pair-start)." >&2
             [ -n "$fp" ] && [ "$pkind" = "NOFED" ] && echo "detail: $fp" >&2
             return 2 ;;
         NONE)
@@ -1257,9 +1257,9 @@ print("NONE\t%s" % (", ".join(known) if known else ""))
             # return pin, or the host string doesn't match the peer's subdomain.
             if [ -n "$fp" ]; then
                 echo "no paired peer matching $host — known peers: $fp" >&2
-                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-request / confirm) so replies can go back." >&2
+                echo "hint: run \`k2 fed peers\` to inspect trust; if you received a message from this host but have no pin, complete pairing (k2 fed pair-start / confirm, or Settings → Connections → Pair) so replies can go back." >&2
             else
-                echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+                echo "no paired peer for $host — pair it first (k2 fed pair-start / confirm), or check the host." >&2
                 echo "hint: run \`k2 fed peers\` to list trusted servers on this machine." >&2
             fi
             return 2 ;;
@@ -1269,7 +1269,7 @@ print("NONE\t%s" % (", ".join(known) if known else ""))
             return 2 ;;
     esac
     if [ -z "$fp" ]; then
-        echo "no paired peer for $host — pair it first (k2 fed pair-request / confirm), or check the host." >&2
+        echo "no paired peer for $host — pair it first (k2 fed pair-start / confirm), or check the host." >&2
         return 2
     fi
     # Trust serializes lowercase ("trusted") on the wire — compare case-insensitively.
@@ -10908,7 +10908,8 @@ for c in conns:
             bound = ' → %s' % handle
             if display and display.strip().lower() != handle.strip().lower():
                 bound += ' (%s)' % display
-        print('  - %s%s   (remote)' % (addr, bound))
+        repair = '  [re-pair recommended: paired with the older pairing code]' if c.get('repairRecommended') else ''
+        print('  - %s%s   (remote)%s' % (addr, bound, repair))
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
         print('  - %s%s' % (c.get('projectName', '?'), flag))
@@ -26182,7 +26183,9 @@ cmd_update_v2() {
 #   k2 fed pubkey [--pem|--fingerprint|--json]   export THIS box's SPKI pubkey
 #   k2 fed send <peer>::<workspace>::<agent> "message"
 #   k2 fed outbox                                queued + dead-lettered per peer
-#   k2 fed pair-request --pubkey <spki.pem> [--label L] [--subdomain S] [--url URL]
+#   k2 fed pair-start [--subdomain S] [--url URL]   pairing v2, step 1 (then
+#   k2 fed pair-join / pair-finish / pair-verify <token>)
+#   k2 fed pair-request --pubkey <spki.pem> ...   pre-0.45.2 pairing (known peers only)
 #   k2 fed confirm <fingerprint> <sas-code>
 #
 # send + confirm are OWNER-gated (they need ~/.k2/daemon.token). pubkey is
@@ -26220,6 +26223,99 @@ cmd_fed() {
                 --connect-timeout 5 --max-time 60 \
                 -H "Content-Type: application/json" 2>/dev/null
             echo
+            ;;
+        pair-start|pair-join|pair-finish|pair-verify)
+            # Pairing v2 (0.45.2): commit-then-reveal code, run by the two
+            # owners on their own servers. Each step prints a one-line token
+            # to send to the other owner:
+            #   A: k2 fed pair-start [--subdomain S] [--url U] [--label L]  -> token 1
+            #   B: k2 fed pair-join <token 1>                               -> token 2
+            #   A: k2 fed pair-finish <token 2>  -> token 3 + A's code
+            #   B: k2 fed pair-verify <token 3>  -> B's code
+            # Both compare the codes, then each runs: k2 fed confirm <fp> <code>
+            if [ -z "$owner_token" ]; then
+                echo "k2 fed $sub: no owner token (need $_tok_file)" >&2
+                exit 1
+            fi
+            local route body token_in=""
+            case "$sub" in
+                pair-start)
+                    local label="" subdomain="" url=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --label) label="${2:-}"; shift 2 ;;
+                            --label=*) label="${1#--label=}"; shift ;;
+                            --subdomain) subdomain="${2:-}"; shift 2 ;;
+                            --subdomain=*) subdomain="${1#--subdomain=}"; shift ;;
+                            --url|--base-url|--baseUrl) url="${2:-}"; shift 2 ;;
+                            --url=*|--base-url=*|--baseUrl=*) url="${1#*=}"; shift ;;
+                            *) echo "k2 fed pair-start: unknown arg: $1" >&2; exit 2 ;;
+                        esac
+                    done
+                    route="pair/v2/init"
+                    body=$(python3 -c 'import json,sys
+print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv[3]}))' "$label" "$subdomain" "$url")
+                    ;;
+                *)
+                    token_in="${1:-}"
+                    if [ -z "$token_in" ]; then
+                        echo "usage: k2 fed $sub <token from the other server's owner>" >&2
+                        exit 2
+                    fi
+                    case "$sub" in
+                        pair-join) route="pair/v2/respond" ;;
+                        pair-finish) route="pair/v2/reveal" ;;
+                        pair-verify) route="pair/v2/verify" ;;
+                    esac
+                    body=$(python3 -c 'import base64,json,sys
+t = sys.argv[1].strip()
+want = {"pair-join": ("k2pair1:", "offer"), "pair-finish": ("k2pair2:", "answer"), "pair-verify": ("k2pair3:", "reveal")}[sys.argv[2]]
+if not t.startswith(want[0]):
+    sys.stderr.write("k2 fed %s: expected a %s... token (got %s...)\n" % (sys.argv[2], want[0], t[:8])); sys.exit(2)
+raw = t[len(want[0]):]
+raw += "=" * (-len(raw) % 4)
+try:
+    obj = json.loads(base64.urlsafe_b64decode(raw.encode()).decode())
+except Exception as e:
+    sys.stderr.write("k2 fed %s: the token is damaged (%s)\n" % (sys.argv[2], e)); sys.exit(2)
+print(json.dumps({want[1]: obj}))' "$token_in" "$sub") || exit 2
+                    ;;
+            esac
+            local _K2_CFG="" resp
+            _k2_cfg_add url "${BASE_URL}/cli/federation/${route}?token=${owner_token}"
+            _k2_cfg_add data-raw "$body"
+            resp=$(_k2_curl "$_K2_CFG" -s -X POST \
+                --connect-timeout 5 --max-time 30 \
+                -H "Content-Type: application/json" 2>/dev/null)
+            printf '%s' "$resp" | python3 -c 'import base64,json,sys
+step = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.stderr.write("k2 fed %s: no answer from the daemon (is federation enabled? k2 fed enable)\n" % step); sys.exit(1)
+if not isinstance(d, dict) or d.get("error"):
+    err = d.get("error") if isinstance(d, dict) else d
+    sys.stderr.write("k2 fed %s: %s\n" % (step, err)); sys.exit(1)
+def tok(prefix, obj):
+    return prefix + base64.urlsafe_b64encode(json.dumps(obj, separators=(",", ":")).encode()).decode().rstrip("=")
+if step == "pair-start":
+    print("Send this to the other server owner (valid 10 minutes, single use):")
+    print(tok("k2pair1:", d["offer"]))
+    print("They run: k2 fed pair-join <token>, and send you back a k2pair2: token.")
+elif step == "pair-join":
+    print("Send this back to the owner who started the pairing:")
+    print(tok("k2pair2:", d["answer"]))
+    print("They run: k2 fed pair-finish <token>, and send you a k2pair3: token.")
+elif step == "pair-finish":
+    print("Send this to the other owner:")
+    print(tok("k2pair3:", d["reveal"]))
+    print("They run: k2 fed pair-verify <token>.")
+    print("Your pairing code: %s" % d["sas"])
+    print("If both codes match, run: k2 fed confirm %s %s" % (d["peer_fingerprint"], d["sas"]))
+else:
+    print("Your pairing code: %s" % d["sas"])
+    print("If both codes match, run: k2 fed confirm %s %s" % (d["peer_fingerprint"], d["sas"]))
+' "$sub"
             ;;
         pair-request)
             local pubkey_file="" label="" subdomain="" url=""
@@ -26346,7 +26442,7 @@ if isinstance(d, dict) and d.get('error'):
 peers = d.get('peers', []) if isinstance(d, dict) else []
 if not peers:
     print('No federation peers pinned on this server.')
-    print('Pair with: k2 fed pair-request / k2 fed confirm (or Settings → Connections auto-pair).')
+    print('Pair with: k2 fed pair-start / k2 fed confirm (or Settings → Connections auto-pair).')
     sys.exit(0)
 print('Peers (%d):' % len(peers))
 for p in peers:
@@ -26365,6 +26461,8 @@ for p in peers:
     fp = (p.get('fingerprint') or '')[:16]
     extra = ('  label=%s' % label) if label else ''
     print('  %s  trust=%s  fp=%s…%s' % (host, trust, fp, extra))
+    if p.get('repair_recommended'):
+        print('      re-pair recommended: paired with the older pairing code (still works; pair again with k2 fed pair-start)')
     # 0.45.2: this server's signed address notice to that peer.
     n = p.get('address_notice') or {}
     st = n.get('status')
@@ -26414,11 +26512,13 @@ for p in peers:
 print(f\"total queued: {d.get('total_queued',0)}\")"
             ;;
         *)
-            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-request|confirm> ..." >&2
+            echo "usage: k2 fed <enable|disable|status|peers|pubkey|send|outbox|pair-start|pair-join|pair-finish|pair-verify|confirm> ..." >&2
             echo "  enable/disable/status: flip the persisted federation switch (headless-friendly)" >&2
             echo "  peers: list pinned servers (use their host with k2 msg agent::host)" >&2
-            echo "  pair-request: --pubkey PEM [--subdomain S] [--url http://host:port] (LAN/air-gap)" >&2
-            echo "  send/outbox/pair-request/confirm need federation ON; pubkey works anytime" >&2
+            echo "  pair-start [--subdomain S] [--url http://host:port]: start a pairing (prints a token for the other owner)" >&2
+            echo "  pair-join / pair-finish / pair-verify <token>: the next steps; both owners then compare codes and confirm" >&2
+            echo "  pair-request: the pre-0.45.2 pairing; refused for a server not paired yet" >&2
+            echo "  send/outbox/pair-*/confirm need federation ON; pubkey works anytime" >&2
             echo "  outbox: queued + dead-lettered cross-server messages per peer" >&2
             exit 2
             ;;

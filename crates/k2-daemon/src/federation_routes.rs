@@ -76,6 +76,25 @@ pub fn handle_pair_request(body: &[u8]) -> CliResponse {
         Ok(s) => s,
         Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
     };
+    // 0.45.2: a NEW pairing must use pairing v2 (commit-then-reveal code).
+    // This v1 route only re-sees keys pinned before; a key it has not
+    // pinned is refused, never downgraded to the v1 code.
+    let presented_fp = match k2_core::federation::peers::fingerprint_of_spki_pem(&req.public_key_pem) {
+        Ok(fp) => fp,
+        Err(e) => return CliResponse::bad_request(format!("bad public key: {e}")),
+    };
+    if store.get(&presented_fp).is_none() {
+        return CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": "This server pairs with a newer, safer pairing code (K2 0.45.2 or later on \
+                          both servers). Update the server or app that started the pairing, then pair again.",
+                "code": "pairing_v2_required",
+            })
+            .to_string(),
+        };
+    }
     let pair_req = pairing::PairRequest {
         label: req.label.unwrap_or_default(),
         subdomain: req.subdomain.unwrap_or_default(),
@@ -124,19 +143,213 @@ pub fn handle_pair_confirm(body: &[u8]) -> CliResponse {
         Ok(s) => s,
         Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
     };
-    if let Err(e) =
-        pairing::apply_pair_confirm(&mut store, &req.fingerprint, &req.sas, &local_fp, &req.capabilities)
-    {
-        // SAS mismatch / blocked / unknown → fail-closed 403.
-        return json_err("403 Forbidden", e);
+    // v2 code when a v2 pairing is waiting; the v1 code only for a peer
+    // that is already Trusted from a pairing before 0.45.2.
+    let kind = match k2_core::federation::pairing_v2::confirm(
+        &mut store,
+        &local_fp,
+        &req.fingerprint,
+        &req.sas,
+        &req.capabilities,
+        chrono::Utc::now(),
+    ) {
+        Ok(k) => k,
+        // Code mismatch / expired / blocked / unknown → fail-closed 403.
+        Err(e) => return json_err("403 Forbidden", e),
+    };
+    if let Err(e) = store.save() {
+        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
     }
+    let pairing_version = store.get(&req.fingerprint).map(|p| p.pairing_version).unwrap_or_default();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "fingerprint": req.fingerprint,
+            "trust": "trusted",
+            "pairing_version": pairing_version,
+            "legacy": kind == k2_core::federation::pairing_v2::ConfirmKind::LegacyTrusted,
+        })
+        .to_string(),
+    )
+}
+
+// ── Pairing v2 (0.45.2): commit-then-reveal code. Four owner-run steps;
+// see `k2_core::federation::pairing_v2`. Nonces never appear in logs.
+
+fn pair_v2_err(e: k2_core::federation::pairing_v2::PairV2Error) -> CliResponse {
+    CliResponse {
+        status: e.status(),
+        content_type: "application/json",
+        body: serde_json::json!({ "error": e.to_string(), "code": e.code() }).to_string(),
+    }
+}
+
+/// This server's own pairing identity: (SPKI PEM, tunnel subdomain,
+/// advertised LAN base URL).
+fn local_pairing_identity() -> Result<(String, String, String), CliResponse> {
+    let key = k2_core::federation::identity::load_or_create()
+        .map_err(|e| json_err("500 Internal Server Error", format!("load identity key: {e}")))?;
+    let subdomain = k2_core::tunnel::config::load().map(|c| c.subdomain).unwrap_or_default();
+    Ok((key.public_key_pem(), subdomain, federation::advertised_federation_base()))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct PairAddress {
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    subdomain: Option<String>,
+    #[serde(default, alias = "baseUrl", alias = "url")]
+    base_url: Option<String>,
+}
+
+fn pick(given: Option<String>, fallback: String) -> String {
+    given.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or(fallback)
+}
+
+/// `POST /cli/federation/pair/v2/init` (owner/admin). Body (optional):
+/// `{label, subdomain, baseUrl}` — the address the other server should pin
+/// for this one (defaults: this server's tunnel subdomain and advertised
+/// LAN URL). Returns the offer to hand to the other server.
+pub fn handle_pair_v2_init(body: &[u8]) -> CliResponse {
+    let addr: PairAddress = if body.iter().all(|b| b.is_ascii_whitespace()) {
+        PairAddress::default()
+    } else {
+        match serde_json::from_slice(body) {
+            Ok(a) => a,
+            Err(e) => return CliResponse::bad_request(format!("bad pair init body: {e}")),
+        }
+    };
+    let (pem, sub, base) = match local_pairing_identity() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let subdomain = pick(addr.subdomain, sub);
+    let base_url = pick(addr.base_url, base);
+    match k2_core::federation::pairing_v2::init(
+        &pem,
+        &addr.label.unwrap_or_default(),
+        &subdomain,
+        &base_url,
+        chrono::Utc::now(),
+    ) {
+        Ok(offer) => CliResponse::ok_json(serde_json::json!({ "offer": offer }).to_string()),
+        Err(e) => pair_v2_err(e),
+    }
+}
+
+/// `POST /cli/federation/pair/v2/respond` (owner/admin). Body: the offer
+/// (`{"offer": {...}}` or the bare offer) plus optional `label`,
+/// `subdomain`, `baseUrl` for this server's own address. Pins the initiator
+/// as Pending (or keeps its existing row) and returns the answer.
+pub fn handle_pair_v2_respond(body: &[u8]) -> CliResponse {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        offer: k2_core::federation::pairing_v2::Offer,
+        #[serde(flatten)]
+        addr: PairAddress,
+    }
+    let parsed: Req = match serde_json::from_slice::<Req>(body) {
+        Ok(r) => r,
+        Err(_) => match serde_json::from_slice::<k2_core::federation::pairing_v2::Offer>(body) {
+            Ok(offer) => Req { offer, addr: PairAddress::default() },
+            Err(e) => return CliResponse::bad_request(format!("bad pair offer: {e}")),
+        },
+    };
+    let (pem, sub, base) = match local_pairing_identity() {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    let answer = match k2_core::federation::pairing_v2::respond(
+        &mut store,
+        &parsed.offer,
+        &pem,
+        &parsed.addr.label.unwrap_or_default(),
+        &pick(parsed.addr.subdomain, sub),
+        &pick(parsed.addr.base_url, base),
+        chrono::Utc::now(),
+    ) {
+        Ok(a) => a,
+        Err(e) => return pair_v2_err(e),
+    };
+    if let Err(e) = store.save() {
+        return json_err("500 Internal Server Error", format!("save peer store: {e}"));
+    }
+    CliResponse::ok_json(serde_json::json!({ "answer": answer }).to_string())
+}
+
+/// `POST /cli/federation/pair/v2/reveal` (owner/admin). Body: the answer
+/// (`{"answer": {...}}` or bare) plus optional `peer_subdomain` /
+/// `peer_base_url` to pin the other server under another address. Pins it
+/// as Pending (or keeps its row), returns `{reveal, sas, peer_fingerprint}`.
+pub fn handle_pair_v2_reveal(body: &[u8]) -> CliResponse {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        answer: k2_core::federation::pairing_v2::Answer,
+        #[serde(default, alias = "peerSubdomain")]
+        peer_subdomain: Option<String>,
+        #[serde(default, alias = "peerBaseUrl")]
+        peer_base_url: Option<String>,
+    }
+    let parsed: Req = match serde_json::from_slice::<Req>(body) {
+        Ok(r) => r,
+        Err(_) => match serde_json::from_slice::<k2_core::federation::pairing_v2::Answer>(body) {
+            Ok(answer) => Req { answer, peer_subdomain: None, peer_base_url: None },
+            Err(e) => return CliResponse::bad_request(format!("bad pair answer: {e}")),
+        },
+    };
+    let mut store = match PeerStore::load() {
+        Ok(s) => s,
+        Err(e) => return json_err("500 Internal Server Error", format!("load peer store: {e}")),
+    };
+    let r = match k2_core::federation::pairing_v2::reveal(
+        &mut store,
+        &parsed.answer,
+        parsed.peer_subdomain.as_deref(),
+        parsed.peer_base_url.as_deref(),
+        chrono::Utc::now(),
+    ) {
+        Ok(r) => r,
+        Err(e) => return pair_v2_err(e),
+    };
     if let Err(e) = store.save() {
         return json_err("500 Internal Server Error", format!("save peer store: {e}"));
     }
     CliResponse::ok_json(
-        serde_json::json!({ "ok": true, "fingerprint": req.fingerprint, "trust": "trusted" })
+        serde_json::json!({ "reveal": r.reveal, "sas": r.sas, "peer_fingerprint": r.peer_fingerprint })
             .to_string(),
     )
+}
+
+/// `POST /cli/federation/pair/v2/verify` (owner/admin). Body: the reveal
+/// (`{"reveal": {...}}` or bare). Checks it against the commitment (aborts
+/// on a mismatch) and returns `{sas, peer_fingerprint}`.
+pub fn handle_pair_v2_verify(body: &[u8]) -> CliResponse {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        reveal: k2_core::federation::pairing_v2::Reveal,
+    }
+    let rv = match serde_json::from_slice::<Req>(body) {
+        Ok(r) => r.reveal,
+        Err(_) => match serde_json::from_slice::<k2_core::federation::pairing_v2::Reveal>(body) {
+            Ok(r) => r,
+            Err(e) => return CliResponse::bad_request(format!("bad pair reveal: {e}")),
+        },
+    };
+    let local_fp = match federation::local_fingerprint() {
+        Ok(fp) => fp,
+        Err(e) => return json_err("500 Internal Server Error", format!("local fingerprint: {e}")),
+    };
+    match k2_core::federation::pairing_v2::verify(&local_fp, &rv, chrono::Utc::now()) {
+        Ok((sas, fp_a)) => CliResponse::ok_json(
+            serde_json::json!({ "sas": sas, "peer_fingerprint": fp_a }).to_string(),
+        ),
+        Err(e) => pair_v2_err(e),
+    }
 }
 
 /// `GET /cli/federation/pubkey` — OWNER-gated (dispatcher enforces). Returns
@@ -1220,6 +1433,10 @@ pub fn handle_peers() -> CliResponse {
                 "capabilities": p.capabilities,
                 "address_notice": crate::federation_address::notice_view(&notices, &p.fingerprint),
                 "address_updated_at": p.address_updated_at.map(|t| t.to_rfc3339()),
+                // 0.45.2: v1 = paired with the fingerprint-only code.
+                "pairing_version": p.pairing_version,
+                "repair_recommended": p.pairing_version
+                    < k2_core::federation::pairing_v2::PAIRING_VERSION,
             })
         })
         .collect();
@@ -1767,57 +1984,140 @@ mod tests {
         v.to_string().into_bytes()
     }
 
+    /// A remote initiator's offer, built with the core primitive for a
+    /// fresh key (the other server in these single-HOME tests).
+    fn remote_offer(sub: &str, base: &str) -> (k2_core::federation::pairing_v2::Offer, String) {
+        let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let offer = k2_core::federation::pairing_v2::init(
+            &peer_key.public_key_pem(),
+            "rosson@laptop",
+            sub,
+            base,
+            chrono::Utc::now(),
+        )
+        .expect("init");
+        let fp = offer.fingerprint.clone();
+        (offer, fp)
+    }
+
     #[test]
-    fn pair_request_then_owner_confirm_promotes_to_trusted() {
+    fn a_new_v1_pair_request_is_refused_with_the_update_error() {
         with_temp_home(|| {
-            // A peer presents a fresh key.
+            // What a 0.45.1 server or app sends to start a pairing.
             let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let pem = peer_key.public_key_pem();
-
             let req = handle_pair_request(&body(serde_json::json!({
-                "label": "rosson@laptop",
-                "subdomain": "rosson",
-                "public_key_pem": pem,
+                "label": "old", "subdomain": "old", "public_key_pem": peer_key.public_key_pem(),
             })));
-            assert_eq!(req.status, "200 OK", "request body: {}", req.body);
-            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
-            let fp = v["fingerprint"].as_str().unwrap().to_string();
-            let sas = v["sas"].as_str().unwrap().to_string();
-            assert_eq!(v["trust"], "pending");
+            assert_eq!(req.status, "409 Conflict", "{}", req.body);
+            assert!(req.body.contains("pairing_v2_required"), "{}", req.body);
+            assert!(req.body.contains("Update the server"), "{}", req.body);
+            assert!(PeerStore::load().unwrap().list().is_empty(), "nothing pinned");
+        });
+    }
 
-            // The store has it Pending (delivers nothing yet).
+    #[test]
+    fn pair_v2_respond_then_verify_then_owner_confirm_promotes_to_trusted() {
+        with_temp_home(|| {
+            // This server is the responder; the initiator is a fresh key.
+            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let offer = k2_core::federation::pairing_v2::init(
+                &peer_key.public_key_pem(),
+                "rosson@laptop",
+                "rosson",
+                "",
+                chrono::Utc::now(),
+            )
+            .expect("init");
+            let fp = offer.fingerprint.clone();
+            let resp = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer })));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let answer: k2_core::federation::pairing_v2::Answer =
+                serde_json::from_value(serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["answer"].clone())
+                    .expect("answer");
             let store = PeerStore::load().unwrap();
             assert_eq!(store.get(&fp).unwrap().trust, PeerTrust::Pending);
+            assert_eq!(store.get(&fp).unwrap().pairing_version, 2);
 
-            // Owner confirms with the matching SAS → Trusted + caps.
+            // The initiator's reveal (computed with the core primitive under
+            // its own session) and its code.
+            let mut initiator_store = PeerStore::default();
+            // (This temp HOME has no tunnel: pin it under an explicit name.)
+            let revealed = k2_core::federation::pairing_v2::reveal(
+                &mut initiator_store,
+                &answer,
+                Some("responder"),
+                None,
+                chrono::Utc::now(),
+            )
+            .expect("reveal");
+            let ver = handle_pair_v2_verify(&body(serde_json::json!({ "reveal": revealed.reveal })));
+            assert_eq!(ver.status, "200 OK", "{}", ver.body);
+            let v: serde_json::Value = serde_json::from_str(&ver.body).unwrap();
+            assert_eq!(v["sas"], revealed.sas.as_str(), "both sides show the same code");
+            assert_eq!(v["peer_fingerprint"], fp.as_str());
+
             let conf = handle_pair_confirm(&body(serde_json::json!({
                 "fingerprint": fp,
-                "sas": sas,
+                "sas": revealed.sas,
             })));
             assert_eq!(conf.status, "200 OK", "confirm body: {}", conf.body);
             let store = PeerStore::load().unwrap();
             let p = store.get(&fp).unwrap();
             assert_eq!(p.trust, PeerTrust::Trusted);
+            assert_eq!(p.pairing_version, 2);
             assert!(p.capabilities.contains("inbound"));
+            let peers: serde_json::Value = serde_json::from_str(&handle_peers().body).unwrap();
+            assert_eq!(peers["peers"][0]["repair_recommended"], false);
         });
     }
 
     #[test]
     fn pair_confirm_rejects_wrong_sas() {
         with_temp_home(|| {
-            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let req = handle_pair_request(&body(serde_json::json!({
-                "label": "p", "subdomain": "p", "public_key_pem": peer_key.public_key_pem(),
-            })));
-            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
-            let fp = v["fingerprint"].as_str().unwrap();
+            let (offer, fp) = remote_offer("p", "");
+            let resp = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer })));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
             let conf = handle_pair_confirm(&body(serde_json::json!({
                 "fingerprint": fp, "sas": "000000",
             })));
-            assert_eq!(conf.status, "403 Forbidden", "wrong SAS must 403");
+            assert_eq!(conf.status, "403 Forbidden", "no code is waiting (verify never ran) → 403");
             // Still Pending.
             let store = PeerStore::load().unwrap();
-            assert_eq!(store.get(fp).unwrap().trust, PeerTrust::Pending);
+            assert_eq!(store.get(&fp).unwrap().trust, PeerTrust::Pending);
+        });
+    }
+
+    #[test]
+    fn a_tampered_reveal_aborts_the_pairing() {
+        with_temp_home(|| {
+            let (offer, _fp) = remote_offer("p", "");
+            let resp = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer.clone() })));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let bad = k2_core::federation::pairing_v2::Reveal {
+                v: 2,
+                session: offer.session.clone(),
+                fingerprint: offer.fingerprint.clone(),
+                nonce: "ab".repeat(32),
+            };
+            let ver = handle_pair_v2_verify(&body(serde_json::json!({ "reveal": bad })));
+            assert_eq!(ver.status, "403 Forbidden", "{}", ver.body);
+            assert!(ver.body.contains("commitment_mismatch"), "{}", ver.body);
+        });
+    }
+
+    #[test]
+    fn v1_peers_are_flagged_for_re_pairing() {
+        with_temp_home(|| {
+            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut p = FederationPeer::pin("old", "old", peer_key.public_key_pem()).unwrap();
+            p.pairing_version = 1;
+            p.trust = PeerTrust::Trusted;
+            let mut store = PeerStore::default();
+            store.upsert(p);
+            store.save().unwrap();
+            let peers: serde_json::Value = serde_json::from_str(&handle_peers().body).unwrap();
+            assert_eq!(peers["peers"][0]["pairing_version"], 1);
+            assert_eq!(peers["peers"][0]["repair_recommended"], true);
         });
     }
 
@@ -3469,16 +3769,23 @@ mod tests {
     fn pair_request_url_then_confirm_is_trusted_no_k2_dev() {
         with_temp_home(|| {
             let _env = AirgapEnv::set(Some("1"));
-            let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let req = handle_pair_request(&body(serde_json::json!({
-                "label": "lan-box",
-                "baseUrl": "http://192.168.1.50:38471",
-                "public_key_pem": peer_key.public_key_pem(),
-            })));
-            assert_eq!(req.status, "200 OK", "body: {}", req.body);
-            let v: serde_json::Value = serde_json::from_str(&req.body).unwrap();
-            let fp = v["fingerprint"].as_str().unwrap().to_string();
-            let sas = v["sas"].as_str().unwrap().to_string();
+            let (offer, fp) = remote_offer("", "http://192.168.1.50:38471");
+            let resp = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer })));
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let answer: k2_core::federation::pairing_v2::Answer =
+                serde_json::from_value(serde_json::from_str::<serde_json::Value>(&resp.body).unwrap()["answer"].clone())
+                    .expect("answer");
+            let revealed = k2_core::federation::pairing_v2::reveal(
+                &mut PeerStore::default(),
+                &answer,
+                None,
+                Some("http://192.168.1.60:38471"),
+                chrono::Utc::now(),
+            )
+            .expect("reveal");
+            let ver = handle_pair_v2_verify(&body(serde_json::json!({ "reveal": revealed.reveal })));
+            assert_eq!(ver.status, "200 OK", "{}", ver.body);
+            let sas = revealed.sas.clone();
             let conf = handle_pair_confirm(&body(serde_json::json!({
                 "fingerprint": fp,
                 "sas": sas,
@@ -3502,9 +3809,16 @@ mod tests {
         with_temp_home(|| {
             let _env = AirgapEnv::set(Some("1"));
             let peer_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
-            let req = handle_pair_request(&body(serde_json::json!({
-                "public_key_pem": peer_key.public_key_pem(),
-            })));
+            let mut offer = k2_core::federation::pairing_v2::init(
+                &peer_key.public_key_pem(),
+                "x",
+                "",
+                "http://192.168.1.50:38471",
+                chrono::Utc::now(),
+            )
+            .expect("init");
+            offer.base_url = String::new();
+            let req = handle_pair_v2_respond(&body(serde_json::json!({ "offer": offer })));
             assert!(
                 req.status.starts_with("400"),
                 "empty url+subdomain must 400; got {} {}",

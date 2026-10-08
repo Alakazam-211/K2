@@ -19,6 +19,12 @@
 //! from BOTH daemons' fingerprints (order-independent), so each side computes
 //! the identical code from its local fingerprint + the peer's — the human
 //! compares them (SSH-host-key / Tailscale ergonomics). No CA, no relay.
+//!
+//! **0.45.2: this is pairing v1.** A fingerprint-only code can be matched by
+//! generating keys offline, so new pairings use [`super::pairing_v2`]
+//! (commit-then-reveal, [`super::sas`]). The daemon refuses a v1 pair-request
+//! for a key it has not pinned yet; these primitives stay for peers paired
+//! before 0.45.2.
 
 use sha2::{Digest, Sha256};
 
@@ -111,8 +117,10 @@ pub fn apply_pair_request(
     // F3: Connect subdomain OR operator --url / baseUrl. Empty both → 400.
     // A LAN URL is the routing hint under air-gap (never invent `.k2.dev`).
     let (subdomain, base_url) = normalize_pair_routing(&req.subdomain, &req.base_url)?;
-    let fresh =
+    let mut fresh =
         FederationPeer::pin(&req.label, &subdomain, &req.public_key_pem)?.with_base_url(base_url);
+    // This is the v1 (fingerprint-only code) path.
+    fresh.pairing_version = 1;
     let fp = fresh.fingerprint.clone();
     // PR3: never pin this daemon as a remote peer (self-fingerprint).
     if !local_fp.is_empty() && fp == local_fp {
@@ -213,7 +221,7 @@ fn normalize_connect_label(raw: &str) -> String {
     n.strip_suffix(".k2.dev").unwrap_or(&n).to_string()
 }
 
-fn normalize_pair_routing(subdomain: &str, base_url: &str) -> Result<(String, String), String> {
+pub(crate) fn normalize_pair_routing(subdomain: &str, base_url: &str) -> Result<(String, String), String> {
     let mut url = base_url.trim().to_string();
     let mut sub = subdomain.trim().to_string();
     if url.is_empty() && dial::is_absolute_http_url(&sub) {

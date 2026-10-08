@@ -100,6 +100,16 @@ pub struct FederationPeer {
     /// When a signed address notice last changed this peer's address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address_updated_at: Option<DateTime<Utc>>,
+    /// How this peer was paired: 1 = the fingerprint-only code (before
+    /// 0.45.2; "re-pair recommended"), 2 = the commit-then-reveal code
+    /// ([`super::pairing_v2`]). Missing on old stores = 1. Both keep
+    /// exchanging messages.
+    #[serde(default = "pairing_version_v1")]
+    pub pairing_version: u32,
+}
+
+fn pairing_version_v1() -> u32 {
+    1
 }
 
 impl FederationPeer {
@@ -125,6 +135,7 @@ impl FederationPeer {
             added_at: Utc::now(),
             address_seq: 0,
             address_updated_at: None,
+            pairing_version: super::pairing_v2::PAIRING_VERSION,
         })
     }
 

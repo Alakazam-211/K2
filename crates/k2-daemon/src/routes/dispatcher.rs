@@ -8830,6 +8830,40 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/federation/pair/v2/init"
+                | "/cli/federation/pair/v2/respond"
+                | "/cli/federation/pair/v2/reveal"
+                | "/cli/federation/pair/v2/verify" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // Pairing v2 (0.45.2): every step is an owner/admin
+                    // action on its own server (same gate as pair/confirm).
+                    if !super::http::require_owner_or_admin(
+                        &mut *stream,
+                        &mut buf,
+                        &query,
+                        state.token.as_str(),
+                    )
+                    .await
+                    {
+                        return DispatchOutcome::Done;
+                    }
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    let step = p.to_string();
+                    tokio::task::spawn_blocking(move || match step.as_str() {
+                        "/cli/federation/pair/v2/init" => crate::federation_routes::handle_pair_v2_init(&body),
+                        "/cli/federation/pair/v2/respond" => {
+                            crate::federation_routes::handle_pair_v2_respond(&body)
+                        }
+                        "/cli/federation/pair/v2/reveal" => {
+                            crate::federation_routes::handle_pair_v2_reveal(&body)
+                        }
+                        _ => crate::federation_routes::handle_pair_v2_verify(&body),
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/federation/address" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;

@@ -59,6 +59,11 @@ airgap = ["k2-core/airgap"]
 # into k2so-core (the `session_stream` feature flag was retired in
 # 0.39.0e).
 k2-core = { path = "../k2-core" }
+# K2 vault (prd-k2-vault-v1): the store and its pure fetch policy; the daemon
+# does the I/O (`egress`, `vault_fetch`).
+k2-vault = { path = "../k2-vault" }
+# URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
+url = "2"
 
 # Cryptographic randomness for the per-boot hook auth token.
 getrandom = "0.2"

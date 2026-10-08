@@ -583,34 +583,46 @@ describe('safe mode', () => {
     expect(h.calls.map((c) => c.route)).toEqual(['zen/gardens', 'zen/get'])
   })
 
-  it('a widget that crashes drops to safe mode with the message, and Exit Zen still works', async () => {
+  it('TUW4.2: a widget that crashes shows its own card; the page, the other widgets and Zen stay up', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let broken = true
     unregister.push(
       registerZenWidget('conversation', () => {
-        throw new Error('boom')
+        if (broken) throw new Error('boom')
+        return <div data-ok-conversation="" />
       }),
+      registerZenWidget('agents', () => <div data-ok-agents="" />),
     )
     mount()
     await enterViaTopBar()
-    await waitFor(() => expect(safeReason()).toBe('The page crashed: boom'))
-    expect(document.querySelector('[data-zen-last-resort]')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-zen-widget-crashed="conversation"]')).not.toBeNull())
+    expect(el('[data-zen-widget-crashed="conversation"]').textContent).toContain('This widget crashed: boom.')
+    // Not safe mode: the user's page and its other widget are still drawn.
+    expect(useZenViewStore.getState().safe).toBeNull()
+    expect(document.querySelector('[data-ok-agents]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-last-resort]')).toBeNull()
+    // Reload remounts only that widget.
+    broken = false
+    await act(async () => void fireEvent.click(el('[data-zen-widget-crashed="conversation"] [data-zen-widget-reload]')))
+    expect(document.querySelector('[data-ok-conversation]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-widget-crashed]')).toBeNull()
     act(() => void window.dispatchEvent(new Event('menu:zen-toggle')))
     expect(zenRoot()).toBeNull()
-    expect(useZenWindowStore.getState().on).toBe(false)
     err.mockRestore()
   })
 
-  it('a crash in a user page falls back to the built-in page with K2’s banner', async () => {
+  it('a crash in K2’s chrome (Z29, kept) falls back to the built-in page with K2’s banner', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     unregister.push(
-      registerZenWidget('agents', () => {
-        if (useZenViewStore.getState().safe === null) throw new Error('agents widget broke')
-        return <div data-ok-agents="" />
+      registerZenChrome('usage', () => {
+        if (useZenViewStore.getState().safe === null) throw new Error('usage tool broke')
+        return null
       }),
+      registerZenWidget('agents', () => <div data-ok-agents="" />),
     )
     mount()
     await enterViaTopBar()
-    await waitFor(() => expect(safeReason()).toBe('The page crashed: agents widget broke'))
+    await waitFor(() => expect(safeReason()).toBe('The page crashed: usage tool broke'))
     expect(document.querySelector('[data-zen-page="k2.texting@1"]')).not.toBeNull()
     expect(document.querySelector('[data-ok-agents]')).not.toBeNull()
     // Safe mode's page has its own Garden switcher.

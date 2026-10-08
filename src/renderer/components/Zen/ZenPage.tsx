@@ -77,6 +77,7 @@ import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
 import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidgetFor } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
 import { ZenWidgetStyles } from './widgets/zen-widget-kit'
+import { ZenWidgetBoundary } from './ZenWidgetBoundary'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
@@ -281,7 +282,12 @@ export function ZenPage({
     const Widget = zenWidgetFor(w.kind)
     const bridge = widgetBridges.get(w.id)
     if (!bridge) throw new Error(`zen page: no bridge for widget ${w.id}`)
-    return <Widget key={w.id} decl={w} bridge={bridge} />
+    // UW31: each widget crashes alone (its own card), never the page.
+    return (
+      <ZenWidgetBoundary key={w.id} widgetId={w.id} kind={w.kind}>
+        <Widget decl={w} bridge={bridge} />
+      </ZenWidgetBoundary>
+    )
   }
   // Content widgets the rows draw (a band, a column edge): by id, with
   // their own bridges. Everything else fills its column's body.

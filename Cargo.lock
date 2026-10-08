@@ -3514,6 +3514,7 @@ dependencies = [
  "ignore",
  "image",
  "k2-core",
+ "k2-node-proto",
  "libc",
  "llama-cpp-2",
  "mio",

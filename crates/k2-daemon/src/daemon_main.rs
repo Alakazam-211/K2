@@ -291,6 +291,7 @@ async fn async_main() {
     // immediately (the K2 Connect toggle persists it; env-var force-on still
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
+    k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API

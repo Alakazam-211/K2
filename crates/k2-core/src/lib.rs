@@ -68,6 +68,8 @@ pub mod cli_stage;
 pub mod cli_folder_trust;
 pub mod clone;
 pub mod companion;
+// K2 compute nodes, controller side (prd-k2-compute-nodes-v1).
+pub mod compute;
 // Phase 2.5e: workspace-to-workspace connections registry (relocated
 // from `agents/connections.rs`). Powers `k2so connections list/add/
 // remove`. Not workspace-scoped — operates on `workspace_relations`

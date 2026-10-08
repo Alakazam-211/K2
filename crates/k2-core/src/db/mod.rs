@@ -1227,6 +1227,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0143_published_services_frame_ancestors",
             include_str!("../../drizzle_sql/0143_published_services_frame_ancestors.sql"),
         ),
+        // 0147 — K2 compute nodes (prd-k2-compute-nodes-v1 §13/§21.3): nodes,
+        // grants, jobs, usage, the compute audit log, and
+        // projects.agents_can_use_compute. New tables + one column. 0144–0146
+        // are claimed by 0.45.x / the vault; 0148 is reserved for a separate
+        // receipts/usage slice. The integrator orders the list.
+        (
+            "0147_compute_nodes",
+            include_str!("../../drizzle_sql/0147_compute_nodes.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1887,7 +1896,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0143_published_services_frame_ancestors",
+            last_name, "0147_compute_nodes",
             "unexpected last migration name: {last_name}"
         );
     }

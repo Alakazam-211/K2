@@ -345,6 +345,12 @@ pub struct AppSettings {
     /// the env var OR this flag is set. Default MUST stay OFF (dark by default).
     #[serde(default)]
     pub federation_enabled: bool,
+    /// K2 compute nodes preview switch (Settings → "Compute nodes
+    /// (preview)", prd-k2-compute-nodes-v1 CN30). Persisted mirror of the
+    /// `K2_COMPUTE` env var; `compute::enabled()` is true when EITHER is
+    /// set. Owner-only to change. Default MUST stay OFF.
+    #[serde(default)]
+    pub compute_preview: bool,
     /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
     /// public API). Persisted app-level mirror of the `K2_API` env flag so
     /// the owner can flip the external `/v1` surface per-server from Settings
@@ -864,6 +870,7 @@ impl Default for AppSettings {
             dns_manage_enabled: false,
             agents_can_create_connections: false,
             federation_enabled: false,
+            compute_preview: false,
             api_enabled: false,
             airgap: false,
             listen_lan: false,

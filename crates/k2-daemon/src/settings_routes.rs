@@ -73,6 +73,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "pushGatewayUrl",
     "pushGatewayToken",
     "companion",
+    // K2 compute nodes preview (CN30): lets agents run programs on paired
+    // machines once grants exist, so only the Owner turns it on.
+    "computePreview",
 ];
 
 /// Who is writing settings, resolved by the dispatcher from the request
@@ -179,6 +182,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             // /cli/federation/* gate flips immediately (no restart) when the K2
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
+            k2_core::compute::set_enabled(merged.compute_preview);
             // 0.40.43 (1c): same deal for the public /v1 API switch — sync the
             // runtime mirror so misc_routes::api_enabled() (checked PER REQUEST
             // by the dispatcher's /v1 arm) flips the surface live, with no
@@ -225,6 +229,7 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
         Ok(defaults) => {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
+            k2_core::compute::set_enabled(defaults.compute_preview);
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);
             k2_core::airgap::set_setting_enabled(defaults.airgap);

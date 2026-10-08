@@ -332,13 +332,13 @@ fn unpack_handler_400s_on_missing_bundle() {
         "dest_parent": "/tmp",
     })
     .to_string();
-    let resp = super::handle_clone_unpack(body.as_bytes());
+    let resp = super::handle_clone_unpack(body.as_bytes(), None);
     assert_eq!(resp.status, "400 Bad Request", "missing bundle → 400");
 }
 
 #[test]
 fn bundle_handler_rejects_invalid_json() {
-    let resp = super::handle_clone_bundle(b"not json");
+    let resp = super::handle_clone_bundle(b"not json", None);
     assert_eq!(resp.status, "400 Bad Request");
 }
 
@@ -354,7 +354,7 @@ fn pack_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[test]
 fn pack_handler_rejects_invalid_json() {
-    let resp = super::handle_clone_pack(b"not json");
+    let resp = super::handle_clone_pack(b"not json", None);
     assert_eq!(resp.status, "400 Bad Request");
 }
 
@@ -365,7 +365,7 @@ fn pack_rejects_unregistered_workspace() {
     let root = TempDir::new("k2so-pack-unregistered");
     let body = serde_json::json!({ "project_path": root.path().to_string_lossy() })
         .to_string();
-    let resp = super::handle_clone_pack(body.as_bytes());
+    let resp = super::handle_clone_pack(body.as_bytes(), None);
     assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
     assert!(
         resp.body.contains("not a registered workspace"),
@@ -379,6 +379,7 @@ fn pack_rejects_unregistered_workspace() {
 fn pack_rejects_nonexistent_path() {
     let resp = super::handle_clone_pack(
         br#"{"project_path":"/nonexistent/definitely-not-here-k2/ws"}"#,
+        None,
     );
     assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
 }
@@ -405,6 +406,8 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         entry_count: None,
         scrubbed_secret_count: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let opts = clone::CloneOptions {
         home_override: Some(home.clone()),
@@ -416,6 +419,7 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         &opts,
         &home,
         k2_core::fs_commands::MAX_TRANSFER_SIZE,
+        None,
     );
 
     let job = super::get_pack_job(&job_id).expect("job stays in the map");
@@ -460,13 +464,15 @@ fn pack_job_enforces_transfer_ceiling() {
         entry_count: None,
         scrubbed_secret_count: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let opts = clone::CloneOptions {
         home_override: Some(home.clone()),
         ..Default::default()
     };
     // 1-byte ceiling: any real bundle is over it.
-    super::run_pack_job(&job_id, &project.to_string_lossy(), &opts, &home, 1);
+    super::run_pack_job(&job_id, &project.to_string_lossy(), &opts, &home, 1, None);
 
     let job = super::get_pack_job(&job_id).expect("job stays in the map");
     assert_eq!(job.phase, "failed");
@@ -513,6 +519,8 @@ fn pack_cleanup_rejects_unknown_job_and_running_job() {
         entry_count: None,
         scrubbed_secret_count: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let resp = super::handle_clone_pack_cleanup(br#"{"job_id":"pack-test-running"}"#);
     assert_eq!(
@@ -622,4 +630,346 @@ fn filetime_set(path: &Path, when: std::time::SystemTime) {
     let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
     let rc = unsafe { libc::utimes(cpath.as_ptr(), tv.as_ptr()) };
     assert_eq!(rc, 0, "utimes failed for {}", path.display());
+}
+
+// ── vault secrets on the owner's own move (0.45.2, clone_vault) ──────
+
+mod vault_carry {
+    use super::*;
+    use crate::clone_vault::{self, CarryRequest, VaultTarget, OWN_MOVE_ONLY};
+    use crate::vault::actor::{Channel, VaultCaller};
+    use k2_vault::confirm::KdfCost;
+    use k2_vault::fsutil::TestDir;
+    use k2_vault::keystore::fake::FakeKeyStore;
+    use k2_vault::{
+        Actor, KeyStore, Kind, ListFilter, LocalVault, Namespace, OpenOptions, PutRequest,
+        Requester, Role, Scope, ScopeKind, SecretBytes, SecretStore, Selector, Use,
+    };
+    use std::sync::Arc;
+
+    const SENTINEL: &str = "sk_test_CLONECARRY_7f6e5d4c3b2a19087";
+    const SERVER_SENTINEL: &str = "sk_test_CLONECARRY_SERVER_0a1b2c3d4e";
+
+    struct V {
+        _dir: TestDir,
+        v: Arc<LocalVault>,
+    }
+
+    fn temp_vault(tag: &str) -> V {
+        let dir = TestDir::new(tag);
+        let ks: Arc<dyn KeyStore> = Arc::new(FakeKeyStore::new());
+        let v = Arc::new(
+            LocalVault::open(dir.path().join("vault"), ks, OpenOptions { kdf: KdfCost::Floor })
+                .expect("open temp vault"),
+        );
+        V { _dir: dir, v }
+    }
+
+    fn owner() -> VaultCaller {
+        VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None }
+    }
+
+    fn member() -> VaultCaller {
+        VaultCaller {
+            actor: Actor::Login { username: "lee".into(), role: Role::Member },
+            channel: Channel::Login,
+            session_id: None,
+        }
+    }
+
+    fn target_of(v: &LocalVault) -> VaultTarget {
+        VaultTarget {
+            recipient: v.carry_recipient().expect("recipient").encode(),
+            vault_id: v.vault_id().to_string(),
+        }
+    }
+
+    fn put(v: &LocalVault, scope: Scope, name: &str, value: &str) {
+        let mut r = PutRequest::new(Namespace::User, scope, name, Kind::ApiKey);
+        r.hosts = vec!["https://api.stripe.com".into()];
+        v.put(r, SecretBytes::from_slice(value.as_bytes()), &Actor::Owner).expect("put");
+    }
+
+    /// Workspace-scope user secrets in `v`, as `(scope id, name)`.
+    fn workspace_secrets(v: &LocalVault) -> Vec<(String, String)> {
+        v.list(&ListFilter::default(), &Actor::System("test".into()))
+            .expect("list")
+            .into_iter()
+            .filter(|m| m.namespace == Namespace::User && m.scope.kind == ScopeKind::Workspace)
+            .map(|m| (m.scope.id.clone(), m.name.clone()))
+            .collect()
+    }
+
+    fn value_of(v: &LocalVault, scope_id: &str, name: &str) -> String {
+        let m = v
+            .list(&ListFilter::default(), &Actor::System("test".into()))
+            .expect("list")
+            .into_iter()
+            .find(|m| m.scope.id == scope_id && m.name == name)
+            .unwrap_or_else(|| panic!("no secret {name} in scope {scope_id}"));
+        let got = v
+            .resolve(&Selector::Id(m.id.clone()), Use::System, &Requester::System("test".into()))
+            .expect("resolve");
+        String::from_utf8(got.value.expose().to_vec()).expect("utf8")
+    }
+
+    /// A registered source workspace (from the shared bundle fixture) with
+    /// one workspace secret, one server secret and one secret of another
+    /// workspace in `src`.
+    fn source_with_secrets(root: &TempDir, src: &V) -> (PathBuf, String, Project) {
+        let (bundle, _slug) = build_source_bundle(root, Some(manager_settings()));
+        let canon = fs::canonicalize(root.path().join("source").join("My Agent")).unwrap();
+        let path = canon.to_string_lossy().to_string();
+        let project = pops::projects_add_without_git(&path).expect("register source");
+        put(&src.v, Scope::workspace(project.id.clone()), "STRIPE_KEY", SENTINEL);
+        put(&src.v, Scope::server(), "SERVER_ONLY", SERVER_SENTINEL);
+        put(&src.v, Scope::workspace("some-other-workspace"), "OTHER_KEY", SERVER_SENTINEL);
+        (bundle, path, project)
+    }
+
+    #[test]
+    fn a_vault_target_without_own_box_move_is_refused_with_a_teaching_code() {
+        let dst = temp_vault("clone-refuse-dst");
+        let body = serde_json::json!({
+            "project_path": "/nonexistent/clone-vault-refusal",
+            "vault_target": { "recipient": target_of(&dst.v).recipient, "vault_id": dst.v.vault_id() },
+            "own_box_move": false,
+        })
+        .to_string();
+        for resp in [
+            super::super::handle_clone_bundle(body.as_bytes(), Some(owner())),
+            super::super::handle_clone_pack(body.as_bytes(), Some(owner())),
+        ] {
+            assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert_eq!(v["code"], OWN_MOVE_ONLY, "body: {}", resp.body);
+            assert!(
+                v["error"].as_str().expect("error text").contains("your own server"),
+                "the refusal teaches why: {}",
+                resp.body
+            );
+        }
+    }
+
+    #[test]
+    fn the_carry_lands_in_the_renamed_destination_project_and_never_shows_a_value() {
+        let root = TempDir::new("k2-clone-vault-roundtrip");
+        let src = temp_vault("clone-rt-src");
+        let dst = temp_vault("clone-rt-dst");
+        let (bundle, src_path, src_project) = source_with_secrets(&root, &src);
+
+        // Source side: only this workspace's secret is sealed.
+        let req = CarryRequest { target: target_of(&dst.v), caller: Some(owner()), vault: Ok(src.v.clone()) };
+        let sealed = clone_vault::seal_for_workspace(&req, &src_path);
+        assert_eq!(sealed.report["sealed"], true, "report: {}", sealed.report);
+        assert_eq!(sealed.report["count"], 1, "report: {}", sealed.report);
+        assert_eq!(sealed.report["secrets"], serde_json::json!(["STRIPE_KEY"]));
+        let carry = sealed.carry_b64.expect("a carry is sealed");
+        for s in [sealed.report.to_string(), carry.clone()] {
+            assert!(!s.contains(SENTINEL) && !s.contains(SERVER_SENTINEL), "no value in {s}");
+        }
+
+        // Destination: the folder name is taken, so the clone lands renamed
+        // as a new project with its own id.
+        let dest_parent = root.path().join("dest");
+        let remote_home = root.path().join("remote-home");
+        fs::create_dir_all(dest_parent.join("My Agent")).unwrap();
+        fs::create_dir_all(&remote_home).unwrap();
+        let (project, dest_path) =
+            super::super::unpack_and_register(&bundle, &dest_parent, &remote_home).expect("unpack");
+        assert_eq!(Path::new(&dest_path), dest_parent.join("My Agent (1)"));
+        assert_ne!(project.id, src_project.id, "the destination row is a new project");
+        assert!(workspace_secrets(&dst.v).is_empty());
+
+        let out = clone_vault::import_into_project(Ok(dst.v.clone()), Some(&owner()), &carry, &project.id);
+        assert!(out.get("vault_error").is_none(), "out: {out}");
+        assert_eq!(out["vault_imported"], serde_json::json!(["STRIPE_KEY"]), "out: {out}");
+        assert_eq!(out["vault_skipped"], serde_json::json!([]), "out: {out}");
+        assert!(!out.to_string().contains(SENTINEL), "no value in {out}");
+
+        // Mapped to the NEW project id — not the source label, which names
+        // the source row in this shared test DB.
+        assert_eq!(
+            workspace_secrets(&dst.v),
+            vec![(project.id.clone(), "STRIPE_KEY".to_string())],
+            "only the cloned workspace's secret, under the new project"
+        );
+        assert_eq!(value_of(&dst.v, &project.id, "STRIPE_KEY"), SENTINEL);
+        let meta = dst
+            .v
+            .list(&ListFilter::default(), &Actor::System("test".into()))
+            .expect("list")
+            .into_iter()
+            .find(|m| m.name == "STRIPE_KEY")
+            .expect("imported meta");
+        assert!(meta.human_given, "the owner's own move keeps person-given (VS20)");
+        assert_eq!(dst.v.user_secret_count(), 1, "server and other-workspace secrets stay home");
+
+        // A second import keeps what is there.
+        let again = clone_vault::import_into_project(Ok(dst.v.clone()), Some(&owner()), &carry, &project.id);
+        assert_eq!(again["vault_imported"], serde_json::json!([]), "again: {again}");
+        assert_eq!(again["vault_skipped"].as_array().expect("skipped").len(), 1, "again: {again}");
+
+        let _ = pops::projects_delete(&project.id);
+        let _ = pops::projects_delete(&src_project.id);
+    }
+
+    #[test]
+    fn the_source_says_why_when_nothing_is_sealed() {
+        let root = TempDir::new("k2-clone-vault-skips");
+        let src = temp_vault("clone-skip-src");
+        let dst = temp_vault("clone-skip-dst");
+        let (_bundle, src_path, src_project) = source_with_secrets(&root, &src);
+
+        let closed = CarryRequest {
+            target: target_of(&dst.v),
+            caller: Some(owner()),
+            vault: Err(k2_vault::VaultError::new("vault_not_open", 503, "the vault isn't open yet")),
+        };
+        let s = clone_vault::seal_for_workspace(&closed, &src_path);
+        assert!(s.carry_b64.is_none());
+        assert_eq!(s.report["sealed"], false);
+        assert_eq!(s.report["reason"], "vault_not_open", "report: {}", s.report);
+
+        let by_member = CarryRequest { target: target_of(&dst.v), caller: Some(member()), vault: Ok(src.v.clone()) };
+        let s = clone_vault::seal_for_workspace(&by_member, &src_path);
+        assert!(s.carry_b64.is_none(), "a Member can clone but not move vault secrets");
+        assert_eq!(s.report["reason"], "vault_admin_required", "report: {}", s.report);
+
+        let empty_vault = temp_vault("clone-skip-empty");
+        let none = CarryRequest { target: target_of(&dst.v), caller: Some(owner()), vault: Ok(empty_vault.v.clone()) };
+        let s = clone_vault::seal_for_workspace(&none, &src_path);
+        assert!(s.carry_b64.is_none());
+        assert_eq!(s.report["reason"], "no_secrets", "report: {}", s.report);
+        assert!(s.report["note"].as_str().expect("note").contains("no vault secrets"));
+
+        let _ = pops::projects_delete(&src_project.id);
+    }
+
+    #[test]
+    fn the_destination_refuses_a_carry_not_made_for_an_own_move() {
+        let src = temp_vault("clone-notown-src");
+        let dst = temp_vault("clone-notown-dst");
+        put(&src.v, Scope::workspace("ws-not-own"), "STRIPE_KEY", SENTINEL);
+        let mut ws = std::collections::HashMap::new();
+        ws.insert("ws-not-own".to_string(), "ws-not-own".to_string());
+        let t = target_of(&dst.v);
+        let sealed = crate::vault_use_routes::seal_carry(&src.v, &t.recipient, &t.vault_id, &ws, &[], false, None)
+            .expect("seal");
+        let carry = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &sealed.file);
+
+        let out = clone_vault::import_into_project(Ok(dst.v.clone()), Some(&owner()), &carry, "new-project-id");
+        assert_eq!(out["vault_error"]["code"], OWN_MOVE_ONLY, "out: {out}");
+        assert_eq!(dst.v.user_secret_count(), 0);
+
+        let own = crate::vault_use_routes::seal_carry(&src.v, &t.recipient, &t.vault_id, &ws, &[], true, None)
+            .expect("seal");
+        let carry = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &own.file);
+        let out = clone_vault::import_into_project(Ok(dst.v.clone()), Some(&member()), &carry, "new-project-id");
+        assert_eq!(out["vault_error"]["code"], "vault_admin_required", "out: {out}");
+        assert_eq!(dst.v.user_secret_count(), 0);
+
+        // Another vault can't open a carry bound to this one.
+        let other = temp_vault("clone-notown-other");
+        let out = clone_vault::import_into_project(Ok(other.v.clone()), Some(&owner()), &carry, "new-project-id");
+        assert!(out["vault_error"]["code"].is_string(), "out: {out}");
+        assert_eq!(other.v.user_secret_count(), 0);
+    }
+
+    /// Through the route: a broken carry never fails the unpack, and a good
+    /// one is reported by name only.
+    #[test]
+    fn unpack_route_reports_the_import_and_survives_a_bad_carry() {
+        crate::test_support::with_temp_home(|| {
+            let dst = crate::vault::ensure_test_vault();
+            let root = TempDir::new("k2-clone-vault-route");
+            let src = temp_vault("clone-route-src");
+            let (bundle, src_path, src_project) = source_with_secrets(&root, &src);
+            let req = CarryRequest { target: target_of(&dst), caller: Some(owner()), vault: Ok(src.v.clone()) };
+            let carry = clone_vault::seal_for_workspace(&req, &src_path).carry_b64.expect("sealed");
+
+            // Bad carry first: the unpack still succeeds and says why.
+            let dest_parent = root.path().join("dest-bad");
+            fs::create_dir_all(&dest_parent).unwrap();
+            let bad_bundle = root.path().join("bundle-copy.tar.gz");
+            fs::copy(&bundle, &bad_bundle).unwrap();
+            let body = serde_json::json!({
+                "bundle_path": bad_bundle.to_string_lossy(),
+                "dest_parent": dest_parent.to_string_lossy(),
+                "vault_carry_b64": "bm90IGEgY2Fycnk=",
+            })
+            .to_string();
+            let resp = super::super::handle_clone_unpack(body.as_bytes(), Some(owner()));
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert!(v["dest_path"].is_string(), "body: {}", resp.body);
+            assert!(v["vault_error"]["code"].is_string(), "body: {}", resp.body);
+            let bad_id = v["project"]["id"].as_str().expect("project id").to_string();
+
+            // Good carry: imported into the new project, value never echoed.
+            let dest_parent = root.path().join("dest-good");
+            fs::create_dir_all(&dest_parent).unwrap();
+            let body = serde_json::json!({
+                "bundle_path": bundle.to_string_lossy(),
+                "dest_parent": dest_parent.to_string_lossy(),
+                "vault_carry_b64": carry,
+            })
+            .to_string();
+            let resp = super::super::handle_clone_unpack(body.as_bytes(), Some(owner()));
+            assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+            assert!(!resp.body.contains(SENTINEL), "no value in {}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            assert_eq!(v["vault_imported"], serde_json::json!(["STRIPE_KEY"]), "body: {}", resp.body);
+            let id = v["project"]["id"].as_str().expect("project id").to_string();
+            assert_eq!(value_of(&dst, &id, "STRIPE_KEY"), SENTINEL);
+
+            let _ = pops::projects_delete(&id);
+            let _ = pops::projects_delete(&bad_id);
+            let _ = pops::projects_delete(&src_project.id);
+        });
+    }
+
+    /// The pull pack job seals the carry into its status, and cleanup
+    /// drops it with the bundle.
+    #[test]
+    fn pack_job_carries_the_sealed_secrets_until_cleanup() {
+        let _g = pack_lock();
+        let root = TempDir::new("k2-clone-vault-pack");
+        let src = temp_vault("clone-pack-src");
+        let dst = temp_vault("clone-pack-dst");
+        let (_bundle, src_path, src_project) = source_with_secrets(&root, &src);
+        let home = root.path().join("pack-home");
+        fs::create_dir_all(&home).unwrap();
+
+        let job_id = "pack-test-vault".to_string();
+        super::super::insert_pack_job(super::super::PackJob::running(job_id.clone()));
+        let opts = clone::CloneOptions { home_override: Some(home.clone()), ..Default::default() };
+        let req = CarryRequest { target: target_of(&dst.v), caller: Some(owner()), vault: Ok(src.v.clone()) };
+        super::super::run_pack_job(
+            &job_id,
+            &src_path,
+            &opts,
+            &home,
+            k2_core::fs_commands::MAX_TRANSFER_SIZE,
+            Some(&req),
+        );
+        let params = std::collections::HashMap::from([("job_id".to_string(), job_id.clone())]);
+        let status = super::super::handle_clone_pack_status(&params);
+        assert_eq!(status.status, "200 OK", "body: {}", status.body);
+        assert!(!status.body.contains(SENTINEL), "no value in {}", status.body);
+        let v: serde_json::Value = serde_json::from_str(&status.body).expect("json");
+        assert_eq!(v["phase"], "done", "body: {}", status.body);
+        assert_eq!(v["vault_carry"]["secrets"], serde_json::json!(["STRIPE_KEY"]));
+        let carry = v["vault_carry_b64"].as_str().expect("carry in status").to_string();
+        let file = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &carry).expect("b64");
+        dst.v.carry_open(&file).expect("the destination vault opens the carry");
+
+        let body = serde_json::json!({ "job_id": job_id }).to_string();
+        let resp = super::super::handle_clone_pack_cleanup(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body: {}", resp.body);
+        let job = super::super::get_pack_job(&job_id).expect("job");
+        assert!(job.vault_carry_b64.is_none(), "cleanup drops the carry");
+
+        let _ = pops::projects_delete(&src_project.id);
+    }
 }

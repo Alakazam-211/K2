@@ -26,6 +26,11 @@
 //!   the client has downloaded it (job-id-keyed — the route never takes a
 //!   path, so it can only ever delete a bundle THIS daemon packed).
 //!
+//! 0.45.2: on the owner's own move, `bundle` / `pack` also seal the
+//! workspace's vault secrets to the destination vault (`vault_target` +
+//! `own_box_move`) and `unpack` adds them to the newly registered project
+//! (`vault_carry_b64`). See `clone_vault`.
+//!
 //! All POSTs are gated by `token_ok` in the dispatcher (the same
 //! isolated-gate pattern as `fs/upload-binary`), so these handlers assume
 //! the caller is already authenticated.
@@ -53,6 +58,32 @@ struct BundleBody {
     /// Carry secrets over the (encrypted) link instead of scrubbing them.
     #[serde(default)]
     carry_secrets: bool,
+    /// The destination vault (its `GET /cli/vault/recipient`): seal this
+    /// workspace's vault secrets to it (0.45.2, see `clone_vault`).
+    #[serde(default)]
+    vault_target: Option<crate::clone_vault::VaultTarget>,
+    /// The owner is moving their own workspace to their own server.
+    /// Required with `vault_target` (a clone for another owner never
+    /// carries vault secrets).
+    #[serde(default)]
+    own_box_move: bool,
+}
+
+impl BundleBody {
+    /// The carry request for this body, or the teaching 400.
+    fn carry_request(
+        &self,
+        vault_caller: Option<crate::vault::actor::VaultCaller>,
+    ) -> Result<Option<crate::clone_vault::CarryRequest>, CliResponse> {
+        if let Some(r) = crate::clone_vault::refuse_unless_own_move(self.vault_target.as_ref(), self.own_box_move) {
+            return Err(r);
+        }
+        Ok(self.vault_target.clone().map(|target| crate::clone_vault::CarryRequest {
+            target,
+            caller: vault_caller,
+            vault: crate::vault::get(),
+        }))
+    }
 }
 
 /// How a bundle build failed — carried out of [`build_workspace_bundle`]
@@ -192,10 +223,21 @@ fn build_workspace_bundle(
 /// K2 settings from the projects DB row, tar.gz's everything to
 /// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
 /// summary (entry count, scrubbed-secret count, byte size).
-pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
+///
+/// With `vault_target` + `own_box_move`, also seals this workspace's vault
+/// secrets to the destination vault and returns them as the opaque
+/// `vault_carry_b64`, plus a names-only `vault_carry` report.
+pub fn handle_clone_bundle(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: BundleBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let carry = match b.carry_request(vault_caller) {
+        Ok(c) => c,
+        Err(r) => return r,
     };
 
     let opts = clone::CloneOptions {
@@ -215,19 +257,24 @@ pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
         Err(BundleError::Internal(e)) => return CliResponse::internal_error(e),
     };
 
-    CliResponse::ok_json(
-        serde_json::json!({
-            "bundle_path": out.bundle_path.to_string_lossy(),
-            "manifest_summary": {
-                "entry_count": out.entry_count,
-                "scrubbed_secret_count": out.scrubbed_count,
-                "size_bytes": out.size_bytes,
-                "include_all_history": !b.live_only,
-                "carry_secrets": b.carry_secrets,
-            }
-        })
-        .to_string(),
-    )
+    let mut resp = serde_json::json!({
+        "bundle_path": out.bundle_path.to_string_lossy(),
+        "manifest_summary": {
+            "entry_count": out.entry_count,
+            "scrubbed_secret_count": out.scrubbed_count,
+            "size_bytes": out.size_bytes,
+            "include_all_history": !b.live_only,
+            "carry_secrets": b.carry_secrets,
+        }
+    });
+    if let Some(req) = &carry {
+        let sealed = crate::clone_vault::seal_for_workspace(req, &b.project_path);
+        resp["vault_carry"] = sealed.report;
+        if let Some(c) = sealed.carry_b64 {
+            resp["vault_carry_b64"] = serde_json::Value::String(c);
+        }
+    }
+    CliResponse::ok_json(resp.to_string())
 }
 
 #[derive(Deserialize)]
@@ -236,11 +283,21 @@ struct UnpackBody {
     bundle_path: String,
     /// Parent folder under which to create `<source-name>/`.
     dest_parent: String,
+    /// The source's sealed vault carry for this workspace (opaque; see
+    /// `clone_vault`). Imported into the newly registered project.
+    #[serde(default)]
+    vault_carry_b64: Option<String>,
 }
 
 /// `POST /cli/clone/unpack` — extract + register + configure on the
 /// DESTINATION daemon. Returns the new project row + the final dest path.
-pub fn handle_clone_unpack(body: &[u8]) -> CliResponse {
+/// With `vault_carry_b64`, also adds the moved vault secrets to the new
+/// project and reports `vault_imported` / `vault_skipped` (names only); a
+/// carry problem never fails the unpack.
+pub fn handle_clone_unpack(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: UnpackBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -256,13 +313,26 @@ pub fn handle_clone_unpack(body: &[u8]) -> CliResponse {
         std::path::Path::new(&b.dest_parent),
         &home,
     ) {
-        Ok((project, dest_path)) => CliResponse::ok_json(
-            serde_json::json!({
+        Ok((project, dest_path)) => {
+            let mut resp = serde_json::json!({
                 "project": project,
                 "dest_path": dest_path,
-            })
-            .to_string(),
-        ),
+            });
+            if let Some(carry) = b.vault_carry_b64.as_deref().filter(|c| !c.trim().is_empty()) {
+                let out = crate::clone_vault::import_into_project(
+                    crate::vault::get(),
+                    vault_caller.as_ref(),
+                    carry,
+                    &project.id,
+                );
+                if let (Some(dst), Some(src)) = (resp.as_object_mut(), out.as_object()) {
+                    for (k, v) in src {
+                        dst.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            CliResponse::ok_json(resp.to_string())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -420,6 +490,29 @@ pub struct PackJob {
     pub scrubbed_secret_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The sealed vault carry for the destination (opaque), when one was
+    /// asked for and sealed. Cleared by `pack-cleanup`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_carry_b64: Option<String>,
+    /// Names-only report of the vault carry (or why there is none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_carry: Option<serde_json::Value>,
+}
+
+impl PackJob {
+    fn running(job_id: String) -> Self {
+        PackJob {
+            job_id,
+            phase: "running",
+            bundle_path: None,
+            size_bytes: None,
+            entry_count: None,
+            scrubbed_secret_count: None,
+            error: None,
+            vault_carry_b64: None,
+            vault_carry: None,
+        }
+    }
 }
 
 fn pack_jobs() -> &'static Mutex<std::collections::HashMap<String, PackJob>> {
@@ -472,10 +565,17 @@ fn new_pack_job_id() -> String {
 /// Validation that would make the job fail instantly happens HERE so the
 /// caller gets a 400 instead of a job that flips to `failed`; the deep
 /// work runs on a worker thread. Returns `{ job_id }`.
-pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
+pub fn handle_clone_pack(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: BundleBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let carry = match b.carry_request(vault_caller) {
+        Ok(c) => c,
+        Err(r) => return r,
     };
 
     // Path validation, same chokepoint as the fs routes (empty / traversal
@@ -509,15 +609,7 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
     };
 
     let job_id = new_pack_job_id();
-    insert_pack_job(PackJob {
-        job_id: job_id.clone(),
-        phase: "running",
-        bundle_path: None,
-        size_bytes: None,
-        entry_count: None,
-        scrubbed_secret_count: None,
-        error: None,
-    });
+    insert_pack_job(PackJob::running(job_id.clone()));
 
     let project_path = canonical.to_string_lossy().to_string();
     let worker_job_id = job_id.clone();
@@ -528,6 +620,7 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
             &opts,
             &home,
             k2_core::fs_commands::MAX_TRANSFER_SIZE,
+            carry.as_ref(),
         );
     });
 
@@ -559,6 +652,7 @@ fn run_pack_job(
     opts: &clone::CloneOptions,
     home: &std::path::Path,
     max_bytes: u64,
+    carry: Option<&crate::clone_vault::CarryRequest>,
 ) {
     match build_workspace_bundle(project_path, opts, home) {
         Ok(out) => {
@@ -582,7 +676,12 @@ fn run_pack_job(
                 });
                 return;
             }
+            let sealed = carry.map(|req| crate::clone_vault::seal_for_workspace(req, project_path));
             update_pack_job(job_id, |j| {
+                if let Some(s) = sealed {
+                    j.vault_carry = Some(s.report);
+                    j.vault_carry_b64 = s.carry_b64;
+                }
                 j.phase = "done";
                 j.bundle_path = Some(out.bundle_path.to_string_lossy().to_string());
                 j.size_bytes = Some(out.size_bytes);
@@ -651,6 +750,7 @@ pub fn handle_clone_pack_cleanup(body: &[u8]) -> CliResponse {
         }
         update_pack_job(&parsed.job_id, |j| j.bundle_path = None);
     }
+    update_pack_job(&parsed.job_id, |j| j.vault_carry_b64 = None);
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 

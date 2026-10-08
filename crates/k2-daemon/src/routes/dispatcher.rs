@@ -5779,8 +5779,11 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Who asked, in vault terms: a pack may seal the workspace's
+            // vault secrets for the owner's own move (clone_vault).
+            let vault_caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str()).ok();
             let result = if p == "/cli/clone/pack" {
-                crate::clone_routes::handle_clone_pack(&body_bytes)
+                crate::clone_routes::handle_clone_pack(&body_bytes, vault_caller)
             } else {
                 crate::clone_routes::handle_clone_pack_cleanup(&body_bytes)
             };
@@ -5815,10 +5818,13 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Who asked, in vault terms: bundle may seal and unpack may add
+            // the workspace's vault secrets on the owner's own move.
+            let vault_caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str()).ok();
             let result = if p == "/cli/clone/bundle" {
-                crate::clone_routes::handle_clone_bundle(&body_bytes)
+                crate::clone_routes::handle_clone_bundle(&body_bytes, vault_caller)
             } else {
-                crate::clone_routes::handle_clone_unpack(&body_bytes)
+                crate::clone_routes::handle_clone_unpack(&body_bytes, vault_caller)
             };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;

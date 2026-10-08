@@ -420,7 +420,7 @@ fn service_set(c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
 /// Migrations: the owner, an Admin, or an IT agent ("Allow managing
 /// server-wide secrets") may run the carry (Rosson on VS2). The recovery
 /// key is never involved.
-fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
+pub(crate) fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
     match c.actor.agent() {
         Some(a) if a.vault_manage => Ok(()),
         Some(_) => Err(VaultError::owner_confirm_required("moving secrets between boxes needs \"Allow managing server-wide secrets\"")),

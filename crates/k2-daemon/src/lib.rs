@@ -29,6 +29,7 @@ pub mod classify_routes;
 pub mod cli;
 pub mod cli_response;
 pub mod clone_routes;
+pub mod clone_vault;
 pub mod companion_host;
 pub mod companion_routes;
 pub mod connect_users_routes;

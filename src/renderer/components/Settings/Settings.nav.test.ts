@@ -18,7 +18,7 @@ describe('Settings nav Apps', () => {
     expect(src).not.toContain("id: 'k2-access', label: 'Admin Access', beta")
   })
 
-  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, K2 Companion', () => {
+  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, K2 Companion', () => {
     const serverStart = src.indexOf("title: 'K2 Server'")
     const serverEnd = src.indexOf("title: 'Editors / Fonts'")
     expect(serverStart).toBeGreaterThan(0)
@@ -33,6 +33,7 @@ describe('Settings nav Apps', () => {
         "{ id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },",
         "{ id: 'connections', label: 'Connected Servers' },",
         "{ id: 'api-tokens', label: 'API Keys' },",
+        "{ id: 'vault', label: 'Vault' },",
         "{ id: 'companion', label: 'K2 Companion' },",
       ].join('\n        '),
     )
@@ -51,6 +52,11 @@ describe('Settings nav Apps', () => {
     expect(SECTION_LABELS.people).toBe('User Access')
     expect(SECTION_LABELS['k2-access']).toBe('Admin Access')
     expect(SECTION_LABELS['skin-access']).toBe('Apps')
+    // prd-k2-vault-v1 KV39: Settings → K2 Server → Vault.
+    expect(SECTION_LABELS.vault).toBe('Vault')
+    expect(src).toContain("activeSection === 'vault'")
+    expect(src).toContain('<VaultSection />')
+    expect(src).toContain('...VAULT_MANIFEST,')
   })
 
   it('User Access, User Templates, and Apps rows carry a right-side BETA tag', () => {

@@ -354,12 +354,24 @@ pub(crate) fn apply_transcript(row: &mut Row, signal: &TranscriptSignal, now: i6
                 row.latch = None;
                 row.pending_cancel = None;
                 row.in_flight.clear();
-                row.turn_started_at = Some(now);
+                row.start_turn(now);
                 lead_working(row, now);
             }
         }
+        TranscriptSignal::Tool { id, command, .. } => {
+            row.pending_transcript_end = None;
+            if drives {
+                lead_working(row, now);
+            }
+            // Counted after `lead_working` (a turn it starts counts this
+            // call). A hooked row counts a record only mid-turn: one that
+            // lands after the hook's Stop belongs to a finished turn. The
+            // hook's PreToolUse with the same id is the same call.
+            if drives || row.lead.state != LeadState::Idle {
+                row.note_tool(id.as_deref(), *command);
+            }
+        }
         TranscriptSignal::Queued { .. }
-        | TranscriptSignal::Tool { .. }
         | TranscriptSignal::ToolDone
         | TranscriptSignal::Thinking => {
             row.pending_transcript_end = None;

@@ -1,7 +1,7 @@
 //! The activity row (DA19, §7.2), its vocabulary (DA31), and the one
 //! entry point every input goes through ([`Row::apply`] / [`Row::tick`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::{json, Value};
 
@@ -33,6 +33,11 @@ pub const ROSTER_CAP: usize = 64;
 
 /// Lead tools remembered in flight (for `waitingFor` binding).
 pub(crate) const IN_FLIGHT_CAP: usize = 32;
+
+/// Lead `tool_use_id`s remembered so one call reported by both the hook
+/// and the transcript counts once. Kept across turns, so a late record
+/// from the last turn is never counted into this one.
+pub(crate) const SEEN_TOOL_IDS_CAP: usize = 256;
 
 /// The lead agent's own state (DA19). Only lead envelopes write it (DA20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,6 +316,18 @@ pub struct ChildCounts {
     pub waiting: usize,
 }
 
+/// This turn's lead tool calls (the `counts` on the row and the app
+/// frame). Numbers only: no tool names, arguments or text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnCounts {
+    /// Lead tool calls started this turn, each `tool_use_id` once.
+    /// Subagents' own calls are not here; a subagent counts as one live
+    /// `ChildCounts::subagents`.
+    pub tools: u32,
+    /// The subset that ran a shell command ([`super::tools::is_command_tool`]).
+    pub commands: u32,
+}
+
 /// One live v2 session's activity (DA19).
 #[derive(Debug, Clone)]
 pub struct Row {
@@ -322,6 +339,10 @@ pub struct Row {
     pub(crate) latch: Option<Latch>,
     pub(crate) pending_cancel: Option<PendingCancel>,
     pub turn_started_at: Option<i64>,
+    /// This turn's lead tool calls; reset by [`Row::start_turn`].
+    pub(crate) turn: TurnCounts,
+    /// Recently counted `tool_use_id`s (dedupe, [`SEEN_TOOL_IDS_CAP`]).
+    pub(crate) seen_tool_ids: VecDeque<String>,
     pub lead_idle_since: Option<i64>,
     pub evidence_at: Option<i64>,
     pub evidence_source: Option<EvidenceSource>,
@@ -360,6 +381,7 @@ struct Visible {
     reason: Reason,
     lead: (LeadState, Outcome),
     counts: ChildCounts,
+    turn: TurnCounts,
     stale_since: Option<i64>,
     confirmed: bool,
 }
@@ -382,6 +404,8 @@ impl Row {
             latch: None,
             pending_cancel: None,
             turn_started_at: None,
+            turn: TurnCounts::default(),
+            seen_tool_ids: VecDeque::new(),
             lead_idle_since: Some(now),
             evidence_at: None,
             evidence_source: None,
@@ -516,12 +540,45 @@ impl Row {
         (subagents, background)
     }
 
+    /// This turn's lead tool and command counts.
+    pub fn turn_counts(&self) -> TurnCounts {
+        self.turn
+    }
+
+    /// A new turn starts at `now`: `turnStartedAt` moves and the per-turn
+    /// counts go back to zero. Every turn start goes through here.
+    pub(crate) fn start_turn(&mut self, now: i64) {
+        self.turn_started_at = Some(now);
+        self.turn = TurnCounts::default();
+    }
+
+    /// One lead tool call started (or was first reported) this turn.
+    /// `id` is its `tool_use_id` / `call_id` when the source has one: a
+    /// call seen before (the hook and the transcript both report it) is
+    /// not counted again. A call with no id always counts.
+    pub(crate) fn note_tool(&mut self, id: Option<&str>, command: bool) {
+        if let Some(id) = id.map(str::trim).filter(|s| !s.is_empty()) {
+            if self.seen_tool_ids.iter().any(|s| s == id) {
+                return;
+            }
+            if self.seen_tool_ids.len() >= SEEN_TOOL_IDS_CAP {
+                self.seen_tool_ids.pop_front();
+            }
+            self.seen_tool_ids.push_back(id.to_string());
+        }
+        self.turn.tools = self.turn.tools.saturating_add(1);
+        if command {
+            self.turn.commands = self.turn.commands.saturating_add(1);
+        }
+    }
+
     fn visible(&self) -> Visible {
         Visible {
             display: self.display,
             reason: self.reason,
             lead: (self.lead.state, self.lead.outcome),
             counts: self.counts(),
+            turn: self.turn,
             stale_since: self.stale_since,
             confirmed: self.confirmed,
         }
@@ -590,6 +647,13 @@ impl Row {
                 "unknown": c.unknown,
                 "owed": c.owed,
                 "waiting": c.waiting,
+            },
+            // The app frame's three numbers, for owner clients too: live
+            // subagents and this turn's lead tool calls / shell commands.
+            "counts": {
+                "subagents": c.subagents,
+                "tools": self.turn.tools,
+                "commands": self.turn.commands,
             },
             "turnStartedAt": self.turn_started_at,
             "evidenceAt": self.evidence_at,

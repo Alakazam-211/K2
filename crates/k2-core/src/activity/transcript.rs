@@ -43,8 +43,11 @@ pub enum TranscriptSignal {
     /// Input that arrived mid-turn (Claude `queued_command`; a stamped
     /// Codex user message). Working evidence and a Thread binding signal.
     Queued { thread_addr: Option<String> },
-    /// The agent called a tool. `line` is the redacted TW8 description.
-    Tool { line: String },
+    /// The agent called a tool. `line` is the redacted TW8 description;
+    /// `id` the call's `tool_use_id` / `call_id` (the per-turn count's
+    /// dedupe key against the hook); `command` whether it is a shell tool
+    /// ([`super::tools::is_command_tool`]).
+    Tool { line: String, id: Option<String>, command: bool },
     /// A tool returned.
     ToolDone,
     /// A reasoning / thinking record.
@@ -210,7 +213,7 @@ impl TranscriptReader {
                             self.pending_tools.push(id.to_string());
                         }
                         let input = part.get("input").unwrap_or(&Value::Null);
-                        out.push(TranscriptSignal::Tool { line: tool_line::describe(name, input) });
+                        out.push(tool_signal(tool_line::describe(name, input), id, name));
                     }
                     "thinking" | "redacted_thinking" => out.push(TranscriptSignal::Thinking),
                     _ => {}
@@ -242,7 +245,7 @@ fn codex(rec: &Value) -> Vec<TranscriptSignal> {
                     return Vec::new();
                 }
                 let args = payload.get("arguments").or_else(|| payload.get("input")).unwrap_or(&Value::Null);
-                vec![TranscriptSignal::Tool { line: foreign_tool_line(name, args) }]
+                vec![tool_signal(foreign_tool_line(name, args), str_at(payload, "call_id"), name)]
             }
             "function_call_output" | "custom_tool_call_output" => vec![TranscriptSignal::ToolDone],
             "reasoning" => vec![TranscriptSignal::Thinking],
@@ -252,6 +255,17 @@ fn codex(rec: &Value) -> Vec<TranscriptSignal> {
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// A tool call signal: its redacted line, its call id (empty = none) and
+/// whether `name` is a shell tool. The name itself is not kept.
+fn tool_signal(line: String, id: &str, name: &str) -> TranscriptSignal {
+    let id = id.trim();
+    TranscriptSignal::Tool {
+        line,
+        id: (!id.is_empty()).then(|| id.to_string()),
+        command: super::tools::is_command_tool(name),
     }
 }
 
@@ -278,7 +292,7 @@ fn grok(rec: &Value) -> Vec<TranscriptSignal> {
                     .filter_map(|c| {
                         let name = c.get("name").and_then(Value::as_str)?;
                         let args = c.get("arguments").or_else(|| c.get("input")).unwrap_or(&Value::Null);
-                        Some(TranscriptSignal::Tool { line: foreign_tool_line(name, args) })
+                        Some(tool_signal(foreign_tool_line(name, args), str_at(c, "id"), name))
                     })
                     .collect(),
                 None => vec![TranscriptSignal::TurnEnd { record_at: None, cross_check: false }],
@@ -286,7 +300,7 @@ fn grok(rec: &Value) -> Vec<TranscriptSignal> {
         }
         "backend_tool_call" | "tool_call" => {
             let name = rec.get("name").and_then(Value::as_str).unwrap_or("tool");
-            vec![TranscriptSignal::Tool { line: foreign_tool_line(name, &Value::Null) }]
+            vec![tool_signal(foreign_tool_line(name, &Value::Null), str_at(rec, "id"), name)]
         }
         "tool_result" => vec![TranscriptSignal::ToolDone],
         "reasoning" => vec![TranscriptSignal::Thinking],
@@ -416,8 +430,8 @@ mod tests {
         let tool = read("codex", &fixture("codex-tool"));
         assert_eq!(tool.first(), Some(&S::TurnStart { thread_addr: None }));
         assert!(tool.contains(&S::Queued { thread_addr: Some("ws/thread-1".into()) }), "{tool:?}");
-        assert!(tool.contains(&S::Tool { line: "Running `cargo test`".into() }), "{tool:?}");
-        assert!(tool.contains(&S::Tool { line: "Editing `lib.rs`".into() }), "{tool:?}");
+        assert!(tool.contains(&S::Tool { line: "Running `cargo test`".into(), id: Some("call_0001".into()), command: true }), "{tool:?}");
+        assert!(tool.contains(&S::Tool { line: "Editing `lib.rs`".into(), id: Some("call_0002".into()), command: false }), "{tool:?}");
         assert_eq!(tool.iter().filter(|s| **s == S::ToolDone).count(), 2);
         assert!(matches!(tool.last(), Some(S::TurnEnd { cross_check: false, .. })));
         let aborted = read("codex", &fixture("codex-interrupt"));
@@ -435,8 +449,8 @@ mod tests {
         );
         let tool = read("grok", &fixture("grok-tool"));
         assert_eq!(tool.first(), Some(&S::TurnStart { thread_addr: Some("ws/thread-2".into()) }));
-        assert!(tool.contains(&S::Tool { line: "Reading `main.rs`".into() }), "{tool:?}");
-        assert!(tool.contains(&S::Tool { line: "Running `ls -la`".into() }), "{tool:?}");
+        assert!(tool.contains(&S::Tool { line: "Reading `main.rs`".into(), id: Some("call-g1".into()), command: false }), "{tool:?}");
+        assert!(tool.contains(&S::Tool { line: "Running `ls -la`".into(), id: Some("call-g2".into()), command: true }), "{tool:?}");
         assert!(tool.contains(&S::ToolDone));
         assert_eq!(tool.iter().filter(|s| matches!(s, S::TurnEnd { .. })).count(), 1);
         assert!(matches!(tool.last(), Some(S::TurnEnd { .. })));
@@ -455,7 +469,7 @@ mod tests {
             vec![
                 S::TurnStart { thread_addr: None },
                 S::Thinking,
-                S::Tool { line: "Running `cargo build`".into() },
+                S::Tool { line: "Running `cargo build`".into(), id: Some("toolu_0001".into()), command: true },
                 S::Queued { thread_addr: Some("ws/thread-3".into()) },
                 S::ToolDone,
                 S::TurnEnd { record_at: Some(1_790_000_009_000), cross_check: true },
@@ -650,7 +664,7 @@ mod row_tests {
         let mut r = row("claude");
         hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1"}"#, 1_000);
         sig(&mut r, end.clone(), 2_000);
-        sig(&mut r, TranscriptSignal::Tool { line: "Running `x`".into() }, 2_500);
+        sig(&mut r, TranscriptSignal::Tool { line: "Running `x`".into(), id: None, command: true }, 2_500);
         r.tick(10_000);
         assert_eq!(r.display, Display::Working);
 
@@ -672,7 +686,7 @@ mod row_tests {
         hook(&mut r, r#"{"hook_event_name":"Stop","prompt_id":"p1"}"#, 2_000);
         assert_eq!(r.display, Display::Idle);
         // A tool record after the hook's Stop does not drive a hooked row.
-        sig(&mut r, TranscriptSignal::Tool { line: "Running `x`".into() }, 2_100);
+        sig(&mut r, TranscriptSignal::Tool { line: "Running `x`".into(), id: None, command: true }, 2_100);
         assert_eq!(r.display, Display::Idle);
         hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p2"}"#, 3_000);
         let ch = sig(&mut r, TranscriptSignal::Interrupt, 4_000);
@@ -709,6 +723,148 @@ mod row_tests {
         feed(&mut r, &mut reader, &lines[lines.len() - 1..], t);
         assert_eq!(r.display, Display::Idle);
         assert_eq!(r.reason, Reason::TranscriptTurnEnd);
+    }
+
+    fn hook_as(r: &mut Row, source: HookSource, body: &str, at: i64) -> super::super::Change {
+        let env = envelope::parse(
+            &HookHeaders {
+                pane: "s".into(),
+                agent_pid: Some(100),
+                source,
+                hook_version: Some(2),
+                cli_version: None,
+                truncated: false,
+                event_hint: None,
+            },
+            body.as_bytes(),
+        )
+        .expect("synthetic hook parses");
+        r.apply(Evidence::Hook(&env), at)
+    }
+
+    fn tool(id: Option<&str>, command: bool) -> TranscriptSignal {
+        TranscriptSignal::Tool { line: "x".into(), id: id.map(str::to_string), command }
+    }
+
+    fn counts(r: &Row) -> (u32, u32) {
+        let c = r.turn_counts();
+        (c.tools, c.commands)
+    }
+
+    /// Per-turn counts: each lead call once whether the hook, the
+    /// transcript or both report it; subagent calls excluded; a count
+    /// change is a drawn change; a new turn resets to zero.
+    #[test]
+    fn turn_counts_dedupe_hook_and_transcript_and_reset_per_turn() {
+        let mut r = row("claude");
+        hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1"}"#, 1_000);
+        assert_eq!(counts(&r), (0, 0));
+        let rev = r.rev;
+        let ch = hook_as(&mut r, HookSource::Claude, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-1"}"#, 1_100);
+        assert_eq!(counts(&r), (1, 1));
+        assert!(ch.changed && r.rev > rev, "a count change bumps rev");
+        // The Post for the same call, and the transcript's record of it.
+        hook(&mut r, r#"{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-1"}"#, 1_200);
+        sig(&mut r, tool(Some("tu-1"), true), 1_250);
+        assert_eq!(counts(&r), (1, 1), "one call, three reports");
+        // Transcript first, hook second: still one.
+        sig(&mut r, tool(Some("tu-2"), false), 1_300);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Read","tool_use_id":"tu-2"}"#, 1_350);
+        assert_eq!(counts(&r), (2, 1));
+        // The hook was lost: the transcript alone counts it.
+        sig(&mut r, tool(Some("tu-3"), true), 1_400);
+        assert_eq!(counts(&r), (3, 2));
+        // A Post whose async Pre was lost counts its call once.
+        hook(&mut r, r#"{"hook_event_name":"PostToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-4"}"#, 1_450);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-4"}"#, 1_460);
+        assert_eq!(counts(&r), (4, 3));
+        // A subagent's own calls are not lead calls.
+        hook(&mut r, r#"{"hook_event_name":"SubagentStart","agent_id":"a-1","agent_type":"Explore"}"#, 1_500);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","agent_id":"a-1","tool_name":"Bash","tool_use_id":"tu-a1"}"#, 1_510);
+        hook(&mut r, r#"{"hook_event_name":"PostToolUse","agent_id":"a-1","tool_name":"Bash","tool_use_id":"tu-a1"}"#, 1_520);
+        assert_eq!(counts(&r), (4, 3));
+        assert_eq!(r.counts().subagents, 1);
+        let j = r.to_json();
+        assert_eq!(j["counts"], serde_json::json!({"subagents": 1, "tools": 4, "commands": 3}));
+        // The turn ends: the counts stay (the finished turn's), and a late
+        // transcript record without an id does not add to them.
+        hook(&mut r, r#"{"hook_event_name":"Stop","prompt_id":"p1","background_tasks":[],"session_crons":[]}"#, 2_000);
+        assert_eq!(r.display, Display::Idle);
+        sig(&mut r, tool(None, true), 2_100);
+        assert_eq!(counts(&r), (4, 3));
+        // A new turn starts at zero; a late record from the last turn
+        // (an id already counted) is not counted into it.
+        hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p2"}"#, 3_000);
+        assert_eq!(counts(&r), (0, 0));
+        sig(&mut r, tool(Some("tu-3"), true), 3_050);
+        assert_eq!(counts(&r), (0, 0));
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p2","tool_name":"Grep","tool_use_id":"tu-5"}"#, 3_100);
+        assert_eq!(counts(&r), (1, 0));
+        // A latched late Pre for a finished prompt never counts.
+        hook(&mut r, r#"{"hook_event_name":"Stop","prompt_id":"p2"}"#, 3_200);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p2","tool_name":"Bash","tool_use_id":"tu-6"}"#, 3_300);
+        assert_eq!(counts(&r), (1, 0));
+    }
+
+    /// A turn whose start we didn't see (no UserPromptSubmit): the
+    /// implicit start resets, then the call that started it counts.
+    #[test]
+    fn turn_counts_reset_on_an_implicit_turn_start() {
+        let mut r = row("claude");
+        hook(&mut r, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1"}"#, 1_000);
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"t1"}"#, 1_100);
+        hook(&mut r, r#"{"hook_event_name":"Stop","prompt_id":"p1"}"#, 1_200);
+        assert_eq!(counts(&r), (1, 1));
+        // p2's UserPromptSubmit was lost; its first PreToolUse starts it.
+        hook(&mut r, r#"{"hook_event_name":"PreToolUse","prompt_id":"p2","tool_name":"Read","tool_use_id":"t2"}"#, 5_000);
+        assert_eq!(r.display, Display::Working);
+        assert_eq!(r.turn_started_at, Some(5_000));
+        assert_eq!(counts(&r), (1, 0));
+    }
+
+    /// Codex and Grok (transcript-driven): every call counts, the turn
+    /// start resets.
+    #[test]
+    fn turn_counts_from_codex_and_grok_transcripts() {
+        let mut r = row("codex");
+        let mut reader = TranscriptReader::new("codex").expect("reader");
+        let lines = super::tests_fixture("codex-tool");
+        let t = feed(&mut r, &mut reader, &lines[..lines.len() - 1], 1_000);
+        assert_eq!(counts(&r), (2, 1), "exec_command + apply_patch");
+        // The same call record again (a re-read) counts nothing new.
+        let t = feed(&mut r, &mut reader, &lines[4..5], t);
+        assert_eq!(counts(&r), (2, 1));
+        let t = feed(&mut r, &mut reader, &lines[lines.len() - 1..], t);
+        assert_eq!(r.display, Display::Idle);
+        assert_eq!(counts(&r), (2, 1), "the finished turn keeps its counts");
+        feed(&mut r, &mut reader, &[r#"{"type":"event_msg","payload":{"type":"task_started"}}"#], t);
+        assert_eq!(counts(&r), (0, 0));
+
+        let mut r = row("grok");
+        let mut reader = TranscriptReader::new("grok").expect("reader");
+        feed(&mut r, &mut reader, &super::tests_fixture("grok-tool"), 1_000);
+        assert_eq!(counts(&r), (2, 1), "read_file + run_terminal_cmd");
+    }
+
+    /// Gemini (`AfterTool`) and Cursor (`beforeShellExecution`,
+    /// `beforeMCPExecution`) hooks count lead calls.
+    #[test]
+    fn turn_counts_from_gemini_and_cursor_hooks() {
+        let mut r = row("gemini");
+        hook_as(&mut r, HookSource::Gemini, r#"{"hook_event_name":"BeforeAgent"}"#, 1_000);
+        hook_as(&mut r, HookSource::Gemini, r#"{"hook_event_name":"AfterTool","tool_name":"run_shell_command"}"#, 1_100);
+        hook_as(&mut r, HookSource::Gemini, r#"{"hook_event_name":"AfterTool","tool_name":"read_file"}"#, 1_200);
+        assert_eq!(counts(&r), (2, 1));
+        hook_as(&mut r, HookSource::Gemini, r#"{"hook_event_name":"AfterAgent"}"#, 1_300);
+        assert_eq!(r.display, Display::Idle);
+        hook_as(&mut r, HookSource::Gemini, r#"{"hook_event_name":"BeforeAgent"}"#, 2_000);
+        assert_eq!(counts(&r), (0, 0));
+
+        let mut r = row("cursor");
+        hook_as(&mut r, HookSource::Cursor, r#"{"hook_event_name":"beforeSubmitPrompt"}"#, 1_000);
+        hook_as(&mut r, HookSource::Cursor, r#"{"hook_event_name":"beforeShellExecution","command":"ls"}"#, 1_100);
+        hook_as(&mut r, HookSource::Cursor, r#"{"hook_event_name":"beforeMCPExecution"}"#, 1_200);
+        assert_eq!(counts(&r), (2, 1));
     }
 
     /// T-S3h (row): screen evidence is working; gone is idle; it never

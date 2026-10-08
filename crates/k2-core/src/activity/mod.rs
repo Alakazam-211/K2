@@ -16,6 +16,8 @@
 //! - [`lock`]: when the row may touch the session lock (DA32).
 //! - [`transcript`]: transcript records → evidence (S3: DA27, A16, A19).
 //! - [`screen`]: the interrupt-marker scan for titleless CLIs (S3: A13).
+//! - [`tools`]: which tool calls are shell commands (the per-turn
+//!   `tools` / `commands` counts, [`Row::turn_counts`]).
 //!
 //! Silence is never "done" (DA3): no timer moves a row to `idle`. Time
 //! only decays a row to `unverifiable` ([`row::STALE_AFTER_MS`]) or ends
@@ -35,12 +37,13 @@ pub mod fold;
 pub mod lock;
 pub mod row;
 pub mod screen;
+pub mod tools;
 pub mod transcript;
 
 pub use ends::KeyInput;
 pub use row::{
     Change, ChildKind, Display, EvidenceSource, LeadState, Outcome, Reason, Row, RowFacts,
-    TitleSignal, TurnEnded,
+    TitleSignal, TurnCounts, TurnEnded,
 };
 pub use transcript::{TranscriptReader, TranscriptSignal};
 

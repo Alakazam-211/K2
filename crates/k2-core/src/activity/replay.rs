@@ -11,7 +11,8 @@
 //! - `exit`: `"owner"` | `"pty"`;
 //! - `tick`: nothing but time passing;
 //! - `expect`: assertions on the row at that time (`display`, `reason`,
-//!   `lead`, `outcome`, child counts, `lock` = the last status written or
+//!   `lead`, `outcome`, child counts, the per-turn `tools` / `commands`,
+//!   `lock` = the last status written or
 //!   `"untouched"`, `foreign` = owner-check rejections so far,
 //!   `turnEnded` = the last turn end's reason).
 //!
@@ -236,6 +237,8 @@ fn check(at: &str, row: &Row, want: &Value, lock: Option<&str>, foreign: u64, tu
             "unknown" => counts.unknown.into(),
             "owed" => counts.owed.into(),
             "waiting" => counts.waiting.into(),
+            "tools" => row.turn_counts().tools.into(),
+            "commands" => row.turn_counts().commands.into(),
             "lock" => lock.unwrap_or("untouched").into(),
             "foreign" => foreign.into(),
             "turnEnded" => turn_end.map_or(Value::Null, Value::from),

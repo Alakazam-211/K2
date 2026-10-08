@@ -8,7 +8,7 @@
 use crate::agent_hooks::envelope::{HookEnvelope, HookSource};
 use crate::agent_hooks::map_event_type;
 
-use super::ends;
+use super::{ends, tools};
 use super::row::{
     ChildKind, ChildOrigin, ChildState, EvidenceSource, LeadState, Latch, Outcome, Reason, Row,
     TurnEnded, Waiting, CANCEL_LATCH_MS, IN_FLIGHT_CAP,
@@ -25,6 +25,10 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
         // Cursor / Gemini: today's three buckets (their own event names).
         if let Some(bucket) = map_event_type(&env.event) {
             apply_bucket_inner(row, bucket, now);
+        }
+        // After the bucket, so a turn the bucket started counts this call.
+        if let Some(command) = tools::foreign_hook_tool(env.source, &env.event, env.tool_name.as_deref()) {
+            row.note_tool(env.tool_use_id.as_deref(), command);
         }
         return;
     }
@@ -49,7 +53,7 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
             row.pending_cancel = None;
             row.in_flight.clear();
             row.lead.prompt_id = env.prompt_id.clone();
-            row.turn_started_at = Some(now);
+            row.start_turn(now);
             lead_working(row, now);
         }
         "PreToolUse" => {
@@ -67,6 +71,7 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
                         w.waiting_for = env.tool_use_id.clone();
                     }
                 }
+                count_tool(row, env, tool, false);
                 return;
             }
             if tool == ASK_TOOL {
@@ -74,6 +79,8 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
             } else {
                 lead_working(row, now);
             }
+            // After `lead_working`: a turn it started counts this call.
+            count_tool(row, env, tool, false);
         }
         "PostToolUse" | "PostToolUseFailure" => {
             let id = env.tool_use_id.as_deref();
@@ -98,14 +105,18 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
             if latched(row, env, now) {
                 return;
             }
+            // A Post whose (async) Pre was lost still counts its call;
+            // only with an id, so a Pre + Post pair counts once.
             if row.lead.state == LeadState::Waiting {
                 let waited = row.lead.waiting.as_ref().and_then(|w| w.waiting_for.as_deref());
                 if waited.is_some() && waited == id {
                     lead_working(row, now);
                 }
+                count_tool(row, env, tool, true);
                 return;
             }
             lead_working(row, now);
+            count_tool(row, env, tool, true);
         }
         "PermissionRequest" => {
             if latched(row, env, now) {
@@ -284,6 +295,20 @@ pub(crate) fn arm_cancel_latch(row: &mut Row, now: i64) {
     row.latch = Some(Latch { prompt_id: row.lead.prompt_id.clone(), until: Some(now + CANCEL_LATCH_MS) });
 }
 
+/// Count one lead tool call from a Claude hook (subagent envelopes never
+/// get here: [`apply_child`]). `require_id`: a Post event counts only
+/// with a `tool_use_id`, the dedupe key its Pre was counted under.
+fn count_tool(row: &mut Row, env: &HookEnvelope, tool: &str, require_id: bool) {
+    let id = env.tool_use_id.as_deref();
+    if tool.is_empty() && id.is_none() {
+        return;
+    }
+    if require_id && id.is_none() {
+        return;
+    }
+    row.note_tool(id, tools::is_command_tool(tool));
+}
+
 fn remember_in_flight(row: &mut Row, id: &str, tool: &str) {
     if row.in_flight.iter().any(|(t, _)| t == id) {
         return;
@@ -297,7 +322,7 @@ fn remember_in_flight(row: &mut Row, id: &str, tool: &str) {
 pub(crate) fn lead_working(row: &mut Row, now: i64) {
     if row.lead.state == LeadState::Idle && row.turn_started_at.map_or(true, |t| t < row.lead.since) {
         // A turn whose start we didn't see (title, legacy, a restart).
-        row.turn_started_at = Some(now);
+        row.start_turn(now);
     }
     if row.lead.state != LeadState::Working {
         row.lead.state = LeadState::Working;

@@ -585,7 +585,7 @@ impl Tracker {
         let mut counted: Option<String> = None;
         if !steps.hooked {
             match signal {
-                TranscriptSignal::Tool { line } => {
+                TranscriptSignal::Tool { line, .. } => {
                     counted = Some(line.clone());
                     steps.tool = Some((None, line.clone(), at));
                     steps.thinking_since = None;
@@ -1504,7 +1504,7 @@ mod tests {
         live(&mut t, &row);
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_150, &row.lookup(), 1_150);
         let line = "Running `cargo test`".to_string();
-        let out = t.transcript(SID, &TranscriptSignal::Tool { line: line.clone() }, 1_700, &row.lookup(), 1_700);
+        let out = t.transcript(SID, &TranscriptSignal::Tool { line: line.clone(), id: None, command: false }, 1_700, &row.lookup(), 1_700);
         let b = only(&out);
         assert_eq!((b["phase"].as_str(), b["line"].as_str()), (Some("tool"), Some(line.as_str())));
         assert_eq!(b["tally"]["cmd"], 1);
@@ -1524,7 +1524,7 @@ mod tests {
         let row = Fake::new(snap(LeadState::Working, Display::Working, 1_100));
         live(&mut t, &row);
         t.envelope(&hook(r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"x"}"#), 1_150, &row.lookup(), 1_150);
-        t.transcript(SID, &TranscriptSignal::Tool { line: "Reading `a.rs`".into() }, 1_200, &row.lookup(), 1_800);
+        t.transcript(SID, &TranscriptSignal::Tool { line: "Reading `a.rs`".into(), id: None, command: false }, 1_200, &row.lookup(), 1_800);
         let b = t.current(CONV, &row.lookup(), 1_800).expect("live");
         assert_ne!(b["phase"], "tool", "{b}");
         assert_eq!(b["tally"]["read"], 0);

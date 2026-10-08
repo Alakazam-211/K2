@@ -314,7 +314,7 @@ impl Node {
         let control = config::read_control(&layout.control());
         let now = self.now();
         let mut l = self.local.lock().unwrap();
-        let before = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.holding.clone());
+        let before = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.clone());
         if let Some(p) = policy {
             l.policy = p;
         }
@@ -343,7 +343,7 @@ impl Node {
         l.unavailable = un;
         let owned = self.smoke.lock().unwrap().owned();
         l.locks = locks::scan(&l.policy.foreign_locks, l.policy.write_smoke_lock.as_deref(), owned, now);
-        let after = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.holding.clone());
+        let after = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.clone());
         let stop_all = l.control.control == Control::Stopped;
         let pause_now = l.policy.on_owner_return == OnOwnerReturn::PauseNow && !l.unavailable.is_empty();
         let pause_reason = l.unavailable.first().cloned();

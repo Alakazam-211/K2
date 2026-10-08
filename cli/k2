@@ -1109,6 +1109,23 @@ _split_remote_target() {
     esac
 }
 
+# One `note:` line on stderr when an address resolved to another name of
+# the same target. Never changes the exit code. Shared wording (TR17):
+#   _k2_addr_note <old> <new>          → note: <old> is <new>      (A7: a second name)
+#   _k2_addr_note <old> <new> renamed  → note: <old> is now <new>  (a rename)
+_k2_addr_note() {
+    local old="${1:-}" new="${2:-}" kind="${3:-}"
+    if [ -z "$old" ] || [ -z "$new" ] || [ "$old" = "$new" ]; then
+        return 0
+    fi
+    if [ "$kind" = "renamed" ]; then
+        printf 'note: %s is now %s\n' "$old" "$new" >&2
+    else
+        printf 'note: %s is %s\n' "$old" "$new" >&2
+    fi
+    return 0
+}
+
 # ── Cross-server agent msg over FEDERATION ────────────────────────────
 # `k2 msg <agent>::<host> "text"` (canonical) or legacy `agent@host` routes a
 # CONNECTED cross-server peer over federation — the SAME verb agents use for
@@ -1331,7 +1348,11 @@ if not ids:
 if len(ids) > 1:
     info = "; ".join("%s (%s)" % (a.get("workspace_name", "?"), a.get("workspace_id", "?")) for a in ids)
     print("AMBIG\t%s" % info); sys.exit(0)
-print("OK\t%s" % (ids[0].get("workspace_id", "") or ""))
+# A7: also hand back the handle when the typed name is another name of
+# that workspace (alias / display name), for the note line.
+handle = (ids[0].get("agent") or "").strip()
+note_handle = handle if handle and norm(handle) != want else ""
+print("OK\t%s\t%s" % ((ids[0].get("workspace_id", "") or ""), note_handle))
 ' "$agent")
 
     local rkind rdetail
@@ -1365,7 +1386,8 @@ sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
             echo "could not parse $host's roster." >&2
             return 2 ;;
     esac
-    local wsid="$rdetail"
+    local wsid="${rdetail%%$'\t'*}" note_handle=""
+    [ "$wsid" != "$rdetail" ] && note_handle="${rdetail#*$'\t'}"
     if [ -z "$wsid" ]; then
         echo "no resolvable workspace for agent \"$agent\" on $host." >&2
         return 2
@@ -1406,7 +1428,7 @@ if st == "sent":
 if st == "queued":
     print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
 if st == "declined":
-    print("ERROR\t%s" % (d.get("reason") or "declined by peer")); sys.exit(0)
+    print("DECLINED\t%s" % (d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
 ')
     skind="${sres%%$'\t'*}"
@@ -1414,9 +1436,11 @@ print("OTHER")
     [ "$sdetail" = "$sres" ] && sdetail=""
     case "$skind" in
         SENT)
+            [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
             echo "delivered to ${agent}::${host} (federation)"
             return 0 ;;
         QUEUED)
+            [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
             echo "${sdetail:-queued for ${agent}::${host} — peer briefly unreachable, will deliver when it reconnects (federation)}" >&2
             return 0 ;;
         GATE)
@@ -1431,6 +1455,11 @@ sys.stderr.write(json.dumps({"error":{"code":code,"hint":hint}},
                             ensure_ascii=False,separators=(",",":"))+"\n")
 ' "$gcode" "$ghint"
             return 3 ;;
+        DECLINED)
+            # The address resolved and reached the peer; it said no.
+            [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
+            echo "${sdetail:-$resp}" >&2
+            return 2 ;;
         ERROR)
             echo "${sdetail:-$resp}" >&2
             return 2 ;;
@@ -9969,6 +9998,11 @@ if as_json:
                 'address': addr,
                 'agent': c.get('agent'),
                 'host': c.get('host'),
+                # A7: the peer workspace this row is bound to (null until
+                # a roster fetch binds it) and the names its roster showed.
+                'remoteWorkspaceId': c.get('remoteWorkspaceId'),
+                'handle': c.get('handle'),
+                'displayName': c.get('displayName'),
             })
         else:
             out['connections'].append({
@@ -10000,7 +10034,16 @@ if not conns:
 for c in conns:
     if c.get('remote'):
         addr = c.get('address') or ('%s::%s' % (c.get('agent', '?'), c.get('host', '?')))
-        print('  - %s   (remote)' % addr)
+        # A7: a bound row shows the workspace it reaches, e.g.
+        # seoca::quillify.k2.dev → quillify-website (Seoca).
+        handle = c.get('handle') or ''
+        display = c.get('displayName') or ''
+        bound = ''
+        if c.get('remoteWorkspaceId') and handle:
+            bound = ' → %s' % handle
+            if display and display.strip().lower() != handle.strip().lower():
+                bound += ' (%s)' % display
+        print('  - %s%s   (remote)' % (addr, bound))
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
         print('  - %s%s' % (c.get('projectName', '?'), flag))
@@ -10077,6 +10120,18 @@ if d.get('noop'):
     print('Already connected to %s (%s)' % (d.get('target', '?'), d.get('message', '')))
 else:
     print('Connected to %s' % d.get('target', '?'))
+# A7 / CA8: a remote add checks the peer's roster when it can. Bound →
+# say which workspace; otherwise warn (the connection is still saved).
+if d.get('bound') and d.get('handle'):
+    host = (d.get('target') or '').rpartition('::')[2]
+    label = d.get('handle') + ('::' + host if host else '')
+    if d.get('displayName') and d['displayName'].strip().lower() != d['handle'].strip().lower():
+        label += ' (%s)' % d['displayName']
+    print('  reaches %s' % label)
+if d.get('bindWarning'):
+    sys.stderr.write('warning: %s\n' % d['bindWarning'])
+if d.get('warning'):
+    sys.stderr.write('warning: %s\n' % d['warning'])
 "
             ;;
         remove)
@@ -24260,6 +24315,10 @@ if isinstance(err, str) and err:
     sys.exit(1)
 if d.get("ok") is False and "id" not in d and "filename" not in d:
     sys.exit(1)
+# A7: a federated agent::host typed by another name of that workspace
+# (the daemon says which), same wording as the live k2 msg note.
+if isinstance(d.get("addressNote"), str) and d["addressNote"]:
+    sys.stderr.write("note: %s\n" % d["addressNote"])
 # Package primary: if wake failed after package landed, note it but exit 0.
 if os.environ.get("WAKE_MODE") == "true":
     wake = d.get("wake")

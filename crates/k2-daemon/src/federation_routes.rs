@@ -33,6 +33,7 @@ use crate::workspace_msg;
 
 use k2_core::awareness::{AgentAddress, AgentSignal, Delivery, SignalKind, WorkspaceId};
 use k2_core::federation::{self, ingress, outbox, pairing, roster, PeerStore};
+use k2_core::workspace::handle::{roster_display_matches, HealReport, RosterEntry, RosterPeerScope};
 
 /// Default hop budget stamped on outbound envelopes (Risk M2).
 const OUTBOUND_TTL: u8 = 8;
@@ -647,34 +648,20 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     // GAP #3 — the CROSS-DAEMON CONNECTION GATE (fail-closed). When
     // `from_workspace` is set (agent-initiated send, or owner body claim),
     // the send is allowed ONLY IF that source workspace is connected to the
-    // target `<agent>::<host>` (PR2 canonical; gate also matches legacy `@`
-    // rows). This is IN ADDITION to the trust check above — trust says
+    // target. This is IN ADDITION to the trust check above — trust says
     // "I've paired with this peer"; the connection says "THIS workspace is
-    // allowed to message THIS remote agent". Scoped principals always have
-    // from_workspace forced, so the gate always runs for agents.
+    // allowed to message THIS remote workspace". Scoped principals always
+    // have from_workspace forced, so the gate always runs for agents.
     // Owner-remote `k2 talk` (no principal, no body from_workspace) is the
     // ungated path; Trusted peer check still always runs.
+    //
+    // A7: the gate decides by the remote WORKSPACE id in `to`, not by the
+    // typed name — any name the peer lists for a connected workspace
+    // passes, and a connected name paired with another workspace's id does
+    // not (F1). See [`remote_send_gate_check`].
     if let Some(from_ws) = from_workspace.as_deref() {
-        let remote_addr = format!("{agent}::{}", peer_host(&peer));
-        if !k2_core::connections::is_remote_connection(from_ws, &remote_addr) {
-            // C2 teaching shape parity with local not_connected (mail/dns):
-            // stable code + hint so CLI exit-3 mappers recognize it.
-            return CliResponse {
-                status: "403 Forbidden",
-                content_type: "application/json",
-                body: serde_json::json!({
-                    "ok": false,
-                    "error": {
-                        "code": "not_connected",
-                        "hint": format!(
-                            "'{remote_addr}' is not a connection — add it with \
-                             `k2 connections add {remote_addr}` (or ask your human: \
-                             Settings → Connections)."
-                        ),
-                    },
-                })
-                .to_string(),
-            };
+        if let Err(resp) = remote_send_gate_check(from_ws, &peer, ws, agent) {
+            return resp;
         }
     }
 
@@ -686,31 +673,50 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
 
     // `from` carries the SENDER AGENT IDENTITY so the recipient's chat can
     // render `[from <agent>::<host>]` and reply with `k2 msg <agent>::<host>`.
-    // In the workspace==agent model the agent name is the source workspace's
-    // AUTHORITATIVE agent name — persona/display `name:` first, folder
-    // basename fallback — resolved via `resolve_agent_name`. Using the
-    // resolved name (not the bare basename) keeps the `[from]` attribution +
-    // reply target consistent with what the recipient's roster sees, so a
-    // reply to `<agent>::<host>` matches the connection row (gate is
-    // case-insensitive + separator-normalized). Owner-remote sends
-    // (`k2 talk`, no `from_workspace`) carry no source agent → attributed to
-    // `owner`. The whole signal is signed end-to-end, so this identity is
-    // AUTHENTICATED to the verified peer (no forgeable plaintext `[from]`,
-    // Risk C1).
+    //
+    // A7 S4: `from.name` is the source workspace's HANDLE — exactly what
+    // its roster lists as `agent` (`projects.handle`, else the resolved
+    // agent name, else the folder basename), so the stamp is always a
+    // name the recipient can reply to and its connection binds to.
+    // CA14 / F3: `from.workspace` is the source project id, never its
+    // filesystem path (receivers ignore it for routing; it only leaked a
+    // home-folder name). Owner-remote sends (`k2 talk`, no
+    // `from_workspace`) carry no source agent → attributed to `owner`. The
+    // whole signal is signed end-to-end, so this identity is AUTHENTICATED
+    // to the verified peer (no forgeable plaintext `[from]`, Risk C1).
     let from = match from_workspace.as_deref() {
-        Some(src) => AgentAddress::Agent {
-            workspace: WorkspaceId(src.to_string()),
-            name: k2_core::workspace::agent_identity::resolve_agent_name(src)
-                .map(|n| n.trim().to_ascii_lowercase())
-                .filter(|s| !s.is_empty())
+        Some(src) => {
+            let (project_id, handle) = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.query_row(
+                    "SELECT id, handle FROM projects WHERE path = ?1 OR id = ?1 LIMIT 1",
+                    rusqlite::params![src],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+                )
+                .map(|(id, h)| (Some(id), h))
+                .unwrap_or((None, None))
+            };
+            let name = handle
+                .map(|h| h.trim().to_ascii_lowercase())
+                .filter(|h| !h.is_empty())
+                .or_else(|| {
+                    k2_core::workspace::agent_identity::resolve_agent_name(src)
+                        .map(|n| n.trim().to_ascii_lowercase())
+                        .filter(|s| !s.is_empty())
+                })
                 .unwrap_or_else(|| {
                     Path::new(src)
                         .file_name()
                         .map(|s| s.to_string_lossy().to_ascii_lowercase())
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| src.to_ascii_lowercase())
-                }),
-        },
+                });
+            AgentAddress::Agent {
+                workspace: WorkspaceId(project_id.unwrap_or_else(|| format!("peer:{local_fp}"))),
+                name,
+            }
+        }
         None => AgentAddress::Agent {
             workspace: WorkspaceId(format!("peer:{local_fp}")),
             name: "owner".to_string(),
@@ -920,7 +926,39 @@ pub fn handle_send_user_tray(
             obj.insert("from_workspace".into(), serde_json::json!(ws));
         }
     }
-    handle_send(&body.to_string().into_bytes())
+    let resp = handle_send(&body.to_string().into_bytes());
+    // A7 S5: typed by another name of that workspace → tell the caller
+    // the reply address (the CLI prints it as a `note:` line).
+    let handle = handle_for_workspace_in_roster_body(&roster_resp.body, &wsid);
+    match handle {
+        Some(h) if resp.status.starts_with("200")
+            && !k2_core::workspace::handle::names_loosely_match(agent, &h) =>
+        {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null);
+            match v.as_object_mut() {
+                Some(obj) => {
+                    obj.insert(
+                        "addressNote".into(),
+                        serde_json::json!(format!("{agent}::{host} is {h}::{host}")),
+                    );
+                    CliResponse::ok_json(v.to_string())
+                }
+                None => resp,
+            }
+        }
+        _ => resp,
+    }
+}
+
+/// The roster `agent` (handle) listed for `workspace_id` in a peer-roster
+/// route body, if any.
+fn handle_for_workspace_in_roster_body(body: &str, workspace_id: &str) -> Option<String> {
+    let d: serde_json::Value = serde_json::from_str(body).ok()?;
+    roster_entries_from_json(&d)?
+        .into_iter()
+        .find(|e| e.workspace_id == workspace_id)
+        .map(|e| e.handle)
 }
 
 fn bare_host(h: &str) -> String {
@@ -1277,11 +1315,12 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         Ok(b) => b,
         Err(e) => return json_err("403 Forbidden", e),
     };
-    match get_peer_roster(&roster_base, &fp, ts, &sig) {
+    match get_peer_roster(&roster_base, &fp, ts, &sig, std::time::Duration::from_secs(20)) {
         Ok(body) => {
             let parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-            lazy_heal_connections_from_roster_json(&peer, &parsed);
+            // A7 S2: heal + bind this peer's rows (scoped to the peer, CA6).
+            let _ = heal_rows_from_roster(&peer, &parsed);
             CliResponse::ok_json(
                 serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
             )
@@ -1290,53 +1329,384 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
     }
 }
 
-/// D10: rewrite stored connection agents that already match a roster
-/// handle or alias. Never attach leftover `sales` to "the only agent".
-/// Only rows that point at `peer` are touched (CA6).
-fn lazy_heal_connections_from_roster_json(
-    peer: &k2_core::federation::FederationPeer,
-    parsed: &serde_json::Value,
-) {
+// ─────────────────────────────────────────────────────────────────────
+// A7 — connections bind to the remote workspace id
+// ─────────────────────────────────────────────────────────────────────
+
+/// Cap on the roster fetch the send gate does for an unbound row (CA10).
+/// An offline peer must not hold a send for the 20 s roster client.
+const GATE_ROSTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The parts of a peer roster body the heal needs. Accepts both the bare
+/// projection (`{"agents":[…]}`) and the peer-roster route's wrapper
+/// (`{"roster":{"agents":[…]}}`). `None` when there is no agents array
+/// (an error body is not a successful fetch, CA9).
+fn roster_entries_from_json(parsed: &serde_json::Value) -> Option<Vec<RosterEntry>> {
     let agents = parsed
         .get("agents")
         .or_else(|| parsed.get("roster").and_then(|r| r.get("agents")))
-        .and_then(|v| v.as_array());
-    let Some(agents) = agents else {
-        return;
+        .and_then(|v| v.as_array())?;
+    let s = |a: &serde_json::Value, k: &str| {
+        a.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
     };
-    let mut roster: Vec<(String, Vec<String>)> = Vec::new();
-    for a in agents {
-        let handle = a
-            .get("agent")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if handle.is_empty() {
-            continue;
-        }
-        let aliases = a
-            .get("aliases")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                    .collect()
+    Some(
+        agents
+            .iter()
+            .filter_map(|a| {
+                let handle = s(a, "agent");
+                let workspace_id = s(a, "workspace_id");
+                if handle.is_empty() || workspace_id.is_empty() {
+                    return None;
+                }
+                Some(RosterEntry {
+                    workspace_id,
+                    handle,
+                    aliases: a
+                        .get("aliases")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    workspace_name: s(a, "workspace_name"),
+                })
             })
-            .unwrap_or_default();
-        roster.push((handle, aliases));
-    }
-    if roster.is_empty() {
-        return;
-    }
+            .collect(),
+    )
+}
+
+/// Fetch `peer`'s roster (signed challenge), bounded by `timeout`.
+fn fetch_peer_roster(
+    peer: &k2_core::federation::FederationPeer,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
+    let key = k2_core::tunnel::tls::load_or_generate_keypair()
+        .map_err(|e| format!("load keypair: {e}"))?;
+    let ts = chrono::Utc::now().timestamp();
+    let (fp, sig) = roster::sign_roster_request(&key, ts)?;
+    let base = gated_peer_base_url(peer)?;
+    let body = get_peer_roster(&base, &fp, ts, &sig, timeout)?;
+    serde_json::from_str(&body).map_err(|e| format!("parse peer roster: {e}"))
+}
+
+/// Heal + bind `peer`'s rows from a fetched roster body (S2). `None` when
+/// the body has no agents array (nothing is touched).
+fn heal_rows_from_roster(
+    peer: &k2_core::federation::FederationPeer,
+    parsed: &serde_json::Value,
+) -> Option<HealReport> {
+    let roster = roster_entries_from_json(parsed)?;
     let host_matches = peer_row_host_matcher(peer);
-    let scope = k2_core::workspace::handle::RosterPeerScope {
+    let scope = RosterPeerScope {
         fingerprint: &peer.fingerprint,
         host_matches: &host_matches,
     };
     let db = k2_core::db::shared();
     let conn = db.lock();
-    k2_core::workspace::handle::heal_remote_connections_from_roster(&conn, &scope, &roster);
+    let report =
+        k2_core::workspace::handle::heal_remote_connections_from_roster(&conn, &scope, &roster);
+    if report != HealReport::default() {
+        k2_core::log_debug!(
+            "[federation] roster heal for {}: {report:?}",
+            peer.fingerprint
+        );
+    }
+    Some(report)
+}
+
+/// The cross-daemon send gate by identity (A7 S3 / CA3 / CA10). `Ok` to
+/// send; `Err` is the 403 `not_connected` response.
+fn remote_send_gate_check(
+    from_ws: &str,
+    peer: &k2_core::federation::FederationPeer,
+    to_workspace_id: &str,
+    typed_name: &str,
+) -> Result<(), CliResponse> {
+    use k2_core::connections::{remote_send_gate, RemoteSendGate};
+    let host_matches = peer_row_host_matcher(peer);
+    let scope = RosterPeerScope {
+        fingerprint: &peer.fingerprint,
+        host_matches: &host_matches,
+    };
+    match remote_send_gate(from_ws, &scope, to_workspace_id, typed_name) {
+        RemoteSendGate::Allowed => Ok(()),
+        RemoteSendGate::Denied => {
+            Err(not_connected_response(from_ws, peer, to_workspace_id, typed_name, None))
+        }
+        RemoteSendGate::NeedsBind { name_match } => {
+            let fetched = fetch_peer_roster(peer, GATE_ROSTER_TIMEOUT).and_then(|parsed| {
+                roster_entries_from_json(&parsed)
+                    .map(|roster| (parsed, roster))
+                    .ok_or_else(|| "peer answered without a roster".to_string())
+            });
+            match fetched {
+                Ok((parsed, roster)) => {
+                    // Bind first, then decide by id: a successful fetch is
+                    // the only thing that ends the name rule for a row.
+                    let _ = heal_rows_from_roster(peer, &parsed);
+                    match remote_send_gate(from_ws, &scope, to_workspace_id, typed_name) {
+                        RemoteSendGate::Allowed => Ok(()),
+                        _ => Err(not_connected_response(
+                            from_ws,
+                            peer,
+                            to_workspace_id,
+                            typed_name,
+                            Some(&roster),
+                        )),
+                    }
+                }
+                Err(e) => {
+                    // CA10: the peer is unreachable. Keep today's name rule so
+                    // the send queues for the outbox; the receiver's gate
+                    // (CA1) still refuses a forged workspace id on delivery.
+                    k2_core::log_debug!(
+                        "[federation] send gate: roster fetch for {} failed ({e}); name rule → {}",
+                        peer.fingerprint,
+                        if name_match { "pass" } else { "deny" }
+                    );
+                    if name_match {
+                        Ok(())
+                    } else {
+                        Err(not_connected_response(from_ws, peer, to_workspace_id, typed_name, None))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 403 `not_connected` with a hint that names the connection the caller
+/// does have on that host, when there is one (A7 S3).
+fn not_connected_response(
+    from_ws: &str,
+    peer: &k2_core::federation::FederationPeer,
+    to_workspace_id: &str,
+    typed_name: &str,
+    roster: Option<&[RosterEntry]>,
+) -> CliResponse {
+    let host = peer_host(peer);
+    let typed_addr = format!("{typed_name}::{host}");
+    let host_matches = peer_row_host_matcher(peer);
+    let scope = RosterPeerScope {
+        fingerprint: &peer.fingerprint,
+        host_matches: &host_matches,
+    };
+    let rows = k2_core::connections::remote_rows_for_peer(from_ws, &scope);
+    // The address the target workspace answers to, when the roster told us.
+    let target_handle = roster
+        .and_then(|r| r.iter().find(|e| e.workspace_id == to_workspace_id))
+        .map(|e| e.handle.clone())
+        .unwrap_or_else(|| typed_name.to_string());
+    let add_hint = format!(
+        "add it with `k2 connections add {target_handle}::{host}` (or ask your human: \
+         Settings → Connections)"
+    );
+
+    // A row saved under the typed name but bound to another workspace.
+    let bound_elsewhere = rows.iter().find(|r| {
+        r.remote_workspace_id.is_some()
+            && k2_core::workspace::handle::names_loosely_match(typed_name, &r.agent)
+    });
+    // A row saved under a display name that several peer workspaces share.
+    let ambiguous = roster.and_then(|roster| {
+        rows.iter()
+            .filter(|r| r.remote_workspace_id.is_none())
+            .find_map(|r| {
+                let hits = k2_core::workspace::handle::roster_display_matches(&r.agent, roster);
+                (hits.len() > 1).then(|| (r.agent.clone(), hits))
+            })
+    });
+    let hint = if let Some(r) = bound_elsewhere {
+        let handle = r.remote_handle.clone().unwrap_or_else(|| r.agent.clone());
+        format!(
+            "you're connected to {handle}::{host} as {agent}; that's a different workspace — \
+             {add_hint}.",
+            agent = r.agent
+        )
+    } else if let Some((agent, hits)) = ambiguous {
+        let names: Vec<String> = hits
+            .iter()
+            .map(|e| format!("{}::{host}", e.handle))
+            .collect();
+        format!(
+            "your connection {agent}::{host} matches {} workspaces on {host} ({}), so it can't \
+             tell which one you mean — add the one you want by its handle: \
+             `k2 connections add <handle>::{host}`.",
+            hits.len(),
+            names.join(", ")
+        )
+    } else {
+        format!("'{typed_addr}' is not a connection — {add_hint}.")
+    };
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "not_connected", "hint": hint },
+        })
+        .to_string(),
+    }
+}
+
+/// CA11: when a peer proves it's online, bind its unbound rows in the
+/// background (one roster fetch, at most once per 10 min per peer).
+pub(crate) fn bind_unbound_rows_soon(fp: &str) {
+    #[cfg(test)]
+    if !AUTO_BIND_IN_TESTS.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    const MIN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
+    static LAST: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
+    let last = LAST.get_or_init(Default::default);
+    if let Ok(map) = last.lock() {
+        if map.get(fp).is_some_and(|t| t.elapsed() < MIN_GAP) {
+            return;
+        }
+    }
+    let Some(peer) = trusted_peer_by_fingerprint(fp) else {
+        return;
+    };
+    if !peer_has_unbound_rows(&peer) {
+        return;
+    }
+    if let Ok(mut map) = last.lock() {
+        map.insert(fp.to_string(), std::time::Instant::now());
+    }
+    let _ = std::thread::Builder::new()
+        .name("fed-bind".into())
+        .spawn(move || match bind_unbound_rows_now(&peer) {
+            Ok(r) => k2_core::log_debug!("[federation] auto-bind {}: {r:?}", peer.fingerprint),
+            Err(e) => k2_core::log_debug!("[federation] auto-bind {}: {e}", peer.fingerprint),
+        });
+}
+
+/// Tests turn the CA11 background bind on explicitly so inbound tests
+/// never start roster fetches of their own.
+#[cfg(test)]
+pub(crate) static AUTO_BIND_IN_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn trusted_peer_by_fingerprint(fp: &str) -> Option<k2_core::federation::FederationPeer> {
+    let store = PeerStore::load().ok()?;
+    store
+        .get(fp)
+        .filter(|p| p.trust == k2_core::federation::PeerTrust::Trusted)
+        .cloned()
+}
+
+fn peer_has_unbound_rows(peer: &k2_core::federation::FederationPeer) -> bool {
+    let host_matches = peer_row_host_matcher(peer);
+    let scope = RosterPeerScope {
+        fingerprint: &peer.fingerprint,
+        host_matches: &host_matches,
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceRemoteConnection::list_all(&conn)
+        .unwrap_or_default()
+        .iter()
+        .any(|r| {
+            r.remote_workspace_id.is_none()
+                && scope.owns_row(&r.host, r.peer_fingerprint.as_deref())
+        })
+}
+
+/// One roster fetch + heal for `peer` (CA11 worker; also used at
+/// `connections add`). Errors leave every binding as it was.
+pub(crate) fn bind_unbound_rows_now(
+    peer: &k2_core::federation::FederationPeer,
+) -> Result<HealReport, String> {
+    let parsed = fetch_peer_roster(peer, GATE_ROSTER_TIMEOUT)?;
+    heal_rows_from_roster(peer, &parsed).ok_or_else(|| "peer roster has no agents list".to_string())
+}
+
+/// CA8: after `k2 connections add <agent>::<host>` stored a row, try to
+/// bind it right away. Warn, never refuse: the row stays either way.
+/// Returns fields to merge into the add response.
+pub(crate) fn bind_after_connection_add(project_path: &str, target: &str) -> serde_json::Value {
+    let Ok((agent, host)) = k2_core::connections::parse_remote_addr(target.trim()) else {
+        return serde_json::json!({});
+    };
+    let store = PeerStore::load().unwrap_or_default();
+    let Some(peer) = store
+        .list()
+        .iter()
+        .find(|p| {
+            p.trust == k2_core::federation::PeerTrust::Trusted && peer_matches_user_host(p, &host)
+        })
+        .cloned()
+    else {
+        return serde_json::json!({});
+    };
+    let host = peer_host(&peer);
+    let parsed = match fetch_peer_roster(&peer, GATE_ROSTER_TIMEOUT) {
+        Ok(p) => p,
+        Err(e) => {
+            return serde_json::json!({
+                "bound": false,
+                "bindWarning": format!(
+                    "couldn't reach {host} to check that name ({e}); the connection is saved \
+                     and binds to that workspace the next time {host} is reachable"
+                ),
+            })
+        }
+    };
+    let Some(roster) = roster_entries_from_json(&parsed) else {
+        return serde_json::json!({
+            "bound": false,
+            "bindWarning": format!("{host} answered without a roster; the connection is saved unbound"),
+        });
+    };
+    let _ = heal_rows_from_roster(&peer, &parsed);
+    let host_matches = peer_row_host_matcher(&peer);
+    let scope = RosterPeerScope {
+        fingerprint: &peer.fingerprint,
+        host_matches: &host_matches,
+    };
+    let row = k2_core::connections::remote_rows_for_peer(project_path, &scope)
+        .into_iter()
+        .find(|r| {
+            k2_core::workspace_session_handles::address_tokens_match(&agent, &r.agent)
+                || r.remote_handle.as_deref().is_some_and(|h| {
+                    k2_core::workspace_session_handles::address_tokens_match(&agent, h)
+                })
+        });
+    match row.and_then(|r| r.remote_workspace_id.clone().map(|id| (r, id))) {
+        Some((r, id)) => serde_json::json!({
+            "bound": true,
+            "remoteWorkspaceId": id,
+            "handle": r.remote_handle,
+            "displayName": r.remote_display_name,
+        }),
+        None => {
+            let display = roster_display_matches(&agent, &roster);
+            let warning = if display.len() > 1 {
+                format!(
+                    "{agent} matches {} workspaces on {host} ({}); messages can't tell which one \
+                     you mean — add it by handle instead",
+                    display.len(),
+                    display.iter().map(|e| e.handle.as_str()).collect::<Vec<_>>().join(", ")
+                )
+            } else {
+                let names: Vec<&str> = roster.iter().map(|e| e.handle.as_str()).collect();
+                if names.is_empty() {
+                    format!("{host} lists no agents right now; the connection is saved unbound")
+                } else {
+                    format!(
+                        "{agent} isn't on {host}'s roster (it lists: {}); the connection is saved, \
+                         but messages to it won't go through until the name matches",
+                        names.join(", ")
+                    )
+                }
+            };
+            serde_json::json!({ "bound": false, "bindWarning": warning })
+        }
+    }
 }
 
 /// True for a stored remote-connection `host` that routes to `peer`: the
@@ -1354,10 +1724,16 @@ fn peer_row_host_matcher(
 
 /// GET `<base>/cli/federation/roster?fp&ts&sig` and return the body. Blocking
 /// (reqwest::blocking); a non-2xx or transport error returns `Err`.
-fn get_peer_roster(base: &str, fp: &str, ts: i64, sig: &str) -> Result<String, String> {
+fn get_peer_roster(
+    base: &str,
+    fp: &str,
+    ts: i64,
+    sig: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
     let url = format!("{base}/cli/federation/roster");
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(timeout)
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
     let resp = client
@@ -2056,90 +2432,127 @@ mod tests {
 
     // ── P4 outbound: seal + durable enqueue + dial + POST over the wire ──
 
-    /// Stand up a loopback TCP stub mimicking a peer's
-    /// `/cli/federation/inbound`. It reads one HTTP request, captures the body,
-    /// answers 200, and ships the captured body back via a oneshot. Returns the
+    /// Stand up a loopback stub mimicking a peer's
+    /// `/cli/federation/inbound`. Captures the first inbound body, answers
+    /// 200, and ships the body back via a oneshot. Its roster route answers
+    /// 404 (a peer whose roster can't be read), so a send gate's roster
+    /// fetch for an unbound row falls back to the name rule. Returns the
     /// bound port + the receiver.
     async fn spawn_inbound_stub() -> (u16, tokio::sync::oneshot::Receiver<Vec<u8>>) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("bind stub");
-        let port = l.local_addr().unwrap().port();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.expect("accept");
-            let mut acc: Vec<u8> = Vec::new();
-            let mut clen: Option<usize> = None;
-            let mut body_start: Option<usize> = None;
-            let mut buf = [0u8; 4096];
-            loop {
-                let n = match s.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-                acc.extend_from_slice(&buf[..n]);
-                if body_start.is_none() {
-                    if let Some(pos) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
-                        body_start = Some(pos + 4);
-                        let head = String::from_utf8_lossy(&acc[..pos]);
-                        clen = head.lines().find_map(|l| {
-                            l.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .and_then(|v| v.trim().parse::<usize>().ok())
-                        });
-                    }
-                }
-                if let (Some(bs), Some(cl)) = (body_start, clen) {
-                    if acc.len() >= bs + cl {
-                        break;
-                    }
-                }
+        let tx = std::sync::Mutex::new(Some(tx));
+        let stub = spawn_peer_stub(None, "ok", move |b| {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(b);
             }
-            let body = body_start.map(|bs| acc[bs..].to_vec()).unwrap_or_default();
-            let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
-            let _ = s.write_all(resp.as_bytes()).await;
-            let _ = s.flush().await;
-            let _ = tx.send(body);
         });
-        (port, rx)
+        (stub.port, rx)
     }
 
     /// Variant of [`spawn_inbound_stub`] that answers 200 with a CUSTOM JSON
     /// body — used to simulate the receive-side DECLINE (200 `delivered:false`).
     async fn spawn_inbound_stub_responding(resp_body: &'static str) -> u16 {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let l = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("bind stub");
+        spawn_peer_stub(None, resp_body, |_| {}).port
+    }
+
+    /// A loopback stand-in for a peer daemon (std thread, many
+    /// connections). `GET /cli/federation/roster` answers `roster` (404
+    /// when `None`, like a peer that can't be read); `POST
+    /// /cli/federation/inbound` answers `inbound_resp` and hands each body
+    /// to `on_inbound`. Counts roster reads.
+    struct PeerStub {
+        port: u16,
+        roster_hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    fn spawn_peer_stub(
+        roster: Option<String>,
+        inbound_resp: &'static str,
+        on_inbound: impl Fn(Vec<u8>) + Send + 'static,
+    ) -> PeerStub {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind peer stub");
         let port = l.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let (mut s, _) = l.accept().await.expect("accept");
-            let mut buf = [0u8; 4096];
-            // Read until we see the header terminator; we don't need the body.
-            let mut acc: Vec<u8> = Vec::new();
-            loop {
-                match s.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        acc.extend_from_slice(&buf[..n]);
-                        if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+        let roster_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits = roster_hits.clone();
+        std::thread::spawn(move || {
+            for stream in l.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut acc: Vec<u8> = Vec::new();
+                let mut buf = [0u8; 4096];
+                let mut head_end: Option<usize> = None;
+                let mut clen = 0usize;
+                loop {
+                    let n = match s.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    acc.extend_from_slice(&buf[..n]);
+                    if head_end.is_none() {
+                        if let Some(pos) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
+                            head_end = Some(pos + 4);
+                            let head = String::from_utf8_lossy(&acc[..pos]).to_string();
+                            clen = head
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .and_then(|v| v.trim().parse::<usize>().ok())
+                                })
+                                .unwrap_or(0);
+                        }
+                    }
+                    if let Some(he) = head_end {
+                        if acc.len() >= he + clen {
                             break;
                         }
                     }
-                    Err(_) => break,
                 }
+                let Some(he) = head_end else { continue };
+                let request_line = String::from_utf8_lossy(&acc[..he])
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let (status, body) = if request_line.starts_with("GET /cli/federation/roster") {
+                    hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    match &roster {
+                        Some(r) => ("200 OK", r.clone()),
+                        None => ("404 Not Found", r#"{"error":"not found"}"#.to_string()),
+                    }
+                } else if request_line.starts_with("POST /cli/federation/inbound") {
+                    on_inbound(acc[he..].to_vec());
+                    ("200 OK", inbound_resp.to_string())
+                } else {
+                    ("404 Not Found", r#"{"error":"not found"}"#.to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
             }
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                resp_body.len(),
-                resp_body
-            );
-            let _ = s.write_all(resp.as_bytes()).await;
-            let _ = s.flush().await;
         });
-        port
+        PeerStub { port, roster_hits }
+    }
+
+    /// A roster body (the peer's `/cli/federation/roster` projection).
+    fn roster_json(entries: &[(&str, &str, &str, &[&str])]) -> String {
+        let agents: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(ws, handle, display, aliases)| {
+                serde_json::json!({
+                    "workspace_id": ws,
+                    "workspace_name": display,
+                    "agent": handle,
+                    "address": format!("{ws}::{handle}"),
+                    "aliases": aliases,
+                })
+            })
+            .collect();
+        serde_json::json!({ "agents": agents }).to_string()
     }
 
     // ── P4 send: a receive-side DECLINE (200 `delivered:false`) must surface
@@ -3165,5 +3578,484 @@ mod tests {
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["status"], "sent", "{}", resp.body);
+    }
+
+    // ── A7: a connection is to a remote WORKSPACE, not a spelling ──────
+    //
+    // Peer = a loopback PeerStub reached through K2_FEDERATION_INBOUND_BASE
+    // (roster + inbound on one port). The source workspace is an agent
+    // (scoped principal), so the connection gate always runs.
+
+    /// Run `handle_send` as the scoped agent of `ws_uuid`.
+    async fn send_as_agent(ws_uuid: &str, to: String, text: &str) -> CliResponse {
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: ws_uuid.to_string(),
+            agent_address: "src-agent".into(),
+        };
+        let send_body = body(serde_json::json!({ "to": to, "text": text }));
+        tokio::task::spawn_blocking(move || {
+            crate::caller_workspace::with_request_principal(Some(principal), || {
+                handle_send(&send_body)
+            })
+        })
+        .await
+        .unwrap()
+    }
+
+    /// The source workspace's stored remote rows.
+    fn remote_rows(src_uuid: &str) -> Vec<k2_core::db::schema::WorkspaceRemoteConnection> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, src_uuid).unwrap()
+    }
+
+    fn error_code(resp: &CliResponse) -> String {
+        let v: serde_json::Value = serde_json::from_str(&resp.body)
+            .unwrap_or_else(|e| panic!("non-JSON body ({e}): {}", resp.body));
+        v["error"]["code"].as_str().unwrap_or("").to_string()
+    }
+
+    fn send_status(resp: &CliResponse) -> String {
+        let v: serde_json::Value = serde_json::from_str(&resp.body)
+            .unwrap_or_else(|e| panic!("non-JSON body ({e}): {}", resp.body));
+        v["status"].as_str().unwrap_or("").to_string()
+    }
+
+    /// Restores K2_FEDERATION_INBOUND_BASE even when an assert panics.
+    struct InboundBase;
+    impl InboundBase {
+        fn set(base: &str) -> Self {
+            std::env::set_var("K2_FEDERATION_INBOUND_BASE", base);
+            InboundBase
+        }
+    }
+    impl Drop for InboundBase {
+        fn drop(&mut self) {
+            std::env::remove_var("K2_FEDERATION_INBOUND_BASE");
+        }
+    }
+
+    /// PRD test 1 + test 6: a row saved under the display name ("seoca")
+    /// is bound by the gate's one roster fetch (no prior peer-roster
+    /// read), and then both the handle and the display name reach that
+    /// workspace. The stored `agent` stays as typed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_handle_and_display_name_share_one_connection() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-both");
+        let w = uuid::Uuid::new_v4().to_string();
+        let x = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[
+                (&w, "quillify-website", "Seoca", &[]),
+                (&x, "other-site", "Other", &[]),
+            ])),
+            r#"{"delivered":true,"mode":"live"}"#,
+            |_| {},
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let fp = pin_trusted_peer_for_send("peer");
+        let host = format!("127.0.0.1:{}", stub.port);
+        k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+            .expect("add remote connection");
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::quillify-website"), "by handle").await;
+        assert_eq!(resp.status, "200 OK", "handle must pass the gate: {}", resp.body);
+        assert_eq!(send_status(&resp), "sent", "{}", resp.body);
+        assert_eq!(
+            stub.roster_hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an unbound row costs exactly one roster fetch"
+        );
+        let rows = remote_rows(&src_uuid);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].remote_workspace_id.as_deref(), Some(w.as_str()), "bound to W");
+        assert_eq!(rows[0].remote_handle.as_deref(), Some("quillify-website"));
+        assert_eq!(rows[0].remote_display_name.as_deref(), Some("Seoca"));
+        assert_eq!(rows[0].agent, "seoca", "a display-name bind keeps the typed name");
+        assert_eq!(rows[0].peer_fingerprint.as_deref(), Some(fp.as_str()));
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::seoca"), "by display").await;
+        assert_eq!(resp.status, "200 OK", "display name must pass too: {}", resp.body);
+        assert_eq!(send_status(&resp), "sent", "{}", resp.body);
+        assert_eq!(
+            stub.roster_hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a bound row decides by id without another fetch"
+        );
+    }
+
+    /// PRD test 2 / CA16 (F1 at the sender): the row is connected to W
+    /// as "seoca". A send naming "seoca" with another roster workspace's
+    /// id X is refused before it leaves this daemon. On v0.45.0 this send
+    /// passed the gate (string match on "seoca") — this test is red there.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_forged_workspace_id_is_not_connected_at_the_sender() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-forged");
+        let w = uuid::Uuid::new_v4().to_string();
+        let x = uuid::Uuid::new_v4().to_string();
+        let delivered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = delivered.clone();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[
+                (&w, "quillify-website", "Seoca", &[]),
+                (&x, "other-site", "Other", &[]),
+            ])),
+            r#"{"delivered":true,"mode":"live"}"#,
+            move |_| {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let fp = pin_trusted_peer_for_send("peer");
+        let host = format!("127.0.0.1:{}", stub.port);
+        k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+            .expect("add remote connection");
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{x}::seoca"), "forged id").await;
+        assert_eq!(resp.status, "403 Forbidden", "forged id must be refused: {}", resp.body);
+        assert_eq!(error_code(&resp), "not_connected", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(
+            hint.contains(&format!("quillify-website::{host}")) && hint.contains("different workspace"),
+            "hint names the connection that exists: {hint}"
+        );
+        assert_eq!(
+            delivered.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing reached the peer"
+        );
+        assert!(
+            outbox::list_for_peer(&fp).is_empty(),
+            "a refused send is never queued"
+        );
+    }
+
+    /// PRD test 3: two peer workspaces share the display name "Seoca", so
+    /// a row saved as "seoca" can't bind (D15). A send by one handle is
+    /// refused and the hint lists both.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_ambiguous_display_name_stays_unbound_and_hint_lists_both() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-ambig");
+        let w1 = uuid::Uuid::new_v4().to_string();
+        let w2 = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[
+                (&w1, "seoca-one", "Seoca", &[]),
+                (&w2, "seoca-two", "Seoca", &[]),
+            ])),
+            r#"{"delivered":true,"mode":"live"}"#,
+            |_| {},
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let fp = pin_trusted_peer_for_send("peer");
+        let host = format!("127.0.0.1:{}", stub.port);
+        k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+            .expect("add remote connection");
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w1}::seoca-one"), "which one").await;
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(error_code(&resp), "not_connected", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(
+            hint.contains(&format!("seoca-one::{host}")) && hint.contains(&format!("seoca-two::{host}")),
+            "hint lists both workspaces: {hint}"
+        );
+        let rows = remote_rows(&src_uuid);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].remote_workspace_id.is_none(), "ambiguous display never binds: {rows:?}");
+    }
+
+    /// CA10: the peer is offline (no listener) and the row is unbound —
+    /// today's name rule still applies and the send queues; a name the
+    /// row doesn't carry is refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_offline_peer_unbound_row_keeps_name_rule_and_queues() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-offline");
+        let _base = InboundBase::set("http://127.0.0.1:1");
+        let fp = pin_trusted_peer_for_send("peer");
+        k2_core::connections::connections(&src_path, "add", Some("seoca::127.0.0.1:1"), None)
+            .expect("add remote connection");
+        let w = uuid::Uuid::new_v4().to_string();
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::seoca"), "while offline").await;
+        assert_eq!(resp.status, "200 OK", "offline + unbound must not 403: {}", resp.body);
+        assert_eq!(send_status(&resp), "queued", "{}", resp.body);
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::{w}::someone-else"), "nope").await;
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(error_code(&resp), "not_connected", "{}", resp.body);
+        let rows = remote_rows(&src_uuid);
+        assert!(rows[0].remote_workspace_id.is_none(), "a failed fetch binds nothing");
+    }
+
+    /// PRD test 5 + CA14 (S4 + F3): `from.name` is the workspace handle —
+    /// the name the peer's roster lists — not the persona `name:`, and
+    /// `from.workspace` is the project id, not the sender's folder path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_from_is_stamped_with_handle_and_project_id() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let handle = format!("quillify-website-{}", uniq());
+        let (src_uuid, src_path) = register_agent_ws("Seoca", &handle, Exposure::ConnectionsOnly);
+        let persona = k2_core::workspace::agent_identity::workspace_agent_md_path(&src_path);
+        std::fs::create_dir_all(persona.parent().unwrap()).unwrap();
+        std::fs::write(&persona, "---\nname: seoca\n---\n# Seoca\n").unwrap();
+        assert_eq!(
+            k2_core::workspace::agent_identity::resolve_agent_name(&src_path).as_deref(),
+            Some("seoca"),
+            "the persona name differs from the handle"
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let tx = std::sync::Mutex::new(tx);
+        let stub = spawn_peer_stub(None, r#"{"delivered":true,"mode":"live"}"#, move |b| {
+            let _ = tx.lock().unwrap().send(b);
+        });
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let fp = pin_trusted_peer_for_send("peer");
+        k2_core::connections::connections(
+            &src_path,
+            "add",
+            Some(&format!("bob::127.0.0.1:{}", stub.port)),
+            None,
+        )
+        .expect("add remote connection");
+        let local_pem = k2_core::tunnel::tls::load_or_generate_keypair().unwrap().public_key_pem();
+
+        let resp = send_as_agent(&src_uuid, format!("{fp}::ws-b::bob"), "stamp check").await;
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let received = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("peer stub received the envelope");
+        let signal = federation::open(&received, &local_pem).expect("envelope opens");
+        match signal.from {
+            AgentAddress::Agent { name, workspace } => {
+                assert_eq!(name, handle, "from.name must be the handle (the roster agent)");
+                assert_eq!(workspace.0, src_uuid, "from.workspace must be the project id, not a path");
+            }
+            other => panic!("from must be an agent address, got {other:?}"),
+        }
+    }
+
+    /// CA9: the peer re-registered the workspace (new id, same handle).
+    /// A successful roster read re-binds; a failed one leaves the binding.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_stale_binding_rebinds_on_roster_read_and_survives_a_failed_one() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-stale");
+        let w_old = uuid::Uuid::new_v4().to_string();
+        let w_new = uuid::Uuid::new_v4().to_string();
+        let first = spawn_peer_stub(
+            Some(roster_json(&[(&w_old, "quillify-website", "Seoca", &[])])),
+            "{}",
+            |_| {},
+        );
+        // Every stub of this test answers under one host: the base env
+        // var decides where the dial goes, the row's host stays the same.
+        let host = "quillify.example.test";
+        let fp = pin_trusted_peer_for_send(host);
+        k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+            .expect("add remote connection");
+
+        {
+            let _base = InboundBase::set(&format!("http://127.0.0.1:{}", first.port));
+            let r = tokio::task::spawn_blocking({
+                let fp = fp.clone();
+                move || handle_peer_roster(&fp)
+            })
+            .await
+            .unwrap();
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+        }
+        assert_eq!(remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(), Some(w_old.as_str()));
+
+        let second = spawn_peer_stub(
+            Some(roster_json(&[(&w_new, "quillify-website", "Seoca", &[])])),
+            "{}",
+            |_| {},
+        );
+        {
+            let _base = InboundBase::set(&format!("http://127.0.0.1:{}", second.port));
+            let r = tokio::task::spawn_blocking({
+                let fp = fp.clone();
+                move || handle_peer_roster(&fp)
+            })
+            .await
+            .unwrap();
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+        }
+        assert_eq!(
+            remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(),
+            Some(w_new.as_str()),
+            "the bound id left the roster → re-bound to the new id"
+        );
+
+        {
+            let _base = InboundBase::set("http://127.0.0.1:1");
+            let r = tokio::task::spawn_blocking({
+                let fp = fp.clone();
+                move || handle_peer_roster(&fp)
+            })
+            .await
+            .unwrap();
+            assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
+        }
+        assert_eq!(
+            remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(),
+            Some(w_new.as_str()),
+            "a failed fetch never touches a binding"
+        );
+    }
+
+    /// CA11: a verified inbound from the peer kicks one background roster
+    /// fetch, which binds the unbound row without anyone sending.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_peer_seen_online_binds_unbound_rows() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-online");
+        let w = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[(&w, "quillify-website", "Seoca", &[])])),
+            "{}",
+            |_| {},
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let key = pin_trusted_peer("peer");
+        let host = format!("127.0.0.1:{}", stub.port);
+        k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+            .expect("add remote connection");
+
+        AUTO_BIND_IN_TESTS.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Addressed to a workspace this server doesn't have: the receiver
+        // answers 404, but the envelope verified, so the peer is online.
+        let bytes = seal_msg_named(&uuid::Uuid::new_v4().to_string(), "nobody", &key, "hello");
+        let resp = tokio::task::spawn_blocking(move || handle_inbound(&bytes))
+            .await
+            .unwrap();
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while remote_rows(&src_uuid)[0].remote_workspace_id.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "row never bound after the peer was seen online"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        AUTO_BIND_IN_TESTS.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(), Some(w.as_str()));
+        assert_eq!(stub.roster_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// CA8: `connections add` binds when the peer answers, warns with the
+    /// roster's names when the name isn't there, and says so when the peer
+    /// is offline. The row is stored in every case.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_connections_add_binds_or_warns() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-add");
+        let w = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[(&w, "quillify-website", "Seoca", &["quillify"])])),
+            "{}",
+            |_| {},
+        );
+        let host = format!("127.0.0.1:{}", stub.port);
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        // Pinned under the host the user types, so `agent::host` finds it.
+        let _fp = pin_trusted_peer_for_send(&host);
+
+        for (target, want_bound) in [
+            (format!("seoca::{host}"), true),
+            (format!("nobody::{host}"), false),
+        ] {
+            k2_core::connections::connections(&src_path, "add", Some(&target), None)
+                .expect("add remote connection");
+            let out = tokio::task::spawn_blocking({
+                let (p, t) = (src_path.clone(), target.clone());
+                move || bind_after_connection_add(&p, &t)
+            })
+            .await
+            .unwrap();
+            assert_eq!(out["bound"], want_bound, "{target}: {out}");
+            if want_bound {
+                assert_eq!(out["remoteWorkspaceId"], w.as_str(), "{out}");
+                assert_eq!(out["handle"], "quillify-website", "{out}");
+            } else {
+                let warn = out["bindWarning"].as_str().unwrap();
+                assert!(warn.contains("quillify-website"), "lists the roster's names: {warn}");
+            }
+        }
+        assert_eq!(remote_rows(&src_uuid).len(), 2, "both rows stored");
+
+        drop(_base);
+        let _offline = InboundBase::set("http://127.0.0.1:1");
+        k2_core::connections::connections(&src_path, "add", Some(&format!("later::{host}")), None)
+            .expect("add while the peer is offline");
+        let out = tokio::task::spawn_blocking({
+            let (p, t) = (src_path.clone(), format!("later::{host}"));
+            move || bind_after_connection_add(&p, &t)
+        })
+        .await
+        .unwrap();
+        assert_eq!(out["bound"], false, "{out}");
+        assert!(
+            out["bindWarning"].as_str().unwrap().contains("couldn't reach"),
+            "{out}"
+        );
+    }
+
+    /// PRD test 7 + CA15: after a display-name bind, the row is removed by
+    /// the name it was saved under, or by the bound workspace's handle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a7_remove_by_saved_name_or_bound_handle() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (src_path, src_uuid) = register_src_workspace("a7-remove");
+        let w = uuid::Uuid::new_v4().to_string();
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[(&w, "quillify-website", "Seoca", &[])])),
+            "{}",
+            |_| {},
+        );
+        let host = format!("127.0.0.1:{}", stub.port);
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let fp = pin_trusted_peer_for_send("peer");
+
+        for remove_as in ["seoca", "quillify-website"] {
+            k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+                .expect("add remote connection");
+            let r = tokio::task::spawn_blocking({
+                let fp = fp.clone();
+                move || handle_peer_roster(&fp)
+            })
+            .await
+            .unwrap();
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(
+                remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(),
+                Some(w.as_str())
+            );
+            k2_core::connections::connections(
+                &src_path,
+                "remove",
+                Some(&format!("{remove_as}::{host}")),
+                None,
+            )
+            .unwrap_or_else(|e| panic!("remove as {remove_as}: {e}"));
+            assert!(remote_rows(&src_uuid).is_empty(), "removed as {remove_as}");
+        }
     }
 }

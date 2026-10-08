@@ -538,6 +538,26 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     actor_is_privileged,
                 ) {
                     Ok(body) => {
+                        // A7 / CA8: a remote add binds to the peer workspace
+                        // when the peer answers (warn, never refuse).
+                        let remote_target = target
+                            .as_deref()
+                            .filter(|t| k2_core::connections::is_remote_target(t));
+                        if action == "add" && k2_core::federation::enabled() {
+                            if let Some(t) = remote_target {
+                                let mut v: serde_json::Value =
+                                    serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                                let extra =
+                                    crate::federation_routes::bind_after_connection_add(&p, t);
+                                if let (Some(obj), Some(ex)) = (v.as_object_mut(), extra.as_object())
+                                {
+                                    for (k, val) in ex {
+                                        obj.insert(k.clone(), val.clone());
+                                    }
+                                    return Some(CliResponse::ok_json(v.to_string()));
+                                }
+                            }
+                        }
                         if action == "list" && list_wants_users(params) {
                             match attach_people_users(body) {
                                 Ok(with_users) => CliResponse::ok_json(with_users),

@@ -199,6 +199,9 @@ fn reset_backoff(fp: &str) {
 /// queued for it. Cheap no-op when its queue is empty.
 pub fn note_peer_reachable(fp: &str) {
     reset_backoff(fp);
+    // A7 / CA11: the peer is online — bind any of our connections to it
+    // that aren't bound to a workspace id yet (background, rate-limited).
+    crate::federation_routes::bind_unbound_rows_soon(fp);
     if outbox::list_for_peer(fp).is_empty() {
         return;
     }

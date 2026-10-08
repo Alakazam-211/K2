@@ -1135,6 +1135,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0139_mail_server_field_fixes",
             include_str!("../../drizzle_sql/0139_mail_server_field_fixes.sql"),
         ),
+        // 0141 — A7: bind a remote connection to the peer's workspace id
+        // (+ the handle / display name its roster showed). Columns + index
+        // only; rows bind on the next roster fetch. 0135–0140 are claimed
+        // by other 0.45.1 work; the integrator orders the list.
+        (
+            "0141_remote_connection_workspace_id",
+            include_str!("../../drizzle_sql/0141_remote_connection_workspace_id.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1795,7 +1803,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0139_mail_server_field_fixes",
+            last_name, "0141_remote_connection_workspace_id",
             "unexpected last migration name: {last_name}"
         );
     }

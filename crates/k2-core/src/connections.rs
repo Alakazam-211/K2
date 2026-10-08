@@ -585,6 +585,77 @@ pub fn is_remote_connection(source_project_path_or_id: &str, remote_addr: &str) 
     WorkspaceRemoteConnection::exists(&conn, &source_id, &key).unwrap_or(false)
 }
 
+/// What the cross-daemon send gate knows from stored rows alone (A7 S3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteSendGate {
+    /// A row on this peer is bound to the target workspace id.
+    Allowed,
+    /// No row is bound to the target, but this peer has unbound rows for
+    /// the source. Decide after one roster fetch binds them; if the fetch
+    /// fails, fall back to today's name rule (`name_match`, CA10).
+    NeedsBind { name_match: bool },
+    /// Not connected (every row on this peer is bound elsewhere, or there
+    /// are none).
+    Denied,
+}
+
+/// The rows of `source` that point at the scoped peer.
+pub fn remote_rows_for_peer(
+    source_project_path_or_id: &str,
+    scope: &crate::workspace::handle::RosterPeerScope<'_>,
+) -> Vec<WorkspaceRemoteConnection> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Some(source_id) = resolve_source_project_id(&conn, source_project_path_or_id) else {
+        return Vec::new();
+    };
+    WorkspaceRemoteConnection::list_for_source(&conn, &source_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| scope.owns_row(&r.host, r.peer_fingerprint.as_deref()))
+        .collect()
+}
+
+/// THE CROSS-DAEMON SEND GATE, by identity (A7 S3 / CA3). A connection is
+/// to a remote WORKSPACE: the send passes when a row of `source` on this
+/// peer is bound to `to_workspace_id`, whatever name the caller typed. A
+/// bound row whose id differs never opens it (F1: a forged id with a
+/// connected name). Rows not yet bound defer to the caller's roster fetch
+/// ([`RemoteSendGate::NeedsBind`]). Fails CLOSED on an unknown source.
+pub fn remote_send_gate(
+    source_project_path_or_id: &str,
+    scope: &crate::workspace::handle::RosterPeerScope<'_>,
+    to_workspace_id: &str,
+    typed_name: &str,
+) -> RemoteSendGate {
+    let to = to_workspace_id.trim();
+    let rows = remote_rows_for_peer(source_project_path_or_id, scope);
+    if !to.is_empty()
+        && rows
+            .iter()
+            .any(|r| r.remote_workspace_id.as_deref().map(str::trim) == Some(to))
+    {
+        return RemoteSendGate::Allowed;
+    }
+    let unbound: Vec<&WorkspaceRemoteConnection> = rows
+        .iter()
+        .filter(|r| {
+            r.remote_workspace_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_none()
+        })
+        .collect();
+    if unbound.is_empty() {
+        return RemoteSendGate::Denied;
+    }
+    let name_match = unbound.iter().any(|r| {
+        crate::workspace_session_handles::address_tokens_match(typed_name, &r.agent)
+    });
+    RemoteSendGate::NeedsBind { name_match }
+}
+
 /// C2 (0.40.45) — THE LOCAL SAME-DAEMON PEER GATE.
 ///
 /// Returns `true` when `a` and `b` are the same project id, OR when a
@@ -774,6 +845,11 @@ pub fn connections_for_actor(
                     "peerFingerprint": peer_fp,
                     "unbound": unbound,
                     "relationTypes": [],
+                    // A7 (additive): the peer workspace this row is bound
+                    // to, and the names that peer's roster showed for it.
+                    "remoteWorkspaceId": r.remote_workspace_id,
+                    "handle": r.remote_handle,
+                    "displayName": r.remote_display_name,
                 }));
             }
             Ok(serde_json::json!({

@@ -721,80 +721,229 @@ impl RosterPeerScope<'_> {
     }
 }
 
-/// Lazy-heal stored remote rows whose agent already matches a roster
-/// handle or alias (D10). Never attaches leftover `sales` to "the only
-/// agent on that host" (D20). Only rows this peer owns are touched
-/// ([`RosterPeerScope`], CA6). A rename that would clash with another row
-/// of the same workspace keeps both rows and logs; it never deletes.
+/// One entry of a peer's signed roster, as the heal needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RosterEntry {
+    /// The peer's `projects.id` for this workspace.
+    pub workspace_id: String,
+    /// Roster `agent` — the workspace handle (D8).
+    pub handle: String,
+    /// Previous handles / pre-slug names (D8).
+    pub aliases: Vec<String>,
+    /// Roster `workspace_name` — the display name (not unique, D15).
+    pub workspace_name: String,
+}
+
+/// What one roster heal changed (logs and tests).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HealReport {
+    /// Rows newly bound to a workspace id.
+    pub bound: usize,
+    /// Rows whose bound id left the roster and were cleared (CA9).
+    pub cleared: usize,
+    /// Rows whose `agent` was rewritten from an alias to the handle (D10).
+    pub renamed: usize,
+}
+
+/// How a stored row's name matched a roster entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RosterMatch {
+    Handle,
+    Alias,
+    Display,
+}
+
+/// The roster entry a stored connection name refers to, if exactly one.
+/// Order: handle, then alias, then display name; a display name binds only
+/// when one workspace on that peer has it (D15). Different tokens never
+/// match (D20).
+fn match_roster_entry<'a>(
+    agent: &str,
+    roster: &'a [RosterEntry],
+) -> Option<(&'a RosterEntry, RosterMatch)> {
+    fn unique<'a>(hits: Vec<&'a RosterEntry>) -> Option<&'a RosterEntry> {
+        let first = *hits.first()?;
+        hits.iter()
+            .all(|e| e.workspace_id == first.workspace_id)
+            .then_some(first)
+    }
+    let by_handle: Vec<&RosterEntry> = roster
+        .iter()
+        .filter(|e| !e.handle.trim().is_empty() && names_loosely_match(agent, &e.handle))
+        .collect();
+    if let Some(e) = unique(by_handle) {
+        return Some((e, RosterMatch::Handle));
+    }
+    let by_alias: Vec<&RosterEntry> = roster
+        .iter()
+        .filter(|e| e.aliases.iter().any(|a| names_loosely_match(agent, a)))
+        .collect();
+    if let Some(e) = unique(by_alias) {
+        return Some((e, RosterMatch::Alias));
+    }
+    let by_display: Vec<&RosterEntry> = roster
+        .iter()
+        .filter(|e| {
+            !e.workspace_name.trim().is_empty() && names_loosely_match(agent, &e.workspace_name)
+        })
+        .collect();
+    unique(by_display).map(|e| (e, RosterMatch::Display))
+}
+
+/// Roster entries whose display name a stored connection name matches.
+/// More than one workspace → the row can't bind (D15); the send hint
+/// lists them.
+pub fn roster_display_matches<'a>(agent: &str, roster: &'a [RosterEntry]) -> Vec<&'a RosterEntry> {
+    let mut out: Vec<&RosterEntry> = Vec::new();
+    for e in roster {
+        if !e.workspace_name.trim().is_empty()
+            && names_loosely_match(agent, &e.workspace_name)
+            && !out.iter().any(|o| o.workspace_id == e.workspace_id)
+        {
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// Heal and bind this peer's stored remote rows from its roster (A7 S2).
+///
+/// Only rows this peer owns are touched ([`RosterPeerScope`], CA6). For
+/// each one:
+///
+/// - **Bound** and the id is still in the roster → refresh the cached
+///   handle / display name; keep the binding.
+/// - **Bound** but the id left the roster (the peer re-registered the
+///   workspace, e.g. after `k2 migrate`) → clear it and re-match (CA9).
+///   The caller only passes a roster from a SUCCESSFUL fetch, so a failed
+///   fetch never clears anything.
+/// - **Unbound** → match the stored name against handle, alias, then
+///   display name ([`match_roster_entry`]) and bind to that workspace id.
+///
+/// On a handle or alias match whose spelling differs from the handle, the
+/// row's `agent` is rewritten to the handle (D10). A display-name match
+/// binds without rewriting, so `k2 connections remove <name>::host` keeps
+/// working. A rename that clashes with another row of the same workspace
+/// keeps both rows and logs; nothing is ever deleted. An empty
+/// `peer_fingerprint` is filled with the peer's.
 pub fn heal_remote_connections_from_roster(
     conn: &Connection,
     scope: &RosterPeerScope<'_>,
-    roster: &[(String, Vec<String>)],
-) {
-    type Row = (String, String, String, String, Option<String>);
-    let rows: Vec<Row> = {
-        let mut stmt = match conn.prepare(
-            "SELECT id, remote_addr, host, agent, peer_fingerprint \
-             FROM workspace_remote_connections",
-        ) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let mapped = match stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?,
-            ))
-        }) {
-            Ok(rows) => rows.flatten().collect(),
-            Err(_) => return,
-        };
-        mapped
+    roster: &[RosterEntry],
+) -> HealReport {
+    use crate::db::schema::WorkspaceRemoteConnection;
+    let mut report = HealReport::default();
+    let rows = match WorkspaceRemoteConnection::list_all(conn) {
+        Ok(r) => r,
+        Err(e) => {
+            crate::log_debug!("[handle] roster heal: list rows failed: {e}");
+            return report;
+        }
     };
-    for (id, remote_addr, host, agent, peer_fp) in rows {
-        if !scope.owns_row(&host, peer_fp.as_deref()) {
+    let fp = scope.fingerprint.trim();
+    for row in rows {
+        if !scope.owns_row(&row.host, row.peer_fingerprint.as_deref()) {
             continue;
         }
-        let mut matched: Option<&str> = None;
-        for (handle, aliases) in roster {
-            if roster_entry_matches(&agent, handle, aliases, "") {
-                matched = Some(handle.as_str());
-                break;
-            }
+        if !fp.is_empty()
+            && row
+                .peer_fingerprint
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_none()
+        {
+            let _ = WorkspaceRemoteConnection::set_peer_fingerprint(conn, &row.id, Some(fp));
         }
-        let Some(canonical) = matched else {
-            continue;
+
+        let bound_id = row
+            .remote_workspace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let (entry, how) = match bound_id {
+            Some(ref id) => match roster.iter().find(|e| &e.workspace_id == id) {
+                Some(e) => {
+                    // Still listed: the bound id wins over any name match.
+                    let how = if names_loosely_match(&row.agent, &e.handle) {
+                        RosterMatch::Handle
+                    } else if e.aliases.iter().any(|a| names_loosely_match(&row.agent, a)) {
+                        RosterMatch::Alias
+                    } else {
+                        RosterMatch::Display
+                    };
+                    (e, how)
+                }
+                None => {
+                    // CA9: the peer no longer lists the bound workspace.
+                    let _ = WorkspaceRemoteConnection::set_binding(conn, &row.id, None, None, None);
+                    report.cleared += 1;
+                    crate::log_debug!(
+                        "[handle] roster heal {}: bound workspace {id} left {}'s roster; re-matching {}",
+                        row.id,
+                        row.host,
+                        row.agent
+                    );
+                    match match_roster_entry(&row.agent, roster) {
+                        Some(m) => m,
+                        None => continue,
+                    }
+                }
+            },
+            None => match match_roster_entry(&row.agent, roster) {
+                Some(m) => m,
+                None => continue,
+            },
         };
-        if agent == canonical {
+
+        let newly_bound = row.remote_workspace_id.as_deref() != Some(entry.workspace_id.as_str());
+        let display = entry.workspace_name.trim();
+        if let Err(e) = WorkspaceRemoteConnection::set_binding(
+            conn,
+            &row.id,
+            Some(&entry.workspace_id),
+            Some(entry.handle.trim()),
+            (!display.is_empty()).then_some(display),
+        ) {
+            crate::log_debug!("[handle] roster heal {}: bind failed: {e}", row.id);
             continue;
         }
-        let new_addr = if remote_addr.contains("::") {
-            format!("{canonical}::{host}")
-        } else if remote_addr.contains('@') {
-            format!("{canonical}@{host}")
+        if newly_bound {
+            report.bound += 1;
+        }
+
+        // D10: an alias (or a differently spelled handle) heals to the
+        // handle. A display-name match keeps the name the owner typed.
+        let canonical = entry.handle.trim().to_ascii_lowercase();
+        if how == RosterMatch::Display || canonical.is_empty() || row.agent == canonical {
+            continue;
+        }
+        let new_addr = if row.remote_addr.contains("::") || !row.remote_addr.contains('@') {
+            format!("{canonical}::{}", row.host)
         } else {
-            format!("{canonical}::{host}")
+            format!("{canonical}@{}", row.host)
         };
         match conn.execute(
             "UPDATE workspace_remote_connections SET agent = ?1, remote_addr = ?2 WHERE id = ?3",
-            params![canonical, new_addr, id],
+            params![canonical, new_addr, row.id],
         ) {
-            Ok(_) => {}
+            Ok(_) => report.renamed += 1,
             Err(e) if e.to_string().contains("UNIQUE") => {
-                // The workspace already has a row under the canonical name.
-                // Keep both (the older canonical row and this one); never
-                // delete a connection because a peer's roster said so.
+                // The workspace already has a row under the handle. Keep
+                // both (both are bound to the same id); never delete a
+                // connection because a peer's roster said so.
                 crate::log_debug!(
-                    "[handle] lazy heal {id}: {agent}::{host} → {canonical} clashes with an \
-                     existing row; kept both"
+                    "[handle] roster heal {}: {}::{} → {canonical} clashes with an existing row; kept both",
+                    row.id,
+                    row.agent,
+                    row.host
                 );
             }
-            Err(e) => crate::log_debug!("[handle] lazy heal {id} failed: {e}"),
+            Err(e) => crate::log_debug!("[handle] roster heal {} rename failed: {e}", row.id),
         }
     }
+    report
 }
 
 /// Slugs this workspace should accept as `/v1/w/<slug>` / wiki grants.
@@ -1270,7 +1419,7 @@ mod tests {
             heal_remote_connections_from_roster(
                 &conn,
                 &RosterPeerScope { fingerprint: "fp-peer", host_matches: &host_ok },
-                &[("sales-team".into(), vec!["sales team".into()])],
+                &[entry("ws-sales-team", "sales-team", &["sales team"], "")],
             );
             let rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
                 .unwrap();
@@ -1315,7 +1464,7 @@ mod tests {
             heal_remote_connections_from_roster(
                 &conn,
                 &RosterPeerScope { fingerprint: "fp-a", host_matches: &host_ok },
-                &[("ceo".into(), vec!["sales-old".into()])],
+                &[entry("ws-ceo", "ceo", &["sales-old"], "")],
             );
             let mut rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
                 .unwrap();
@@ -1357,14 +1506,143 @@ mod tests {
             heal_remote_connections_from_roster(
                 &conn,
                 &RosterPeerScope { fingerprint: "fp-a", host_matches: &host_ok },
-                &[("sales".into(), vec!["sales-old".into()])],
+                &[entry("ws-sales", "sales", &["sales-old"], "")],
             );
             let rows = crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, &id)
                 .unwrap();
             assert_eq!(rows.len(), 2, "clash must never delete a row: {rows:?}");
             let alias = rows.iter().find(|r| r.id == "clash-alias").expect("alias row kept");
             assert_eq!(alias.agent, "sales-old", "clashing row is left as it was");
+            assert_eq!(
+                alias.remote_workspace_id.as_deref(),
+                Some("ws-sales"),
+                "a clashing row still binds to the workspace"
+            );
         }
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    fn entry(ws: &str, handle: &str, aliases: &[&str], display: &str) -> RosterEntry {
+        RosterEntry {
+            workspace_id: ws.to_string(),
+            handle: handle.to_string(),
+            aliases: aliases.iter().map(|s| s.to_string()).collect(),
+            workspace_name: display.to_string(),
+        }
+    }
+
+    /// One remote row on `<label>.k2.dev` for a fresh source workspace
+    /// (a host per test: the heal touches every row of the peer's host,
+    /// and the test DB is shared by parallel tests).
+    fn one_row(label: &str, agent: &str) -> (String, String, String) {
+        let host = format!("{label}.k2.dev");
+        let (id, path) = unique_dir(label);
+        insert_project(&id, &format!("A7 {label}"), &path);
+        let row_id = format!("row-{}", uuid::Uuid::new_v4());
+        let dbh = db::shared();
+        let conn = dbh.lock();
+        crate::db::schema::WorkspaceRemoteConnection::create(
+            &conn,
+            &row_id,
+            &id,
+            &format!("{agent}::{host}"),
+            &host,
+            agent,
+            None,
+        )
+        .unwrap();
+        (id, path, row_id)
+    }
+
+    fn heal_a(label: &str, roster: &[RosterEntry]) -> HealReport {
+        let host = format!("{label}.k2.dev");
+        let host_ok = |h: &str| h == host;
+        let dbh = db::shared();
+        let conn = dbh.lock();
+        heal_remote_connections_from_roster(
+            &conn,
+            &RosterPeerScope { fingerprint: "fp-a", host_matches: &host_ok },
+            roster,
+        )
+    }
+
+    fn row(source: &str, row_id: &str) -> crate::db::schema::WorkspaceRemoteConnection {
+        let dbh = db::shared();
+        let conn = dbh.lock();
+        crate::db::schema::WorkspaceRemoteConnection::list_for_source(&conn, source)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == row_id)
+            .expect("row")
+    }
+
+    /// A7 S2 (PRD test 1, core half): a row saved under the display name
+    /// binds to that workspace without rewriting the saved name, and the
+    /// peer's fingerprint is filled in.
+    #[test]
+    fn roster_heal_binds_display_name_row_keeping_agent() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("bind-display", "seoca");
+        let report = heal_a("bind-display", &[
+            entry("ws-w", "quillify-website", &[], "Seoca"),
+            entry("ws-x", "other-site", &[], "Other"),
+        ]);
+        assert!(report.bound >= 1, "{report:?}");
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-w"));
+        assert_eq!(r.remote_handle.as_deref(), Some("quillify-website"));
+        assert_eq!(r.remote_display_name.as_deref(), Some("Seoca"));
+        assert_eq!(r.agent, "seoca", "a display-name bind never rewrites the saved name");
+        assert_eq!(r.peer_fingerprint.as_deref(), Some("fp-a"));
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// D15: a display name two workspaces share never binds.
+    #[test]
+    fn roster_heal_leaves_ambiguous_display_name_unbound() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("ambig-display", "seoca");
+        heal_a("ambig-display", &[
+            entry("ws-1", "seoca-one", &[], "Seoca"),
+            entry("ws-2", "seoca-two", &[], "Seoca"),
+        ]);
+        assert!(row(&src, &rid).remote_workspace_id.is_none());
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// CA7: a row already spelled as the handle still binds; a handle
+    /// match outranks another workspace's display name.
+    #[test]
+    fn roster_heal_binds_canonical_row_and_prefers_handle() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("canonical", "seoca");
+        heal_a("canonical", &[
+            entry("ws-display", "quillify-website", &[], "Seoca"),
+            entry("ws-handle", "seoca", &[], "Somebody"),
+        ]);
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-handle"));
+        assert_eq!(r.agent, "seoca");
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// CA9: the bound id left the roster (the peer re-registered the
+    /// workspace) → cleared and re-matched by the saved name.
+    #[test]
+    fn roster_heal_rebinds_when_bound_id_leaves_the_roster() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("rebind", "seoca");
+        heal_a("rebind", &[entry("ws-old", "quillify-website", &[], "Seoca")]);
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-old"));
+        let report = heal_a("rebind", &[entry("ws-new", "quillify-website", &[], "Seoca")]);
+        assert!(report.cleared >= 1, "{report:?}");
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-new"));
+        // Listed again under a new display name: the binding (by id) holds
+        // and the cached names follow.
+        heal_a("rebind", &[entry("ws-new", "quillify-website", &[], "Seoca Two")]);
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-new"));
+        assert_eq!(r.remote_display_name.as_deref(), Some("Seoca Two"));
         std::fs::remove_dir_all(&path).ok();
     }
 

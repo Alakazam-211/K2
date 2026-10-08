@@ -2927,6 +2927,17 @@ pub struct WorkspaceRemoteConnection {
     /// Paired peer's fingerprint when known; `None` until resolved.
     pub peer_fingerprint: Option<String>,
     pub created_at: i64,
+    /// A7 (0141): the peer's workspace UUID this row is bound to, from
+    /// the peer's signed roster. `None` until a roster fetch binds it.
+    /// When set, this — not the typed name — is what the send gate checks.
+    #[serde(default)]
+    pub remote_workspace_id: Option<String>,
+    /// The bound workspace's handle at bind time (display / remove).
+    #[serde(default)]
+    pub remote_handle: Option<String>,
+    /// The bound workspace's display name at bind time (display only).
+    #[serde(default)]
+    pub remote_display_name: Option<String>,
 }
 
 /// Loose split of a remote user address into `(agent, host)` for gate match.
@@ -2982,22 +2993,59 @@ impl WorkspaceRemoteConnection {
         conn: &Connection,
         source_project_id: &str,
     ) -> Result<Vec<WorkspaceRemoteConnection>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, source_project_id, remote_addr, host, agent, peer_fingerprint, created_at \
-             FROM workspace_remote_connections WHERE source_project_id = ?1 ORDER BY created_at",
-        )?;
-        let rows = stmt.query_map(params![source_project_id], |row| {
-            Ok(WorkspaceRemoteConnection {
-                id: row.get(0)?,
-                source_project_id: row.get(1)?,
-                remote_addr: row.get(2)?,
-                host: row.get(3)?,
-                agent: row.get(4)?,
-                peer_fingerprint: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM workspace_remote_connections WHERE source_project_id = ?1 \
+             ORDER BY created_at, rowid",
+            Self::COLUMNS
+        ))?;
+        let rows = stmt.query_map(params![source_project_id], Self::from_row)?;
         rows.collect()
+    }
+
+    /// Every remote connection on this daemon (all source workspaces),
+    /// oldest first. Used by the per-peer roster heal.
+    pub fn list_all(conn: &Connection) -> Result<Vec<WorkspaceRemoteConnection>> {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM workspace_remote_connections ORDER BY created_at, rowid",
+            Self::COLUMNS
+        ))?;
+        let rows = stmt.query_map([], Self::from_row)?;
+        rows.collect()
+    }
+
+    const COLUMNS: &'static str = "id, source_project_id, remote_addr, host, agent, \
+        peer_fingerprint, created_at, remote_workspace_id, remote_handle, remote_display_name";
+
+    fn from_row(row: &rusqlite::Row<'_>) -> Result<WorkspaceRemoteConnection> {
+        Ok(WorkspaceRemoteConnection {
+            id: row.get(0)?,
+            source_project_id: row.get(1)?,
+            remote_addr: row.get(2)?,
+            host: row.get(3)?,
+            agent: row.get(4)?,
+            peer_fingerprint: row.get(5)?,
+            created_at: row.get(6)?,
+            remote_workspace_id: row.get(7)?,
+            remote_handle: row.get(8)?,
+            remote_display_name: row.get(9)?,
+        })
+    }
+
+    /// A7: bind (or, with `None`, clear) a row to the peer workspace id and
+    /// the handle / display name the peer's roster showed for it.
+    pub fn set_binding(
+        conn: &Connection,
+        id: &str,
+        remote_workspace_id: Option<&str>,
+        remote_handle: Option<&str>,
+        remote_display_name: Option<&str>,
+    ) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_remote_connections \
+             SET remote_workspace_id = ?1, remote_handle = ?2, remote_display_name = ?3 \
+             WHERE id = ?4",
+            params![remote_workspace_id, remote_handle, remote_display_name, id],
+        )
     }
 
     /// Whether `(source_project_id, remote_addr)` is already connected.
@@ -3048,20 +3096,34 @@ impl WorkspaceRemoteConnection {
     ) -> Result<usize> {
         if let Some((agent, host)) = split_remote_user_addr(remote_addr) {
             let mut stmt = conn.prepare(
-                "SELECT id, agent FROM workspace_remote_connections \
+                "SELECT id, agent, remote_handle FROM workspace_remote_connections \
                  WHERE source_project_id = ?1 AND LOWER(host) = LOWER(?2)",
             )?;
             let rows = stmt.query_map(params![source_project_id, host], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             })?;
             let mut ids = Vec::new();
+            let mut by_handle = Vec::new();
             for row in rows {
-                let (id, stored) = row?;
+                let (id, stored, handle) = row?;
                 if crate::workspace_session_handles::address_tokens_match(&agent, &stored) {
                     ids.push(id);
+                } else if handle.as_deref().is_some_and(|h| {
+                    crate::workspace_session_handles::address_tokens_match(&agent, h)
+                }) {
+                    by_handle.push(id);
                 }
             }
             drop(stmt);
+            // A7 / CA15: no row saved under that name, but a row bound to
+            // the workspace whose handle it is → remove that one.
+            if ids.is_empty() {
+                ids = by_handle;
+            }
             let mut n = 0usize;
             for id in ids {
                 n += conn.execute(

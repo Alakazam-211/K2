@@ -65,7 +65,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode"
+TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api"
 # FC34's names in Cortana's order (FC65), menu-bottom-right before the
 # later column-corner.
 WANT_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"

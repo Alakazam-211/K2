@@ -1855,8 +1855,8 @@ fn fc_t5_skill_v9_documents_the_chrome_tables() {
 // ── prd-zen-freeform-chrome S4: the CLI guide ─────────────────────────
 
 /// The guide's topics, in the index's order (FC33).
-const GUIDE_TOPICS: [&str; 11] =
-    ["gardens", "files", "widgets", "bands", "required", "menus", "themes", "sync", "examples", "undo", "safe-mode"];
+const GUIDE_TOPICS: [&str; 12] =
+    ["gardens", "files", "widgets", "bands", "required", "menus", "themes", "sync", "examples", "undo", "safe-mode", "api"];
 /// FC34's examples in Cortana's order (FC65).
 const GUIDE_EXAMPLES: [&str; 7] =
     ["rail-top", "quiet-top", "bottom-bar", "menu-both", "texting-chrome", "menu-bottom-right", "column-corner"];

@@ -23,9 +23,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { ZenGardenTemplate, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
-import type { ZenScope, ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
+import type { ZenGardenNewRequest, ZenScope, ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
 import { loadZenTemplates, useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
-import { zenScopeKind, zenScopeRows } from '@/lib/zen/zen-custom-scope'
+import { zenGrantEntries, zenScopeKind, zenScopeRows } from '@/lib/zen/zen-custom-scope'
 import { ZenCapList, ZenScopeCount, ZenScopePicker, ZenSendingChoice, zenDefaultScope } from './ZenGrantDialog'
 
 /** The two starts as K2 has always offered them (the fallback list). */
@@ -127,7 +127,7 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
     if (!problem) setStep('start')
   }
 
-  const create = (start: ZenGardenTemplate, ask: boolean, grant?: { scope: ZenScope; sending: boolean }): void => {
+  const create = (start: ZenGardenTemplate, ask: boolean, grant?: ZenGardenNewRequest['grant']): void => {
     if (busy) return
     setBusy(true)
     setError(null)
@@ -281,7 +281,15 @@ export function ZenNewGarden({ bridge, onDone }: { bridge: ZenWidgetBridge; onDo
             type="button"
             data-zen-new-garden-create=""
             disabled={blocked}
-            onClick={() => scope && create(entry.short, false, { scope, sending: posts ? sending : false })}
+            onClick={() =>
+              scope &&
+              create(entry.short, false, {
+                scope,
+                sending: posts ? sending : false,
+                // UWA8, B2: the agents the scope covers now, as a sealed record.
+                entries: zenGrantEntries(zenScopeRows(scope).rows),
+              })
+            }
             className="cursor-pointer disabled:cursor-default"
             style={{ ...choiceStyle(true), padding: '4px 12px', fontWeight: 600, opacity: blocked ? 0.5 : 1 }}
           >

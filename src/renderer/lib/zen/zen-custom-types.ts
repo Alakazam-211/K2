@@ -112,6 +112,8 @@ export interface ZenWidgetBundleResponse {
   nonce: string
   html: string
   bytes: number
+  /** The widget's state (B2): `ok`, `errors` (last good served) or `broken`. */
+  state?: 'ok' | 'errors' | 'broken'
 }
 
 /**
@@ -166,6 +168,8 @@ export interface ZenWidgetGrantRow {
   sending: boolean
   paused: ZenGrantPause | null
   grantedAt: string
+  /** The Garden's name (B2; absent from an older daemon). */
+  gardenName?: string
 }
 
 /** One row of GET /cli/zen/templates (UWB23; Rust `TemplateInfo`). */
@@ -211,7 +215,8 @@ export interface ZenGardenNewRequest {
   template?: string
   seedHome?: string
   at?: number
-  grant?: { scope: ZenScope; sending?: boolean }
+  /** B2: `entries` (the bound rows at Allow, UWA8) may be empty. */
+  grant?: { scope: ZenScope; sending?: boolean; entries?: ZenGrantEntry[] }
 }
 
 // ── The frame protocol (UW15, §7) ───────────────────────────────────────

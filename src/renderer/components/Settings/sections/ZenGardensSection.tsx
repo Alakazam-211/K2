@@ -43,7 +43,7 @@ import {
   type ZenTemplateInfo,
   type ZenWidgetGrantRow,
 } from '@/lib/zen/zen-custom-types'
-import { zenScopeKind, zenScopeRows, zenScopeWhere } from '@/lib/zen/zen-custom-scope'
+import { zenGrantEntries, zenScopeKind, zenScopeRows, zenScopeWhere } from '@/lib/zen/zen-custom-scope'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import {
   ZenCapList,
@@ -498,7 +498,7 @@ function CatalogGrant({
   onConfirmed(on: boolean): void
   busy: boolean
   onBack(): void
-  onCreate(grant: { scope: ZenScope; sending: boolean }): void
+  onCreate(grant: NonNullable<ZenGardenNewRequest['grant']>): void
 }): React.JSX.Element {
   const caps = entry.needsGrant?.caps ?? []
   const posts = caps.includes('thread:post')
@@ -530,7 +530,9 @@ function CatalogGrant({
           type="button"
           disabled={blocked}
           data-zen-settings-catalog-create=""
-          onClick={() => scope && onCreate({ scope, sending: posts ? sending : false })}
+          onClick={() =>
+            scope && onCreate({ scope, sending: posts ? sending : false, entries: zenGrantEntries(zenScopeRows(scope).rows) })
+          }
           className={BTN}
         >
           Create
@@ -738,7 +740,8 @@ function WidgetPermissions({
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const gardenName = (id: string): string => gardens.find((g) => g.id === id)?.name ?? 'a deleted Garden'
+  const gardenName = (g: ZenWidgetGrantRow): string =>
+    gardens.find((x) => x.id === g.garden)?.name ?? g.gardenName ?? 'a deleted Garden'
   return (
     <section data-settings-id="zen-gardens.widgets" className="mt-8" data-zen-settings-grants={grants.length}>
       <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
@@ -762,7 +765,7 @@ function WidgetPermissions({
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs text-[var(--color-text-primary)] truncate">
-                      {g.widget} <span className="text-[var(--color-text-muted)]">in {gardenName(g.garden)}</span>
+                      {g.widget} <span className="text-[var(--color-text-muted)]">in {gardenName(g)}</span>
                     </div>
                     <div className="text-[10px] text-[var(--color-text-muted)]">
                       {zenScopeWhere(g.scope)} · {g.caps.map((c) => K2_CAPS[c].label).join(', ') || 'no permissions'}

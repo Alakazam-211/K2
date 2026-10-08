@@ -667,7 +667,7 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(row(rowNames()[3]).textContent).toContain('Diary')
     expect(zenPosts()).toEqual([
-      ['zen/garden/new', { name: 'Notebook', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true } }],
+      ['zen/garden/new', { name: 'Notebook', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } }],
     ])
   })
 
@@ -705,7 +705,7 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     fireEvent.click(detail.querySelector('[data-zen-settings-catalog-create]') as HTMLElement)
     await waitFor(() => expect(rowNames()).toHaveLength(5))
     expect(zenPosts()).toEqual([
-      ['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true } }],
+      ['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: { scope: { home: 'home-work' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } }],
     ])
     // A catalog Garden with no widget: Add → Create, no grant.
     fireEvent.click(document.querySelector('[data-zen-catalog-card="stickers"]') as HTMLElement)

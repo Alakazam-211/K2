@@ -333,6 +333,18 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
     </div>
   )
 
+  const brokenCard = (): React.JSX.Element => {
+    const first = widget.errors[0]?.message ?? problem?.message ?? 'it has no working version yet'
+    return wrap(
+      <Card testId="broken">
+        <span>This widget has errors: {first.replace(/[.\s]+$/, '')}. Ask your agent to fix it.</span>
+      </Card>,
+    )
+  }
+  // A placement with nothing to run (its folder deleted, or never bundled
+  // clean): asking to allow it would go nowhere, so K2 says why first.
+  if (widget.state === 'broken' && !widget.hash) return brokenCard()
+
   // 1. Review.
   if (zenGrantNeedsReview(grant, widget.requested)) {
     if (notNow) {
@@ -395,14 +407,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
       </Card>,
     )
   }
-  if (widget.state === 'broken' || problem?.code === 'widget_broken') {
-    const first = widget.errors[0]?.message ?? problem?.message ?? 'it has no working version yet'
-    return wrap(
-      <Card testId="broken">
-        <span>This widget has errors: {first.replace(/[.\s]+$/, '')}. Ask your agent to fix it.</span>
-      </Card>,
-    )
-  }
+  if (widget.state === 'broken' || problem?.code === 'widget_broken') return brokenCard()
   if (problem) {
     return wrap(
       <Card testId={problem.code === 'older_daemon' ? 'older-daemon' : 'load-failed'}>

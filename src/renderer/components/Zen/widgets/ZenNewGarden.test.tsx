@@ -112,7 +112,7 @@ describe('New Garden: the Garden catalog (R5)', () => {
     expect(creates).toEqual([])
     await act(async () => void fireEvent.click(q('[data-zen-new-garden-create]')))
     expect(creates).toEqual([
-      { name: 'Notebook', template: 'diary', opts: { ask: false, grant: { scope: { home: 'home-work' }, sending: true } } },
+      { name: 'Notebook', template: 'diary', opts: { ask: false, grant: { scope: { home: 'home-work' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } } },
     ])
     expect(done).toHaveBeenCalledTimes(1)
   })

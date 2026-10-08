@@ -103,6 +103,7 @@ export function parseZenWidgetBundle(raw: unknown): ZenWidgetBundleResponse {
     nonce: raw.nonce,
     html: raw.html,
     bytes: typeof raw.bytes === 'number' ? raw.bytes : raw.html.length,
+    ...(raw.state === 'ok' || raw.state === 'errors' || raw.state === 'broken' ? { state: raw.state } : {}),
   }
 }
 
@@ -166,6 +167,7 @@ export function parseZenWidgetGrants(raw: unknown): ZenWidgetGrantRow[] {
       sending: g.sending === true,
       paused: isObj(g.paused) && g.paused.reason === 'runaway' ? { at: typeof g.paused.at === 'string' ? g.paused.at : '', reason: 'runaway' } : null,
       grantedAt: typeof g.grantedAt === 'string' ? g.grantedAt : '',
+      ...(typeof g.gardenName === 'string' && g.gardenName ? { gardenName: g.gardenName } : {}),
     })
   }
   return out

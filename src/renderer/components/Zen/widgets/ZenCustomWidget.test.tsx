@@ -366,6 +366,18 @@ describe('paused and stopped', () => {
     expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()
   })
 
+  it('B2: a deleted widget folder (broken, no bundle) shows the broken card, not a review card', () => {
+    mount(
+      payload({
+        hash: '',
+        state: 'broken',
+        errors: [{ file: 'widgets/agent-arcade', line: 0, col: 0, message: 'no widget folder agent-arcade' }],
+      }),
+    )
+    expect(document.querySelector('[data-zen-custom-card="review"]')).toBeNull()
+    expect(q('[data-zen-custom-card="broken"]').textContent).toContain('no widget folder agent-arcade')
+  })
+
   it('a broken widget names its first error', () => {
     mount(
       payload({

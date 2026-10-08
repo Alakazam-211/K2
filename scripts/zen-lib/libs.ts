@@ -113,6 +113,15 @@ const LEAFLET_GLUE = (ctx: GlueContext): string =>
   )}})})();
 `
 
+// d3-dsv's csvParse/tsvParse turn the header row into code with
+// `new Function`, which the widget CSP refuses (no 'unsafe-eval'). Same
+// results without eval: rows from parseRows, objects built in a loop, the
+// row function called as (d, i, columns), null/undefined rows dropped, and
+// `columns` on the array.
+const D3_GLUE = `/* K2 glue: d3.csvParse / d3.tsvParse without new Function (sealed widget CSP). */
+(function(){var d3=window.d3;if(!d3||!d3.csvParseRows)return;function mk(parseRows){return function(text,f){var rows=parseRows(text),columns=rows.length?rows.shift():[],out=[],n=0;for(var i=0;i<rows.length;i++){var r=rows[i],o={};for(var j=0;j<columns.length;j++)o[columns[j]]=r[j]||"";if(f){o=f(o,n++,columns);if(o==null)continue}else{n++}out.push(o)}out.columns=columns;return out}}d3.csvParse=mk(d3.csvParseRows);d3.tsvParse=mk(d3.tsvParseRows)})();
+`
+
 /** The libraries, in manifest order. */
 export const LIBS: LibSpec[] = [
   // ── 3D and physics ──────────────────────────────────────────────────
@@ -215,8 +224,12 @@ export const LIBS: LibSpec[] = [
     copyright: 'Copyright 2010-2023 Mike Bostock',
     source: 'bundled',
     licenses: ['d3/LICENSE'],
-    files: [{ name: 'd3.min.js', copy: 'd3/dist/d3.min.js' }],
-    notes: 'd3.json/d3.csv fetch over the network and are blocked; parse inline data with d3.csvParse.',
+    files: [
+      { name: 'd3.min.js', copy: 'd3/dist/d3.min.js' },
+      { name: 'd3-k2.js', glue: D3_GLUE },
+    ],
+    notes:
+      'd3.json/d3.csv fetch over the network and are blocked; parse inline text instead. d3.csvParse and d3.tsvParse are K2 versions with the same results (upstream builds a function from text, which the widget security policy blocks); d3.dsvFormat(…).parse still needs eval, so use its parseRows.',
   },
   {
     id: 'chart.js',
@@ -228,6 +241,7 @@ export const LIBS: LibSpec[] = [
     source: 'bundled',
     licenses: ['chart.js/LICENSE.md'],
     files: [{ name: 'chart.umd.min.js', copy: 'chart.js/dist/chart.umd.min.js' }],
+    notes: 'If a responsive chart draws at 0×0 (seen in Chrome, not WebKit), set responsive: false and give the canvas a width and height.',
   },
   {
     id: 'echarts',
@@ -313,7 +327,7 @@ export const LIBS: LibSpec[] = [
     licenses: ['tone/LICENSE.md', 'tone/build/Tone.js.LICENSE.txt'],
     files: [{ name: 'Tone.js', copy: 'tone/build/Tone.js' }],
     notes:
-      'Limited: AudioWorklet modules can\'t load in a sealed widget (they need blob: scripts), so worklet-based nodes (Tone.Worklet and nodes built on it) fail. Oscillators, synths, effects and the Transport work.',
+      'Limited: AudioWorklet modules can\'t load in a sealed widget (audioWorklet.addModule(blob:) is refused: worklets need blob: scripts, which the widget policy does not allow), so worklet-based nodes fail. Oscillators, synths, effects and the Transport work. Sound starts only after a click (browser autoplay rule).',
   },
   // ── Maps ────────────────────────────────────────────────────────────
   {

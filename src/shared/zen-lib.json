@@ -151,9 +151,14 @@
           "name": "d3.min.js",
           "bytes": 279706,
           "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
+        },
+        {
+          "name": "d3-k2.js",
+          "bytes": 536,
+          "sha256": "9c7375902513e1b1bd1ca358114c0f0827d4ca7e64205c5c63f5ccf85c11338a"
         }
       ],
-      "notes": "d3.json/d3.csv fetch over the network and are blocked; parse inline data with d3.csvParse."
+      "notes": "d3.json/d3.csv fetch over the network and are blocked; parse inline text instead. d3.csvParse and d3.tsvParse are K2 versions with the same results (upstream builds a function from text, which the widget security policy blocks); d3.dsvFormat(…).parse still needs eval, so use its parseRows."
     },
     {
       "id": "chart.js",
@@ -170,7 +175,8 @@
           "bytes": 208480,
           "sha256": "84d0e233daba702b8f77d669d8c137cad36d441a10f200b6f2d3ab553bdfcf6b"
         }
-      ]
+      ],
+      "notes": "If a responsive chart draws at 0×0 (seen in Chrome, not WebKit), set responsive: false and give the canvas a width and height."
     },
     {
       "id": "echarts",
@@ -294,7 +300,7 @@
           "sha256": "6b1d53712892f2ef423d7b2dd2bbb122c4520205cfa7404a97b0d354bd8a883c"
         }
       ],
-      "notes": "Limited: AudioWorklet modules can't load in a sealed widget (they need blob: scripts), so worklet-based nodes (Tone.Worklet and nodes built on it) fail. Oscillators, synths, effects and the Transport work."
+      "notes": "Limited: AudioWorklet modules can't load in a sealed widget (audioWorklet.addModule(blob:) is refused: worklets need blob: scripts, which the widget policy does not allow), so worklet-based nodes fail. Oscillators, synths, effects and the Transport work. Sound starts only after a click (browser autoplay rule)."
     },
     {
       "id": "leaflet",

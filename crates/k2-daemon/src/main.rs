@@ -73,6 +73,9 @@ mod fs_routes;
 mod fs_live;
 mod charter_compose_watch;
 mod notify_bound;
+// Hooked from zen_routes::handle (Zen v2 B2's one line); until then the bin
+// has no caller.
+#[allow(dead_code)]
 mod zen_lib_routes;
 mod zen_routes;
 mod zen_watch;

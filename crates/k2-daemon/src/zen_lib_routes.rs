@@ -129,9 +129,6 @@ impl LibErr {
     fn bad(m: impl Into<String>) -> Self {
         Self::new("400 Bad Request", "bad_request", m)
     }
-    pub fn code(&self) -> &'static str {
-        self.code
-    }
     fn into_response(self) -> CliResponse {
         CliResponse {
             status: self.status,

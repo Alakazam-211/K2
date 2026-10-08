@@ -25,6 +25,7 @@
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
+import { setZenCatalogBadge } from './zen-templates'
 
 function localScope(): ServerScope {
   return scopeForHost('local')
@@ -384,15 +385,25 @@ export function zenNewCatalogShorts(news: ZenNews | null): string[] {
   return news ? news.items.flatMap((i) => (i.kind === 'catalog' ? [i.short] : [])) : []
 }
 
-/** Hook: the unseen catalog shorts, loading news once if nothing has. */
-export function useZenNewCatalogShorts(): string[] {
-  const news = useZenSyncStore((s) => s.news)
-  return zenNewCatalogShorts(news)
+/** The catalog's "New" badges follow the loaded news: B4's catalog draws
+ *  whatever `setZenCatalogBadge` sets, and this module is the one that
+ *  knows what's new. Badges this module set and the news no longer lists
+ *  (seen, or a newer load) are cleared; other badges are left alone. */
+let badged: string[] = []
+export function syncZenNewsBadges(news: ZenNews | null): void {
+  const next = zenNewCatalogShorts(news)
+  for (const short of badged) if (!next.includes(short)) setZenCatalogBadge(short, null)
+  for (const short of next) setZenCatalogBadge(short, 'New')
+  badged = next
 }
+useZenSyncStore.subscribe((s, prev) => {
+  if (s.news !== prev.news) syncZenNewsBadges(s.news)
+})
 
 /** Tests only. */
 export function __resetZenSyncForTests(): void {
   syncSeq = 0
   useZenSyncStore.setState({ supported: null, list: null, news: null, failure: null })
+  badged = []
   useZenSyncPreviewStore.setState({ preview: null })
 }

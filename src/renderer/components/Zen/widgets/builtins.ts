@@ -17,6 +17,8 @@ import { ZenGardenEmptyWidget } from './ZenGardenEmptyWidget'
 import { ZenNavRailWidget } from './ZenNavRailWidget'
 import { ZenProjectsViewWidget } from './ZenProjectsViewWidget'
 import { ZenTicketsViewWidget } from './ZenTicketsViewWidget'
+import { ZenCustomWidget } from './ZenCustomWidget'
+import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
 import { ZEN_PROJECTS_VIEW_KIND, ZEN_TICKETS_VIEW_KIND } from '@/lib/zen/zen-rail-views'
 import { installZenAppNavVerbs } from '@/lib/zen/zen-app-nav'
 
@@ -32,6 +34,8 @@ export function installZenBuiltins(): () => void {
     // The rail's K2 views (Garden 1's Projects and Tickets, in Zen).
     registerZenWidget(ZEN_PROJECTS_VIEW_KIND, ZenProjectsViewWidget),
     registerZenWidget(ZEN_TICKETS_VIEW_KIND, ZenTicketsViewWidget),
+    // prd-zen-user-widgets-v2: agent-written widgets, sealed (UW13, UW38).
+    registerZenWidget(ZEN_CUSTOM_KIND, ZenCustomWidget),
     installZenAppNavVerbs(),
   ]
   return () => {

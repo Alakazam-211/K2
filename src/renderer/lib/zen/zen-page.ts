@@ -19,6 +19,9 @@
 // mode never reads the user's files, so it renders `BUILTIN_TEXTING_PAGE`,
 // with the template's chrome (FC22).
 
+import type { ZenCustomWidgetPayload } from './zen-custom-types'
+import { parseZenCustomWidget } from './zen-custom-payload'
+
 /** The two controls every Garden page must draw and K2 checks (G24,
  *  Rosson 2026-10-04): the Zen toggle (the way out) and the Garden
  *  switcher. The drag region is still drawn and bound (it moves the
@@ -144,9 +147,16 @@ export interface ZenWidgetDecl {
   align?: ZenAlign
   props: Record<string, unknown>
   caps: string[]
-  /** `builtin` in v1 (granted by K2). */
+  /** `builtin` in v1 (granted by K2); `user` for a custom widget. */
   source: string
+  /** `kind: "custom"` only (prd-zen-user-widgets-v2 UW38): the manifest,
+   *  bundle and grant as the daemon resolved them. `caps` above is then
+   *  the effective caps and `source` is always `user` (UW26). */
+  custom?: ZenCustomWidgetPayload
 }
+
+/** The kind of a custom (agent-written) widget placement (UW6). */
+export const ZEN_CUSTOM_KIND = 'custom'
 
 /** One theme the daemon offers (Omarchy additions 1–3): K2's built-in
  *  read-only themes and the user's own under `~/.k2/zen/themes/`. */
@@ -386,14 +396,23 @@ function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): 
     const band = typeof w.slot === 'string' && ZEN_BAND_SLOTS.includes(w.slot) ? w.slot : null
     const e = band ? undefined : edgeOf(w.edge)
     const a = align(w.align)
+    const column = band ? 0 : col !== null && col >= 0 && col < columns ? Math.floor(col) : Math.min(idx, columns - 1)
+    const props = isObj(w.props) ? w.props : {}
+    if (kind === ZEN_CUSTOM_KIND) {
+      // UW6, UWA14: column-only content; the renderer forces `source: user`
+      // and the effective caps whatever the body says (UW26).
+      const custom = parseZenCustomWidget(w, { id, column, props })
+      out.push({ id, kind, column, props, caps: [...custom.caps], source: 'user', custom })
+      return
+    }
     out.push({
       id,
       kind,
       ...(band ? { slot: band } : {}),
       ...(e ? { edge: e } : {}),
       ...(a ? { align: a } : {}),
-      column: band ? 0 : col !== null && col >= 0 && col < columns ? Math.floor(col) : Math.min(idx, columns - 1),
-      props: isObj(w.props) ? w.props : {},
+      column,
+      props,
       caps: Array.isArray(w.caps) ? w.caps.filter((c): c is string => typeof c === 'string') : [],
       source: typeof w.source === 'string' ? w.source : 'builtin',
     })

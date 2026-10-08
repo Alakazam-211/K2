@@ -27,6 +27,7 @@ import {
   reloadZenWidget,
   runZenWidgetsNow,
   useZenCustomRunStore,
+  useZenWidgetsGate,
   zenPlacementKey,
   zenWidgetStopText,
   ZEN_WIDGETS_PAUSED_TEXT,
@@ -296,7 +297,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   const key = zenPlacementKey(gid, decl.id)
   const stop = useZenCustomRunStore((s) => s.stopped[key] ?? null)
   const generation = useZenCustomRunStore((s) => s.generation[key] ?? 0)
-  const pausedStart = useZenCustomRunStore((s) => s.pausedStart)
+  const gate = useZenWidgetsGate(gid)
   const [notNow, setNotNow] = useState(false)
   const [dialog, setDialog] = useState<'grant' | 'about' | null>(null)
   const [problem, setProblem] = useState<ZenCustomLoadProblem | null>(null)
@@ -348,7 +349,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   }
 
   // 2. Paused.
-  if (pausedStart) {
+  if (gate === 'paused') {
     return wrap(
       <Card testId="paused">
         <span>{ZEN_WIDGETS_PAUSED_TEXT}</span>
@@ -414,6 +415,9 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
       </Card>,
     )
   }
+
+  // The window's boot decision (UW32) isn't in yet: nothing mounts.
+  if (gate === 'waiting') return wrap(<div data-zen-custom-waiting="" className="flex-1" />)
 
   // 4. The frame and K2's corner menu.
   const missing = grant?.state === 'partial' ? widget.requested.filter((c) => !grant.caps.includes(c)) : []

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ZenFrameHello } from './zen-custom-types'
 import type { ZenCustomLayer } from './zen-custom-bridge'
 import {
-  setZenFrameChordHandler,
   startZenFrameHost,
   ZEN_FRAME_PING_MS,
   ZEN_FRAME_READY_MS,
@@ -50,6 +49,7 @@ interface Setup {
   handled: unknown[]
   disposed: { layer: boolean }
   focused: { v: boolean }
+  chords: Array<[unknown, boolean]>
   frameEnd: object
   dispose(): void
 }
@@ -61,6 +61,7 @@ function setup(over: Partial<ZenFrameHostOptions> = {}, label = 'arcade'): Setup
   const handled: unknown[] = []
   const disposed = { layer: false }
   const focused = { v: true }
+  const chords: Array<[unknown, boolean]> = []
   const h = startZenFrameHost(
     { postMessage: (msg, target, transfer) => posted.push({ msg, target, transfer }) },
     {
@@ -69,6 +70,7 @@ function setup(over: Partial<ZenFrameHostOptions> = {}, label = 'arcade'): Setup
       channel: () => ch,
       stop: (r) => stops.push(r),
       focused: () => focused.v,
+      onChord: (c, f) => void chords.push([c, f]),
       now: () => Date.now(),
       makeLayer: (push): ZenCustomLayer => ({
         handle: async (m) => {
@@ -83,7 +85,7 @@ function setup(over: Partial<ZenFrameHostOptions> = {}, label = 'arcade'): Setup
       ...over,
     },
   )
-  return { host, posted, stops, handled, disposed, focused, frameEnd, dispose: h.dispose }
+  return { host, posted, stops, handled, disposed, focused, chords, frameEnd, dispose: h.dispose }
 }
 
 beforeEach(() => {
@@ -164,20 +166,15 @@ describe('TUW3.6: ready, ping, unload', () => {
 })
 
 describe('UW33: forwarded chords', () => {
-  it('act only while the frame has focus, at most once every 500 ms, and only the fixed set', () => {
-    const seen: string[] = []
-    const off = setZenFrameChordHandler((c) => seen.push(c))
+  it('go to the page’s gate with this frame’s focus, never to the layer', () => {
     const s = setup()
     s.host.deliver({ chord: 'garden-2' })
-    s.host.deliver({ chord: 'garden-3' })
-    vi.advanceTimersByTime(500)
-    s.host.deliver({ chord: 'zen-exit' })
-    vi.advanceTimersByTime(500)
-    s.host.deliver({ chord: 'rm -rf' })
     s.focused.v = false
-    vi.advanceTimersByTime(500)
-    s.host.deliver({ chord: 'garden-1' })
-    expect(seen).toEqual(['garden-2', 'zen-exit'])
-    off()
+    s.host.deliver({ chord: 'zen-exit' })
+    expect(s.chords).toEqual([
+      ['garden-2', true],
+      ['zen-exit', false],
+    ])
+    expect(s.handled).toEqual([])
   })
 })

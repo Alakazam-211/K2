@@ -44,7 +44,8 @@ import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenCustomWidgetPayload, ZenGrantView } from '@/lib/zen/zen-custom-types'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
-import { __resetZenCustomRunForTests, setZenWidgetsPausedStart, useZenCustomRunStore } from '@/lib/zen/zen-custom-run'
+import { __resetZenCustomRunForTests, useZenCustomRunStore } from '@/lib/zen/zen-custom-run'
+import { resetZenPausedStartForTests, takeZenPausedAtBoot, zenWidgetsRunningKey } from '@/lib/zen/zen-widgets-running'
 import { ZenCustomWidget } from './ZenCustomWidget'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -136,6 +137,9 @@ beforeEach(() => {
   h.gets = []
   h.bundleError = null
   __resetZenCustomRunForTests()
+  // This window's boot decision (UW32, B3): nothing was running.
+  resetZenPausedStartForTests()
+  takeZenPausedAtBoot(null, { label: 'main', storage: null })
 })
 
 afterEach(() => {
@@ -350,14 +354,15 @@ describe('paused and stopped', () => {
     expect(h.posts).toEqual([{ hostKey: 'local', route: 'zen/widget/resume', body: { garden: 'g-test0001', placement: 'arcade' } }])
   })
 
-  it('UW32: a paused start mounts no frame until Run them', () => {
-    const run = vi.fn()
-    setZenWidgetsPausedStart(true, run)
+  it('TUW4.4: a paused start (this Garden froze while starting) mounts no frame until Run them', () => {
+    resetZenPausedStartForTests()
+    const kv = new Map<string, string>([[zenWidgetsRunningKey('main'), JSON.stringify({ garden: 'g-test0001', at: 1, beats: 0 })]])
+    const storage = { getItem: (k: string) => kv.get(k) ?? null, setItem: (k: string, v: string) => void kv.set(k, v), removeItem: (k: string) => void kv.delete(k) }
+    expect(takeZenPausedAtBoot(null, { label: 'main', storage })).toEqual({ garden: 'g-test0001', reason: 'starting' })
     mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
     expect(q('[data-zen-custom-card="paused"]').textContent).toContain('They’re paused.')
     expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
     act(() => void fireEvent.click(q('[data-zen-custom-action="run-them"]')))
-    expect(run).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()
   })
 

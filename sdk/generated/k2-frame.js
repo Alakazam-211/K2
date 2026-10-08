@@ -227,13 +227,19 @@
     })
 
     var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
+    // Mirrors `zenForwardedChordForKey` (lib/zen/zen-shortcut.ts): trusted,
+    // non-repeating keys only; K2's host gates each one again (focus, 500 ms).
     /** @param {KeyboardEvent} e */
     function chordOf(e) {
+      if (e.isTrusted === false || e.repeat) return null
+      var altGr = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')
+      if (!MAC && e.code === 'KeyZ' && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey && !altGr) return 'zen-exit'
       var digit = /^Digit([1-9])$/.exec(e.code)
-      if (digit && e.altKey && (e.metaKey || (!MAC && e.ctrlKey))) return 'garden-' + digit[1]
-      var themeMods = MAC ? e.ctrlKey && e.metaKey && !e.altKey : e.ctrlKey && e.altKey && !e.metaKey
-      if (e.code === 'Period' && themeMods) return e.shiftKey ? 'theme-prev' : 'theme-next'
-      if (!MAC && e.code === 'KeyZ' && e.ctrlKey && e.altKey && !e.metaKey && !(e.getModifierState && e.getModifierState('AltGraph'))) return 'zen-exit'
+      if (digit && e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey) return 'garden-' + digit[1]
+      if (e.code === 'Period') {
+        var mods = MAC ? e.ctrlKey && e.metaKey && !e.altKey : e.ctrlKey && e.altKey && !e.metaKey && !altGr
+        if (mods) return e.shiftKey ? 'theme-prev' : 'theme-next'
+      }
       return null
     }
     g.addEventListener(

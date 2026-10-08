@@ -25,6 +25,27 @@ import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
 import { stopZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
 import { ensureZenConversation, zenAgentRows, zenCustomViewFor } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
+import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
+import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
+import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
+import { useZenConfigStore } from '@/lib/zen/zen-api'
+import { exitZen } from '@/lib/zen/zen-view'
+
+/** UW33: one gate for every widget frame in this window (they share the
+ *  500 ms budget), acting as K2's own keys would. */
+const zenFrameChordGate = createZenChordGate()
+
+const ZEN_FRAME_CHORD_ACTIONS: ZenChordActions = {
+  exitZen: () => exitZen(),
+  switchGarden: (n) => switchZenGardenByIndex(n - 1),
+  cycleTheme: (dir) => {
+    const gardenId = currentZenGardenId()
+    if (!gardenId) return
+    const scope = useZenConfigStore.getState().page?.themeScope ?? 'global'
+    // The daemon's zen_changed re-reads the page with the new theme.
+    void cycleZenTheme(dir, scope, gardenId).catch((err: unknown) => console.warn('[zen] theme from a widget key failed:', err))
+  },
+}
 
 /** Why the bundle couldn't be shown (the parent draws K2's card). */
 export interface ZenCustomLoadProblem {
@@ -141,7 +162,8 @@ export function ZenCustomFrame({
       hello,
       label: `${w.widget} (${gardenId}/${w.id})`,
       stop: (reason) => stopZenWidget(key, reason),
-      focused: () => document.activeElement === frameRef.current,
+      focused: () => zenFrameHasFocus(frameRef.current),
+      onChord: (chord, frameFocused) => zenFrameChordGate.run(chord, frameFocused, Date.now(), ZEN_FRAME_CHORD_ACTIONS),
       makeLayer: (push) =>
         createZenCustomLayer({
           widget: () => widgetRef.current,

@@ -241,11 +241,15 @@ describe('TUWA6: the frame runtime', () => {
     r.fire('unhandledrejection', { reason: { message: 'nope' } })
     let prevented = 0
     const key = (o: Record<string, unknown>): void =>
-      r.fire('keydown', { code: '', ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, getModifierState: () => false, preventDefault: () => void prevented++, ...o })
+      r.fire('keydown', { code: '', isTrusted: true, repeat: false, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, getModifierState: () => false, preventDefault: () => void prevented++, ...o })
     key({ code: 'KeyZ', ctrlKey: true, altKey: true })
-    key({ code: 'Digit3', ctrlKey: true, altKey: true })
+    key({ code: 'Digit3', metaKey: true, altKey: true })
     key({ code: 'Period', ctrlKey: true, altKey: true, shiftKey: true })
     key({ code: 'KeyA', ctrlKey: true })
+    // Mirrors zenForwardedChordForKey: untrusted, repeats and Ctrl+Alt+digit are not chords.
+    key({ code: 'KeyZ', ctrlKey: true, altKey: true, isTrusted: false })
+    key({ code: 'KeyZ', ctrlKey: true, altKey: true, repeat: true })
+    key({ code: 'Digit4', ctrlKey: true, altKey: true })
     await tick()
     expect(heard).toEqual([
       { error: { message: 'boom', stack: 'at x' } },

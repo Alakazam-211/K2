@@ -9,15 +9,25 @@
 //   - `rate`: ten `rate_limited` answers in a minute (UW29);
 //   - `runaway`: the runaway guard tripped (UWB9); the daemon also holds a
 //     pause on the grant, which only the owner's Resume clears.
-// `pausedStart` is the paused start after a crash with widgets running
-// (UW32): the per-window marker is B3's (`k2.zen.widgetsRunning.<label>`);
-// while it is set no custom frame mounts, and every custom widget shows
-// "They're paused. [Run them]".
+// The paused start after a freeze (UW32) is `zen-widgets-running.ts`
+// (B3): a page with custom widgets waits for the window's boot decision
+// (`zenPausedStartReady`), marks itself running while they're mounted, and
+// while `zenPausedStart()` names its Garden no custom frame mounts: every
+// custom widget shows "They're paused. [Run them]".
 //
 // This is per-window view state (which frames this window runs), never a
 // canonical record: the grant and its pause live in the daemon.
 
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { create } from 'zustand'
+import {
+  clearZenWidgetsRunning,
+  markZenWidgetsRunning,
+  resumeZenPausedStart,
+  subscribeZenPausedStart,
+  zenPausedStart,
+  zenPausedStartReady,
+} from './zen-widgets-running'
 
 export type ZenWidgetStopReason = 'not-started' | 'not-responding' | 'failing' | 'rate' | 'runaway'
 
@@ -31,17 +41,11 @@ interface RunState {
   stopped: Record<string, ZenWidgetStop>
   /** Bumped by Reload: remounts that frame. */
   generation: Record<string, number>
-  /** UW32: K2 restarted while this window's widgets ran. */
-  pausedStart: boolean
-  /** What "Run them" does (B3 clears its marker); default just unpauses. */
-  onRunThem: (() => void) | null
 }
 
 export const useZenCustomRunStore = create<RunState>(() => ({
   stopped: {},
   generation: {},
-  pausedStart: false,
-  onRunThem: null,
 }))
 
 export function zenPlacementKey(gardenId: string, placementId: string): string {
@@ -61,16 +65,46 @@ export function reloadZenWidget(key: string): void {
   })
 }
 
-/** B3 (UW32): hold every custom frame in this window until "Run them". */
-export function setZenWidgetsPausedStart(paused: boolean, onRunThem: (() => void) | null = null): void {
-  useZenCustomRunStore.setState({ pausedStart: paused, onRunThem })
+/** Whether a Garden's custom frames may mount in this window (UW32):
+ *  `waiting` until the boot decision, `paused` while it names this Garden. */
+export type ZenWidgetsGate = 'waiting' | 'paused' | 'run'
+
+let bootDecided = false
+void zenPausedStartReady().then(() => {
+  bootDecided = true
+})
+
+export function useZenWidgetsGate(gardenId: string): ZenWidgetsGate {
+  const [ready, setReady] = useState(bootDecided)
+  useEffect(() => {
+    if (ready) return
+    let live = true
+    void zenPausedStartReady().then(() => {
+      if (live) setReady(true)
+    })
+    return () => {
+      live = false
+    }
+  }, [ready])
+  const paused = useSyncExternalStore(subscribeZenPausedStart, zenPausedStart)
+  if (!ready) return 'waiting'
+  return paused && paused.garden === gardenId ? 'paused' : 'run'
 }
 
-/** "Run them": unpause this window's widgets. */
+/** The page: mark this window's Garden as running custom widgets while
+ *  they're mounted (B3's freeze memory), clear it when they unmount. */
+export function useZenWidgetsRunningMarker(gardenId: string, hasCustom: boolean): void {
+  const gate = useZenWidgetsGate(gardenId)
+  useEffect(() => {
+    if (!hasCustom || !gardenId || gate !== 'run') return
+    markZenWidgetsRunning(gardenId)
+    return () => clearZenWidgetsRunning()
+  }, [gardenId, hasCustom, gate])
+}
+
+/** "Run them". */
 export function runZenWidgetsNow(): void {
-  const { onRunThem } = useZenCustomRunStore.getState()
-  useZenCustomRunStore.setState({ pausedStart: false, onRunThem: null })
-  onRunThem?.()
+  resumeZenPausedStart()
 }
 
 /** K2's card text for a stop. */
@@ -93,5 +127,5 @@ export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted while this Garden’s widge
 
 /** Tests only. */
 export function __resetZenCustomRunForTests(): void {
-  useZenCustomRunStore.setState({ stopped: {}, generation: {}, pausedStart: false, onRunThem: null })
+  useZenCustomRunStore.setState({ stopped: {}, generation: {} })
 }

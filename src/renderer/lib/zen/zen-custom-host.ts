@@ -12,9 +12,9 @@
 //     last resort is the shell's per-window watchdog, UW32, B3's);
 //   - uncaught errors and rejections are reported; 20 in a minute →
 //     "keeps failing";
-//   - a forwarded chord acts only while that frame has focus, at most once
-//     every 500 ms (UW33). What a chord does is the chord handler's
-//     (`setZenFrameChordHandler`; B3 wires K2's own keys).
+//   - a forwarded chord goes to `onChord` with whether this frame has focus;
+//     the page's one gate (`createZenChordGate`, zen-shortcut.ts) acts on it
+//     only while that frame has focus, at most once every 500 ms (UW33).
 // Stopping removes only that frame; the rest of the Garden keeps running.
 
 import type { ZenFrameHello, ZenFrameReply } from './zen-custom-types'
@@ -25,31 +25,6 @@ export const ZEN_FRAME_READY_MS = 10_000
 export const ZEN_FRAME_PING_MS = 5_000
 export const ZEN_FRAME_MISSED_PINGS = 3
 export const ZEN_FRAME_ERRORS_PER_MINUTE = 20
-export const ZEN_FRAME_CHORD_GAP_MS = 500
-
-/** The chords a frame may forward (the shim's fixed set). */
-export const ZEN_FRAME_CHORDS: ReadonlySet<string> = new Set([
-  'zen-exit',
-  'theme-next',
-  'theme-prev',
-  ...Array.from({ length: 9 }, (_, i) => `garden-${i + 1}`),
-])
-
-type ChordHandler = (chord: string) => void
-let chordHandler: ChordHandler | null = null
-
-/** B3 (UW33): what a forwarded chord does. Returns the unregister. */
-export function setZenFrameChordHandler(fn: ChordHandler): () => void {
-  chordHandler = fn
-  return () => {
-    if (chordHandler === fn) chordHandler = null
-  }
-}
-
-export function zenFrameChordHandler(): ChordHandler | null {
-  return chordHandler
-}
-
 /** The window a hello goes to (an iframe's `contentWindow`). */
 export interface ZenFrameWindow {
   postMessage(message: unknown, targetOrigin: string, transfer: Transferable[]): void
@@ -62,6 +37,8 @@ export interface ZenFrameHostOptions {
   stop(reason: ZenWidgetStopReason): void
   /** Does this frame have keyboard focus now? */
   focused(): boolean
+  /** A forwarded chord (still to be gated: known chord, focus, 500 ms). */
+  onChord(chord: unknown, frameFocused: boolean): void
   /** The widget's name, for logs. */
   label: string
   now?: () => number
@@ -84,7 +61,6 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
   let pingSeq = 0
   let answered = 0
   let missed = 0
-  let lastChord = -Infinity
   const errors: number[] = []
   let pingTimer: ReturnType<typeof setInterval> | null = null
 
@@ -148,11 +124,8 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       if (errors.length >= ZEN_FRAME_ERRORS_PER_MINUTE) stop('failing')
       return
     }
-    if (typeof m.chord === 'string') {
-      const t = now()
-      if (!ZEN_FRAME_CHORDS.has(m.chord) || !opts.focused() || t - lastChord < ZEN_FRAME_CHORD_GAP_MS) return
-      lastChord = t
-      chordHandler?.(m.chord)
+    if ('chord' in m) {
+      opts.onChord(m.chord, opts.focused())
       return
     }
     void layer.handle(m).then((reply) => {

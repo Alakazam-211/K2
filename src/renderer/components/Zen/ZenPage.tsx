@@ -78,6 +78,8 @@ import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidget
 import { zenConversationRow } from './widgets/ZenConversationWidget'
 import { ZenWidgetStyles } from './widgets/zen-widget-kit'
 import { ZenWidgetBoundary } from './ZenWidgetBoundary'
+import { useZenWidgetsRunningMarker } from '@/lib/zen/zen-custom-run'
+import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
@@ -204,6 +206,12 @@ export function ZenPage({
   }, [host, page.widgets])
   const bridgesRef = useRef(widgetBridges)
   bridgesRef.current = widgetBridges
+  // UW32: while this Garden's custom widgets are mounted, the window
+  // remembers it (a freeze then restarts them paused). Not in safe mode.
+  useZenWidgetsRunningMarker(
+    garden.garden?.id ?? currentZenGardenId() ?? '',
+    !safe && page.widgets.some((w) => w.kind === ZEN_CUSTOM_KIND),
+  )
 
   // Arriving at My Home / Agents (a rail switch, or this window entering
   // Zen): focus the selected agent's message box once it can be typed in.

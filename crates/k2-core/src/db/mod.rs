@@ -1126,6 +1126,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0138_zen_widget_grants",
             include_str!("../../drizzle_sql/0138_zen_widget_grants.sql"),
         ),
+        // 0139 — hosted-mail field fixes (0.45.1): mail_server.public_ipv4
+        // (+ _at, the cached box IPv4 for the mail host's A row) and
+        // outbound_json (only what K2 changed in Stalwart: mx route, DANE,
+        // spam rules URL/repair, the one ACME retry). ALTER only. 0135–0138
+        // are claimed by other 0.45.1 work.
+        (
+            "0139_mail_server_field_fixes",
+            include_str!("../../drizzle_sql/0139_mail_server_field_fixes.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1786,7 +1795,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0138_zen_widget_grants",
+            last_name, "0139_mail_server_field_fixes",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1873,6 +1882,49 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM mail_backup_inventory", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "re-running 0136 keeps the inventory");
+    }
+
+    /// 0139 (hosted-mail field fixes): the three mail_server columns
+    /// exist, start NULL, and a re-run skips each duplicate column
+    /// without skipping the others or touching the values.
+    #[test]
+    fn mail_server_field_fixes_migration_adds_ip_cache_and_outbound_markers() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO mail_server (id, status, pinned_version, updated_at) \
+             VALUES (1, 'running', '0.16.20', 1)",
+            [],
+        )
+        .unwrap();
+        let (ip, at, outbound): (Option<String>, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT public_ipv4, public_ipv4_at, outbound_json FROM mail_server WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((ip, at, outbound), (None, None, None), "NULL = never read / nothing changed");
+        conn.execute(
+            "UPDATE mail_server SET public_ipv4 = '203.0.113.7', public_ipv4_at = 5, \
+             outbound_json = '{}' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        run_single_migration(
+            &conn,
+            "0139_mail_server_field_fixes_rerun",
+            include_str!("../../drizzle_sql/0139_mail_server_field_fixes.sql"),
+        )
+        .unwrap();
+        let (ip, at): (String, i64) = conn
+            .query_row(
+                "SELECT public_ipv4, public_ipv4_at FROM mail_server WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((ip.as_str(), at), ("203.0.113.7", 5), "re-running 0139 keeps the values");
     }
 
     /// 0132 (k2 sidecar v1): the switch backfills ON only for

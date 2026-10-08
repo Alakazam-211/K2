@@ -3816,6 +3816,13 @@ pub struct MailServer {
     /// 0136: the backup churn observer (last run/error + up to 30 daily
     /// summaries). NULL = never observed.
     pub backup_state_json: Option<String>,
+    /// 0139: the box's public IPv4 (egress) and when it was read — the
+    /// mail host's A row in the DNS table reads it. NULL = never read.
+    pub public_ipv4: Option<String>,
+    pub public_ipv4_at: Option<i64>,
+    /// 0139: only what K2 changed in Stalwart's registry (mx route, DANE,
+    /// spam rules URL/repair, the one ACME retry), each with `from`/`at`.
+    pub outbound_json: Option<String>,
 }
 
 /// One `mail_domains` row. `domain` is ALWAYS the normalized form

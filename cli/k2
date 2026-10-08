@@ -73,6 +73,37 @@ _ws_dot_dir() {
     if [ -d "$1/.k2" ]; then echo "$1/.k2"; else echo "$1/.k2so"; fi
 }
 
+# One `note:` line about an address, on stderr (exit code unaffected).
+# `_k2_addr_note old new [renamed]`: "is now" with `renamed` (a local
+# rename; prd-thread-survives-tab-rename S5), "is" without (a synonym;
+# prd-cli-addressing A7). Same name and shape as the CLI-addressing
+# builder's helper (TR17), so the two branches print one way.
+_k2_addr_note() {
+    local old="$1" new="$2" how="${3:-}"
+    if [ -z "$old" ] || [ -z "$new" ] || [ "$old" = "$new" ]; then
+        return 0
+    fi
+    if [ "$how" = "renamed" ]; then
+        echo "note: $old is now $new" >&2
+    else
+        echo "note: $old is $new" >&2
+    fi
+}
+
+# The rename note when a daemon response carries `movedFrom` (+ `addr`).
+_k2_moved_from_note() {
+    local pair
+    pair=$(printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if isinstance(d,dict) and d.get("movedFrom") and d.get("addr"):
+    print("%s %s" % (d["movedFrom"], d["addr"]))' 2>/dev/null)
+    [ -n "$pair" ] || return 0
+    _k2_addr_note "${pair%% *}" "${pair#* }" renamed
+}
+
 # After a successful overlay write (not --json): first post, then every
 # 10th. Agents forget Thread is markdown; help is not re-read. stderr
 # so stdout stays the id/seq line. Best-effort — missing .k2 is a no-op.
@@ -7950,6 +7981,7 @@ except Exception:
     # 0.44.4: the legacy GET retry for pre-0.39.45 daemons is gone — the
     # daemon refuses GET on this route (it changes state).
     echo "$response"
+    _k2_moved_from_note "$response"
 
     # Issue #9 — if the daemon WOKE a dormant canonical session to deliver,
     # surface it on stderr so the caller attributes the latency rather than
@@ -8103,6 +8135,7 @@ cmd_thread() {
         local response
         response=$(cli_send cli_post_form "/cli/thread/post" "$params")
         local rc=$?
+        _k2_moved_from_note "$response"
         if [[ "$json" == "true" ]]; then
             echo "$response"
         else
@@ -8246,6 +8279,7 @@ print(json.dumps(obj))
     local response
     response=$(cli_send cli_post_json "/cli/thread/ask" "$body")
     local rc=$?
+    _k2_moved_from_note "$response"
     if [[ "$json" == "true" ]]; then
         echo "$response"
         return $rc
@@ -8325,6 +8359,7 @@ print(json.dumps(obj))
     local response
     response=$(cli_send cli_post_json "/cli/thread/secret" "$body")
     local rc=$?
+    _k2_moved_from_note "$response"
     if [[ "$json" == "true" ]]; then
         echo "$response" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -17258,6 +17293,16 @@ ADDRESSES ARE HANDLES
   display name (`Sales Team`). Bare `k2 msg sales` is the primary.
   Sidecar: slash `sales/reviewer` or `sales/1`. Hyphen `sales-reviewer`
   is a workspace handle, not a sidecar.
+
+WHEN A CHAT IS RENAMED
+  A sidecar's address follows its Chats name: `sales/3` renamed
+  "Reviewer" answers at `sales/reviewer`. Old addresses keep working:
+  `sales/3` (the number never changes) and every earlier name still
+  reach the same chat; the CLI prints `note: sales/3 is now
+  sales/reviewer`. Old names stay reserved to their chat until it is
+  archived or someone runs Release old names in Chats. All-digit names
+  are display only; `sales/3` is always the number. A live chat gets a
+  `[k2] This chat's address is now …` line when it is renamed.
 
 STAMPS YOU WILL SEE
   [thread:<addr>]    human wrote on the Thread tab → `k2 thread`

@@ -51,6 +51,8 @@ pub fn is_running() -> bool {
 /// (it has a Garden list). Per-Home pages never shipped: nothing migrates.
 pub fn start_at_boot() {
     if k2_core::zen::is_set_up() {
+        // GS17: archive K2's defaults and run the Garden sync loader first.
+        k2_core::zen::ZenFiles::local().sync_boot();
         crate::zen_routes::prime();
         start();
     }

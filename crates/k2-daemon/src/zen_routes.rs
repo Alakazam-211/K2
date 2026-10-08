@@ -49,8 +49,10 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/new",
     "/cli/zen/garden/rename",
     "/cli/zen/garden/reorder",
+    "/cli/zen/garden/sync",
     "/cli/zen/garden/template",
     "/cli/zen/lib/fetch",
+    "/cli/zen/news/seen",
     "/cli/zen/reload",
     "/cli/zen/reset",
     "/cli/zen/setup",
@@ -72,7 +74,9 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/get",
     "/cli/zen/history",
     "/cli/zen/lib/file",
+    "/cli/zen/news",
     "/cli/zen/status",
+    "/cli/zen/sync",
     "/cli/zen/templates",
     "/cli/zen/theme/list",
     "/cli/zen/validate",
@@ -265,7 +269,7 @@ fn handle_get(params: &HashMap<String, String>) -> Result<J, ZenError> {
     // `get` serves the live state; refresh first so a save the watcher
     // hasn't debounced yet is already live (and announced once).
     refresh_and_emit()?;
-    f.resolve_with(param(params, "garden"), &grant_snapshot(&f)?)
+    crate::zen_sync_routes::get(&f, param(params, "garden"), param(params, "preview"), &grant_snapshot(&f)?)
 }
 
 /// GET `/cli/zen/gardens` (G13): 200 with `setUp:false` and no Gardens when
@@ -1145,6 +1149,10 @@ pub fn handle(
         "/cli/zen/garden/template" => handle_garden_template(body),
         "/cli/zen/reload" => handle_reload(),
         "/cli/zen/reset" => handle_reset(body),
+        // Garden sync (prd-zen-garden-sync-defaults-v1 GS31/GS32): a change
+        // takes the owner token from the owner itself, never a passport.
+        p if crate::zen_sync_routes::is_post_route(p) && !owner_token => return local_only(),
+        p if crate::zen_sync_routes::is_route(p) => crate::zen_sync_routes::handle(p, params, body),
         _ => unreachable!("checked against GET_ROUTES/POST_ROUTES above"),
     };
     match r {

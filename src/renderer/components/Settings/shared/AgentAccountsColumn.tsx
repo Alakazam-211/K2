@@ -16,6 +16,8 @@ import { useCallback, useEffect, useState } from 'react'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
+import { isWebClient } from '@/lib/is-web'
 import {
   addApiKey,
   errorText,
@@ -319,13 +321,24 @@ function ApiKeyDialog({
 }
 
 export function AgentAccountsColumn(): React.JSX.Element {
+  // The window's server, resolved at call time: every read and every
+  // gesture on this page goes to that server's daemon, never to this
+  // computer's unless this computer is the window's server. The store
+  // drops the list and reloads on a server switch; this subscription
+  // re-renders the label and clears this server's leftover sheet/error.
   const scope = primaryScope()
+  const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
   const entry = useLlmAccountsStore((s) => s.entries[scope.id])
   const [sheet, setSheet] = useState<LoginSheetStart | null>(null)
   const [keyDialog, setKeyDialog] = useState<{ tool: string; toolLabel: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => watchLlmAccounts(scope), [scope])
+  useEffect(() => {
+    setSheet(null)
+    setKeyDialog(null)
+    setError(null)
+  }, [hostKey])
 
   const doc = entry?.doc ?? null
   const byTool = new Map((doc?.tools ?? []).map((t) => [t.tool, t]))
@@ -333,6 +346,13 @@ export function AgentAccountsColumn(): React.JSX.Element {
   return (
     <div className="w-full" data-settings-id="agents.accounts">
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Tokens</h2>
+      {/* Hosted web is one server and its primary scope reads "This
+          computer", so the line is desktop-only. */}
+      {!isWebClient() && (
+        <p className="text-[10px] text-[var(--color-text-muted)] mb-1" data-testid="llm-server">
+          Server: {scope.label}
+        </p>
+      )}
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4 leading-relaxed" data-testid="llm-switch-note">
         {SWITCH_NOTE}
       </p>
@@ -341,7 +361,12 @@ export function AgentAccountsColumn(): React.JSX.Element {
           Air-gap mode is on: adding subscriptions and refreshing tokens are off. Switching between saved tokens still works.
         </p>
       )}
-      {entry?.error && !doc && (
+      {!entry && (
+        <p className="text-[10px] text-[var(--color-text-muted)] mb-3" data-testid="llm-accounts-loading">
+          Loading tokens…
+        </p>
+      )}
+      {entry?.error && (
         <p className="text-[10px] text-red-400 mb-3" data-testid="llm-accounts-error">
           {entry.error}
         </p>
@@ -351,101 +376,103 @@ export function AgentAccountsColumn(): React.JSX.Element {
           {error}
         </p>
       )}
-      <div className="border border-[var(--color-border)]" data-settings-id="agents.add-login">
-        {LOGIN_TOOL_ROWS.map((row, i) => {
-          const tool = byTool.get(row.id)
-          const supported = tool?.supported === true
-          const canSignIn = supported && tool?.subscription === true
-          const canKey = supported && tool?.apiKeys === true
-          // "Use next token" cycles the server default's subscriptions only:
-          // no API tokens, nothing set for a workspace or chat.
-          const cyclable = (tool?.accounts ?? []).filter(
-            (a) => a.state === 'signed_in' && a.kind !== 'api_key' && !isPinned(a),
-          )
-          const activeAcc = tool?.accounts.find((a) => a.id === tool.activeId)
-          const keptLive =
-            activeAcc?.kind === 'api_key' && tool?.liveAccountId
-              ? tool.accounts.find((a) => a.id === tool.liveAccountId)
-              : undefined
-          return (
-            <div
-              key={row.id}
-              data-testid={`llm-tool-${row.id}`}
-              className={i === LOGIN_TOOL_ROWS.length - 1 ? '' : 'border-b border-[var(--color-border)]'}
-            >
-              <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <AgentIcon agent={row.agentIcon} size={14} />
-                  <div className="text-xs text-[var(--color-text-secondary)] truncate">{row.label}</div>
-                </div>
-                {supported ? (
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    {canSignIn && (
-                      <button
-                        type="button"
-                        className="text-[10px] text-[var(--color-accent)] disabled:opacity-40"
-                        disabled={doc?.airgap === true}
-                        onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
-                      >
-                        + Add subscription
-                      </button>
-                    )}
-                    {canKey && (
-                      <button
-                        type="button"
-                        className="text-[10px] text-[var(--color-accent)]"
-                        onClick={() => setKeyDialog({ tool: row.id, toolLabel: row.label })}
-                      >
-                        + Add API token
-                      </button>
-                    )}
+      {doc && (
+        <div className="border border-[var(--color-border)]" data-settings-id="agents.add-login">
+          {LOGIN_TOOL_ROWS.map((row, i) => {
+            const tool = byTool.get(row.id)
+            const supported = tool?.supported === true
+            const canSignIn = supported && tool?.subscription === true
+            const canKey = supported && tool?.apiKeys === true
+            // "Use next token" cycles the server default's subscriptions only:
+            // no API tokens, nothing set for a workspace or chat.
+            const cyclable = (tool?.accounts ?? []).filter(
+              (a) => a.state === 'signed_in' && a.kind !== 'api_key' && !isPinned(a),
+            )
+            const activeAcc = tool?.accounts.find((a) => a.id === tool.activeId)
+            const keptLive =
+              activeAcc?.kind === 'api_key' && tool?.liveAccountId
+                ? tool.accounts.find((a) => a.id === tool.liveAccountId)
+                : undefined
+            return (
+              <div
+                key={row.id}
+                data-testid={`llm-tool-${row.id}`}
+                className={i === LOGIN_TOOL_ROWS.length - 1 ? '' : 'border-b border-[var(--color-border)]'}
+              >
+                <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AgentIcon agent={row.agentIcon} size={14} />
+                    <div className="text-xs text-[var(--color-text-secondary)] truncate">{row.label}</div>
                   </div>
-                ) : (
-                  <span className="text-[10px] text-[var(--color-text-muted)]">Not available yet</span>
+                  {supported ? (
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {canSignIn && (
+                        <button
+                          type="button"
+                          className="text-[10px] text-[var(--color-accent)] disabled:opacity-40"
+                          disabled={doc?.airgap === true}
+                          onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
+                        >
+                          + Add subscription
+                        </button>
+                      )}
+                      {canKey && (
+                        <button
+                          type="button"
+                          className="text-[10px] text-[var(--color-accent)]"
+                          onClick={() => setKeyDialog({ tool: row.id, toolLabel: row.label })}
+                        >
+                          + Add API token
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-[10px] text-[var(--color-text-muted)]">Not available yet</span>
+                  )}
+                </div>
+                {supported && tool && tool.accounts.length === 0 && (
+                  <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]">
+                    {canSignIn ? 'No subscription on this server yet.' : 'No API token on this server yet.'}
+                  </div>
+                )}
+                {keptLive && (
+                  <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
+                    Subscription still signed in for {row.label}: {tokenName(row.label, keptLive)}
+                  </div>
+                )}
+                {supported &&
+                  tool?.accounts.map((a) => (
+                    <AccountRow
+                      key={a.id}
+                      account={a}
+                      tool={tool}
+                      onError={setError}
+                      onLoginAgain={(acc) =>
+                        setSheet({ kind: 'relogin', tool: row.id, toolLabel: row.label, accountId: acc.id, label: acc.label })
+                      }
+                    />
+                  ))}
+                {supported && tool && cyclable.length >= 2 && (
+                  <div className="px-3 py-2 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-[var(--color-text-muted)]">
+                      Use this when a session hits its limit. Applies to chats on Server default. K2 never switches on its own.
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
+                      onClick={() => {
+                        switchToNext(scope, row.id).catch((e: unknown) => setError(errorText(e)))
+                      }}
+                    >
+                      Use next token
+                    </button>
+                  </div>
                 )}
               </div>
-              {supported && tool && tool.accounts.length === 0 && (
-                <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]">
-                  {canSignIn ? 'No subscription on this server yet.' : 'No API token on this server yet.'}
-                </div>
-              )}
-              {keptLive && (
-                <div className="px-3 pb-2 text-[10px] text-[var(--color-text-muted)]" data-testid={`llm-kept-live-${row.id}`}>
-                  Subscription still signed in for {row.label}: {tokenName(row.label, keptLive)}
-                </div>
-              )}
-              {supported &&
-                tool?.accounts.map((a) => (
-                  <AccountRow
-                    key={a.id}
-                    account={a}
-                    tool={tool}
-                    onError={setError}
-                    onLoginAgain={(acc) =>
-                      setSheet({ kind: 'relogin', tool: row.id, toolLabel: row.label, accountId: acc.id, label: acc.label })
-                    }
-                  />
-                ))}
-              {supported && tool && cyclable.length >= 2 && (
-                <div className="px-3 py-2 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-[var(--color-text-muted)]">
-                    Use this when a session hits its limit. Applies to chats on Server default. K2 never switches on its own.
-                  </span>
-                  <button
-                    type="button"
-                    className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
-                    onClick={() => {
-                      switchToNext(scope, row.id).catch((e: unknown) => setError(errorText(e)))
-                    }}
-                  >
-                    Use next token
-                  </button>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
       {sheet && <LlmLoginSheet scope={scope} start={sheet} onClose={() => setSheet(null)} />}
       {keyDialog && (
         <ApiKeyDialog

@@ -176,6 +176,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // Heartbeat S6: Keep awake is a server's machine. 0.43.2 Z17: the
   // window's own entry; a focused room's entry uses the room's scope.
   'stores/keep-awake.ts',
+  // 0.45.1: a server switch drops the window's token list and reloads it
+  // from the new server (Settings → LLMs is per server).
+  'stores/llm-accounts.ts',
   'stores/presence.ts',
   'stores/presets.ts',
   'stores/project-groups.ts',

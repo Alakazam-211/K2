@@ -11,7 +11,9 @@
 
 import { create } from 'zustand'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import type { ServerScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { onActiveHostChange } from '@/stores/connect-host'
+import { isWebClient } from '@/lib/is-web'
 import { onLlmAccountsChanged } from '@/stores/session-events'
 import type { HarnessUsage } from '@/lib/subscription-usage'
 
@@ -140,9 +142,22 @@ export const LOGIN_STATE_LABELS: Record<string, string> = {
   timed_out: 'Sign-in timed out',
 }
 
+function rawMessage(e: unknown): string {
+  return (e instanceof Error ? e.message : String(e)).replace(/^Error:\s*/, '')
+}
+
+/** A server older than 0.45.0 has no token routes: a login gets
+ *  `route_unclassified` (404), the owner token `route not found`. */
+const NO_WALLET = /route_unclassified|route not found/i
+/** The route policy refused this login's role (`daemon-cli` keeps only the
+ *  `error` string of `{"error":"role_required",…}`). */
+const ROLE_REFUSED = /role_required/
+
 /** The daemon's `{"error":{"code","hint"}}` → a readable line. */
 export function errorText(e: unknown): string {
-  const raw = (e instanceof Error ? e.message : String(e)).replace(/^Error:\s*/, '')
+  const raw = rawMessage(e)
+  if (NO_WALLET.test(raw)) return 'This server runs a K2 older than 0.45.0, which has no LLM tokens.'
+  if (ROLE_REFUSED.test(raw)) return "Your login on this server isn't allowed to change LLM tokens."
   try {
     const parsed = JSON.parse(raw) as { error?: { hint?: unknown; code?: unknown } }
     const err = parsed?.error
@@ -188,7 +203,51 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
   }
 }
 
+/** A load failure as a person reads it, naming the server (hosted web
+ *  is one server, and its primary scope's label reads "This computer"). */
+export function loadErrorText(scope: ServerScope, e: unknown): string {
+  const name = isWebClient() ? 'This server' : scope.label
+  const raw = rawMessage(e)
+  if (NO_WALLET.test(raw)) {
+    return `${name} runs a K2 older than 0.45.0, which has no LLM tokens. Update that server to manage its tokens here.`
+  }
+  if (ROLE_REFUSED.test(raw)) {
+    return `Your login on ${name} can't see its LLM tokens. Ask the server's owner for a Member login or higher.`
+  }
+  return `Couldn't load LLM tokens from ${name}: ${errorText(e)}`
+}
+
+// Entries are keyed by `scope.id`. The window's own server is always
+// `primary`, whichever server the window is on, so a server switch must
+// drop that entry (and make any in-flight load for it land nowhere):
+// otherwise the page keeps showing the previous server's tokens under the
+// new server — this computer's tokens on a remote, 0.45.0's bug.
 const loadInflight = new Map<string, Promise<void>>()
+const epochs = new Map<string, number>()
+/** Mounted watchers of the window's server (`primary`). */
+let primaryWatchers = 0
+
+/** `daemon-cli`'s HostSwitchedError, matched by name (tests mock that
+ *  module with the request helpers only). */
+function hostSwitched(e: unknown): boolean {
+  return e instanceof Error && e.name === 'HostSwitchedError'
+}
+
+function epochOf(key: string): number {
+  return epochs.get(key) ?? 0
+}
+
+/** Forget one server's entry; an in-flight load for it lands nowhere. */
+function dropEntry(key: string): void {
+  epochs.set(key, epochOf(key) + 1)
+  loadInflight.delete(key)
+  useLlmAccountsStore.setState((s) => {
+    if (!(key in s.entries)) return s
+    const entries = { ...s.entries }
+    delete entries[key]
+    return { entries }
+  })
+}
 
 interface LlmAccountsStore {
   entries: Record<string, AccountsEntry>
@@ -198,37 +257,67 @@ interface LlmAccountsStore {
 export const useLlmAccountsStore = create<LlmAccountsStore>((set) => ({
   entries: {},
   load: (scope) => {
-    const running = loadInflight.get(scope.id)
+    const key = scope.id
+    const running = loadInflight.get(key)
     if (running) return running
+    const epoch = epochOf(key)
     const p = (async () => {
       try {
         const doc = parseAccountsDoc(await daemonCliGet<unknown>(scope, 'llm/accounts/list'))
-        set((s) => ({ entries: { ...s.entries, [scope.id]: { doc, error: null } } }))
+        if (epoch !== epochOf(key)) return
+        set((s) => ({ entries: { ...s.entries, [key]: { doc, error: null } } }))
       } catch (e) {
+        // The window moved to another server mid-request: that server's
+        // own load (after the switch) fills the entry.
+        if (epoch !== epochOf(key) || hostSwitched(e)) return
+        // Keep the last list from THIS server (the entry is dropped on a
+        // switch, so it is never another server's) and say what failed.
         set((s) => ({
-          entries: { ...s.entries, [scope.id]: { doc: s.entries[scope.id]?.doc ?? null, error: errorText(e) } },
+          entries: { ...s.entries, [key]: { doc: s.entries[key]?.doc ?? null, error: loadErrorText(scope, e) } },
         }))
       } finally {
-        loadInflight.delete(scope.id)
+        if (epoch === epochOf(key)) loadInflight.delete(key)
       }
     })()
-    loadInflight.set(scope.id, p)
+    loadInflight.set(key, p)
     return p
   },
 }))
 
+/** The window switched servers (or minted a session on its server): drop
+ *  the window's list, then load the new server's if the page is open. */
+export function resetWindowLlmAccounts(): void {
+  const scope = primaryScope()
+  dropEntry(scope.id)
+  if (primaryWatchers > 0) void useLlmAccountsStore.getState().load(scope)
+}
+
+onActiveHostChange(() => resetWindowLlmAccounts())
+
 export function resetLlmAccountsForTests(): void {
+  for (const key of new Set([...epochs.keys(), ...loadInflight.keys()])) epochs.set(key, epochOf(key) + 1)
   loadInflight.clear()
+  primaryWatchers = 0
   useLlmAccountsStore.setState({ entries: {} })
 }
 
-/** Load now and on every `llm_accounts_changed` from that server.
- *  Returns the unsubscribe fn. */
+/** Load now and on every `llm_accounts_changed` from that server (and,
+ *  for the window's server, on every server switch). Returns the
+ *  unsubscribe fn. */
 export function watchLlmAccounts(scope: ServerScope): () => void {
+  const primary = scope.isPrimary
+  if (primary) primaryWatchers += 1
   void useLlmAccountsStore.getState().load(scope)
-  return onLlmAccountsChanged(scope, () => {
+  const off = onLlmAccountsChanged(scope, () => {
     void useLlmAccountsStore.getState().load(scope)
   })
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    if (primary) primaryWatchers = Math.max(0, primaryWatchers - 1)
+    off()
+  }
 }
 
 async function mutate<T>(scope: ServerScope, route: string, body: Record<string, unknown>): Promise<T> {

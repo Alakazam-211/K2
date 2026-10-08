@@ -5,6 +5,7 @@ members = [
     "crates/k2-core",
     "crates/k2-daemon",
     "crates/k2-menubar",
+    "crates/k2-node-proto",
 ]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.

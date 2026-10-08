@@ -1,0 +1,17 @@
+[package]
+name = "k2-node-proto"
+# Versioned by `PROTOCOL`, not the product version: release.sh does not
+# bump this crate. A wire change bumps `PROTOCOL` (src/lib.rs).
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 compute nodes: the wire between a controller daemon and k2-node (frames, canonical JSON, signatures, pairing codes, receipts, the refusal function). No tokio, no k2-core."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aws-lc-rs = "1"
+base64 = "0.22"

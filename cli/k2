@@ -19547,6 +19547,16 @@ PEOPLE ONLY
   The recovery key, the vault password, reveal and key rotation are for
   your owner, from their own terminal or Settings. If doctor/status says
   "recovery: not confirmed", don't run it — tell your owner.
+  Backups (k2 vault backup) and restoring one (k2 vault restore) are
+  theirs too.
+
+MOVING TO ANOTHER BOX
+  With "Allow managing server-wide secrets" you may move secrets in a
+  migration: on the new box `k2 vault recipient`, on the old box
+  `k2 vault carry export --recipient … --target … --workspace <ws>
+  --out carry.age`, then on the new box `k2 vault carry import carry.age`
+  (it lists first; add --apply). The file opens only in that vault. The
+  recovery key is never used for this.
 
 HONEST LIMITS
   Fetch can't stop a harmful call to the allowed site (use restricted

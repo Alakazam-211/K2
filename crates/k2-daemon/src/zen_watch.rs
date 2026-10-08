@@ -29,6 +29,7 @@ use k2_core::log_debug;
 use k2_core::zen::schema::image_ext;
 use k2_core::zen::store::{valid_garden_id, GARDENS_DIR, THEMES_DIR, THEME_FILE, ZEN_FILE};
 use k2_core::zen::valid_theme_name;
+use k2_core::zen::widgets::{CODE_EXTS, WIDGETS_DIR};
 
 use crate::notify_bound::{should_observe, DroppingHandler, NOTIFY_CHANNEL_BOUND};
 
@@ -108,7 +109,7 @@ pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
     let Some(parent) = path.parent() else { return false };
     let is_root = |p: &Path| roots.iter().any(|r| r == p);
     if is_root(parent) {
-        return name == ZEN_FILE || name == GARDENS_DIR || name == THEMES_DIR;
+        return name == ZEN_FILE || name == GARDENS_DIR || name == THEMES_DIR || name == WIDGETS_DIR;
     }
     let parent_name = parent.file_name().and_then(|n| n.to_str());
     let grand = parent.parent();
@@ -118,6 +119,21 @@ pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
     if parent_name == Some(THEMES_DIR) && grand.is_some_and(is_root) {
         return valid_theme_name(name);
     }
+    if parent_name == Some(WIDGETS_DIR) && grand.is_some_and(is_root) {
+        return valid_theme_name(name);
+    }
+    // A widget folder's files (UW12): code, images, fonts (and .svg, so its
+    // error shows). Never dotfiles or editor temp files.
+    let in_widget = parent_name.is_some_and(valid_theme_name)
+        && grand.is_some_and(|g| {
+            g.file_name().and_then(|n| n.to_str()) == Some(WIDGETS_DIR) && g.parent().is_some_and(is_root)
+        });
+    if in_widget {
+        let lower = name.to_ascii_lowercase();
+        let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+        return !name.starts_with('.')
+            && (CODE_EXTS.contains(&ext) || k2_core::zen::bundle::asset_mime(&lower).is_some() || ext == "svg");
+    }
     let in_theme = parent_name.is_some_and(valid_theme_name)
         && grand.is_some_and(|g| {
             g.file_name().and_then(|n| n.to_str()) == Some(THEMES_DIR) && g.parent().is_some_and(is_root)
@@ -125,9 +141,15 @@ pub(crate) fn is_zen_source(roots: &[PathBuf], path: &Path) -> bool {
     in_theme && !name.starts_with('.') && (name == THEME_FILE || image_ext(name).is_some())
 }
 
-/// `themes/<name>/` folders to watch now.
+/// `themes/<name>/` and `widgets/<name>/` folders to watch now.
 fn theme_dirs(root: &Path) -> BTreeSet<PathBuf> {
-    std::fs::read_dir(root.join(THEMES_DIR))
+    let mut out = sub_dirs(root, THEMES_DIR);
+    out.extend(sub_dirs(root, WIDGETS_DIR));
+    out
+}
+
+fn sub_dirs(root: &Path, dir: &str) -> BTreeSet<PathBuf> {
+    std::fs::read_dir(root.join(dir))
         .map(|rd| {
             rd.flatten()
                 .filter(|e| e.path().is_dir() && valid_theme_name(&e.file_name().to_string_lossy()))
@@ -152,8 +174,10 @@ pub(crate) fn watch_loop(
         .map_err(|e| format!("watch {}: {e}", root.display()))?;
     let gardens = root.join(GARDENS_DIR);
     let themes = root.join(THEMES_DIR);
+    let widgets = root.join(WIDGETS_DIR);
     let mut gardens_watched = false;
     let mut themes_watched = false;
+    let mut widgets_watched = false;
     let mut theme_watched: BTreeSet<PathBuf> = BTreeSet::new();
     let mut last_scan = Instant::now() - THEME_RESCAN;
     let roots = root_forms(root);
@@ -173,9 +197,16 @@ pub(crate) fn watch_loop(
         } else if themes_watched && !themes.is_dir() {
             themes_watched = false;
         }
-        // Theme folders come and go (`k2 zen theme new`, a hand mkdir): add
-        // a non-recursive watch for each new one, at most once a second.
-        if themes_watched && last_scan.elapsed() >= THEME_RESCAN {
+        if !widgets_watched && widgets.is_dir() {
+            widgets_watched = watcher.watch(&widgets, RecursiveMode::NonRecursive).is_ok();
+            last_scan = Instant::now() - THEME_RESCAN;
+        } else if widgets_watched && !widgets.is_dir() {
+            widgets_watched = false;
+        }
+        // Theme and widget folders come and go (`k2 zen theme new`,
+        // `k2 zen widget new`, a hand mkdir): add a non-recursive watch for
+        // each new one, at most once a second.
+        if (themes_watched || widgets_watched) && last_scan.elapsed() >= THEME_RESCAN {
             last_scan = Instant::now();
             let now = theme_dirs(root);
             theme_watched.retain(|d| now.contains(d));
@@ -191,7 +222,11 @@ pub(crate) fn watch_loop(
             Ok(Ok(ev)) => {
                 if should_observe(ev.kind) && ev.paths.iter().any(|p| is_zen_source(&roots, p)) {
                     pending = Some(Instant::now());
-                    if ev.paths.iter().any(|p| p.parent().is_some_and(|pp| pp.ends_with(THEMES_DIR))) {
+                    if ev
+                        .paths
+                        .iter()
+                        .any(|p| p.parent().is_some_and(|pp| pp.ends_with(THEMES_DIR) || pp.ends_with(WIDGETS_DIR)))
+                    {
                         last_scan = Instant::now() - THEME_RESCAN;
                     }
                 }
@@ -236,6 +271,30 @@ mod tests {
         assert!(is_zen_source(&roots, &root.join("themes/sunset/theme.toml")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset/background.jpg")));
         assert!(is_zen_source(&roots, &root.join("themes/sunset/wall.PNG")));
+        // Zen v2 widget folders (UW12).
+        for yes in [
+            "widgets",
+            "widgets/agent-arcade",
+            "widgets/agent-arcade/manifest.json",
+            "widgets/agent-arcade/index.html",
+            "widgets/agent-arcade/game.js",
+            "widgets/agent-arcade/game.css",
+            "widgets/agent-arcade/cat.png",
+            "widgets/agent-arcade/font.woff2",
+            "widgets/agent-arcade/logo.svg",
+        ] {
+            assert!(is_zen_source(&roots, &root.join(yes)), "{yes} must be watched");
+        }
+        for no in [
+            "widgets/Arcade/index.html",
+            "widgets/agent-arcade/.game.js.swp",
+            "widgets/agent-arcade/game.js~",
+            "widgets/agent-arcade/notes.md",
+            "widgets/agent-arcade/assets/cat.png",
+            ".history/widgets/agent-arcade/last-good.html",
+        ] {
+            assert!(!is_zen_source(&roots, &root.join(no)), "{no} must be ignored");
+        }
         for no in [
             "gardens.json",
             "homes.json",

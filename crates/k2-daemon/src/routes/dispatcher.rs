@@ -5360,10 +5360,14 @@ async fn handle_one_request(
                 Vec::new()
             };
             let owner = super::http::token_is_owner(&query, state.token.as_str());
+            // Zen v2 (UWB3): who presented what, for the owner-only grant
+            // routes and their audit line.
+            let caller = crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let ingress_label = ingress.as_str().to_string();
             let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
             let r = tokio::task::spawn_blocking(move || {
-                crate::zen_routes::handle(&p_owned, owner, &params, &body_bytes)
+                crate::zen_routes::handle(&p_owned, owner, &caller, &ingress_label, &params, &body_bytes)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));

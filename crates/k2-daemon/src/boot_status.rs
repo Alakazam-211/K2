@@ -210,6 +210,21 @@ pub const FEATURE_ZEN_GARDENS: &str = "zen-gardens-v1";
 /// `edge`, `menu`). A client without it draws the template's chrome.
 pub const FEATURE_ZEN_CHROME: &str = "zen-chrome-v1";
 
+/// Zen v2 custom widgets (prd-zen-user-widgets-v2 UW36): `kind = "custom"`
+/// placements in `GET /cli/zen/get`, widget folders and bundles
+/// (`/cli/zen/widgets`, `widget/bundle`, `widget/new`), signed grants
+/// (`widget/grant|revoke|sending|resume|grants`) and `GET /cli/zen/templates`.
+pub const FEATURE_ZEN_WIDGETS: &str = "zen-widgets-v1";
+
+/// Zen v2 widget library downloads (UWB15): `/cli/zen/lib/fetch` and
+/// `/cli/zen/lib/file` (`zen_lib_routes`, B3).
+pub const FEATURE_ZEN_LIB: &str = crate::zen_lib_routes::FEATURE;
+
+/// A Thread post from a Garden widget carries `origin: {widget, garden}`;
+/// the daemon stores it and skips compose history (UWB12a, B3's
+/// `overlay_routes`).
+pub const FEATURE_THREAD_WIDGET_ORIGIN: &str = "thread-widget-origin";
+
 /// Zen Z41: `GET /cli/thread/latest?addrs=` answers on this server. A
 /// client without it falls back to `GET /cli/thread?addr=&limit=1`.
 pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
@@ -241,7 +256,10 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_ZEN_GARDENS);
     out.push(FEATURE_ZEN_CHROME);
+    out.push(FEATURE_ZEN_WIDGETS);
+    out.push(FEATURE_ZEN_LIB);
     out.push(FEATURE_THREAD_LATEST);
+    out.push(FEATURE_THREAD_WIDGET_ORIGIN);
     out.push(FEATURE_HOME_AVATARS);
     out.push(FEATURE_DAEMON_ACTIVITY);
     out.push(FEATURE_THREAD_ADDRESS_STABLE);
@@ -251,6 +269,15 @@ pub fn features() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A widget manifest's `requires.features` names keys K2 knows
+    /// (k2-core `KNOWN_FEATURES`); each zen one this daemon reports is in it.
+    #[test]
+    fn zen_feature_keys_are_known_to_the_widget_validator() {
+        for f in features().into_iter().filter(|f| f.starts_with("zen-") || f.starts_with("thread-")) {
+            assert!(k2_core::zen::widgets::KNOWN_FEATURES.contains(&f), "{f} missing from KNOWN_FEATURES");
+        }
+    }
 
     #[test]
     fn features_report_spawn_attach_only_and_tickets_list_all() {
@@ -264,7 +291,10 @@ mod tests {
                 "zen-v1",
                 "zen-gardens-v1",
                 "zen-chrome-v1",
+                "zen-widgets-v1",
+                "zen-lib-v1",
                 "thread-latest",
+                "thread-widget-origin",
                 "home-avatars-v1",
                 "daemon-activity",
                 "thread-address-stable"

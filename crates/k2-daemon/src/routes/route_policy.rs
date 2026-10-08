@@ -856,6 +856,9 @@ pub const ROUTES: &[Route] = &[
     // G13/G45): Member floor so a Member's own desktop works; every handler
     // then requires the LOCAL owner token and answers 403 `zen_local_only`
     // to anything else. `page/ensure` and `homes/sync` are gone (G13).
+    // Zen v2 (prd-zen-user-widgets-v2 UW35, UWB6, UWB15, UWB23): the widget
+    // and grant rows are Member too; the grant-giving ones take the owner
+    // token only (403 `owner_only`, UWB3). `lib/*` is B3's zen_lib_routes.
     get("/cli/zen/doctor", Member),
     post("/cli/zen/garden/delete", Member),
     post("/cli/zen/garden/new", Member),
@@ -865,16 +868,27 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/gardens", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),
+    post("/cli/zen/lib/fetch", Member),
+    get("/cli/zen/lib/file", Member),
     post("/cli/zen/reload", Member),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
     get("/cli/zen/status", Member),
+    get("/cli/zen/templates", Member),
     get("/cli/zen/theme/list", Member),
     post("/cli/zen/theme/new", Member),
     post("/cli/zen/theme/next", Member),
     post("/cli/zen/theme/prev", Member),
     post("/cli/zen/theme/set", Member),
     get("/cli/zen/validate", Member),
+    get("/cli/zen/widget/bundle", Member),
+    post("/cli/zen/widget/grant", Member),
+    get("/cli/zen/widget/grants", Member),
+    post("/cli/zen/widget/new", Member),
+    post("/cli/zen/widget/resume", Member),
+    post("/cli/zen/widget/revoke", Member),
+    post("/cli/zen/widget/sending", Member),
+    get("/cli/zen/widgets", Member),
 ];
 
 /// Non-`/cli` POST paths the top-level method guard admits. The external
@@ -1034,6 +1048,8 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/wiki/note", "regenerates the derived host wiki index"),
     ("/cli/workspace/resume-chat-args", "assigns a resume session id when none is saved"),
     ("/cli/zen/get", "snapshots Zen history when the files changed"),
+    ("/cli/zen/widget/bundle", "keeps a widget's last good bundle when its folder changed"),
+    ("/cli/zen/widgets", "keeps each widget's last good bundle when its folder changed"),
 ];
 
 /// Central "no state change over GET" check (0.44.4). True when a GET to

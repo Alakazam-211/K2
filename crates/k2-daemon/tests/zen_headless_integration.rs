@@ -227,9 +227,20 @@ fn login_as(port: u16, owner: &str, username: &str, role: &str) -> String {
 
 /// POST `setup` as the app does when Zen is first turned on. Returns the
 /// answer and Garden 1's id.
+///
+/// Since Rosson 2026-10-08 setup also preinstalls the Diary (Garden
+/// catalog, `new_users`). These tests are about Gardens 1 and 2, so the
+/// helper checks the Diary is there and deletes it (before any event
+/// counter starts); the answer it returns lists the two Gardens left.
+/// `zen_widgets_headless.rs` covers the Diary itself.
 fn setup(port: u16, tok: &str) -> (J, String) {
-    let (s, v) = call(port, "POST", &format!("/cli/zen/setup?token={tok}"), Some("{}"));
+    let (s, mut v) = call(port, "POST", &format!("/cli/zen/setup?token={tok}"), Some("{}"));
     assert_eq!(s, 200, "setup: {v}");
+    let names: Vec<&str> = v["gardens"].as_array().expect("gardens").iter().filter_map(|g| g["name"].as_str()).collect();
+    assert_eq!(names, vec!["Garden 1", "Garden 2", "Diary"], "setup preinstalls the Diary: {v}");
+    let (s, d) = call(port, "POST", &format!("/cli/zen/garden/delete?token={tok}"), Some(r#"{"garden":"Diary"}"#));
+    assert_eq!(s, 200, "delete the Diary: {d}");
+    v["gardens"] = d["gardens"].clone();
     let id = v["gardens"][0]["id"].as_str().unwrap_or_else(|| panic!("setup lists no Garden: {v}")).to_string();
     (v, id)
 }
@@ -335,7 +346,7 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
     assert_eq!(s, 200, "{again}");
     assert_eq!(again["createdFolder"], false, "setup is idempotent: {again}");
     assert_eq!(again["createdDefault"], false, "setup is idempotent: {again}");
-    assert_eq!(again["gardens"].as_array().map(Vec::len), Some(2), "{again}");
+    assert_eq!(again["gardens"].as_array().map(Vec::len), Some(2), "a deleted Diary never comes back: {again}");
     let (_, g0) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={default_id}"), None);
     assert_eq!(g0["page"]["template"], "k2.texting@1", "{g0}");
     let kinds = control_kinds(&g0);

@@ -36,14 +36,26 @@ fn temp_root(tag: &str) -> (TempRoot, ZenFiles) {
     (TempRoot(dir), ZenFiles::new(zen_dir))
 }
 
-/// Zen set up the way the app does it: `setup` makes Garden 1 (texting)
-/// and Garden 2 (empty).
+/// Zen set up the way the app does it: `setup` makes Garden 1 (texting),
+/// Garden 2 (empty) and, since Rosson 2026-10-08, the Diary (catalog,
+/// `new_users`). These tests are about Gardens 1 and 2, so the helper then
+/// takes the Diary out of the list and its page off disk, leaving exactly
+/// what setup made before (no history, no record). The preinstall itself
+/// is tested in `setup_default_garden_new_garden_is_empty_and_template_is_honoured`
+/// and k2-core's `widget_store_tests`.
 fn set_up(tag: &str) -> (TempRoot, ZenFiles) {
     let (t, f) = temp_root(tag);
     let out = f.setup().expect("setup");
     assert!(out.created_folder && out.created_zen && out.created_default, "first setup creates all: {out:?}");
     let names: Vec<&str> = out.gardens.iter().map(|g| g.name.as_str()).collect();
-    assert_eq!(names, vec!["Garden 1", "Garden 2"], "{out:?}");
+    assert_eq!(names, vec!["Garden 1", "Garden 2", "Diary"], "{out:?}");
+    let diary = out.gardens[2].id.clone();
+    std::fs::remove_file(f.path_of(&ZenFile::Garden(diary))).expect("rm the Diary's page");
+    let two: Vec<_> = out.gardens[..2].to_vec();
+    let list = serde_json::to_string_pretty(&json!({ "version": 1, "gardens": two })).expect("list JSON");
+    std::fs::write(f.root().join("gardens.json"), list + "\n").expect("write the two-Garden list");
+    let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
+    assert_eq!(names, vec!["Garden 1", "Garden 2"]);
     (t, f)
 }
 
@@ -1317,7 +1329,9 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     let out = f.setup().expect("setup");
     assert!(out.created_folder && out.created_default);
     let list = f.gardens();
-    assert_eq!(list.len(), 2, "{list:?}");
+    assert_eq!(list.len(), 3, "Garden 1, Garden 2 and the preinstalled Diary: {list:?}");
+    assert_eq!((list[2].name.as_str(), list[2].template.as_str()), ("Diary", "k2.diary@1"), "{list:?}");
+    let diary = list[2].clone();
     let d = &list[0];
     assert_eq!(d.name, "Garden 1");
     assert_eq!(d.template, "k2.texting@1");
@@ -1339,7 +1353,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     // Setup is idempotent.
     let again = f.setup().expect("setup again");
     assert!(!again.created_folder && !again.created_default, "{again:?}");
-    assert_eq!(f.gardens().len(), 2, "setup again makes nothing new");
+    assert_eq!(f.gardens().len(), 3, "setup again makes nothing new");
 
     let n = f.new_garden("  Notes\u{7}  ", None, None, None).expect("new");
     assert_eq!(n.name, "Notes", "trimmed, control characters dropped");
@@ -1350,7 +1364,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     let e = f.resolve(Some(&n.id)).expect("empty Garden");
     assert_eq!(e["page"]["template"], "k2.blank@1", "{e}");
     assert_eq!(kinds_of(&e["page"], "widgets"), vec!["garden-empty"], "{e}");
-    assert_eq!(e["garden"]["index"], 3);
+    assert_eq!(e["garden"]["index"], 4);
     assert_eq!(e["errors"], json!([]), "the stub validates: {e}");
     assert_eq!(f.resolve(Some("notes")).expect("by name")["garden"]["id"], n.id, "a name selects, case aside");
 
@@ -1378,7 +1392,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     match f.resolve(Some("nowhere")) {
         Err(ZenError::UnknownGarden { garden, known }) => {
             assert_eq!(garden, "nowhere");
-            assert_eq!(known, vec![d.id.clone(), two.id.clone(), n.id.clone()]);
+            assert_eq!(known, vec![d.id.clone(), two.id.clone(), diary.id.clone(), n.id.clone()]);
         }
         other => panic!("an unknown Garden must be UnknownGarden, got {other:?}"),
     }
@@ -1388,7 +1402,12 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     let again = f.setup().expect("setup after deleting Garden 2");
     assert!(!again.created_default, "{again:?}");
     let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
-    assert_eq!(names, vec!["Garden 1".to_string(), "Notes".to_string()], "Garden 2 stays deleted");
+    assert_eq!(names, vec!["Garden 1".to_string(), "Diary".to_string(), "Notes".to_string()], "Garden 2 stays deleted");
+    // So does a deleted Diary: the preinstall happens once, on an empty list.
+    f.delete_garden(&diary.id).expect("delete the Diary");
+    f.setup().expect("setup after deleting the Diary");
+    let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
+    assert_eq!(names, vec!["Garden 1".to_string(), "Notes".to_string()], "the Diary stays deleted");
     // "Garden 2" is a free name again.
     f.new_garden("Garden 2", None, None, None).expect("a new Garden 2");
 }
@@ -1649,7 +1668,7 @@ fn a_leftover_folder_without_gardens_is_not_set_up_and_setup_ignores_old_files()
     let out = f.setup().expect("setup");
     assert!(!out.created_folder && out.created_default, "{out:?}");
     let names: Vec<String> = f.gardens().into_iter().map(|g| g.name).collect();
-    assert_eq!(names, vec!["Garden 1".to_string(), "Garden 2".to_string()]);
+    assert_eq!(names, vec!["Garden 1".to_string(), "Garden 2".to_string(), "Diary".to_string()]);
     assert!(f.root().join("pages/home-1.toml").is_file() && f.root().join("homes.json").is_file(), "old files are ignored, not touched");
     let g = f.resolve(None).expect("resolve");
     assert_eq!(g["theme"]["name"], "paper", "the global pick survives: {g}");

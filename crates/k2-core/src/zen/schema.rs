@@ -31,6 +31,18 @@ pub const TEMPLATE_ID: &str = "k2.texting@1";
 pub const BLANK_TEMPLATE_ID: &str = "k2.blank@1";
 /// Every page template K2 ships (G11).
 pub const TEMPLATE_IDS: &[&str] = &[TEMPLATE_ID, BLANK_TEMPLATE_ID];
+
+/// Every template a Garden may name: [`TEMPLATE_IDS`] (the two starts)
+/// then the Garden catalog's ids, every shipped version
+/// (prd-zen-user-widgets-v2 §15.4), read through `Defaults::live()`.
+pub fn template_ids() -> Vec<&'static str> {
+    super::Defaults::live().template_ids()
+}
+
+/// Whether a Garden may name `id` as its template.
+pub fn is_template_id(id: &str) -> bool {
+    super::Defaults::live().has_template(id)
+}
 /// Files over this size are refused (they are themes, not data).
 pub const MAX_FILE_BYTES: usize = 64 * 1024;
 /// Minimum contrast of `text` and `accent` against `canvas` (Z13).
@@ -278,7 +290,39 @@ pub const MAX_MENUS: usize = 3;
 /// A menu holds 1 to this many items (FC13).
 pub const MAX_MENU_ITEMS: usize = 6;
 /// Content kinds that fill their column: they take no `edge` or `align` (FC9).
-pub const FILL_WIDGET_KINDS: &[&str] = &["agents", "conversation"];
+/// `custom` is column-only content (prd-zen-user-widgets-v2 UWA14).
+pub const FILL_WIDGET_KINDS: &[&str] = &["agents", "conversation", CUSTOM_KIND];
+
+/// A custom widget placement (prd-zen-user-widgets-v2 UW6): code from a
+/// folder under `~/.k2/zen/widgets/<name>/` or a built-in `k2:<name>@<n>`,
+/// run in a sealed frame. Not in [`WIDGET_KINDS`] (those are K2's own);
+/// a column-only content kind that fills its column.
+pub const CUSTOM_KIND: &str = "custom";
+/// What `custom` places, for errors and docs.
+pub const CUSTOM_KIND_DOC: &str = "a custom widget: an agent-written page in a sealed frame, from widgets/<name>/ (widget = \"<name>\") or a built-in (widget = \"k2:diary@1\"); it gets only the caps you allow with a click in the K2 app";
+/// At most this many custom widgets on one page (UW6, UW29).
+pub const MAX_CUSTOM_WIDGETS: usize = 6;
+/// A custom placement's `config` table, as JSON, is at most this long (UW7).
+pub const MAX_CONFIG_BYTES: usize = 4 * 1024;
+/// A custom placement's props (UW7): `home` and `agent` (text) and `config`
+/// (a table of strings, numbers and booleans, handed to the widget as
+/// `k2.config`). `kind` is [`CUSTOM_KIND`].
+pub const CUSTOM_PROPS: &[WidgetProp] = &[
+    WidgetProp {
+        kind: CUSTOM_KIND,
+        name: "home",
+        ty: PropType::Text,
+        default: None,
+        doc: "the Home the widget asks to see, by name or id; the human picks the scope when they allow it, and changing this asks again",
+    },
+    WidgetProp {
+        kind: CUSTOM_KIND,
+        name: "agent",
+        ty: PropType::Text,
+        default: None,
+        doc: "one agent's name or address the widget asks to see; changing this asks again",
+    },
+];
 
 /// Chrome kinds (prd-zen-freeform-chrome FC1): K2's own controls, placed
 /// with `[[widget]]` like any widget. Declaring any of them replaces ALL of
@@ -510,14 +554,14 @@ pub fn valid_widget_id(id: &str) -> bool {
 /// Applied to template widgets and Garden widgets alike, so the renderer
 /// always reads every prop.
 pub fn normalize_props(kind: &str, props: &mut Map<String, J>) {
+    // Defaults are read through `Defaults::live()` (sync-defaults D0).
+    let defaults = super::Defaults::live();
     for p in widget_props(kind) {
         if props.contains_key(p.name) {
             continue;
         }
-        if let Some(d) = p.default {
-            let v: J = serde_json::from_str(d)
-                .unwrap_or_else(|e| panic!("WIDGET_PROPS default for {}.{} is not JSON: {e}", p.kind, p.name));
-            props.insert(p.name.to_string(), v);
+        if let Some(v) = defaults.widget_prop_default(p.kind, p.name) {
+            props.insert(p.name.to_string(), v.clone());
         }
     }
     if kind == "agents" && !props.contains_key("mode") {
@@ -1147,17 +1191,17 @@ fn check_with(file: &str, src: &str, kind: FileKind, base: &Layer, default_templ
                 }
             }
             "template" if kind == FileKind::Garden => match item.as_value().and_then(Value::as_str) {
-                Some(t) if TEMPLATE_IDS.contains(&t) => {
+                Some(t) if is_template_id(t) => {
                     page_pos.get_or_insert(pos);
                     ctx.set("page.template".into(), json!(t), pos)
                 }
                 Some(other) => {
                     let p = item_pos(&ctx, item, pos);
-                    ctx.error(p, format!("unknown template '{other}'; Zen templates are: {}", TEMPLATE_IDS.join(", ")));
+                    ctx.error(p, format!("unknown template '{other}'; Zen templates are: {}", template_ids().join(", ")));
                 }
                 None => {
                     let p = item_pos(&ctx, item, pos);
-                    ctx.error(p, format!("template must be a string, one of: {}", TEMPLATE_IDS.join(", ")));
+                    ctx.error(p, format!("template must be a string, one of: {}", template_ids().join(", ")));
                 }
             },
             "template" if kind == FileKind::Theme => {
@@ -1441,6 +1485,39 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
     }
 }
 
+/// A custom widget's `config` (UW7): a table of strings, numbers and
+/// booleans, at most [`MAX_CONFIG_BYTES`] as JSON. K2 gives it no meaning.
+fn check_config(ctx: &mut Ctx, v: &Item, pos: (usize, usize)) -> Option<J> {
+    let Some(t) = require_table(ctx, v, pos, "widget.props.config") else { return None };
+    let mut out = Map::new();
+    let mut ok = true;
+    for (k, item) in t.iter() {
+        let kp = key_pos(ctx, t, k, item, pos);
+        let val = match item.as_value() {
+            Some(Value::String(s)) => Some(json!(s.value())),
+            Some(Value::Integer(n)) => Some(json!(*n.value())),
+            Some(Value::Float(f)) if f.value().is_finite() => Some(json!(*f.value())),
+            Some(Value::Boolean(b)) => Some(json!(*b.value())),
+            _ => None,
+        };
+        match val {
+            Some(j) => {
+                out.insert(k.to_string(), j);
+            }
+            None => {
+                ctx.error(kp, format!("config.{k} must be a string, a number or true/false (no lists or tables)"));
+                ok = false;
+            }
+        }
+    }
+    let size = J::Object(out.clone()).to_string().len();
+    if size > MAX_CONFIG_BYTES {
+        ctx.error(pos, format!("config is {size} bytes as JSON; a custom widget's config is at most {MAX_CONFIG_BYTES} (4 KB)"));
+        ok = false;
+    }
+    ok.then_some(J::Object(out))
+}
+
 /// One `[[widget]]` after the walk, for the page-wide rules.
 struct Placed {
     kind: String,
@@ -1480,13 +1557,14 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
         ctx.error(at, "declare at least one [[widget]], or leave them out to keep the template's");
         return;
     }
-    let content_kinds: Vec<&str> = WIDGET_KINDS.iter().map(|(k, _)| *k).collect();
+    let mut content_kinds: Vec<&str> = WIDGET_KINDS.iter().map(|(k, _)| *k).collect();
     let chrome_kinds = chrome_kind_names();
     let kind_list = format!(
-        "built-in widgets are: {}; Zen controls are: {}",
+        "built-in widgets are: {}; Zen controls are: {}; a custom widget is kind = \"{CUSTOM_KIND}\" with widget = \"<folder>\"",
         content_kinds.join(", "),
         chrome_kinds.join(", ")
     );
+    content_kinds.push(CUSTOM_KIND);
     let mut out: Vec<J> = Vec::new();
     let mut ids: Vec<String> = Vec::new();
     let mut ok = true;
@@ -1701,9 +1779,74 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         ok = false;
                     }
                 },
+                "caps" if kind.as_deref() == Some(CUSTOM_KIND) => {
+                    ctx.error(
+                        pos,
+                        "a page can't grant caps: the widget's manifest.json asks for them, and the human allows them with a click in the K2 app",
+                    );
+                    ok = false;
+                }
                 "caps" => {
                     ctx.error(pos, "a page can't name caps: built-in widgets get K2's caps");
                     ok = false;
+                }
+                "widget" if kind.as_deref() == Some(CUSTOM_KIND) => {
+                    let vp = item_pos(ctx, v, pos);
+                    match v.as_value().and_then(Value::as_str).map(super::builtin_widgets::parse_widget_ref) {
+                        Some(Ok(super::builtin_widgets::WidgetRef::Builtin { version: None, name })) => {
+                            ctx.error(
+                                vp,
+                                format!("name a built-in widget with its version, like k2:{name}@1 (k2:{name} without a version is only for k2 zen widget new --from)"),
+                            );
+                            ok = false;
+                        }
+                        Some(Ok(r)) => {
+                            ctx.pos.insert(format!("page.widget.{i}.widget"), vp);
+                            w.insert("widget".into(), json!(r.to_string()));
+                        }
+                        Some(Err(m)) => {
+                            ctx.error(vp, m);
+                            ok = false;
+                        }
+                        None => {
+                            ctx.error(vp, "widget must be the widget's folder name (a string), or a built-in like k2:diary@1");
+                            ok = false;
+                        }
+                    }
+                }
+                "widget" => {
+                    ctx.error(
+                        pos,
+                        format!("widget = names a custom widget's folder; it goes only with kind = \"{CUSTOM_KIND}\""),
+                    );
+                    ok = false;
+                }
+                "props" if kind.as_deref() == Some(CUSTOM_KIND) => {
+                    let Some(pt) = require_table(ctx, v, pos, "widget.props") else {
+                        ok = false;
+                        continue;
+                    };
+                    for (pk, pv) in pt.iter() {
+                        let ppos = key_pos(ctx, pt, pk, pv, pos);
+                        let checked = match pk {
+                            "config" => check_config(ctx, pv, ppos),
+                            _ => match CUSTOM_PROPS.iter().find(|p| p.name == pk) {
+                                Some(p) => check_prop(ctx, p, pv, ppos),
+                                None => {
+                                    ctx.error(ppos, unknown_key(pk, "a custom widget's props", &["home", "agent", "config"]));
+                                    None
+                                }
+                            },
+                        };
+                        match checked {
+                            Some(val) => {
+                                let vp = item_pos(ctx, pv, ppos);
+                                ctx.pos.insert(format!("page.widget.{i}.props.{pk}"), vp);
+                                props.insert(pk.to_string(), val);
+                            }
+                            None => ok = false,
+                        }
+                    }
                 }
                 "props" => {
                     let Some(pt) = require_table(ctx, v, pos, "widget.props") else {
@@ -1733,11 +1876,18 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 other => {
                     ctx.error(
                         pos,
-                        unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "edge", "align", "menu", "props"]),
+                        unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "edge", "align", "menu", "props", "widget"]),
                     );
                     ok = false;
                 }
             }
+        }
+        if kind.as_deref() == Some(CUSTOM_KIND) && t.get("widget").is_none() {
+            ctx.error(
+                tpos,
+                "a custom widget needs widget = \"<folder name>\" (its folder under ~/.k2/zen/widgets/; make one with k2 zen widget new <name>)",
+            );
+            ok = false;
         }
         if in_menu && t.get("menu").is_none() {
             ctx.error(tpos, "a menu item (slot = \"menu\") needs menu = \"<menu id>\": the menu that holds it");
@@ -1872,6 +2022,11 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
     let content = placed.iter().filter(|p| !is_chrome_kind(&p.kind)).count();
     if content > MAX_WIDGETS {
         ctx.error(at, format!("a Garden page holds at most {MAX_WIDGETS} widgets; this one has {content}"));
+        ok = false;
+    }
+    let custom = placed.iter().filter(|p| p.kind == CUSTOM_KIND).count();
+    if custom > MAX_CUSTOM_WIDGETS {
+        ctx.error(at, format!("a Garden page holds at most {MAX_CUSTOM_WIDGETS} custom widgets; this one has {custom}"));
         ok = false;
     }
     let chrome_n = placed.len() - content;
@@ -2012,6 +2167,14 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
     let layout_at = ctx.pos.get("page.layout").copied().unwrap_or(at);
     let agents_ids: Vec<String> =
         widgets.iter().filter(|(_, x)| x["kind"] == "agents").filter_map(|(_, x)| x["id"].as_str().map(str::to_string)).collect();
+    // A Conversation may follow a custom widget too (UW40); whether that
+    // widget asks for `agents:read` needs its manifest, so the store checks
+    // it. Auto-linking stays Agents-only (`link_conversations`).
+    let followable: Vec<String> = widgets
+        .iter()
+        .filter(|(_, x)| x["kind"] == "agents" || x["kind"] == CUSTOM_KIND)
+        .filter_map(|(_, x)| x["id"].as_str().map(str::to_string))
+        .collect();
     let column_error = |ctx: &mut Ctx, i: usize, id: &str, col: usize| {
         let p = ctx.pos.get(&format!("page.widget.{i}.column")).copied().unwrap_or(at);
         ctx.error(
@@ -2038,7 +2201,7 @@ fn cross_check_page(ctx: &mut Ctx, at: (usize, usize)) {
             if let Some(i) = idx {
                 let pinned = w["props"]["agent"].is_string();
                 match w["props"]["agents"].as_str() {
-                    Some(target) if !agents_ids.iter().any(|a| a == target) => {
+                    Some(target) if !followable.iter().any(|a| a == target) => {
                         let p = ctx.pos.get(&format!("page.widget.{i}.props.agents")).copied().unwrap_or(at);
                         let known = if agents_ids.is_empty() { String::new() } else { format!(" ({})", agents_ids.join(", ")) };
                         ctx.error(p, format!("conversation '{id}' follows '{target}', which is not an Agents widget on this page{known}"));

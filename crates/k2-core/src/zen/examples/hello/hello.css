@@ -1,0 +1,28 @@
+/* K2 writes the Garden's --zen-* colours onto :root; the frame is
+   transparent, so the column shows through. */
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--zen-text, #222);
+  font-family: var(--zen-font, system-ui, sans-serif);
+}
+
+.hello {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.clock {
+  font-size: 48px;
+  font-variant-numeric: tabular-nums;
+}
+
+.greeting {
+  font-size: 16px;
+  opacity: 0.8;
+}

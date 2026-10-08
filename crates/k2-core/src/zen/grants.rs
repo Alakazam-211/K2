@@ -40,9 +40,17 @@ use super::USER_WIDGET_CAPS;
 /// changes; old rows then resolve `invalid` and go back to review.
 pub const GRANT_CANON_TAG: &str = "k2-zen-grant/v2";
 
-/// The key file under `~/.k2/` (UWB4). Agents never write it; it joins the
-/// skill's "never write" list (UWB26).
+/// The key file under `~/.k2/` (UWB4). Agents never write it. The skill's
+/// "never write" list (UWB26 as amended by prd-zen-garden-sync-defaults-v1
+/// SD8/GT1) is [`NEVER_WRITE`].
 pub const GRANT_KEY_FILE: &str = "zen-grant.key";
+
+/// Files agents must never write (UWB26, as amended by
+/// prd-zen-garden-sync-defaults-v1 SD8/GT1: `pins.json` is gone; the sync
+/// state, its news and saved defaults sets join `zen-grant.key`). Paths
+/// under `~/.k2/zen/` except the key, which sits in `~/.k2/`. B1's skill
+/// reads this list.
+pub const NEVER_WRITE: &[&str] = &["sync.json", "news.json", ".defaults/", "zen-grant.key"];
 
 /// The migration that creates `zen_widget_grants` (UWB5). Reserved for Zen
 /// v2; B2 writes `crates/k2-core/drizzle_sql/0138_zen_widget_grants.sql`.
@@ -502,13 +510,31 @@ pub fn effective_caps(requested: &[String], granted: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The same-name `k2:` carry (prd-zen-garden-sync-defaults-v1 S4, SD7): a
+/// grant made for the built-in `k2:<name>@<n>` covers `k2:<name>@<m>` with
+/// `m > n` on the same Garden and placement, so a synced Diary that moves
+/// from `k2:diary@1` to `k2:diary@2` keeps its grant. More caps still give
+/// `partial` (Q2: edits never re-ask unless they want more). Never across
+/// names, never down a version, never between a folder and a built-in.
+pub fn carries(granted: &str, now: &str) -> bool {
+    use super::builtin_widgets::{parse_widget_ref, WidgetRef};
+    match (parse_widget_ref(granted), parse_widget_ref(now)) {
+        (
+            Ok(WidgetRef::Builtin { name: a, version: Some(n) }),
+            Ok(WidgetRef::Builtin { name: b, version: Some(m) }),
+        ) => a == b && m > n,
+        _ => false,
+    }
+}
+
 /// The effective grant for one placement. **Pure**: the store loads the
 /// placement's live row (`row`) and the key (`key`, `None` when the key file
 /// is missing) and passes them in; B2 owns that loading (table 0138).
 ///
 /// Fails closed:
 /// - no row → `none`;
-/// - a row for another garden, placement or widget, no key, a different
+/// - a row for another garden, placement or widget (except the same-name
+///   `k2:` carry, [`carries`]), no key, a different
 ///   `key_id`, or a bad signature → `invalid`;
 /// - the placement's ask differs from the granted ask → `review`;
 /// - requested ⊄ granted → `partial` (effective caps still served);
@@ -518,7 +544,8 @@ pub fn effective(row: Option<&GrantRow>, key: Option<&GrantKey>, q: &GrantQuery<
         return GrantView::empty(GrantState::None);
     };
     let r = &row.record;
-    let same_place = r.garden == q.garden && r.placement == q.placement && r.widget == q.widget;
+    let same_place =
+        r.garden == q.garden && r.placement == q.placement && (r.widget == q.widget || carries(&r.widget, q.widget));
     let signed = match key {
         Some(k) => row.key_id == k.id() && verify(k, r, &row.sig),
         None => false,
@@ -948,6 +975,51 @@ mod tests {
 
         let v = effective(Some(&good), Some(&key), &GrantQuery { widget: "agent-arcade-2", ..q });
         assert_eq!(v.state, GrantState::Invalid, "a row for another widget");
+    }
+
+    /// SD7: a `k2:` grant carries to a newer version of the same built-in.
+    #[test]
+    fn a_builtin_grant_carries_up_versions_of_the_same_name_only() {
+        assert!(carries("k2:diary@1", "k2:diary@2"));
+        assert!(carries("k2:diary@1", "k2:diary@12"));
+        for (a, b) in [
+            ("k2:diary@2", "k2:diary@1"),
+            ("k2:diary@1", "k2:diary@1"),
+            ("k2:diary@1", "k2:notes@2"),
+            ("diary", "k2:diary@2"),
+            ("k2:diary@1", "diary"),
+            ("k2:diary@1", "k2:diary"),
+            ("agent-arcade", "agent-arcade-2"),
+        ] {
+            assert!(!carries(a, b), "{a} must not carry to {b}");
+        }
+        let key = GrantKey::from_bytes([7; 32]);
+        let mut rec = record();
+        rec.widget = "k2:diary@1".into();
+        rec.caps = s(&["agents:read", "thread:read"]);
+        let row = GrantRow {
+            sig: sign(&key, &rec),
+            record: rec,
+            widget_hash: "h".into(),
+            key_id: key.id(),
+            paused: None,
+            granted_by_kind: "owner_token".into(),
+        };
+        let ask = PlacementAsk { home: Some("Work".into()), agent: None };
+        let req = s(&["agents:read", "thread:read"]);
+        let q = GrantQuery {
+            garden: "g-test0001",
+            placement: "arcade",
+            widget: "k2:diary@2",
+            hash: "h2",
+            requested: &req,
+            ask: &ask,
+        };
+        assert_eq!(effective(Some(&row), Some(&key), &q).state, GrantState::Granted);
+        let more = s(&["agents:read", "thread:read", "thread:post"]);
+        let v = effective(Some(&row), Some(&key), &GrantQuery { requested: &more, ..q });
+        assert_eq!(v.state, GrantState::Partial, "more caps still ask");
+        assert_eq!(effective(Some(&row), Some(&key), &GrantQuery { widget: "k2:other@2", ..q }).state, GrantState::Invalid);
     }
 
     #[test]

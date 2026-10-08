@@ -36,15 +36,19 @@
 //! controls.
 
 pub mod builtin_widgets;
+pub mod bundle;
+pub mod defaults;
 pub mod garden_catalog;
 pub mod grants;
 pub mod schema;
 pub mod skill;
 pub mod stdlib;
 pub mod store;
+pub mod widgets;
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+
+pub use defaults::Defaults;
 
 use serde_json::{json, Value as J};
 
@@ -130,38 +134,10 @@ pub fn check_builtin_theme(name: &str) -> Option<schema::Checked> {
 }
 
 /// The full built-in layer of a theme: `basic` merged with the named
-/// built-in (just `basic` for `basic`). `None` when not built in.
+/// built-in (just `basic` for `basic`). `None` when not built in. Read
+/// through [`Defaults::live`] (D0).
 pub fn builtin_theme_layer(name: &str) -> Option<&'static Layer> {
-    static LAYERS: OnceLock<std::collections::BTreeMap<&'static str, Layer>> = OnceLock::new();
-    LAYERS
-        .get_or_init(|| {
-            BUILTIN_THEMES
-                .iter()
-                .map(|t| {
-                    let own = schema::check(
-                        &builtin_label(t.name),
-                        t.toml,
-                        FileKind::Theme,
-                        &Layer::new(),
-                    )
-                    .layer;
-                    let layer = if t.name == DEFAULT_THEME {
-                        own
-                    } else {
-                        let base = schema::check(
-                            &builtin_label(DEFAULT_THEME),
-                            BUILTIN_THEMES[0].toml,
-                            FileKind::Theme,
-                            &Layer::new(),
-                        )
-                        .layer;
-                        schema::merge(&[&base, &own])
-                    };
-                    (t.name, layer)
-                })
-                .collect()
-        })
-        .get(name)
+    Defaults::live().theme_layer(name)
 }
 
 /// The `k2.texting@1` template (Z10): Garden 1, the first Garden.
@@ -268,6 +244,45 @@ pub fn builtin_widget(mut w: J) -> J {
     w["caps"] = json!(widget_caps(&kind).unwrap_or(&[]));
     w["source"] = json!("builtin");
     w
+}
+
+/// A custom widget placement as the page carries it before the store fills
+/// in what the folder and the grant say (prd-zen-user-widgets-v2 UW38):
+/// `{id, kind: "custom", widget, column, props: {home?, agent?, config},
+/// caps: [], requested: [], source: "user"}`. The store's resolve adds
+/// `name`, `description`, `reasons`, `libs`, `hash`, `state`, `errors`,
+/// `warnings`, `requested`, the effective `caps` and `grant`.
+pub fn custom_widget(w: J) -> J {
+    let mut props = serde_json::Map::new();
+    for k in ["home", "agent"] {
+        if let Some(v) = w["props"].get(k).filter(|v| v.is_string()) {
+            props.insert(k.into(), v.clone());
+        }
+    }
+    props.insert(
+        "config".into(),
+        w["props"].get("config").filter(|c| c.is_object()).cloned().unwrap_or_else(|| json!({})),
+    );
+    json!({
+        "id": w["id"],
+        "kind": schema::CUSTOM_KIND,
+        "widget": w["widget"],
+        "column": w["column"].as_u64().unwrap_or(0),
+        "props": props,
+        "caps": [],
+        "requested": [],
+        "source": "user",
+    })
+}
+
+/// A content widget as the renderer reads it: a custom placement
+/// ([`custom_widget`]) or a built-in ([`builtin_widget`]).
+pub fn content_widget(w: J) -> J {
+    if w["kind"] == schema::CUSTOM_KIND {
+        custom_widget(w)
+    } else {
+        builtin_widget(w)
+    }
 }
 
 /// A chrome item as the renderer reads it (prd-zen-freeform-chrome FC29):
@@ -478,45 +493,40 @@ fn name_columns(columns: &mut [J], widgets: &[J]) {
 /// tables split into content (`widgets`) and chrome (`chrome.items`, from
 /// `"template"`); `controls` is the template's `[[control]]` list as is.
 /// `None` for an unknown id.
+///
+/// Every template, the Garden catalog's included, is read through
+/// [`Defaults::live`] (D0).
 pub fn template_page(id: &str) -> Option<J> {
-    static PAGES: OnceLock<std::collections::BTreeMap<&'static str, J>> = OnceLock::new();
-    PAGES
-        .get_or_init(|| {
-            TEMPLATES
-                .iter()
-                .map(|(tid, toml_src)| {
-                    let v: toml::Value = toml::from_str(toml_src)
-                        .unwrap_or_else(|e| panic!("built-in Zen template {tid} does not parse: {e}"));
-                    let t = serde_json::to_value(v)
-                        .unwrap_or_else(|e| panic!("built-in Zen template {tid} to JSON: {e}"));
-                    let columns = t["layout"]["column"].as_array().cloned().unwrap_or_default();
-                    let all = t["widget"].as_array().cloned().unwrap_or_default();
-                    let mut widgets: Vec<J> =
-                        all.iter().filter(|w| !kind_is_chrome(w)).cloned().map(builtin_widget).collect();
-                    link_conversations(&mut widgets);
-                    let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(chrome_item).collect();
-                    let mut page = json!({
-                        "template": tid,
-                        "layout": layout_json(&t["layout"]["kind"], &columns),
-                        "widgets": widgets,
-                        "controls": t["control"].clone(),
-                    });
-                    let ordered: Vec<(&J, bool)> =
-                        widgets.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, true))).collect();
-                    set_chrome(&mut page, "template", &chrome, &ordered);
-                    (*tid, page)
-                })
-                .collect()
-        })
-        .get(id)
-        .cloned()
+    Defaults::live().template(id)
+}
+
+/// Build one template's resolved page from its TOML (the work behind
+/// [`Defaults::template`]).
+fn build_template_page(tid: &str, toml_src: &str) -> J {
+    let v: toml::Value =
+        toml::from_str(toml_src).unwrap_or_else(|e| panic!("built-in Zen template {tid} does not parse: {e}"));
+    let t = serde_json::to_value(v).unwrap_or_else(|e| panic!("built-in Zen template {tid} to JSON: {e}"));
+    let columns = t["layout"]["column"].as_array().cloned().unwrap_or_default();
+    let all = t["widget"].as_array().cloned().unwrap_or_default();
+    let mut widgets: Vec<J> = all.iter().filter(|w| !kind_is_chrome(w)).cloned().map(content_widget).collect();
+    link_conversations(&mut widgets);
+    let chrome: Vec<J> = all.iter().filter(|w| kind_is_chrome(w)).map(chrome_item).collect();
+    let mut page = json!({
+        "template": tid,
+        "layout": layout_json(&t["layout"]["kind"], &columns),
+        "widgets": widgets,
+        "controls": t["control"].clone(),
+    });
+    let ordered: Vec<(&J, bool)> = widgets.iter().map(|w| (w, false)).chain(chrome.iter().map(|c| (c, true))).collect();
+    set_chrome(&mut page, "template", &chrome, &ordered);
+    page
 }
 
 /// A template's chrome `[[widget]]` tables written out as a Garden file
 /// (`schema = 1` + those tables), so a test and the doctor can check them
 /// with the same rules as a Garden file (FC30). `None` for an unknown id.
 pub fn template_chrome_toml(id: &str) -> Option<String> {
-    let src = TEMPLATES.iter().find(|(t, _)| *t == id)?.1;
+    let src = Defaults::live().template_source(id)?;
     let v: toml::Value =
         toml::from_str(src).unwrap_or_else(|e| panic!("built-in Zen template {id} does not parse: {e}"));
     let chrome: Vec<toml::Value> = v
@@ -566,7 +576,7 @@ pub fn garden_page(layer: &Layer, default_template: &str) -> J {
     // Every file widget in file order, as the renderer reads it.
     let file_items: Vec<(J, bool)> = file
         .iter()
-        .map(|w| if kind_is_chrome(w) { (chrome_item(w), true) } else { (builtin_widget(w.clone()), false) })
+        .map(|w| if kind_is_chrome(w) { (chrome_item(w), true) } else { (content_widget(w.clone()), false) })
         .collect();
     let has_content = file_items.iter().any(|(_, c)| !c);
     let has_chrome = file_items.iter().any(|(_, c)| *c);

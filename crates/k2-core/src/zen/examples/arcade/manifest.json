@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "Agent Arcade",
+  "description": "Your agents as little characters. Click one to talk to it.",
+  "entry": "index.html",
+  "caps": ["agents:read", "thread:read", "thread:post"],
+  "reasons": {
+    "agents:read": "to draw one character per agent and show who is working",
+    "thread:read": "to show each character's last message in a speech bubble",
+    "thread:post": "so you can talk to a character from the game"
+  }
+}

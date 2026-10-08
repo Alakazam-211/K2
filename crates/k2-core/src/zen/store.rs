@@ -449,7 +449,7 @@ impl ZenFiles {
         let text = fs::read_to_string(self.path_of(&ZenFile::Garden(id.to_string()))).ok()?;
         let v: toml::Value = toml::from_str(&text).ok()?;
         let t = v.get("template")?.as_str()?;
-        schema::TEMPLATE_IDS.iter().copied().find(|x| *x == t)
+        schema::template_ids().into_iter().find(|x| *x == t)
     }
 
     /// The Garden list and where it came from (G9). A missing or unreadable
@@ -471,7 +471,7 @@ impl ZenFiles {
                             fresh
                         })
                         .map(|mut g| {
-                            if !schema::TEMPLATE_IDS.contains(&g.template.as_str()) {
+                            if !schema::is_template_id(&g.template) {
                                 g.template = schema::BLANK_TEMPLATE_ID.to_string();
                             }
                             g
@@ -1770,7 +1770,7 @@ impl ZenFiles {
             (ListSource::Missing, _) => (false, format!("no Gardens. {NOT_SET_UP}")),
         };
         checks.push(check("gardens.json", ok, detail));
-        let bad_templates: Vec<String> = schema::TEMPLATE_IDS
+        let bad_templates: Vec<String> = schema::template_ids()
             .iter()
             .filter(|t| {
                 let page = super::template_page(t);
@@ -1791,7 +1791,7 @@ impl ZenFiles {
             "templates",
             bad_templates.is_empty(),
             if bad_templates.is_empty() {
-                format!("{} built in, each with the required controls", schema::TEMPLATE_IDS.len())
+                format!("{} built in, each with the required controls", schema::template_ids().len())
             } else {
                 format!("missing a required control: {}", bad_templates.join(", "))
             },

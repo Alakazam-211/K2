@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "Hello",
+  "description": "A clock and a hello to your first agent.",
+  "entry": "index.html",
+  "caps": ["agents:read"],
+  "reasons": {
+    "agents:read": "to say hello to the first agent in this Home"
+  }
+}

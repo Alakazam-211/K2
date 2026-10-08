@@ -41,8 +41,10 @@
 //!   entry with `new_users = true`, in `order`. Diary ships with `false`;
 //!   preinstalling it is the one-line flip of that key.
 //! - **Immutable per version.** A released `<short>-<n>.toml` page never
-//!   changes (look versions, GU4); a better page is `<short>-<n+1>.toml`, and
-//!   the catalog offers the highest version of each `short`. The `[catalog]`
+//!   changes; a better page is `<short>-<n+1>.toml`, and the catalog offers
+//!   the highest version of each `short` (a synced Garden shows it; an own
+//!   copy keeps the id it names: prd-zen-garden-sync-defaults-v1 GS21,
+//!   GS45a, which keep exact ids meaningful for files and v4 bundles). The `[catalog]`
 //!   table is metadata: it is not part of the page and not in the page hash,
 //!   so `label`, `description`, `order` and `new_users` may change.
 //! - A Garden file may name any catalog template id (`template =

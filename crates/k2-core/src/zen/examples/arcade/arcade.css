@@ -1,0 +1,108 @@
+/* Agent Arcade. Colours come from the Garden (--zen-*); the frame is
+   transparent. No images: CSS shapes and emoji. */
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--zen-text, #222);
+  font-family: var(--zen-font, system-ui, sans-serif);
+}
+
+.arcade {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  box-sizing: border-box;
+  gap: 10px;
+}
+
+.hud {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.title { font-weight: 600; letter-spacing: 0.04em; }
+
+.stage {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  align-content: start;
+  gap: 18px 12px;
+  overflow-y: auto;
+  padding-top: 28px;
+}
+
+.hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--zen-surface, #fff) 70%, transparent);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.hero:hover, .hero.picked {
+  outline: 2px solid var(--zen-accent, #6a5acd);
+}
+
+.sprite {
+  font-size: 34px;
+  line-height: 1;
+  transition: transform 0.2s;
+}
+
+.hero.working .sprite { animation: hop 0.6s ease-in-out infinite alternate; }
+.hero.needs .sprite { animation: wave 0.8s ease-in-out infinite; }
+.hero.asleep .sprite { opacity: 0.55; filter: grayscale(0.6); }
+
+.name { font-size: 13px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state { font-size: 11px; opacity: 0.7; }
+
+.bubble {
+  position: absolute;
+  bottom: calc(100% - 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 150px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: var(--zen-surface, #fff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.bubble:empty { display: none; }
+
+.empty { text-align: center; opacity: 0.7; }
+
+.talk {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.talk-to { font-size: 12px; opacity: 0.8; white-space: nowrap; }
+.talk-text { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); background: transparent; color: inherit; font: inherit; }
+.talk button { padding: 6px 10px; border-radius: 8px; border: 0; background: var(--zen-accent, #6a5acd); color: #fff; font: inherit; cursor: pointer; }
+.talk #talk-close { background: transparent; color: inherit; }
+
+@keyframes hop { from { transform: translateY(0); } to { transform: translateY(-6px); } }
+@keyframes wave { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-14deg); } 75% { transform: rotate(14deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero.working .sprite, .hero.needs .sprite { animation: none; }
+}

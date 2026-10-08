@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="arcade.css">
+  </head>
+  <body>
+    <main class="arcade">
+      <header class="hud">
+        <span class="title">Agent Arcade</span>
+        <span id="score" class="score">0 working</span>
+      </header>
+      <section id="stage" class="stage" aria-label="Your agents"></section>
+      <p id="empty" class="empty" hidden>No agents here yet.</p>
+      <form id="talk" class="talk" hidden>
+        <span id="talk-to" class="talk-to"></span>
+        <input id="talk-text" class="talk-text" maxlength="4000" autocomplete="off" placeholder="Say something">
+        <button type="submit">Send</button>
+        <button type="button" id="talk-close" aria-label="Close">×</button>
+      </form>
+    </main>
+    <script src="arcade.js"></script>
+  </body>
+</html>

@@ -14,8 +14,9 @@
 //!   k2-core (`include_str!`), read-only, never a folder.
 //! - **Immutable per version.** Once a release ships `k2:diary@1`, its bytes
 //!   never change (TUWB6 pins them by hash). Better code ships as
-//!   `k2:diary@2`, and only a template moves to it, so a Garden pinned by
-//!   look versions keeps `@1` (GU4, GU8, GU14).
+//!   `k2:diary@2`, and only a template moves to it, so an own-copy Garden
+//!   keeps `@1` (prd-zen-garden-sync-defaults-v1 GS16, GS45a); a synced
+//!   Garden's grant carries to `@2` (SD7, `zen::grants::carries`).
 //! - A **Garden file** must name a built-in with its version
 //!   (`widget = "k2:diary@1"`). `k2 zen widget new my-diary --from k2:diary`
 //!   (no version) copies the latest version into a user folder to edit.

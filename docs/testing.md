@@ -55,8 +55,10 @@ on any thread count.
    `let _agents = test_env::AgentShim::install();` (each name runs `exec cat`).
 8. **No dead well-known ports.** Never point a client at `127.0.0.1:9` / `:1` as
    "unreachable": where loopback RSTs are dropped, that connect hangs. Use
-   `test_env::ErrorHttpServer::start(503)` (a real listener that answers an error)
-   or your own mock server.
+   `test_env::ErrorHttpServer::start(503)` (a real listener that answers an error),
+   your own mock server, or `test_env::ClosedPort::new()` / `::dual()` (a reserved,
+   non-listening port: refused at once). Never bind a listener and drop it to get
+   a "closed" port: a parallel test can re-bind it before you connect.
 9. **No chmod-based failure injection.** Root ignores `0444` / `0555`. Inject I/O
    errors structurally: a directory where a file must be written (EISDIR), a
    regular file where a directory must be (ENOTDIR), or a seam such as
@@ -81,6 +83,14 @@ for v in $(env | grep -oE '^K2(SO)?_[A-Z0-9_]+'); do unset $v; done
 cargo test -p k2-core --lib -- <module>::     # one module
 cargo test -p k2-daemon --test <file>        # one integration file
 ```
+
+A route arm in `routes/dispatcher.rs` that answers on a keep-alive socket must
+consume the peeked request on EVERY branch (GET included), or the loop answers
+it again (the `GET /cli/tunnel/config` bug).
+
+The nightly soak, `scripts/test-soak-linux.sh <sha>`, loops the known-flaky
+groups 200x under CPU load, runs both unit binaries with shuffle seeds 1-10, and
+runs the whole suite once under load.
 
 Loop a flake fix before calling it fixed: run the module filter 200 times with
 `--test-threads=12` under CPU load, and once with a shuffled order

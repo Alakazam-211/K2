@@ -292,4 +292,51 @@ kind = "columns"
         let unpinned: &'static str = Box::leak(DIARY_FIXTURE.replace("k2:diary@1", "k2:diary").into_boxed_str());
         assert!(parse_entry("diary-1.toml", unpinned).is_err(), "grant widget must be versioned");
     }
+
+    /// Integration (Zen v2, B1 × B2): every catalog template, every shipped
+    /// version, names only built-in widgets that exist in this build. A
+    /// catalog Garden has no widget folder of its own, so a `custom` widget
+    /// must be a versioned `k2:<name>@<n>` from `BUILTIN_WIDGETS`; the grant
+    /// names one of the page's widgets and asks for no more than its
+    /// manifest does.
+    #[test]
+    fn every_catalog_template_names_an_existing_builtin_widget() {
+        use crate::zen::builtin_widgets::builtin_widget;
+        let all = garden_catalog();
+        assert!(!all.is_empty(), "the catalog ships at least the Diary");
+        for e in all {
+            let v: toml::Value = toml::from_str(e.toml).unwrap_or_else(|err| panic!("{}: {err}", e.file));
+            let widgets = v.get("widget").and_then(toml::Value::as_array).cloned().unwrap_or_default();
+            let mut custom: Vec<String> = Vec::new();
+            for w in &widgets {
+                if w.get("kind").and_then(toml::Value::as_str) != Some("custom") {
+                    continue;
+                }
+                let name = w
+                    .get("widget")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or_else(|| panic!("{}: a custom widget without `widget =`", e.file));
+                let r = parse_widget_ref(name).unwrap_or_else(|err| panic!("{}: {name}: {err}", e.file));
+                assert!(
+                    matches!(r, WidgetRef::Builtin { version: Some(_), .. }),
+                    "{}: '{name}' must be a versioned built-in (k2:<name>@<n>); a catalog Garden has no widget folder",
+                    e.file
+                );
+                assert!(builtin_widget(&r).is_some(), "{}: '{name}' isn't a built-in widget in this build", e.file);
+                custom.push(name.to_string());
+            }
+            if let Some(g) = &e.meta.grant {
+                assert!(custom.contains(&g.widget), "{}: grant widget {} isn't on the page", e.file, g.widget);
+                let b = builtin_widget(&parse_widget_ref(&g.widget).expect("checked by parse_entry"))
+                    .unwrap_or_else(|| panic!("{}: grant widget {} doesn't exist", e.file, g.widget));
+                let manifest = b.files.iter().find(|(f, _)| *f == "manifest.json").map(|(_, s)| *s).expect("manifest");
+                let manifest: serde_json::Value = serde_json::from_str(manifest).expect("manifest is JSON");
+                let asked: Vec<&str> =
+                    manifest["caps"].as_array().expect("caps").iter().filter_map(|c| c.as_str()).collect();
+                for c in &g.caps {
+                    assert!(asked.contains(&c.as_str()), "{}: grant cap {c} isn't in {}'s manifest", e.file, g.widget);
+                }
+            }
+        }
+    }
 }

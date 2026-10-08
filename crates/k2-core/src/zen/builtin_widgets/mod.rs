@@ -255,4 +255,39 @@ mod tests {
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
         assert!(code <= 256 * 1024, "UW8: the Diary's code is {code} bytes");
     }
+
+    /// Integration (Zen v2, B1 × B3): every library a built-in widget asks
+    /// for resolves against the checked-in `zen-lib.json`, and is bundled,
+    /// so a built-in works offline and under air-gap with no first-use
+    /// download. The Diary's `perfect-freehand@1` and `font-caveat@5` are
+    /// pinned by name so a rename in the stdlib fails here, not at mount.
+    #[test]
+    fn builtin_widget_libraries_resolve_in_zen_lib_json() {
+        use crate::zen::stdlib::{find, zen_lib_manifest, LibRef, LibSource};
+        let m = zen_lib_manifest();
+        for w in BUILTIN_WIDGETS {
+            let manifest = w
+                .files
+                .iter()
+                .find(|(f, _)| *f == "manifest.json")
+                .map(|(_, b)| *b)
+                .unwrap_or_else(|| panic!("{} has a manifest.json", w.id()));
+            let manifest: serde_json::Value =
+                serde_json::from_str(manifest).unwrap_or_else(|e| panic!("{}: manifest.json: {e}", w.id()));
+            let Some(libs) = manifest.get("requires").and_then(|r| r.get("libs")) else { continue };
+            let libs = libs.as_array().unwrap_or_else(|| panic!("{}: requires.libs is a list", w.id()));
+            for l in libs {
+                let r = LibRef::from_json(l).unwrap_or_else(|e| panic!("{}: {e}", w.id()));
+                let e = find(m, &r).unwrap_or_else(|| panic!("{}: {l} isn't in src/shared/zen-lib.json", w.id()));
+                assert_eq!(e.source, LibSource::Bundled, "{}: {l} must be bundled, not a download", w.id());
+                assert!(!e.files.is_empty(), "{}: {l} resolves to a row with no files", w.id());
+            }
+        }
+        builtin_widget(&parse_widget_ref(DIARY_WIDGET).expect("parses")).expect("k2:diary@1 ships");
+        for (id, v) in [("perfect-freehand", "1"), ("font-caveat", "5")] {
+            let r = LibRef::Named { id: id.into(), version: v.into() };
+            let e = find(m, &r).unwrap_or_else(|| panic!("the Diary's {id}@{v} isn't in zen-lib.json"));
+            assert_eq!(e.source, LibSource::Bundled, "{id}@{v}");
+        }
+    }
 }

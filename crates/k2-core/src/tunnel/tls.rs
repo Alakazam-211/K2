@@ -647,13 +647,8 @@ mod tests {
             // Ensure the spike hatch is OFF for this test.
             let _self_signed = crate::test_env::EnvVar::remove("K2_E2E_SELF_SIGNED");
             // Point the broker at a closed port so the call fails fast.
-            let dead = {
-                use std::net::TcpListener;
-                let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-                let p = l.local_addr().unwrap().port();
-                drop(l);
-                format!("http://127.0.0.1:{p}/cert")
-            };
+            let closed = crate::test_env::ClosedPort::new();
+            let dead = format!("http://127.0.0.1:{}/cert", closed.port());
             let _broker_url = crate::test_env::EnvVar::set(super::super::cert_broker::BROKER_URL_ENV, &dead);
             super::super::config::save(&super::super::config::TunnelConfig {
                 token: "tok".to_string(),

@@ -1033,11 +1033,10 @@ mod tests {
 
         // IPv4-only app (spawn_tagged_stub binds 127.0.0.1).
         let app_port = spawn_tagged_stub("V4APP").await;
-        // A port nothing listens on, on either loopback.
-        let dead_port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-            l.local_addr().unwrap().port()
-        };
+        // A port nothing listens on, on either loopback (reserved for the
+        // test's life so a parallel test can't take it).
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let dead_port = closed.port();
 
         let mut targets = std::collections::HashMap::new();
         targets.insert("web".to_string(), format!("localhost:{app_port}"));

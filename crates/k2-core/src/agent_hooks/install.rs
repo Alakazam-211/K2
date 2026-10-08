@@ -1397,8 +1397,9 @@ mod tests {
     fn t_s1b_script_exits_zero_quickly_with_the_daemon_down() {
         let home = TempHome::new("s1b-down");
         write_script(&script_path(home.path()), "0.44.3").expect("script");
-        // A port nobody listens on (bind then drop).
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // A reserved port nobody listens on.
+        let closed = crate::test_env::ClosedPort::new();
+        let port = closed.port();
         std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
         let (code, stdout, took) = run_script(
             home.path(),

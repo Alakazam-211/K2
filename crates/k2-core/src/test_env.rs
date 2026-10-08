@@ -495,6 +495,107 @@ pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
     out
 }
 
+/// A loopback TCP port that is RESERVED but not listening: connects to it
+/// are refused at once, and no other test can take it while the guard
+/// lives. Use it for "nothing listens there" tests instead of binding a
+/// listener and dropping it, which frees the port for any parallel test to
+/// re-bind (`local_port_reachable_false_for_closed_port` saw a closed port
+/// answer under load). [`ClosedPort::new`] reserves `127.0.0.1:<port>`;
+/// [`ClosedPort::dual`] also reserves `[::1]:<port>` when the host has IPv6
+/// loopback, for tests of code that tries both.
+#[cfg(unix)]
+pub struct ClosedPort {
+    port: u16,
+    _fds: Vec<std::os::fd::OwnedFd>,
+}
+
+#[cfg(unix)]
+impl ClosedPort {
+    /// Reserve a closed `127.0.0.1` port.
+    pub fn new() -> Self {
+        let (fd, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+        Self { port, _fds: vec![fd] }
+    }
+
+    /// Reserve the same closed port on `127.0.0.1` and (when IPv6
+    /// loopback exists) `::1`.
+    pub fn dual() -> Self {
+        for _ in 0..64 {
+            let (v4, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+            match reserve(true, port) {
+                Ok((v6, _)) => return Self { port, _fds: vec![v4, v6] },
+                // No IPv6 loopback on this host: nothing can listen there.
+                Err(e) if e.raw_os_error() == Some(libc::EAFNOSUPPORT)
+                    || e.raw_os_error() == Some(libc::EADDRNOTAVAIL) =>
+                {
+                    return Self { port, _fds: vec![v4] }
+                }
+                // Someone holds [::1]:port; pick another port.
+                Err(_) => continue,
+            }
+        }
+        panic!("could not reserve one closed port on both loopbacks");
+    }
+
+    /// The reserved port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+/// A bound, NOT listening TCP socket on loopback (`port` 0 = any).
+#[cfg(unix)]
+fn reserve(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, u16)> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let family = if v6 { libc::AF_INET6 } else { libc::AF_INET };
+    // SAFETY: plain socket syscalls on a fresh fd we own; every pointer
+    // passed is to a correctly sized, zero-initialized sockaddr.
+    unsafe {
+        let raw = libc::socket(family, libc::SOCK_STREAM, 0);
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let fd = OwnedFd::from_raw_fd(raw);
+        libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+        let mut storage: libc::sockaddr_storage = std::mem::zeroed();
+        let len = if v6 {
+            let a = &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in6);
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            {
+                a.sin6_len = std::mem::size_of::<libc::sockaddr_in6>() as u8;
+            }
+            a.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+            a.sin6_port = port.to_be();
+            a.sin6_addr.s6_addr = std::net::Ipv6Addr::LOCALHOST.octets();
+            std::mem::size_of::<libc::sockaddr_in6>()
+        } else {
+            let a = &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in);
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            {
+                a.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+            }
+            a.sin_family = libc::AF_INET as libc::sa_family_t;
+            a.sin_port = port.to_be();
+            a.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            std::mem::size_of::<libc::sockaddr_in>()
+        } as libc::socklen_t;
+        if libc::bind(fd.as_raw_fd(), &storage as *const _ as *const libc::sockaddr, len) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut out: libc::sockaddr_storage = std::mem::zeroed();
+        let mut out_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        if libc::getsockname(fd.as_raw_fd(), &mut out as *mut _ as *mut libc::sockaddr, &mut out_len) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let bound = if v6 {
+            (*(&out as *const _ as *const libc::sockaddr_in6)).sin6_port
+        } else {
+            (*(&out as *const _ as *const libc::sockaddr_in)).sin_port
+        };
+        Ok((fd, u16::from_be(bound)))
+    }
+}
+
 /// Run `f` with a fresh temp `$HOME` (see [`TempHome`]).
 pub fn with_temp_home<R>(f: impl FnOnce(&Path) -> R) -> R {
     let home = TempHome::new();
@@ -576,6 +677,22 @@ mod tests {
         }
         assert_eq!(std::env::var_os(SHIM_DIR_ENV), before);
         assert!(!dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closed_port_refuses_at_once_and_stays_reserved() {
+        let closed = ClosedPort::dual();
+        let t = std::time::Instant::now();
+        let err = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], closed.port())),
+            std::time::Duration::from_secs(5),
+        )
+        .expect_err("nothing listens on a reserved port");
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err:?}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
+        // Reserved: nobody else can listen on it meanwhile.
+        assert!(std::net::TcpListener::bind(("127.0.0.1", closed.port())).is_err());
     }
 
     #[test]

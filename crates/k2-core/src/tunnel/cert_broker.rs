@@ -683,13 +683,10 @@ mod tests {
                 ..Default::default()
             })
             .expect("seed config");
-            // Point at a closed port (bind then drop so nothing is listening).
-            let dead = {
-                let l = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-                let p = l.local_addr().unwrap().port();
-                drop(l);
-                format!("http://127.0.0.1:{p}/cert")
-            };
+            // Point at a reserved, closed port (nothing listens; no parallel
+            // test can take it meanwhile).
+            let closed = crate::test_env::ClosedPort::new();
+            let dead = format!("http://127.0.0.1:{}/cert", closed.port());
             let err = with_broker_url_ret(&dead, || provision_via_broker("rosson"))
                 .expect_err("unreachable broker must NOT silently fall back");
             assert!(

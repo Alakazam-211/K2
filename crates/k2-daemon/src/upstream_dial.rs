@@ -275,11 +275,9 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_localhost_reports_both_addresses_tried() {
-        // Bind then drop to get a port nothing listens on.
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
-        };
+        // A port reserved on both loopbacks that nothing listens on.
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let port = closed.port();
         let err = dial_target(&format!("localhost:{port}"), Duration::from_secs(5))
             .await
             .expect_err("nothing listens there");

@@ -2685,11 +2685,10 @@ mod tests {
 
     #[test]
     fn local_port_reachable_false_for_closed_port() {
-        // Bind then drop so we know a free port that is not listening.
-        let port = {
-            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-            l.local_addr().expect("addr").port()
-        };
+        // Reserved, not listening (a dropped listener's port can be
+        // re-bound by a parallel test before we probe it).
+        let closed = crate::test_env::ClosedPort::new();
+        let port = closed.port();
         assert!(
             !local_port_reachable(port),
             "closed port {port} must report unreachable"

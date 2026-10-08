@@ -1,23 +1,16 @@
-// prd-zen-user-widgets-v2 UW38 (+ UWB4, UWB7, UWB9, UWB13) — a custom
-// widget as `GET /cli/zen/get` sends it, parsed at the boundary.
+// prd-zen-user-widgets-v2 UW38 (+ UWB9, UWB13) — a custom widget as
+// `GET /cli/zen/get` sends it, parsed at the boundary.
 //
 // The daemon resolves each `[[widget]] kind = "custom"` placement to
 // `ZenCustomWidgetPayload` (`zen-custom-types.ts`): the manifest's name,
-// description, reasons and requested caps, the bundle hash and state, and
-// the grant the daemon verified (signature, key, widget and ask). Nothing
-// past this file sees raw JSON. A field this client can't read falls back
-// to the closed, safe value: no caps, no grant, `broken`.
+// description, reasons and requested caps, the bundle hash and state, where
+// it came from and the runaway pause. A widget in your own Garden runs with
+// every Garden-safe cap it asks for; there is no grant (Rosson 2026-10-08).
+// Nothing past this file sees raw JSON. A field this client can't read
+// falls back to the closed, safe value: no caps, `broken`.
 
 import { USER_WIDGET_CAPS, type UserWidgetCap } from '../k2-caps.generated'
-import type {
-  ZenCustomWidgetPayload,
-  ZenGrantEntry,
-  ZenGrantPause,
-  ZenGrantState,
-  ZenGrantView,
-  ZenScope,
-  ZenWidgetFinding,
-} from './zen-custom-types'
+import { zenWidgetMayRun, type ZenCustomWidgetPayload, type ZenWidgetFinding, type ZenWidgetPause } from './zen-custom-types'
 import type { ZenLibRef } from './zen-lib-loader'
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -40,66 +33,10 @@ export function zenWidgetCaps(raw: unknown): UserWidgetCap[] {
   return out
 }
 
-const GRANT_STATES: readonly ZenGrantState[] = ['none', 'invalid', 'review', 'partial', 'granted']
-
-/** A scope from its one-key wire form (`{home}`, `{allHomes: true}`, …), or null. */
-export function parseZenScope(raw: unknown): ZenScope | null {
-  if (!isObj(raw)) return null
-  const keys = Object.keys(raw)
-  if (keys.length !== 1) return null
-  const [k] = keys
-  const v = raw[k]
-  switch (k) {
-    case 'agent':
-    case 'home':
-    case 'server':
-      return typeof v === 'string' && v.trim() ? ({ [k]: v } as ZenScope) : null
-    case 'homes': {
-      if (!Array.isArray(v) || v.length === 0) return null
-      const ids = v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-      if (ids.length !== v.length || new Set(ids).size !== ids.length) return null
-      return { homes: ids }
-    }
-    case 'allHomes':
-      return v === true ? { allHomes: true } : null
-    case 'allServers':
-      return v === true ? { allServers: true } : null
-    default:
-      return null
-  }
-}
-
-function parseEntries(raw: unknown): ZenGrantEntry[] {
-  if (!Array.isArray(raw)) return []
-  const out: ZenGrantEntry[] = []
-  for (const e of raw) {
-    if (isObj(e) && typeof e.server === 'string' && typeof e.room === 'string') out.push({ server: e.server, room: e.room })
-  }
-  return out
-}
-
-function parsePause(raw: unknown): ZenGrantPause | null {
+/** The runaway pause (Rust `Pause`), or null. */
+export function parseZenWidgetPause(raw: unknown): ZenWidgetPause | null {
   if (!isObj(raw) || raw.reason !== 'runaway') return null
   return { at: str(raw.at) ?? '', reason: 'runaway' }
-}
-
-/** `grant` on a custom widget (Rust `GrantView`), or null when absent. An
- *  unreadable state reads as `invalid` (fails closed: no caps). */
-export function parseZenGrantView(raw: unknown): ZenGrantView | null {
-  if (!isObj(raw)) return null
-  const state = GRANT_STATES.includes(raw.state as ZenGrantState) ? (raw.state as ZenGrantState) : 'invalid'
-  const closed = state === 'none' || state === 'invalid' || state === 'review'
-  return {
-    state,
-    caps: closed ? [] : zenWidgetCaps(raw.caps),
-    granted: zenWidgetCaps(raw.granted),
-    scope: parseZenScope(raw.scope),
-    entries: parseEntries(raw.entries),
-    sending: raw.sending === true,
-    paused: parsePause(raw.paused),
-    grantedAt: str(raw.grantedAt),
-    widgetHash: str(raw.widgetHash),
-  }
 }
 
 function parseFindings(raw: unknown): ZenWidgetFinding[] {
@@ -147,19 +84,19 @@ function parseReasons(raw: unknown): Partial<Record<UserWidgetCap, string>> {
 
 /**
  * One custom widget from `page.widgets` (`kind: "custom"`). `base` is what
- * the page parser already read (id, column, props). The effective caps are
- * intersected again here (UW26 step 2): requested ∩ the grant's caps ∩ the
- * four widget caps, and none while the grant needs review.
+ * the page parser already read (id, column, props). The caps are
+ * intersected again here (UW26 step 2): requested ∩ the daemon's caps ∩ the
+ * four widget caps, and none for a widget that isn't from your own Garden
+ * (an unknown `origin` fails closed: the v4 seam).
  */
 export function parseZenCustomWidget(
   raw: Record<string, unknown>,
   base: { id: string; column: number; props: Record<string, unknown> },
 ): ZenCustomWidgetPayload {
   const requested = zenWidgetCaps(raw.requested)
-  const grant = parseZenGrantView(raw.grant)
   const fromDaemon = zenWidgetCaps(raw.caps)
-  const grantCaps = grant ? grant.caps : []
-  const caps = requested.filter((c) => fromDaemon.includes(c) && grantCaps.includes(c))
+  const origin = raw.origin === 'local' ? 'local' : 'other'
+  const caps = zenWidgetMayRun({ origin }) ? requested.filter((c) => fromDaemon.includes(c)) : []
   const props = base.props
   const state = raw.state === 'ok' || raw.state === 'errors' ? raw.state : 'broken'
   const name = str(raw.name)?.trim()
@@ -184,6 +121,7 @@ export function parseZenCustomWidget(
     state,
     errors: parseFindings(raw.errors),
     warnings: parseFindings(raw.warnings),
-    grant,
+    origin,
+    paused: parseZenWidgetPause(raw.paused),
   }
 }

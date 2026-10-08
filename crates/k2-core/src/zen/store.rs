@@ -35,12 +35,12 @@ pub const GARDENS_DIR: &str = "gardens";
 /// The Garden list (G9). Daemon-written, atomic, never watched.
 pub const GARDENS_FILE: &str = "gardens.json";
 pub const HISTORY_DIR: &str = ".history";
-/// Never read or written: Zen v2 keeps widget grants as signed rows in the
-/// daemon's database (`zen::grants`, UWB4). No route may name it.
+/// Never read or written: widgets in your own Garden need no grants
+/// (`zen::widget_access`, 2026-10-08). No route may name it.
 pub const GRANTS_FILE: &str = "grants.json";
-/// The fingerprint keys for widget folders and grants (UW12).
+/// The fingerprint keys for widget folders and runaway pauses (UW12).
 const WIDGETS_DIR_KEY: &str = "widgets/";
-const GRANTS_KEY: &str = "grants";
+const PAUSES_KEY: &str = "pauses";
 /// User theme bundles: `themes/<name>/theme.toml` plus an optional image.
 pub const THEMES_DIR: &str = "themes";
 pub const THEME_FILE: &str = "theme.toml";
@@ -1471,20 +1471,20 @@ impl ZenFiles {
     /// is the first). The page is the Garden's template with its file's
     /// layout and widgets (G38); the theme stack ends with its file.
     pub fn resolve(&self, garden: Option<&str>) -> Result<J, ZenError> {
-        self.resolve_with(garden, &super::grants::GrantSnapshot::empty())
+        self.resolve_with(garden, &super::widget_access::WidgetPauses::empty())
     }
 
-    /// [`ZenFiles::resolve`] with the daemon's grants: each custom widget
-    /// carries its folder's state and its effective grant (UW38), and
+    /// [`ZenFiles::resolve`] with the daemon's runaway pauses: each custom
+    /// widget carries its folder's state, its caps and its pause (UW38), and
     /// Garden-file findings that need the folders join `errors`.
-    pub fn resolve_with(&self, garden: Option<&str>, grants: &super::grants::GrantSnapshot) -> Result<J, ZenError> {
-        self.resolve_view_with(garden, grants, &super::sync::View::current())
+    pub fn resolve_with(&self, garden: Option<&str>, pauses: &super::widget_access::WidgetPauses) -> Result<J, ZenError> {
+        self.resolve_view_with(garden, pauses, &super::sync::View::current())
     }
 
-    /// [`ZenFiles::resolve`] through `view`, with no grants (the sync code's
-    /// comparisons: both sides see the same grants).
+    /// [`ZenFiles::resolve`] through `view`, with no pauses (the sync code's
+    /// comparisons: both sides see the same pauses).
     pub fn resolve_view(&self, garden: Option<&str>, view: &super::sync::View) -> Result<J, ZenError> {
-        self.resolve_view_with(garden, &super::grants::GrantSnapshot::empty(), view)
+        self.resolve_view_with(garden, &super::widget_access::WidgetPauses::empty(), view)
     }
 
     /// [`ZenFiles::resolve_with`] through `view`: the Garden's page and theme
@@ -1494,7 +1494,7 @@ impl ZenFiles {
     pub fn resolve_view_with(
         &self,
         garden: Option<&str>,
-        grants: &super::grants::GrantSnapshot,
+        pauses: &super::widget_access::WidgetPauses,
         view: &super::sync::View,
     ) -> Result<J, ZenError> {
         self.require()?;
@@ -1562,7 +1562,7 @@ impl ZenFiles {
             page.layer.get("page.widgets"),
             &page.positions,
         ));
-        self.fill_custom_widgets(&id, &mut page_json, grants);
+        self.fill_custom_widgets(&id, &mut page_json, pauses);
         let versioned = json!({
             "garden": garden_json,
             "page": page_json,
@@ -1686,17 +1686,17 @@ impl ZenFiles {
     /// the same fingerprint, so a caller emits `zen_changed` only when it
     /// moves (Z12): a Garden create, rename, reorder or delete moves it.
     pub fn refresh(&self) -> Result<String, ZenError> {
-        self.refresh_with(&super::grants::GrantSnapshot::empty())
+        self.refresh_with(&super::widget_access::WidgetPauses::empty())
     }
 
     /// [`ZenFiles::refresh`] that also covers every widget folder (keeping
-    /// its last good bundle and code history, UW11) and the daemon's grants
-    /// (UW12): a widget save, a grant and a revoke each move it once.
-    pub fn refresh_with(&self, grants: &super::grants::GrantSnapshot) -> Result<String, ZenError> {
+    /// its last good bundle and code history, UW11) and the daemon's runaway
+    /// pauses (UW12): a widget save, a pause and a resume each move it once.
+    pub fn refresh_with(&self, pauses: &super::widget_access::WidgetPauses) -> Result<String, ZenError> {
         self.require()?;
         let mut state = serde_json::Map::new();
         state.insert(WIDGETS_DIR_KEY.to_string(), self.refresh_widgets()?);
-        state.insert(GRANTS_KEY.to_string(), grants.fingerprint());
+        state.insert(PAUSES_KEY.to_string(), pauses.fingerprint());
         state.insert(super::sync::SYNC_FILE.to_string(), self.sync_fingerprint_state());
         state.insert(
             GARDENS_FILE.to_string(),
@@ -1968,9 +1968,9 @@ impl ZenFiles {
             "grants.json",
             true,
             if grants {
-                "present and ignored: widget grants live in K2's database, signed, and only your click in the K2 app makes one (k2 zen widget list)".into()
+                "present and ignored: widgets in your own Gardens need no permissions".into()
             } else {
-                "absent (widget grants live in K2's database; k2 zen widget list shows them)".into()
+                "absent (widgets in your own Gardens need no permissions)".into()
             },
         ));
         let names = self.widget_names();

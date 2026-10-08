@@ -18,7 +18,7 @@
 #     as basic, quietly): list/next/prev/set/new, per-Garden picks, an unknown name
 #     exits 1, reset --theme clears an override, and a curl-only switch (no
 #     CLI, no client) shows up in /cli/zen/get;
-#   - there is no grant verb, and nothing writes grants.json.
+#   - there is no grant verb (widgets need no permissions), and nothing writes grants.json.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
 
 set -euo pipefail
@@ -510,10 +510,10 @@ assert_contains "doctor reports the watcher" "$out" "ok   watcher"
 assert_contains "doctor reports the Garden list" "$out" "ok   gardens.json: 1 Garden(s): Garden 1"
 assert_contains "doctor reports the templates" "$out" "ok   templates"
 
-echo "== agents can't grant =="
+echo "== no grant verb: widgets need no permissions =="
 capture zen grant thread:post
 assert_eq "no grant verb" "$rc" "2"
-assert_contains "grant refusal says why" "$out" "Agents never grant permissions"
+assert_contains "grant refusal says why" "$out" "Widgets in your own Gardens need no permissions"
 capture zen reset --file grants.json
 assert_eq "reset can't name grants.json" "$rc" "1"
 capture zen validate --file gardens.json

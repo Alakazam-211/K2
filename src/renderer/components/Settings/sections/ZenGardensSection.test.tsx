@@ -35,8 +35,6 @@ const h = vi.hoisted(() => ({
   sockets: [] as string[],
   reveals: [] as string[],
   label: 'main',
-  /** `GET widget/grants` rows; null = the daemon has no such route. */
-  grants: null as null | Array<Record<string, unknown>>,
   /** `GET templates` rows; null = the daemon has no such route. */
   templates: null as null | Array<Record<string, unknown>>,
 }))
@@ -89,10 +87,8 @@ function fakeGet(route: string): unknown {
       themes: h.themes.map((name) => ({ name, builtin: true, user: false, summary: '', active: name === h.global })),
     }
   }
-  if (route === 'zen/widget/grants') {
-    if (h.grants === null) throw new Error('unknown zen route')
-    return { ok: true, grants: h.grants }
-  }
+  // Rosson 2026-10-08: no widget permissions; Settings never asks for them.
+  if (route === 'zen/widget/grants') throw new Error('Settings must not read widget permissions')
   if (route === 'zen/templates') {
     if (h.templates === null) throw new Error('unknown zen route')
     return { ok: true, templates: h.templates }
@@ -148,16 +144,6 @@ function fakePost(route: string, body: Record<string, unknown>): unknown {
       const g = findGarden(String(body.garden))
       h.gardens.splice(h.gardens.indexOf(g), 1)
       return { ok: true }
-    }
-    case 'zen/widget/revoke':
-    case 'zen/widget/sending':
-    case 'zen/widget/resume': {
-      const i = (h.grants ?? []).findIndex((g) => g.garden === body.garden && g.placement === body.placement)
-      if (i < 0) throw new Error('unknown_grant')
-      if (route === 'zen/widget/revoke') h.grants?.splice(i, 1)
-      else if (route === 'zen/widget/sending') (h.grants as Array<Record<string, unknown>>)[i].sending = body.on
-      else (h.grants as Array<Record<string, unknown>>)[i].paused = null
-      return { ok: true, changed: true }
     }
     case 'zen/theme/set': {
       if (body.clear === true) {
@@ -223,7 +209,7 @@ import {
 } from '@/lib/zen/zen-settings'
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import Settings, { settingsNav } from '../Settings'
-import { ZenGardensSection } from './ZenGardensSection'
+import { ZEN_GARDENS_MANIFEST, ZenGardensSection } from './ZenGardensSection'
 import { __resetZenTemplatesForTests, setZenCatalogBadge } from '@/lib/zen/zen-templates'
 import { useHomesStore } from '@/stores/homes'
 
@@ -306,7 +292,6 @@ beforeEach(() => {
   setPlatform('MacIntel')
   __resetZenSettingsForTests()
   __resetZenTemplatesForTests()
-  h.grants = null
   h.templates = null
   // A light section underneath, so only the sidebar and Gardens matter.
   useSettingsStore.setState({ settingsOpen: true, activeSection: 'keybindings' })
@@ -450,9 +435,8 @@ describe('Settings → Gardens: the section', () => {
       ['GET', 'local', 'zen/gardens'],
       ['GET', 'local', 'zen/status'],
       ['GET', 'local', 'zen/theme/list'],
-      // prd-zen-user-widgets-v2: widget permissions and the Garden catalog
-      // (this daemon has neither route: both quietly absent).
-      ['GET', 'local', 'zen/widget/grants'],
+      // prd-zen-user-widgets-v2: the Garden catalog (this daemon has no
+      // route: quietly absent). No widget permissions (Rosson 2026-10-08).
       ['GET', 'local', 'zen/templates'],
     ])
     expect(document.querySelector('[data-zen-settings-grants]')).toBeNull()
@@ -642,23 +626,19 @@ describe('Settings → Gardens: the section', () => {
   })
 })
 
-describe('Settings → Gardens: the Garden catalog and widget permissions (prd-zen-user-widgets-v2)', () => {
+describe('Settings → Gardens: the Garden catalog, and no widget permissions (prd-zen-user-widgets-v2)', () => {
   const STARTS = [
-    { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', needsGrant: null, newUsers: true },
-    { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'e', section: 'start', needsGrant: null, newUsers: true },
+    { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', newUsers: true },
+    { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'e', section: 'start', newUsers: true },
   ]
-  const CONSENT = 'Diary can read your agents on this computer and post to their Threads.'
   const DIARY = {
     id: 'k2.diary@1',
     short: 'diary',
     label: 'Diary',
     description: 'A haunted journal.',
     section: 'catalog',
-    needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'], scope: 'local', consent: CONSENT },
     newUsers: false,
   }
-  // The Diary's grant is this computer's agents: Alice, never Julie (remote).
-  const LOCAL_GRANT = { scope: { server: 'local' }, sending: true, entries: [{ server: 'local', room: 'alice' }] }
   let savedHomes: ReturnType<typeof useHomesStore.getState>['homes']
 
   beforeEach(() => {
@@ -681,27 +661,24 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     useHomesStore.setState({ homes: savedHomes })
   })
 
-  it('Rosson 2026-10-08: the Diary is the first card in + New Garden; the click is the consent, its grant fixed to this computer', async () => {
+  it('Rosson 2026-10-08: the Diary is the first card in + New Garden; Create posts no grant (no permissions)', async () => {
     h.templates = [...STARTS, DIARY]
-    h.grants = []
     await mountSection()
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
     await waitFor(() => expect(newGardenCards()).toEqual(['diary', 'texting', 'blank']))
     expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true')
     expect(newGardenEl('[data-zen-new-garden-card="diary"] [data-zen-garden-sketch="diary"]')).not.toBeNull()
-    expect(newGardenEl('[data-zen-new-garden-consent="diary"]').textContent).toBe(CONSENT)
-    // No scope picker, no Sending choice: one plain sentence.
-    expect(document.querySelector('[data-testid="zen-new-garden-modal"] select, [data-zen-sending-choice]')).toBeNull()
+    // Nothing to agree to: no consent line, no scope picker, no Sending choice.
+    expect(document.querySelector('[data-zen-new-garden-consent], [data-testid="zen-new-garden-modal"] select, [data-zen-sending-choice]')).toBeNull()
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Notebook' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
     expect(row(rowNames()[3]).textContent).toContain('Diary')
-    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Notebook', template: 'diary', grant: LOCAL_GRANT }]])
+    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Notebook', template: 'diary' }]])
   })
 
   it('R5: nothing is ever appended; the plain starts post no grant', async () => {
     h.templates = [...STARTS, DIARY]
-    h.grants = []
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
@@ -714,8 +691,7 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
   })
 
   it('Rosson 2026-10-08: the Garden catalog area uses the same cards; a card opens New Garden on it', async () => {
-    h.templates = [...STARTS, DIARY, { ...DIARY, id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', needsGrant: null }]
-    h.grants = []
+    h.templates = [...STARTS, DIARY, { ...DIARY, id: 'k2.stickers@1', short: 'stickers', label: 'Stickers' }]
     h.gardens.push({ id: 'g-diary', name: 'Diary', template: 'k2.diary@1', theme: null })
     await mountSection()
     act(() => setZenCatalogBadge('diary', 'New'))
@@ -730,11 +706,11 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true'))
     expect(zenPosts()).toEqual([])
     expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Diary 2')
-    expect(newGardenEl('[data-zen-new-garden-consent="diary"]').textContent).toBe(CONSENT)
+    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Diary 2', template: 'diary', grant: LOCAL_GRANT }]])
-    // A catalog Garden with no widget: no consent, no grant.
+    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Diary 2', template: 'diary' }]])
+    // Another catalog Garden: the same, no consent, no grant.
     await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
     fireEvent.click(document.querySelector('[data-zen-catalog-card="stickers"]') as HTMLElement)
     await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="stickers"]').getAttribute('aria-checked')).toBe('true'))
@@ -749,37 +725,25 @@ describe('Settings → Gardens: the Garden catalog and widget permissions (prd-z
     expect(document.querySelector('[data-zen-settings-catalog-area]')).toBeNull()
   })
 
-  it('UWB3: the permissions list: sending off, resume, turn off, all on the local daemon', async () => {
-    h.grants = [
-      {
-        garden: 'g-2',
-        placement: 'arcade',
-        widget: 'agent-arcade',
-        state: 'granted',
-        caps: ['agents:read', 'thread:post'],
-        scope: { home: 'home-work' },
-        entries: [{ server: 'local', room: 'alice' }],
-        sending: true,
-        paused: { at: '2026-10-08T00:00:00Z', reason: 'runaway' },
-        grantedAt: '2026-10-08T00:00:00Z',
-      },
-    ]
+  it('Rosson 2026-10-08: nothing in Settings mentions widget permissions, sending switches or grants', async () => {
+    h.templates = [...STARTS, DIARY]
+    h.gardens.push({ id: 'g-diary', name: 'Diary', template: 'k2.diary@1', theme: null })
     await mountSection()
-    const item = document.querySelector('[data-zen-settings-grant="g-2/arcade"]') as HTMLElement
-    expect(item.textContent).toContain('agent-arcade')
-    expect(item.textContent).toContain('in Garden 2')
-    expect(item.textContent).toContain('Work · See agents, Post to the Thread · paused by K2')
-    fireEvent.click(item.querySelector('[data-zen-settings-grant-sending="on"]') as HTMLElement)
-    await waitFor(() => expect(document.querySelector('[data-zen-settings-grant-sending="off"]')).not.toBeNull())
-    fireEvent.click(document.querySelector('[data-zen-settings-grant-resume]') as HTMLElement)
-    await waitFor(() => expect(document.querySelector('[data-zen-settings-grant-resume]')).toBeNull())
-    fireEvent.click(document.querySelector('[data-zen-settings-grant-revoke]') as HTMLElement)
-    await waitFor(() => expect(document.querySelector('[data-zen-settings-grants-empty]')).not.toBeNull())
-    expect(zenPosts()).toEqual([
-      ['zen/widget/sending', { garden: 'g-2', placement: 'arcade', on: false, reason: 'user' }],
-      ['zen/widget/resume', { garden: 'g-2', placement: 'arcade' }],
-      ['zen/widget/revoke', { garden: 'g-2', placement: 'arcade' }],
-    ])
-    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
+    for (const gone of [
+      '[data-zen-settings-grants]',
+      '[data-zen-settings-grant]',
+      '[data-zen-settings-grant-sending]',
+      '[data-zen-settings-grant-resume]',
+      '[data-zen-settings-grant-revoke]',
+      '[data-settings-id="zen-gardens.widgets"]',
+    ]) {
+      expect(document.querySelector(gone), gone).toBeNull()
+    }
+    const text = document.querySelector('[data-zen-gardens-section]')?.textContent ?? ''
+    expect(text).not.toMatch(/permission|sending on|sending off|turn off|grant/i)
+    expect(h.calls.some((c) => String(c.route).startsWith('zen/widget/'))).toBe(false)
+    // The search manifest has no widget-permissions entry either.
+    expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.widgets')
+    expect(JSON.stringify(ZEN_GARDENS_MANIFEST)).not.toMatch(/permission|grant|sending/i)
   })
 })

@@ -3,7 +3,7 @@
 //! folder is under the temp dir; fixtures use made-up names only.
 
 use super::*;
-use crate::zen::grants::{self, GrantKey, GrantRecord, Scope};
+use crate::zen::widget_access::{Pause, PauseReason, WidgetPauses};
 
 struct Tmp(PathBuf);
 impl Drop for Tmp {
@@ -43,7 +43,10 @@ fn setup_preinstalls_the_diary_once_and_a_deleted_one_never_returns() {
     let w = &page["page"]["widgets"][0];
     assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some("k2:diary@1")), "{page}");
     assert_eq!(w["source"], "user");
-    assert_eq!(w["grant"], J::Null);
+    assert_eq!(w["origin"], "local");
+    assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post"]), "the Diary works with zero clicks: {w}");
+    assert_eq!(w["paused"], J::Null);
+    assert!(w.get("grant").is_none(), "no grants any more: {w}");
     f.setup().expect("setup again");
     assert_eq!(f.gardens().len(), 3, "setup again adds nothing");
     f.delete_garden(&diary.id).expect("delete diary");
@@ -141,14 +144,16 @@ fn the_refresh_fingerprint_moves_once_per_change() {
     let c2 = f.refresh().expect("fp");
     assert_ne!(c, c2, "a manifest-only change (the name) moves it");
     let c = c2;
-    let key = GrantKey::from_bytes([3; 32]);
-    let snap = GrantSnapshot { rows: Vec::new(), key: Some(key), key_error: None };
-    assert_ne!(c, f.refresh_with(&snap).expect("fp"), "grants are in the fingerprint");
+    let mut pauses = WidgetPauses::empty();
+    pauses.insert("g-test0001", "clock", Pause { at: "2026-10-08T12:00:00Z".into(), reason: PauseReason::Runaway });
+    assert_ne!(c, f.refresh_with(&pauses).expect("fp"), "a runaway pause is in the fingerprint");
+    assert_eq!(c, f.refresh().expect("fp"), "and its resume moves it back");
 }
 
-/// UW38: a custom placement in `get`, with and without a grant.
+/// UW38 as changed 2026-10-08: a custom placement in `get` runs with every
+/// Garden-safe cap it asks for, no grant; a runaway pause shows on it.
 #[test]
-fn resolve_fills_custom_widgets_and_grants() {
+fn resolve_fills_custom_widgets_with_their_caps_and_pause() {
     let (_t, f) = set_up("resolve");
     f.new_widget("agent-arcade", Some("arcade")).expect("new");
     let g = gid(&f, "Garden 2");
@@ -160,41 +165,31 @@ fn resolve_fills_custom_widgets_and_grants() {
     assert_eq!(w["kind"], "custom");
     assert_eq!(w["name"], "Agent Arcade");
     assert_eq!(w["state"], "ok");
-    assert_eq!(w["caps"], json!([]));
     assert_eq!(w["requested"], json!(["agents:read", "thread:read", "thread:post"]));
+    assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post"]), "a new widget works with zero clicks");
+    assert_eq!(w["origin"], "local");
+    assert_eq!(w["paused"], J::Null);
+    assert!(w.get("grant").is_none(), "{w}");
     assert_eq!(w["props"], json!({"home": "Work", "config": {}}));
-    assert_eq!(w["grant"], J::Null);
     assert!(w["hash"].as_str().is_some_and(|h| h.len() == 64));
 
-    let conn = rusqlite::Connection::open(":memory:").expect("db");
-    crate::db::run_migrations(&conn).expect("migrate");
-    let key = GrantKey::from_bytes([5; 32]);
-    let rec = GrantRecord {
-        garden: g.clone(),
-        placement: "arcade".into(),
-        widget: "agent-arcade".into(),
-        caps: vec!["agents:read".into(), "thread:read".into()],
-        scope: Scope::Home("h-test0001".into()),
-        entries: vec![grants::GrantEntry { server: "alice.example.test".into(), room: "cortana".into() }],
-        ask: PlacementAsk { home: Some("Work".into()), agent: None },
-        sending: true,
-        granted_at: "2026-10-08T12:00:00Z".into(),
-    };
-    grants::put(&conn, &key, rec, w["hash"].as_str().unwrap_or_default(), "owner_token").expect("put");
-    let snap = GrantSnapshot { rows: grants::live_rows(&conn).expect("rows"), key: Some(key), key_error: None };
-    let page = f.resolve_with(Some(&g), &snap).expect("resolve");
+    let mut pauses = WidgetPauses::empty();
+    pauses.insert(&g, "arcade", Pause { at: "2026-10-08T12:00:00Z".into(), reason: PauseReason::Runaway });
+    let page = f.resolve_with(Some(&g), &pauses).expect("resolve");
     let w = &page["page"]["widgets"][0];
-    assert_eq!(w["grant"]["state"], "partial", "the manifest asks for thread:post too: {w}");
-    assert_eq!(w["caps"], json!(["agents:read", "thread:read"]));
-    let listed = f.widgets_json(&snap).expect("widgets");
+    assert_eq!(w["paused"], json!({"at": "2026-10-08T12:00:00Z", "reason": "runaway"}), "{w}");
+    assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post"]), "a pause never takes caps away");
+    let listed = f.widgets_json(&pauses).expect("widgets");
     let arcade = listed["widgets"].as_array().expect("list").iter().find(|x| x["name"] == "agent-arcade").cloned();
-    assert_eq!(arcade.expect("arcade listed")["placements"][0]["grant"], "partial", "{listed}");
+    let placement = arcade.expect("arcade listed")["placements"][0].clone();
+    assert_eq!(placement["placement"], "arcade", "{listed}");
+    assert_eq!(placement["paused"]["reason"], "runaway", "{listed}");
+    assert!(placement.get("grant").is_none(), "{listed}");
 
-    // The placement's home changes: back to review.
+    // The placement's home prop changes: nothing to re-ask.
     write_garden(&f, &g, &ARCADE_PAGE.replace("home = \"Work\"", "home = \"Play\""));
-    let page = f.resolve_with(Some(&g), &snap).expect("resolve");
-    assert_eq!(page["page"]["widgets"][0]["grant"]["state"], "review");
-    assert_eq!(page["page"]["widgets"][0]["caps"], json!([]));
+    let page = f.resolve(Some(&g)).expect("resolve");
+    assert_eq!(page["page"]["widgets"][0]["caps"], json!(["agents:read", "thread:read", "thread:post"]));
 }
 
 /// TUW1.5 (store side): a missing folder is an error at its line without
@@ -306,8 +301,4 @@ fn catalog_templates_check_clean_and_carry_both_controls() {
     assert_eq!(page["menus"]["more"].as_array().map(Vec::len), Some(2), "the menu holds both: {page}");
     let content: Vec<&str> = page["widgets"].as_array().expect("widgets").iter().filter_map(|w| w["kind"].as_str()).collect();
     assert_eq!(content, vec!["custom"], "the Diary page is the Diary alone: {page}");
-    assert_eq!(
-        diary.meta.grant.as_ref().map(|g| g.caps.clone()),
-        Some(vec!["agents:read".to_string(), "thread:read".to_string(), "thread:post".to_string()])
-    );
 }

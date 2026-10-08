@@ -8,7 +8,7 @@
 //    before any of the widget's HTML, under the nonce CSP.
 // 3. On the frame's `load`: the private port and K2's hello
 //    (`startZenFrameHost`), with the custom layer (`createZenCustomLayer`)
-//    checking every message against the widget's caps, scope and budgets.
+//    checking every message against the widget's caps, reach and budgets.
 // A problem loading (an older daemon, no good bundle, a library that can't
 // be served) goes to the parent, which draws K2's card instead. The frame
 // is remounted (keyed by the parent) on a new hash or a Reload.
@@ -17,12 +17,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameHello } from '@/lib/zen/zen-custom-types'
-import { fetchZenWidgetBundle, setZenWidgetSending, zenWidgetError, type ZenWidgetErrorCode } from '@/lib/zen/zen-custom-grants'
+import { fetchZenWidgetBundle, pauseZenWidget, zenWidgetError, type ZenWidgetErrorCode } from '@/lib/zen/zen-widget-routes'
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
 import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
-import { stopZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
+import { isZenWidgetPostingPaused, pauseZenWidgetPosting, stopZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
 import { ensureZenConversation, zenAgentRows, zenCustomViewFor } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
@@ -173,8 +173,13 @@ export function ZenCustomFrame({
           ensureConversation: (address) => ensureZenConversation(zenCustomViewFor(gardenId, widgetRef.current), address),
           push,
           stop: (reason) => stopZenWidget(key, reason),
-          sendingOffForRunaway: () =>
-            setZenWidgetSending({ garden: gardenId, placement: widgetRef.current.id, on: false, reason: 'runaway' }),
+          paused: () => widgetRef.current.paused !== null || isZenWidgetPostingPaused(key),
+          pauseForRunaway: () => {
+            pauseZenWidgetPosting(key)
+            void pauseZenWidget({ garden: gardenId, placement: widgetRef.current.id, reason: 'runaway' }).catch((err: unknown) =>
+              console.warn('[zen] runaway: the daemon pause failed (this window stays paused):', err),
+            )
+          },
           theme: () => zenFrameThemeInfo(root),
           onThemeChange: (cb) => {
             if (!root || typeof MutationObserver === 'undefined') return () => undefined

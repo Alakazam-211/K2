@@ -601,7 +601,7 @@ codes live in **one** place: `crates/k2-core/src/contract/catalog.json`
 - `sdk/generated/k2.d.ts`: the frame's `k2` object as TypeScript types;
 - `src/renderer/lib/zen/zen-verbs.generated.ts` (`ZEN_VERBS`,
   `ZEN_CUSTOM_VERBS`) and `src/renderer/lib/k2-caps.generated.ts` (`K2_CAPS`
-  with each cap's Settings label and review-dialog sentence).
+  with each cap's Settings label and plain sentence).
 
 All of them are written by `cargo run -p k2-core --bin contract-gen` and never
 edited by hand; `cargo test -p k2-core --lib contract::` and the vitest twin
@@ -646,18 +646,26 @@ A custom placement is a content widget in `page.widgets`
   "reasons": { "thread:post": "…" }, "libs": ["three@0.170"],
   "hash": "<sha256 of the bundle without nonces>",
   "state": "ok", "errors": [], "warnings": [],
-  "grant": { "state": "partial", "caps": ["agents:read"], "granted": ["agents:read"],
-             "scope": { "home": "<home id>" }, "entries": [{ "server": "…", "room": "…" }],
-             "sending": true, "paused": null, "grantedAt": "…", "widgetHash": "…" } }
+  "origin": "local", "paused": null }
 ```
 
-- `caps` is the daemon's decision: requested ∩ granted ∩ widget caps (UW26).
-  The renderer intersects again and forces `source: "user"`.
-- `grant.state`: `none` (no grant), `invalid` (signature, key or widget
-  doesn't check out: caps `[]`), `review` (granted for another
-  `home`/`agent` ask), `partial` (the manifest asks for more; the granted
-  caps keep working), `granted`. K2 draws its review card for `none`,
-  `invalid` and `review` (`zenGrantNeedsReview`).
+- **No permissions** (Rosson's 0.45.1 smoke, 2026-10-08: "If the widget
+  exists, it should be able to interact with agents"). `caps` = requested ∩
+  widget caps: a widget in your own Garden gets every Garden-safe cap it
+  asks for, with no review card, grant, scope picker or Sending switch. The
+  renderer intersects again and forces `source: "user"`.
+- `origin`: `local` (a folder under `~/.k2/zen/widgets/` or a built-in
+  `k2:`). The seam for v4's widgets imported from other people: any other
+  origin gets no caps and never runs until a review exists
+  (`zenWidgetMayRun`); the renderer reads an unknown origin as `other`.
+- `paused`: `{at, reason: "runaway"}` while the runaway guard has posting
+  paused (see Limits), else `null`.
+- **Reach.** A widget's rows are the Garden's reach, resolved on this device
+  (`zenWidgetReachRows`): this computer's agents plus every row on the
+  person's Homes (the rooms and servers they connected in Home), at most 8
+  live servers. A saved server on no Home is outside it (`not_bound`).
+  Remote rows use the person's own Connect login, so every server's role
+  floors still apply.
 - `state`: `ok`, `errors` (a newer edit has errors; the last good bundle is
   served), `broken` (errors and no last good bundle).
 
@@ -668,37 +676,28 @@ rows, 64 KB request bodies, a GET on a POST route is 405.
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `GET widgets` | — | `{ok, widgets: [{name, title, description, caps, hash, state, errors, warnings, placements: [{garden, placement, grant}]}]}` |
+| `GET widgets` | — | `{ok, widgets: [{name, title, description, caps, hash, state, errors, warnings, placements: [{garden, gardenName, placement, paused}]}]}` |
 | `GET widget/bundle` | `?widget=<name or k2:…@n>` | `{ok, widget, hash, nonce, html, bytes}`; 404 `unknown_widget`; 409 `widget_broken` |
 | `POST widget/new` | `{name, from?}` (`hello`, `arcade`, `k2:diary`) | `{ok, name, path, files, changed}`; 409 `widget_exists`; 404 `zen_not_set_up` |
-| `POST widget/grant` | `{garden, placement, widget, caps, scope, entries, sending, hash}` | `{ok, grant, changed}`; 409 `widget_changed` when `hash` is stale |
-| `POST widget/revoke` | `{garden, placement}` or `{widget}` | `{ok, revoked, changed}` |
-| `POST widget/sending` | `{garden, placement, on, reason?}` | turning on is owner-only, like a grant |
-| `POST widget/resume` | `{garden, placement}` | clears a runaway pause (owner only) |
-| `GET widget/grants` | — | the Settings list (`ZenWidgetGrantRow[]`) |
-| `GET templates` | — | `[{id, short, label, description, section, needsGrant, newUsers}]`; `needsGrant` = `{widget, caps, scope, consent}`, `scope: "local"` = fixed to this computer's agents |
+| `POST widget/pause` | `{garden, placement, reason: "runaway"}` | `{ok, paused, changed}`; the renderer's runaway guard tripped. Taking power away: anything Zen accepts |
+| `POST widget/resume` | `{garden, placement}` | `{ok, paused: null, resumed, changed}`; the person's Resume click: owner token only (a passport, Connect login, API key or app pass gets 403 `owner_only`) |
+| `GET templates` | — | `[{id, short, label, description, section, newUsers}]` |
 
-**A catalog Garden's fixed scope** (Rosson 2026-10-08). A `[catalog.grant]`
-with `scope = "local"` (the Diary) is granted `{server: "local"}` and nothing
-else: `garden/new` takes `grant: {entries?, sending?}` (scope left out, or
-exactly `{server: "local"}`), and `widget/grant` for that built-in widget
-(`k2:diary@1`, wherever it is placed) refuses any other scope or an entry
-whose `server` isn't `local` (400 `bad_request`). A user's copy (`k2 zen
-widget new my-diary --from k2:diary`) is a folder widget: its scope is the
-person's pick, as for any widget.
-
-**Grants** (UWB3, UWB4): only the owner token makes one; agent passports,
-Connect logins and app passes get 403 `owner_only`. A grant is a row in the
-daemon's database (migration 0138), signed HMAC-SHA256 with a key in
-`~/.k2/zen-grant.key` over the canonical form `k2-zen-grant/v2` (the `ask`,
-the placement's `home`/`agent` text, is signed too). A row edited by hand
-resolves `invalid`. `grants.json` is never a grant store and stays refused as
-a `reset`/`validate` target. There is no CLI grant: `k2 zen widget grant`
-exits 1 with "Only you can allow a widget, in the K2 app: open the Garden and
-click Review."
+**No grants** (2026-10-08). The first Zen v2 build's grant routes
+(`widget/grant`, `widget/revoke`, `widget/sending`, `GET widget/grants`) are
+gone (404), and `garden/new` takes no `grant` (400 on the field). Table
+`zen_widget_grants` (migration 0138) stays in the schema so existing
+databases keep their migration list, but nothing reads or writes it, and
+`~/.k2/zen-grant.key` is no longer made or read. The runaway pause is held
+in the daemon's memory (a daemon restart clears it, like the renderer's
+post counters). `grants.json` stays refused as a `reset`/`validate` target.
+`k2 zen widget grant` and `revoke` only print that widgets need no
+permissions. Each widget post writes one `zen.widget.post` audit line
+(widget, Garden, to, length; never the text), and pause/resume write
+`zen.widget.pause` / `zen.widget.resume`.
 
 `validate`, `history` and `reset` take `widget=` (GET) / `{widget}` (POST).
-`doctor` gains `widgets` and `grants` checks.
+`doctor` gains a `widgets` check.
 
 ### The frame protocol
 
@@ -736,13 +735,14 @@ to 8 MB per widget, outside those. 6 custom widgets per page. Per widget: 60
 calls a second (burst 120), 16 live subscriptions, 64 KB per message, 8 live
 servers. Posts are text only, up to 4,000 characters, never files or
 secrets; the runaway guard (more than 120 posts in 10 minutes, or 20
-identical texts to one agent in 10 minutes) unloads the frame and turns
-sending off until the owner resumes it.
+identical texts to one agent in 10 minutes) pauses posting (`sending_off`;
+the frame keeps running) with a small "Paused: too many posts. Resume"
+notice on the widget, in every window, until the person clicks Resume.
 
 ### Events
 
-No new event kind: a widget save, a grant, a revoke, a sending switch and a
-resume each emit exactly one payload-free `zen_changed` (UW12, UW37).
+No new event kind: a widget save, a pause and a resume each emit exactly
+one payload-free `zen_changed` (UW12, UW37).
 
 ## Garden sync with K2's defaults (zen-sync-v1)
 
@@ -843,12 +843,9 @@ this contract, where it reads more loosely or decides something:
    1's layout) and **Start empty and ask my agent** (`template: "blank"`;
    the new Garden's empty-Garden widget then opens Ask my agent by itself,
    once). Pick a card, name it, Create: one step. The name follows the pick
-   until typed ("Diary", "Garden 4"). For K2's own catalog Gardens the
-   create click is the consent: the modal shows the catalog's one
-   `consent` sentence, and the same owner-only `garden/new` carries the
-   grant, scoped to this computer's agents (`{server: "local"}`, entries =
-   the local agents now). No scope picker. It sends `{name, template,
-   grant?}` and reads `garden` from the answer; the window switches to it at
+   until typed ("Diary", "Garden 4"). There is nothing to agree to: a
+   catalog Garden's widgets work the moment it's created (no permissions).
+   It sends `{name, template}` and reads `garden` from the answer; the window switches to it at
    once and the list is re-read on the `zen_changed` that follows. Names are
    checked case-insensitively before the create, and a 409 `garden_exists`
    stays in the modal with "You already have a Garden called “<name>”.".

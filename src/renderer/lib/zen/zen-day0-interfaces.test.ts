@@ -7,7 +7,7 @@ import { CATALOG_ERROR_CODES, type Catalog } from '../contract/catalog-types'
 import { K2_CAPS, USER_WIDGET_CAPS } from '../k2-caps.generated'
 import { ZEN_VERBS as BRIDGE_ZEN_VERBS } from './zen-bridge'
 import { ZEN_CUSTOM_VERBS, ZEN_VERBS } from './zen-verbs.generated'
-import { ZEN_TEMPLATES_FALLBACK, zenGrantNeedsReview, type ZenGrantView } from './zen-custom-types'
+import { ZEN_TEMPLATES_FALLBACK, zenWidgetMayRun } from './zen-custom-types'
 import { ZEN_LIB_MANIFEST, ZenLibError, zenLib, zenLibFind, zenLibVersionMatches, type ZenLibEntry } from './zen-lib-loader'
 
 const ROOT = resolve(__dirname, '../../../..')
@@ -58,27 +58,10 @@ describe('day-0: verb tables', () => {
   })
 })
 
-describe('day-0: grants and templates', () => {
-  const view = (state: ZenGrantView['state']): ZenGrantView => ({
-    state,
-    caps: [],
-    granted: [],
-    scope: null,
-    entries: [],
-    sending: false,
-    paused: null,
-    grantedAt: null,
-    widgetHash: null,
-  })
-
-  it('review card rule matches the Rust GrantView::needs_review', () => {
-    expect(zenGrantNeedsReview(null, ['agents:read'])).toBe(true)
-    expect(zenGrantNeedsReview(view('none'), ['agents:read'])).toBe(true)
-    expect(zenGrantNeedsReview(view('invalid'), ['agents:read'])).toBe(true)
-    expect(zenGrantNeedsReview(view('review'), ['agents:read'])).toBe(true)
-    expect(zenGrantNeedsReview(view('partial'), ['agents:read'])).toBe(false)
-    expect(zenGrantNeedsReview(view('granted'), ['agents:read'])).toBe(false)
-    expect(zenGrantNeedsReview(null, [])).toBe(false)
+describe('day-0: widget origin and templates', () => {
+  it('no review: a widget from your own Garden runs; anything else waits for v4', () => {
+    expect(zenWidgetMayRun({ origin: 'local' })).toBe(true)
+    expect(zenWidgetMayRun({ origin: 'other' })).toBe(false)
   })
 
   it('template fallback is the two starts', () => {

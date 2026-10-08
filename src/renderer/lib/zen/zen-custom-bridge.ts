@@ -1,6 +1,8 @@
 // prd-zen-user-widgets-v2 UW15–UW19, UW26, UW29, UWA4, UWA6, UWA10,
-// UWB7–UWB11 — the custom layer: what a sealed widget's frame may ask K2
+// UWB8–UWB11 — the custom layer: what a sealed widget's frame may ask K2
 // for, checked on every message before anything reaches K2's own verbs.
+// No permissions (Rosson 2026-10-08): a widget in your own Garden may use
+// every Garden-safe verb it asks for, on the Garden's reach, at once.
 //
 // One layer per placement (one private port, UW15): who is calling comes
 // from which port the message arrived on, never from what it says. Each
@@ -12,16 +14,17 @@
 //      `ZEN_VERBS`): a catalog verb not marked `widget` → `not_exposed`
 //      (`zen.exit`, `controls.bind`, `homes.list`, …); anything else →
 //      `unknown_verb` (UWA10);
-//   4. the cap: requested ∩ granted ∩ the four widget caps, as the daemon
-//      sent it and the renderer intersected again (UW26) → `cap_not_granted`;
-//   5. the binding: an address must be one of the widget's bound rows (its
-//      granted scope now, UWB7) → `not_bound`. Thread verbs take any bound
-//      address (UWB10);
-//   6. sending: `thread.post` / `thread.answer` need Sending on (UWB9) →
-//      `sending_off`; text only, ≤ 4,000 characters, never files or secrets
-//      (UW19, UW50); the runaway guard (120 posts or 20 identical texts to
-//      one agent in 10 minutes, R6) turns Sending off on the grant and
-//      unloads the frame;
+//   4. the cap: the manifest's caps ∩ the four widget caps, as the daemon
+//      sent them and the renderer intersected again (UW26) →
+//      `cap_not_granted` (a verb the widget didn't ask for);
+//   5. the reach: an address must be one of the widget's rows (this
+//      computer's agents plus your Homes' rows now, `zenWidgetReachRows`)
+//      → `not_bound`. Thread verbs take any of them (UWB10);
+//   6. posting: text only, ≤ 4,000 characters, never files or secrets
+//      (UW19, UW50); the runaway guard (more than 120 posts, or 20
+//      identical texts to one agent, in 10 minutes; R6) pauses posting
+//      (`sending_off`) until the person clicks Resume on the widget. The
+//      frame keeps running;
 //   7. limits: 16 live subscriptions, 16 Thread subscriptions, at most 8
 //      live servers (`zen-custom-scope`), `gardens.switch` once every 2 s
 //      and never in the first 2 s after mount.
@@ -62,6 +65,9 @@ export const ZEN_WIDGET_BUDGET = {
 /** R6: the runaway guard, per widget, over a sliding 10 minutes. */
 export const ZEN_RUNAWAY = { windowMs: 10 * 60_000, posts: 120, identical: 20 } as const
 
+/** What a refused post says while the guard has posting paused. */
+export const ZEN_PAUSED_MESSAGE = 'Paused: too many posts. Resume it on the widget.'
+
 export class ZenCustomRefusal extends Error {
   readonly wire: CatalogWireError
   constructor(code: CatalogErrorCode, message: string, extra: Partial<Pick<CatalogWireError, 'cap' | 'room' | 'feature'>> = {}) {
@@ -76,9 +82,9 @@ export interface ZenCustomLayerDeps {
   /** The placement as the daemon resolved it (live: re-read each call). */
   widget(): ZenCustomWidgetPayload
   gardenId(): string
-  /** The widget's inner bridge, built with its effective caps. */
+  /** The widget's inner bridge, built with its caps. */
   inner: ZenWidgetBridge
-  /** The bound rows now (the grant's scope, never a fallback). */
+  /** The rows it reaches now (never a fallback). */
   boundRows(): ZenAgentRow[]
   /** UWB10: resolve a bound agent's conversation without picking it. */
   ensureConversation(address: string): Promise<void>
@@ -86,8 +92,11 @@ export interface ZenCustomLayerDeps {
   push(sub: number, value: unknown): void
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
-  /** Runaway: turn Sending off on the grant (sets the daemon's pause). */
-  sendingOffForRunaway(): Promise<void>
+  /** Is posting paused now (the runaway guard, here or in the daemon)? */
+  paused(): boolean
+  /** The runaway guard tripped: pause posting (this window at once, and
+   *  the daemon for every window) until the person's Resume. */
+  pauseForRunaway(): void
   /** The Garden's theme now (`ThemeInfo`), and its changes (UW39). */
   theme(): unknown
   onThemeChange(cb: () => void): () => void
@@ -181,9 +190,17 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     return text
   }
 
+  let wasPaused = false
+  /** Posting is refused while paused; after a Resume the count starts over. */
   const needSending = (): void => {
-    const g = deps.widget().grant
-    if (!g || !g.sending || g.paused) refuse('sending_off', 'Sending is turned off for this widget.')
+    if (deps.paused()) {
+      wasPaused = true
+      refuse('sending_off', ZEN_PAUSED_MESSAGE)
+    }
+    if (wasPaused) {
+      wasPaused = false
+      posts.length = 0
+    }
   }
 
   /** R6: record a post; trip the guard on the 121st, or the 21st identical text to one agent. */
@@ -193,9 +210,9 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     const key = `${address}\n${text.trim()}`
     const same = posts.filter((p) => p.key === key).length
     if (posts.length + 1 > ZEN_RUNAWAY.posts || same + 1 > ZEN_RUNAWAY.identical) {
-      void deps.sendingOffForRunaway().catch((err: unknown) => console.warn('[zen] runaway: turning sending off failed:', err))
-      stop('runaway')
-      throw new ZenCustomRefusal('sending_off', 'This widget sent too many messages, so K2 turned its sending off.')
+      wasPaused = true
+      deps.pauseForRunaway()
+      throw new ZenCustomRefusal('sending_off', ZEN_PAUSED_MESSAGE)
     }
     posts.push({ at: now, key })
   }

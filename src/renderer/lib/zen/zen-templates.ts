@@ -18,7 +18,6 @@
 import { create } from 'zustand'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { zenLocalScope } from './zen-api'
-import { zenWidgetCaps } from './zen-custom-payload'
 import { ZEN_TEMPLATES_FALLBACK, type ZenTemplateInfo } from './zen-custom-types'
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -35,22 +34,12 @@ export function parseZenTemplates(raw: unknown): ZenTemplateInfo[] {
     if (!isObj(t) || typeof t.id !== 'string' || typeof t.short !== 'string' || !t.short || seen.has(t.short)) continue
     if (t.section !== 'start' && t.section !== 'catalog') continue
     seen.add(t.short)
-    const g = t.needsGrant
     out.push({
       id: t.id,
       short: t.short,
       label: typeof t.label === 'string' && t.label.trim() ? t.label : t.short,
       description: typeof t.description === 'string' ? t.description : '',
       section: t.section,
-      needsGrant:
-        isObj(g) && typeof g.widget === 'string'
-          ? {
-              widget: g.widget,
-              caps: zenWidgetCaps(g.caps),
-              scope: g.scope === 'local' ? 'local' : null,
-              consent: typeof g.consent === 'string' && g.consent.trim() ? g.consent.trim() : null,
-            }
-          : null,
       newUsers: t.newUsers === true,
     })
   }

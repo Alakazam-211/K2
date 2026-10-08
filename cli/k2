@@ -581,13 +581,14 @@ unset _k2_cli_wants_help
 [ "${1:-}" = "study" ] && _skip_conn_gate=1
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
 # `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
-# none of them talks to the daemon. Neither does `k2 zen widget grant`,
-# which only says who grants (prd-zen-user-widgets-v2 UW41).
+# none of them talks to the daemon. Neither do `k2 zen widget grant` and
+# `revoke`, which only say there are no widget permissions (Rosson
+# 2026-10-08).
 if [ "${1:-}" = "zen" ]; then
     case "${2:-}" in
         ""|guide|help|--help|-h) _skip_conn_gate=1 ;;
         widget|widgets)
-            case "${3:-}" in grant|allow|""|help) _skip_conn_gate=1 ;; esac
+            case "${3:-}" in grant|allow|revoke|""|help) _skip_conn_gate=1 ;; esac
             for _a in "${@:2}"; do
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
@@ -17259,7 +17260,7 @@ cmd_schema() {
     {
       "name": "zen",
       "usage": "k2 zen <garden|theme|widget|validate|reload|reset|history|doctor|path|sync|news|guide> ...",
-      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; widgets/<name>/ custom widgets; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
+      "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; widgets/<name>/ custom widgets; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. Widgets in your own Gardens need no permissions. Exit 3 when Zen isn't set up here.",
       "args": [],
       "flags": [
         {"name": "--garden", "arg": "name|id", "description": "A Garden's page (gardens/<id>.toml) instead of zen.toml."},
@@ -17340,8 +17341,8 @@ cmd_schema() {
     },
     {
       "name": "zen widget",
-      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list|revoke <garden> <placement>|revoke --widget <name>> [--json]",
-      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement's grant; revoke takes grants away. There is no grant verb: k2 zen widget grant exits 1 with \"Only you can allow a widget, in the K2 app: open the Garden and click Review.\" The helpers a widget can call: k2 zen guide api.",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list> [--json]",
+      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
       "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
       "flags": [
         {"name": "--from", "arg": "k2:diary|hello|arcade", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
@@ -38800,8 +38801,8 @@ cmd_store() {
 # ── Zen Mode — k2 zen (prd-zen-mode-v1 Z17; prd-zen-gardens-v1 G35) ──
 # `~/.k2/zen/` belongs to THIS computer's K2. Every verb talks to the
 # local daemon's /cli/zen/* routes, which answer only this computer's own
-# owner token. There is deliberately no `grant` verb: agents may request a
-# permission from the human, never grant one (Z19). The `k2-zen` skill
+# owner token. There is no `grant` verb: widgets in your own Gardens need no
+# permissions (Rosson 2026-10-08). The `k2-zen` skill
 # documents Gardens, the page grammar, tokens, motion and bridge verbs.
 
 cmd_help_zen() {
@@ -38835,7 +38836,6 @@ USAGE
   k2 zen theme new <name> [--from <theme>] [--json]
   k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
-  k2 zen widget revoke <garden> <placement> | --widget <name> [--json]
   k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen reload [--json]
   k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]
@@ -38868,11 +38868,11 @@ COMMANDS
   widget    Custom widgets: your own sealed HTML, CSS and JS in
             ~/.k2/zen/widgets/<name>/. new copies a working example
             (--from k2:diary, hello or arcade) and prints the folder; list
-            shows each widget's state, caps and every placement's grant;
-            revoke takes grants away (one placement, or --widget for all).
-            There is no grant: only the human allows a widget, in the K2
-            app (open the Garden and click Review). k2 zen guide api lists
-            the k2 object's helpers.
+            shows each widget's state, caps and every placement. Widgets can
+            talk to your agents right away: no permissions, no review. If a
+            widget posts too much (120 in 10 minutes), K2 pauses its posting
+            until the person clicks Resume on it. k2 zen guide api lists the
+            k2 object's helpers.
   validate  Check what is on disk now. Prints file:line:col: message for
             each error and exits 1; exits 0 when every file is clean.
   reload    Re-read now (the daemon also watches the folder) and print errors.
@@ -38906,9 +38906,8 @@ RULES
   .defaults/ or .history/: K2 writes them.
   Editing a Garden's file never changes whether it syncs; only the person
   turns sync on or off (Settings → Gardens). k2 zen guide sync.
-  Agents request permissions from the human; they never grant them.
-  A custom widget: k2 zen validate --widget <name>, then tell the human to
-  open the Garden and click Review.
+  A custom widget: k2 zen validate --widget <name>; it talks to your
+  agents as soon as it's placed (no permissions to ask for).
   Load the k2-zen skill for the page grammar, every widget prop and token.
 
 EXIT
@@ -39088,9 +39087,8 @@ NEVER WRITE (K2 writes them)
   sync.json      which Gardens sync with K2's defaults: k2 zen sync
   news.json      which Garden news was seen: k2 zen news
   .defaults/     K2's defaults that own-copy Gardens sit on
-  grants.json    widget permissions live in K2's daemon, signed; only
-                 the human's Allow click makes one. Agents request;
-                 they never grant. Also never zen-grant.key or pins.json.
+  grants.json    K2 never reads it: widgets in your own Gardens need no
+                 permissions. Also never pins.json.
 
 LAYERS (a later file wins, key by key)
   1. K2's basic theme
@@ -39454,7 +39452,7 @@ CHANGE (the person)
 
 WHAT STILL CHANGES FOR EVERY GARDEN
   What widgets show and do, security and accessibility fixes, K2's
-  safety UI (safe mode, review cards, banners), and everything outside
+  safety UI (safe mode, pause notices, banners), and everything outside
   the Garden. New options appear only when a file asks for them.
 
 FILES (K2 writes them; never edit)
@@ -39564,9 +39562,9 @@ _zen_guide_page_api() {
 k2 zen guide api — the k2 object in a custom widget
 
 A custom widget is a sealed page in a Garden: no network, no storage, no
-files. It reaches K2 only through window.k2, and each call needs a cap the
-human allowed in the K2 app (agents never grant). From K2's verb catalog,
-version 2.
+files. It reaches K2 only through window.k2. Each call needs a cap its
+manifest.json asks for; a widget in your own Garden gets every one it asks
+for at once (no review). From K2's verb catalog, version 2.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -39619,7 +39617,9 @@ ALSO ON k2
 RULES
   textContent for anything an agent wrote, never innerHTML. No onclick=:
   use addEventListener in a script file. Files via k2.asset(). Check with
-  k2 zen validate --widget <name>; the human allows it with Review.
+  k2 zen validate --widget <name>; it works as soon as it's placed.
+  Posting pauses after 120 posts (or 20 identical ones to one agent) in
+  10 minutes, until the person clicks Resume on the widget (sending_off).
 
 Types: sdk/generated/k2.d.ts in the K2 repo. Caps in K2's words: the
 k2-zen skill.
@@ -40239,7 +40239,7 @@ elif verb == "widget-new":
     if files:
         print("files: %s" % ", ".join(files))
     print("next: edit it, place it in a Garden with kind = \"custom\" and widget = \"%s\"," % name)
-    print("check with k2 zen validate --widget %s, then ask the human to open the Garden and click Review" % name)
+    print("check with k2 zen validate --widget %s; it talks to your agents as soon as it\x27s placed" % name)
 elif verb == "widget-list":
     ws = d.get("widgets") or []
     if not ws:
@@ -40254,19 +40254,14 @@ elif verb == "widget-list":
         if not placements:
             print("  not placed in any Garden")
         for p in placements:
-            print("  %s/%s  %s" % (p.get("garden"), p.get("placement"), p.get("grant")))
-elif verb == "widget-revoke":
-    n = d.get("revoked")
-    if isinstance(n, list):
-        n = len(n)
-    print("revoked %s grant%s%s" % (n, "" if n == 1 else "s", "" if d.get("changed", True) else " (nothing to revoke)"))
+            paused = "posting paused (too many posts; the person clicks Resume on it)" if p.get("paused") else "running"
+            print("  %s/%s  %s" % (p.get("garden"), p.get("placement"), paused))
 '
 }
 
-# k2 zen widget <new|list|revoke> (prd-zen-user-widgets-v2 UW41). Custom
-# widgets are folders under ~/.k2/zen/widgets/; the daemon owns their
-# grants. There is no grant verb: only the human allows a widget, in the
-# K2 app (UWB3).
+# k2 zen widget <new|list> (prd-zen-user-widgets-v2 UW41). Custom widgets
+# are folders under ~/.k2/zen/widgets/. They need no permissions (Rosson
+# 2026-10-08): `grant` and `revoke` only say so.
 cmd_zen_widget() {
     local verb="${1:-}"
     shift || true
@@ -40293,8 +40288,8 @@ cmd_zen_widget() {
         echo "Error: --from is for k2 zen widget new" >&2
         exit 2
     fi
-    if [ "$verb" != "revoke" ] && [ -n "$widget" ]; then
-        echo "Error: --widget is for k2 zen widget revoke (and k2 zen validate/history/reset)" >&2
+    if [ -n "$widget" ] && [ "$verb" != "revoke" ] && [ "$verb" != "grant" ] && [ "$verb" != "allow" ]; then
+        echo "Error: --widget is for k2 zen validate, history and reset" >&2
         exit 2
     fi
     case "$verb" in
@@ -40315,29 +40310,15 @@ print(json.dumps(b))
             raw=$(cli_request "/cli/zen/widgets")
             _zen_print widget-list "$as_json" "$raw"
             ;;
-        revoke)
-            if [ -n "$widget" ]; then
-                [ "$n" -eq 0 ] || { echo "Error: pass a Garden and a placement, or --widget <name>, not both" >&2; exit 2; }
-                body=$(ZW="$widget" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')
-            else
-                [ "$n" -eq 2 ] || { echo "Error: k2 zen widget revoke needs a Garden and a placement id, or --widget <name>" >&2; exit 2; }
-                body=$(ZG="${pos[0]}" ZP="${pos[1]}" python3 -c '
-import json, os
-print(json.dumps({"garden": os.environ["ZG"], "placement": os.environ["ZP"]}))
-')
-            fi
-            raw=$(cli_post_json "/cli/zen/widget/revoke" "$body")
-            _zen_print widget-revoke "$as_json" "$raw"
-            ;;
-        grant|allow)
-            echo "Only you can allow a widget, in the K2 app: open the Garden and click Review." >&2
-            exit 1
+        grant|allow|revoke)
+            echo "Widgets in your own Gardens need no permissions: they can talk to your agents right away. To stop one, take its [[widget]] out of the Garden file."
+            exit 0
             ;;
         ""|help|--help|-h)
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen widget' subcommand: $verb (new, list, revoke)" >&2
+            echo "Unknown 'k2 zen widget' subcommand: $verb (new, list)" >&2
             exit 2
             ;;
     esac
@@ -40777,8 +40758,8 @@ print(json.dumps(b))
             cmd_zen_guide "$@"
             ;;
         grant|grants|allow)
-            echo "Error: there is no 'k2 zen $sub'. Agents never grant permissions." >&2
-            echo "Tell the human what the widget needs and why; they grant it in the K2 app." >&2
+            echo "Error: there is no 'k2 zen $sub'. Widgets in your own Gardens need no permissions:" >&2
+            echo "they can talk to your agents right away." >&2
             exit 2
             ;;
         *)
@@ -41491,7 +41472,8 @@ EOF
         ;;
     zen)
         # Zen Mode (prd-zen-mode-v1 Z17): this computer's ~/.k2/zen via the
-        # local daemon's owner-only /cli/zen/* routes. No grant verb (Z19).
+        # local daemon's owner-only /cli/zen/* routes. No grant verb: widgets
+        # need no permissions (2026-10-08).
         # `k2 zen guide` is static and handles its own --help.
         if [ "${2:-}" != "guide" ] && _wants_help "${@:2}"; then
             cmd_help_zen

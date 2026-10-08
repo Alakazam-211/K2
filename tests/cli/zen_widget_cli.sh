@@ -8,7 +8,8 @@
 #   - before Zen is set up every widget verb exits 3 with the top-bar sentence;
 #   - after setup: widget new w --from hello prints the folder; list --json
 #     parses with w in it; validate/history --widget w work; new w again
-#     exits 1; revoke --widget w works; widget grant exits 1;
+#     exits 1; widget grant / revoke only say there are no permissions
+#     (Rosson 2026-10-08) and reach no route;
 #   - nothing the CLI does writes a grant.
 # The parts that need no daemon are tests/cli/zen_widget_offline.sh.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
@@ -92,7 +93,7 @@ capture() {
 
 echo "== not set up =="
 NOT_SET_UP="Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar."
-for verb in "widget list" "widget new w" "widget revoke --widget w" "validate --widget w" "history --widget w"; do
+for verb in "widget list" "widget new w" "validate --widget w" "history --widget w"; do
     # shellcheck disable=SC2086
     capture zen $verb
     assert_eq "zen $verb before setup exits 3" "$rc" "3"
@@ -125,12 +126,20 @@ assert_eq "history --widget w exits 0" "$rc" "0"
 capture zen validate --widget nope
 [ "$rc" -ne 0 ] && ok "validate --widget on a missing folder fails" || bad "validate --widget nope exited 0"
 
-echo "== no grant from the CLI =="
-capture zen widget grant
-assert_eq "widget grant exits 1" "$rc" "1"
-assert_contains "widget grant says who grants" "$out" "open the Garden and click Review"
-capture zen widget revoke --widget w
-assert_eq "widget revoke --widget exits 0" "$rc" "0"
+echo "== no permissions (Rosson 2026-10-08) =="
+for verb in "widget grant" "widget revoke --widget w" "widget allow w"; do
+    # shellcheck disable=SC2086
+    capture zen $verb
+    assert_eq "zen $verb exits 0" "$rc" "0"
+    assert_eq "zen $verb says there are no permissions" "$out" "Widgets in your own Gardens need no permissions: they can talk to your agents right away. To stop one, take its [[widget]] out of the Garden file."
+done
+for route in widget/grant widget/revoke widget/sending; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/$route?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
+    [ "$code" != "200" ] && ok "POST $route is gone ($code)" || bad "POST $route still answers 200"
+done
+capture zen widget list
+assert_eq "widget list exits 0" "$rc" "0"
+case "$out" in *grant*|*review*) bad "widget list still talks about grants: $out" ;; *) ok "widget list says nothing about grants" ;; esac
 [ ! -e "$ZEN/grants.json" ] && ok "nothing wrote grants.json" || bad "grants.json appeared"
 
 echo

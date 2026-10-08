@@ -3,7 +3,7 @@
 //! UWB25).
 //!
 //! **Day-0 interface (Zen v2, 2026-10-08). Owner: B2** (loader, templates
-//! route, `garden/new` with a grant, setup). B4 reads [`TemplateInfo`] from
+//! route, setup). B4 reads [`TemplateInfo`] from
 //! `GET /cli/zen/templates`; its TypeScript mirror is `ZenTemplateInfo` in
 //! `src/renderer/lib/zen/zen-custom-types.ts`.
 //!
@@ -22,12 +22,6 @@
 //! description = "Write to one agent at a time; replies appear in handwriting."
 //! order = 10                      # place in New Garden's catalog list
 //! new_users = false               # true = setup also seeds it on a new computer
-//!
-//! [catalog.grant]                 # granted by the owner's create click (UWB22)
-//! widget = "k2:diary@1"
-//! caps = ["agents:read", "thread:read", "thread:post"]
-//! scope = "local"                 # optional: fixed to this computer's agents
-//! consent = "Diary can read your agents on this computer and post to their Threads."
 //!
 //! [layout]
 //! kind = "columns"
@@ -51,12 +45,14 @@
 //!   so `label`, `description`, `order` and `new_users` may change.
 //! - A Garden file may name any catalog template id (`template =
 //!   "k2.diary@1"`); `schema::is_template_id` accepts every catalog id.
+//! - **No grants (Rosson 2026-10-08).** A catalog Garden's widgets work the
+//!   moment it's created, like any widget in your own Garden
+//!   (`zen::widget_access`); the old `[catalog.grant]` table is gone and
+//!   refused as an unknown key.
 
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
-
-use super::builtin_widgets::{parse_widget_ref, WidgetRef};
 
 /// The Diary template (UWB21): the first catalog entry.
 pub const DIARY_TEMPLATE_ID: &str = "k2.diary@1";
@@ -73,58 +69,6 @@ pub struct CatalogMeta {
     pub order: u32,
     #[serde(default)]
     pub new_users: bool,
-    #[serde(default)]
-    pub grant: Option<CatalogGrant>,
-}
-
-/// What the owner's create click grants (UWB22): the page's built-in
-/// widget and its caps, Sending on. With `scope = "local"` the scope is
-/// fixed (Rosson 2026-10-08: the Diary sees only this computer's agents),
-/// so New Garden shows no scope picker: the create click is the consent,
-/// in the one `consent` sentence the modal shows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CatalogGrant {
-    /// A versioned built-in, `k2:<name>@<n>`.
-    pub widget: String,
-    pub caps: Vec<String>,
-    /// A fixed scope: only [`FIXED_SCOPE_LOCAL`] (this computer's agents,
-    /// grant scope `{server: "local"}`). None = the person picks.
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// The plain sentence New Garden shows beside Create ("Diary can read
-    /// your agents on this computer and post to their Threads.").
-    #[serde(default)]
-    pub consent: Option<String>,
-}
-
-/// `[catalog.grant] scope = "local"`: this computer's agents only.
-pub const FIXED_SCOPE_LOCAL: &str = "local";
-/// The host key of this computer's daemon in a grant scope and its entries
-/// (`{server: "local"}`; the renderer's `LOCAL_HOME_HOST`).
-pub const LOCAL_SERVER: &str = "local";
-/// Longest `consent` sentence, in characters.
-pub const CONSENT_MAX: usize = 160;
-
-impl CatalogGrant {
-    /// The grant scope a fixed `scope` stands for.
-    pub fn fixed_scope(&self) -> Option<super::grants::Scope> {
-        match self.scope.as_deref() {
-            Some(FIXED_SCOPE_LOCAL) => Some(super::grants::Scope::Server(LOCAL_SERVER.into())),
-            _ => None,
-        }
-    }
-}
-
-/// The scope a built-in widget is fixed to wherever it is placed, from the
-/// catalog entries that grant it (`k2:diary@1` → this computer only).
-/// None for a user widget or a built-in no catalog entry fixes.
-pub fn fixed_scope_for_widget(widget: &str) -> Option<super::grants::Scope> {
-    garden_catalog()
-        .iter()
-        .filter_map(|e| e.meta.grant.as_ref())
-        .filter(|g| g.widget == widget)
-        .find_map(CatalogGrant::fixed_scope)
 }
 
 /// One catalog entry: a template version plus its metadata.
@@ -143,8 +87,7 @@ pub struct GardenCatalogEntry {
 
 /// Parse one entry file. Checks: the file name is `<short>-<n>.toml`, `id`
 /// is `k2.<short>@<n>` with the same short and version, `[catalog]` has
-/// only known keys, a grant names a versioned built-in widget and only
-/// widget caps.
+/// only known keys.
 pub fn parse_entry(file: &'static str, src: &'static str) -> Result<GardenCatalogEntry, String> {
     let stem = file.strip_suffix(".toml").ok_or_else(|| format!("{file}: catalog files end in .toml"))?;
     let (short, n) = stem.rsplit_once('-').ok_or_else(|| format!("{file}: name it <short>-<version>.toml"))?;
@@ -162,30 +105,6 @@ pub fn parse_entry(file: &'static str, src: &'static str) -> Result<GardenCatalo
     let meta: CatalogMeta = meta.try_into().map_err(|e| format!("{file}: [catalog]: {e}"))?;
     if meta.short != short {
         return Err(format!("{file}: [catalog] short is '{}', the file name says '{short}'", meta.short));
-    }
-    if let Some(g) = &meta.grant {
-        match parse_widget_ref(&g.widget) {
-            Ok(WidgetRef::Builtin { version: Some(_), .. }) => {}
-            _ => return Err(format!("{file}: [catalog.grant] widget must be a versioned built-in like k2:diary@1")),
-        }
-        if let Some(bad) = g.caps.iter().find(|c| !super::USER_WIDGET_CAPS.contains(&c.as_str())) {
-            return Err(format!("{file}: [catalog.grant] cap '{bad}' isn't available to custom widgets"));
-        }
-        if let Some(s) = &g.scope {
-            if s != FIXED_SCOPE_LOCAL {
-                return Err(format!(
-                    "{file}: [catalog.grant] scope is \"{FIXED_SCOPE_LOCAL}\" (this computer's agents) or left out"
-                ));
-            }
-        }
-        if let Some(c) = &g.consent {
-            let n = c.chars().count();
-            if c.trim().is_empty() || n > CONSENT_MAX || c.chars().any(char::is_control) {
-                return Err(format!(
-                    "{file}: [catalog.grant] consent is one plain sentence, 1 to {CONSENT_MAX} characters"
-                ));
-            }
-        }
     }
     Ok(GardenCatalogEntry { file, template_id: want, version, meta, toml: src })
 }
@@ -247,10 +166,6 @@ pub struct TemplateInfo {
     pub label: String,
     pub description: String,
     pub section: TemplateSection,
-    /// Set when creating it also makes a grant (UWB22): the dialog asks for
-    /// a scope, and the same owner-only request creates the Garden and the
-    /// signed grant.
-    pub needs_grant: Option<CatalogGrant>,
     /// Seeded by setup on a new computer.
     pub new_users: bool,
 }
@@ -266,7 +181,6 @@ pub fn template_list() -> Vec<TemplateInfo> {
             label: "Start with the default".into(),
             description: "Garden 1’s layout: your agents beside a conversation.".into(),
             section: TemplateSection::Start,
-            needs_grant: None,
             new_users: true,
         },
         TemplateInfo {
@@ -275,7 +189,6 @@ pub fn template_list() -> Vec<TemplateInfo> {
             label: "Start empty and ask my agent".into(),
             description: "An empty page. Your agent builds it with you.".into(),
             section: TemplateSection::Start,
-            needs_grant: None,
             new_users: true,
         },
     ];
@@ -285,7 +198,6 @@ pub fn template_list() -> Vec<TemplateInfo> {
         label: e.meta.label.clone(),
         description: e.meta.description.clone(),
         section: TemplateSection::Catalog,
-        needs_grant: e.meta.grant.clone(),
         new_users: e.meta.new_users,
     }));
     out
@@ -304,10 +216,6 @@ short = "diary"
 label = "Diary"
 description = "Write to one agent at a time."
 order = 10
-
-[catalog.grant]
-widget = "k2:diary@1"
-caps = ["agents:read", "thread:read", "thread:post"]
 
 [layout]
 kind = "columns"
@@ -331,8 +239,6 @@ kind = "columns"
         assert_eq!(e.template_id, DIARY_TEMPLATE_ID);
         assert_eq!(e.version, 1);
         assert!(!e.meta.new_users, "Diary is not preinstalled unless the file says so");
-        let g = e.meta.grant.expect("grant");
-        assert_eq!(g.widget, crate::zen::builtin_widgets::DIARY_WIDGET);
     }
 
     #[test]
@@ -343,63 +249,39 @@ kind = "columns"
         assert!(parse_entry("diary-01.toml", DIARY_FIXTURE).is_err());
         let extra: &'static str = Box::leak(DIARY_FIXTURE.replace("order = 10", "order = 10\nicon = \"x\"").into_boxed_str());
         assert!(parse_entry("diary-1.toml", extra).is_err(), "unknown [catalog] key");
-        let cap: &'static str =
-            Box::leak(DIARY_FIXTURE.replace("\"thread:post\"]", "\"gardens:manage\"]").into_boxed_str());
-        assert!(parse_entry("diary-1.toml", cap).is_err(), "non-widget cap in the grant");
-        let unpinned: &'static str = Box::leak(DIARY_FIXTURE.replace("k2:diary@1", "k2:diary").into_boxed_str());
-        assert!(parse_entry("diary-1.toml", unpinned).is_err(), "grant widget must be versioned");
-        let wide: &'static str = Box::leak(
-            DIARY_FIXTURE.replace("\"thread:post\"]", "\"thread:post\"]\nscope = \"allServers\"").into_boxed_str(),
-        );
-        assert!(parse_entry("diary-1.toml", wide).is_err(), "a fixed scope is only \"local\"");
-        let long: &'static str = Box::leak(
+        // Rosson 2026-10-08: no grants. The old `[catalog.grant]` table
+        // is an unknown key now, so a stale entry can't come back.
+        let granted: &'static str = Box::leak(
             DIARY_FIXTURE
-                .replace("\"thread:post\"]", &format!("\"thread:post\"]\nconsent = \"{}\"", "x".repeat(CONSENT_MAX + 1)))
+                .replace("order = 10", "order = 10\n\n[catalog.grant]\nwidget = \"k2:diary@1\"\ncaps = [\"agents:read\"]")
                 .into_boxed_str(),
         );
-        assert!(parse_entry("diary-1.toml", long).is_err(), "consent is one short sentence");
-        let blank: &'static str =
-            Box::leak(DIARY_FIXTURE.replace("\"thread:post\"]", "\"thread:post\"]\nconsent = \"  \"").into_boxed_str());
-        assert!(parse_entry("diary-1.toml", blank).is_err(), "consent can't be blank");
+        assert!(parse_entry("diary-1.toml", granted).is_err(), "[catalog.grant] is gone");
     }
 
-    /// Rosson 2026-10-08: the Diary is a journal of THIS computer's agents.
-    /// Its catalog grant fixes the scope to `{server: "local"}` and carries
-    /// the one sentence New Garden shows; no scope picker, no agent chooser.
+    /// Rosson 2026-10-08: the Diary works the moment it's created; New
+    /// Garden asks nothing and the templates route carries no grant.
     #[test]
-    fn the_shipped_diary_is_fixed_to_this_computer() {
-        let e = current_entries().into_iter().find(|e| e.meta.short == "diary").expect("the Diary ships");
-        let g = e.meta.grant.as_ref().expect("the Diary grants in the create click");
-        assert_eq!(g.scope.as_deref(), Some(FIXED_SCOPE_LOCAL));
-        assert_eq!(g.fixed_scope(), Some(crate::zen::grants::Scope::Server(LOCAL_SERVER.into())));
-        let consent = g.consent.as_deref().expect("a consent sentence");
-        assert!(consent.contains("this computer"), "{consent}");
-        assert_eq!(
-            fixed_scope_for_widget(crate::zen::builtin_widgets::DIARY_WIDGET),
-            Some(crate::zen::grants::Scope::Server("local".into()))
-        );
-        assert_eq!(fixed_scope_for_widget("agent-arcade"), None, "a user widget's scope is the person's pick");
+    fn the_shipped_diary_needs_no_grant() {
         let row = template_list().into_iter().find(|t| t.short == "diary").expect("listed");
         let wire = serde_json::to_value(&row).expect("serializes");
-        assert_eq!(wire["needsGrant"]["scope"], "local");
-        assert_eq!(wire["needsGrant"]["consent"], consent);
+        assert!(wire.get("needsGrant").is_none(), "{wire}");
+        assert_eq!(wire["section"], "catalog");
     }
 
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped
     /// version, names only built-in widgets that exist in this build. A
     /// catalog Garden has no widget folder of its own, so a `custom` widget
-    /// must be a versioned `k2:<name>@<n>` from `BUILTIN_WIDGETS`; the grant
-    /// names one of the page's widgets and asks for no more than its
-    /// manifest does.
+    /// must be a versioned `k2:<name>@<n>` from `BUILTIN_WIDGETS`.
     #[test]
     fn every_catalog_template_names_an_existing_builtin_widget() {
-        use crate::zen::builtin_widgets::builtin_widget;
+        use crate::zen::builtin_widgets::{builtin_widget, parse_widget_ref, WidgetRef};
         let all = garden_catalog();
         assert!(!all.is_empty(), "the catalog ships at least the Diary");
         for e in all {
             let v: toml::Value = toml::from_str(e.toml).unwrap_or_else(|err| panic!("{}: {err}", e.file));
             let widgets = v.get("widget").and_then(toml::Value::as_array).cloned().unwrap_or_default();
-            let mut custom: Vec<String> = Vec::new();
+            let mut custom = 0;
             for w in &widgets {
                 if w.get("kind").and_then(toml::Value::as_str) != Some("custom") {
                     continue;
@@ -415,20 +297,9 @@ kind = "columns"
                     e.file
                 );
                 assert!(builtin_widget(&r).is_some(), "{}: '{name}' isn't a built-in widget in this build", e.file);
-                custom.push(name.to_string());
+                custom += 1;
             }
-            if let Some(g) = &e.meta.grant {
-                assert!(custom.contains(&g.widget), "{}: grant widget {} isn't on the page", e.file, g.widget);
-                let b = builtin_widget(&parse_widget_ref(&g.widget).expect("checked by parse_entry"))
-                    .unwrap_or_else(|| panic!("{}: grant widget {} doesn't exist", e.file, g.widget));
-                let manifest = b.files.iter().find(|(f, _)| *f == "manifest.json").map(|(_, s)| *s).expect("manifest");
-                let manifest: serde_json::Value = serde_json::from_str(manifest).expect("manifest is JSON");
-                let asked: Vec<&str> =
-                    manifest["caps"].as_array().expect("caps").iter().filter_map(|c| c.as_str()).collect();
-                for c in &g.caps {
-                    assert!(asked.contains(&c.as_str()), "{}: grant cap {c} isn't in {}'s manifest", e.file, g.widget);
-                }
-            }
+            assert!(custom <= 6, "{}: at most 6 custom widgets", e.file);
         }
     }
 }

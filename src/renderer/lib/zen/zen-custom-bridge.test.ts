@@ -1,7 +1,8 @@
 // prd-zen-user-widgets-v2 TUW3.3 (caps, binding, refusals), TUW3.4 (rows by
-// cap), TUW3.5 (limits), TUWA7 (projection), TUWB4 (runaway guard), UWB9
-// (Sending) — the custom layer, with K2's own verbs faked behind the inner
-// bridge. Fixtures are made up (example.test, g-test0001).
+// cap), TUW3.5 (limits), TUWA7 (projection), TUWB4 (runaway guard as changed
+// 2026-10-08: it pauses posting, never the frame) — the custom layer, with
+// K2's own verbs faked behind the inner bridge. No permissions: a new widget
+// posts with zero clicks. Fixtures are made up (example.test, g-test0001).
 import { describe, expect, it, vi } from 'vitest'
 import type { ZenWidgetBridge } from './zen-bridge'
 import { ZenBridgeError } from './zen-bridge'
@@ -57,17 +58,8 @@ function payload(over: Partial<ZenCustomWidgetPayload> = {}): ZenCustomWidgetPay
     state: 'ok',
     errors: [],
     warnings: [],
-    grant: {
-      state: 'granted',
-      caps: ['agents:read', 'thread:read', 'thread:post'],
-      granted: ['agents:read', 'thread:read', 'thread:post'],
-      scope: { home: 'home-work' },
-      entries: [{ server: 'local', room: 'alice' }],
-      sending: true,
-      paused: null,
-      grantedAt: 'x',
-      widgetHash: 'h1',
-    },
+    origin: 'local',
+    paused: null,
     ...over,
   }
 }
@@ -78,6 +70,7 @@ interface Harness {
   pushes: Array<{ sub: number; value: unknown }>
   stops: string[]
   runaway: number
+  paused: boolean
   clock: { t: number }
   widget: { current: ZenCustomWidgetPayload }
 }
@@ -88,6 +81,7 @@ function harness(over: Partial<ZenCustomLayerDeps> = {}, impls: Record<string, (
     pushes: [],
     stops: [],
     runaway: 0,
+    paused: false,
     clock: { t: 1_000_000 },
     widget: { current: payload() },
   } as unknown as Harness
@@ -123,8 +117,10 @@ function harness(over: Partial<ZenCustomLayerDeps> = {}, impls: Record<string, (
     ensureConversation: async () => undefined,
     push: (sub, value) => h.pushes.push({ sub, value }),
     stop: (reason) => h.stops.push(reason),
-    sendingOffForRunaway: async () => {
+    paused: () => h.paused,
+    pauseForRunaway: () => {
       h.runaway += 1
+      h.paused = true
     },
     theme: () => ({ theme: { scheme: 'light', vars: {} }, chrome: { corners: null, stoplights: null }, motion: { reduced: false } }),
     onThemeChange: () => () => undefined,
@@ -147,9 +143,9 @@ function code(r: ZenFrameReply): string {
 }
 
 describe('TUW3.3: caps, binding and refusals', () => {
-  it('no grant: every capped verb is cap_not_granted (with the cap); no-cap verbs still work', async () => {
+  it('a widget that asks for no caps: every capped verb is cap_not_granted (with the cap); no-cap verbs still work', async () => {
     const h = harness()
-    h.widget.current = payload({ caps: [], grant: null })
+    h.widget.current = payload({ caps: [], requested: [] })
     const layer = createZenCustomLayer(h.deps)
     for (const verb of ['agents.list', 'thread.read', 'thread.post', 'compose.draft', 'presence.get', 'conversation.open']) {
       const r = await call(layer, verb, 'alice::local', 'x')
@@ -231,18 +227,38 @@ describe('TUW3.3: caps, binding and refusals', () => {
   })
 })
 
-describe('UWB9: Sending and the runaway guard (TUWB4)', () => {
-  it('Sending off → sending_off for posts and answers; drafts still work', async () => {
+describe('No permissions, and the runaway guard (TUWB4, Rosson 2026-10-08)', () => {
+  it('a new widget posts with zero clicks: no grant, no Sending switch', async () => {
     const h = harness()
-    const g = payload().grant!
-    h.widget.current = payload({ grant: { ...g, sending: false } })
     const layer = createZenCustomLayer(h.deps)
-    expect(code(await call(layer, 'thread.post', 'alice::local', 'hi'))).toBe('sending_off')
-    expect(code(await call(layer, 'thread.answer', 'alice::local', 'c1', 'Yes'))).toBe('sending_off')
-    expect(await call(layer, 'compose.draft', 'alice::local', 'hi')).toMatchObject({ ok: true })
+    expect(await call(layer, 'thread.post', 'alice::local', 'hello')).toEqual({ id: 1, ok: true, value: { id: 'm1', seq: 9 } })
+    expect(await call(layer, 'thread.answer', 'alice::local', 'c1', 'Yes')).toMatchObject({ ok: true })
+    expect(await call(layer, 'agents.list')).toMatchObject({ ok: true })
+    expect(h.runaway).toBe(0)
   })
 
-  it(`the ${ZEN_RUNAWAY.posts + 1}st post in 10 minutes turns sending off and unloads the frame`, async () => {
+  it('a widget that is not from your own Garden gets no caps (the v4 seam)', async () => {
+    const h = harness()
+    h.widget.current = payload({ origin: 'other', caps: [] })
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'thread.post', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    expect(h.calls).toEqual([])
+  })
+
+  it('while paused (here or by the daemon) posts and answers are sending_off; reads and drafts still work', async () => {
+    const h = harness()
+    h.paused = true
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.post', 'alice::local', 'hi')
+    expect(code(r)).toBe('sending_off')
+    expect((r as { error: { message: string } }).error.message).toContain('Paused: too many posts')
+    expect(code(await call(layer, 'thread.answer', 'alice::local', 'c1', 'Yes'))).toBe('sending_off')
+    expect(await call(layer, 'compose.draft', 'alice::local', 'hi')).toMatchObject({ ok: true })
+    expect(await call(layer, 'agents.list')).toMatchObject({ ok: true })
+    expect(h.calls.some((c) => c.verb === 'thread.post')).toBe(false)
+  })
+
+  it(`the ${ZEN_RUNAWAY.posts + 1}st post in 10 minutes pauses posting; the frame keeps running; Resume lets it post again`, async () => {
     const h = harness()
     const layer = createZenCustomLayer(h.deps)
     for (let i = 0; i < ZEN_RUNAWAY.posts; i++) {
@@ -252,9 +268,19 @@ describe('UWB9: Sending and the runaway guard (TUWB4)', () => {
     h.clock.t += 2_000
     expect(code(await call(layer, 'thread.post', 'alice::local', 'one more'))).toBe('sending_off')
     expect(h.runaway).toBe(1)
-    expect(h.stops).toEqual(['runaway'])
-    // Stopped: the layer answers nothing more.
-    expect(await layer.handle({ id: 2, verb: 'gardens.list', args: [] })).toBeNull()
+    expect(h.stops).toEqual([])
+    // Still running: reads answer, posts stay refused, the guard trips once.
+    expect(await layer.handle({ id: 2, verb: 'gardens.list', args: [] })).toMatchObject({ ok: true })
+    h.clock.t += 2_000
+    expect(code(await call(layer, 'thread.post', 'alice::local', 'and another'))).toBe('sending_off')
+    expect(h.runaway).toBe(1)
+    // The person clicks Resume: posting starts over with a fresh count.
+    h.paused = false
+    for (let i = 0; i < ZEN_RUNAWAY.posts; i++) {
+      h.clock.t += 2_000
+      expect(await call(layer, 'thread.post', 'alice::local', `after ${i}`)).toMatchObject({ ok: true })
+    }
+    expect(h.runaway).toBe(1)
   })
 
   it(`the ${ZEN_RUNAWAY.identical + 1}st identical text to one agent trips it; posts older than 10 minutes don't count`, async () => {
@@ -274,7 +300,8 @@ describe('UWB9: Sending and the runaway guard (TUWB4)', () => {
     }
     h.clock.t += 1_000
     expect(code(await call(layer, 'thread.post', 'alice::local', 'ping'))).toBe('sending_off')
-    expect(h.stops).toEqual(['runaway'])
+    expect(h.runaway).toBe(1)
+    expect(h.stops).toEqual([])
   })
 })
 
@@ -326,7 +353,7 @@ describe('TUW3.5: limits', () => {
 
   it('a refused subscription is answered once with {sub, error}, never dropped (B4 Q2)', async () => {
     const h = harness({}, { 'agents.subscribe': () => () => undefined })
-    h.widget.current = payload({ caps: [], grant: null })
+    h.widget.current = payload({ caps: [], requested: [] })
     const noCap = createZenCustomLayer(h.deps)
     expect(await noCap.handle({ sub: 7, verb: 'agents.subscribe', args: [] })).toEqual({
       sub: 7,

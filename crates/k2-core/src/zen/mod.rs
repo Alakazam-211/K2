@@ -27,9 +27,10 @@
 //!
 //! Zen v2 (prd-zen-user-widgets-v2): `widgets/<name>/` holds custom
 //! widgets an agent writes ([`widgets`], [`bundle`], [`widget_store`]);
-//! a Garden places one with `kind = "custom"`. What a widget may do is a
-//! signed row in the daemon's database ([`grants`]), made only by the
-//! owner's click in the K2 app; `grants.json` is never read or written.
+//! a Garden places one with `kind = "custom"`. A widget in your own Garden
+//! can use every Garden-safe cap it asks for, with no permissions to click
+//! through ([`widget_access`], Rosson 2026-10-08); `grants.json` is never
+//! read or written.
 //! Ready-made Gardens (the Diary) are data in [`garden_catalog`], and every
 //! built-in default is read through [`Defaults`] (sync-defaults D0).
 //!
@@ -45,13 +46,13 @@ pub mod builtin_widgets;
 pub mod bundle;
 pub mod defaults;
 pub mod garden_catalog;
-pub mod grants;
 pub mod news;
 pub mod schema;
 pub mod skill;
 pub mod stdlib;
 pub mod store;
 pub mod sync;
+pub mod widget_access;
 pub mod widget_store;
 pub mod widgets;
 
@@ -189,9 +190,10 @@ pub const BRIDGE_CAPS: &[&str] = &[
     "app:navigate",
 ];
 
-/// The caps a custom widget may ask for and be granted
-/// (prd-zen-user-widgets-v2 UW5, UW24). Equal to the catalog's caps exposed
-/// to `widget` (`crate::contract`, asserted in `grants` tests), and a subset
+/// The caps a custom widget may ask for, and runs with when it asks
+/// (prd-zen-user-widgets-v2 UW5; no grant since 2026-10-08). Equal to the
+/// catalog's caps exposed to `widget` (`crate::contract`, asserted in
+/// `widget_access` tests), and a subset
 /// of [`BRIDGE_CAPS`]. `agents:add`, `gardens:manage`, `gardens:template`
 /// and `app:navigate` stay built-in only.
 pub const USER_WIDGET_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post"];

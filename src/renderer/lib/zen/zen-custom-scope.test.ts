@@ -1,6 +1,6 @@
-// prd-zen-user-widgets-v2 TUWB3 (scope), UW38 parsing and UWA8 entries.
-// Fixtures are made up (the repo is public): hosts under example.test,
-// Garden ids like g-test0001.
+// prd-zen-user-widgets-v2 TUWB3 (as changed 2026-10-08: no scope to pick; a
+// widget reaches the Garden's reach) and UW38 parsing. Fixtures are made up
+// (the repo is public): hosts under example.test, Garden ids like g-test0001.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -27,14 +27,13 @@ import { useProjectsStore } from '@/stores/projects'
 import {
   __resetZenScopeForTests,
   useZenServerRosters,
-  zenAskScope,
-  zenGrantEntries,
-  zenScopeRows,
-  zenScopeWhere,
+  zenServerName,
+  zenWidgetReachRows,
   ZEN_WIDGET_MAX_SERVERS,
 } from './zen-custom-scope'
-import { parseZenCustomWidget, parseZenGrantView, parseZenScope } from './zen-custom-payload'
+import { parseZenCustomWidget, parseZenWidgetPause } from './zen-custom-payload'
 import { parseZenGet } from './zen-page'
+import { zenAgentRows, zenCustomViewFor } from './zen-data'
 
 const WORK: Home = {
   id: 'home-work',
@@ -54,7 +53,7 @@ const PLAY: Home = {
 }
 
 function host(n: number): ConnectHost {
-  return { id: `h${n}`, label: `Box ${n}`, hostname: `box${n}.example.test`, port: 443, secure: true } as ConnectHost
+  return { id: `h${n}`, label: `Box ${n}`, hostname: `box${n}.example.test`, port: 443, secure: true, token: 'tok-test' } as ConnectHost
 }
 
 let saved: { homes: Home[]; hosts: ConnectHost[]; projects: unknown[]; active: unknown }
@@ -80,93 +79,79 @@ afterEach(() => {
   useProjectsStore.setState({ projects: saved.projects as never })
 })
 
-const addrs = (s: ReturnType<typeof zenScopeRows>): string[] => s.rows.map((r) => r.address)
+const addrs = (): string[] => zenWidgetReachRows().rows.map((r) => r.address)
 
-describe('TUWB3: each scope kind resolves to the right rows', () => {
-  it('agent, home, homes and allHomes', () => {
-    expect(addrs(zenScopeRows({ agent: 'bob::box.example.test' }))).toEqual(['bob::box.example.test'])
-    expect(addrs(zenScopeRows({ home: 'home-work' }))).toEqual(['alice::local', 'bob::box.example.test'])
-    expect(addrs(zenScopeRows({ homes: ['home-play', 'home-work'] }))).toEqual([
-      'carol::local',
-      'alice::local',
-      'bob::box.example.test',
-    ])
-    expect(addrs(zenScopeRows({ allHomes: true }))).toEqual(['alice::local', 'bob::box.example.test', 'carol::local'])
-    expect(zenScopeRows(null).rows).toEqual([])
-  })
-
-  it('an agent added to a granted Home appears at once; a deleted Home gives fewer rows, never the window Home', () => {
-    expect(addrs(zenScopeRows({ home: 'home-play' }))).toEqual(['carol::local', 'alice::local'])
-    useHomesStore.setState({
-      homes: [WORK, { ...PLAY, rows: [...PLAY.rows, { address: 'dave::local', workspaceId: 'w4', label: 'Dave' }] }],
-    })
-    expect(addrs(zenScopeRows({ home: 'home-play' }))).toEqual(['carol::local', 'alice::local', 'dave::local'])
-    useHomesStore.setState({ homes: [WORK], selectedId: WORK.id })
-    expect(addrs(zenScopeRows({ home: 'home-play' }))).toEqual([])
-    expect(addrs(zenScopeRows({ homes: ['home-play', 'home-work'] }))).toEqual(['alice::local', 'bob::box.example.test'])
-  })
-
-  it('server: its Home rows plus its workspaces (the window server from the projects store)', () => {
+describe('TUWB3: a widget reaches this computer plus every Home row, at once', () => {
+  it("this computer's workspaces plus every Home's rows, deduplicated, local first", () => {
     useProjectsStore.setState({
       projects: [{ id: 'p9', name: 'Erin', handle: 'erin', path: '/x', pinned: false } as never],
     })
-    expect(addrs(zenScopeRows({ server: 'local' }))).toEqual(['alice::local', 'carol::local', 'erin::local'])
+    expect(addrs()).toEqual(['alice::local', 'carol::local', 'erin::local', 'bob::box.example.test'])
     expect(h.gets).toEqual([])
   })
 
-  it('server: another server reads projects/list once with your login there', async () => {
-    useConnectHostStore.setState({ hosts: [host(1)], activeHost: 'local' })
-    h.rosters['box1.example.test'] = [{ id: 'q1', name: 'Frank', handle: 'frank' }]
-    expect(addrs(zenScopeRows({ server: 'box1.example.test' }))).toEqual([])
-    await vi.waitFor(() => expect(useZenServerRosters.getState().rosters['box1.example.test']?.status).toBe('ready'))
-    expect(addrs(zenScopeRows({ server: 'box1.example.test' }))).toEqual(['frank::box1.example.test'])
-    zenScopeRows({ server: 'box1.example.test' })
-    expect(h.gets).toEqual([{ hostKey: 'box1.example.test', route: 'projects/list' }])
+  it('an agent added to a Home appears at once; a deleted Home gives fewer rows', () => {
+    expect(addrs()).toEqual(['alice::local', 'carol::local', 'bob::box.example.test'])
+    useHomesStore.setState({
+      homes: [WORK, { ...PLAY, rows: [...PLAY.rows, { address: 'dave::local', workspaceId: 'w4', label: 'Dave' }] }],
+    })
+    expect(addrs()).toContain('dave::local')
+    useHomesStore.setState({ homes: [], selectedId: undefined })
+    expect(addrs()).toEqual([])
   })
 
-  it(`allServers: this computer first, at most ${ZEN_WIDGET_MAX_SERVERS} live servers, the rest left out`, async () => {
-    const hosts = Array.from({ length: 9 }, (_, i) => host(i + 1))
-    useConnectHostStore.setState({ hosts, activeHost: 'local' })
-    for (const x of hosts) h.rosters[`${x.hostname}`] = [{ id: 'z', name: 'Zed', handle: `zed-${x.id}` }]
-    zenScopeRows({ allServers: true })
-    await vi.waitFor(() =>
-      expect(Object.values(useZenServerRosters.getState().rosters).filter((r) => r.status === 'ready')).toHaveLength(9),
-    )
-    const r = zenScopeRows({ allServers: true })
+  it('a saved server that is on no Home is outside the reach (never listed, never fetched)', () => {
+    useConnectHostStore.setState({ hosts: [host(1)], activeHost: 'local' })
+    h.rosters['box1.example.test'] = [{ id: 'q1', name: 'Frank', handle: 'frank' }]
+    expect(addrs()).not.toContain('frank::box1.example.test')
+    expect(h.gets).toEqual([])
+    // On a Home, a row of that server is in reach.
+    useHomesStore.setState({ homes: [{ id: 'home-x', name: 'X', rows: [{ address: 'frank::box1.example.test', workspaceId: 'q1', label: 'Frank' }] }] })
+    expect(addrs()).toEqual(['frank::box1.example.test'])
+  })
+
+  it("on another server's window, this computer's agents come from one local projects/list", async () => {
+    useConnectHostStore.setState({ hosts: [host(1)], activeHost: host(1) as never })
+    useHomesStore.setState({ homes: [], selectedId: undefined })
+    h.rosters['local'] = [{ id: 'l1', name: 'Gina', handle: 'gina' }]
+    expect(addrs()).toEqual([])
+    await vi.waitFor(() => expect(useZenServerRosters.getState().rosters['local']?.status).toBe('ready'))
+    expect(addrs()).toEqual(['gina::local'])
+    // Cached: reading the reach again asks nothing more.
+    const asked = h.gets.length
+    addrs()
+    await Promise.resolve()
+    expect(h.gets.length).toBe(asked)
+    expect(h.gets).toContainEqual({ hostKey: 'local', route: 'projects/list' })
+  })
+
+  it(`at most ${ZEN_WIDGET_MAX_SERVERS} live servers, this computer first; the rest are left out`, () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({ address: `zed::box${i + 1}.example.test`, workspaceId: `z${i}`, label: 'Zed' }))
+    useHomesStore.setState({ homes: [WORK, { id: 'home-many', name: 'Many', rows }] })
+    const r = zenWidgetReachRows()
     expect(r.servers).toHaveLength(ZEN_WIDGET_MAX_SERVERS)
     expect(r.servers[0]).toBe('local')
     expect(r.overflow.length).toBeGreaterThan(0)
     for (const row of r.rows) expect(r.servers).toContain(row.address.split('::')[1])
   })
-})
 
-describe('UWA8: grant entries', () => {
-  it('one {server, room} per row, sorted, deduplicated', () => {
-    expect(zenGrantEntries(zenScopeRows({ allHomes: true }).rows)).toEqual([
-      { server: 'box.example.test', room: 'bob' },
-      { server: 'local', room: 'alice' },
-      { server: 'local', room: 'carol' },
+  it("a custom widget's rows are its reach; a widget that may not run (v4) gets none", () => {
+    const base = { id: 'arcade', column: 0, props: {} }
+    const raw = { kind: 'custom', widget: 'agent-arcade', requested: ['agents:read'], caps: ['agents:read'], hash: 'h', state: 'ok' }
+    const local = parseZenCustomWidget({ ...raw, origin: 'local' }, base)
+    expect(zenAgentRows(zenCustomViewFor('g-test0001', local)).map((r) => r.address)).toEqual([
+      'alice::local',
+      'carol::local',
+      'bob::box.example.test',
     ])
-  })
-})
-
-describe('UW22: the placement ask fixes the scope', () => {
-  it('home by name or id; agent within that Home; a missing name says so', () => {
-    expect(zenAskScope({ home: 'work' })).toEqual({ scope: { home: 'home-work' } })
-    expect(zenAskScope({ home: 'Work', agent: 'Bob' })).toEqual({ scope: { agent: 'bob::box.example.test' } })
-    expect(zenAskScope({ agent: 'carol' })).toEqual({ scope: { agent: 'carol::local' } })
-    expect(zenAskScope({ home: 'Nope' })).toEqual({ missing: 'No Home called “Nope” on this computer.' })
-    expect(zenAskScope({ home: 'Work', agent: 'carol' })).toEqual({ missing: 'No agent “carol” in Work.' })
-    expect(zenAskScope({})).toBeNull()
+    const other = parseZenCustomWidget({ ...raw, origin: 'imported' }, base)
+    expect(zenAgentRows(zenCustomViewFor('g-test0001', other))).toEqual([])
   })
 
-  it('where words', () => {
-    expect(zenScopeWhere({ home: 'home-work' })).toBe('Work')
-    expect(zenScopeWhere({ homes: ['home-work', 'home-play'] })).toBe('Work and Play')
-    expect(zenScopeWhere({ allHomes: true })).toBe('all your Homes')
-    expect(zenScopeWhere({ agent: 'carol::local' })).toBe('only Carol')
-    expect(zenScopeWhere({ allServers: true })).toBe('every server you use')
-    expect(zenScopeWhere({ server: 'local' })).toBe('this computer')
+  it('server names', () => {
+    expect(zenServerName('local')).toBe('this computer')
+    useConnectHostStore.setState({ hosts: [host(2)], activeHost: 'local' })
+    expect(zenServerName('box2.example.test')).toBe('Box 2')
   })
 })
 
@@ -188,20 +173,11 @@ describe('UW38: parsing a custom widget', () => {
     state: 'ok',
     errors: [],
     warnings: [{ file: 'widgets/agent-arcade/index.html', line: 3, col: 1, message: 'innerHTML' }],
-    grant: {
-      state: 'partial',
-      caps: ['agents:read', 'thread:read'],
-      granted: ['agents:read', 'thread:read'],
-      scope: { home: 'home-work' },
-      entries: [{ server: 'local', room: 'alice' }],
-      sending: true,
-      paused: null,
-      grantedAt: '2026-10-08T00:00:00Z',
-      widgetHash: 'abc123',
-    },
+    origin: 'local',
+    paused: null,
   }
 
-  it('effective caps = requested ∩ daemon caps ∩ grant caps ∩ widget caps; source is user', () => {
+  it('caps = requested ∩ daemon caps ∩ widget caps, no grant; source is user', () => {
     const page = parseZenGet({
       ok: true,
       page: { template: 'k2.blank@1', layout: { split: [100] }, widgets: [raw], controls: [] },
@@ -214,28 +190,26 @@ describe('UW38: parsing a custom widget', () => {
     expect(w.custom?.props).toEqual({ home: 'Work', config: { speed: 2 } })
     expect(w.custom?.reasons).toEqual({ 'thread:post': 'so you can talk' })
     expect(w.custom?.libs).toEqual(['three@0.170', { url: 'https://cdn.example.test/x.js', integrity: 'sha384-x' }])
-    expect(w.custom?.grant?.state).toBe('partial')
+    expect(w.custom?.origin).toBe('local')
+    expect(w.custom?.paused).toBeNull()
+    expect(w.custom).not.toHaveProperty('grant')
   })
 
-  it('a grant needing review (or unreadable) carries no caps', () => {
-    for (const state of ['review', 'invalid', 'none', 'bogus']) {
-      const c = parseZenCustomWidget({ ...raw, grant: { ...raw.grant, state } }, { id: 'a', column: 0, props: {} })
-      expect(c.caps, state).toEqual([])
-      expect(c.grant?.caps, state).toEqual([])
+  it('an origin that is not local (or unreadable) carries no caps: the v4 seam fails closed', () => {
+    for (const origin of ['imported', 'bogus', undefined, 7]) {
+      const c = parseZenCustomWidget({ ...raw, origin }, { id: 'a', column: 0, props: {} })
+      expect(c.caps, String(origin)).toEqual([])
+      expect(c.origin, String(origin)).toBe('other')
     }
-    expect(parseZenCustomWidget({ ...raw, grant: null }, { id: 'a', column: 0, props: {} }).caps).toEqual([])
-    expect(parseZenGrantView('x')).toBeNull()
     expect(parseZenCustomWidget({ ...raw, state: 'weird' }, { id: 'a', column: 0, props: {} }).state).toBe('broken')
   })
 
-  it('scopes: exactly one known key', () => {
-    expect(parseZenScope({ home: 'h' })).toEqual({ home: 'h' })
-    expect(parseZenScope({ homes: ['a', 'b'] })).toEqual({ homes: ['a', 'b'] })
-    expect(parseZenScope({ homes: ['a', 'a'] })).toBeNull()
-    expect(parseZenScope({ homes: [] })).toBeNull()
-    expect(parseZenScope({ allHomes: true })).toEqual({ allHomes: true })
-    expect(parseZenScope({ allServers: false })).toBeNull()
-    expect(parseZenScope({ home: 'a', server: 'b' })).toBeNull()
-    expect(parseZenScope({ galaxy: 'x' })).toBeNull()
+  it('the runaway pause: {at, reason: runaway} or null', () => {
+    expect(parseZenWidgetPause({ at: '2026-10-08T00:00:00Z', reason: 'runaway' })).toEqual({ at: '2026-10-08T00:00:00Z', reason: 'runaway' })
+    expect(parseZenWidgetPause({ reason: 'bored' })).toBeNull()
+    expect(parseZenWidgetPause(null)).toBeNull()
+    const c = parseZenCustomWidget({ ...raw, paused: { at: 't', reason: 'runaway' } }, { id: 'a', column: 0, props: {} })
+    expect(c.paused).toEqual({ at: 't', reason: 'runaway' })
+    expect(c.caps).toEqual(['agents:read', 'thread:read'])
   })
 })

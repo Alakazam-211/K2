@@ -1,12 +1,10 @@
 // @vitest-environment jsdom
 //
 // Rosson 2026-10-08 — New Garden is one modal: a name and the catalog's
-// cards (the Diary first, then the starts). Pick one, name it, Create. For
-// K2's own catalog Gardens the create click is the consent: one plain
-// sentence, no scope picker, and the grant is fixed to THIS computer's
-// agents (`{server: 'local'}`); a remote server's agent is never bound. An
-// older daemon keeps the two starts. "See it in New Garden" opens the modal
-// on that entry.
+// cards (the Diary first, then the starts). Pick one, name it, Create. No
+// permissions (Rosson 2026-10-08): no consent sentence, no scope picker, no
+// grant in the create. An older daemon keeps the two starts. "See it in New
+// Garden" opens the modal on that entry.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -38,21 +36,19 @@ import { ZenNewGardenHost } from './ZenNewGardenModal'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const CONSENT = 'Diary can read your agents on this computer and post to their Threads.'
 const DIARY = {
   id: 'k2.diary@1',
   short: 'diary',
   label: 'Diary',
   description: 'A haunted journal.',
   section: 'catalog',
-  needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'], scope: 'local', consent: CONSENT },
   newUsers: true,
 }
 const STARTS = [
-  { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'Garden 1’s layout.', section: 'start', needsGrant: null, newUsers: true },
-  { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'An empty page.', section: 'start', needsGrant: null, newUsers: true },
+  { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'Garden 1’s layout.', section: 'start', newUsers: true },
+  { id: 'k2.blank@1', short: 'blank', label: 'Start empty and ask my agent', description: 'An empty page.', section: 'start', newUsers: true },
 ]
-const STICKERS = { id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', description: 'Just a look.', section: 'catalog', needsGrant: null, newUsers: false }
+const STICKERS = { id: 'k2.stickers@1', short: 'stickers', label: 'Stickers', description: 'Just a look.', section: 'catalog', newUsers: false }
 
 // A Home with an agent on this computer and one on a remote server.
 const WORK: Home = {
@@ -134,30 +130,23 @@ describe('New Garden: one modal, the catalog as cards (Rosson 2026-10-08)', () =
     expect(cards()).toEqual(['diary', 'stickers', 'texting', 'blank'])
     for (const c of cards()) expect(document.querySelector(`[data-zen-new-garden-card="${c}"] [data-zen-garden-sketch="${c}"]`), c).not.toBeNull()
     expect(h.gets.every((g) => g === 'local zen/templates')).toBe(true)
-    // The Diary is picked first, its name suggested, its one sentence shown.
+    // The Diary is picked first, its name suggested; nothing to agree to.
     expect(q('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true')
     expect((q('[data-zen-new-garden-name]') as HTMLInputElement).value).toBe('Diary')
-    expect(q('[data-zen-new-garden-consent="diary"]').textContent).toBe(CONSENT)
+    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
+    expect(q('[data-testid="zen-new-garden-modal"]').textContent).not.toMatch(/permission|allow|post to their Threads/i)
     expect(creates).toEqual([])
   })
 
-  it('Diary: one click creates it with its grant fixed to this computer; no scope picker, no remote agent', async () => {
+  it('Diary: one click creates it, with no grant in the request; no scope picker, no Sending choice', async () => {
     h.templates = [...STARTS, DIARY]
     await openFromMenu()
-    // No scope picker, no Sending choice, no agent chooser: the click is the consent.
+    // No scope picker, no Sending choice, no agent chooser.
     expect(document.querySelector('[data-zen-new-garden-modal] select, [data-zen-sending-choice], [data-zen-scope-kind]')).toBeNull()
     expect(document.querySelectorAll('[data-testid="zen-new-garden-modal"] select').length).toBe(0)
     fireEvent.change(q('[data-zen-new-garden-name]'), { target: { value: 'Séance' } })
     await act(async () => void fireEvent.click(q('[data-zen-new-garden-create]')))
-    expect(creates).toEqual([
-      {
-        name: 'Séance',
-        template: 'diary',
-        opts: { ask: false, grant: { scope: { server: 'local' }, sending: true, entries: [{ server: 'local', room: 'alice' }] } },
-      },
-    ])
-    // Julie is on scout.k2.dev: never bound to the Diary.
-    expect(JSON.stringify(creates)).not.toContain('julie')
+    expect(creates).toEqual([{ name: 'Séance', template: 'diary', opts: { ask: false } }])
     expect(useZenNewGardenModal.getState().open).toBe(false)
     expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull()
   })
@@ -191,7 +180,7 @@ describe('New Garden: one modal, the catalog as cards (Rosson 2026-10-08)', () =
     expect(useZenNewGardenModal.getState().open).toBe(true)
   })
 
-  it('a catalog Garden with no widget creates with no grant and no consent line', async () => {
+  it('another catalog Garden creates the same way: no grant, no consent line', async () => {
     h.templates = [...STARTS, STICKERS]
     await openFromMenu()
     await act(async () => void fireEvent.click(q('[data-zen-new-garden-card="stickers"]')))

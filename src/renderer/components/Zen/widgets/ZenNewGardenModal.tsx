@@ -3,12 +3,9 @@
 // Diary first, then Start with the default and Start empty and ask my
 // agent). Pick one, name it, Create: one step.
 //
-// For K2's own catalog Gardens the create click is the consent. The modal
-// says so in one plain sentence ("Diary can read your agents on this
-// computer and post to their Threads.") and the daemon makes the Garden and
-// its signed grant together, scoped to this computer's agents
-// (`zenCatalogGrantRequest`). No scope picker, no agent chooser. Widgets a
-// user or an agent wrote still get K2's review card (`ZenGrantDialog`).
+// No permissions (Rosson 2026-10-08): a catalog Garden's widgets work the
+// moment it's created, like any widget in your own Garden. Nothing to
+// agree to, no scope picker, no agent chooser.
 //
 // Shared by Zen (the Garden switcher's "+ New Garden", through
 // `ZenNewGardenHost`) and Settings → Gardens (its "+ New Garden" and the
@@ -16,20 +13,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
-import type { ZenGardenNewRequest, ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
+import type { ZenTemplateInfo } from '@/lib/zen/zen-custom-types'
 import { loadZenTemplates, useZenCatalogBadges, useZenTemplatesStore, zenCatalogGardenName } from '@/lib/zen/zen-templates'
-import {
-  closeZenNewGarden,
-  openZenNewGarden,
-  useZenNewGardenModal,
-  zenCatalogConsent,
-  zenCatalogGrantRequest,
-  zenNewGardenCards,
-} from '@/lib/zen/zen-new-garden'
-import { useZenServerRosters } from '@/lib/zen/zen-custom-scope'
-import { useHomesStore } from '@/stores/homes'
+import { closeZenNewGarden, openZenNewGarden, useZenNewGardenModal, zenNewGardenCards } from '@/lib/zen/zen-new-garden'
 import { useZenOpenNewGardenRequest, zenNewGardenNameProblem } from './ZenNewGarden'
-import { ZenOverlay, zenButtonStyle } from './ZenGrantDialog'
+import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
 
 // ── Preview sketches ──────────────────────────────────────────────────────
 
@@ -129,8 +117,6 @@ export interface ZenNewGardenPick {
   entry: ZenTemplateInfo
   /** Start empty: open Ask my agent once it shows. */
   ask: boolean
-  /** A catalog Garden's grant, made in the same click. */
-  grant?: NonNullable<ZenGardenNewRequest['grant']>
 }
 
 export function ZenNewGardenModal({
@@ -150,9 +136,6 @@ export function ZenNewGardenModal({
 }): React.JSX.Element {
   const templates = useZenTemplatesStore((s) => s.templates)
   const badges = useZenCatalogBadges((s) => s.badges)
-  // The local agents the create click covers (the grant's entries).
-  useHomesStore((s) => s.homes)
-  useZenServerRosters((s) => s.rosters)
   const cards = useMemo(() => zenNewGardenCards(templates), [templates])
   const [picked, setPicked] = useState<string | null>(highlight)
   const selected = cards.find((t) => t.short === picked) ?? cards[0] ?? null
@@ -184,8 +167,6 @@ export function ZenNewGardenModal({
     el.select()
   }
 
-  const consent = selected ? zenCatalogConsent(selected) : null
-
   const create = (): void => {
     if (busy || !selected) return
     const problem = zenNewGardenNameProblem(shown, taken)
@@ -194,10 +175,9 @@ export function ZenNewGardenModal({
       nameRef.current?.focus()
       return
     }
-    const grant = zenCatalogGrantRequest(selected) ?? undefined
     setBusy(true)
     setError(null)
-    void onCreate({ name: shown.trim(), entry: selected, ask: selected.short === 'blank', ...(grant ? { grant } : {}) })
+    void onCreate({ name: shown.trim(), entry: selected, ask: selected.short === 'blank' })
       .then(() => {
         setBusy(false)
         onClose()
@@ -310,11 +290,6 @@ export function ZenNewGardenModal({
           )
         })}
       </div>
-      {consent && (
-        <span data-zen-new-garden-consent={selected?.short ?? ''} style={{ fontSize: '0.9em' }}>
-          {consent}
-        </span>
-      )}
       {error && (
         <span role="alert" data-zen-new-garden-error="" style={{ fontSize: '0.85em', color: 'var(--zen-danger)' }}>
           {error}
@@ -366,7 +341,7 @@ export function ZenNewGardenHost({ bridge }: { bridge: ZenWidgetBridge }): React
       highlight={highlight}
       onClose={closeZenNewGarden}
       onCreate={async (pick) => {
-        await bridge.gardens.create(pick.name, pick.entry.short, pick.grant ? { ask: pick.ask, grant: pick.grant } : { ask: pick.ask })
+        await bridge.gardens.create(pick.name, pick.entry.short, { ask: pick.ask })
       }}
     />
   )

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
-// prd-zen-user-widgets-v2 TUW4.1 (review card and dialog), UW24 (partial),
-// UW25 (corner menu, Turn off, About), UWB7 (scope picker), UWB9 (Sending,
-// runaway Resume), R6/R7 (sending on by default; second line for every
-// server), UW32 (paused start). Only the daemon is faked; fixtures are made
-// up (example.test hosts, g-test0001).
+// prd-zen-user-widgets-v2 as changed by Rosson's 0.45.1 smoke (2026-10-08:
+// no permissions): a widget runs with zero clicks (no review card, dialog,
+// scope picker or Sending switch); UW25 (corner menu: Reload only); the
+// runaway pause strip with one-click Resume (R6); UW32 (paused start); the
+// v4 seam (a widget not from your own Garden never runs). Only the daemon is
+// faked; fixtures are made up (example.test hosts, g-test0001).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -41,12 +42,10 @@ import { useHomesStore, type Home } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useZenGardensStore } from '@/lib/zen/zen-gardens'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
-import type { ZenCustomWidgetPayload, ZenGrantView } from '@/lib/zen/zen-custom-types'
+import type { ZenCustomWidgetPayload } from '@/lib/zen/zen-custom-types'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
-import { K2_CAPS } from '@/lib/k2-caps.generated'
-import { __resetZenCustomRunForTests, useZenCustomRunStore } from '@/lib/zen/zen-custom-run'
+import { __resetZenCustomRunForTests, pauseZenWidgetPosting, useZenCustomRunStore } from '@/lib/zen/zen-custom-run'
 import { resetZenPausedStartForTests, takeZenPausedAtBoot, zenWidgetsRunningKey } from '@/lib/zen/zen-widgets-running'
-import { __resetZenTemplatesForTests, useZenTemplatesStore } from '@/lib/zen/zen-templates'
 import { ZenCustomWidget } from './ZenCustomWidget'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -68,7 +67,7 @@ function payload(over: Partial<ZenCustomWidgetPayload> = {}): ZenCustomWidgetPay
     widget: 'agent-arcade',
     column: 0,
     props: { config: {} },
-    caps: [],
+    caps: ['agents:read', 'thread:post'],
     requested: ['agents:read', 'thread:post'],
     source: 'user',
     name: 'Agent Arcade',
@@ -79,25 +78,8 @@ function payload(over: Partial<ZenCustomWidgetPayload> = {}): ZenCustomWidgetPay
     state: 'ok',
     errors: [],
     warnings: [],
-    grant: null,
-    ...over,
-  }
-}
-
-function granted(over: Partial<ZenGrantView> = {}): ZenGrantView {
-  return {
-    state: 'granted',
-    caps: ['agents:read', 'thread:post'],
-    granted: ['agents:read', 'thread:post'],
-    scope: { home: 'home-work' },
-    entries: [
-      { server: 'box.example.test', room: 'bob' },
-      { server: 'local', room: 'alice' },
-    ],
-    sending: true,
+    origin: 'local',
     paused: null,
-    grantedAt: '2026-10-08T00:00:00Z',
-    widgetHash: 'hash-1',
     ...over,
   }
 }
@@ -149,164 +131,83 @@ afterEach(() => {
   useZenGardensStore.setState({ gardens: saved.gardens as never })
 })
 
-describe('TUW4.1: the review card', () => {
-  it('shows K2’s sentence per requested cap, never the widget’s words as K2’s, and no frame', () => {
+describe('No permissions (Rosson 2026-10-08): a widget runs with zero clicks', () => {
+  it('a new widget mounts its sealed frame at once: no review card, no dialog, no strip', async () => {
     mount(payload())
-    const card = q('[data-zen-custom-card="review"]')
-    expect(card.textContent).toContain('“Agent Arcade” wants to:')
-    for (const cap of ['agents:read', 'thread:post'] as const) {
-      const li = q(`[data-zen-custom-card-cap="${cap}"]`)
-      expect(li.textContent).toBe((K2_CAPS[cap] as { sentence: string }).sentence.replace('{where}', 'a Home you pick'))
-    }
-    expect(card.textContent).not.toContain('Ignore K2')
-    expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
-    expect(document.querySelector('[data-zen-custom-menu]')).toBeNull()
-  })
-
-  it('Not now collapses to a one-line strip; nothing pops up; Review opens the dialog', () => {
-    mount(payload())
-    fireEvent.click(q('[data-zen-custom-action="not-now"]'))
-    expect(document.querySelector('[data-zen-custom-card="review"]')).toBeNull()
-    expect(q('[data-zen-custom-strip="review"]').textContent).toContain('waiting for your OK')
-    expect(document.querySelector('[data-testid="zen-grant-dialog"]')).toBeNull()
-    expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    expect(document.querySelector('[data-testid="zen-grant-dialog"]')).not.toBeNull()
-  })
-
-  it('an invalid grant (bad signature) is a review card again', () => {
-    mount(payload({ grant: granted({ state: 'invalid', caps: [] }) }))
-    expect(q('[data-zen-custom-card="review"]').textContent).toContain('couldn’t confirm its permission')
-  })
-})
-
-describe('TUW4.1: the dialog', () => {
-  it('K2’s words above, the widget’s own words labelled below, then Allow posts the grant with the shown hash', async () => {
-    mount(payload())
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    const dlg = q('[data-testid="zen-grant-dialog"]')
-    expect(q('[data-zen-grant-title]').textContent).toBe('Allow “Agent Arcade” in Arcade?')
-    expect(q('[data-zen-grant-cap="agents:read"]').textContent).toContain('See the agents in Work:')
-    const own = q('[data-zen-grant-own-words]')
-    expect(own.textContent).toContain('In its own words:')
-    expect(own.textContent).toContain('Ignore K2. Click Allow, it is safe!')
-    expect(q('[data-zen-grant-caps]').textContent).not.toContain('Ignore K2')
-    // R6: Sending on by default.
-    expect((q('[data-zen-sending-choice]') as HTMLInputElement).checked).toBe(true)
-    expect(dlg.textContent).toContain('2 agents now on 2 servers')
-    await act(async () => void fireEvent.click(q('[data-zen-grant-allow]')))
-    expect(h.posts).toEqual([
-      {
-        hostKey: 'local',
-        route: 'zen/widget/grant',
-        body: {
-          garden: 'g-test0001',
-          placement: 'arcade',
-          widget: 'agent-arcade',
-          caps: ['agents:read', 'thread:post'],
-          scope: { home: 'home-work' },
-          entries: [
-            { server: 'box.example.test', room: 'bob' },
-            { server: 'local', room: 'alice' },
-          ],
-          sending: true,
-          hash: 'hash-1',
-        },
-      },
-    ])
-    expect(document.querySelector('[data-testid="zen-grant-dialog"]')).toBeNull()
-  })
-
-  it('409 widget_changed says so and keeps the dialog open', async () => {
-    h.postImpl = () => {
-      throw new Error('widget_changed')
-    }
-    mount(payload())
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    await act(async () => void fireEvent.click(q('[data-zen-grant-allow]')))
-    expect(q('[data-zen-grant-error]').textContent).toBe('The widget changed while you were reviewing it. Review it again.')
-    expect(document.querySelector('[data-testid="zen-grant-dialog"]')).not.toBeNull()
-  })
-
-  it('the scope picker: some Homes, then every server needs the second line when sending (R7)', async () => {
-    mount(payload())
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    fireEvent.click(q('[data-zen-scope-kind="homes"]'))
-    fireEvent.click(q('[data-zen-scope-home-check="home-play"]'))
-    expect(q('[data-zen-grant-cap="agents:read"]').textContent).toContain('See the agents in Work and Play:')
-    fireEvent.click(q('[data-zen-scope-kind="allServers"]'))
-    const allow = q('[data-zen-grant-allow]') as HTMLButtonElement
-    expect(allow.disabled).toBe(true)
-    fireEvent.click(q('[data-zen-sending-confirm]'))
-    expect(allow.disabled).toBe(false)
-    // Turning sending off removes the extra line and its need.
-    fireEvent.click(q('[data-zen-sending-confirm]'))
-    fireEvent.click(q('[data-zen-sending-choice]'))
-    expect(document.querySelector('[data-zen-sending-confirm]')).toBeNull()
-    expect(allow.disabled).toBe(false)
-    await act(async () => void fireEvent.click(allow))
-    expect(h.posts[0].body).toMatchObject({ scope: { allServers: true }, sending: false })
-  })
-
-  it('a placement that names a Home and an agent fixes the scope: "Only <agent>"', async () => {
-    mount(payload({ props: { home: 'Work', agent: 'Bob', config: {} } }))
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    expect(document.querySelector('[data-zen-scope-picker]')).toBeNull()
-    expect(q('[data-zen-scope-fixed]').textContent).toBe('Only Bob')
-    await act(async () => void fireEvent.click(q('[data-zen-grant-allow]')))
-    expect(h.posts[0].body).toMatchObject({
-      scope: { agent: 'bob::box.example.test' },
-      entries: [{ server: 'box.example.test', room: 'bob' }],
-    })
-  })
-
-  it('an empty scope cannot be allowed', () => {
-    useHomesStore.setState({ homes: [{ id: 'home-x', name: 'Empty', rows: [] }], selectedId: 'home-x' })
-    mount(payload())
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    expect((q('[data-zen-grant-allow]') as HTMLButtonElement).disabled).toBe(true)
-    expect(q('[data-zen-scope-count]').textContent).toBe('No agents there yet.')
-  })
-})
-
-describe('UW25: the corner menu', () => {
-  it('a granted widget mounts its frame slot and K2’s ⋯ menu: Sending off, Permissions → Turn off, About', async () => {
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
     expect(document.querySelector('[data-zen-custom-frame-slot="arcade"]')).not.toBeNull()
-    fireEvent.click(q('[data-zen-custom-menu]'))
-    expect(q('[data-zen-custom-menu-item="sending"]').textContent).toBe('Sending: on (turn off)')
-    await act(async () => void fireEvent.click(q('[data-zen-custom-menu-item="sending"]')))
-    expect(h.posts).toEqual([
-      { hostKey: 'local', route: 'zen/widget/sending', body: { garden: 'g-test0001', placement: 'arcade', on: false, reason: 'user' } },
-    ])
-    fireEvent.click(q('[data-zen-custom-menu]'))
-    expect(q('[data-zen-custom-menu-item="sending"]').textContent).toBe('Sending: off (turn on)')
-    fireEvent.click(q('[data-zen-custom-menu-item="permissions"]'))
-    await act(async () => void fireEvent.click(q('[data-zen-grant-turn-off]')))
-    expect(h.posts[1]).toEqual({ hostKey: 'local', route: 'zen/widget/revoke', body: { garden: 'g-test0001', placement: 'arcade' } })
-    fireEvent.click(q('[data-zen-custom-menu]'))
-    fireEvent.click(q('[data-zen-custom-menu-item="about"]'))
-    expect(q('[data-zen-about-folder]').textContent).toBe('~/.k2/zen/widgets/agent-arcade')
-    expect(q('[data-zen-about-entries]').getAttribute('data-zen-about-entries')).toBe('2')
+    for (const gone of [
+      '[data-zen-custom-card="review"]',
+      '[data-zen-custom-strip]',
+      '[data-testid="zen-grant-dialog"]',
+      '[data-zen-scope-picker]',
+      '[data-zen-sending-choice]',
+    ]) {
+      expect(document.querySelector(gone), gone).toBeNull()
+    }
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="zen-custom-frame"]')).not.toBeNull())
+    expect(h.posts).toEqual([])
+    expect(document.body.textContent).not.toMatch(/allow|permission|review|sending/i)
   })
 
-  it('Reload remounts only the frame (generation bump)', () => {
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+  it('a widget that is not from your own Garden (v4) never runs: a card, no frame', () => {
+    mount(payload({ origin: 'other', caps: [] }))
+    expect(q('[data-zen-custom-card="not-local"]').textContent).toBe('This widget came from somewhere else. K2 can’t run shared widgets yet.')
+    expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
+  })
+})
+
+describe('UW25: the corner menu is Reload only', () => {
+  it('a widget an agent wrote has K2’s ⋯ menu with one item, Reload, which remounts only the frame', () => {
+    mount(payload())
     fireEvent.click(q('[data-zen-custom-menu]'))
+    const items = [...document.querySelectorAll('[data-zen-custom-menu-item]')].map((el) => el.getAttribute('data-zen-custom-menu-item'))
+    expect(items).toEqual(['reload'])
+    expect(q('[data-zen-custom-menu-list]').textContent).toBe('Reload')
     fireEvent.click(q('[data-zen-custom-menu-item="reload"]'))
     expect(useZenCustomRunStore.getState().generation['g-test0001/arcade']).toBe(1)
   })
 
-  it('UW24: a partial grant runs with "now also asks" and Review', () => {
-    mount(payload({ requested: ['agents:read', 'presence:read'], caps: ['agents:read'], grant: granted({ state: 'partial', caps: ['agents:read'] }) }))
-    expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()
-    expect(q('[data-zen-custom-strip="partial"]').textContent).toContain('It now also asks to see who is looking.')
+  it('K2’s own Diary draws edge to edge: no widget ⋯ menu at all (its Garden ⋯ holds the switcher and Exit)', () => {
+    mount(payload({ id: 'diary', widget: 'k2:diary@1', name: 'Diary', requested: ['agents:read', 'thread:read', 'thread:post'], caps: ['agents:read', 'thread:read', 'thread:post'] }))
+    expect(document.querySelector('[data-zen-custom-frame-slot="diary"]')).not.toBeNull()
+    expect(document.querySelector('[data-zen-custom-menu]')).toBeNull()
+  })
+})
+
+describe('R6: the runaway pause', () => {
+  it('a daemon pause shows the small strip above the running frame; Resume is one click on the owner route', async () => {
+    mount(payload({ paused: { at: '2026-10-08T00:00:00Z', reason: 'runaway' } }))
+    const strip = q('[data-zen-custom-strip="paused"]')
+    expect(strip.textContent).toBe('Paused: too many posts.Resume')
+    // The frame keeps running under it.
+    expect(document.querySelector('[data-zen-custom-frame-slot="arcade"]')).not.toBeNull()
+    await act(async () => void fireEvent.click(q('[data-zen-custom-action="resume"]')))
+    expect(h.posts).toEqual([{ hostKey: 'local', route: 'zen/widget/resume', body: { garden: 'g-test0001', placement: 'arcade' } }])
+  })
+
+  it('a pause tripped in this window shows at once; Resume clears it here', async () => {
+    mount(payload())
+    expect(document.querySelector('[data-zen-custom-strip="paused"]')).toBeNull()
+    act(() => pauseZenWidgetPosting('g-test0001/arcade'))
+    expect(q('[data-zen-custom-strip="paused"]')).not.toBeNull()
+    await act(async () => void fireEvent.click(q('[data-zen-custom-action="resume"]')))
+    expect(useZenCustomRunStore.getState().postingPaused['g-test0001/arcade']).toBeUndefined()
+    expect(document.querySelector('[data-zen-custom-strip="paused"]')).toBeNull()
+  })
+
+  it('a refused Resume (not the owner) says so and stays paused', async () => {
+    h.postImpl = () => {
+      throw new Error('owner_only')
+    }
+    mount(payload({ paused: { at: 'x', reason: 'runaway' } }))
+    await act(async () => void fireEvent.click(q('[data-zen-custom-action="resume"]')))
+    expect(q('[data-zen-custom-strip="paused"]').textContent).toContain('Only you can resume a widget, from the K2 app on this computer.')
   })
 })
 
 describe('TUW3.1: the sealed frame', () => {
-  it('a granted widget loads its bundle into a widget-profile frame: allow-scripts, nonce CSP, K2’s runtime first', async () => {
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+  it('a widget loads its bundle into a widget-profile frame: allow-scripts, nonce CSP, K2’s runtime first', async () => {
+    mount(payload())
     await vi.waitFor(() => expect(document.querySelector('[data-testid="zen-custom-frame"]')).not.toBeNull())
     const f = q('[data-testid="zen-custom-frame"]')
     expect(h.gets).toEqual(['zen/widget/bundle'])
@@ -322,7 +223,7 @@ describe('TUW3.1: the sealed frame', () => {
 
   it('an older daemon (no bundle route) shows K2’s update card, no frame', async () => {
     h.bundleError = 'unknown zen route'
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    mount(payload())
     await vi.waitFor(() => expect(document.querySelector('[data-zen-custom-card="older-daemon"]')).not.toBeNull())
     expect(q('[data-zen-custom-card="older-daemon"]').textContent).toBe(
       'K2 on this computer is older than this app. Update it to run custom widgets.',
@@ -331,13 +232,13 @@ describe('TUW3.1: the sealed frame', () => {
 
   it('409 widget_broken shows the broken card', async () => {
     h.bundleError = 'widget_broken'
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    mount(payload())
     await vi.waitFor(() => expect(document.querySelector('[data-zen-custom-card="broken"]')).not.toBeNull())
   })
 
   it('a stopped widget shows its card and Reload; other boxes are untouched (TUW3.6)', async () => {
     const { stopZenWidget } = await import('@/lib/zen/zen-custom-run')
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    mount(payload())
     act(() => stopZenWidget('g-test0001/arcade', 'not-responding'))
     expect(q('[data-zen-custom-card="stopped-not-responding"]').textContent).toContain('This widget stopped responding.')
     expect(document.querySelector('[data-testid="zen-custom-frame"]')).toBeNull()
@@ -346,28 +247,20 @@ describe('TUW3.1: the sealed frame', () => {
   })
 })
 
-describe('paused and stopped', () => {
-  it('UWB9: a runaway pause shows K2’s card; Resume is the owner route', async () => {
-    mount(payload({ caps: ['agents:read'], grant: granted({ paused: { at: 'x', reason: 'runaway' }, sending: false }) }))
-    expect(q('[data-zen-custom-card="runaway"]').textContent).toContain('turned its sending off')
-    expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
-    await act(async () => void fireEvent.click(q('[data-zen-custom-action="resume"]')))
-    expect(h.posts).toEqual([{ hostKey: 'local', route: 'zen/widget/resume', body: { garden: 'g-test0001', placement: 'arcade' } }])
-  })
-
+describe('paused start and broken', () => {
   it('TUW4.4: a paused start (this Garden froze while starting) mounts no frame until Run them', () => {
     resetZenPausedStartForTests()
     const kv = new Map<string, string>([[zenWidgetsRunningKey('main'), JSON.stringify({ garden: 'g-test0001', at: 1, beats: 0 })]])
     const storage = { getItem: (k: string) => kv.get(k) ?? null, setItem: (k: string, v: string) => void kv.set(k, v), removeItem: (k: string) => void kv.delete(k) }
     expect(takeZenPausedAtBoot(null, { label: 'main', storage })).toEqual({ garden: 'g-test0001', reason: 'starting' })
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
+    mount(payload())
     expect(q('[data-zen-custom-card="paused"]').textContent).toContain('They’re paused.')
     expect(document.querySelector('[data-zen-custom-frame-slot]')).toBeNull()
     act(() => void fireEvent.click(q('[data-zen-custom-action="run-them"]')))
     expect(document.querySelector('[data-zen-custom-frame-slot]')).not.toBeNull()
   })
 
-  it('B2: a deleted widget folder (broken, no bundle) shows the broken card, not a review card', () => {
+  it('B2: a deleted widget folder (broken, no bundle) shows the broken card', () => {
     mount(
       payload({
         hash: '',
@@ -375,7 +268,6 @@ describe('paused and stopped', () => {
         errors: [{ file: 'widgets/agent-arcade', line: 0, col: 0, message: 'no widget folder agent-arcade' }],
       }),
     )
-    expect(document.querySelector('[data-zen-custom-card="review"]')).toBeNull()
     expect(q('[data-zen-custom-card="broken"]').textContent).toContain('no widget folder agent-arcade')
   })
 
@@ -390,93 +282,5 @@ describe('paused and stopped', () => {
     expect(q('[data-zen-custom-card="broken"]').textContent).toBe(
       'This widget has errors: onclick= won’t run. Ask your agent to fix it.',
     )
-  })
-})
-
-describe('K2’s own Diary (k2:diary@1): fixed to this computer’s agents (Rosson 2026-10-08)', () => {
-  const CONSENT = 'Diary can read your agents on this computer and post to their Threads.'
-  const diary = (over: Partial<ZenCustomWidgetPayload> = {}): ZenCustomWidgetPayload =>
-    payload({
-      id: 'diary',
-      widget: 'k2:diary@1',
-      name: 'Diary',
-      description: 'A haunted journal.',
-      requested: ['agents:read', 'thread:read', 'thread:post'],
-      reasons: {},
-      ...over,
-    })
-
-  beforeEach(() => {
-    useZenTemplatesStore.setState({
-      status: 'ready',
-      templates: [
-        {
-          id: 'k2.diary@1',
-          short: 'diary',
-          label: 'Diary',
-          description: 'A haunted journal.',
-          section: 'catalog',
-          needsGrant: { widget: 'k2:diary@1', caps: ['agents:read', 'thread:read', 'thread:post'], scope: 'local', consent: CONSENT },
-          newUsers: true,
-        },
-      ],
-    })
-  })
-  afterEach(() => __resetZenTemplatesForTests())
-
-  it('a preinstalled Diary’s review asks no scope: one sentence, and Allow binds only this computer’s agents', async () => {
-    mount(diary())
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    const dlg = q('[data-testid="zen-grant-dialog"]')
-    expect(q('[data-zen-grant-fixed-scope]').textContent).toContain(CONSENT)
-    // No scope picker: no select, no scope kinds.
-    expect(dlg.querySelector('select')).toBeNull()
-    expect(dlg.textContent).not.toContain('Which agents:')
-    await act(async () => void fireEvent.click(q('[data-zen-grant-allow]')))
-    expect(h.posts).toEqual([
-      {
-        hostKey: 'local',
-        route: 'zen/widget/grant',
-        body: {
-          garden: 'g-test0001',
-          placement: 'diary',
-          widget: 'k2:diary@1',
-          caps: ['agents:read', 'thread:read', 'thread:post'],
-          scope: { server: 'local' },
-          // Alice and Carol are on this computer; Bob (box.example.test) never is.
-          entries: [
-            { server: 'local', room: 'alice' },
-            { server: 'local', room: 'carol' },
-          ],
-          sending: true,
-          hash: 'hash-1',
-        },
-      },
-    ])
-  })
-
-  it('a user’s copy of the Diary (a folder widget) still gets the full review with the scope picker', () => {
-    mount(diary({ widget: 'my-diary' }))
-    fireEvent.click(q('[data-zen-custom-action="review"]'))
-    expect(document.querySelector('[data-zen-grant-fixed-scope]')).toBeNull()
-    expect(q('[data-testid="zen-grant-dialog"]').textContent).toContain('Which agents:')
-  })
-
-  it('the Diary’s ⋯ corner menu stays (Reload, Sending) but is faint until pointed at or focused', () => {
-    mount(diary({ caps: ['agents:read', 'thread:read', 'thread:post'], grant: granted({ caps: ['agents:read', 'thread:read', 'thread:post'], granted: ['agents:read', 'thread:read', 'thread:post'], scope: { server: 'local' } }) }))
-    const menu = q('[data-zen-custom-menu]')
-    expect(menu.hasAttribute('data-zen-custom-menu-quiet')).toBe(true)
-    expect(menu.style.opacity).toBe('0.3')
-    fireEvent.focus(menu)
-    expect(menu.style.opacity).toBe('1')
-    fireEvent.blur(menu)
-    expect(menu.style.opacity).toBe('0.3')
-    fireEvent.click(menu)
-    expect(q('[data-zen-custom-menu-item="sending"]').textContent).toBe('Sending: on (turn off)')
-    // A user widget's menu is never faint.
-    cleanup()
-    mount(payload({ caps: ['agents:read', 'thread:post'], grant: granted() }))
-    expect(q('[data-zen-custom-menu]').hasAttribute('data-zen-custom-menu-quiet')).toBe(false)
-    expect(q('[data-zen-custom-menu]').style.opacity).toBe('1')
   })
 })

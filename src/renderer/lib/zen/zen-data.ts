@@ -108,8 +108,8 @@ import { exitZen } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
 import { ZEN_CUSTOM_KIND } from './zen-page'
-import { useZenServerRosters, zenScopeRows } from './zen-custom-scope'
-import { zenGrantNeedsReview, type ZenCustomWidgetPayload, type ZenScope } from './zen-custom-types'
+import { useZenServerRosters, zenWidgetReachRows } from './zen-custom-scope'
+import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types'
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
@@ -284,11 +284,13 @@ export interface ZenView {
   /** Single-agent mode: a row address, handle or name (the `agent` prop). */
   agent: string | null
   /** `workspaces`: this server's workspaces (the Agents view), not a Home.
-   *  `scope`: a custom widget's granted scope (prd-zen-user-widgets-v2
-   *  UWB7): its rows now, never a loose or window-Home fallback. */
-  source?: 'home' | 'workspaces' | 'scope'
-  /** `source: 'scope'`: the grant's scope; null = not granted (no rows). */
-  scope?: ZenScope | null
+   *  `reach`: a custom widget's reach (this computer's agents plus your
+   *  Homes' rows, `zenWidgetReachRows`; no permissions since 2026-10-08):
+   *  its rows now, never a loose or window-Home fallback. */
+  source?: 'home' | 'workspaces' | 'reach'
+  /** `source: 'reach'`: false for a widget that may not run (v4's
+   *  imported widgets): no rows at all. */
+  reach?: boolean
 }
 
 /** One focus group as the Agents view's dropdown shows it. */
@@ -568,19 +570,17 @@ function looseView(gardenId: string, widgetId: string): ZenView {
   return { key: zenGardenHomeKey(gardenId, widgetId), gardenId, widgetId, homeId: null, agent: null }
 }
 
-/** A custom widget's view (UWB7, UW48): its granted scope, only while the
- *  grant holds (granted or partial); otherwise no rows at all. */
+/** A custom widget's view (UW48): the Garden's reach for a widget from
+ *  your own Garden; no rows at all for one that may not run. */
 function customView(gardenId: string, w: ZenWidgetDecl): ZenView {
-  const grant = w.custom?.grant ?? null
-  const usable = grant !== null && !zenGrantNeedsReview(grant, w.custom?.requested ?? []) && grant.state !== 'none'
   return {
     key: zenGardenHomeKey(gardenId, w.id),
     gardenId,
     widgetId: w.id,
     homeId: null,
     agent: null,
-    source: 'scope',
-    scope: usable ? grant.scope : null,
+    source: 'reach',
+    reach: w.custom ? zenWidgetMayRun(w.custom) : false,
   }
 }
 
@@ -673,7 +673,7 @@ function anyRow(address: string): HomeRow | null {
 
 /** The view's rows, in Home order (the Agents view: the Agents page's). */
 function viewRows(view: ZenView): HomeRow[] {
-  if (view.source === 'scope') return zenScopeRows(view.scope ?? null).rows
+  if (view.source === 'reach') return view.reach ? zenWidgetReachRows().rows : []
   if (view.source === 'workspaces') {
     const rows = workspaceRows()
     return view.agent ? rows.filter((r) => matchesAgent(r, view.agent as string)) : rows
@@ -834,11 +834,8 @@ function syncViewHomes(): void {
   for (const l of rowListeners) {
     const v = l.view()
     if (v?.homeId) ids.add(v.homeId)
-    // A custom widget's scope: the Homes it shows get Home's row-status poll too.
-    const s = v?.source === 'scope' ? v.scope : null
-    if (s && 'home' in s) ids.add(s.home)
-    else if (s && 'homes' in s) for (const id of s.homes) ids.add(id)
-    else if (s && ('allHomes' in s || 'allServers' in s)) for (const id of allHomes()) ids.add(id)
+    // A custom widget reaches every Home's rows: they get Home's row-status poll too.
+    if (v?.source === 'reach' && v.reach) for (const id of allHomes()) ids.add(id)
   }
   const next = [...ids].sort()
   const prev = zenViewHomes.getState().homeIds
@@ -1009,7 +1006,7 @@ function findRow(view: ZenView, address: string): { row: HomeRow; index: number 
   const rows = viewRows(view)
   const index = rows.findIndex((r) => r.address === address)
   if (index >= 0) return { row: rows[index], index }
-  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'scope') {
+  if (view.homeId === null && view.source !== 'workspaces' && view.source !== 'reach') {
     const loose = anyRow(address)
     if (loose) return { row: loose, index: 0 }
   }

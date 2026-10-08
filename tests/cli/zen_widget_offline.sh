@@ -2,7 +2,8 @@
 # k2 zen widget, the parts that never reach a daemon
 # (prd-zen-user-widgets-v2 UW41, TUW5.1, TUWA11). Hermetic: temp HOME, a
 # dead port, no real ~/.k2.
-#   - `k2 zen widget grant` exits 1 with the one sentence (there is no grant);
+#   - `k2 zen widget grant` / `revoke` exit 0 with the one sentence (widgets
+#     need no permissions, Rosson 2026-10-08) and never reach a daemon;
 #   - usage errors exit 2 before any request;
 #   - help and the --schema manifest list the widget family and --widget;
 #   - `k2 zen guide api` is generated, at most 80 lines, and --json parses.
@@ -27,12 +28,14 @@ assert_contains() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else b
 
 run() { set +e; out="$("$K2_CLI" "$@" 2>&1)"; rc=$?; set -e; }
 
-echo "== there is no grant =="
-run zen widget grant
-assert_eq "widget grant exits 1" "$rc" "1"
-assert_eq "widget grant says who grants" "$out" "Only you can allow a widget, in the K2 app: open the Garden and click Review."
-run zen widget grant some-widget --json
-assert_eq "widget grant with arguments still exits 1" "$rc" "1"
+echo "== there are no permissions =="
+MSG="Widgets in your own Gardens need no permissions: they can talk to your agents right away. To stop one, take its [[widget]] out of the Garden file."
+for verb in "grant" "grant some-widget --json" "revoke" "revoke g p" "revoke --widget w" "allow w"; do
+    # shellcheck disable=SC2086
+    run zen widget $verb
+    assert_eq "widget $verb exits 0 with no daemon" "$rc" "0"
+    assert_eq "widget $verb says there are no permissions" "$out" "$MSG"
+done
 
 echo "== usage errors exit 2 before any request =="
 run zen widget new
@@ -41,10 +44,6 @@ run zen widget new a b
 assert_eq "new with two names" "$rc" "2"
 run zen widget list --from hello
 assert_eq "--from on list" "$rc" "2"
-run zen widget revoke onlygarden
-assert_eq "revoke with one argument" "$rc" "2"
-run zen widget revoke g p --widget w
-assert_eq "revoke with both forms" "$rc" "2"
 run zen widget frobnicate
 assert_eq "unknown widget verb" "$rc" "2"
 run zen validate --widget a --garden b
@@ -58,7 +57,8 @@ run zen --help
 assert_eq "zen help exits 0" "$rc" "0"
 assert_contains "help lists widget new" "$out" "k2 zen widget new <name> [--from k2:diary|hello|arcade]"
 assert_contains "help lists validate --widget" "$out" "--widget <name>"
-assert_contains "help says who allows a widget" "$out" "open the Garden and click Review"
+assert_contains "help says widgets need no permissions" "$out" "no permissions, no review"
+case "$out" in *"click Review"*|*"widget revoke"*) bad "help still sends people to a review or a revoke" ;; *) ok "help has no review or revoke" ;; esac
 run zen widget --help
 assert_eq "widget help exits 0 with no daemon" "$rc" "0"
 run --schema json

@@ -29,17 +29,11 @@ import {
   useZenSettingsStore,
   zenSettingsErrorText,
   zenTemplateLabel,
-  resumeZenSettingsGrant,
-  revokeZenSettingsGrant,
-  setZenSettingsGrantSending,
   type ZenNewGardenTemplate,
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
 import { useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
-import { type ZenWidgetGrantRow } from '@/lib/zen/zen-custom-types'
-import { zenScopeWhere } from '@/lib/zen/zen-custom-scope'
-import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { ZenGardenSketch, ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
@@ -63,13 +57,6 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
     label: 'Garden Catalog',
     description: 'Browse ready-made Gardens (like the Diary) and add one',
     keywords: ['zen', 'garden', 'catalog', 'diary', 'ready-made', 'template', 'add'],
-  },
-  {
-    id: 'zen-gardens.widgets',
-    section: 'zen-gardens',
-    label: 'Widget Permissions',
-    description: 'What you allowed custom Garden widgets: turn sending or a widget off',
-    keywords: ['zen', 'widget', 'permission', 'grant', 'sending', 'revoke'],
   },
   {
     id: 'zen-gardens.folder',
@@ -341,7 +328,7 @@ const ZEN_TOKENS_IN_SETTINGS = {
  * Settings' New Garden: the same modal as Zen's (Rosson 2026-10-08): a
  * name and the catalog's cards, the Diary first. `highlight` opens it on
  * a catalog entry (the Garden catalog's cards). Creates through the local
- * daemon; a catalog Garden's grant rides the same click.
+ * daemon; there is nothing to allow.
  */
 function SettingsNewGardenModal({
   gardens,
@@ -360,7 +347,7 @@ function SettingsNewGardenModal({
       onClose={onClose}
       onCreate={async (pick) => {
         const clean = checkZenGardenName(pick.name, gardens)
-        await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate, pick.grant)
+        await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate)
       }}
     />
   )
@@ -434,97 +421,6 @@ function GardenCatalog({ gardens }: { gardens: readonly ZenSettingsGarden[] }): 
         })}
       </div>
       {adding && <SettingsNewGardenModal gardens={gardens} highlight={adding} onClose={() => setAdding(null)} />}
-    </section>
-  )
-}
-
-/** Settings → Gardens → Widget permissions (UWB3: the grants list). */
-function WidgetPermissions({
-  grants,
-  error,
-  gardens,
-}: {
-  grants: ZenWidgetGrantRow[]
-  error: string | null
-  gardens: readonly ZenSettingsGarden[]
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const gardenName = (g: ZenWidgetGrantRow): string =>
-    gardens.find((x) => x.id === g.garden)?.name ?? g.gardenName ?? 'a deleted Garden'
-  return (
-    <section data-settings-id="zen-gardens.widgets" className="mt-8" data-zen-settings-grants={grants.length}>
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-        Widget permissions
-      </h3>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
-        What you allowed widgets that agents wrote for your Gardens. Only you can allow one, from its Garden.
-      </p>
-      <InlineError text={error} testId="zen-grants-load-error" />
-      {grants.length === 0 && !error ? (
-        <p className="text-xs text-[var(--color-text-muted)]" data-zen-settings-grants-empty="">
-          No widget has permissions.
-        </p>
-      ) : (
-        <ul className="border-t border-[var(--color-border)]">
-          {grants.map((g) => {
-            const key = `${g.garden}/${g.placement}`
-            const canSend = g.caps.includes('thread:post')
-            return (
-              <li key={key} data-zen-settings-grant={key} className="py-2 border-b border-[var(--color-border)] space-y-1">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs text-[var(--color-text-primary)] truncate">
-                      {g.widget} <span className="text-[var(--color-text-muted)]">in {gardenName(g)}</span>
-                    </div>
-                    <div className="text-[10px] text-[var(--color-text-muted)]">
-                      {zenScopeWhere(g.scope)} · {g.caps.map((c) => K2_CAPS[c].label).join(', ') || 'no permissions'}
-                      {g.state === 'invalid' ? ' · K2 couldn’t confirm it' : g.state === 'review' ? ' · needs a new review' : ''}
-                      {g.paused ? ' · paused by K2' : ''}
-                    </div>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    {g.paused && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        data-zen-settings-grant-resume=""
-                        onClick={() => void attempt(() => resumeZenSettingsGrant(g.garden, g.placement), setBusy, setActionError)}
-                        className={BTN}
-                      >
-                        Resume
-                      </button>
-                    )}
-                    {canSend && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        data-zen-settings-grant-sending={g.sending ? 'on' : 'off'}
-                        onClick={() =>
-                          void attempt(() => setZenSettingsGrantSending(g.garden, g.placement, !g.sending), setBusy, setActionError)
-                        }
-                        className={BTN}
-                      >
-                        {g.sending ? 'Sending on' : 'Sending off'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={busy}
-                      data-zen-settings-grant-revoke=""
-                      onClick={() => void attempt(() => revokeZenSettingsGrant(g.garden, g.placement), setBusy, setActionError)}
-                      className={DANGER_BTN}
-                    >
-                      Turn off
-                    </button>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      <InlineError text={actionError} testId="zen-grants-error" />
     </section>
   )
 }
@@ -621,8 +517,6 @@ export function ZenGardensSection(): React.JSX.Element {
             </div>
             <InlineError text={error} testId="zen-gardens-theme-error" />
           </section>
-
-          {st.grants !== null && <WidgetPermissions grants={st.grants} error={st.grantsError} gardens={st.gardens} />}
         </>
       )}
 

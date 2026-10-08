@@ -6,9 +6,10 @@
 //   - `not-started`: no `k2.ready()` within 10 s (UW30);
 //   - `not-responding`: three missed pings after ready (UW30);
 //   - `failing`: 20 uncaught errors in a minute (UW30);
-//   - `rate`: ten `rate_limited` answers in a minute (UW29);
-//   - `runaway`: the runaway guard tripped (UWB9); the daemon also holds a
-//     pause on the grant, which only the owner's Resume clears.
+//   - `rate`: ten `rate_limited` answers in a minute (UW29).
+// The runaway guard (R6) never stops a frame: it pauses posting only. This
+// window marks the pause at once (`pauseZenWidgetPosting`); the daemon holds
+// it for every window (`paused` on the widget) until the person's Resume.
 // The paused start after a freeze (UW32) is `zen-widgets-running.ts`
 // (B3): a page with custom widgets waits for the window's boot decision
 // (`zenPausedStartReady`), marks itself running while they're mounted, and
@@ -16,7 +17,7 @@
 // custom widget shows "They're paused. [Run them]".
 //
 // This is per-window view state (which frames this window runs), never a
-// canonical record: the grant and its pause live in the daemon.
+// canonical record: the runaway pause lives in the daemon.
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { create } from 'zustand'
@@ -29,7 +30,7 @@ import {
   zenPausedStartReady,
 } from './zen-widgets-running'
 
-export type ZenWidgetStopReason = 'not-started' | 'not-responding' | 'failing' | 'rate' | 'runaway'
+export type ZenWidgetStopReason = 'not-started' | 'not-responding' | 'failing' | 'rate'
 
 export interface ZenWidgetStop {
   reason: ZenWidgetStopReason
@@ -41,12 +42,34 @@ interface RunState {
   stopped: Record<string, ZenWidgetStop>
   /** Bumped by Reload: remounts that frame. */
   generation: Record<string, number>
+  /** `<gardenId>/<placementId>` → the runaway guard paused its posting in
+   *  this window (until Resume; the daemon's pause covers other windows). */
+  postingPaused: Record<string, true>
 }
 
 export const useZenCustomRunStore = create<RunState>(() => ({
   stopped: {},
   generation: {},
+  postingPaused: {},
 }))
+
+/** The runaway guard tripped in this window: posting pauses at once. */
+export function pauseZenWidgetPosting(key: string): void {
+  useZenCustomRunStore.setState((s) => ({ postingPaused: { ...s.postingPaused, [key]: true } }))
+}
+
+/** Resume: posting may go again in this window. */
+export function resumeZenWidgetPosting(key: string): void {
+  useZenCustomRunStore.setState((s) => {
+    const postingPaused = { ...s.postingPaused }
+    delete postingPaused[key]
+    return { postingPaused }
+  })
+}
+
+export function isZenWidgetPostingPaused(key: string): boolean {
+  return useZenCustomRunStore.getState().postingPaused[key] === true
+}
 
 export function zenPlacementKey(gardenId: string, placementId: string): string {
   return `${gardenId}/${placementId}`
@@ -118,14 +141,15 @@ export function zenWidgetStopText(reason: ZenWidgetStopReason): string {
       return 'This widget keeps failing.'
     case 'rate':
       return 'This widget kept going over its limits, so K2 stopped it.'
-    case 'runaway':
-      return 'This widget sent a lot of messages very quickly, so K2 stopped it and turned its sending off.'
   }
 }
+
+/** The small inline notice while the runaway guard has posting paused. */
+export const ZEN_WIDGET_PAUSED_POSTING_TEXT = 'Paused: too many posts.'
 
 export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted while this Garden’s widgets were running. They’re paused.'
 
 /** Tests only. */
 export function __resetZenCustomRunForTests(): void {
-  useZenCustomRunStore.setState({ stopped: {}, generation: {} })
+  useZenCustomRunStore.setState({ stopped: {}, generation: {}, postingPaused: {} })
 }

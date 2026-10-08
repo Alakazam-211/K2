@@ -1709,7 +1709,9 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     for must in ["k2 zen theme list", "k2 zen theme next", "k2 zen theme prev", "k2 zen theme set <name>", "k2 zen theme new <name>", "k2 zen reset --theme", "themes/<name>/theme.toml"] {
         assert!(body.contains(must), "skill must mention {must}");
     }
-    assert!(lower.contains("request") && lower.contains("never grant"), "agents request, never grant");
+    // Rosson 2026-10-08: no widget permissions; nothing to request or grant.
+    assert!(lower.contains("need no permissions"), "widgets in your own Gardens need no permissions");
+    assert!(!lower.contains("click review"), "nothing sends the human to a review");
     let mut want: Vec<String> = Vec::new();
     want.extend(schema::COLOR_TOKENS.iter().map(|t| format!("`{t}`")));
     want.extend(schema::TERMINAL_TOKENS.iter().map(|t| format!("`{t}`")));

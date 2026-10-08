@@ -266,11 +266,11 @@ fn exposure_name(e: &Exposure) -> &'static str {
 fn caps_ts(c: &Catalog) -> String {
     let mut s = generated_header("//", " (`caps`)");
     s.push_str(
-        "// Read by the Garden review dialog (`sentence`) and Settings → Apps\n// (`label`, UWA9).\n\n",
+        "// Read by Settings → Apps (`label`, UWA9) and the guide.\n\n",
     );
     s.push_str("import type { CatalogExposure } from './contract/catalog-types'\n\n");
     s.push_str(
-        "export interface K2CapInfo {\n  readonly label: string\n  /** Garden review-dialog sentence; `{where}` is the scope's words. */\n  readonly sentence?: string\n  readonly exposure: readonly CatalogExposure[]\n}\n\n",
+        "export interface K2CapInfo {\n  readonly label: string\n  /** A plain sentence for the cap; `{where}` is the agents' words. */\n  readonly sentence?: string\n  readonly exposure: readonly CatalogExposure[]\n}\n\n",
     );
     s.push_str("export const K2_CAPS = {\n");
     for cap in &c.caps {
@@ -540,9 +540,9 @@ pub fn guide_api_page(c: &Catalog) -> String {
     s.push_str("k2 zen guide api — the k2 object in a custom widget\n\n");
     s.push_str(&format!(
         "A custom widget is a sealed page in a Garden: no network, no storage, no\n\
-files. It reaches K2 only through window.k2, and each call needs a cap the\n\
-human allowed in the K2 app (agents never grant). From K2's verb catalog,\n\
-version {}.\n\n",
+files. It reaches K2 only through window.k2. Each call needs a cap its\n\
+manifest.json asks for; a widget in your own Garden gets every one it asks\n\
+for at once (no review). From K2's verb catalog, version {}.\n\n",
         c.catalog_version
     ));
     s.push_str("TEN EXAMPLES\n");
@@ -586,7 +586,9 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
         "RULES",
         "  textContent for anything an agent wrote, never innerHTML. No onclick=:",
         "  use addEventListener in a script file. Files via k2.asset(). Check with",
-        "  k2 zen validate --widget <name>; the human allows it with Review.",
+        "  k2 zen validate --widget <name>; it works as soon as it's placed.",
+        "  Posting pauses after 120 posts (or 20 identical ones to one agent) in",
+        "  10 minutes, until the person clicks Resume on the widget (sending_off).",
         "",
         "Types: sdk/generated/k2.d.ts in the K2 repo. Caps in K2's words: the",
         "k2-zen skill.",

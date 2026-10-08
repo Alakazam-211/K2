@@ -15,8 +15,8 @@
 //! - **Immutable per version.** Once a release ships `k2:diary@1`, its bytes
 //!   never change (TUWB6 pins them by hash). Better code ships as
 //!   `k2:diary@2`, and only a template moves to it, so an own-copy Garden
-//!   keeps `@1` (prd-zen-garden-sync-defaults-v1 GS16, GS45a); a synced
-//!   Garden's grant carries to `@2` (SD7, `zen::grants::carries`).
+//!   keeps `@1` (prd-zen-garden-sync-defaults-v1 GS16, GS45a). There is no
+//!   grant to carry (no permissions since 2026-10-08).
 //! - A **Garden file** must name a built-in with its version
 //!   (`widget = "k2:diary@1"`). `k2 zen widget new my-diary --from k2:diary`
 //!   (no version) copies the latest version into a user folder to edit.
@@ -221,12 +221,6 @@ mod tests {
             })
             .collect();
         assert_eq!(named, [("perfect-freehand".to_string(), "1".to_string()), ("font-caveat".to_string(), "5".to_string())]);
-        // The garden catalog grants exactly what the Diary asks for.
-        if let Some(e) = crate::zen::garden_catalog::garden_catalog().iter().find(|e| e.meta.short == "diary") {
-            let g = e.meta.grant.as_ref().expect("the Diary Garden grants in the create click");
-            assert_eq!(g.widget, DIARY_WIDGET);
-            assert_eq!(g.caps, caps);
-        }
         let html = file("index.html");
         let js = file("diary.js");
         // UW10's errors: no inline handlers, no network, no frames.

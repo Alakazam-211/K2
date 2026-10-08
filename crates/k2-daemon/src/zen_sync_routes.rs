@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
-use k2_core::zen::grants::GrantSnapshot;
+use k2_core::zen::widget_access::WidgetPauses;
 use k2_core::zen::sync::{Parts, View};
 use k2_core::zen::{ZenError, ZenFiles};
 
@@ -56,11 +56,11 @@ fn require(f: &ZenFiles) -> Result<(), ZenError> {
 }
 
 /// `GET /cli/zen/get`, with `preview=` (GS25). Called by `zen_routes` with
-/// the request's grant snapshot.
-pub fn get(f: &ZenFiles, garden: Option<&str>, preview: Option<&str>, grants: &GrantSnapshot) -> Result<J, ZenError> {
+/// the daemon's runaway pauses.
+pub fn get(f: &ZenFiles, garden: Option<&str>, preview: Option<&str>, pauses: &WidgetPauses) -> Result<J, ZenError> {
     match preview {
-        None => f.resolve_with(garden, grants),
-        Some(p) => f.resolve_view_with(garden, grants, &View::preview(Parts::parse(p)?)),
+        None => f.resolve_with(garden, pauses),
+        Some(p) => f.resolve_view_with(garden, pauses, &View::preview(Parts::parse(p)?)),
     }
 }
 

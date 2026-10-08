@@ -212,8 +212,9 @@ pub const FEATURE_ZEN_CHROME: &str = "zen-chrome-v1";
 
 /// Zen v2 custom widgets (prd-zen-user-widgets-v2 UW36): `kind = "custom"`
 /// placements in `GET /cli/zen/get`, widget folders and bundles
-/// (`/cli/zen/widgets`, `widget/bundle`, `widget/new`), signed grants
-/// (`widget/grant|revoke|sending|resume|grants`) and `GET /cli/zen/templates`.
+/// (`/cli/zen/widgets`, `widget/bundle`, `widget/new`), the runaway pause
+/// (`widget/pause|resume`) and `GET /cli/zen/templates`. Widgets in your own
+/// Garden need no grants (2026-10-08).
 pub const FEATURE_ZEN_WIDGETS: &str = "zen-widgets-v1";
 
 /// Zen v2 widget library downloads (UWB15): `/cli/zen/lib/fetch` and

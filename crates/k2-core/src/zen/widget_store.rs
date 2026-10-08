@@ -12,8 +12,9 @@
 //!   `.history/widgets/<name>/<utc>/`. Only [`ZenFiles::refresh_widget`]
 //!   writes them (the watcher and `get` call it through `refresh`), and
 //!   `reset --widget` keeps the code it replaces.
-//! - Nothing here reads or writes grants: they are rows in the daemon's
-//!   database ([`super::grants`]), passed in as a [`GrantSnapshot`].
+//! - There are no grants (2026-10-08): a widget in your own Garden runs
+//!   with every Garden-safe cap it asks for ([`super::widget_access`]).
+//!   The daemon's runaway pauses come in as a [`WidgetPauses`].
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,7 +26,7 @@ use serde_json::{json, Value as J};
 
 use super::builtin_widgets::{self, parse_widget_ref, WidgetRef};
 use super::bundle::Bundle;
-use super::grants::{GrantQuery, GrantSnapshot, GrantState, PlacementAsk};
+use super::widget_access::{effective_caps, WidgetOrigin, WidgetPauses};
 use super::schema::{self, Diagnostic};
 use super::store::{ZenError, ZenFile, ZenFiles, HISTORY_KEEP};
 use super::widgets::{self, Manifest, WIDGETS_DIR};
@@ -99,7 +100,6 @@ pub struct Placement {
     pub garden_name: String,
     pub placement: String,
     pub widget: String,
-    pub ask: PlacementAsk,
 }
 
 /// Bundling is the slow part; every `get` refreshes. Keyed by label and
@@ -635,7 +635,6 @@ impl ZenFiles {
                     garden_name: g.name.clone(),
                     placement: w["id"].as_str().unwrap_or_default().to_string(),
                     widget: w["widget"].as_str().unwrap_or_default().to_string(),
-                    ask: ask_of(w),
                 });
             }
         }
@@ -643,19 +642,18 @@ impl ZenFiles {
     }
 
     /// Fill each custom widget on a resolved page with its folder's state
-    /// and its grant (UW38): `name`, `description`, `reasons`, `libs`,
-    /// `hash`, `state`, `errors`, `warnings`, `requested`, effective `caps`
-    /// and `grant` (`null` with no live row).
-    pub(crate) fn fill_custom_widgets(&self, garden: &str, page: &mut J, snap: &GrantSnapshot) {
+    /// (UW38): `name`, `description`, `reasons`, `libs`, `hash`, `state`,
+    /// `errors`, `warnings`, `requested`, `origin`, the `caps` it runs with
+    /// (every Garden-safe cap it asks for, no grant: [`effective_caps`]) and
+    /// `paused` (the runaway guard's pause, or `null`).
+    pub(crate) fn fill_custom_widgets(&self, garden: &str, page: &mut J, pauses: &WidgetPauses) {
         let Some(widgets) = page["widgets"].as_array_mut() else { return };
         for w in widgets.iter_mut().filter(|w| w["kind"] == schema::CUSTOM_KIND) {
             let widget = w["widget"].as_str().unwrap_or_default().to_string();
             let placement = w["id"].as_str().unwrap_or_default().to_string();
             let st = self.widget_status(&widget);
             let requested = st.requested();
-            let ask = ask_of(w);
-            let q = GrantQuery { garden, placement: &placement, widget: &widget, hash: st.hash(), requested: &requested, ask: &ask };
-            let view = snap.view(&q);
+            let origin = WidgetOrigin::of(&widget);
             let m = st.manifest.as_ref();
             w["name"] = json!(st.title());
             w["description"] = json!(m.and_then(|m| m.description.clone()));
@@ -666,8 +664,9 @@ impl ZenFiles {
             w["state"] = json!(st.state.as_str());
             w["errors"] = json!(st.errors);
             w["warnings"] = json!(st.warnings);
-            w["caps"] = json!(view.caps);
-            w["grant"] = if view.state == GrantState::None { J::Null } else { json!(view) };
+            w["origin"] = json!(origin);
+            w["caps"] = json!(effective_caps(origin, &requested));
+            w["paused"] = json!(pauses.get(garden, &placement));
         }
     }
 
@@ -737,8 +736,8 @@ impl ZenFiles {
     }
 
     /// GET `/cli/zen/widgets` (UW35): every folder with its state and each
-    /// placement's grant state.
-    pub fn widgets_json(&self, snap: &GrantSnapshot) -> Result<J, ZenError> {
+    /// placement (and whether the runaway guard paused it).
+    pub fn widgets_json(&self, pauses: &WidgetPauses) -> Result<J, ZenError> {
         self.require_set_up()?;
         let placements = self.custom_placements();
         let mut names = self.widget_names();
@@ -756,16 +755,12 @@ impl ZenFiles {
                     .iter()
                     .filter(|p| &p.widget == name)
                     .map(|p| {
-                        let q = GrantQuery {
-                            garden: &p.garden,
-                            placement: &p.placement,
-                            widget: &p.widget,
-                            hash: st.hash(),
-                            requested: &requested,
-                            ask: &p.ask,
-                        };
-                        let v = snap.view(&q);
-                        json!({ "garden": p.garden, "gardenName": p.garden_name, "placement": p.placement, "grant": v.state, "caps": v.caps })
+                        json!({
+                            "garden": p.garden,
+                            "gardenName": p.garden_name,
+                            "placement": p.placement,
+                            "paused": pauses.get(&p.garden, &p.placement),
+                        })
                     })
                     .collect();
                 let m = st.manifest.as_ref();
@@ -785,12 +780,6 @@ impl ZenFiles {
             .collect();
         Ok(json!({ "ok": true, "widgets": out }))
     }
-}
-
-/// A placement's `home` / `agent` ask (UW7, §15.2).
-pub fn ask_of(w: &J) -> PlacementAsk {
-    let text = |k: &str| w["props"][k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    PlacementAsk { home: text("home"), agent: text("agent") }
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@
 // A widget never receives a token, a scope, or a `daemonCli*` function. It
 // gets a `ZenWidgetBridge`: every call names a VERB, every verb needs a CAP,
 // and a widget's caps are what its source declared (built-ins: the template
-// TOML, granted by K2, source `builtin`; v2 user widgets: manifest +
-// grants.json). An undeclared verb throws `cap_not_granted`, loudly.
+// TOML, granted by K2, source `builtin`; v2 user widgets: their manifest
+// caps, no grant). An undeclared verb throws `cap_not_granted`, loudly.
 //
 // Verb table (G29):
 //   - no cap, every page has them: `gardens.list`, `gardens.current`,
@@ -45,7 +45,6 @@
 import type { ZenControlRegistry, ZenBindKind } from './zen-controls'
 import type { ZenResolvedPage } from './zen-page'
 import { BLANK_TEMPLATE_ID } from './zen-page'
-import type { ZenGardenNewRequest } from './zen-custom-types'
 import { ZEN_VERBS } from './zen-verbs.generated'
 import type { CatalogErrorCode } from '../contract/catalog-types'
 import { isZenTemplateShort } from './zen-templates'
@@ -108,11 +107,9 @@ export interface ZenHomeSummary {
 export type ZenGardenTemplate = 'texting' | 'blank' | (string & {})
 
 /** `gardens.create` options: `ask` opens Ask my agent on the new (empty)
- *  Garden once it shows; `grant` allows a catalog Garden's widget in the
- *  same owner click (UWB22). */
+ *  Garden once it shows. */
 export interface ZenGardenCreateOptions {
   ask?: boolean
-  grant?: ZenGardenNewRequest['grant']
 }
 
 /** What `gardens.useTemplate` did: `changed` is false when the Garden

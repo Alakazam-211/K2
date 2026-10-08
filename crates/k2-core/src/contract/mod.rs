@@ -260,7 +260,7 @@ impl Catalog {
     }
 
     /// Cap names exposed to `who`, in file order. For `Widget` this is
-    /// `USER_WIDGET_CAPS` (asserted equal in `zen::grants` tests).
+    /// `USER_WIDGET_CAPS` (asserted equal in `zen::widget_access` tests).
     pub fn caps_exposed_to(&self, who: Exposure) -> Vec<&str> {
         self.caps.iter().filter(|c| c.exposure.contains(&who)).map(|c| c.name.as_str()).collect()
     }

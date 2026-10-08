@@ -233,8 +233,7 @@ export async function createZenGarden(
       await daemonCliPost<unknown>(
         zenLocalScope(),
         'zen/garden/new',
-        // UWB22: a catalog Garden's widget is allowed in the same owner click.
-        opts.grant ? { name: clean, template, grant: opts.grant } : { name: clean, template },
+        { name: clean, template },
       ),
     )
   } catch (err) {

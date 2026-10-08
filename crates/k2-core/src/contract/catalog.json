@@ -23,7 +23,7 @@
       "name": "thread:post",
       "exposure": ["widget", "app"],
       "label": "Post to the Thread",
-      "sentence": "Send messages to the agents in {where} as you (text only). You can turn sending off at any time."
+      "sentence": "Send messages to the agents in {where} as you (text only)."
     },
     {"name": "agents:add", "label": "Open Add agent"},
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
@@ -48,12 +48,12 @@
     {
       "code": "cap_not_granted",
       "fields": ["cap", "room"],
-      "doc": "The verb's cap isn't in this widget's effective caps (requested ∩ granted ∩ widget caps)."
+      "doc": "The verb's cap isn't one this widget asked for in its manifest (or isn't a widget cap)."
     },
     {
       "code": "not_bound",
       "fields": ["room"],
-      "doc": "The address isn't one of the rows in this widget's granted scope."
+      "doc": "The address isn't one of the agents this widget reaches (this computer's agents and your Homes' rows)."
     },
     {
       "code": "rate_limited",
@@ -71,7 +71,7 @@
       "code": "not_exposed",
       "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)."
     },
-    {"code": "sending_off", "doc": "Sending is turned off for this widget (by you, or by the runaway guard)."},
+    {"code": "sending_off", "doc": "Posting is paused: the runaway guard tripped (too many posts). The person resumes it on the widget."},
     {"code": "failed", "doc": "The call failed; the message says why."}
   ],
   "bannedFields": [

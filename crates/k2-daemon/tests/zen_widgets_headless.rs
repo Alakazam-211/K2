@@ -6,10 +6,10 @@
 //!    in `get`, one `zen_changed` per widget save, the templates list with
 //!    the Diary, 405 on GET of every POST row, Connect logins refused.
 //! 2. The in-process dispatcher (`test_harness`) under a temp HOME, so the
-//!    test can mint an agent passport and edit the grants table: the grant
-//!    routes take only the owner token, the daemon signs rows, a hand-edited
-//!    row is `invalid`, Sending off/on, the runaway pause and resume,
-//!    revoke, `garden/new` with a grant.
+//!    test can mint an agent passport: widgets need no permissions (Rosson
+//!    2026-10-08), so a new widget and a new Diary run with every
+//!    Garden-safe cap at once; the old grant routes are gone; the runaway
+//!    pause shows on the widget and only a person's Resume clears it.
 //!
 //! Never touches the real `~/.k2`. Fixtures use made-up names only.
 
@@ -116,12 +116,16 @@ fn wait_for<T>(what: &str, within: Duration, mut f: impl FnMut() -> Option<T>) -
 
 const PAGE: &str = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 60\nmin-width = 200\n[[layout.column]]\nsize = 40\nmin-width = 200\n\n[[widget]]\nid = \"arcade\"\nkind = \"custom\"\nwidget = \"agent-arcade\"\ncolumn = 0\n[widget.props]\nhome = \"Work\"\n\n[[widget]]\nid = \"talk\"\nkind = \"conversation\"\ncolumn = 1\n[widget.props]\nagents = \"arcade\"\n";
 
-const POST_ROWS: &[&str] = &[
-    "/cli/zen/widget/grant",
-    "/cli/zen/widget/new",
-    "/cli/zen/widget/resume",
-    "/cli/zen/widget/revoke",
-    "/cli/zen/widget/sending",
+const POST_ROWS: &[&str] = &["/cli/zen/widget/new", "/cli/zen/widget/pause", "/cli/zen/widget/resume"];
+
+/// The grant routes of the first Zen v2 build: gone (Rosson 2026-10-08).
+/// A POST to a path with no policy row is 405 at the method guard; a GET is
+/// 404 (no route).
+const GONE_ROUTES: &[(&str, &str, u16)] = &[
+    ("POST", "/cli/zen/widget/grant", 405),
+    ("POST", "/cli/zen/widget/revoke", 405),
+    ("POST", "/cli/zen/widget/sending", 405),
+    ("GET", "/cli/zen/widget/grants", 404),
 ];
 
 // ── 1. The real binary ──────────────────────────────────────────────────
@@ -235,14 +239,12 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         assert_eq!(s, 405, "GET {p}");
     }
 
-    // Templates: the two starts, then the Diary with its grant.
+    // Templates: the two starts, then the Diary, with nothing to allow.
     let (s, v) = call(port, "GET", &format!("/cli/zen/templates?token={tok}"), None);
     assert_eq!(s, 200, "{v}");
     let shorts: Vec<&str> = v["templates"].as_array().expect("templates").iter().filter_map(|t| t["short"].as_str()).collect();
     assert_eq!(shorts, vec!["texting", "blank", "diary"]);
-    assert_eq!(v["templates"][2]["needsGrant"]["widget"], "k2:diary@1");
-    assert_eq!(v["templates"][2]["needsGrant"]["scope"], "local", "the Diary is fixed to this computer");
-    assert!(v["templates"][2]["needsGrant"]["consent"].as_str().is_some_and(|c| c.contains("this computer")), "{v}");
+    assert!(v["templates"][2].get("needsGrant").is_none(), "no permissions: {v}");
     assert_eq!(v["templates"][2]["newUsers"], true);
 
     let (events, task) = zen_event_counter(port, &tok).await;
@@ -274,7 +276,7 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     let (s, v) = call(port, "GET", &format!("/cli/zen/widget/bundle?widget=nope&token={tok}"), None);
     assert_eq!((s, v["error"].as_str()), (404, Some("unknown_widget")), "{v}");
 
-    // Place it: get shows the custom widget, no grant yet.
+    // Place it: get shows the custom widget, working at once (no grant).
     let before = events.load(Ordering::SeqCst);
     std::fs::write(zen.join(format!("gardens/{garden2}.toml")), PAGE).expect("write Garden 2");
     expect_one_event(&events, before, "a Garden save placing the widget");
@@ -284,9 +286,11 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     let w = &g["page"]["widgets"][0];
     assert_eq!(w["kind"], "custom");
     assert_eq!(w["source"], "user");
-    assert_eq!(w["caps"], json!([]));
     assert_eq!(w["requested"], json!(["agents:read", "thread:read", "thread:post"]));
-    assert_eq!(w["grant"], J::Null);
+    assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post"]), "zero clicks: {w}");
+    assert_eq!(w["origin"], "local");
+    assert_eq!(w["paused"], J::Null);
+    assert!(w.get("grant").is_none(), "{w}");
     assert_eq!(w["hash"], a["hash"]);
 
     // TUW1.4: a JS save → one event; the same bytes → none; a manifest
@@ -328,10 +332,12 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     let (s, v) = call(port, "GET", &format!("/cli/zen/widgets?token={tok}"), None);
     assert_eq!(s, 200, "{v}");
     let arcade = v["widgets"].as_array().expect("widgets").iter().find(|w| w["name"] == "agent-arcade").cloned().expect("listed");
-    assert_eq!(arcade["placements"][0]["grant"], "none", "{arcade}");
+    assert_eq!(arcade["placements"][0]["placement"], "arcade", "{arcade}");
+    assert_eq!(arcade["placements"][0]["paused"], J::Null, "{arcade}");
+    assert!(arcade["placements"][0].get("grant").is_none(), "{arcade}");
 
-    // Connect logins (every role) never reach Zen; the grant routes say
-    // owner_only, the rest zen_local_only.
+    // Connect logins (every role) never reach Zen; Resume (a person's
+    // click) says owner_only, the rest zen_local_only.
     for role in ["member", "admin", "owner"] {
         let user = format!("u-{role}");
         let (s, v) = call(port, "POST", &format!("/cli/users/add?token={tok}"), Some(&format!(r#"{{"username":"{user}","password":"correct-horse-battery-9"}}"#)));
@@ -345,7 +351,7 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let session = v["token"].as_str().expect("session").to_string();
         let (s, v) = call(port, "GET", &format!("/cli/zen/widgets?token={session}"), None);
         assert_eq!((s, v["error"].as_str()), (403, Some("zen_local_only")), "{role}: {v}");
-        let (s, v) = call(port, "POST", &format!("/cli/zen/widget/grant?token={session}"), Some("{}"));
+        let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={session}"), Some("{}"));
         assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{role}: {v}");
     }
     // 65 KB body, sent in full → 413. The daemon answers from the declared
@@ -357,7 +363,7 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
     task.abort();
 }
 
-// ── 2. In-process: grants ───────────────────────────────────────────────
+// ── 2. In-process: no permissions, the runaway pause ────────────────────
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 const OWNER_TOKEN: &str = "zen-widgets-owner-token-0001";
@@ -398,9 +404,12 @@ fn login(username: &str) -> String {
     connect_users::create_session(username)
 }
 
-/// TUW2.1, TUWB1, TUWB2, TUWB4 (daemon side), TUWB6.
+/// Rosson 2026-10-08: no permissions. A new widget and a new Diary run with
+/// every Garden-safe cap at once; the grant routes are gone and no key is
+/// made; the runaway pause shows on the widget, anything Zen accepts may
+/// set it, and only a person's Resume (the owner token) clears it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tuwb_grants_are_owner_only_signed_and_fail_closed() {
+async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_temp_home(|home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
@@ -413,179 +422,89 @@ async fn tuwb_grants_are_owner_only_signed_and_fail_closed() {
         let (s, v) = owner("POST", "/cli/zen/setup", Some("{}"));
         assert_eq!(s, 200, "{v}");
         let garden = v["gardens"][1]["id"].as_str().expect("Garden 2").to_string();
+        let diary = v["gardens"][2]["id"].as_str().expect("the preinstalled Diary").to_string();
         let (s, v) = owner("POST", "/cli/zen/widget/new", Some(r#"{"name":"agent-arcade","from":"arcade"}"#));
         assert_eq!(s, 200, "{v}");
         std::fs::write(home.join(format!(".k2/zen/gardens/{garden}.toml")), PAGE).expect("place");
+
+        // Zero clicks: the new widget and the preinstalled Diary.
+        let all = json!(["agents:read", "thread:read", "thread:post"]);
+        for (id, what) in [(&garden, "a new widget"), (&diary, "the Diary")] {
+            let (s, g) = owner("GET", &format!("/cli/zen/get?garden={id}"), None);
+            assert_eq!(s, 200, "{g}");
+            let w = &g["page"]["widgets"][0];
+            assert_eq!(w["caps"], all, "{what} posts with zero clicks: {w}");
+            assert_eq!((w["origin"].as_str(), w["paused"].is_null()), (Some("local"), true), "{what}: {w}");
+            assert!(w.get("grant").is_none(), "{what}: {w}");
+        }
+        // A Diary from New Garden: no grant to send, works at once.
+        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"My diary","template":"diary"}"#));
+        assert_eq!(s, 200, "{v}");
+        assert!(v.get("grant").is_none(), "{v}");
+        let mine = v["garden"]["id"].as_str().expect("id").to_string();
+        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={mine}"), None);
+        assert_eq!(g["page"]["widgets"][0]["caps"], all, "{g}");
+        // The old grant field is refused, not silently honoured.
+        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"D2","template":"diary","grant":{"scope":{"server":"local"}}}"#));
+        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{v}");
+
+        // The grant routes are gone; nothing makes a key.
+        for (m, p, status) in GONE_ROUTES {
+            let (s, v) = owner(m, p, if *m == "POST" { Some("{}") } else { None });
+            assert_eq!(s, *status, "{m} {p} is gone: {v}");
+        }
+        assert!(!home.join(".k2/zen-grant.key").exists(), "no grant key any more");
+
+        // The runaway pause: bad bodies first.
+        let pause = format!(r#"{{"garden":"{garden}","placement":"arcade","reason":"runaway"}}"#);
+        let resume = format!(r#"{{"garden":"{garden}","placement":"arcade"}}"#);
+        for (b, status, code) in [
+            (pause.replace("runaway", "bored"), 400, "bad_request"),
+            (pause.replace("\"placement\":\"arcade\"", "\"placement\":\"talk\""), 404, "not_found"),
+            (r#"{"garden":"g-nope0001","placement":"arcade","reason":"runaway"}"#.to_string(), 404, "unknown_garden"),
+        ] {
+            let (s, v) = owner("POST", "/cli/zen/widget/pause", Some(&b));
+            assert_eq!((s, v["error"].as_str()), (status, Some(code)), "{b}: {v}");
+        }
+        // The guard trips (the renderer posts it with Zen's owner token).
+        let (s, v) = owner("POST", "/cli/zen/widget/pause", Some(&pause));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["paused"]["reason"], "runaway", "{v}");
         let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        let hash = g["page"]["widgets"][0]["hash"].as_str().expect("hash").to_string();
+        let w = &g["page"]["widgets"][0];
+        assert_eq!(w["paused"]["reason"], "runaway", "the pause shows on the widget: {w}");
+        assert_eq!(w["caps"], all, "a pause never takes caps away: {w}");
+        let (_, v) = owner("GET", "/cli/zen/widgets", None);
+        let arcade = v["widgets"].as_array().expect("widgets").iter().find(|w| w["name"] == "agent-arcade").cloned().expect("listed");
+        assert_eq!(arcade["placements"][0]["paused"]["reason"], "runaway", "{arcade}");
 
-        let body = |caps: &str, entries: &str, h: &str| {
-            format!(
-                r#"{{"garden":"{garden}","placement":"arcade","widget":"agent-arcade","caps":{caps},"scope":{{"home":"h-test0001"}},"entries":{entries},"hash":"{h}"}}"#
-            )
-        };
-        let one = r#"[{"server":"alice.example.test","room":"cortana"}]"#;
-        let good = body(r#"["agents:read","thread:read"]"#, one, &hash);
-
-        // TUWB1: passport (agent), Connect login, app pass, API key → 403.
+        // Only a person resumes: passport, Connect login, app pass, API key → 403.
         let passport = mint_passport();
         assert!(session_token::validate_hook(&passport).is_some(), "passport validates");
         let session = login("zen-owner-login");
         for (who, cred) in [("passport", passport.as_str()), ("connect login", session.as_str()), ("app pass", "k2skn_notreal"), ("api key", "k2sk_notreal")] {
-            for (p, b) in [
-                ("/cli/zen/widget/grant", good.clone()),
-                ("/cli/zen/widget/resume", format!(r#"{{"garden":"{garden}","placement":"arcade"}}"#)),
-                ("/cli/zen/widget/sending", format!(r#"{{"garden":"{garden}","placement":"arcade","on":true}}"#)),
-                ("/cli/zen/garden/new", r#"{"name":"D2","template":"diary","grant":{"scope":{"allHomes":true}}}"#.to_string()),
-            ] {
-                let (s, v) = call(port, "POST", &format!("{p}?token={cred}"), Some(&b));
-                assert_eq!(s, 403, "{who} {p}: {v}");
-                assert_eq!(v["error"], "owner_only", "{who} {p}: {v}");
-            }
+            let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={cred}"), Some(&resume));
+            assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{who}: {v}");
         }
-        let (_, gs) = owner("GET", "/cli/zen/gardens", None);
-        assert!(!gs["gardens"].as_array().expect("gardens").iter().any(|g| g["name"] == "D2"), "a refused create leaves nothing");
+        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
+        assert_eq!(g["page"]["widgets"][0]["paused"]["reason"], "runaway", "still paused after the refusals");
+        // An agent can't reach Zen at all, pause included.
+        let (s, v) = call(port, "POST", &format!("/cli/zen/widget/pause?token={passport}"), Some(&pause));
+        assert_eq!((s, v["error"].as_str()), (403, Some("zen_local_only")), "{v}");
 
-        // Bad bodies.
-        for (b, status, code) in [
-            (body(r#"["agents:read"]"#, one, "stale"), 409, "widget_changed"),
-            (body(r#"["gardens:manage"]"#, one, &hash), 400, "bad_request"),
-            (body(r#"["presence:read"]"#, one, &hash), 400, "bad_request"),
-            (body(r#"["agents:read"]"#, "[]", &hash), 400, "bad_request"),
-            (good.replace(r#""scope":{"home":"h-test0001"}"#, r#""scope":{"agent":"cortana::alice.example.test"}"#).replace(one, r#"[{"server":"a.example.test","room":"x"},{"server":"b.example.test","room":"y"}]"#), 400, "bad_request"),
-            (good.replace("\"placement\":\"arcade\"", "\"placement\":\"talk\""), 404, "not_found"),
-        ] {
-            let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&b));
-            assert_eq!((s, v["error"].as_str()), (status, Some(code)), "{b}: {v}");
-        }
-
-        // The owner grants: stored, signed, key file 0600.
-        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&good));
+        // The person's one click.
+        let (s, v) = owner("POST", "/cli/zen/widget/resume", Some(&resume));
         assert_eq!(s, 200, "{v}");
-        assert_eq!(v["grant"]["state"], "partial", "thread:post is asked for but not granted: {v}");
-        assert_eq!(v["grant"]["caps"], json!(["agents:read", "thread:read"]));
-        let key = home.join(".k2/zen-grant.key");
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&key).expect("key").permissions().mode() & 0o777, 0o600);
-        }
+        assert_eq!((v["resumed"].as_bool(), v["changed"].as_bool()), (Some(true), Some(true)), "{v}");
+        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
+        assert_eq!(g["page"]["widgets"][0]["paused"], J::Null, "{g}");
+        let (s, v) = owner("POST", "/cli/zen/widget/resume", Some(&resume));
+        assert_eq!((s, v["resumed"].as_bool(), v["changed"].as_bool()), (200, Some(false), Some(false)), "resume again is a no-op: {v}");
+
         let audit = std::fs::read_to_string(k2_core::auth_audit::path()).expect("audit log");
-        assert!(audit.contains("zen.widget.grant") && audit.contains("zen.widget.refused"), "{audit}");
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["caps"], json!(["agents:read", "thread:read"]), "{g}");
-        assert_eq!(g["page"]["widgets"][0]["grant"]["sending"], true, "Sending is on by default (R6)");
-
-        // TUWB4: the runaway guard turns sending off and pauses; a passport
-        // can't resume or turn it on; the owner resumes.
-        let off = format!(r#"{{"garden":"{garden}","placement":"arcade","on":false,"reason":"runaway"}}"#);
-        let (s, v) = owner("POST", "/cli/zen/widget/sending", Some(&off));
-        assert_eq!(s, 200, "{v}");
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        let gr = &g["page"]["widgets"][0]["grant"];
-        assert_eq!((gr["sending"].as_bool(), gr["paused"]["reason"].as_str()), (Some(false), Some("runaway")), "{gr}");
-        assert_eq!(gr["state"], "partial", "a pause keeps the grant valid");
-        let (s, v) = call(port, "POST", &format!("/cli/zen/widget/sending?token={}", mint_passport()), Some(&off.replace("\"reason\":\"runaway\"", "\"reason\":\"user\"")));
-        assert_eq!(s, 403, "a passport turning sending off still needs Zen's owner token: {v}");
-        assert_eq!(v["error"], "zen_local_only");
-        let (s, v) = owner("POST", "/cli/zen/widget/resume", Some(&format!(r#"{{"garden":"{garden}","placement":"arcade"}}"#)));
-        assert_eq!(s, 200, "{v}");
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["grant"]["paused"], J::Null);
-        assert_eq!(g["page"]["widgets"][0]["grant"]["sending"], true);
-
-        // The Settings list.
-        let (s, v) = owner("GET", "/cli/zen/widget/grants", None);
-        assert_eq!(s, 200, "{v}");
-        assert_eq!(v["grants"][0]["placement"], "arcade");
-        assert_eq!(v["grants"][0]["state"], "partial");
-
-        // TUWB2: a row edited in SQLite is invalid, caps [].
-        {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            conn.execute(
-                "UPDATE zen_widget_grants SET caps_json = '[\"agents:read\",\"thread:read\",\"thread:post\"]' WHERE garden = ?1 AND revoked_at IS NULL",
-                [&garden],
-            )
-            .expect("hand edit");
+        for line in ["zen.widget.pause", "zen.widget.resume", "zen.widget.refused"] {
+            assert!(audit.contains(line), "{line} missing: {audit}");
         }
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["grant"]["state"], "invalid", "{g}");
-        assert_eq!(g["page"]["widgets"][0]["caps"], json!([]));
-        let (s, v) = owner("POST", "/cli/zen/widget/resume", Some(&format!(r#"{{"garden":"{garden}","placement":"arcade"}}"#)));
-        assert_eq!((s, v["error"].as_str()), (409, Some("widget_changed")), "an invalid row is never re-signed: {v}");
-
-        // Re-grant, then a new key file voids it.
-        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&good));
-        assert_eq!(s, 200, "{v}");
-        let saved = std::fs::read(&key).expect("key");
-        std::fs::remove_file(&key).expect("rm key");
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["grant"]["state"], "invalid", "no key, no grant: {g}");
-        std::fs::write(&key, &saved).expect("restore key");
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
-        }
-
-        // The placement's home changes → review.
-        std::fs::write(home.join(format!(".k2/zen/gardens/{garden}.toml")), PAGE.replace("Work", "Play")).expect("edit");
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["grant"]["state"], "review", "{g}");
-        std::fs::write(home.join(format!(".k2/zen/gardens/{garden}.toml")), PAGE).expect("restore");
-
-        // Revoke → caps [], grant null.
-        let (s, v) = owner("POST", "/cli/zen/widget/revoke", Some(&format!(r#"{{"garden":"{garden}","placement":"arcade"}}"#)));
-        assert_eq!(s, 200, "{v}");
-        assert_eq!(v["revoked"].as_array().map(Vec::len), Some(1));
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={garden}"), None);
-        assert_eq!(g["page"]["widgets"][0]["grant"], J::Null);
-        assert_eq!(g["page"]["widgets"][0]["caps"], json!([]));
-
-        // TUWB6: garden/new with a catalog grant, from the owner token.
-        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"Blank one","template":"blank","grant":{"scope":{"allHomes":true}}}"#));
-        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "blank has nothing to allow: {v}");
-        let diary = k2_core::zen::builtin_widgets::parse_widget_ref(k2_core::zen::builtin_widgets::DIARY_WIDGET).expect("ref");
-        assert!(k2_core::zen::builtin_widgets::builtin_widget(&diary).is_some(), "k2:diary@1 ships");
-        // Rosson 2026-10-08: the Diary sees only this computer's agents. Any
-        // other scope, or an entry on another server, is refused and leaves
-        // no Garden behind.
-        for refused in [
-            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"allHomes":true}}}"#,
-            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"allServers":true}}}"#,
-            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"server":"alice.example.test"}}}"#,
-            r#"{"name":"Wide diary","template":"diary","grant":{"scope":{"server":"local"},"entries":[{"server":"alice.example.test","room":"cortana"}]}}"#,
-        ] {
-            let (s, v) = owner("POST", "/cli/zen/garden/new", Some(refused));
-            assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{refused}: {v}");
-        }
-        let (_, gs) = owner("GET", "/cli/zen/gardens", None);
-        assert!(!gs["gardens"].as_array().expect("gardens").iter().any(|g| g["name"] == "Wide diary"), "{gs}");
-        // The create click: the fixed scope, from the catalog, with no scope sent.
-        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"My diary","template":"diary","grant":{"entries":[{"server":"local","room":"cortana"}]}}"#));
-        assert_eq!(s, 200, "{v}");
-        assert_eq!(v["grant"]["caps"], json!(["agents:read", "thread:read", "thread:post"]), "{v}");
-        assert_eq!(v["grant"]["sending"], true);
-        assert_eq!(v["grant"]["scope"], json!({"server": "local"}), "{v}");
-        // Sending the same scope explicitly works too.
-        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"Second diary","template":"diary","grant":{"scope":{"server":"local"}}}"#));
-        assert_eq!(s, 200, "{v}");
-        assert_eq!(v["grant"]["scope"], json!({"server": "local"}), "{v}");
-        // The review dialog's route holds the Diary to the same scope.
-        let id = v["garden"]["id"].as_str().expect("id").to_string();
-        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={id}"), None);
-        let hash = g["page"]["widgets"][0]["hash"].as_str().expect("hash").to_string();
-        let regrant = |scope: &str, server: &str| {
-            format!(
-                r#"{{"garden":"{id}","placement":"diary","widget":"k2:diary@1","caps":["agents:read"],"scope":{scope},"entries":[{{"server":"{server}","room":"cortana"}}],"hash":"{hash}"}}"#
-            )
-        };
-        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"allServers":true}"#, "alice.example.test")));
-        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{v}");
-        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"server":"local"}"#, "alice.example.test")));
-        assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "a remote entry on a local scope: {v}");
-        let (s, v) = owner("POST", "/cli/zen/widget/grant", Some(&regrant(r#"{"server":"local"}"#, "local")));
-        assert_eq!(s, 200, "{v}");
     });
 }
 

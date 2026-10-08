@@ -3509,7 +3509,6 @@ dependencies = [
  "fontdue",
  "getrandom 0.2.17",
  "git2",
- "hmac",
  "html5ever 0.40.1",
  "idna",
  "ignore",

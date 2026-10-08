@@ -84,11 +84,8 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
   Garden news was seen, and K2's defaults that own-copy Gardens sit on. K2 writes\n\
   them. **Never write sync.json, news.json or .defaults/**; read them with\n\
   `k2 zen sync` and `k2 zen news`.\n\
-- Widget permissions live in K2's daemon, signed, and only the human makes one by\n\
-  clicking Allow in the K2 app. **Never write grants.json**, `zen-grant.key` or\n\
-  `pins.json`, never ask the human to paste a permission anywhere, and never try to\n\
-  give yourself or a widget a permission. You may request one by telling the human\n\
-  what and why; they review it in the app.\n\n\
+- Widgets in your own Gardens need no permissions: a widget can talk to your agents\n\
+  right away. **Never write grants.json** or `pins.json` (K2 never reads them).\n\n\
 ## Synced with K2's defaults, or its own copy\n\n\
 Each Garden's page (template, widget prop defaults, the frame) and theme (the\n\
 built-in layers under its theme) either sync with K2's defaults, following K2's\n\
@@ -374,8 +371,8 @@ widget's `status` prop keeps three values: `monitoring` shows with `working`, an
 `unverifiable` with `idle`. A custom widget's rows also say `unreachable` when\n\
 that agent's server is offline.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
-manifest and the human grants them in the K2 app. Agents request caps; they\n\
-never grant them.\n\n",
+manifest and gets every one it asks for at once: widgets in your own Gardens\n\
+need no permissions.\n\n",
     );
     s.push_str(&custom_widgets_section());
     s.push_str(&whats_available_section());
@@ -389,7 +386,8 @@ fn bridge_section() -> String {
     let mut s = format!(
         "## Bridge verbs and caps\n\n\
 Every widget reaches K2 only through the Zen bridge; each verb needs a cap\n\
-the widget is granted. Caps: {}.\n\n\
+the widget has (a built-in's from K2, a custom widget's from its manifest).\n\
+Caps: {}.\n\n\
 This list comes from K2's verb catalog (version {}). A verb marked\n\
 **custom widgets** is one a custom widget may call too (see Custom widgets);\n\
 the rest belong to K2's own widgets and controls.\n\n",
@@ -426,7 +424,8 @@ When the built-in widgets can't do what the human asks (\"make my agents look li
 game\", \"a diary\", \"a globe of my servers\"), write a **custom widget**: a small web\n\
 page in a folder, placed in a Garden. K2 runs it **sealed**: no network, no storage,\n\
 no popups, no files, no K2 internals. It talks to K2 only through the `k2` object,\n\
-and only with the caps the human allowed with a click.\n\n\
+with the caps its manifest asks for. **Widgets can talk to your agents right away:**\n\
+no review, no permission dialog, nothing for the human to allow.\n\n\
 ### The folder\n\n\
 `~/.k2/zen/widgets/<name>/`, one flat folder (`<name>`: lower-case letters, digits,\n\
 `-` and `_`, up to 40; subfolders are ignored). K2 reads `manifest.json`, the entry\n\
@@ -455,26 +454,26 @@ kind = \"custom\"\n\
 widget = \"agent-arcade\"   # the folder, or a built-in like \"k2:diary@1\"\n\
 column = 0\n\
 [widget.props]\n\
-home = \"Work\"             # what it asks to see: home = \"…\" or agent = \"…\"\n\
+home = \"Work\"             # optional props your code reads (k2.widget, k2.config)\n\
 ```\n\n\
 `custom` is a content widget that fills its column (never a band, edge or menu). At most\n\
 6 custom widgets per page. `config` (a small table of strings, numbers and booleans)\n\
 reaches the widget as `k2.config`. A conversation widget can follow it:\n\
 `agents = \"arcade\"` on a `conversation` widget shows what it opens with\n\
 `k2.conversation.open(address)`.\n\n\
-### Permissions: you can't grant\n\n\
-The human picks what the widget may see when they allow it: one agent, a Home, several\n\
-Homes, every Home, one server, or every server. Until then K2 draws its own review card\n\
-in the widget's box and your code doesn't run. **You can't grant: tell the human to open\n\
-the Garden and click Review.** Never write grants.json, never call the grant route,\n\
-never ask the human to paste anything. Grants live in K2's daemon, signed; a hand-made\n\
-one is refused. Code changes keep the grant; asking for a new cap, or a different\n\
-`home`/`agent`, sends it back to review. Sending is on by default and the human can turn\n\
-it off; a runaway guard (more than 120 posts in 10 minutes, or 20 identical texts to one\n\
-agent) stops the widget and turns sending off until the human resumes it.\n\n\
+### No permissions: it works right away\n\n\
+A widget in your own Garden can use every cap its manifest asks for the moment it's\n\
+placed: no review card, no grant, no scope to pick, no sending switch. It reaches the\n\
+agents on this computer plus every agent on the human's Homes (the rooms and servers\n\
+they connected in Home); any other address is `not_bound`, and every server still\n\
+checks the human's role. Never write grants.json; there is nothing to grant. K2 keeps\n\
+a few invisible rails: the sealed frame, an audit line per post, and a runaway guard:\n\
+more than 120 posts in 10 minutes, or 20 identical texts to one agent, pauses posting\n\
+(`sending_off`) with a small \"Paused: too many posts. Resume\" notice on the widget\n\
+until the human clicks Resume. The widget keeps running meanwhile.\n\n\
 ### The `k2` object\n\n\
 Run `k2 zen guide api` for every helper with an example and its errors. In short, by\n\
-cap (K2's sentence for each is what the human reads):\n\n",
+cap:\n\n",
     );
     for (cap, rows) in gen::widget_groups(c) {
         match cap.and_then(|n| c.cap(n)) {
@@ -516,18 +515,19 @@ returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
 2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
 3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
    it's done. A folder with errors keeps serving its last good version.\n\
-4. Tell the human it's ready and that they need to click **Review** on it to allow it.\n\
-5. `k2 zen widget list` shows each widget's state and grants; `k2 zen history --widget\n\
-   <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit;\n\
-   `k2 zen widget revoke` takes a grant away (taking power away is always allowed).\n\n\
+4. Tell the human it's ready: it talks to their agents as soon as it's placed.\n\
+5. `k2 zen widget list` shows each widget's state and placements; `k2 zen history --widget\n\
+   <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit. To stop a\n\
+   widget, take its `[[widget]]` out of the Garden file.\n\n\
 **The Diary** (`k2:diary@1`, the Diary Garden in New Garden) is the canonical example:\n\
 a haunted journal with one page per agent on this computer. The human turns the page\n\
 (drags or clicks a corner, or uses the arrow keys) to write to another agent; their ink\n\
-sinks in and the reply bleeds back in handwriting. K2 fixes its scope to this computer's\n\
-agents, and its Garden keeps only one ⋯ menu (the Garden switcher and the Zen toggle).\n\
+sinks in and the reply bleeds back in handwriting. It keeps to this computer's agents,\n\
+and its Garden keeps only one ⋯ menu floating over the page (the Garden switcher and\n\
+the Zen toggle) and hides the window's stoplights (`stoplights = \"hidden\"`).\n\
 Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget itself\n\
 never changes.\n\n\
-Files K2 owns here too: **never write grants.json**, `zen-grant.key` or `pins.json`.\n\n",
+Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n",
     );
     s
 }
@@ -720,20 +720,26 @@ mod tests {
             assert!(body.contains(&format!("**`{cap}`**: \"")), "the cap {cap} with K2's sentence");
         }
         for must in [
-            "**You can't grant: tell the human to open\nthe Garden and click Review.**",
+            "**Widgets can talk to your agents right away:**",
+            "### No permissions: it works right away",
             "Never write grants.json",
-            "never call the grant route",
+            "Paused: too many posts. Resume",
             "Run `k2 zen guide api`",
             "`k2 zen widget new <name> --from k2:diary`",
             "`k2 zen validate --widget <name>`",
             "## What's available to a custom widget",
-            "**never write grants.json**, `zen-grant.key` or `pins.json`",
+            "**never write grants.json** or `pins.json`",
             "textContent",
         ] {
             assert!(body.contains(must), "skill v12 must say {must:?}");
         }
         assert!(!body.contains("nothing is grantable yet"), "the v2 placeholder line is gone");
         assert!(!body.contains("only the app writes it"), "grants live in the daemon now (UWB4)");
+        // Rosson 2026-10-08: no permissions. Nothing tells an agent to send
+        // the human to a review, a grant or a sending switch.
+        for gone in ["click Review", "click **Review**", "K2 draws its own review card", "zen-grant.key", "widget revoke", "Sending is on", "human grants"] {
+            assert!(!body.contains(gone), "skill v12 must not say {gone:?}");
+        }
     }
 
     #[test]

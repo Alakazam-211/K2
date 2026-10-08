@@ -23,13 +23,8 @@ order = 10
 # Gardens 1 and 2; never appended to an existing user's Gardens).
 new_users = true
 
-# The create click is the consent (Rosson 2026-10-08): the scope is fixed
-# to this computer's agents, so New Garden asks nothing more.
-[catalog.grant]
-widget = "k2:diary@1"
-caps = ["agents:read", "thread:read", "thread:post"]
-scope = "local"
-consent = "Diary can read your agents on this computer and post to their Threads."
+# No permissions (Rosson 2026-10-08): the Diary talks to the agents on
+# this computer the moment it's created.
 
 [layout]
 kind = "columns"

@@ -642,6 +642,25 @@ fn overlay_sender_from(params: &HashMap<String, String>, resolved: &ResolvedOver
     }
 }
 
+/// One audit line per Thread post a Garden widget sends for the person
+/// (`zen.widget.post`): which widget, which Garden, to whom, how long.
+/// Never the text itself.
+fn audit_widget_post(origin: &overlay::WidgetOrigin, from: &str, addr: &str, text: &str) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "zen.widget.post",
+        from,
+        format!(
+            "widget={:?} garden={} to={addr} chars={}",
+            origin.widget,
+            origin.garden,
+            text.chars().count()
+        ),
+        "-",
+        "-",
+        "cli",
+    ));
+}
+
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     // A23: a Thread turn's `startedAt` is the daemon's ms receipt time.
     let received_at = chrono::Utc::now().timestamp_millis();
@@ -746,8 +765,12 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 let turn = ThreadTurn::new(&resolved, &item.id, received_at);
                 inject_thread_compose(&resolved, &from, &text, &command, turn);
                 // A widget's posts never fill the person's compose history
-                // (UWB12a: a busy widget would flood the last 50).
-                if origin.is_none() {
+                // (UWB12a: a busy widget would flood the last 50). Each
+                // one writes an audit line instead: widgets need no
+                // permission (Rosson 2026-10-08), so the log is the record.
+                if let Some(o) = &origin {
+                    audit_widget_post(o, &from, &resolved.addr, &text);
+                } else {
                     let _ = k2_core::workspace_compose_history::record_compose_send(
                         &resolved.project_id,
                         &text,
@@ -1741,6 +1764,8 @@ mod tests {
 
     #[test]
     fn widget_post_stores_origin_wakes_the_agent_and_skips_compose_history() {
+        // The audit line goes to `$HOME/.k2/auth-audit.jsonl`: a temp HOME.
+        let _home = crate::test_support::TempHome::new();
         let handle = format!("ovlwidget{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -1783,6 +1808,17 @@ mod tests {
             hist.iter().all(|e| e.body != body),
             "a widget post must not enter compose history: {hist:?}"
         );
+        // One audit line per widget post (no permissions, so the log is the
+        // record), without the text.
+        let audit = k2_core::auth_audit::tail(200).expect("audit tail");
+        let line = audit
+            .iter()
+            .find(|e| e["event"] == "zen.widget.post" && e["outcome"].as_str().is_some_and(|o| o.contains(&handle)))
+            .unwrap_or_else(|| panic!("no zen.widget.post audit line for {handle}: {audit:?}"));
+        let outcome = line["outcome"].as_str().expect("outcome");
+        assert!(outcome.contains("widget=\"Agent Arcade\"") && outcome.contains("garden=g-test0001"), "{line}");
+        assert!(outcome.contains(&format!("chars={}", body.chars().count())), "{line}");
+        assert!(!outcome.contains(&body), "the audit line never holds the text: {line}");
         let author = crate::workspace_msg::resolve_owner_from();
         let want = format_thread_compose_pty_line(&author, &handle, &body);
         assert!(

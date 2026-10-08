@@ -1,9 +1,9 @@
 // Custom Garden widgets: the wire shapes between the daemon, the renderer
-// and the sealed frame (prd-zen-user-widgets-v2 UW15, UW35, UW38, UWB4,
-// UWB6–UWB9, UWB21–UWB23).
+// and the sealed frame (prd-zen-user-widgets-v2 UW15, UW35, UW38, UWB9,
+// UWB21–UWB23; no permissions since Rosson's 2026-10-08 smoke).
 //
 // Day-0 interface (Zen v2, 2026-10-08). Owner: B4 (renderer). The Rust side
-// is `crates/k2-core/src/zen/grants.rs` (GrantView, Scope, GrantEntry) and
+// is `crates/k2-core/src/zen/widget_access.rs` (WidgetOrigin, Pause) and
 // `crates/k2-core/src/zen/garden_catalog.rs` (TemplateInfo), owned by B2.
 // Change a shape only with the integrator, on both sides in one commit.
 
@@ -11,59 +11,24 @@ import type { CatalogWireError } from '../contract/catalog-types'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import type { ZenLibRef } from './zen-lib-loader'
 
-// ── Scope and grant (UWB4, UWB7) ─────────────────────────────────────────
+// ── Where a widget came from, and the runaway pause ───────────────────
 
 /**
- * What a widget may see; exactly one key. The renderer resolves it to rows
- * at Allow and at every mount (Homes are device-local). Bound rows are the
- * union of the scope's rows now (QA1); a missing Home gives fewer rows,
- * never the window's Home or a loose view.
+ * Where a widget came from (Rust `WidgetOrigin`). `local` = in your own
+ * Garden on this computer (a widget folder or a built-in `k2:`): it runs
+ * with every Garden-safe cap it asks for, no review (Rosson 2026-10-08:
+ * "If the widget exists, it should be able to interact with agents").
+ * `other` = anything else (v4's widgets imported from other people, not
+ * built; or an origin this client can't read): no caps until a review
+ * exists, and `zenWidgetMayRun` is where that review will go.
  */
-export type ZenScope =
-  | { agent: string } // `handle::host`
-  | { home: string } // Home id
-  | { homes: string[] } // Home ids, 1+, no repeats
-  | { allHomes: true }
-  | { server: string } // host key
-  | { allServers: true } // local + every saved Connect host; ≤ 8 live per widget (R7)
+export type ZenWidgetOrigin = 'local' | 'other'
 
-/** One bound row at Allow (UWA8): `server` = host of `handle::host`, `room` = handle. */
-export interface ZenGrantEntry {
-  server: string
-  room: string
-}
-
-/**
- * none: no live grant · invalid: signature, key or widget doesn't check out
- * · review: granted for a different home/agent ask · partial: manifest asks
- * for more, granted caps keep working · granted.
- */
-export type ZenGrantState = 'none' | 'invalid' | 'review' | 'partial' | 'granted'
-
-export interface ZenGrantPause {
+/** The runaway guard's pause (Rust `Pause`): posting is paused until the
+ *  person clicks Resume. The widget keeps running. */
+export interface ZenWidgetPause {
   at: string
   reason: 'runaway'
-}
-
-/** `grant` on a custom widget in `GET /cli/zen/get` (Rust `GrantView`). */
-export interface ZenGrantView {
-  state: ZenGrantState
-  /** Effective: requested ∩ granted ∩ USER_WIDGET_CAPS. */
-  caps: UserWidgetCap[]
-  granted: UserWidgetCap[]
-  scope: ZenScope | null
-  entries: ZenGrantEntry[]
-  sending: boolean
-  paused: ZenGrantPause | null
-  grantedAt: string | null
-  widgetHash: string | null
-}
-
-/** True when K2 draws its review card instead of the frame. */
-export function zenGrantNeedsReview(grant: ZenGrantView | null, requested: readonly string[]): boolean {
-  if (requested.length === 0) return false
-  if (!grant) return true
-  return grant.state === 'none' || grant.state === 'invalid' || grant.state === 'review'
 }
 
 // ── The custom widget in a resolved page (UW38) ─────────────────────────
@@ -83,7 +48,7 @@ export interface ZenCustomWidgetPayload {
   widget: string
   column: number
   props: { home?: string; agent?: string; config: Record<string, string | number | boolean> }
-  /** Effective caps (the daemon's step 1, UW26). */
+  /** The caps it runs with: every Garden-safe cap it asks for (no grant). */
   caps: UserWidgetCap[]
   /** The manifest's `caps`. */
   requested: UserWidgetCap[]
@@ -97,7 +62,15 @@ export interface ZenCustomWidgetPayload {
   state: 'ok' | 'errors' | 'broken'
   errors: ZenWidgetFinding[]
   warnings: ZenWidgetFinding[]
-  grant: ZenGrantView | null
+  origin: ZenWidgetOrigin
+  /** Set while the runaway guard has its posting paused. */
+  paused: ZenWidgetPause | null
+}
+
+/** The v4 seam: only a widget from your own Garden runs today. One that
+ *  came from someone else will need a review here first (not built). */
+export function zenWidgetMayRun(w: Pick<ZenCustomWidgetPayload, 'origin'>): boolean {
+  return w.origin === 'local'
 }
 
 // ── Routes (UW35, UWB6, UWB15, UWB22, UWB23) ────────────────────────────
@@ -116,69 +89,17 @@ export interface ZenWidgetBundleResponse {
   state?: 'ok' | 'errors' | 'broken'
 }
 
-/**
- * POST /cli/zen/widget/grant (owner token only; passports, Connect logins
- * and app passes get 403 `owner_only`). The daemon reads the placement's
- * `home`/`agent` ask from the Garden file itself; 409 `widget_changed` when
- * `hash` isn't the current bundle.
- */
-export interface ZenWidgetGrantRequest {
+/** POST /cli/zen/widget/pause: the runaway guard tripped (anything Zen accepts). */
+export interface ZenWidgetPauseRequest {
   garden: string
   placement: string
-  widget: string
-  caps: UserWidgetCap[]
-  scope: ZenScope
-  entries: ZenGrantEntry[]
-  /** On by default after Allow (R6). */
-  sending: boolean
-  /** The hash the dialog showed. */
-  hash: string
+  reason: 'runaway'
 }
 
-/** POST /cli/zen/widget/revoke: one placement, or every placement of a widget. */
-export type ZenWidgetRevokeRequest = { garden: string; placement: string } | { widget: string }
-
-/**
- * POST /cli/zen/widget/sending: off is allowed like revoke (the runaway
- * guard sends `reason: 'runaway'`, which also sets the pause); on is a grant
- * (owner only).
- */
-export interface ZenWidgetSendingRequest {
-  garden: string
-  placement: string
-  on: boolean
-  reason?: 'runaway' | 'user'
-}
-
-/** POST /cli/zen/widget/resume: clears a runaway pause (owner only). */
+/** POST /cli/zen/widget/resume: the person's one click (owner token only). */
 export interface ZenWidgetResumeRequest {
   garden: string
   placement: string
-}
-
-/** GET /cli/zen/widget/grants: the Settings list (UWB3c). */
-export interface ZenWidgetGrantRow {
-  garden: string
-  placement: string
-  widget: string
-  state: ZenGrantState
-  caps: UserWidgetCap[]
-  scope: ZenScope
-  entries: ZenGrantEntry[]
-  sending: boolean
-  paused: ZenGrantPause | null
-  grantedAt: string
-  /** The Garden's name (B2; absent from an older daemon). */
-  gardenName?: string
-}
-
-/** A catalog Garden's grant (Rust `CatalogGrant`). */
-export interface ZenCatalogGrant {
-  widget: string
-  caps: UserWidgetCap[]
-  /** `'local'` = this computer's agents only; null = the person picks. */
-  scope: 'local' | null
-  consent: string | null
 }
 
 /** One row of GET /cli/zen/templates (UWB23; Rust `TemplateInfo`). */
@@ -191,11 +112,6 @@ export interface ZenTemplateInfo {
   description: string
   /** start = the two New Garden starts; catalog = ready-made Gardens (R5). */
   section: 'start' | 'catalog'
-  /** Creating it also grants this (UWB22), in the same click. `scope:
-   *  'local'` fixes the scope to this computer's agents (`{server:
-   *  'local'}`; the Diary, Rosson 2026-10-08); `consent` is the one plain
-   *  sentence New Garden shows beside Create. */
-  needsGrant: ZenCatalogGrant | null
   newUsers: boolean
 }
 
@@ -207,7 +123,6 @@ export const ZEN_TEMPLATES_FALLBACK: readonly ZenTemplateInfo[] = [
     label: 'Start with the default',
     description: 'Garden 1’s layout: your agents beside a conversation.',
     section: 'start',
-    needsGrant: null,
     newUsers: true,
   },
   {
@@ -216,21 +131,17 @@ export const ZEN_TEMPLATES_FALLBACK: readonly ZenTemplateInfo[] = [
     label: 'Start empty and ask my agent',
     description: 'An empty page. Your agent builds it with you.',
     section: 'start',
-    needsGrant: null,
     newUsers: true,
   },
 ]
 
-/** POST /cli/zen/garden/new, with the grant a catalog Garden needs (UWB22; owner only when `grant` is set). */
+/** POST /cli/zen/garden/new. A catalog Garden's widgets work at once: there
+ *  is nothing to allow. */
 export interface ZenGardenNewRequest {
   name: string
   template?: string
   seedHome?: string
   at?: number
-  /** B2: `entries` (the bound rows at Allow, UWA8) may be empty. `scope`
-   *  may be left out when the catalog fixes it (the daemon refuses any
-   *  other scope then). */
-  grant?: { scope?: ZenScope; sending?: boolean; entries?: ZenGrantEntry[] }
 }
 
 // ── The frame protocol (UW15, §7) ───────────────────────────────────────

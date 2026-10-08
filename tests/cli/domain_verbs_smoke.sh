@@ -254,7 +254,7 @@ assert_contains "refresh all POSTs empty body" "$(cat "$WORK/posts.jsonl")" '"pa
 assert_contains "refresh --json passes through" "$out" '"checked":true'
 
 help_refresh="$("$K2_CLI" domain refresh --help)"
-assert_contains "refresh help says check again" "$help_refresh" "Check again"
+assert_contains "refresh help says check now" "$help_refresh" "Check now"
 
 echo "== $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]

@@ -42,7 +42,7 @@ pub use model::{Consumer, ConsumerKind, Delivery, Kind, Namespace, Scope, ScopeK
 pub use policy::{Actor, AgentActor, HumanProof, Role};
 pub use secret::{Key32, SecretBytes};
 pub use store::{
-    AuditQuery, AuditRow, Grant, GrantRequest, ListFilter, PolicyPatch, PutMode, PutOutcome, PutRequest, Requester,
-    Resolved, SecretMeta, SecretStore, Selector, SpawnItem, Use,
+    AuditQuery, AuditRow, Grant, GrantRequest, ListFilter, Placeholder, PolicyPatch, ProxyItem, PutMode, PutOutcome, PutRequest,
+    Requester, Resolved, SecretMeta, SecretStore, Selector, SpawnItem, Use,
 };
 pub use vault::{LocalVault, OpenOptions, VaultStatus};

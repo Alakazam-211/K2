@@ -1611,6 +1611,49 @@ impl LocalVault {
         Ok(out)
     }
 
+    /// Every proxy delivery a session gets at spawn (§9.3): secrets whose
+    /// delivery for this requester is exactly `proxy` (implicit or
+    /// granted). Fetch-only secrets don't go on the proxy.
+    pub fn proxy_items(&self, who: &Requester) -> Result<Vec<ProxyItem>> {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let rows: Vec<(SecretRow, Vec<u8>)> = {
+            let mut st = conn.prepare("SELECT * FROM secret WHERE namespace = 'user' AND status = 'active'")?;
+            let it = st.query_map([], |r| Ok(read_secret_raw(r)))?;
+            let mut v = vec![];
+            for r in it {
+                v.push(r??);
+            }
+            v
+        };
+        let rollback = *self.rollback.lock();
+        let t = now();
+        let mut out = vec![];
+        for (row, mac) in rows {
+            if !hmac_verify(&keys.row, &secret_mac_input(&row.meta, &row.external_ref), &mac) {
+                continue;
+            }
+            let m = &row.meta;
+            if m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
+                continue;
+            }
+            for (d, env, _, narrowed, explicit) in self.effective(&conn, &keys, m, who)? {
+                if (explicit && rollback) || d != Delivery::Proxy {
+                    continue;
+                }
+                out.push(ProxyItem {
+                    secret_id: m.id.clone(),
+                    name: m.name.clone(),
+                    hosts: narrowed.unwrap_or_else(|| m.hosts.clone()),
+                    env_name: env,
+                });
+                break;
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     // ── list / meta / audit ─────────────────────────────────────────
 
     fn list_inner(&self, filter: &ListFilter, actor: &Actor) -> Result<Vec<SecretMeta>> {
@@ -2317,49 +2360,114 @@ impl LocalVault {
         hex(&hmac(&self.keys.read().ph, token.as_bytes()))
     }
 
-    /// Mint a placeholder for (secret, session, provider). Only its hash
-    /// is stored.
-    pub fn placeholder_mint(&self, secret_id: &str, session_id: &str, provider: &str, expires_at: Option<String>) -> Result<String> {
+    /// Mint a placeholder for (secret, workspace, session, provider). Only
+    /// its hash is stored. The proxy resolves the secret for that session
+    /// at use time, so a revoked grant stops a live placeholder.
+    pub fn placeholder_mint(
+        &self,
+        secret_id: &str,
+        workspace_id: &str,
+        session_id: &str,
+        provider: &str,
+        expires_at: Option<String>,
+    ) -> Result<String> {
+        if secret_id.is_empty() || workspace_id.trim().is_empty() || session_id.trim().is_empty() || provider.is_empty() {
+            return Err(VaultError::bad_request(
+                "bad_placeholder",
+                "a placeholder needs a secret, a workspace, a session and a provider",
+            ));
+        }
         let token = crate::refs::new_placeholder();
         let h = self.placeholder_hash(&token);
-        let (sid, sess, prov) = (secret_id.to_string(), session_id.to_string(), provider.to_string());
+        let (sid, ws, sess, prov) =
+            (secret_id.to_string(), workspace_id.to_string(), session_id.to_string(), provider.to_string());
         self.mutate(false, |tx, _| {
             tx.execute(
-                "INSERT INTO placeholder (token_hash, secret_id, session_id, provider, created_at, expires_at) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![h, sid, sess, prov, ts(now()), expires_at],
+                "INSERT INTO placeholder (token_hash, secret_id, workspace_id, session_id, provider, created_at, expires_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![h, sid, ws, sess, prov, ts(now()), expires_at],
             )?;
             Ok(((), vec![]))
         })?;
         Ok(token)
     }
 
-    /// Look a placeholder up: `(secret_id, session_id, provider)`.
-    pub fn placeholder_lookup(&self, token: &str) -> Result<(String, String, String)> {
+    /// Look a placeholder up by its hash.
+    pub fn placeholder_lookup(&self, token: &str) -> Result<Placeholder> {
         if !crate::refs::looks_like_placeholder(token) {
             return Err(VaultError::new("placeholder_unknown", 401, "unknown placeholder"));
         }
         let h = self.placeholder_hash(token);
         let conn = self.conn.lock();
-        let r: Option<(String, String, String, Option<String>)> = conn
+        let r: Option<(Placeholder, Option<String>)> = conn
             .query_row(
-                "SELECT secret_id, session_id, provider, expires_at FROM placeholder WHERE token_hash = ?1",
+                "SELECT secret_id, workspace_id, session_id, provider, expires_at FROM placeholder WHERE token_hash = ?1",
                 params![h],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        Placeholder {
+                            secret_id: r.get(0)?,
+                            workspace_id: r.get(1)?,
+                            session_id: r.get(2)?,
+                            provider: r.get(3)?,
+                        },
+                        r.get(4)?,
+                    ))
+                },
             )
             .optional()?;
-        let (s, sess, p, exp) = r.ok_or_else(|| VaultError::new("placeholder_unknown", 401, "unknown placeholder"))?;
+        let (p, exp) = r.ok_or_else(|| VaultError::new("placeholder_unknown", 401, "unknown placeholder"))?;
         if exp.as_deref().and_then(parse_ts).is_some_and(|x| x < now()) {
             return Err(VaultError::new("placeholder_unknown", 401, "placeholder expired"));
         }
-        Ok((s, sess, p))
+        Ok(p)
     }
 
-    /// Session ended: its placeholders die.
+    /// Session ended: its placeholders die, and so do the session grants
+    /// K2 itself made for it (an LLM wallet key on the proxy).
     pub fn placeholders_drop_session(&self, session_id: &str) -> Result<()> {
-        let sess = session_id.to_string();
+        self.drop_session_material(Some(session_id))
+    }
+
+    /// Boot: no session survives a daemon restart, so every placeholder
+    /// and every session grant K2 itself made goes.
+    pub fn placeholders_drop_all(&self) -> Result<()> {
+        self.drop_session_material(None)
+    }
+
+    fn drop_session_material(&self, session_id: Option<&str>) -> Result<()> {
+        let sess = session_id.map(str::to_string);
         self.mutate(false, |tx, _| {
-            tx.execute("DELETE FROM placeholder WHERE session_id = ?1", params![sess])?;
+            match &sess {
+                Some(s) => tx.execute("DELETE FROM placeholder WHERE session_id = ?1", params![s])?,
+                None => tx.execute("DELETE FROM placeholder", [])?,
+            };
             Ok(((), vec![]))
+        })?;
+        // Grants are anchored state: only move the generation when there
+        // is one to remove.
+        let gone: Vec<(String, String, String)> = {
+            let conn = self.conn.lock();
+            let mut st = conn.prepare(
+                "SELECT id, secret_id, consumer_id FROM grants \
+                 WHERE consumer_kind = 'session' AND granted_by LIKE 'system:%' AND (?1 IS NULL OR consumer_id = ?1)",
+            )?;
+            let it = st.query_map(params![sess], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        if gone.is_empty() {
+            return Ok(());
+        }
+        self.mutate(true, |tx, _| {
+            let mut entries = vec![];
+            for (id, secret_id, consumer) in &gone {
+                tx.execute("DELETE FROM grants WHERE id = ?1", params![id])?;
+                entries.push(
+                    Entry::new("revoke", "system:session-end", "ok")
+                        .secret(secret_id, None)
+                        .consumer(Consumer::session(consumer.clone()).label()),
+                );
+            }
+            Ok(((), entries))
         })
     }
 

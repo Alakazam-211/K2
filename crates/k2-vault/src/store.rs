@@ -256,6 +256,28 @@ pub struct SpawnItem {
     pub file_name: Option<String>,
 }
 
+/// One proxy delivery for a spawn (§9.3): the session gets a placeholder
+/// and a loopback base URL, never the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyItem {
+    pub secret_id: String,
+    pub name: String,
+    /// The secret's sites, narrowed by the grant when it narrows them.
+    pub hosts: Vec<String>,
+    /// The grant's env name (generic providers name their pair after it).
+    pub env_name: Option<String>,
+}
+
+/// A live proxy placeholder: whose session it belongs to and what it may
+/// reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placeholder {
+    pub secret_id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub provider: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditRow {

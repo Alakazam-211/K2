@@ -18,6 +18,10 @@ pub struct Redactor {
     ac: Option<AhoCorasick>,
     replacements: Vec<Vec<u8>>,
     max_len: usize,
+    /// The patterns themselves, for a stream's held-back tail.
+    pats: Vec<Vec<u8>>,
+    /// Bytes some pattern starts with.
+    first: [bool; 256],
 }
 
 fn base64_variants(v: &[u8], out: &mut Vec<Vec<u8>>) {
@@ -102,11 +106,33 @@ impl Redactor {
                     .expect("redactor patterns build"),
             )
         };
-        Redactor { ac, replacements: reps, max_len }
+        let mut first = [false; 256];
+        for p in &pats {
+            first[p[0] as usize] = true;
+        }
+        Redactor { ac, replacements: reps, max_len, pats, first }
     }
 
     pub fn empty() -> Redactor {
-        Redactor { ac: None, replacements: vec![], max_len: 0 }
+        Redactor { ac: None, replacements: vec![], max_len: 0, pats: vec![], first: [false; 256] }
+    }
+
+    /// Length of the longest tail of `buf` that is the start of some
+    /// pattern (but not a whole one): only that much has to wait for the
+    /// next chunk. Text that can't begin a match goes out at once, so a
+    /// stream (SSE) isn't held back by a whole pattern length.
+    fn tail_hold(&self, buf: &[u8]) -> usize {
+        let max = self.max_len.saturating_sub(1).min(buf.len());
+        for k in (1..=max).rev() {
+            let tail = &buf[buf.len() - k..];
+            if !self.first[tail[0] as usize] {
+                continue;
+            }
+            if self.pats.iter().any(|p| p.len() > k && p.starts_with(tail)) {
+                return k;
+            }
+        }
+        0
     }
 
     pub fn is_empty(&self) -> bool {
@@ -144,9 +170,10 @@ impl Redactor {
     }
 }
 
-/// Redacts a byte stream split into arbitrary chunks: keeps a carry buffer
-/// of `max_pattern_len − 1` bytes so a value split across chunks is still
-/// caught.
+/// Redacts a byte stream split into arbitrary chunks: holds back only a
+/// tail that could be the start of a pattern (at most
+/// `max_pattern_len − 1` bytes), so a value split across chunks is still
+/// caught and everything else flows on.
 pub struct StreamRedactor<'a> {
     r: &'a Redactor,
     carry: Vec<u8>,
@@ -160,7 +187,7 @@ impl StreamRedactor<'_> {
         };
         let mut buf = std::mem::take(&mut self.carry);
         buf.extend_from_slice(chunk);
-        let hold = self.r.max_len.saturating_sub(1);
+        let hold = self.r.tail_hold(&buf);
         let safe_end = buf.len().saturating_sub(hold);
         let mut out = Vec::with_capacity(buf.len());
         let mut pos = 0;
@@ -244,6 +271,24 @@ mod tests {
         }
         out.extend(s.finish());
         assert_eq!(out, b"hello [k2v:STRIPE_KEY] world");
+    }
+
+    #[test]
+    fn stream_holds_back_only_a_possible_start_of_a_value() {
+        let r = r();
+        let mut s = r.stream();
+        // Nothing here can begin the key: all of it goes out at once.
+        assert_eq!(s.push(b"data: {\"text\":\"hi\"}\n\n"), b"data: {\"text\":\"hi\"}\n\n");
+        // The first bytes of the key wait for the next chunk.
+        assert_eq!(s.push(b"event: x\ndata: k2tes"), b"event: x\ndata: ");
+        let mut rest = s.push(b"t_fake_key_4eC39HqLyjWDarjt tail!\n\n");
+        rest.extend(s.finish());
+        assert_eq!(rest, b"[k2v:STRIPE_KEY] tail!\n\n");
+        // A tail that only looked like a start goes out once it can't be one.
+        let mut s = r.stream();
+        assert_eq!(s.push(b"k2t"), b"");
+        assert_eq!(s.push(b"other!"), b"k2tother!");
+        assert!(s.finish().is_empty());
     }
 
     #[test]

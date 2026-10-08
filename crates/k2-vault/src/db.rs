@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS secret_request (
 CREATE TABLE IF NOT EXISTS placeholder (
     token_hash TEXT PRIMARY KEY,
     secret_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     created_at TEXT NOT NULL,

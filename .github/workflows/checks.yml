@@ -96,7 +96,7 @@ jobs:
       - name: cargo check (deny warnings, all targets)
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check -p k2-core -p k2-daemon --all-targets
+        run: cargo check -p k2-core -p k2-daemon -p k2-node-proto -p k2-node --all-targets
 
       # Zen v2 (prd-zen-user-widgets-v2 UWB28): the steps above only
       # compile, so the verb catalog's lint, the generated-file freshness
@@ -110,6 +110,18 @@ jobs:
         run: |
           cargo test -p k2-core --lib -- contract:: zen::
           cargo test -p k2-daemon --test contract_routes
+
+      # K2 compute nodes (prd-k2-compute-nodes-v1 CN28): the wire, the node
+      # runtime (real processes in temp dirs, loopback fakes only), the
+      # controller core, and the headless daemon + real node contract test.
+      - name: cargo test compute nodes
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo test -p k2-node-proto -p k2-node
+          cargo test -p k2-core --lib -- compute::
+          cargo test -p k2-daemon --lib -- compute_ route_policy
+          cargo test -p k2-daemon --test compute_integration
 
       # Custom/enterprise air-gap compile (`--features airgap`). Compiles
       # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot

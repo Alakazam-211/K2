@@ -17092,7 +17092,7 @@ cmd_schema() {
     },
     {
       "name": "zen",
-      "usage": "k2 zen <garden|theme|widget|validate|reload|reset|history|doctor|path|guide> ...",
+      "usage": "k2 zen <garden|theme|widget|validate|reload|reset|history|doctor|path|sync|news|guide> ...",
       "description": "Build Zen Gardens on this computer (~/.k2/zen: gardens/<id>.toml, one page per Garden; zen.toml; themes/<name>/; widgets/<name>/ custom widgets; K2's built-in themes and templates are read-only defaults underneath) through the local daemon. No grant verb: agents request permissions, never grant them. Exit 3 when Zen isn't set up here.",
       "args": [],
       "flags": [
@@ -17191,9 +17191,30 @@ cmd_schema() {
       "flags": []
     },
     {
+      "name": "zen sync",
+      "usage": "k2 zen sync [--json] | k2 zen sync <garden> on|off|preview|undo|keep-previous [--page|--theme] [--json]",
+      "description": "Whether each Garden's page and theme sync with K2's defaults or are its own copy (prd-zen-garden-sync-defaults-v1). No arguments: every Garden's state, its own changes and whether K2's default changed since its copy. on/off/undo/keep-previous are the person's (an agent gets 403 zen_local_only: ask the person, Settings → Gardens); preview prints the Garden as if synced and writes nothing.",
+      "args": [{"name": "garden", "required": false}, {"name": "on|off|preview|undo|keep-previous", "required": false}],
+      "flags": [
+        {"name": "--page", "arg": null, "description": "Only the page part (template, prop defaults, frame)."},
+        {"name": "--theme", "arg": null, "description": "Only the theme part (the built-in layers under the Garden's theme)."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
+      "name": "zen news",
+      "usage": "k2 zen news [--json] | k2 zen news seen [<id>... | --all] [--json]",
+      "description": "Unseen Garden news (new catalog Gardens; K2 defaults a synced Garden picked up) and how many own copies have a newer default. seen marks ids, or every unseen item with --all, as read.",
+      "args": [{"name": "seen", "required": false}, {"name": "id", "required": false}],
+      "flags": [
+        {"name": "--all", "arg": null, "description": "seen: every unseen item."},
+        {"name": "--json", "arg": null, "description": "Daemon JSON."}
+      ]
+    },
+    {
       "name": "zen guide",
       "usage": "k2 zen guide [<topic>] [--json] | k2 zen guide example [<name> [--toml] | --list] [--json]",
-      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
+      "description": "The Zen Gardens user guide: short static pages (gardens, files, widgets, bands, required, menus, themes, sync, examples, undo, safe-mode, api), each at most 80 lines, and whole example Garden files (rail-top, quiet-top, bottom-bar, menu-both, texting-chrome, menu-bottom-right, column-corner). Daemon-optional. An unknown topic or example exits 2.",
       "args": [{"name": "topic|example", "required": false}, {"name": "name", "required": false}],
       "flags": [
         {"name": "--toml", "arg": null, "description": "example <name>: print only the Garden file, ready for > ~/.k2/zen/gardens/<id>.toml."},
@@ -38430,6 +38451,12 @@ USAGE
   k2 zen history [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen doctor [--json]
   k2 zen path
+  k2 zen sync [--json]
+  k2 zen sync <garden> on|off|preview [--page|--theme] [--json]
+  k2 zen sync <garden> undo [--json]
+  k2 zen sync <garden> keep-previous [--page|--theme] [--json]
+  k2 zen news [--json]
+  k2 zen news seen [<id>... | --all] [--json]
   k2 zen guide [<topic>] [--json]
   k2 zen guide example [<name> [--toml] | --list]
 
@@ -38464,18 +38491,30 @@ COMMANDS
             Defaults to zen.toml.
   history   List the last 20 good versions of each file (newest first),
             deleted Gardens included.
-  doctor    Check the folder, Garden list, templates, watcher and history.
+  doctor    Check the folder, Garden list, templates, watcher, history,
+            the sync state, K2's archived defaults and the frame floor.
   path      Print the Zen folder.
+  sync      Whether each Garden's page and theme sync with K2's defaults
+            (they follow K2's improvements) or are its own copy (no K2
+            update changes them). on/off/undo/keep-previous change it and
+            are for the person only (agents get 403: ask the person to use
+            Settings → Gardens). preview prints the Garden as if synced
+            and writes nothing. Default part: both.
+  news      Unseen Garden news: new catalog Gardens and K2 defaults a
+            synced Garden picked up. seen marks ids (or --all) as read.
   guide     The user guide: short pages (gardens, files, widgets, bands,
-            required, menus, themes, examples, undo, safe-mode, api) and
-            whole example files to pipe into a Garden. Needs no daemon.
+            required, menus, themes, sync, examples, undo, safe-mode, api)
+            and whole example files to pipe into a Garden. Needs no daemon.
 
 RULES
   New to Gardens? k2 zen guide. Moving controls? k2 zen guide bands, then
   k2 zen guide required.
   "In my Zen Garden ... (id g-...)" means: edit ~/.k2/zen/gardens/<id>.toml.
   Run `k2 zen validate --garden <id>` before you say it's done.
-  Never write grants.json, gardens.json, active.json or .history/: K2 writes them.
+  Never write grants.json, gardens.json, active.json, sync.json, news.json,
+  .defaults/ or .history/: K2 writes them.
+  Editing a Garden's file never changes whether it syncs; only the person
+  turns sync on or off (Settings → Gardens). k2 zen guide sync.
   Agents request permissions from the human; they never grant them.
   A custom widget: k2 zen validate --widget <name>, then tell the human to
   open the Garden and click Review.
@@ -38497,7 +38536,7 @@ EOF
 # zen_core Rust test checks every example with the daemon's own schema and
 # that the pages name every slot, align, edge and control kind.
 
-_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes examples undo safe-mode api"
+_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api"
 _ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
 
 _zen_guide_usage() {
@@ -38509,8 +38548,8 @@ Usage: k2 zen guide [<topic>] [--json]
 Short pages on building Zen Gardens. Works with no daemon running.
 
 Topics:
-  gardens  files  widgets  bands  required  menus  themes  examples
-  undo  safe-mode  api
+  gardens  files  widgets  bands  required  menus  themes  sync
+  examples  undo  safe-mode  api
 
   k2 zen guide                          the index (start here)
   k2 zen guide <topic>                  one page
@@ -38533,6 +38572,7 @@ _zen_guide_title() {
         required) echo "The two buttons every page keeps" ;;
         menus) echo "Menus" ;;
         themes) echo "Themes" ;;
+        sync) echo "Synced with K2's defaults, or its own copy" ;;
         examples) echo "Examples you can pipe" ;;
         undo) echo "Check, look back, put it back" ;;
         safe-mode) echo "Safe mode and the ways out" ;;
@@ -38574,6 +38614,7 @@ Start here: k2 zen guide gardens
   required    The two buttons every page keeps; what validate refuses
   menus       A menu button that holds controls
   themes      Colours, font, shape, motion; k2 zen theme
+  sync        Synced with K2's defaults, or the Garden's own copy
   examples    Whole Garden files you can pipe into a Garden
   undo        validate, history, reset, reload, doctor; troubleshooting
   safe-mode   Every safe-mode line, its fix, and the ways out
@@ -38619,6 +38660,12 @@ SWITCHING
   and + New Garden. Cmd+Option+1-9 (Ctrl+Alt+1-9 on Linux) switch Gardens
   even when no switcher is on screen.
 
+SYNC
+  Each Garden's page and theme either sync with K2's defaults (they get
+  K2's improvements) or are its own copy (K2 updates never change it).
+  Editing the file never changes which; the person does, in Settings →
+  Gardens. k2 zen sync lists them; k2 zen guide sync.
+
 WHEN THE HUMAN ASKS
   "In my Zen Garden ... (id g-...)" means: edit
   ~/.k2/zen/gardens/<id>.toml, then run k2 zen validate --garden <id>.
@@ -38647,6 +38694,9 @@ NEVER WRITE (K2 writes them)
   gardens.json   the Garden list: use k2 zen garden
   active.json    the active theme: use k2 zen theme
   .history/      the last 20 good versions of each file
+  sync.json      which Gardens sync with K2's defaults: k2 zen sync
+  news.json      which Garden news was seen: k2 zen news
+  .defaults/     K2's defaults that own-copy Gardens sit on
   grants.json    widget permissions live in K2's daemon, signed; only
                  the human's Allow click makes one. Agents request;
                  they never grant. Also never zen-grant.key or pins.json.
@@ -38971,6 +39021,58 @@ k2 zen guide undo.
 EOF
 }
 
+_zen_guide_page_sync() {
+    cat <<'EOF'
+k2 zen guide sync — synced with K2's defaults, or its own copy
+
+A Garden file holds only its changes. Everything else comes from K2's
+defaults: the template's layout, widgets and controls, every widget prop
+the file doesn't set, the built-in theme under its theme, and the frame
+(sizes, gaps, glass) the app draws.
+
+TWO PARTS, TWO STATES
+  page    the template, prop defaults and frame
+  theme   the built-in theme layers under the Garden's theme
+  synced     follows K2's improvements. Your edits sit on top.
+  own copy   K2 keeps the defaults this Garden sat on; no K2 update
+             changes it. The Garden file is never rewritten.
+
+WHO DECIDES
+  The switch is the truth. Editing a Garden's file never changes it.
+  Only the person turns sync on or off, in Settings → Gardens (or k2 zen
+  sync <garden> on|off). An agent gets 403 zen_local_only: suggest it to
+  the person instead.
+  Start with the default (k2 zen garden template) and k2 zen reset
+  --garden <id> turn page sync on; reset --to <snapshot> leaves it.
+  New Gardens start synced.
+
+LOOK
+  k2 zen sync                       every Garden: page and theme state,
+                                    own changes, newer default
+  k2 zen sync <garden> preview      the Garden as if synced (no write)
+  k2 zen news                       new catalog Gardens; defaults a
+                                    synced Garden picked up
+
+CHANGE (the person)
+  k2 zen sync <garden> on|off [--page|--theme]
+  k2 zen sync <garden> undo         the state before the last change
+  k2 zen sync <garden> keep-previous [--page|--theme]
+                                    after an update changed a synced
+                                    Garden: back to the previous defaults
+  k2 zen news seen <id>... | --all
+
+WHAT STILL CHANGES FOR EVERY GARDEN
+  What widgets show and do, security and accessibility fixes, K2's
+  safety UI (safe mode, review cards, banners), and everything outside
+  the Garden. New options appear only when a file asks for them.
+
+FILES (K2 writes them; never edit)
+  sync.json, news.json, .defaults/<fp>.json, and a copy of each
+  Garden's state in .history/gardens/<id>.toml/sync.json.
+  k2 zen doctor checks them.
+EOF
+}
+
 _zen_guide_page_undo() {
     cat <<'EOF'
 k2 zen guide undo — check, look back, put it back
@@ -38997,7 +39099,12 @@ PUT IT BACK
 START OVER FROM A TEMPLATE
   k2 zen garden template <garden> texting|blank [--force]
   A file with its own layout, widgets (Zen controls count) or theme
-  tables needs --force. The old file is kept in .history/.
+  tables needs --force. The old file is kept in .history/. It also turns
+  the Garden's page sync on (k2 zen sync <garden> undo puts it back).
+
+KEEP IT EXACTLY AS IT IS
+  Ask the person to turn sync off in Settings → Gardens: then no K2
+  update changes the Garden. k2 zen guide sync.
 
 TROUBLESHOOTING
   validate is clean, but the open app still shows the old top strip:
@@ -39139,6 +39246,7 @@ _zen_guide_page() {
         required) _zen_guide_page_required ;;
         menus) _zen_guide_page_menus ;;
         themes) _zen_guide_page_themes ;;
+        sync) _zen_guide_page_sync ;;
         examples) _zen_guide_page_examples ;;
         undo) _zen_guide_page_undo ;;
         safe-mode) _zen_guide_page_safe_mode ;;
@@ -39526,6 +39634,8 @@ if err is not None:
         print(d.get("message") or "That\x27s your last Garden.", file=sys.stderr)
     elif err == "garden_has_changes":
         print("Error: Garden %s has its own changes (%s). Add --force to start it over; the file is kept in .history/." % (d.get("garden"), ", ".join(d.get("keys") or [])), file=sys.stderr)
+    elif err == "zen_local_only" and verb.startswith(("sync", "news")):
+        print("Error: only the person on this computer can change Garden sync and news. Ask the person: Settings → Gardens.", file=sys.stderr)
     elif err == "zen_local_only":
         print("Error: k2 zen talks only to the K2 on this computer, and this token is not its owner.", file=sys.stderr)
     elif isinstance(err, dict):
@@ -39542,8 +39652,37 @@ if as_json:
 def diag(e, warn=False):
     return "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
 
+SYNC = {}
+try:
+    for row in (json.loads(os.environ.get("ZEN_SYNC_RAW") or "{}").get("gardens") or []):
+        SYNC[row.get("id")] = row
+except Exception:
+    SYNC = {}
+
+def sync_word(row):
+    p = (row.get("page") or {}).get("mode")
+    t = (row.get("theme") or {}).get("mode")
+    if p == t:
+        return "synced" if p == "synced" else "own copy"
+    word = lambda m: "synced" if m == "synced" else "own copy"
+    return "page: %s · theme: %s" % (word(p), word(t))
+
 def garden_line(g):
-    return "%s %d  %s  %s  %s" % ("*" if g.get("theme") else " ", g.get("index"), g.get("id"), g.get("name"), g.get("template"))
+    line = "%s %d  %s  %s  %s" % ("*" if g.get("theme") else " ", g.get("index"), g.get("id"), g.get("name"), g.get("template"))
+    if g.get("id") in SYNC:
+        line += "  " + sync_word(SYNC[g.get("id")])
+    return line
+
+def part_line(name, part):
+    mode = part.get("mode")
+    if mode == "synced":
+        return "%s synced" % name
+    s = "%s own copy of %s" % (name, part.get("defaults"))
+    if part.get("k2Version"):
+        s += " (K2 %s)" % part["k2Version"]
+    if part.get("newerDefault"):
+        s += ", K2\x27s default has changed since"
+    return s
 
 if verb in ("validate", "reload"):
     errs = d.get("errors") or []
@@ -39649,6 +39788,53 @@ elif verb == "theme-switch":
         print("Garden %s follows this computer: theme %s" % (d["garden"], d.get("theme")))
     else:
         print("theme %s for this computer" % d.get("theme"))
+elif verb == "sync-list":
+    for row in d.get("gardens") or []:
+        own = row.get("ownChanges")
+        extra = []
+        if own:
+            extra.append("own changes: %s" % ", ".join(own))
+        elif own is None:
+            extra.append("its file doesn\x27t parse")
+        if row.get("undo"):
+            extra.append("undo: %s" % ", ".join(row["undo"].get("parts") or []))
+        kp = row.get("keepPrevious") or {}
+        if kp.get("page") or kp.get("theme"):
+            extra.append("keep-previous offered")
+        print("%d  %s  %s  %s; %s%s" % (row.get("index"), row.get("id"), row.get("name"), part_line("page", row.get("page") or {}), part_line("theme", row.get("theme") or {}), ("  [" + "; ".join(extra) + "]") if extra else ""))
+    print("K2 defaults: %s (K2 %s)%s" % (d.get("liveDefaults"), d.get("k2Version"), ("; previous %s" % d["previousDefaults"]) if d.get("previousDefaults") else ""))
+elif verb == "sync-change":
+    row = d.get("garden") or {}
+    if d.get("changed"):
+        print("%s (%s): %s; %s" % (row.get("name"), row.get("id"), part_line("page", row.get("page") or {}), part_line("theme", row.get("theme") or {})))
+        if row.get("undo"):
+            print("undo with: k2 zen sync %s undo" % row.get("id"))
+    else:
+        print("%s (%s): unchanged (%s; %s)" % (row.get("name"), row.get("id"), part_line("page", row.get("page") or {}), part_line("theme", row.get("theme") or {})))
+elif verb == "sync-preview":
+    g = d.get("garden") or {}
+    page = d.get("page") or {}
+    theme = d.get("theme") or {}
+    s = d.get("sync") or {}
+    print("preview of %s (%s) with K2\x27s default for the %s (nothing written)" % (g.get("name"), g.get("id"), s.get("preview")))
+    print("  template %s, layout %s, %d widget(s)" % (page.get("template"), (page.get("layout") or {}).get("split"), len(page.get("widgets") or [])))
+    print("  theme %s, accent %s / %s" % (theme.get("name"), ((theme.get("tokens") or {}).get("colors") or {}).get("light", {}).get("accent"), ((theme.get("tokens") or {}).get("colors") or {}).get("dark", {}).get("accent")))
+    print("  page now: %s; theme now: %s" % ((s.get("page") or {}).get("mode"), (s.get("theme") or {}).get("mode")))
+elif verb == "news":
+    items = d.get("items") or []
+    if not items:
+        print("no unseen Garden news")
+    for it in items:
+        if it.get("kind") == "catalog":
+            print("%s  New in the Garden catalog: %s. %s" % (it.get("id"), it.get("label"), it.get("description")))
+        elif it.get("kind") == "update":
+            print("%s  %s has a fresh look (%s)%s" % (it.get("id"), it.get("gardenName"), it.get("part"), "; keep-previous offered" if it.get("keepPrevious") else ""))
+    n = d.get("copiesWithNewerDefault") or 0
+    if n:
+        print("%d own cop%s didn\x27t change; K2\x27s default is newer (k2 zen sync)" % (n, "y" if n == 1 else "ies"))
+elif verb == "news-seen":
+    seen = d.get("seen") or []
+    print("marked %d item(s) seen%s" % (len(seen), (": " + ", ".join(seen)) if seen else ""))
 elif verb == "theme-new":
     print("made %s from %s" % (d.get("path"), d.get("from")))
     if d.get("copiedImage"):
@@ -39849,7 +40035,9 @@ cmd_zen_garden() {
         list)
             [ "$n" -eq 0 ] || { echo "Error: k2 zen garden list takes only --json" >&2; exit 2; }
             raw=$(cli_request "/cli/zen/gardens")
-            _zen_print garden-list "$as_json" "$raw"
+            # The sync column (prd-zen-garden-sync-defaults-v1 §11); an
+            # older daemon has no /cli/zen/sync and the column is left out.
+            ZEN_SYNC_RAW="$(cli_request "/cli/zen/sync" 2>/dev/null || true)" _zen_print garden-list "$as_json" "$raw"
             ;;
         new)
             [ "$n" -ge 1 ] || { echo "Error: k2 zen garden new needs a name" >&2; exit 2; }
@@ -40003,6 +40191,104 @@ print(json.dumps(b))
     esac
 }
 
+# k2 zen sync / k2 zen news (prd-zen-garden-sync-defaults-v1 §11). The
+# daemon owns sync.json and news.json; the changes are owner-only, so an
+# agent gets 403 zen_local_only and the message to ask the person.
+cmd_zen_sync() {
+    local as_json=false part="" raw body
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --page) [ -z "$part" ] || { echo "Error: pass one of --page or --theme (neither: both)" >&2; exit 2; }; part="page"; shift ;;
+            --theme) [ -z "$part" ] || { echo "Error: pass one of --page or --theme (neither: both)" >&2; exit 2; }; part="theme"; shift ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local n=${#pos[@]}
+    if [ "$n" -eq 0 ]; then
+        [ -z "$part" ] || { echo "Error: k2 zen sync with no Garden takes only --json" >&2; exit 2; }
+        raw=$(cli_request "/cli/zen/sync")
+        _zen_print sync-list "$as_json" "$raw"
+        return
+    fi
+    [ "$n" -eq 2 ] || { echo "Error: k2 zen sync <garden> on|off|preview|undo|keep-previous [--page|--theme]" >&2; exit 2; }
+    local garden="${pos[0]}" act="${pos[1]}"
+    case "$act" in
+        on|off)
+            body=$(ZG="$garden" ZP="${part:-both}" ZS="$act" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "part": os.environ["ZP"], "sync": os.environ["ZS"] == "on"}))
+')
+            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            _zen_print sync-change "$as_json" "$raw"
+            ;;
+        undo)
+            [ -z "$part" ] || { echo "Error: undo puts back the last change; it takes no --page or --theme" >&2; exit 2; }
+            body=$(ZG="$garden" python3 -c 'import json, os; print(json.dumps({"garden": os.environ["ZG"], "undo": True}))')
+            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            _zen_print sync-change "$as_json" "$raw"
+            ;;
+        keep-previous)
+            body=$(ZG="$garden" ZP="${part:-both}" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "keep": "previous", "part": os.environ["ZP"]}))
+')
+            raw=$(cli_post_json "/cli/zen/garden/sync" "$body")
+            _zen_print sync-change "$as_json" "$raw"
+            ;;
+        preview)
+            raw=$(cli_request "/cli/zen/get" "garden=$(urlencode "$garden")" "preview=${part:-both}")
+            _zen_print sync-preview "$as_json" "$raw"
+            ;;
+        *)
+            echo "Error: unknown 'k2 zen sync' action '$act' (on, off, preview, undo, keep-previous)" >&2
+            exit 2
+            ;;
+    esac
+}
+
+cmd_zen_news() {
+    local as_json=false all=false raw body
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all) all=true; shift ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    if [ ${#pos[@]} -eq 0 ]; then
+        [ "$all" = false ] || { echo "Error: --all is for k2 zen news seen" >&2; exit 2; }
+        raw=$(cli_request "/cli/zen/news")
+        _zen_print news "$as_json" "$raw"
+        return
+    fi
+    [ "${pos[0]}" = "seen" ] || { echo "Error: unknown 'k2 zen news' subcommand '${pos[0]}' (seen)" >&2; exit 2; }
+    local -a ids=("${pos[@]:1}")
+    if [ "$all" = true ] && [ ${#ids[@]} -gt 0 ]; then
+        echo "Error: pass ids or --all, not both" >&2
+        exit 2
+    fi
+    if [ "$all" = false ] && [ ${#ids[@]} -eq 0 ]; then
+        echo "Error: k2 zen news seen needs ids (from k2 zen news) or --all" >&2
+        exit 2
+    fi
+    body=$(ZA="$all" python3 -c '
+import json, os, sys
+if os.environ.get("ZA") == "true":
+    print(json.dumps({"all": True}))
+else:
+    print(json.dumps({"ids": sys.argv[1:]}))
+' ${ids[@]+"${ids[@]}"})
+    raw=$(cli_post_json "/cli/zen/news/seen" "$body")
+    _zen_print news-seen "$as_json" "$raw"
+}
+
 cmd_zen() {
     local sub="${1:-}"
     shift || true
@@ -40063,6 +40349,12 @@ print(json.dumps(b))
             ;;
         widget|widgets)
             cmd_zen_widget "$@"
+            ;;
+        sync)
+            cmd_zen_sync "$@"
+            ;;
+        news)
+            cmd_zen_news "$@"
             ;;
         pages)
             echo "Error: there is no 'k2 zen pages' any more: Zen pages are Gardens now. Use k2 zen garden list." >&2

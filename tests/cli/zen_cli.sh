@@ -99,6 +99,8 @@ assert_contains "help names validate" "$out" "k2 zen validate"
 assert_contains "help names garden new" "$out" "k2 zen garden new <name>"
 assert_contains "help names garden template" "$out" "k2 zen garden template <garden> texting|blank [--force]"
 assert_contains "help states the grant rule" "$out" "Never write grants.json"
+assert_contains "help names zen sync" "$out" "k2 zen sync <garden> on|off|preview [--page|--theme] [--json]"
+assert_contains "help names sync.json in the never-write rule" "$out" "sync.json, news.json"
 capture help zen
 assert_eq "k2 help zen exit" "$rc" "0"
 assert_contains "k2 help zen" "$out" "k2 zen reset"
@@ -127,8 +129,38 @@ assert_eq "zen path exit" "$rc" "0"
 assert_eq "zen path prints the folder" "$out" "$ZEN"
 capture zen garden list
 assert_eq "garden list exit" "$rc" "0"
-assert_eq "garden list shows Garden 1 and Garden 2" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1
-  2  $SECOND_ID  Garden 2  k2.blank@1"
+assert_eq "garden list shows Garden 1 and Garden 2, both synced" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1  synced
+  2  $SECOND_ID  Garden 2  k2.blank@1  synced"
+
+echo "== sync and news (prd-zen-garden-sync-defaults-v1 §11) =="
+capture zen sync
+assert_eq "zen sync exit" "$rc" "0"
+assert_contains "zen sync lists Garden 1 synced" "$out" "1  $DEFAULT_ID  Garden 1  page synced; theme synced"
+capture zen sync "Garden 2" off --page
+assert_eq "sync off --page exit" "$rc" "0"
+assert_contains "sync off says own copy" "$out" "page own copy of d-"
+capture zen garden list
+assert_contains "garden list shows the split state" "$out" "  2  $SECOND_ID  Garden 2  k2.blank@1  page: own copy · theme: synced"
+capture zen sync "Garden 2" undo
+assert_eq "sync undo exit" "$rc" "0"
+assert_contains "undo is back to synced" "$out" "page synced; theme synced"
+capture zen sync "Garden 2" undo
+assert_eq "a second undo exits 1" "$rc" "1"
+capture zen sync "Garden 2" preview --theme
+assert_eq "sync preview exit" "$rc" "0"
+assert_contains "preview writes nothing" "$out" "(nothing written)"
+capture zen sync "Garden 2" sideways
+assert_eq "an unknown sync action exits 2" "$rc" "2"
+capture zen sync "Garden 2" undo --page
+assert_eq "undo takes no part" "$rc" "2"
+capture zen news
+assert_eq "zen news exit" "$rc" "0"
+assert_contains "a fresh computer has no news" "$out" "no unseen Garden news"
+capture zen news seen
+assert_eq "news seen needs ids or --all" "$rc" "2"
+capture zen news seen --all
+assert_eq "news seen --all exit" "$rc" "0"
+[ -f "$ZEN/sync.json" ] && ok "the daemon wrote sync.json" || bad "no sync.json"
 capture zen validate
 assert_eq "fresh setup validates" "$rc" "0"
 assert_contains "validate ok line" "$out" "ok: zen.toml, gardens/$DEFAULT_ID.toml"
@@ -359,7 +391,7 @@ done
 resp="$(curl -s -X POST "http://127.0.0.1:$PORT/cli/zen/setup?token=$TOKEN" -H 'Content-Type: application/json' --data-raw '{}')"
 assert_contains "setup never brings a deleted Garden 2 back" "$resp" '"createdDefault":false'
 capture zen garden list
-assert_eq "only Garden 1 is left" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1"
+assert_eq "only Garden 1 is left" "$out" "  1  $DEFAULT_ID  Garden 1  k2.texting@1  synced"
 capture zen garden delete "Garden 1"
 assert_eq "the last Garden exits 1" "$rc" "1"
 assert_eq "the last Garden says so" "$out" "That's your last Garden."

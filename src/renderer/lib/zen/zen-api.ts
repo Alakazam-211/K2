@@ -9,6 +9,8 @@
 //
 // Routes used here (contract in `docs/zen-contract.md`):
 //   GET  /cli/zen/get?garden=<id>   the resolved page of one Garden
+//        (&preview=page|theme|both while Settings previews K2's default
+//        for that Garden: prd-zen-garden-sync-defaults-v1 GS25, zen-sync.ts)
 //   `zen_changed` (app event, payload-free) on the local daemon's app bus
 // The Garden list and its routes are `zen-gardens.ts`.
 //
@@ -19,6 +21,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { onZenChanged, subscribeToActiveState } from '@/stores/session-events'
 import { parseZenGet, ZenPageParseError, type ZenResolvedPage } from './zen-page'
+import { zenSyncPreviewParam } from './zen-sync'
 
 /** This computer's daemon. The only scope Zen config ever uses. */
 export function zenLocalScope(): ServerScope {
@@ -54,9 +57,11 @@ export const useZenConfigStore = create<ZenConfigState>(() => ({
   failure: null,
 }))
 
-/** `GET /cli/zen/get?garden=<id>`, parsed. */
+/** `GET /cli/zen/get?garden=<id>`, parsed. While this window previews K2's
+ *  default for the Garden, `preview=` asks for it (the daemon writes nothing). */
 export async function fetchZenPage(gardenId: string): Promise<ZenResolvedPage> {
-  const raw = await daemonCliGet<unknown>(zenLocalScope(), 'zen/get', { garden: gardenId })
+  const preview = zenSyncPreviewParam(gardenId)
+  const raw = await daemonCliGet<unknown>(zenLocalScope(), 'zen/get', preview ? { garden: gardenId, preview } : { garden: gardenId })
   return parseZenGet(raw)
 }
 

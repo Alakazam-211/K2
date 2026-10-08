@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliGet, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { isAirgap } from '@/lib/airgap'
@@ -6,6 +6,8 @@ import { DialogScrim, Surface } from '@/components/ui'
 import Markdown from '../Markdown/Markdown'
 import k2Logo from '../../assets/k2-logo.png'
 import { primaryScope } from '@/kessel/server-scope'
+import { markZenNewsSeen } from '@/lib/zen/zen-sync'
+import { ZenGardenNewsCard } from './ZenGardenNewsCard'
 
 const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
 
@@ -167,6 +169,13 @@ export default function WhatsNewModal({
   const totalPages = pages.length
   const currentPage = pages[pageIdx]
 
+  // prd-zen-garden-sync-defaults-v1 GS43: the Garden news card on the left
+  // leaves with the dialog; closing marks what it showed as seen.
+  const zenNewsShown = useRef<string[]>([])
+  const onZenNewsShown = useCallback((ids: string[]) => {
+    zenNewsShown.current = ids
+  }, [])
+
   const handleDismiss = useCallback(async () => {
     if (dismissing) return
     setDismissing(true)
@@ -175,6 +184,12 @@ export default function WhatsNewModal({
     } catch (err) {
       // eslint-disable-next-line no-console
       console.debug('[whats-new] mark_seen failed:', err)
+    }
+    const shown = zenNewsShown.current
+    zenNewsShown.current = []
+    if (shown.length > 0) {
+      // eslint-disable-next-line no-console
+      void markZenNewsSeen(shown).catch((err: unknown) => console.debug('[whats-new] zen news/seen failed:', err))
     }
     setVisible(false)
     setDismissing(false)
@@ -487,6 +502,7 @@ export default function WhatsNewModal({
         </div>
       </Surface>
       {showStarDrawer && <GithubStarDrawer />}
+      <ZenGardenNewsCard dialogVisible={visible} onShown={onZenNewsShown} onAction={() => void handleDismiss()} />
       </div>
     </>
   )

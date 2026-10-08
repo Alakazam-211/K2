@@ -999,6 +999,14 @@ pub fn send_cancel(node_id: &str, job_id: &str, generation: i64) -> bool {
     send_to(node_id, Frame::Cancel(Cancel { job_id: job_id.into(), generation: generation as u32, reason: "cancelled".into() }))
 }
 
+/// Close a node's live connection without revoking it (the node redials).
+/// Used by the reconnect contract test to stand in for a network drop.
+#[allow(dead_code)]
+pub fn drop_connection(node_id: &str) -> bool {
+    let tx = with_engine(|e| e.conns.get(node_id).map(|c| c.tx.clone()));
+    tx.is_some_and(|tx| tx.send(Out::Close).is_ok())
+}
+
 /// Revoke a live node: signed `revoked`, then the socket closes (CN5).
 pub fn revoke(node_id: &str) {
     send_to(node_id, Frame::Revoked(Revoked { reason: format!("removed by {}", controller_label()) }));

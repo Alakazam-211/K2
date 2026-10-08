@@ -447,3 +447,76 @@ async fn compute_end_to_end_with_the_real_node() {
     running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
     drop(env);
 }
+
+/// Enroll + confirm a node called `name` against the daemon on `port`.
+async fn enrolled_node(env: &Env, port: u16, name: &str) -> Layout {
+    let base = format!("http://127.0.0.1:{port}");
+    let r = post(port, "/cli/compute/nodes/enroll-code", OWNER, json!({"name": name, "url": base})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let es = k2_node_proto::pairing::EnrollString::parse(j(&r)["enroll"].as_str().unwrap()).unwrap();
+    let layout = node_layout(env, name);
+    let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
+    let mut sock = k2_node::session::connect(&base, k2_node::session::ENROLL_PATH).await.unwrap();
+    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &es, name, &Default::default(), k2_node::util::now())
+        .await
+        .unwrap();
+    k2_node::identity::write_pin(&layout.pin(), &done.pin).unwrap();
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": name, "sas": done.sas})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    layout
+}
+
+/// The laptop-controller case in miniature (§11.5): the node's connection
+/// drops mid-job; the job keeps running and journaling; on reconnect the
+/// Welcome resume hint makes the node replay exactly the missing log
+/// lines, then the result. Nothing lost, nothing doubled, never `failed`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_dropped_connection_loses_no_log_lines() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "gamma");
+    let layout = enrolled_node(&env, port, "n2").await;
+    let running = start_node(&layout).await;
+    wait_for("node online", 20, || Box::pin(async move { node_row(port, "n2").await["offer"].is_object() })).await;
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "n2", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let mut body = run_body("n2", &["sh", "-c", "i=1; while [ $i -le 40 ]; do echo line$i; i=$((i+1)); sleep 0.05; done; exit 4"], "client-0000000101");
+    body["workspace"] = json!(ws.id);
+    let r = post(port, "/cli/compute/run", OWNER, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    wait_for("job running", 20, || {
+        let jb = job.clone();
+        Box::pin(async move { j(&get(port, "/cli/compute/jobs/get", OWNER, &format!("job={jb}")).await)["state"] == "running" })
+    })
+    .await;
+
+    // Cut the connection twice while the job prints; the node keeps
+    // journaling and redials on its own.
+    let node_id = node_row(port, "n2").await["id"].as_str().unwrap().to_string();
+    for _ in 0..2 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(k2_daemon::compute_ws::drop_connection(&node_id), "node was connected");
+        let mid = j(&get(port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await);
+        assert_ne!(mid["state"], "failed", "lost contact never turns into failed: {mid}");
+        let nid = node_id.clone();
+        wait_for("node back online", 20, move || {
+            let n = nid.clone();
+            Box::pin(async move { k2_daemon::compute_ws::is_online(&n) })
+        })
+        .await;
+    }
+
+    let (out, _, fin) = follow(port, OWNER, &job).await;
+    let want: String = (1..=40).map(|i| format!("line{i}\n")).collect();
+    assert_eq!(out, want, "every line once, in order");
+    assert_eq!(fin["state"], "done", "{fin}");
+    assert_eq!(fin["exitCode"], 4);
+
+    running.runner.abort();
+    running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+    drop(env);
+}

@@ -567,8 +567,38 @@ pub fn move_conversation(
         let docs = txn
             .open_table(DOCS)
             .map_err(|e| format!("overlay open docs: {e}"))?;
-        let thread = move_collection(&txn, &docs, THREAD, "thread", from, to)?;
-        let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to)?;
+        let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, None)?;
+        let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, None)?;
+        (thread, chatter)
+    };
+    before_commit(thread, chatter)?;
+    txn.commit()
+        .map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok((thread, chatter))
+}
+
+/// Split a shared conversation: move only the `thread` / `chatter`
+/// pointers of `from` whose doc `take` accepts to `to`, merged and
+/// renumbered there like [`move_conversation`]. Pointers left under
+/// `from` keep their seqs (gaps are fine; a client's high-water mark
+/// stays valid), so the other owner's Thread is untouched (TR20: a fork
+/// tab that shared another workspace's conversation id).
+pub fn split_conversation(
+    from: &str,
+    to: &str,
+    take: &dyn Fn(&OverlayDoc) -> bool,
+    before_commit: impl FnOnce(MovedCollection, MovedCollection) -> Result<(), String>,
+) -> Result<(MovedCollection, MovedCollection), String> {
+    let db = db()?;
+    let txn = db
+        .begin_write()
+        .map_err(|e| format!("overlay redb write: {e}"))?;
+    let (thread, chatter) = {
+        let docs = txn
+            .open_table(DOCS)
+            .map_err(|e| format!("overlay open docs: {e}"))?;
+        let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, Some(take))?;
+        let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, Some(take))?;
         (thread, chatter)
     };
     before_commit(thread, chatter)?;
@@ -602,20 +632,29 @@ fn move_collection(
     collection: &str,
     from: &str,
     to: &str,
+    take: Option<&dyn Fn(&OverlayDoc) -> bool>,
 ) -> Result<MovedCollection, String> {
-    let created_at = |id: &str| -> Result<i64, String> {
+    let load = |id: &str| -> Result<OverlayDoc, String> {
         let guard = docs
             .get(id)
             .map_err(|e| format!("overlay get doc: {e}"))?
             .ok_or_else(|| format!("overlay {collection} points at missing docs/{id}"))?;
-        let doc: OverlayDoc = serde_json::from_slice(guard.value())
-            .map_err(|e| format!("overlay doc parse {id}: {e}"))?;
-        Ok(doc.created_at)
+        serde_json::from_slice(guard.value()).map_err(|e| format!("overlay doc parse {id}: {e}"))
     };
+    let created_at = |id: &str| -> Result<i64, String> { Ok(load(id)?.created_at) };
     let mut table = txn
         .open_table(def)
         .map_err(|e| format!("overlay open {collection}: {e}"))?;
-    let old = conv_pointers(&table, collection, from)?;
+    let mut old = conv_pointers(&table, collection, from)?;
+    if let Some(take) = take {
+        let mut kept = Vec::with_capacity(old.len());
+        for (seq, id) in old {
+            if take(&load(&id)?) {
+                kept.push((seq, id));
+            }
+        }
+        old = kept;
+    }
     let new = conv_pointers(&table, collection, to)?;
     if old.is_empty() {
         return Ok(MovedCollection { moved: 0, total: new.len() });

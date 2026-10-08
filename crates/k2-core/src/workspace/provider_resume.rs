@@ -241,6 +241,13 @@ fn flag_value(args: &[String], is_flag: impl Fn(&str) -> bool) -> Option<String>
 ///   random command's `--session`/leading-`resume` argv is not evidence
 ///   of a resumable conversation).
 pub fn session_id_from_spawn_argv(command: &str, args: &[String]) -> Option<String> {
+    // TR20: `--resume S --fork-session` (Chat History continue in another
+    // workspace, cross-worktree resume) mints a NEW conversation; `S` is
+    // the source's id, never this session's. A fork is a self-minting
+    // harness: no id until the transcript follower adopts the new one.
+    if args.iter().any(|a| a == "--fork-session") {
+        return None;
+    }
     match provider_resume_for_command(command) {
         Some(adapter) => match adapter.grammar {
             ResumeGrammar::Subcommand(sub) => subcommand_session_id(args, sub),
@@ -736,6 +743,25 @@ mod tests {
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// TR20: a fork names its SOURCE with `--resume`; that id is never the
+    /// fork's own conversation, in either flag order.
+    #[test]
+    fn a_fork_argv_names_no_conversation() {
+        let src = "11111111-2222-4333-8444-555555555555";
+        assert_eq!(
+            session_id_from_spawn_argv("claude", &args(&["--resume", src])).as_deref(),
+            Some(src)
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("claude", &args(&["--resume", src, "--fork-session"])),
+            None
+        );
+        assert_eq!(
+            session_id_from_spawn_argv("claude", &args(&["--fork-session", "--resume", src])),
+            None
+        );
     }
 
     // ── Table lookups ────────────────────────────────────────────────

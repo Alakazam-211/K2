@@ -109,6 +109,68 @@ pub fn move_conversation(
     Ok(Some(moved))
 }
 
+/// Split a conversation two workspaces shared (TR20, fork tabs): move the
+/// Thread/Chatter docs `take` accepts from `from` to `to` (catalog row in
+/// `to_project_id`), under the overlay write lock in one redb transaction
+/// plus one SQLite savepoint. `from`'s catalog row and its remaining
+/// rows' seqs are left as they are. Fires no move listener: no client is
+/// on `to` yet. `Ok(None)` when nothing matched.
+pub fn split_conversation(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    to_project_id: &str,
+    take: &dyn Fn(&OverlayDoc) -> bool,
+) -> Result<Option<ConversationMove>, String> {
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(None);
+    }
+    let _guard = WRITE.lock();
+    if catalog::get(conn, from)?.is_none() {
+        return Ok(None);
+    }
+    conn.execute_batch("SAVEPOINT overlay_split")
+        .map_err(|e| format!("overlay split savepoint: {e}"))?;
+    let res = store::split_conversation(from, to, take, |thread, chatter| {
+        if thread.moved == 0 && chatter.moved == 0 {
+            return Ok(());
+        }
+        catalog::ensure_conversation(conn, to, to_project_id)?;
+        conn.execute(
+            "UPDATE overlay_conversations \
+             SET last_thread_seq = MAX(last_thread_seq, ?2), last_chatter_seq = MAX(last_chatter_seq, ?3) \
+             WHERE conversation_id = ?1",
+            rusqlite::params![to, thread.total as i64, chatter.total as i64],
+        )
+        .map_err(|e| format!("overlay catalog split: {e}"))?;
+        Ok(())
+    });
+    match res {
+        Ok((thread, chatter)) => {
+            conn.execute_batch("RELEASE overlay_split")
+                .map_err(|e| format!("overlay split release: {e}"))?;
+            if thread.moved == 0 && chatter.moved == 0 {
+                return Ok(None);
+            }
+            Ok(Some(ConversationMove {
+                project_id: to_project_id.to_string(),
+                from: from.to_string(),
+                to: to.to_string(),
+                thread_moved: thread.moved,
+                thread_total: thread.total,
+                chatter_moved: chatter.moved,
+                chatter_total: chatter.total,
+            }))
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO overlay_split; RELEASE overlay_split");
+            Err(e)
+        }
+    }
+}
+
 /// Post overlay text onto the Thread collection only (not Chatter).
 pub fn post_thread(
     conn: &Connection,

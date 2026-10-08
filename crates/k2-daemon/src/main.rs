@@ -1190,6 +1190,12 @@ async fn async_main() {
     // (prd-workspace-resources-v1 R8). Never unpins tabs.
     workspace_resources_migrate::run_once();
 
+    // 0.45.1 — fork tabs (`--resume <id> --fork-session`) opened before
+    // this build claimed the source workspace's conversation id. Give
+    // each its own pane key and split its Thread rows out (TR20).
+    // One-shot, gated by a code_migrations marker; logs each re-key.
+    k2_core::fork_tab_repair::run_once();
+
     // daemon-run may have queued signals for offline agents that
     // never got injected (daemon crashed before the session came
     // online). Log them so operators can eyeball the queue; the

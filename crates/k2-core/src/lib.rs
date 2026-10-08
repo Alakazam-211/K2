@@ -126,6 +126,9 @@ pub mod feedback;
 // Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the
 // agent's HTML brief next to its ticket (`feedback_briefs`, 0126).
 pub mod feedback_brief;
+// Thread survives a tab rename (TR20): one-time repair for fork tabs that
+// claimed the source workspace's conversation id before 0.45.1.
+pub mod fork_tab_repair;
 // Remote Session Layer 0 — master switch + denial audit (default OFF).
 pub mod remote_sessions;
 pub mod fs_abstract;

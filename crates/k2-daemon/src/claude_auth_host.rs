@@ -155,24 +155,14 @@ fn write_credentials(updated_json: &serde_json::Value) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // -U: update if exists. Pass via -w arg so the value never
-        // hits a shell — keeps newlines/quotes/escapes intact.
-        let status = Command::new("security")
-            .args([
-                "add-generic-password",
-                "-U",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                KEYCHAIN_ACCOUNT,
-                "-w",
-                &json_str,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to run security command: {}", e))?;
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            k2_core::log_debug!("[claude-auth] Keychain write failed: {}", stderr);
+        // Never `-w <json>` on argv (visible in `ps`): data set in process.
+        if let Err(e) = k2_core::macos_keychain::write(
+            KEYCHAIN_SERVICE,
+            KEYCHAIN_ACCOUNT,
+            json_str.as_bytes(),
+            &Default::default(),
+        ) {
+            k2_core::log_debug!("[claude-auth] Keychain write failed: {e}");
         }
     }
 

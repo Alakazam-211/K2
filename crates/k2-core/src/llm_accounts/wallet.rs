@@ -83,6 +83,11 @@ fn import_live_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &s
     let Some(bytes) = store::read_live(tool)? else {
         return Ok(None);
     };
+    if let Err(why) = store::validate_cred(tool, &bytes) {
+        // Never copy a broken live store into the wallet.
+        crate::log_debug!("[llm-accounts] {}: live login not imported ({why})", tool.as_str());
+        return Ok(None);
+    }
     let label = unique_label(conn, tool, label)?;
     let e = super::create(conn, tool, &label, by)?;
     store::write_slot(tool, &e.id, &bytes)?;
@@ -238,9 +243,21 @@ pub fn switch(
         });
     }
     let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
+    // 0. The incoming login must be whole before anything moves.
+    let incoming = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
+    store::validate_cred(tool, &incoming).map_err(|why| store::invalid_cred(tool, "saved sign-in", why))?;
     // 1. Save the outgoing live login (the CLI may have refreshed it).
     //    A live login K2 doesn't know is kept as "Previous subscription".
-    let live = store::read_live(tool)?;
+    //    A live store that isn't a whole credential (e.g. a write cut off
+    //    part way) is NEVER mirrored: it would overwrite the outgoing
+    //    login's only good copy. It is replaced by the swap below.
+    let live = store::read_live(tool)?.filter(|bytes| match store::validate_cred(tool, bytes) {
+        Ok(()) => true,
+        Err(why) => {
+            crate::log_debug!("[llm-accounts] {}: live login not saved back ({why})", tool.as_str());
+            false
+        }
+    });
     let mut saved = false;
     match (&owner, &live) {
         (Some(o), Some(bytes)) => {
@@ -364,7 +381,9 @@ pub struct LiveSwapTicket {
 pub fn begin_live_swap(conn: &Connection, tool: Tool, new_id: &str, by: Option<&str>) -> Result<LiveSwapTicket, WalletError> {
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
     let live = store::read_live(tool)?;
-    if let Some(bytes) = &live {
+    // A broken live store is fingerprinted (so a change is noticed) but
+    // never copied into a slot.
+    if let Some(bytes) = live.as_ref().filter(|b| store::validate_cred(tool, b).is_ok()) {
         match active_id(conn, tool)? {
             Some(cur) => store::write_slot(tool, &cur, bytes)?,
             None => {
@@ -384,7 +403,10 @@ pub fn begin_live_swap(conn: &Connection, tool: Tool, new_id: &str, by: Option<&
 /// (they stay inside the wallet code path and are never logged).
 pub fn live_swap_poll(ticket: &LiveSwapTicket) -> Result<Option<Vec<u8>>, WalletError> {
     match store::read_live(ticket.tool)? {
-        Some(b) if Some(fingerprint(&b)) != ticket.snapshot_fp => Ok(Some(b)),
+        // Changed AND whole: a login still being written is not captured.
+        Some(b) if Some(fingerprint(&b)) != ticket.snapshot_fp && store::validate_cred(ticket.tool, &b).is_ok() => {
+            Ok(Some(b))
+        }
         _ => Ok(None),
     }
 }

@@ -168,6 +168,10 @@ pub mod llm;
 /// LLM login wallet: one active login per tool, idle logins in
 /// `~/.k2/llm-accounts` (`k2 llm accounts`, Settings → LLMs).
 pub mod llm_accounts;
+/// macOS keychain generic passwords: no size limit, no secret on argv,
+/// every write read back (Claude's live login, Connect session, companion).
+#[cfg(target_os = "macos")]
+pub mod macos_keychain;
 // K2 Mail (prd-email-server-v1 pre-mortem #14) — the ONE mail-domain
 // normalization helper (lowercase punycode A-label) used at every
 // boundary. Store only what it returns; display-decode at the edge.

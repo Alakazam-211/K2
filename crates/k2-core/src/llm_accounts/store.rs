@@ -144,82 +144,100 @@ pub fn keychain_enabled() -> bool {
 }
 
 pub mod keychain {
-    //! `security` CLI wrappers (macOS). Callers check
-    //! [`super::keychain_enabled`] first.
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+    //! Claude's keychain items (macOS). Callers check
+    //! [`super::keychain_enabled`] first. Reads go through
+    //! `/usr/bin/security` (the trusted reader on Claude's item). Writes
+    //! set the data in process via [`crate::macos_keychain`]: no size
+    //! limit (`security -i` splits lines over ~4 KB, and in 0.45.0 that
+    //! wrote a truncated login), and the secret is never on argv. Every
+    //! write is read back before it returns `Ok`.
 
-    /// Read a generic password. `Ok(None)` = no such item.
+    /// Read a generic password. `Ok(None)` = no such item (or empty).
+    #[cfg(target_os = "macos")]
     pub fn read(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-        let out = Command::new("/usr/bin/security")
-            .args(["find-generic-password", "-a", account, "-s", service, "-w"])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| format!("security: {e}"))?;
-        if out.status.success() {
-            let raw = String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_string();
-            if raw.is_empty() {
-                return Ok(None);
-            }
-            // `security -w` prints hex when the secret isn't printable.
-            if !raw.starts_with('{') && raw.len() % 2 == 0 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
-                if let Some(bytes) = decode_hex(&raw) {
-                    return Ok(Some(bytes));
+        match crate::macos_keychain::read(service, account, None) {
+            Ok(Some(b)) if b.is_empty() => Ok(None),
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Create or update, then read back and compare. A new item is
+    /// created by `security` itself, so it gets the same access list as
+    /// one Claude Code made.
+    #[cfg(target_os = "macos")]
+    pub fn write(service: &str, account: &str, secret: &[u8]) -> Result<(), String> {
+        crate::macos_keychain::write(service, account, secret, &Default::default()).map_err(|e| e.to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn delete(service: &str, account: &str) -> Result<(), String> {
+        crate::macos_keychain::delete(service, account, None).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn read(_service: &str, _account: &str) -> Result<Option<Vec<u8>>, String> {
+        Err("the keychain is macOS-only".into())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn write(_service: &str, _account: &str, _secret: &[u8]) -> Result<(), String> {
+        Err("the keychain is macOS-only".into())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn delete(_service: &str, _account: &str) -> Result<(), String> {
+        Err("the keychain is macOS-only".into())
+    }
+}
+
+// ── Credential validation ──────────────────────────────────────────
+
+/// Is `bytes` a whole credential for `tool`? Claude, Codex and Grok keep
+/// a JSON object, and a truncated or half-written store doesn't parse.
+/// K2 never writes a credential that fails this into a live store or a
+/// wallet slot, so a broken live store can't overwrite a good slot.
+pub fn validate_cred(tool: Tool, bytes: &[u8]) -> Result<(), String> {
+    if !bytes.iter().any(|c| !c.is_ascii_whitespace()) {
+        return Err("it is empty".into());
+    }
+    match tool {
+        Tool::Claude | Tool::Codex | Tool::Grok => match serde_json::from_slice::<serde_json::Value>(bytes) {
+            // Claude: a sign-in has a `claudeAiOauth` token. (`{}` is also
+            // the placeholder a new keychain item holds for an instant.)
+            Ok(v @ serde_json::Value::Object(_)) if tool == Tool::Claude => {
+                let o = &v["claudeAiOauth"];
+                let has = |k: &str| o[k].as_str().map(|s| !s.is_empty()).unwrap_or(false);
+                if has("accessToken") || has("refreshToken") {
+                    Ok(())
+                } else {
+                    Err("it has no claudeAiOauth token".into())
                 }
             }
-            return Ok(Some(raw.into_bytes()));
-        }
-        // 44 = errSecItemNotFound.
-        if out.status.code() == Some(44) {
-            return Ok(None);
-        }
-        Err(format!("security find-generic-password exited {:?}", out.status.code()))
+            Ok(serde_json::Value::Object(_)) => Ok(()),
+            Ok(_) => Err("it is not a JSON object".into()),
+            // Never the parser's message: it can quote the input.
+            Err(e) => Err(format!(
+                "it is not valid JSON: {} at byte {} of {}",
+                match e.classify() {
+                    serde_json::error::Category::Eof => "cut off before the end",
+                    serde_json::error::Category::Syntax => "syntax error",
+                    serde_json::error::Category::Data => "data error",
+                    serde_json::error::Category::Io => "read error",
+                },
+                e.column(),
+                bytes.len()
+            )),
+        },
+        Tool::Gemini => Ok(()),
     }
+}
 
-    /// Create or update, the way Claude itself does: `security -i` with
-    /// the payload hex-encoded on stdin (not on argv).
-    pub fn write(service: &str, account: &str, secret: &[u8]) -> Result<(), String> {
-        let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
-        let line = format!("add-generic-password -U -a \"{account}\" -s \"{service}\" -X \"{hex}\" \n");
-        let mut child = Command::new("/usr/bin/security")
-            .arg("-i")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("security: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(line.as_bytes()).map_err(|e| format!("security stdin: {e}"))?;
-        }
-        let out = child.wait_with_output().map_err(|e| format!("security: {e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(format!("security add-generic-password exited {:?}", out.status.code()))
-        }
-    }
-
-    pub fn delete(service: &str, account: &str) -> Result<(), String> {
-        let out = Command::new("/usr/bin/security")
-            .args(["delete-generic-password", "-a", account, "-s", service])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|e| format!("security: {e}"))?;
-        if out.success() || out.code() == Some(44) {
-            Ok(())
-        } else {
-            Err(format!("security delete-generic-password exited {:?}", out.code()))
-        }
-    }
-
-    fn decode_hex(s: &str) -> Option<Vec<u8>> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-            .collect()
-    }
+pub(crate) fn invalid_cred(tool: Tool, what: &str, why: String) -> WalletError {
+    WalletError::Conflict(
+        "credential_invalid",
+        format!("{}'s {what} is not a whole sign-in ({why}); K2 left everything as it was", tool.display()),
+    )
 }
 
 // ── Private file IO ────────────────────────────────────────────────
@@ -316,7 +334,11 @@ pub(crate) fn read_slot(tool: Tool, id: &str) -> Result<Option<Vec<u8>>, WalletE
     read_nonempty(&slot_cred_path(tool, id))
 }
 
+/// Save a credential into a wallet slot. Refuses anything that isn't a
+/// whole credential ([`validate_cred`]): a slot is the only copy of an
+/// idle login, so it is never overwritten with a broken one.
 pub(crate) fn write_slot(tool: Tool, id: &str, bytes: &[u8]) -> Result<(), WalletError> {
+    validate_cred(tool, bytes).map_err(|why| invalid_cred(tool, "credential to save", why))?;
     let dir = slot_dir(tool, id);
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
     if tool == Tool::Claude && keychain_enabled() {
@@ -343,27 +365,109 @@ pub(crate) fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
         match keychain::read(&svc, &claude_keychain_account()) {
             Ok(Some(b)) => return Ok(Some(b)),
             Ok(None) => {}
+            // The error says "unlock" only when the keychain really is
+            // locked (macos_keychain maps the status codes).
             Err(e) => return Err(WalletError::LiveStoreUnavailable(format!(
-                "could not read Claude's keychain item ({e}); unlock the login keychain on this Mac"
+                "could not read Claude's keychain item: {e}"
             ))),
         }
     }
     read_nonempty(&live_cred_path(tool))
 }
 
-/// Write the tool's live login atomically. Claude on macOS: keychain
-/// item, plus the fallback file when one already exists (so the two
-/// never disagree). Grok: under Grok's own `auth.json.lock`.
+/// Make `bytes` the tool's live login, all or nothing: refuse a
+/// credential that isn't whole ([`validate_cred`]), remember what is live
+/// now, write, read back and compare, and on ANY failure put the previous
+/// live value back exactly (or remove the new one when the tool was
+/// signed out). The swap is committed only when the read-back matches.
 pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
+    validate_cred(tool, bytes).map_err(|why| invalid_cred(tool, "login to make live", why))?;
+    if tool == Tool::Gemini {
+        return Err(WalletError::LiveStoreUnavailable(
+            "Gemini subscriptions aren't supported; use an API token".into(),
+        ));
+    }
+    // Can't read what's live → can't restore it → don't write.
+    let prev = read_live(tool)?;
+    commit_verified(
+        tool,
+        bytes,
+        prev.as_deref(),
+        |b| write_live_raw(tool, b),
+        || read_live(tool),
+        || clear_live(tool),
+    )
+}
+
+/// The write → read back → compare → restore sequence behind
+/// [`write_live`], with the store operations passed in so tests can
+/// drive a store that truncates or fails.
+pub(crate) fn commit_verified(
+    tool: Tool,
+    bytes: &[u8],
+    prev: Option<&[u8]>,
+    write: impl Fn(&[u8]) -> Result<(), WalletError>,
+    read: impl Fn() -> Result<Option<Vec<u8>>, WalletError>,
+    clear: impl Fn() -> Result<(), WalletError>,
+) -> Result<(), WalletError> {
+    let check = |want: &[u8]| -> Result<(), WalletError> {
+        match read()? {
+            Some(got) if got == want => Ok(()),
+            Some(got) => Err(WalletError::LiveStoreUnavailable(format!(
+                "it read back as {} bytes instead of the {} written",
+                got.len(),
+                want.len()
+            ))),
+            None => Err(WalletError::LiveStoreUnavailable("it read back empty".into())),
+        }
+    };
+    let Err(e) = write(bytes).and_then(|_| check(bytes)) else {
+        return Ok(());
+    };
+    let restored = match prev {
+        Some(p) => write(p).and_then(|_| check(p)),
+        None => clear(),
+    };
+    let what = match prev {
+        Some(_) => "the previous login was put back",
+        None => "the tool was left signed out, as it was",
+    };
+    Err(WalletError::LiveStoreUnavailable(match restored {
+        Ok(()) => format!("could not make the new {} login live ({e}); {what}", tool.display()),
+        Err(r) => format!(
+            "could not make the new {} login live ({e}), and restoring the previous one ALSO failed ({r}); sign in to {} again",
+            tool.display(),
+            tool.display()
+        ),
+    }))
+}
+
+/// Remove a live login K2 just wrote when the tool was signed out before.
+fn clear_live(tool: Tool) -> Result<(), WalletError> {
+    if tool == Tool::Claude && keychain_enabled() {
+        let svc = claude_live_keychain_service();
+        keychain::delete(&svc, &claude_keychain_account()).map_err(WalletError::LiveStoreUnavailable)?;
+        return Ok(());
+    }
+    match fs::remove_file(live_cred_path(tool)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(WalletError::Io(e.to_string())),
+    }
+}
+
+/// Write the tool's live store (no checks; see [`write_live`]). Claude
+/// on macOS: keychain item, plus the fallback file when one already
+/// exists (so the two never disagree). Grok: under Grok's own
+/// `auth.json.lock`.
+fn write_live_raw(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
     match tool {
         Tool::Claude => {
             let file = live_cred_path(tool);
             if keychain_enabled() {
                 let svc = claude_live_keychain_service();
                 keychain::write(&svc, &claude_keychain_account(), bytes).map_err(|e| {
-                    WalletError::LiveStoreUnavailable(format!(
-                        "could not write Claude's keychain item ({e}); unlock the login keychain on this Mac"
-                    ))
+                    WalletError::LiveStoreUnavailable(format!("could not write Claude's keychain item: {e}"))
                 })?;
                 if file.exists() {
                     write_private(&file, bytes).map_err(|e| WalletError::Io(e.to_string()))?;

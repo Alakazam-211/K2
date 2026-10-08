@@ -37,7 +37,7 @@ pub fn read_password_hash() -> Option<String> {
 pub fn write_password_hash(hash: &str) -> Result<(), String> {
     // 0.40.7 — stamp an explicit trusted-application ACL so this item never
     // provokes the login-keychain password prompt, and the grant survives an
-    // app-update re-sign. Both the WRITE (here) and the READ
+    // app-update re-sign. Both the item's creation (here) and the READ
     // ([`read_password_hash`]) go through `/usr/bin/security`, so that is the
     // process the keychain sees as the requester on every access; we also
     // trust the daemon's own executable for any future direct read. (Same
@@ -47,26 +47,18 @@ pub fn write_password_hash(hash: &str) -> Result<(), String> {
     // (re)install the ACL — including upgrading a pre-0.40.7 item created
     // without one — we DELETE then plain-ADD (no `-U`). A delete of a
     // missing item is a harmless no-op.
-    let _ = std::process::Command::new("security")
-        .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
-        .output();
-
-    let mut cmd = std::process::Command::new("security");
-    cmd.args(["add-generic-password", "-s", SERVICE, "-a", ACCOUNT]);
-    for app in acl_trusted_apps() {
-        cmd.arg("-T").arg(app);
-    }
-    // `-w <hash>` LAST; args are passed directly to exec (never shell-parsed)
-    // so the hash's `$` is safe.
-    cmd.arg("-w").arg(hash);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("keychain spawn failed: {}", e))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("keychain write failed: {}", err.trim()));
-    }
-    Ok(())
+    //
+    // The hash is never on argv (`-w <hash>` showed it in `ps`): `security`
+    // creates the item with a placeholder and the `-T` list, and the hash
+    // is set in process and read back (`crate::macos_keychain::write`).
+    let opts = crate::macos_keychain::WriteOptions {
+        keychain: None,
+        label: None,
+        trusted_apps: acl_trusted_apps(),
+        replace_acl: true,
+    };
+    crate::macos_keychain::write(SERVICE, ACCOUNT, hash.as_bytes(), &opts)
+        .map_err(|e| format!("keychain write failed: {e}"))
 }
 
 /// Trusted-application `-T` set for the companion password-hash item.

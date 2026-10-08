@@ -249,6 +249,12 @@ signal-hook-mio = { version = "0.2", features = ["support-v1_0"] }
 #   native macOS daemon. cargo unions feature sets per crate, so the macOS
 #   build gets `["sampler", "metal"]`.
 [target.'cfg(target_os = "macos")'.dependencies]
+# Keychain writes (`macos_keychain`): set an item's data in process so the
+# secret is never on a `security` argv and never split by `security -i`'s
+# line buffer. Same versions already in Cargo.lock (rustls/keyring).
+security-framework = "3"
+security-framework-sys = "2.17"
+core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
 llama-cpp-2 = { version = "0.1", features = ["metal"] }

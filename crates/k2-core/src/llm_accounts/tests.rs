@@ -519,3 +519,168 @@ fn secret_shaped_metadata_is_refused() {
     let err = update_meta(&conn, &e.id, &MetaUpdate { email: Some("sk-ant-oat01-zzz".into()), ..Default::default() }).unwrap_err();
     assert_eq!(err.code(), "io");
 }
+
+// ── 0.45.0 field bug: a cut-off live write must never cost a login ──
+
+/// A Claude credential big enough to look like a real one with MCP
+/// OAuth tokens (> 4,032 hex characters).
+fn big_claude_cred(tag: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "claudeAiOauth": {
+            "accessToken": format!("{MARKER}-access-{tag}"),
+            "refreshToken": format!("{MARKER}-refresh-{tag}"),
+            "expiresAt": far_future_ms(),
+        },
+        "mcpOAuth": { "server": { "accessToken": format!("{MARKER}-mcp-{tag}-{}", "m".repeat(2600)) } }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_cut_off_live_login_is_never_mirrored_over_the_outgoing_slot() {
+    let h = Home::new("cutoff");
+    let conn = db();
+    let a_bytes = big_claude_cred("a");
+    write_live_claude(&h, &a_bytes);
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    let b = create(&conn, Tool::Claude, "b", None).unwrap();
+    let b_bytes = big_claude_cred("b");
+    store::write_slot(Tool::Claude, &b.id, &b_bytes).unwrap();
+    // What 0.45.0 left behind: the first 2,013 bytes of B in the live
+    // store while A is still the active login.
+    write_live_claude(&h, &b_bytes[..2013]);
+    assert!(store::validate_cred(Tool::Claude, &b_bytes[..2013]).is_err());
+    // Clicking "Use this token" again must not overwrite A's slot.
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    assert!(!out.saved_outgoing, "the broken live store was not saved back");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), a_bytes, "A's login intact");
+    assert_eq!(read_live_claude(&h), b_bytes, "B is live and whole");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(b.id.as_str()));
+    assert_eq!(list_for(&conn, Tool::Claude).unwrap().len(), 2, "no 'Previous subscription' made from garbage");
+
+    // Boot import and the live-swap capture never take a cut-off login.
+    let conn2 = db();
+    write_live_claude(&h, &b_bytes[..2013]);
+    assert!(wallet::import_live(&conn2, Tool::Claude, None).unwrap().is_none());
+    let new = wallet::begin_new(&conn2, Tool::Claude, "new", None).unwrap();
+    write_live_claude(&h, &a_bytes);
+    let ticket = wallet::begin_live_swap(&conn2, Tool::Claude, &new.id, None).unwrap();
+    write_live_claude(&h, &b_bytes[..100]);
+    assert!(wallet::live_swap_poll(&ticket).unwrap().is_none(), "a half-written login is not captured");
+    write_live_claude(&h, &b_bytes);
+    assert_eq!(wallet::live_swap_poll(&ticket).unwrap().unwrap(), b_bytes);
+}
+
+#[test]
+fn a_broken_saved_sign_in_is_refused_before_anything_moves() {
+    let h = Home::new("brokenslot");
+    let conn = db();
+    let a_bytes = claude_cred("a", far_future_ms());
+    write_live_claude(&h, &a_bytes);
+    let a = wallet::import_live(&conn, Tool::Claude, None).unwrap().unwrap();
+    let b = create(&conn, Tool::Claude, "b", None).unwrap();
+    let good_b = claude_cred("b", far_future_ms());
+    store::write_slot(Tool::Claude, &b.id, &good_b).unwrap();
+    // write_slot itself refuses a cut-off credential and keeps the slot.
+    let err = store::write_slot(Tool::Claude, &b.id, &good_b[..40]).unwrap_err();
+    assert_eq!(err.code(), "credential_invalid");
+    assert!(!err.to_string().contains(MARKER), "no token in the error: {err}");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &b.id)).unwrap(), good_b);
+    // A slot broken on disk: the switch refuses and nothing moves.
+    fs::write(store::slot_cred_path(Tool::Claude, &b.id), &good_b[..40]).unwrap();
+    let err = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap_err();
+    assert_eq!(err.code(), "credential_invalid");
+    assert_eq!(read_live_claude(&h), a_bytes, "live untouched");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), a_bytes);
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
+    // write_live refuses it directly too, and the keychain placeholder
+    // (`{}`) or a token-less object is never a sign-in.
+    assert_eq!(store::write_live(Tool::Claude, &good_b[..40]).unwrap_err().code(), "credential_invalid");
+    assert!(store::validate_cred(Tool::Claude, b"{}").is_err());
+    assert!(store::validate_cred(Tool::Claude, b"{\"claudeAiOauth\":{}}").is_err());
+    assert!(store::validate_cred(Tool::Claude, &good_b).is_ok());
+    assert_eq!(read_live_claude(&h), a_bytes);
+}
+
+/// A fake live store whose writes can be cut off at a byte limit (what
+/// `security -i` did) or whose restore write fails.
+struct FakeStore {
+    data: std::cell::RefCell<Option<Vec<u8>>>,
+    cut_at: Option<usize>,
+    fail_restore: bool,
+    writes: std::cell::Cell<usize>,
+}
+
+impl FakeStore {
+    fn new(data: Option<&[u8]>, cut_at: Option<usize>) -> FakeStore {
+        FakeStore {
+            data: std::cell::RefCell::new(data.map(<[u8]>::to_vec)),
+            cut_at,
+            fail_restore: false,
+            writes: std::cell::Cell::new(0),
+        }
+    }
+    fn commit(&self, bytes: &[u8], prev: Option<&[u8]>) -> Result<(), WalletError> {
+        store::commit_verified(
+            Tool::Claude,
+            bytes,
+            prev,
+            |b| {
+                let n = self.writes.get() + 1;
+                self.writes.set(n);
+                if self.fail_restore && n > 1 {
+                    return Err(WalletError::Io("restore write failed".into()));
+                }
+                let keep = self.cut_at.map(|c| c.min(b.len())).unwrap_or(b.len());
+                *self.data.borrow_mut() = Some(b[..keep].to_vec());
+                Ok(())
+            },
+            || Ok(self.data.borrow().clone()),
+            || {
+                *self.data.borrow_mut() = None;
+                Ok(())
+            },
+        )
+    }
+}
+
+#[test]
+fn a_live_write_is_read_back_and_the_previous_login_restored_on_any_mismatch() {
+    let prev = claude_cred("prev", far_future_ms());
+    let next = big_claude_cred("next");
+    // Whole write: committed.
+    let s = FakeStore::new(Some(&prev), None);
+    s.commit(&next, Some(&prev)).unwrap();
+    assert_eq!(s.data.borrow().as_deref(), Some(next.as_slice()));
+    // Cut off part way (the 0.45.0 bug): error, previous login restored.
+    let cut = prev.len().max(2013);
+    assert!(next.len() > cut);
+    let s = FakeStore::new(Some(&prev), Some(cut));
+    let err = s.commit(&next, Some(&prev)).unwrap_err();
+    assert_eq!(s.data.borrow().as_deref(), Some(prev.as_slice()), "previous login back");
+    let text = err.to_string();
+    assert!(text.contains("previous login was put back") && text.contains("read back"), "{text}");
+    assert!(!text.contains(MARKER), "{text}");
+    // Signed out before: the half-written item is removed again.
+    let s = FakeStore::new(None, Some(2013));
+    let err = s.commit(&next, None).unwrap_err();
+    assert!(s.data.borrow().is_none(), "left signed out");
+    assert!(err.to_string().contains("left signed out"), "{err}");
+    // Restore fails too: said plainly.
+    let mut s = FakeStore::new(Some(&prev), Some(2013));
+    s.fail_restore = true;
+    let err = s.commit(&next, Some(&prev)).unwrap_err();
+    assert!(err.to_string().contains("ALSO failed"), "{err}");
+}
+
+#[test]
+fn live_writes_on_file_stores_are_verified_and_refuse_broken_input() {
+    let h = Home::new("livefile");
+    fs::create_dir_all(h.p(".codex")).unwrap();
+    let good = format!(r#"{{"tokens":{{"refresh_token":"{MARKER}-r"}}}}"#).into_bytes();
+    store::write_live(Tool::Codex, &good).unwrap();
+    assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), good);
+    assert_eq!(store::write_live(Tool::Codex, &good[..20]).unwrap_err().code(), "credential_invalid");
+    assert_eq!(store::write_live(Tool::Codex, b"[1,2]").unwrap_err().code(), "credential_invalid");
+    assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), good, "unchanged");
+}

@@ -634,54 +634,30 @@ fn purge_legacy_session_items() {
 /// `-T` ACL. Deleting then adding the SAME value preserves the token across
 /// the operation; the only observable change is the (now correct) ACL.
 ///
-/// Best-effort throughout: a delete of a missing item is fine (we ignore its
-/// status), and an add failure is logged + swallowed (the in-memory token is
-/// still good for this run).
+/// The token never goes on argv (`security add-generic-password -w <token>`
+/// showed it in `ps`) and has no size limit: `security` creates the item
+/// with a placeholder, the `-l` label and the `-T` list, and the token is
+/// set in process and read back ([`crate::macos_keychain::write`]).
+///
+/// Best-effort throughout: a delete of a missing item is fine, and a write
+/// failure is logged + swallowed (the in-memory token is still good for
+/// this run).
 #[cfg(target_os = "macos")]
 fn write_token_with_acl(service: &str, account: &str, token: &str) {
-    // Drop any existing item so the subsequent ADD installs our ACL rather
-    // than leaving a legacy creator-only ACL in place. Ignore the status:
-    // "not found" is the expected first-write case.
-    let _ = std::process::Command::new("security")
-        .args(["delete-generic-password", "-s", service, "-a", account])
-        .output();
-
-    let mut cmd = std::process::Command::new("security");
-    cmd.args([
-        "add-generic-password",
-        // NOTE: no `-U` — we deleted above, and a plain add is what installs
-        // a fresh ACL. `-U` would update-in-place and skip the ACL.
-        "-s",
-        service,
-        "-a",
-        account,
+    let opts = crate::macos_keychain::WriteOptions {
+        keychain: None,
         // Friendly label shown in the macOS keychain access dialog instead
         // of the bare service id.
-        "-l",
-        ACCOUNT_KEYCHAIN_LABEL,
-    ]);
-    // One `-T <path>` per trusted binary (see acl_trusted_apps for the
-    // rationale tied to which process performs each access).
-    for app in acl_trusted_apps() {
-        cmd.arg("-T").arg(app);
-    }
-    // `-w <token>` LAST so the secret is the final arg (never shell-parsed;
-    // args are passed directly to exec, not through a shell).
-    cmd.arg("-w").arg(token);
-
-    match cmd.output() {
-        Ok(out) if out.status.success() => {}
-        Ok(out) => {
-            crate::log_debug!(
-                "[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service} rc={:?})",
-                out.status.code()
-            );
-        }
-        Err(e) => {
-            crate::log_debug!(
-                "[tunnel/lease] WARN: keychain write spawn failed (service={service}): {e}"
-            );
-        }
+        label: Some(ACCOUNT_KEYCHAIN_LABEL.to_string()),
+        // One `-T <path>` per trusted binary (see acl_trusted_apps for the
+        // rationale tied to which process performs each access).
+        trusted_apps: acl_trusted_apps(),
+        // Delete first so a fresh item carries our ACL (`-U` keeps a
+        // legacy creator-only ACL).
+        replace_acl: true,
+    };
+    if let Err(e) = crate::macos_keychain::write(service, account, token.as_bytes(), &opts) {
+        crate::log_debug!("[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service}): {e}");
     }
 }
 

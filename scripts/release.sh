@@ -490,8 +490,10 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
-# Nested K2 Daemon.app (signs its k2-daemon with the same entitlements).
-k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "$ENTITLEMENTS"
+# Nested K2 Daemon.app: its own, smaller entitlements (K2 vault KV6/VS14).
+DAEMON_ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
+[ -f "$DAEMON_ENTITLEMENTS" ] || { echo "  FATAL: daemon entitlements not found at $DAEMON_ENTITLEMENTS" >&2; exit 1; }
+k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \

@@ -190,6 +190,12 @@ k2_daemon_helper_verify_signed() {
         || { echo "FATAL: helper is not signed with the hardened runtime" >&2; return 1; }
     grep -q "com.apple.security.cs.disable-library-validation" <<<"$ents" \
         || { echo "FATAL: helper lost the daemon entitlements" >&2; return 1; }
+    # K2 vault (VS14): the daemon holds the vault key; nothing may attach to
+    # or inject into it.
+    if grep -qE "get-task-allow|allow-dyld-environment-variables|cs.allow-jit|allow-unsigned-executable-memory" <<<"$ents"; then
+        echo "FATAL: K2 Daemon.app carries an entitlement it must not have (debugger/dyld/JIT)" >&2
+        return 1
+    fi
 
     rc=0
     out="$("$exe" --version 2>&1)" || rc=$?

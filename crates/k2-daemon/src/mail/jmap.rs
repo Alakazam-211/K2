@@ -682,18 +682,7 @@ impl StalwartClient {
                  `k2 hostmail cert owner --stalwart-acme`"
             ));
         }
-        let due = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let args = serde_json::json!({
-            "create": {
-                CREATE_TAG: {
-                    "@type": "AcmeRenewal",
-                    "domainId": domain_id,
-                    "status": { "@type": "Pending", "due": due },
-                }
-            }
-        });
-        let resp = self.registry_call("x:Task/set", args)?;
-        parse_set_created_id("x:Task/set", &resp)
+        self.queue_acme_renewal(&domain_id)
     }
 
     /// ✔ LIVE-VERIFIED: list the registry's network listeners
@@ -3259,6 +3248,144 @@ pub fn parse_session_upload_url(
         ));
     };
     Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
+}
+
+/// The `x:SpamSettings` singleton id (same convention as SystemSettings).
+const SPAM_SETTINGS_SINGLETON_ID: &str = "singleton";
+
+/// 0.45.1 hosted-mail field fixes ([`super::defaults`]): reads and
+/// writes of the few Stalwart settings K2 owns (the `mx` route, the
+/// outbound TLS strategies, three DNSBL rules, the spam-rules URL) and
+/// the ACME renewal tasks. Registry calls on the loopback management API
+/// only; no restart, no hostmail disable/enable.
+impl StalwartClient {
+    /// Every object of one registry type: `x:<typ>/get` with no ids.
+    /// A reply without a `list` is a loud Err.
+    pub fn registry_list(&self, typ: &str) -> Result<Vec<serde_json::Value>, String> {
+        let method = format!("x:{typ}/get");
+        let resp = self.registry_call(&method, serde_json::json!({}))?;
+        parse_get_list(&method, &resp)
+    }
+
+    /// Update one registry object (`x:<typ>/set` update). `patch` is the
+    /// object to write — K2 writes whole objects minus the read-only
+    /// `id` and `name` (HF6: `name` is read-only, enum values are
+    /// case-sensitive). `notUpdated` is a loud Err.
+    pub fn registry_update(
+        &self,
+        typ: &str,
+        id: &str,
+        patch: serde_json::Value,
+    ) -> Result<(), String> {
+        let method = format!("x:{typ}/set");
+        let resp = self.registry_call(&method, serde_json::json!({ "update": { id: patch } }))?;
+        expect_set_clean(&method, &resp)?;
+        parse_set_updated(&method, id, &resp)
+    }
+
+    /// `x:SpamSettings.spamFilterRulesUrl` (`None` = unset: Stalwart then
+    /// never downloads rules).
+    pub fn spam_filter_rules_url(&self) -> Result<Option<String>, String> {
+        let resp = self.registry_call(
+            "x:SpamSettings/get",
+            serde_json::json!({
+                "ids": [SPAM_SETTINGS_SINGLETON_ID],
+                "properties": ["spamFilterRulesUrl"],
+            }),
+        )?;
+        parse_spam_rules_url(&resp)
+    }
+
+    /// Set `x:SpamSettings.spamFilterRulesUrl` (A4 URL pin).
+    pub fn set_spam_filter_rules_url(&self, url: &str) -> Result<(), String> {
+        self.registry_update(
+            "SpamSettings",
+            SPAM_SETTINGS_SINGLETON_ID,
+            serde_json::json!({ "spamFilterRulesUrl": url }),
+        )
+    }
+
+    /// Every `AcmeRenewal` task Stalwart holds (Pending, Retry or Failed;
+    /// a task that succeeded is gone). Callers filter on `domainId` (HF8:
+    /// the query has no domain filter).
+    ///
+    /// ✔ LIVE-VERIFIED 2026-10-08 (scratch 0.16.10 → 0.16.20 on
+    /// k2-sandbox-01): the type filter key is `@type` (`{filter:{type}}`
+    /// answers `unsupportedFilter: type` on both). An unsupported filter
+    /// still falls back to an unfiltered query; the parser keeps the
+    /// AcmeRenewal tasks itself.
+    pub fn acme_renewal_tasks(&self) -> Result<Vec<super::defaults::AcmeTask>, String> {
+        let q = match self.registry_call(
+            "x:Task/query",
+            serde_json::json!({ "filter": { "@type": "AcmeRenewal" } }),
+        ) {
+            Ok(q) => q,
+            Err(e) if e.contains("unsupportedFilter") => {
+                self.registry_call("x:Task/query", serde_json::json!({}))?
+            }
+            Err(e) => return Err(e),
+        };
+        let ids = parse_query_ids(&q);
+        let mut out = Vec::new();
+        for chunk in ids.chunks(100) {
+            let resp = self.registry_call("x:Task/get", serde_json::json!({ "ids": chunk }))?;
+            out.extend(super::defaults::parse_acme_tasks(&resp)?);
+        }
+        Ok(out)
+    }
+
+    /// Queue one `AcmeRenewal` task for a Domain (due now). The task
+    /// carries no names: the order reads the Domain's
+    /// `subjectAlternativeNames`. Returns the task id.
+    pub fn queue_acme_renewal(&self, domain_id: &str) -> Result<String, String> {
+        let due = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let args = serde_json::json!({
+            "create": {
+                CREATE_TAG: {
+                    "@type": "AcmeRenewal",
+                    "domainId": domain_id,
+                    "status": { "@type": "Pending", "due": due },
+                }
+            }
+        });
+        let resp = self.registry_call("x:Task/set", args)?;
+        parse_set_created_id("x:Task/set", &resp)
+    }
+
+    /// The Stalwart Domain carrying the mail host's ACME config, with the
+    /// name it carries ([`Self::mail_hostname_domain_id`] order: the host
+    /// itself, else its default domain). Stalwart expands an empty SAN
+    /// list under that name.
+    pub fn mail_hostname_domain(&self, host: &str) -> Result<Option<(String, String)>, String> {
+        if let Some(id) = self.domain_query_id(host)? {
+            return Ok(Some((id, host.to_string())));
+        }
+        let apex = super::supervisor::default_domain_for(host);
+        Ok(self.domain_query_id(&apex)?.map(|id| (id, apex)))
+    }
+}
+
+/// `x:<Type>/get` reply → its `list` (loud when absent).
+fn parse_get_list(method: &str, args: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    args.get("list")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .ok_or_else(|| format!("{method}: reply has no 'list'"))
+}
+
+/// `x:SpamSettings/get` reply → `spamFilterRulesUrl` (null = unset).
+fn parse_spam_rules_url(args: &serde_json::Value) -> Result<Option<String>, String> {
+    let list = parse_get_list("x:SpamSettings/get", args)?;
+    let obj = list
+        .first()
+        .ok_or("x:SpamSettings/get: the settings singleton is missing")?;
+    match obj.get("spamFilterRulesUrl") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
+        Some(other) => Err(format!(
+            "x:SpamSettings/get: spamFilterRulesUrl is not a string: {other}"
+        )),
+    }
 }
 
 /// Certificate upkeep for K2-issued certificates (domains::renew). The

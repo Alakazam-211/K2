@@ -184,6 +184,17 @@ pub trait DoctorEnv {
     /// handshake = the cert covers the name). Returns the status and
     /// the `Location` header. Unauthenticated; never a body upload.
     fn http_probe(&self, url: &str, method: &str) -> Result<(u16, Option<String>), String>;
+    /// 0.45.1 A1: the `nameserver` lines of /etc/resolv.conf (what
+    /// Stalwart's System resolver uses). Default: none (fakes).
+    fn resolv_nameservers(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// 0.45.1 A1: one DNS-over-TCP exchange with a box nameserver
+    /// (length-prefixed stream back). Never a public resolver. Default:
+    /// not probed (fakes).
+    fn dns_tcp_exchange(&self, _nameserver: &str, _query: &[u8]) -> Result<Vec<u8>, String> {
+        Err("not probed".into())
+    }
 }
 
 // ── The check table (pure over the seams) ───────────────────────────────
@@ -1465,6 +1476,16 @@ impl DoctorEnv for RealDoctorEnv {
             .map(str::to_string);
         Ok((resp.status().as_u16(), location))
     }
+
+    fn resolv_nameservers(&self) -> Vec<String> {
+        std::fs::read_to_string("/etc/resolv.conf")
+            .map(|t| super::defaults::resolv_conf_nameservers(&t))
+            .unwrap_or_default()
+    }
+
+    fn dns_tcp_exchange(&self, nameserver: &str, query: &[u8]) -> Result<Vec<u8>, String> {
+        super::defaults::tcp_dns_exchange(nameserver, query)
+    }
 }
 
 // ── Persistence + the production entry points ──────────────────────────
@@ -1630,6 +1651,17 @@ pub fn run(raw_domain: Option<&str>) -> Result<serde_json::Value, DocError> {
         &extra_apexes,
         now,
     ));
+    // 0.45.1 field fixes: the box resolver's DNSSEC over TCP, DANE off
+    // (HF19), the mx route, queued mail stuck on DNSSEC, spam rules that
+    // can't load, the last ACME task on acme-cert-names, and the cached
+    // box IPv4. Soft only — never gates_direct.
+    super::defaults::doctor_checks_live(
+        &env,
+        &ctx.hostname,
+        report.ip.as_deref(),
+        domain_id.is_none(),
+        &mut report.checks,
+    );
     // 0.45.0: mail passwords K2 can't vouch for (an agent may hold one
     // from before agents lost credential access). Server-level runs
     // only; soft, never gates_direct, never revokes.

@@ -1250,6 +1250,11 @@ async fn async_main() {
     // sure Stalwart's own ACME is Manual for the mail host's Domain. One
     // registry write, no restart; never flips back. Linux-only thread.
     mail::cert_owner::spawn_startup_reconcile();
+    // 0.45.1 field fixes: lock the mail cert names (+ one guarded ACME
+    // retry), repair the 3 spam rules Stalwart 0.16.x can't parse, mx
+    // route → v4Only once, DANE off below 0.16.20; one ReloadSettings.
+    // Registry only (restart only if the reload is refused). Linux thread.
+    mail::defaults::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();
 
     // Files-drawer multi-writer live refresh — recursive watcher over

@@ -86,7 +86,12 @@ fn unsupported() -> CliResponse {
 ///   "hostname": <hostname|null>,
 ///   "portPlan": <port_plan|null>,
 ///   "enableProgress": <enable_progress_json|null>,  // S1 machine steps
-///   "lastError": <last_error|null>,
+///   "lastError": <last_error | "acme: <reason>" when the cert is not
+///                 issued and the last ACME task failed | null>,
+///   "cert": {host, names (served SANs), state, …, acme: {mode,
+///            orderNames, locked, lastTask}, note?},
+///   "outbound": {ipStrategy, ipStrategySetBy, dane[], daneSummary,
+///                daneAutoOff, dnssec, pendingReload?},
 ///   "helper": "installed" | "missing" | "not allowed by sudoers",  // Linux only
 ///   "helperFix": <root install command — only when helper != installed>,
 ///   "upgradeAvailable": <installed version present and != pinnedVersion>,
@@ -209,6 +214,14 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
             None => crate::mail::cert_owner::CertOwner::Unknown,
         };
         cert.insert("owner".into(), serde_json::json!(owner.as_str()));
+    }
+    // 0.45.1 field fixes: `outbound` (mx route, DANE, who set them, the
+    // doctor's DNSSEC verdict), `cert.acme` (mode, real order names,
+    // locked, last ACME task) + the next-renewal note, and the `lastError`
+    // fallback to the last failed ACME task. Registry reads bounded to
+    // 2 s and cached 60 s (Settings polls this).
+    if installed {
+        crate::mail::defaults::fill_status(&mut body, hostname.as_deref());
     }
     // Linux only: the root door enable / cert restart / boot reconcile
     // need. Cached 30 s (each probe is a `sudo -n -l`).
@@ -424,6 +437,12 @@ pub(crate) fn handle_server_enable_at(body: &[u8], daemon_port: Option<u16>) -> 
                 if let Some(hint) = reapply_skin_door_after_mail_enable(daemon_port) {
                     supervisor::note_enable_progress_hint("caddyHint", &hint);
                 }
+                // 0.45.1: cache the box IPv4 (the mail host's A row) and
+                // run the field-fix reconcile once the latch is released
+                // (it pins the spam-rules URL, waits for the first rules
+                // download, then repairs; mx route; DANE).
+                let _ = crate::mail::cert_names::refresh_public_ipv4();
+                crate::mail::defaults::spawn_after("enable");
             }
             Err(e) => {
                 k2_core::log_debug!("[mail/supervisor] enable failed: {e}");
@@ -1538,6 +1557,78 @@ mod tests {
             let conn = db.lock();
             let _ = k2_core::domains::remove_binding(&conn, "owner-status.test");
         }
+        clean_row();
+    }
+
+    /// 0.45.1 A2: no supervisor error + cert `missing` + a Failed
+    /// AcmeRenewal → `lastError` = `acme: <reason>` (computed at read time,
+    /// the health loop can't wipe it), `cert.acme` carries the real order
+    /// names; a healthy cert → `lastError` null and `names` = served SANs;
+    /// a wider valid cert under a lock → the next-renewal note (HF9).
+    #[test]
+    fn status_last_error_falls_back_to_the_failed_acme_task() {
+        use crate::mail::defaults::{clear_test_status_reads, set_test_status_reads, AcmeTask};
+        use crate::mail::jmap::CertManagement;
+        let _g = crate::mail::mail_server_test_lock();
+        let _clean = crate::mail::MailServerRowCleanup;
+        let _home = crate::test_support::TempHome::new();
+        let _unit = supervisor::with_test_unit_state("active");
+        clean_row();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_server (id, status, pinned_version, installed_version, hostname, \
+                 port_plan, updated_at) VALUES (1, 'running', ?1, '0.16.10', 'mail.example.com', \
+                 'tls-alpn', 100)",
+                rusqlite::params![STALWART_PINNED_VERSION],
+            )
+            .expect("seed row");
+        }
+        let failed = AcmeTask {
+            id: "t1".into(),
+            domain_id: "dom-1".into(),
+            state: "Failed".into(),
+            reason: Some("urn:ietf:params:acme:error:connection: refused".into()),
+            at: Some("2026-10-07T20:00:00Z".into()),
+            due: None,
+        };
+        let locked = CertManagement::Automatic {
+            acme_provider_id: "p".into(),
+            subject_alternative_names: vec!["mail.example.com".into()],
+        };
+        set_test_status_reads(
+            Ok(vec![serde_json::json!({ "id": "r", "name": "mx", "@type": "Mx", "ipLookupStrategy": "v4ThenV6" })]),
+            Ok(vec![]),
+            Ok(Some(("dom-1".into(), "example.com".into(), locked))),
+            Ok(vec![failed]),
+        );
+        let status = || -> serde_json::Value {
+            serde_json::from_str(&handle_status(&HashMap::new()).body).expect("json")
+        };
+        let v = status();
+        assert_eq!(v["cert"]["state"], "missing", "{v}");
+        assert_eq!(v["cert"]["names"], serde_json::json!([]), "{v}");
+        assert_eq!(v["cert"]["host"], "mail.example.com", "{v}");
+        assert!(
+            v["lastError"].as_str().expect("lastError").starts_with("acme: urn:ietf:params:acme:error:connection"),
+            "{v}"
+        );
+        assert_eq!(v["cert"]["acme"]["orderNames"], serde_json::json!(["mail.example.com"]), "{v}");
+        assert_eq!(v["cert"]["acme"]["lastTask"]["state"], "Failed", "{v}");
+        assert_eq!(v["outbound"]["ipStrategy"], "v4ThenV6", "{v}");
+        {
+            let _cert = supervisor::with_test_issued_cert(&["mail.example.com", "mta-sts.example.com"]);
+            let v = status();
+            assert_eq!(v["cert"]["state"], "issued", "{v}");
+            assert!(v["lastError"].is_null(), "healthy cert → null: {v}");
+            assert_eq!(v["cert"]["names"], serde_json::json!(["mail.example.com", "mta-sts.example.com"]));
+            assert!(
+                v["cert"]["note"].as_str().expect("HF9 note").contains("covers mail.example.com only"),
+                "{v}"
+            );
+        }
+        clear_test_status_reads();
         clean_row();
     }
 

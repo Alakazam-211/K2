@@ -127,6 +127,10 @@ pub mod autoconfig;
 pub mod backup;
 pub mod config;
 pub mod dav;
+// 0.45.1 field fixes: the Stalwart settings K2 owns (mx route v4Only,
+// DANE on old Stalwart, cert-name lock + one guarded ACME retry, the 3
+// spam rules), healed by one reconcile at boot / enable / upgrade.
+pub mod defaults;
 pub mod dns_verify;
 pub mod doctor;
 pub mod domains;

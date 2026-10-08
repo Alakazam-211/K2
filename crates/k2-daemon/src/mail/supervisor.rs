@@ -829,15 +829,14 @@ fn tls_cert_json(host: &str, probe: TlsProbe, certs_dir_has_files: bool) -> serd
     } else {
         serde_json::json!(host)
     };
-    let names: Vec<String> = if host.is_empty() {
-        Vec::new()
-    } else {
-        vec![host.to_string()]
-    };
+    // 0.45.1 A2: `names` are the DNS SANs of the leaf actually served —
+    // never assumed. No certificate served = no names (`host` stays set).
+    let mut names: Vec<String> = Vec::new();
     let (state, self_signed, expires_at) = match probe {
         TlsProbe::Missing => ("missing", false, serde_json::Value::Null),
         TlsProbe::Handshake { leaf_der } => match parse_captured_leaf(&leaf_der) {
-            Some((issuer, subject, not_after)) => {
+            Some(CapturedLeaf { issuer, subject, not_after, dns_sans }) => {
+                names = dns_sans;
                 let expires = serde_json::json!(not_after);
                 if looks_rcgen_or_self_signed(&issuer, &subject) {
                     ("self-signed", true, expires)
@@ -863,12 +862,32 @@ fn tls_cert_json(host: &str, probe: TlsProbe, certs_dir_has_files: bool) -> serd
     })
 }
 
-fn parse_captured_leaf(der: &[u8]) -> Option<(String, String, i64)> {
+/// What `status` reads from the captured leaf.
+struct CapturedLeaf {
+    issuer: String,
+    subject: String,
+    not_after: i64,
+    /// DNS names in the subjectAltName extension, lowercased, in order.
+    dns_sans: Vec<String>,
+}
+
+fn parse_captured_leaf(der: &[u8]) -> Option<CapturedLeaf> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
     let issuer = cert.issuer().to_string();
     let subject = cert.subject().to_string();
     let not_after = cert.validity().not_after.timestamp();
-    Some((issuer, subject, not_after))
+    let mut dns_sans = Vec::new();
+    if let Ok(Some(ext)) = cert.subject_alternative_name() {
+        for n in &ext.value.general_names {
+            if let x509_parser::extensions::GeneralName::DNSName(d) = n {
+                let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
+                if !d.is_empty() && !dns_sans.contains(&d) {
+                    dns_sans.push(d);
+                }
+            }
+        }
+    }
+    Some(CapturedLeaf { issuer, subject, not_after, dns_sans })
 }
 
 fn looks_rcgen_or_self_signed(issuer: &str, subject: &str) -> bool {
@@ -1100,7 +1119,23 @@ fn set_test_tls_cert(probe: Option<TlsProbe>, certs_dir: Option<bool>) {
 }
 
 #[cfg(test)]
-struct TestTlsCertGuard;
+pub(crate) struct TestTlsCertGuard;
+
+/// Test seam for other modules: the TLS probe captures a Let's
+/// Encrypt-looking leaf carrying `sans` (status reports `issued`).
+#[cfg(test)]
+pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+    let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .expect("SAN params");
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "R11");
+    dn.push(DnType::OrganizationName, "Let's Encrypt");
+    params.distinguished_name = dn;
+    let der = params.self_signed(&key).expect("sign").der().to_vec();
+    with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true)
+}
 
 #[cfg(test)]
 impl Drop for TestTlsCertGuard {
@@ -3866,9 +3901,14 @@ mod tests {
     }
 
     fn mint_leaf_der(cn: &str, org: Option<&str>) -> Vec<u8> {
+        mint_leaf_der_with_sans(cn, org, &[])
+    }
+
+    fn mint_leaf_der_with_sans(cn: &str, org: Option<&str>, sans: &[&str]) -> Vec<u8> {
         use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
         let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
-        let mut params = CertificateParams::default();
+        let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("SAN params");
         let mut dn = DistinguishedName::new();
         dn.push(DnType::CommonName, cn);
         if let Some(org) = org {
@@ -3880,9 +3920,15 @@ mod tests {
     }
 
     /// L1: a captured rcgen leaf is self-signed, never missing+false.
+    /// 0.45.1 A2: `names` are the served leaf's real SANs (both of them),
+    /// not an assumed `[host]`.
     #[test]
     fn tls_cert_status_rcgen_leaf_is_self_signed() {
-        let der = mint_leaf_der("rcgen self signed cert", None);
+        let der = mint_leaf_der_with_sans(
+            "rcgen self signed cert",
+            None,
+            &["mail.acme.dev", "Autoconfig.Acme.dev"],
+        );
         let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "self-signed", "{v}");
@@ -3893,12 +3939,26 @@ mod tests {
         );
         assert_eq!(v["host"].as_str().expect("host"), "mail.acme.dev", "{v}");
         assert_eq!(
-            v["names"].as_array().expect("names")[0]
-                .as_str()
-                .expect("name"),
-            "mail.acme.dev",
+            v["names"],
+            serde_json::json!(["mail.acme.dev", "autoconfig.acme.dev"]),
             "{v}"
         );
+    }
+
+    /// 0.45.1 A2 / HF10: no certificate served → `names` is empty and
+    /// `host` stays set; a leaf without SANs lists none either.
+    #[test]
+    fn tls_cert_status_names_are_empty_without_a_served_san() {
+        let _g = with_test_tls_cert(TlsProbe::Missing, false);
+        let v = tls_cert_status(Some("mail.acme.dev"));
+        assert_eq!(v["names"], serde_json::json!([]), "{v}");
+        assert_eq!(v["host"], "mail.acme.dev", "{v}");
+        drop(_g);
+        let der = mint_leaf_der("R3", Some("Let's Encrypt"));
+        let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
+        let v = tls_cert_status(Some("mail.acme.dev"));
+        assert_eq!(v["state"], "issued", "{v}");
+        assert_eq!(v["names"], serde_json::json!([]), "{v}");
     }
 
     /// L1: handshake + ACME-looking issuer is issued, not self-signed.

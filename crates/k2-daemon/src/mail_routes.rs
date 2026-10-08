@@ -262,6 +262,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/group/members" => crate::mail::calendar_share::handle_group_members_get(params),
         "/cli/mail/calendar/shares" => crate::mail::calendar_share::handle_shares(params),
         "/cli/mail/calendar/sharing" => crate::mail::calendar_share::handle_sharing_get(params),
+        // 0.45.1: the outbound settings K2 manages (mx route, DANE, who
+        // set them). POST {dane: on} turns DANE back on. Same gate.
+        "/cli/mail/outbound" => crate::mail::defaults::handle_get(params),
 
         // ── POST-only mutations reached via the GET chain → 405 ─────
         // (feedback_post_only_route_guards house rule.)
@@ -431,6 +434,7 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/cert/renew" => routes_server::handle_cert_renew(body),
         "/cli/mail/cert/names" => crate::mail::cert_names::handle_post(body),
         "/cli/mail/cert/owner" => crate::mail::cert_owner::handle_post(body),
+        "/cli/mail/outbound" => crate::mail::defaults::handle_post(body),
         "/cli/mail/list" => crate::mail::lists::handle_list_create(body),
         "/cli/mail/list/members" => crate::mail::lists::handle_members_post(body),
         "/cli/mail/list/delete" => crate::mail::lists::handle_list_delete(body),
@@ -550,6 +554,7 @@ pub fn is_mail_owner_surface(path: &str) -> bool {
         || path == "/cli/mail/cert/renew"
         || path == "/cli/mail/cert/names"
         || path == "/cli/mail/cert/owner"
+        || path == "/cli/mail/outbound"
         || path == "/cli/mail/server/rotate-admin"
 }
 
@@ -625,6 +630,7 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/cert/renew"
             | "/cli/mail/cert/names"
             | "/cli/mail/cert/owner"
+            | "/cli/mail/outbound"
             | "/cli/mail/server/rotate-admin"
             | "/cli/mail/address/password"
             | "/cli/mail/list"
@@ -1211,7 +1217,7 @@ mod tests {
     #[test]
     fn cert_names_route_is_gated_like_cert_renew() {
         // `/cli/mail/cert/owner` (the owner command) has the same gate.
-        for p in ["/cli/mail/cert/names", "/cli/mail/cert/owner"] {
+        for p in ["/cli/mail/cert/names", "/cli/mail/cert/owner", "/cli/mail/outbound"] {
             cert_route_is_gated_like_cert_renew(p);
         }
     }

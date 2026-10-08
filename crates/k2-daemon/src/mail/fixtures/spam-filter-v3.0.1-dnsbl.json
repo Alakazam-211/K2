@@ -1,0 +1,121 @@
+{
+  "source": "https://github.com/stalwartlabs/spam-filter/releases/download/v3.0.1/spam-filter-rules.json.gz",
+  "note": "Verbatim excerpt: the 3 SpamDnsblServer objects (only these differ between v3.0.1 and v3.0.2).",
+  "SpamDnsblServer": [
+    {
+      "@type": "Domain",
+      "name": "STWT_SURBL_DOMAIN",
+      "enable": true,
+      "tag": {
+        "else": "false",
+        "match": {
+          "0": {
+            "if": "octets[3] == 128",
+            "then": "'CRACKED_SURBL'"
+          },
+          "1": {
+            "if": "octets[3] == 64",
+            "then": "'ABUSE_SURBL'"
+          },
+          "2": {
+            "if": "octets[3] == 32",
+            "then": "'CT_SURBL'"
+          },
+          "3": {
+            "if": "octets[3] == 16",
+            "then": "'MW_SURBL_MULTI'"
+          },
+          "4": {
+            "if": "octets[3] == 8",
+            "then": "'PH_SURBL_MULTI'"
+          },
+          "5": {
+            "if": "octets[3] == 4",
+            "then": "'DM_SURBL'"
+          },
+          "6": {
+            "if": "octets[3] == 1",
+            "then": "'SURBL_BLOCKED'"
+          }
+        }
+      },
+      "zone": {
+        "else": "value + '.multi.surbl.org'",
+        "match": {}
+      }
+    },
+    {
+      "@type": "Domain",
+      "name": "STWT_URIBL_DOMAIN",
+      "enable": true,
+      "tag": {
+        "else": "false",
+        "match": {
+          "0": {
+            "if": "octets[3] == 1",
+            "then": "'URIBL_BLOCKED'"
+          },
+          "1": {
+            "if": "octets[3] == 2",
+            "then": "'URIBL_BLACK'"
+          },
+          "2": {
+            "if": "octets[3] == 4",
+            "then": "'URIBL_GREY'"
+          },
+          "3": {
+            "if": "octets[3] == 8",
+            "then": "'URIBL_RED'"
+          }
+        }
+      },
+      "zone": {
+        "else": "value + '.multi.uribl.com'",
+        "match": {}
+      }
+    },
+    {
+      "@type": "Url",
+      "name": "STWT_SURBL_HASHBL_DOMAIN",
+      "enable": true,
+      "tag": {
+        "else": "false",
+        "match": {
+          "0": {
+            "if": "octets[0] != 127",
+            "then": "false"
+          },
+          "1": {
+            "if": "octets[3] == 8",
+            "then": "'SURBL_HASHBL_PHISH'"
+          },
+          "2": {
+            "if": "octets[3] == 16",
+            "then": "'SURBL_HASHBL_MALWARE'"
+          },
+          "3": {
+            "if": "octets[3] == 64",
+            "then": "'SURBL_HASHBL_ABUSE'"
+          },
+          "4": {
+            "if": "octets[3] == 128",
+            "then": "'SURBL_HASHBL_CRACKED'"
+          },
+          "5": {
+            "if": "octets[2] == 1",
+            "then": "'SURBL_HASHBL_EMAIL'"
+          }
+        }
+      },
+      "zone": {
+        "else": "false",
+        "match": {
+          "0": {
+            "if": "key_exists('surbl-hashbl', host)",
+            "then": "hash(host + path, 'md5') + '.hashbl.surbl.org'"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -514,6 +514,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/oauth-config/set", Admin),
     both("/cli/mail/ooo", Admin),
     post("/cli/mail/ooo/unset", Admin),
+    both("/cli/mail/outbound", Admin),
     get("/cli/mail/outbox", Member),
     post("/cli/mail/outbox/cancel", Member),
     get("/cli/mail/preflight", Member),

@@ -1145,10 +1145,18 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
                 run(&ops, &mut doors, &probe, &plan)
             }));
             match outcome {
-                Ok(v) => k2_core::log_debug!(
-                    "[mail/upgrade] finished: {}",
-                    v["state"].as_str().unwrap_or("?")
-                ),
+                Ok(v) => {
+                    k2_core::log_debug!(
+                        "[mail/upgrade] finished: {}",
+                        v["state"].as_str().unwrap_or("?")
+                    );
+                    // 0.45.1: re-run the field-fix reconcile on the new
+                    // version (puts back the DANE K2 turned off below
+                    // 0.16.20). It waits for this thread's latch.
+                    if v["state"] == "succeeded" {
+                        super::defaults::spawn_after("upgrade");
+                    }
+                }
                 // The record stays `running` → reported `interrupted`, and
                 // the next upgrade is blocked until acknowledged.
                 Err(_) => k2_core::log_debug!("[mail/upgrade] PANICKED mid-run"),

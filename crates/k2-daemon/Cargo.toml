@@ -241,9 +241,6 @@ rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "
 # Postgres 16 grammar for POST /cli/db/query. pg_query 6.x is PostgreSQL 17.
 pg_query = "=5.1.1"
 
-# K2 vault (prd-k2-vault-v1): the encrypted secret store, used in-process
-# behind its SecretStore trait. Its own small crate (cores direction).
-k2-vault = { path = "../k2-vault" }
 # Constant-time zeroing of key buffers read from key stores.
 zeroize = "1"
 

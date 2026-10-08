@@ -80,6 +80,8 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'components/Settings/sections/CodeEditorSettingsSection.tsx': 'example code inside a prompt string',
   'hooks/useGit.ts': 'a local function named fetch (git refresh)',
   'dev/room-frame-probe.ts': 'dev-only P1.5 probe, not shipped',
+  'lib/zen/zen-lib-loader.ts':
+    "Zen widget library: reads the bundled files from the app's own origin (/zen-lib/), not a daemon call; downloads go through daemonCli on the local scope",
   'dev/zen-spike-s0.ts':
     'Zen v2 S0 spike (VITE_K2_ZEN_SPIKE=s0 builds only): reads its own page CSP header; the rest are probes inside the sealed frame',
 }

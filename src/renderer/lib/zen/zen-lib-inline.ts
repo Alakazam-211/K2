@@ -11,6 +11,9 @@
 //   `</script` → `<\/script`   (`\/` is `/` in strings, templates and every regex mode)
 //   `<!--`     → `\x3C!--`     (`\x3C` is `<` in strings, templates and every regex mode)
 // A `<` that was already escaped (`\<`) has its escape replaced, not doubled.
+// The one visible difference: a rewritten regular expression's `.source`
+// shows the escape (esbuild does the same for `</script`); what it matches
+// is unchanged.
 //
 // Used by scripts/vendor-zen-lib.sh on the bundled files (so they are
 // checked in already safe) and by zenLib.texts on downloaded and CDN text.

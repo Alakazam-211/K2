@@ -125,9 +125,24 @@ if [ "$NEED_FRPC" = 1 ]; then
 fi
 
 # ── 4. daemon binary (minisign-verified via install-daemon.sh) ───────
+# Root decides the version ONCE, here, and both the daemon (step 4) and
+# the mail helper (step 7a) use it. Root never executes the installed
+# daemon (it lives in the daemon user's writable home) to learn it.
+# Plain x.y.z only: it becomes part of download URLs.
+if [ -z "$K2_VERSION" ]; then
+	log "resolving the latest daemon release"
+	K2_VERSION="$(curl -fsSL --retry 3 --retry-delay 2 \
+		"https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json" \
+		| sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)" \
+		|| die "could not resolve the latest daemon release; set K2_VERSION=<x.y.z>"
+fi
+K2_VERSION="${K2_VERSION#v}"
+[[ "$K2_VERSION" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] \
+	|| die "K2_VERSION must look like 0.45.1 (got '$K2_VERSION')"
 INSTALLER="$SCRIPT_DIR/install-daemon.sh"
 if [ ! -f "$INSTALLER" ]; then
-	INSTALLER="/tmp/k2-install-daemon.sh"
+	INSTALLER="$(mktemp -d)/install-daemon.sh"
+	chmod 0755 "$(dirname "$INSTALLER")"
 	log "fetching install-daemon.sh from the repo"
 	curl -fsSL "$RAW_BASE/scripts/install-daemon.sh" -o "$INSTALLER"
 	chmod +x "$INSTALLER"
@@ -276,12 +291,21 @@ if [ "$(uname -s)" != "Linux" ]; then
 	MAIL_HELPER_LINE="skipped (not Linux)"
 else
 	log "installing ${MAIL_HELPER_PATH}"
-	# The daemon version step 4 just installed. 0.40.82+ `k2-daemon
-	# --version` prints and exits without booting.
-	DAEMON_VERSION="$(timeout 10 "$K2_HOME/.local/bin/k2-daemon" --version 2>/dev/null \
+	# The version is the one root resolved before step 4 (K2_VERSION),
+	# never read by running the daemon binary as root: it sits in the
+	# daemon user's writable home. Plain x.y.z only.
+	DAEMON_VERSION="${K2_VERSION#v}"
+	[[ "$DAEMON_VERSION" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] \
+		|| mail_helper_die "K2_VERSION must be a plain x.y.z release (got '${K2_VERSION}')"
+	# Cross-check that step 4 installed that version. The binary runs as
+	# the daemon user (never root); 0.40.82+ prints and exits without
+	# booting. Its answer is only compared, never used.
+	INSTALLED_VERSION="$(runuser -u "$K2_RUN_USER" -- timeout 10 "$K2_HOME/.local/bin/k2-daemon" --version 2>/dev/null \
 		| sed -n 's/^k2-daemon[[:space:]]\{1,\}\([0-9][^[:space:]]*\).*/\1/p' | head -n1 || true)"
-	if [ -n "$K2_VERSION" ] && [ -n "$DAEMON_VERSION" ] && [ "${K2_VERSION#v}" != "$DAEMON_VERSION" ]; then
-		mail_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${DAEMON_VERSION}; the helper must match the daemon"
+	[ -n "$INSTALLED_VERSION" ] \
+		|| mail_helper_die "could not read the installed daemon version from $K2_HOME/.local/bin/k2-daemon --version (run as ${K2_RUN_USER})"
+	if [ "$INSTALLED_VERSION" != "$DAEMON_VERSION" ]; then
+		mail_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${INSTALLED_VERSION}; the helper must match the daemon"
 	fi
 	MAIL_HELPER_SRC=""
 	if [ -n "${K2_MAIL_HELPER_BIN:-}" ]; then
@@ -292,20 +316,14 @@ else
 	elif [ -f "$SCRIPT_DIR/../target/release/k2-mail-helper" ]; then
 		MAIL_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-mail-helper"
 	fi
-	if [ -z "$MAIL_HELPER_SRC" ] && [ -z "$DAEMON_VERSION" ]; then
-		mail_helper_die "no local k2-mail-helper binary and could not read the installed daemon version from $K2_HOME/.local/bin/k2-daemon --version (set K2_MAIL_HELPER_BIN)"
-	fi
 	# The installer: the copy beside this script, else the signed release's
-	# own copy for the same version, else (local binary, daemon version
-	# unreadable) the repo's copy.
+	# own copy for the same version. Downloaded into a fresh root-only
+	# directory, never a fixed /tmp name another user could pre-create.
 	MAIL_HELPER_INSTALLER="$SCRIPT_DIR/install-mail-helper.sh"
 	if [ ! -f "$MAIL_HELPER_INSTALLER" ]; then
-		MAIL_HELPER_INSTALLER="/tmp/k2-install-mail-helper.sh"
-		if [ -n "$DAEMON_VERSION" ]; then
-			MAIL_HELPER_INSTALLER_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-mail-helper.sh"
-		else
-			MAIL_HELPER_INSTALLER_URL="$RAW_BASE/scripts/install-mail-helper.sh"
-		fi
+		MAIL_HELPER_TMP="$(mktemp -d)" || mail_helper_die "mktemp failed"
+		MAIL_HELPER_INSTALLER="$MAIL_HELPER_TMP/install-mail-helper.sh"
+		MAIL_HELPER_INSTALLER_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-mail-helper.sh"
 		log "fetching install-mail-helper.sh (${MAIL_HELPER_INSTALLER_URL})"
 		curl -fsSL --retry 3 --retry-delay 2 "$MAIL_HELPER_INSTALLER_URL" -o "$MAIL_HELPER_INSTALLER" \
 			|| mail_helper_die "could not download $MAIL_HELPER_INSTALLER_URL"
@@ -313,7 +331,7 @@ else
 	if [ -n "$MAIL_HELPER_SRC" ]; then
 		bash "$MAIL_HELPER_INSTALLER" --file "$MAIL_HELPER_SRC" --user "$K2_RUN_USER" \
 			|| mail_helper_die "install-mail-helper.sh --file $MAIL_HELPER_SRC failed (output above)"
-		MAIL_HELPER_LINE="installed (local build${DAEMON_VERSION:+, daemon v${DAEMON_VERSION}})"
+		MAIL_HELPER_LINE="installed (local build, daemon v${DAEMON_VERSION})"
 	else
 		log "no local k2-mail-helper — installing the signed v${DAEMON_VERSION} release asset"
 		bash "$MAIL_HELPER_INSTALLER" --version "$DAEMON_VERSION" --user "$K2_RUN_USER" \

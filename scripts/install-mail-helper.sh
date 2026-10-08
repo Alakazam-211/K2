@@ -8,8 +8,7 @@
 #   curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh \
 #     | sudo bash -s -- --version <version>
 #
-#   sudo bash install-mail-helper.sh                         # version of the daemon on this box
-#   sudo bash install-mail-helper.sh --version 0.44.1
+#   sudo bash install-mail-helper.sh --version 0.44.1        # the daemon's version
 #   sudo bash install-mail-helper.sh --file ./k2-mail-helper  # locally built binary
 #
 # What it does (and nothing else):
@@ -38,6 +37,11 @@
 # nothing. Release assets exist from 0.44.1; the helper's argv must match
 # the daemon, so install the version the daemon runs.
 #
+# --version (or --file) is required. The script never asks the box which
+# version it runs: the daemon binary, its port file and its /boot-status
+# all belong to the daemon user, and root must never execute or trust
+# them. The version must be plain x.y.z.
+#
 # Environment (rarely needed):
 #   K2_RUN_USER      daemon user (default k2; same as --user)
 #   K2_RELEASE_BASE  release download base (default the GitHub releases URL;
@@ -64,14 +68,14 @@ FILE=""
 
 usage() {
 	cat <<'EOF'
-Usage: install-mail-helper.sh [--version <x.y.z> | --file <path>] [--user <name>]
+Usage: install-mail-helper.sh (--version <x.y.z> | --file <path>) [--user <name>]
 
 Run as root. Installs /usr/local/libexec/k2-mail-helper (root:root 0755) and
 /etc/sudoers.d/k2-mail-helper (0440, visudo-checked) so the K2 daemon user
 can enable hosted mail.
 
-  --version <v>   release to fetch (default: the daemon version on this box,
-                  from its /boot-status or `k2-daemon --version`)
+  --version <v>   release to fetch: the daemon's version, plain x.y.z
+                  (required unless --file)
   --file <path>   install this local binary instead of downloading
   --user <name>   daemon user for the sudoers line (default: k2)
 EOF
@@ -100,8 +104,10 @@ while [ $# -gt 0 ]; do
 done
 
 [ -z "$VERSION" ] || [ -z "$FILE" ] || die "pass --version or --file, not both"
+[ -n "$VERSION" ] || [ -n "$FILE" ] || die "pass --version <x.y.z> (the daemon's version, e.g. from 'k2 hostmail status' or the release you installed) or --file <path>. This script never runs the daemon's own binary as root to find it."
 VERSION="${VERSION#v}"
-if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.-]*$ ]]; then
+# Plain semver core only: it becomes part of a download URL.
+if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
 	die "--version must look like 0.44.1 (got '$VERSION')"
 fi
 # The user name lands in sudoers: refuse anything but a plain login name.
@@ -131,43 +137,6 @@ cleanup() {
 trap cleanup EXIT
 
 sha_of() { sha256sum "$1" | awk '{print $1}'; }
-
-user_home() {
-	local h
-	h="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6 || true)"
-	[ -n "$h" ] || h="/home/$RUN_USER"
-	printf '%s\n' "$h"
-}
-
-# The version the box's daemon runs. Prefer the RUNNING daemon's
-# unauthenticated /boot-status (no binary is executed). Fall back to
-# `k2-daemon --version` (safe on 0.40.82+, which exits without booting;
-# the helper itself needs 0.40.150+), bounded by timeout.
-detect_version() {
-	local home port body v bin
-	home="$(user_home)"
-	for pf in "$home/.k2/daemon.port" "$home/.k2so/daemon.port"; do
-		[ -f "$pf" ] || continue
-		port="$(tr -dc '0-9' <"$pf")"
-		[ -n "$port" ] || continue
-		body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/boot-status" 2>/dev/null || true)"
-		v="$(printf '%s' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-		if [ -n "$v" ]; then
-			printf '%s\n' "$v"
-			return 0
-		fi
-	done
-	for bin in "$home/.local/bin/k2-daemon" "$(command -v k2-daemon 2>/dev/null || true)" \
-		/usr/bin/k2-daemon /usr/local/bin/k2-daemon; do
-		[ -n "$bin" ] && [ -x "$bin" ] || continue
-		v="$(timeout 10 "$bin" --version 2>/dev/null | sed -n 's/^k2-daemon[[:space:]]\{1,\}\([0-9][^[:space:]]*\).*/\1/p' | head -n1 || true)"
-		if [ -n "$v" ]; then
-			printf '%s\n' "$v"
-			return 0
-		fi
-	done
-	return 1
-}
 
 fetch() {
 	# fetch <url> <dest>
@@ -203,10 +172,6 @@ if [ -n "$FILE" ]; then
 		PROVENANCE="local file $FILE (operator-supplied, not signature-checked)"
 	fi
 else
-	if [ -z "$VERSION" ]; then
-		VERSION="$(detect_version)" || die "could not find the daemon version on this box (no running daemon for user '$RUN_USER', no k2-daemon binary). Pass --version <x.y.z> — the same version as the daemon."
-		log "daemon version on this box: $VERSION"
-	fi
 	command -v minisign >/dev/null 2>&1 || die "minisign is required to verify the helper (apt-get install minisign) — refusing to install an unverified root binary"
 	command -v curl >/dev/null 2>&1 || die "curl is required"
 	ASSET="k2-mail-helper-linux-${ARCH}"

@@ -40,6 +40,22 @@ if printf '%s' "$BLOCK" | grep -q 'NOPASSWD'; then fail "7a must not write sudo 
 ok "no new sudo policy in the provisioner"
 if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'hostmail|k2 dns|/cli/mail|/cli/dns'; then fail "7a must not enable mail or touch DNS"; fi
 ok "does not enable mail or touch DNS"
+# Root never executes the daemon user's binary: every line that runs the
+# installed k2-daemon must drop to the daemon user first.
+if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -F '/.local/bin/k2-daemon"' | grep -vq 'runuser -u "$K2_RUN_USER" --'; then
+	fail "7a runs the daemon user's k2-daemon without dropping to that user"
+fi
+if grep -Ev '^[[:space:]]*#' "$PROVISION" | grep -F '/.local/bin/k2-daemon"' | grep -F -- '--version' | grep -vq 'runuser -u'; then
+	fail "the provisioner runs k2-daemon --version as root somewhere"
+fi
+ok "the installed daemon only ever runs as the daemon user"
+L_RESOLVE="$(line_of 'K2_VERSION must look like')"
+[ -n "$L_RESOLVE" ] && [ "$L_RESOLVE" -lt "$L_DAEMON" ] || fail "K2_VERSION must be resolved and validated before step 4"
+ok "root resolves and validates K2_VERSION before the daemon install"
+if grep -Ev '^[[:space:]]*#' "$PROVISION" | grep -Eq '/tmp/k2-install'; then
+	fail "the provisioner downloads an installer to a fixed /tmp name"
+fi
+ok "no fixed /tmp installer paths"
 
 WORK="$(mktemp -d -t k2-provision-mail-helper-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
@@ -50,6 +66,14 @@ REAL_STAT="$(command -v stat)"
 cat >"$SHIMS/uname" <<'SH'
 #!/bin/sh
 case "${1:-}" in -s) echo "${SHIM_OS:-Linux}" ;; -m) echo x86_64 ;; *) echo "${SHIM_OS:-Linux}" ;; esac
+SH
+cat >"$SHIMS/runuser" <<SH
+#!/bin/sh
+# runuser -u <user> -- cmd...: record the user, run cmd as this test user.
+[ "\$1" = "-u" ] && [ "\$3" = "--" ] || { echo "runuser shim: bad argv \$*" >&2; exit 97; }
+echo "\$2" >>"$WORK/runuser.log"
+shift 3
+SHIM_VIA_RUNUSER=1 exec "\$@"
 SH
 cat >"$SHIMS/timeout" <<'SH'
 #!/bin/sh
@@ -77,9 +101,11 @@ chmod +x "$SHIMS"/*
 # Fake daemon home + fake script dir holding a fake installer.
 K2_HOME_T="$WORK/home/k2"
 mkdir -p "$K2_HOME_T/.local/bin"
-cat >"$K2_HOME_T/.local/bin/k2-daemon" <<'SH'
+cat >"$K2_HOME_T/.local/bin/k2-daemon" <<SH
 #!/bin/sh
-[ "$1" = "--version" ] && echo "k2-daemon ${FAKE_DAEMON_VERSION-0.45.0}"
+# Record whether this ran through runuser (as the daemon user) or not.
+echo "\${SHIM_VIA_RUNUSER:-direct}" >>"$WORK/daemon-runs.log"
+[ "\$1" = "--version" ] && echo "k2-daemon \${FAKE_DAEMON_VERSION-0.45.0}"
 SH
 chmod +x "$K2_HOME_T/.local/bin/k2-daemon"
 SD="$WORK/scripts"
@@ -108,10 +134,10 @@ STEP="$WORK/step.sh"
 run_step() {
 	# run_step <dest-root>; sets out/rc. Extra env comes from the caller.
 	local dest="$1"
-	rm -f "$WORK/installer.log" "$WORK/visudo.log"
+	rm -f "$WORK/installer.log" "$WORK/visudo.log" "$WORK/runuser.log" "$WORK/daemon-runs.log"
 	set +e
 	out="$(PATH="$SHIMS:$PATH" K2_INSTALL_ROOT="$dest" K2_HOME="$K2_HOME_T" \
-		SCRIPT_DIR="$SD" K2_RUN_USER="${K2_RUN_USER:-k2}" K2_VERSION="${K2_VERSION:-}" \
+		SCRIPT_DIR="$SD" K2_RUN_USER="${K2_RUN_USER:-k2}" K2_VERSION="${K2_VERSION-0.45.0}" \
 		RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
 	rc=$?
 	set -e
@@ -128,6 +154,9 @@ ok "visudo -c ran after install"
 printf '%s' "$out" | grep -q 'mail helper: installed (v0.45.0)' || fail "missing 'mail helper: installed (v0.45.0)': $out"
 printf '%s' "$out" | grep -q 'SUMMARY=installed (v0.45.0)' || fail "summary var: $out"
 ok "prints 'mail helper: installed (v0.45.0)'"
+grep -qx k2 "$WORK/runuser.log" || fail "the version cross-check must run as k2: $(cat "$WORK/runuser.log" 2>/dev/null)"
+if grep -qx direct "$WORK/daemon-runs.log"; then fail "k2-daemon was executed without dropping to k2"; fi
+ok "the installed daemon ran only as k2 (runuser), never as the caller"
 
 echo "== installer fails: provisioning stops with a clear message =="
 FAKE_INSTALL_RC=7 run_step "$WORK/box2"
@@ -168,6 +197,15 @@ FAKE_DAEMON_VERSION="" run_step "$WORK/box9"
 [ "$rc" -ne 0 ] || fail "unreadable daemon version must fail: $out"
 printf '%s' "$out" | grep -q 'could not read the installed daemon version' || fail "message: $out"
 ok "unreadable daemon version is fatal"
+
+echo "== K2_VERSION is required and must be plain x.y.z =="
+for bad in "" "latest" "0.45" "0.45.0-rc1" '0.45.0;id' '0.45.0/../x'; do
+	K2_VERSION="$bad" run_step "$WORK/box-badver"
+	[ "$rc" -ne 0 ] || fail "K2_VERSION='$bad' must fail: $out"
+	printf '%s' "$out" | grep -q 'plain x.y.z' || fail "K2_VERSION='$bad' message: $out"
+	[ ! -e "$WORK/installer.log" ] || fail "K2_VERSION='$bad': installer must not run"
+done
+ok "missing or malformed K2_VERSION stops before anything runs"
 
 echo "== not Linux: skipped with a note, nothing run =="
 SHIM_OS=Darwin run_step "$WORK/box10"

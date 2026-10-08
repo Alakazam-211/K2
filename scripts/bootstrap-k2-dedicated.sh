@@ -88,7 +88,9 @@ WORKER_TAR="k2-vmm-worker-${VER}-${ARCH}.tar.zst"
 run_standard_provision() {
 	local prov="$SCRIPT_DIR/provision-k2-server.sh"
 	if [ ! -f "$prov" ]; then
-		prov="/tmp/k2-provision-k2-server.sh"
+		# A fresh root-only directory, never a fixed /tmp name another
+		# user could pre-create and rewrite before root runs it.
+		prov="$(mktemp -d)/provision-k2-server.sh"
 		log "fetching provision-k2-server.sh from raw main"
 		curl -fsSL "$RAW_BASE/scripts/provision-k2-server.sh" -o "$prov"
 		chmod +x "$prov"
@@ -211,20 +213,31 @@ else
 fi
 
 # ── 6. k2-vmm-worker → NEXT TO the daemon binary, setuid-root ────────
+# BIN_DIR belongs to the daemon user, so root never chowns or setuids a
+# file that is already there (it may not be the worker any more). Every
+# run extracts the worker from the sha-verified artifact into a root-only
+# staging directory on the same filesystem, sets root:root 4755 THERE,
+# then renames it into place (atomic; replacing it later strips the bit).
 WORKER_DST="$BIN_DIR/k2-vmm-worker"
-WORKER_STAMP="$BIN_DIR/.k2-vmm-worker.sha"
-WORKER_WANT=$(expected_sha "$WORKER_TAR")
-if [ -f "$WORKER_STAMP" ] && [ "$(cat "$WORKER_STAMP")" = "$WORKER_WANT" ] && [ -f "$WORKER_DST" ]; then
-	log "worker already installed (stamp matches)"
-else
-	fetch_asset "$WORKER_TAR"
-	log "installing k2-vmm-worker at $WORKER_DST"
-	zstd -dcq "$DL/$WORKER_TAR" | tar -xf - -C "$BIN_DIR" k2-vmm-worker
-	printf '%s' "$WORKER_WANT" > "$WORKER_STAMP"
-fi
-# ALWAYS re-apply the privilege bits (anything that replaces the file strips them):
-chown root:root "$WORKER_DST"
-chmod u+s,go-w "$WORKER_DST"   # -rwsr-xr-x
+fetch_asset "$WORKER_TAR"
+STAGE_PARENT="$(dirname "$K2_HOME")"
+[ "$(stat -c '%u' "$STAGE_PARENT")" = "0" ] \
+	&& [ -z "$(find "$STAGE_PARENT" -maxdepth 0 -perm /022)" ] \
+	|| die "$STAGE_PARENT must be root-owned and not group/world-writable to stage the setuid worker"
+[ -d "$BIN_DIR" ] && [ ! -L "$BIN_DIR" ] || die "$BIN_DIR is missing or a symlink"
+[ "$(stat -c '%d' "$STAGE_PARENT")" = "$(stat -c '%d' "$BIN_DIR")" ] \
+	|| die "$BIN_DIR is not on the same filesystem as $STAGE_PARENT; cannot place the setuid worker atomically"
+WORKER_STAGE="$(mktemp -d "$STAGE_PARENT/.k2-vmm-worker.XXXXXX")" || die "mktemp failed"
+chmod 0700 "$WORKER_STAGE"
+log "installing k2-vmm-worker at $WORKER_DST"
+zstd -dcq "$DL/$WORKER_TAR" | tar --no-same-owner -xf - -C "$WORKER_STAGE" k2-vmm-worker
+[ -f "$WORKER_STAGE/k2-vmm-worker" ] && [ ! -L "$WORKER_STAGE/k2-vmm-worker" ] \
+	|| die "worker artifact did not contain a regular k2-vmm-worker file"
+chown root:root "$WORKER_STAGE/k2-vmm-worker"
+chmod 4755 "$WORKER_STAGE/k2-vmm-worker"   # -rwsr-xr-x
+mv -fT "$WORKER_STAGE/k2-vmm-worker" "$WORKER_DST"
+rmdir "$WORKER_STAGE"
+rm -f "$BIN_DIR/.k2-vmm-worker.sha"   # leftover stamp; no longer trusted
 
 # ── 7. nft file-capability (caps don't cross exec to a plain binary) ─
 log "setcap cap_net_admin+ei /usr/sbin/nft"

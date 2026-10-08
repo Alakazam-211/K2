@@ -220,6 +220,31 @@ ok "sudoers user injection refused"
 run "$D4" --version 'v1;rm -rf /'
 expect_fail_with "bad version" "must look like"
 ok "malformed version refused"
+for bad in 0.44 0.44.1.2 00.44.1 0.044.1 0.44.1-rc1 0.44.1+x '0.44.1/../x' ' 0.44.1' '0.44.1 ' 1234567.0.0; do
+	run "$D4" --version "$bad"
+	expect_fail_with "strict version '$bad'" "must look like"
+done
+ok "only plain x.y.z versions are accepted"
+
+echo "== no version source: refuse; never ask the daemon user's files =="
+# A daemon-user-owned binary that records being run. Root must never run it.
+FAKE_K2_HOME="$WORK/home/k2"
+mkdir -p "$FAKE_K2_HOME/.local/bin" "$FAKE_K2_HOME/.k2"
+cat >"$FAKE_K2_HOME/.local/bin/k2-daemon" <<SH
+#!/bin/sh
+echo ran >"$WORK/daemon-was-executed"
+echo "k2-daemon 0.44.1"
+SH
+chmod +x "$FAKE_K2_HOME/.local/bin/k2-daemon"
+echo 1 >"$FAKE_K2_HOME/.k2/daemon.port"
+HOME="$FAKE_K2_HOME" run "$D4"
+expect_fail_with "no --version" "pass --version"
+[ ! -e "$WORK/daemon-was-executed" ] || fail "the installer executed the daemon user's binary"
+ok "no --version/--file is refused without running anything of the daemon user's"
+if grep -Ev '^[[:space:]]*#' "$INSTALLER" | grep -Eq 'detect_version|\.local/bin/k2-daemon|daemon\.port|/boot-status'; then
+	fail "installer still derives the version from daemon-user files"
+fi
+ok "installer has no daemon-user version probe left"
 SHIM_UID=1000 run "$D4" --version 0.44.1
 expect_fail_with "non-root" "run as root"
 ok "non-root refused"

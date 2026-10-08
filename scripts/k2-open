@@ -1,6 +1,6 @@
 #!/bin/sh
 # k2-open — K2 browser-open shim (staged by the K2 daemon; do not edit).
-# K2_OPEN_SHIM_VERSION: 1
+# K2_OPEN_SHIM_VERSION: 2
 #
 # 0.40.34 (Rosson): when a process inside a K2 terminal session runs
 # `xdg-open <url>` / honors $BROWSER, the URL must surface in the
@@ -22,7 +22,10 @@
 #      require_hook capability gate).
 #   2. Owner fallback: ~/.k2/heartbeat.{port,token} → loopback TCP with
 #      the standard ?token= query gate.
-# The token is NEVER echoed or logged by this script.
+# The token is NEVER echoed or logged by this script, and never put on
+# curl's argv (any OS user can read argv with `ps`): the header / URL that
+# carries it goes to curl as a config on stdin (`curl -K -`), written by
+# the printf builtin. Tokens hold no `"` or `\`, so no escaping.
 
 # ── parse: find the URL argument ─────────────────────────────────────
 url=""
@@ -50,10 +53,10 @@ if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
     _sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
     _hook_tok="${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}"
     if [ -n "$_sock" ] && [ -n "$_hook_tok" ] && [ -S "$_sock" ]; then
-        if curl -fsS --max-time 5 --unix-socket "$_sock" \
-            -H "Authorization: Bearer $_hook_tok" \
-            --data-urlencode "url=$url" \
-            "http://k2/cli/browser/open-url" >/dev/null 2>&1; then
+        if printf 'header = "Authorization: Bearer %s"\n' "$_hook_tok" \
+            | curl -fsS -K - --max-time 5 --unix-socket "$_sock" \
+                --data-urlencode "url=$url" \
+                "http://k2/cli/browser/open-url" >/dev/null 2>&1; then
             exit 0
         fi
     fi
@@ -63,9 +66,9 @@ if [ "$is_http" = 1 ] && command -v curl >/dev/null 2>&1; then
         _port=$(cat "${_k2_home}/heartbeat.port" 2>/dev/null)
         _tok=$(cat "${_k2_home}/heartbeat.token" 2>/dev/null)
         if [ -n "$_port" ] && [ -n "$_tok" ]; then
-            if curl -fsS --max-time 5 \
-                --data-urlencode "url=$url" \
-                "http://127.0.0.1:${_port}/cli/browser/open-url?token=${_tok}" >/dev/null 2>&1; then
+            if printf 'url = "http://127.0.0.1:%s/cli/browser/open-url?token=%s"\n' "$_port" "$_tok" \
+                | curl -fsS -K - --max-time 5 \
+                    --data-urlencode "url=$url" >/dev/null 2>&1; then
                 exit 0
             fi
         fi

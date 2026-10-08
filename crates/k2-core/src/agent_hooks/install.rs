@@ -175,12 +175,16 @@ HDR=(-H "Content-Type: application/json"
 [ -n "$HINT" ] && HDR+=(-H "X-K2-Hook-Event: $HINT")
 [ -n "$TRUNCATED" ] && HDR+=(-H "X-K2-Hook-Truncated: 1")
 
+# Tokens never ride curl's argv (any OS user can read argv with `ps`):
+# the Authorization header goes in a curl config on fd 3 (a here-string;
+# stdin carries the payload). Tokens hold no `"` or `\`, so no escaping.
+
 # Per-cell socket first, with the scoped token as a Bearer header.
 if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
-    if printf '%s' "$BODY" | curl -sf -X POST --unix-socket "$SOCK" \
+    if printf '%s' "$BODY" | curl -sf -K /dev/fd/3 -X POST --unix-socket "$SOCK" \
         --connect-timeout 1 --max-time 2 "${{HDR[@]}}" \
-        -H "Authorization: Bearer $SCOPED" \
-        --data-binary @- "http://localhost/hook/event" >/dev/null 2>&1; then
+        --data-binary @- "http://localhost/hook/event" >/dev/null 2>&1 \
+        3<<<"header = \"Authorization: Bearer $SCOPED\""; then
         exit 0
     fi
 fi
@@ -190,9 +194,10 @@ fi
 PORT="$(cat "$HOME/.k2/heartbeat.port" 2>/dev/null)"
 [ -z "$PORT" ] && exit 0
 TOKEN="$(cat "$HOME/.k2/heartbeat.token" 2>/dev/null)"
-printf '%s' "$BODY" | curl -s -X POST --connect-timeout 1 --max-time 2 \
-    "${{HDR[@]}}" -H "Authorization: Bearer $TOKEN" \
-    --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1
+printf '%s' "$BODY" | curl -s -K /dev/fd/3 -X POST --connect-timeout 1 --max-time 2 \
+    "${{HDR[@]}}" \
+    --data-binary @- "http://127.0.0.1:$PORT/hook/event" >/dev/null 2>&1 \
+    3<<<"header = \"Authorization: Bearer $TOKEN\""
 exit 0
 "#,
         max_body = super::envelope::MAX_BODY_BYTES,
@@ -1405,6 +1410,77 @@ mod tests {
         assert!(took < Duration::from_secs(3), "{took:?}");
         let (code, stdout, _) = run_script(home.path(), &[], b"{\"hook_event_name\":\"Stop\"}");
         assert_eq!((code, stdout.is_empty()), (0, true));
+    }
+
+    /// 0.45.1: neither the scoped passport nor the owner token is on
+    /// curl's argv (world-readable via `ps`), yet both still reach the
+    /// daemon as the Authorization header. A `curl` shim first on PATH
+    /// logs every argv it is given, then runs the real curl.
+    #[cfg(unix)]
+    #[test]
+    fn t_s1b_tokens_never_on_curl_argv() {
+        let home = TempHome::new("s1b-argv");
+        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        let shim_dir = home.path().join("shim");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let argv_log = home.path().join("curl-argv.log");
+        let shim = shim_dir.join("curl");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec /usr/bin/curl \"$@\"\n",
+                argv_log.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path_env = format!("{}:/usr/bin:/bin", shim_dir.display());
+
+        // Arm 1: the per-cell socket with the scoped passport.
+        let sock = PathBuf::from(format!("/tmp/k2argv-{}-{}.sock", std::process::id(), Instant::now().elapsed().as_nanos() % 100000));
+        let _ = std::fs::remove_file(&sock);
+        let server = serve_one(ServerSock::Unix(std::os::unix::net::UnixListener::bind(&sock).expect("bind")), "204 No Content");
+        let (code, _, _) = run_script(
+            home.path(),
+            &[
+                ("PATH", &path_env),
+                ("K2_PANE_ID", "pane-argv"),
+                ("K2_HOOK_SOCK", sock.to_str().expect("utf8")),
+                ("K2_HOOK_TOKEN", "sid.scoped-argv-secret"),
+            ],
+            b"{\"hook_event_name\":\"Stop\"}",
+        );
+        let raw = server.join().expect("server thread");
+        let _ = std::fs::remove_file(&sock);
+        assert_eq!(code, 0);
+        let (head, body) = split_request(&raw);
+        assert!(head.contains("authorization: bearer sid.scoped-argv-secret"), "{head}");
+        assert_eq!(body, b"{\"hook_event_name\":\"Stop\"}", "stdin payload still the body");
+
+        // Arm 2: loopback TCP with the disk owner token.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
+        std::fs::write(home.path().join(".k2/heartbeat.token"), "owner-argv-secret").unwrap();
+        let server = serve_one(ServerSock::Tcp(listener), "204 No Content");
+        let (code, _, _) = run_script(
+            home.path(),
+            &[("PATH", &path_env), ("K2_PANE_ID", "pane-argv")],
+            b"{\"hook_event_name\":\"Stop\"}",
+        );
+        let raw = server.join().expect("server");
+        assert_eq!(code, 0);
+        let (head, _) = split_request(&raw);
+        assert!(head.contains("authorization: bearer owner-argv-secret"), "{head}");
+
+        let log = std::fs::read_to_string(&argv_log).expect("the shim must have run");
+        assert_eq!(log.lines().count(), 2, "one curl per arm: {log}");
+        assert!(!log.contains("scoped-argv-secret"), "scoped token on curl argv: {log}");
+        assert!(!log.contains("owner-argv-secret"), "owner token on curl argv: {log}");
+        assert!(!log.to_ascii_lowercase().contains("authorization"), "{log}");
     }
 
     #[test]

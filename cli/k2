@@ -331,6 +331,49 @@ _cli_apply_auth_for_verb() {
 
 # END_CLI_TOOL_POLICY
 
+# BEGIN_CLI_CURL_CFG
+# Credentials never ride curl's argv (0.45.1). Every process's argv is
+# readable by every other OS user (`ps`), so the owner token, a session
+# passport, a Connect bearer and secret bodies (passwords, API keys) go
+# to curl as a config read from stdin (`curl -K -`). The `printf` builtin
+# writes it: no exec, no argv, no temp file, no /dev/fd. Works with the
+# macOS system curl and Linux curl 7.68+ (Ubuntu 20.04), bash 3.2+.
+# Wire bytes are unchanged: `?token=` stays in the query, only the way
+# curl learns the URL / header / body moved.
+
+# _k2_cq VALUE — set _K2_CQ to VALUE as a double-quoted curl config string
+# (\ and " escaped, newline → \n; curl's config parser undoes exactly
+# that). Plain values (tokens, urlencoded params) never fork. Values that
+# need escaping go through sed: bash 3.2's ${s//x/y} is quadratic.
+_k2_cq() {
+    local s="$1"
+    if [[ "$s" == *\\* || "$s" == *\"* || "$s" == *$'\n'* ]]; then
+        # Sentinel `x` keeps a trailing newline (sed/$(…) would drop it).
+        s="$(printf '%sx' "$s" | LC_ALL=C sed -e 's/[\\"]/\\&/g' -e '$!s/$/\\n/' | LC_ALL=C tr -d '\n')"
+        s="${s%x}"
+    fi
+    _K2_CQ="\"${s}\""
+}
+
+# _k2_cfg_add NAME VALUE — append `NAME = "VALUE"` to the caller's
+# `local _K2_CFG` (bash dynamic scope; no subshell).
+_k2_cfg_add() {
+    _k2_cq "$2"
+    _K2_CFG="${_K2_CFG}${1} = ${_K2_CQ}"$'\n'
+}
+
+# _k2_curl CFG curl-args… — run curl with CFG (config lines) on stdin.
+# CFG empty → plain curl. The caller's stdin is NOT available to curl.
+_k2_curl() {
+    local cfg="$1"; shift
+    if [ -z "$cfg" ]; then
+        curl "$@"
+        return
+    fi
+    printf '%s' "$cfg" | curl -K - "$@"
+}
+# END_CLI_CURL_CFG
+
 # BEGIN_CLI_STALE_PASSPORT
 # Codex 0.155+ runs every interactive session's tool commands under ONE
 # shared, detached app-server per CODEX_HOME (`codex app-server --listen
@@ -380,9 +423,9 @@ _cli_under_shared_codex_server() {
 # answers with its auth refusal (the token names no live session).
 _cli_scoped_token_rejected() {
     [ -n "${SCOPED_TOKEN:-}" ] && [ -n "${BASE_URL:-}" ] || return 1
-    local out
-    out="$(curl -s --connect-timeout 3 --max-time 5 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
+    local out _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 3 --max-time 5 \
         "${BASE_URL}/cli/whoami" 2>/dev/null)" || return 1
     [[ "$out" == *"Invalid or missing auth token"* ]]
 }
@@ -591,12 +634,17 @@ _cli_transport_is_denied() {
 # Body on stdout. -v so modern curl's OS errno (EPERM vs refused) is visible.
 # `{ } 4>&1` + `1>&4` keeps the body on this function's stdout (so
 # `resp=$(cli_request …)` works); stderr is classified, never printed.
+# A leading `--k2-cfg CFG` hands curl secret config lines on stdin (_k2_curl).
 _cli_curl() {
-    local err rc=1
+    local err rc=1 cfg=""
+    if [ "${1:-}" = "--k2-cfg" ]; then
+        cfg="$2"
+        shift 2
+    fi
     local _had_e=0
     case $- in *e*) _had_e=1; set +e ;; esac
     {
-        err=$(curl "$@" 2>&1 1>&4)
+        err=$(_k2_curl "$cfg" "$@" 2>&1 1>&4)
         rc=$?
     } 4>&1
     [ "$_had_e" -eq 1 ] && set -e
@@ -616,9 +664,10 @@ cli_request() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    _cli_curl -sS -v -G "${BASE_URL}${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
-        -d "$params"
+    local _K2_CFG=""
+    _k2_cfg_add data "$params"
+    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G "${BASE_URL}${endpoint}" \
+        --connect-timeout 5 --max-time 30
 }
 
 # 0.44.4 — POST twin of cli_request for routes that change state (the
@@ -637,8 +686,9 @@ cli_request_post() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local out rc=0
-    out="$(_cli_curl -sS -v -X POST "${BASE_URL}${endpoint}?${params}" \
+    local out rc=0 _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    out="$(_cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST \
         --connect-timeout 5 --max-time 30 \
         --data-raw "")" || rc=$?
     if [ "$rc" -eq 0 ] && [[ "$out" == *'method not allowed for this route'* ]]; then
@@ -654,9 +704,10 @@ cli_request_post_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    _cli_curl -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
         --data-raw ""
 }
 
@@ -670,10 +721,13 @@ cli_post_json() {
     if [ -z "$body" ]; then
         body="$(cat)"
     fi
-    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}" \
+    # Bodies carry passwords (k2 users add, k2 app user password): config too.
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add data-raw "$body"
+    _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/json" \
-        --data-raw "$body" 2>/dev/null
+        -H "Content-Type: application/json" 2>/dev/null
 }
 
 urlencode() {
@@ -707,10 +761,12 @@ cli_post_form() {
     for param in "$@"; do
         body="${body}${body:+&}${param}"
     done
-    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")" \
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
+    _k2_cfg_add data-raw "$body"
+    _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        --data-raw "$body" 2>/dev/null
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
 }
 
 # ── #58 Phase-1 close: scoped per-cell UDS arms ──────────────────────────
@@ -727,32 +783,37 @@ cli_request_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    _cli_curl -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
-        --connect-timeout 5 --max-time 30 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-        ${params:+-d "$params"}
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    if [ -n "$params" ]; then
+        _k2_cfg_add data "$params"
+    fi
+    _cli_curl --k2-cfg "$_K2_CFG" -sS -v -G --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+        --connect-timeout 5 --max-time 30
 }
 
 cli_post_form_uds() {
     local endpoint="$1"; shift
     local body=""
     for param in "$@"; do body="${body}${body:+&}${param}"; done
-    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    _k2_cfg_add data-raw "$body"
+    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        --data-raw "$body" 2>/dev/null
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
 }
 
 cli_post_json_uds() {
     local endpoint="$1"
     local body="${2:-}"
     if [ -z "$body" ]; then body="$(cat)"; fi
-    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    _k2_cfg_add data-raw "$body"
+    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-        -H "Content-Type: application/json" \
-        --data-raw "$body" 2>/dev/null
+        -H "Content-Type: application/json" 2>/dev/null
 }
 
 # Verbs the scoped per-cell socket actually serves (the daemon allowlist).
@@ -871,11 +932,12 @@ cmd_respond() {
     # token as Bearer. Only a scoped token (shape `<sid>.<secret>`)
     # carries session identity — with none present, fail loudly.
     if [[ "$SCOPED_TOKEN" == *.* ]] && [ -n "$PORT" ]; then
-        curl -s -X POST "${BASE_URL}/cli/respond" \
+        local _K2_CFG=""
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        _k2_cfg_add data-raw "message=$(urlencode "$message")&final=${final}"
+        _k2_curl "$_K2_CFG" -s -X POST "${BASE_URL}/cli/respond" \
             --connect-timeout 5 --max-time 30 \
-            -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-raw "message=$(urlencode "$message")&final=${final}" 2>/dev/null
+            -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
         return $?
     fi
     echo "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token)." >&2
@@ -925,19 +987,13 @@ cmd_session_complete() {
         return $?
     fi
     if [[ "$SCOPED_TOKEN" == *.* ]] && [ -n "$PORT" ]; then
-        if [ -n "$form" ]; then
-            curl -s -X POST "${BASE_URL}/cli/session/complete" \
-                --connect-timeout 5 --max-time 30 \
-                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-                -H "Content-Type: application/x-www-form-urlencoded" \
-                --data-raw "$form" 2>/dev/null
-        else
-            curl -s -X POST "${BASE_URL}/cli/session/complete" \
-                --connect-timeout 5 --max-time 30 \
-                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-                -H "Content-Type: application/x-www-form-urlencoded" \
-                --data-raw "" 2>/dev/null
-        fi
+        # Empty $form → empty body, exactly as before.
+        local _K2_CFG=""
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        _k2_cfg_add data-raw "$form"
+        _k2_curl "$_K2_CFG" -s -X POST "${BASE_URL}/cli/session/complete" \
+            --connect-timeout 5 --max-time 30 \
+            -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
         return $?
     fi
     echo "Error: 'k2 done' (session complete) needs an API-launched session (per-cell socket or scoped session token)." >&2
@@ -2948,8 +3004,9 @@ cmd_daemon_restart() {
         local base="${host%/}"
         # OWNER-ONLY route: token rides the query string (the daemon's
         # require_owner reads it there), no body.
-        local resp
-        resp=$(curl -s -X POST "${base}/cli/daemon/restart?token=${token}" \
+        local resp _K2_CFG=""
+        _k2_cfg_add url "${base}/cli/daemon/restart?token=${token}"
+        resp=$(_k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 30 2>/dev/null) || true
         if [ -z "$resp" ]; then
             echo "daemon restart --host: no response from ${base} (unreachable, or the daemon exited before flushing)" >&2
@@ -8673,36 +8730,48 @@ EOF
 # else TCP ($TOKEN, already the scoped token inside a cell for id tools).
 _sidecar_send() {
     local method="$1" path="$2" payload="${3:-}"
-    local sock out=""
+    local sock out="" _K2_CFG=""
+    # The payload (an API key for `k2 llm tokens add-key`) and the token
+    # both ride the curl config on stdin — never curl's argv.
     sock="$(_hook_sock)"
     if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
+        _K2_CFG=""
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
         if [ "$method" = "GET" ]; then
-            out="$(curl -s -G --unix-socket "$sock" "http://localhost${path}" \
+            if [ -n "$payload" ]; then
+                _k2_cfg_add data "$payload"
+            fi
+            out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time 120 \
-                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
-                ${payload:+--data "$payload"} -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || out=""
         else
-            out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$sock" "http://localhost${path}" \
+            _k2_cfg_add data-raw "$payload"
+            out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
                 --connect-timeout 5 --max-time 120 \
-                -H "Authorization: Bearer ${SCOPED_TOKEN}" \
                 -H "Content-Type: application/json" \
-                --data-binary @- -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                -w $'\n%{http_code}' 2>/dev/null)" || out=""
         fi
         if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
             printf '%s' "$out"
             return 0
         fi
     fi
+    _K2_CFG=""
     if [ "$method" = "GET" ]; then
-        curl -s -G "${BASE_URL}${path}" \
+        _k2_cfg_add data-urlencode "token=${TOKEN}"
+        if [ -n "$payload" ]; then
+            _k2_cfg_add data "$payload"
+        fi
+        _k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
             --connect-timeout 5 --max-time 120 \
-            --data-urlencode "token=${TOKEN}" \
-            ${payload:+--data "$payload"} -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null || true
     else
-        printf '%s' "$payload" | curl -s -X POST "${BASE_URL}${path}?token=$(urlencode "$TOKEN")" \
+        _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+        _k2_cfg_add data-raw "$payload"
+        _k2_curl "$_K2_CFG" -s -X POST \
             --connect-timeout 5 --max-time 120 \
             -H "Content-Type: application/json" \
-            --data-binary @- -w $'\n%{http_code}' 2>/dev/null || true
+            -w $'\n%{http_code}' 2>/dev/null || true
     fi
 }
 
@@ -9514,8 +9583,8 @@ if v.get("note"):
                 echo "usage: no API token on stdin" >&2
                 exit 2
             fi
-            # The key reaches python on stdin and curl on stdin: never on
-            # any process's argv, never printed.
+            # The key reaches python on stdin and curl in its config on
+            # stdin (_sidecar_send): never on any process's argv, never printed.
             local key_body
             key_body="$(printf '%s' "$api_key" | python3 -c '
 import json, sys
@@ -9869,7 +9938,9 @@ cli_post() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    curl -s -X POST "${BASE_URL}${endpoint}?${params}" \
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
+    _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
         --data-raw "" 2>/dev/null
 }
@@ -9882,9 +9953,10 @@ cli_post_uds() {
     for param in "$@"; do
         params="${params}${params:+&}${param}"
     done
-    curl -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}${params:+?${params}}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Authorization: Bearer ${SCOPED_TOKEN}" \
         --data-raw "" 2>/dev/null
 }
 
@@ -10297,13 +10369,15 @@ _connect_curl() {
     fi
     local args=(-sS -X "$method" "${K2_CONNECT_BASE}${endpoint}"
         --connect-timeout 5 --max-time 30
-        -H "Authorization: Bearer ${token}"
         -w $'\n%{http_code}')
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${token}"
     if [ -n "$body" ]; then
-        args+=(-H "Content-Type: application/json" --data-raw "$body")
+        args+=(-H "Content-Type: application/json")
+        _k2_cfg_add data-raw "$body"
     fi
     local out
-    out="$(curl "${args[@]}" 2>/dev/null)" || {
+    out="$(_k2_curl "$_K2_CFG" "${args[@]}" 2>/dev/null)" || {
         echo "Error: could not reach the K2 Connect control plane at ${K2_CONNECT_BASE}." >&2
         exit 1
     }
@@ -23288,21 +23362,25 @@ _msg_inbox_cli_post_json_file() {
     local endpoint="$1"
     local body_file="$2"
     local max_time="${3:-300}"
-    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}" \
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \
         -H "Content-Type: application/json" \
         --data-binary @"$body_file" 2>/dev/null
 }
 
-# Small JSON body (delete etc.) — still fine on argv.
+# Small JSON body (delete etc.). Token + body ride the curl config.
 _msg_inbox_cli_post_json() {
     local endpoint="$1"
     local body="$2"
     local max_time="${3:-30}"
-    curl -s -X POST "${BASE_URL}${endpoint}?token=${TOKEN}" \
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
+    _k2_cfg_add data-raw "$body"
+    _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 10 --max-time "$max_time" \
-        -H "Content-Type: application/json" \
-        --data-raw "$body" 2>/dev/null
+        -H "Content-Type: application/json" 2>/dev/null
 }
 
 # BEGIN_MSG_INBOX_FS_AUTH
@@ -24284,10 +24362,12 @@ cmd_fed() {
             # to. (Owner-remote `k2 talk` is a different, ungated path.)
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"to":sys.argv[1],"text":sys.argv[2],"from_workspace":sys.argv[3]}))' "$to" "$text" "$PROJECT")
-            curl -s -X POST "${BASE_URL}/cli/federation/send?token=${owner_token}" \
+            local _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/cli/federation/send?token=${owner_token}"
+            _k2_cfg_add data-raw "$body"
+            _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 60 \
-                -H "Content-Type: application/json" \
-                --data-raw "$body" 2>/dev/null
+                -H "Content-Type: application/json" 2>/dev/null
             echo
             ;;
         pair-request)
@@ -24331,10 +24411,12 @@ print(json.dumps({"label":sys.argv[1],"subdomain":sys.argv[2],"baseUrl":sys.argv
             fi
             local body
             body=$(python3 -c 'import json,sys; print(json.dumps({"fingerprint":sys.argv[1],"sas":sys.argv[2]}))' "$fp" "$sas")
-            curl -s -X POST "${BASE_URL}/cli/federation/pair/confirm?token=${owner_token}" \
+            local _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/cli/federation/pair/confirm?token=${owner_token}"
+            _k2_cfg_add data-raw "$body"
+            _k2_curl "$_K2_CFG" -s -X POST \
                 --connect-timeout 5 --max-time 30 \
-                -H "Content-Type: application/json" \
-                --data-raw "$body" 2>/dev/null
+                -H "Content-Type: application/json" 2>/dev/null
             echo
             ;;
         pubkey)
@@ -24439,7 +24521,9 @@ for p in peers:
                 echo "k2 fed outbox: no owner token (need $_tok_file)" >&2
                 exit 1
             fi
-            curl -s "${BASE_URL}/cli/federation/outbox?token=${owner_token}" \
+            local _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/cli/federation/outbox?token=${owner_token}"
+            _k2_curl "$_K2_CFG" -s \
                 --connect-timeout 5 --max-time 30 2>/dev/null \
                 | python3 -c "import json,sys
 try:

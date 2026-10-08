@@ -3571,6 +3571,8 @@ dependencies = [
  "instant-acme",
  "jsonwebtoken",
  "k2-core",
+ "k2-node",
+ "k2-node-proto",
  "lettre",
  "libc",
  "mail-parser",

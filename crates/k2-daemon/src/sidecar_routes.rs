@@ -1268,8 +1268,8 @@ fn handle_access(
     }
     let v = json_body(body)?;
     let toggle = str_field(&v, "toggle").unwrap_or("");
-    if toggle != "agents_manage" {
-        return Err(err("bad_request", 400, "toggle must be 'agents_manage'"));
+    if toggle != "agents_manage" && toggle != "compute" {
+        return Err(err("bad_request", 400, "toggle must be 'agents_manage' or 'compute'"));
     }
     let value = match v.get("value") {
         Some(serde_json::Value::Bool(b)) => *b,
@@ -1278,6 +1278,30 @@ fn handle_access(
         _ => return Err(err("bad_request", 400, "value must be true or false")),
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    if toggle == "compute" {
+        // K2 compute nodes (CN20): "Allow compute nodes" is written only
+        // here (Owner/Admin), never through workspace/set.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::compute::store::set_agents_can_use_compute(&conn, &ws.id, value)
+                .map_err(|e| err("workspace_not_found", 404, e))?;
+            k2_core::compute::store::record_event(
+                &conn,
+                &caller.audit_user(),
+                "workspace_switch",
+                None,
+                Some(&ws.id),
+                None,
+                serde_json::json!({ "agentsCanUseCompute": value }),
+            );
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute", "agentsCanUseCompute": value }),
+            format!("ok {} compute={value}", ws.handle),
+        ));
+    }
     k2_core::workspace::settings::set_agents_can_manage_agents(&ws.id, value)
         .map_err(|e| err("workspace_not_found", 404, e))?;
     k2_core::agent_hooks::emit(

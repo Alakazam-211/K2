@@ -271,3 +271,7 @@ tokio = { version = "1", features = ["full", "test-util"] }
 # Same version/features k2-core pins, so Cargo resolves it to the
 # one `vte` already in the lock tree — no new crate.
 vte = { version = "0.15", features = ["std", "ansi"] }
+# K2 compute nodes: the headless contract test drives the REAL node runtime
+# (a separate crate that never links k2-core) against the in-process daemon.
+k2-node = { path = "../k2-node" }
+k2-node-proto = { path = "../k2-node-proto" }

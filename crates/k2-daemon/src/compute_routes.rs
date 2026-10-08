@@ -965,9 +965,8 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }
-        if gate.is_some() {
-            node_visible(who, &n)?;
-        }
+        // An ungranted node is refused below with a teaching `not_granted`.
+        let _ = gate;
         return Ok(n);
     }
     if b(v, "any") != Some(true) {

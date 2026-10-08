@@ -741,6 +741,16 @@ pub fn test_sink_take(session: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
+pub fn test_sink_peek(session: &str) -> Vec<String> {
+    TEST_SINK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(session).cloned())
+        .unwrap_or_default()
+}
+
 fn test_sink(session: &str, text: &str) -> bool {
     let mut g = TEST_SINK.lock().unwrap_or_else(|p| p.into_inner());
     match g.as_mut().and_then(|m| m.get_mut(session)) {

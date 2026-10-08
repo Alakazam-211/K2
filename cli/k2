@@ -11093,6 +11093,38 @@ cli_post_uds() {
 #   GET /cli/tunnel/subdomains — the daemon's cached nested-subdomain
 #   routing map (label -> internal target); read-only, distinct from
 #   `k2 publish subdomain list` which asks the CONTROL PLANE directly.
+# Print a /cli/tunnel/release response (release or forget). 0.45.2: a
+# release reports upstream only when this device's tunnel is connected (it
+# holds the name); otherwise it is local only, and nothing is queued.
+_k2_tunnel_release_print() {
+    printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    err = d["error"]
+    print(f"Failed to release tunnel identity: {err}", file=sys.stderr); sys.exit(1)
+sub = (d.get("subdomain") or "").strip()
+label = f"{sub}.k2.dev" if sub else "its subdomain"
+if d.get("alreadyReleased"):
+    print(f"This device was already released from {label}.")
+elif d.get("localOnly"):
+    print(f"Forgotten on this device: {label} no longer routes here.")
+else:
+    print(f"Released: this device is unpaired from {label}.")
+if d.get("upstreamReported"):
+    print("K2 Connect recorded the release.")
+elif d.get("queued"):
+    print("K2 Connect was unreachable; the release is queued and replays on the next daemon boot.")
+note = d.get("note")
+if note:
+    print(f"Note: {note}")
+print("Your account still owns the subdomain; pair it on any device any time.")
+'
+}
+
 cmd_tunnel() {
     local sub="${1:-status}"
     shift || true
@@ -11153,18 +11185,25 @@ print("Tunnel disabled (persisted — survives daemon restarts and reboots).")
 print("Re-enable with: k2 tunnel enable")
 '
             ;;
+        # 0.45.2: `enable` also persists auto-start (re-launch on daemon
+        # boot / reboot) unless --no-auto-start — before, a box with
+        # auto_start:false said "enabled and running" and stayed dark after
+        # a reboot. Same tunnel.json field as Settings' "Re-launch tunnel on
+        # restart" toggle.
         enable)
             _k2_refuse_if_airgap
-            local subdomain=""
+            local subdomain="" auto_start="1"
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --subdomain) subdomain="$2"; shift 2 ;;
+                    --no-auto-start) auto_start="0"; shift ;;
+                    --auto-start) auto_start="1"; shift ;;
                     *) shift ;;
                 esac
             done
-            local extra=""
-            [ -n "$subdomain" ] && extra="subdomain=$(urlencode "$subdomain")"
-            cli_post "/cli/tunnel/enable" $extra | python3 -c '
+            local extra="auto_start=$auto_start"
+            [ -n "$subdomain" ] && extra="$extra&subdomain=$(urlencode "$subdomain")"
+            cli_post "/cli/tunnel/enable" "$extra" | python3 -c '
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -11179,6 +11218,63 @@ if d.get("running"):
 else:
     print("Tunnel enabled (persisted). Not running yet — pair a subdomain in")
     print("Settings -> K2 Connect (or run: k2 tunnel start).")
+if d.get("autoStart") is True:
+    print("Auto-start: on (comes back by itself after a daemon restart or reboot).")
+elif d.get("autoStart") is False:
+    print("Auto-start: off (after a restart, run k2 tunnel enable again).")
+'
+            ;;
+        # 0.45.2: move this device to another subdomain in one step. The
+        # daemon binds the new name, moves the encrypted listener, its
+        # certificate and renewer, the nested routes and frpc, and rolls
+        # back to the old name if any step fails. No daemon restart.
+        switch)
+            _k2_refuse_if_airgap
+            local subdomain="" token="" start=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --token) token="$2"; shift 2 ;;
+                    --start) start="true"; shift ;;
+                    --no-start) start="false"; shift ;;
+                    -*) echo "k2 tunnel switch: unknown flag $1" >&2; exit 2 ;;
+                    *) subdomain="$1"; shift ;;
+                esac
+            done
+            if [ -z "$subdomain" ]; then
+                echo "usage: k2 tunnel switch <subdomain> [--token <tunnel token>] [--start|--no-start]" >&2
+                exit 2
+            fi
+            local body
+            body=$(SUB="$subdomain" TOK="$token" START="$start" python3 -c '
+import json, os
+b = {"subdomain": os.environ["SUB"]}
+if os.environ.get("TOK"): b["token"] = os.environ["TOK"]
+if os.environ.get("START"): b["start"] = os.environ["START"] == "true"
+print(json.dumps(b))
+')
+            cli_post_json "/cli/tunnel/switch" "$body" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error") and "steps" not in d:
+    err = d["error"]
+    print(f"Switch refused: {err}", file=sys.stderr); sys.exit(1)
+for s in d.get("steps") or []:
+    mark = "ok " if s.get("ok") else "ERR"
+    step = s.get("step", "")
+    detail = s.get("detail", "")
+    print(f"  [{mark}] {step}: {detail}")
+if d.get("ok"):
+    sub = d.get("subdomain") or ""
+    print(f"Switched to {sub}.k2.dev.")
+else:
+    err = d.get("error") or "unknown error"
+    print(f"Switch failed: {err}", file=sys.stderr)
+    if d.get("rolledBack"):
+        print("Rolled back: the previous subdomain is still in place.", file=sys.stderr)
+    sys.exit(1)
 '
             ;;
         # PRD tunnel-disable-unpair §2B — the DESTRUCTIVE unpair. Deletes
@@ -11204,39 +11300,42 @@ try:
 except Exception:
     print("")
 ' "${K2_HOME}/tunnel.json" 2>/dev/null || true)
-                echo "k2 tunnel release permanently unpairs THIS DEVICE from its subdomain:" >&2
+                echo "k2 tunnel release unpairs THIS DEVICE from its subdomain:" >&2
                 if [ -n "$_sub" ]; then
-                    echo "  - ${_sub}.k2.dev stops routing here and this device can NEVER reclaim it" >&2
+                    echo "  - ${_sub}.k2.dev stops routing here; this copy of the identity is refused" >&2
                 else
-                    echo "  - this device's tunnel identity is deleted and can NEVER reclaim its subdomain" >&2
+                    echo "  - this device's tunnel identity is deleted" >&2
                 fi
-                echo "  - your ACCOUNT keeps the subdomain — pair it on another device any time" >&2
+                echo "  - K2 Connect is told only if this device's tunnel is connected (it holds the name)" >&2
+                echo "  - your ACCOUNT keeps the subdomain — pair it on any device any time" >&2
                 echo "  - this is NOT a pause; for that use: k2 tunnel disable" >&2
+                echo "  - stale config from another machine? use: k2 tunnel forget --confirm" >&2
+                echo "  - moving to another subdomain? use: k2 tunnel switch <subdomain> --token <t>" >&2
                 echo "Re-run with --confirm to proceed: k2 tunnel release --confirm" >&2
                 exit 1
             fi
-            cli_post "/cli/tunnel/release" "confirm=1" | python3 -c '
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-except Exception as e:
-    print(f"Failed to parse daemon response: {e}", file=sys.stderr); sys.exit(1)
-if d.get("error"):
-    err = d["error"]
-    print(f"Failed to release tunnel identity: {err}", file=sys.stderr); sys.exit(1)
-sub = (d.get("subdomain") or "").strip()
-label = f"{sub}.k2.dev" if sub else "its subdomain"
-if d.get("alreadyReleased"):
-    print(f"This device was already released from {label}.")
-else:
-    print(f"Released: this device is permanently unpaired from {label}.")
-if d.get("upstreamReported"):
-    print("The relay has been notified — the old identity is refused everywhere.")
-else:
-    print("Relay notification is QUEUED (device offline?) — it replays on next")
-    print("daemon boot; you can also force-release from the k2.dev account portal.")
-print("Your account still owns the subdomain; pair it on another device any time.")
-'
+            _k2_tunnel_release_print "$(cli_post "/cli/tunnel/release" "confirm=1")"
+            ;;
+        # 0.45.2: forget this device's tunnel LOCALLY — delete tunnel.json,
+        # frpc.toml and the old name's certificate, send NOTHING to K2
+        # Connect. For a stale config (a migrated or cloned machine) whose
+        # subdomain another box holds: a release from here could otherwise
+        # contest it.
+        forget)
+            local confirmed=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --confirm) confirmed=1; shift ;;
+                    *) shift ;;
+                esac
+            done
+            if [ "$confirmed" != "1" ]; then
+                echo "k2 tunnel forget deletes this device's tunnel config (tunnel.json, frpc.toml," >&2
+                echo "the certificate) and tells K2 Connect NOTHING — the subdomain and whichever" >&2
+                echo "device holds it now are untouched. Re-run with --confirm." >&2
+                exit 1
+            fi
+            _k2_tunnel_release_print "$(cli_post "/cli/tunnel/release" "confirm=1&mode=forget")"
             ;;
         status)
             local as_json=0
@@ -11275,6 +11374,18 @@ if d.get("running"):
     if d.get("server_addr"):
         sa = d["server_addr"]
         print(f"  Server:     {sa}")
+# 0.45.2: re-launch on boot, and which name the encrypted listener serves.
+if "autoStart" in d:
+    print("  Auto-start: " + ("on" if d.get("autoStart") else "off (k2 tunnel enable turns it on)"))
+if "e2eListener" in d:
+    li = d.get("e2eListener")
+    if li:
+        lsub = li.get("subdomain", "")
+        lport = li.get("port", "")
+        print(f"  Encrypted listener: {lsub}.k2.dev (port {lport})")
+        want = (d.get("subdomain") or "").strip()
+        if d.get("running") and want and want.lower() != str(lsub).lower():
+            print(f"  WARNING: the tunnel serves {want}.k2.dev but the listener holds the {lsub}.k2.dev certificate; run: k2 tunnel switch {want}")
 '
             ;;
         subdomains)
@@ -11349,8 +11460,11 @@ PRODUCT BOUNDARY
 
 USAGE
   k2 tunnel start [--subdomain <s>]
-  k2 tunnel stop | disable | enable [--subdomain <s>]
-  k2 tunnel release --confirm
+  k2 tunnel stop | disable
+  k2 tunnel enable [--subdomain <s>] [--no-auto-start]   (persists auto-start on by default)
+  k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]
+  k2 tunnel release --confirm      (tells K2 Connect only when this device holds the name)
+  k2 tunnel forget --confirm       (local only: stale config from another machine)
   k2 tunnel status [--json]
   k2 tunnel subdomains [--json]
 
@@ -17367,17 +17481,31 @@ cmd_schema() {
     },
     {
       "name": "tunnel enable",
-      "usage": "k2 tunnel enable [--subdomain <s>]",
-      "description": "Undo 'k2 tunnel disable' (persisted) and bring the tunnel up when a subdomain is paired.",
+      "usage": "k2 tunnel enable [--subdomain <s>] [--no-auto-start]",
+      "description": "Undo 'k2 tunnel disable' (persisted), turn auto-start on (the tunnel comes back after a daemon restart or reboot), and bring the tunnel up when a subdomain is paired.",
       "args": [],
-      "flags": [{"name": "--subdomain", "arg": "s", "description": "Override the stored subdomain label."}]
+      "flags": [{"name": "--subdomain", "arg": "s", "description": "Override the stored subdomain label."}, {"name": "--no-auto-start", "arg": null, "description": "Leave auto-start off (the tunnel does not come back by itself after a restart)."}]
+    },
+    {
+      "name": "tunnel switch",
+      "usage": "k2 tunnel switch <subdomain> [--token <t>] [--start|--no-start]",
+      "description": "Move this device to another subdomain without a daemon restart: binds the new name and moves the encrypted listener, its certificate and renewer, nested routes and frpc. Rolls back to the old name if any step fails.",
+      "args": [{"name": "subdomain", "required": true, "description": "The new subdomain label."}],
+      "flags": [{"name": "--token", "arg": "t", "description": "The new subdomain's tunnel token (not needed to re-run the switch for the current name)."}, {"name": "--start", "arg": null, "description": "Start the tunnel on the new name (default: keep it running if it was)."}, {"name": "--no-start", "arg": null, "description": "Only bind the new name."}]
     },
     {
       "name": "tunnel release",
       "usage": "k2 tunnel release --confirm",
-      "description": "DESTRUCTIVE: permanently unpair THIS DEVICE from its subdomain — deletes the local tunnel identity and notifies the relay so the old identity is refused forever. The account keeps the subdomain (pair it elsewhere). Not a pause; that is 'k2 tunnel disable'.",
+      "description": "DESTRUCTIVE: unpair THIS DEVICE from its subdomain — deletes the local tunnel identity. K2 Connect is told only when this device's tunnel is connected (it holds the name); otherwise it is local only. The account keeps the subdomain. Not a pause; that is 'k2 tunnel disable'.",
       "args": [],
       "flags": [{"name": "--confirm", "arg": null, "description": "Required — the release cannot be undone on this device."}]
+    },
+    {
+      "name": "tunnel forget",
+      "usage": "k2 tunnel forget --confirm",
+      "description": "Forget this device's tunnel locally (tunnel.json, frpc.toml, certificate) and tell K2 Connect NOTHING. For stale config from a migrated or cloned machine whose subdomain another box holds.",
+      "args": [],
+      "flags": [{"name": "--confirm", "arg": null, "description": "Required."}]
     },
     {
       "name": "tunnel subdomains",

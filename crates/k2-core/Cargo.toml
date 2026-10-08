@@ -182,6 +182,10 @@ subtle = "2.6"
 # only needed for low-entropy passwords). Already in the lock tree via
 # rcgen/argon2; pinned here as a direct dep.
 sha2 = "0.10"
+# Zen v2 widget grants (prd-zen-user-widgets-v2 UWB4): the daemon signs each
+# grant row with HMAC-SHA256. Already in the lock tree; same digest 0.10 as
+# sha2.
+hmac = "0.12"
 # Ticket HTML brief (prd-ticket-html-brief-v1 H11/H34): the daemon cleans
 # an agent's brief on write. ammonia is MIT/Apache, built on html5ever.
 # html5ever is pinned to ammonia's major so the tokenizer the brief

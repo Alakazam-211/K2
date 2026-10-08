@@ -35,8 +35,12 @@
 //! ([`TEMPLATES`]) and returned as the resolved page's layout, widgets and
 //! controls.
 
+pub mod builtin_widgets;
+pub mod garden_catalog;
+pub mod grants;
 pub mod schema;
 pub mod skill;
+pub mod stdlib;
 pub mod store;
 
 use std::path::PathBuf;
@@ -199,6 +203,13 @@ pub const BRIDGE_CAPS: &[&str] = &[
     "gardens:template",
     "app:navigate",
 ];
+
+/// The caps a custom widget may ask for and be granted
+/// (prd-zen-user-widgets-v2 UW5, UW24). Equal to the catalog's caps exposed
+/// to `widget` (`crate::contract`, asserted in `grants` tests), and a subset
+/// of [`BRIDGE_CAPS`]. `agents:add`, `gardens:manage`, `gardens:template`
+/// and `app:navigate` stay built-in only.
+pub const USER_WIDGET_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post"];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A
 /// Garden file never names caps (G38); these are the only ones.

@@ -73,6 +73,8 @@ pub mod companion;
 // remove`. Not workspace-scoped — operates on `workspace_relations`
 // linking two projects together.
 pub mod connections;
+/// K2's verb catalog (prd-zen-user-widgets-v2 UWA1, UWB29).
+pub mod contract;
 // K2SO #617: connect-user accounts (username+password, owner-provisioned)
 // + in-memory login sessions. The auth boundary for the PUBLIC K2 Connect
 // tunnel surface. See module docs.

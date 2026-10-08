@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "maxBytesPerWidget": 8388608,
+  "cdnHosts": ["cdnjs.cloudflare.com", "cdn.jsdelivr.net", "unpkg.com"],
+  "libs": []
+}

@@ -1,0 +1,67 @@
+{
+  "catalogVersion": 1,
+  "caps": [
+    {
+      "name": "agents:read",
+      "exposure": ["widget"],
+      "label": "See agents",
+      "sentence": "See the agents in {where}: their names, whether they're working, and whether they need you."
+    },
+    {
+      "name": "presence:read",
+      "exposure": ["widget"],
+      "label": "See who is looking",
+      "sentence": "See who else is looking at those agents."
+    },
+    {
+      "name": "thread:read",
+      "exposure": ["widget", "app"],
+      "label": "Read the Thread",
+      "sentence": "Read your conversations with the agents in {where}, including each one's last message."
+    },
+    {
+      "name": "thread:post",
+      "exposure": ["widget", "app"],
+      "label": "Post to the Thread",
+      "sentence": "Send messages to the agents in {where} as you (text only). You can turn sending off at any time."
+    },
+    { "name": "agents:add", "label": "Open Add agent" },
+    { "name": "gardens:manage", "label": "Create, rename and delete Gardens" },
+    { "name": "gardens:template", "label": "Turn this Garden into a built-in page" },
+    { "name": "app:navigate", "label": "Switch the rail view" },
+    { "name": "files:read", "exposure": ["app"], "label": "Read files (also shows heartbeat instructions)" },
+    { "name": "files:write", "exposure": ["app"], "label": "Write files (not .k2/heartbeats)" },
+    { "name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates" },
+    { "name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets" },
+    { "name": "wiki:read", "exposure": ["app"], "label": "Read the wiki" },
+    { "name": "store:read", "exposure": ["app"], "label": "Read the workspace store" },
+    { "name": "store:write", "exposure": ["app"], "label": "Change dump-table rows" },
+    { "name": "activity:read", "exposure": ["app"], "label": "See when the agent is working" },
+    { "name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history" },
+    { "name": "heartbeats:write", "exposure": ["app"], "label": "Add, edit, turn on or off, archive and fire heartbeats" }
+  ],
+  "errors": [
+    { "code": "cap_not_granted", "fields": ["cap", "room"], "doc": "The verb's cap isn't in this widget's effective caps (requested ∩ granted ∩ widget caps)." },
+    { "code": "not_bound", "fields": ["room"], "doc": "The address isn't one of the rows in this widget's granted scope." },
+    { "code": "rate_limited", "doc": "Over a per-widget budget (calls, subscriptions, live servers, gardens.switch)." },
+    { "code": "too_large", "doc": "A message or argument is over its size limit." },
+    { "code": "unknown_verb", "doc": "No such verb in the catalog." },
+    { "code": "verb_unavailable", "fields": ["feature"], "doc": "No implementation is registered, or the server lacks the row's feature." },
+    { "code": "verb_local", "doc": "A Garden-only verb called from an App. Never happens in a Garden." },
+    { "code": "not_exposed", "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)." },
+    { "code": "sending_off", "doc": "Sending is turned off for this widget (by you, or by the runaway guard)." },
+    { "code": "failed", "doc": "The call failed; the message says why." }
+  ],
+  "bannedFields": [
+    "projectPath",
+    "path",
+    "cwd",
+    "sessionId",
+    "canonicalSessionId",
+    "conversation_id",
+    "hostKey",
+    "auth",
+    "token"
+  ],
+  "verbs": []
+}

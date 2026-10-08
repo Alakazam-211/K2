@@ -1,0 +1,58 @@
+// DAY-0 PLACEHOLDER, hand-written 2026-10-08 (prd-zen-user-widgets-v2 §15).
+// B1's `contract-gen` (UWA11) replaces this whole file with the `caps` of
+// `crates/k2-core/src/contract/catalog.json`, keeping these export names
+// and shapes. Read by the Garden review dialog (`sentence`) and, from S4,
+// Settings → Apps (`label`, UWA9). Once generated, never edit by hand.
+
+import type { CatalogExposure } from './contract/catalog-types'
+
+export interface K2CapInfo {
+  readonly label: string
+  /** Garden review-dialog sentence; `{where}` is the scope's words. */
+  readonly sentence?: string
+  readonly exposure: readonly CatalogExposure[]
+}
+
+export const K2_CAPS = {
+  'agents:read': {
+    label: 'See agents',
+    sentence: "See the agents in {where}: their names, whether they're working, and whether they need you.",
+    exposure: ['widget'],
+  },
+  'presence:read': {
+    label: 'See who is looking',
+    sentence: 'See who else is looking at those agents.',
+    exposure: ['widget'],
+  },
+  'thread:read': {
+    label: 'Read the Thread',
+    sentence: "Read your conversations with the agents in {where}, including each one's last message.",
+    exposure: ['widget', 'app'],
+  },
+  'thread:post': {
+    label: 'Post to the Thread',
+    sentence: 'Send messages to the agents in {where} as you (text only). You can turn sending off at any time.',
+    exposure: ['widget', 'app'],
+  },
+  'agents:add': { label: 'Open Add agent', exposure: [] },
+  'gardens:manage': { label: 'Create, rename and delete Gardens', exposure: [] },
+  'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
+  'app:navigate': { label: 'Switch the rail view', exposure: [] },
+  'files:read': { label: 'Read files (also shows heartbeat instructions)', exposure: ['app'] },
+  'files:write': { label: 'Write files (not .k2/heartbeats)', exposure: ['app'] },
+  'tickets:read': { label: 'Read tickets and get live ticket updates', exposure: ['app'] },
+  'tickets:post': { label: 'Open, answer, assign and set status on tickets', exposure: ['app'] },
+  'wiki:read': { label: 'Read the wiki', exposure: ['app'] },
+  'store:read': { label: 'Read the workspace store', exposure: ['app'] },
+  'store:write': { label: 'Change dump-table rows', exposure: ['app'] },
+  'activity:read': { label: 'See when the agent is working', exposure: ['app'] },
+  'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
+  'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
+} as const satisfies Record<string, K2CapInfo>
+
+export type K2Cap = keyof typeof K2_CAPS
+
+/** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post'] as const
+
+export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

@@ -40,51 +40,117 @@ const DEFAULT_GLOBAL_QUEUE_DEPTH: usize = 256;
 /// Default max job age before expire (20 minutes).
 const DEFAULT_MAX_AGE_SECS: u64 = 20 * 60;
 
-/// Is the durable spawn queue feature enabled?
-/// Env `K2_HOST_SESSION_SPAWN_QUEUE`: `1`/`true`/`on`/`yes` → ON; default OFF.
-pub fn feature_enabled() -> bool {
-    match std::env::var("K2_HOST_SESSION_SPAWN_QUEUE") {
-        Ok(v) => {
-            let t = v.trim().to_ascii_lowercase();
-            matches!(t.as_str(), "1" | "true" | "on" | "yes")
+/// The queue's knobs, read ONCE from the environment (the daemon's env
+/// never changes after boot) and held in one slot.
+///
+/// - `K2_HOST_SESSION_SPAWN_QUEUE`: `1`/`true`/`on`/`yes` → ON; default OFF.
+/// - `K2_HOST_SESSION_QUEUE_DEPTH`: max queued jobs per workspace (32).
+/// - `K2_HOST_SESSION_QUEUE_GLOBAL_DEPTH`: max queued jobs overall (256).
+/// - `K2_HOST_SESSION_QUEUE_MAX_AGE_SECS`: job expiry (20 min).
+///
+/// Before 0.45.1 every call re-read the env, and the unit tests flipped
+/// those vars while sibling tests ran (quiet-gate PRD §4.16–4.18). Tests now
+/// override the config per thread with [`test_override`]; nothing in this
+/// module mutates the process env.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnQueueConfig {
+    pub enabled: bool,
+    pub ws_depth: usize,
+    pub global_depth: usize,
+    pub max_age_secs: u64,
+}
+
+impl Default for SpawnQueueConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ws_depth: DEFAULT_QUEUE_DEPTH,
+            global_depth: DEFAULT_GLOBAL_QUEUE_DEPTH,
+            max_age_secs: DEFAULT_MAX_AGE_SECS,
         }
-        Err(_) => false,
     }
+}
+
+impl SpawnQueueConfig {
+    /// Read the knobs from `var` (a lookup, so tests can pass a map).
+    pub fn from_lookup(var: impl Fn(&str) -> Option<String>) -> Self {
+        let d = Self::default();
+        let enabled = var("K2_HOST_SESSION_SPAWN_QUEUE")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
+            .unwrap_or(false);
+        Self {
+            enabled,
+            ws_depth: positive(var("K2_HOST_SESSION_QUEUE_DEPTH")).unwrap_or(d.ws_depth as u64)
+                as usize,
+            global_depth: positive(var("K2_HOST_SESSION_QUEUE_GLOBAL_DEPTH"))
+                .unwrap_or(d.global_depth as u64) as usize,
+            max_age_secs: positive(var("K2_HOST_SESSION_QUEUE_MAX_AGE_SECS"))
+                .unwrap_or(d.max_age_secs),
+        }
+    }
+
+    /// Read the knobs from the process environment.
+    pub fn from_env() -> Self {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+}
+
+/// A positive integer, or `None` (absent / unparsable / zero).
+fn positive(v: Option<String>) -> Option<u64> {
+    v.and_then(|s| s.trim().parse::<u64>().ok()).filter(|n| *n > 0)
+}
+
+static CONFIG: std::sync::OnceLock<SpawnQueueConfig> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CONFIG: Cell<Option<SpawnQueueConfig>> = const { Cell::new(None) };
+}
+
+/// The live config (the test override on this thread, if any).
+pub fn config() -> SpawnQueueConfig {
+    #[cfg(test)]
+    if let Some(c) = TEST_CONFIG.with(|c| c.get()) {
+        return c;
+    }
+    *CONFIG.get_or_init(SpawnQueueConfig::from_env)
+}
+
+/// Test-only: use `cfg` on THIS thread until the guard drops.
+#[cfg(test)]
+pub(crate) fn test_override(cfg: SpawnQueueConfig) -> TestConfigGuard {
+    let prev = TEST_CONFIG.with(|c| c.replace(Some(cfg)));
+    TestConfigGuard { prev }
+}
+
+#[cfg(test)]
+pub(crate) struct TestConfigGuard {
+    prev: Option<SpawnQueueConfig>,
+}
+
+#[cfg(test)]
+impl Drop for TestConfigGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        TEST_CONFIG.with(|c| c.set(prev));
+    }
+}
+
+/// Is the durable spawn queue feature enabled? (See [`SpawnQueueConfig`].)
+pub fn feature_enabled() -> bool {
+    config().enabled
 }
 
 fn queue_depth() -> usize {
-    env_usize("K2_HOST_SESSION_QUEUE_DEPTH", DEFAULT_QUEUE_DEPTH)
+    config().ws_depth
 }
 
 fn global_queue_depth() -> usize {
-    env_usize(
-        "K2_HOST_SESSION_QUEUE_GLOBAL_DEPTH",
-        DEFAULT_GLOBAL_QUEUE_DEPTH,
-    )
+    config().global_depth
 }
 
 fn max_age_secs() -> u64 {
-    match std::env::var("K2_HOST_SESSION_QUEUE_MAX_AGE_SECS") {
-        Ok(v) => v
-            .trim()
-            .parse::<u64>()
-            .ok()
-            .filter(|n| *n > 0)
-            .unwrap_or(DEFAULT_MAX_AGE_SECS),
-        Err(_) => DEFAULT_MAX_AGE_SECS,
-    }
-}
-
-fn env_usize(var: &str, default: usize) -> usize {
-    match std::env::var(var) {
-        Ok(v) => v
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .filter(|n| *n > 0)
-            .unwrap_or(default),
-        Err(_) => default,
-    }
+    config().max_age_secs
 }
 
 fn now_secs() -> i64 {
@@ -452,9 +518,10 @@ pub fn on_slot_freed(_principal: Option<&str>, workspace: Option<&str>) {
     if DRAINING.with(|d| d.get()) {
         return;
     }
-    let Ok(_guard) = DRAIN_LOCK.lock() else {
-        return;
-    };
+    // A panic in an earlier drain poisons the lock; the queue state is in
+    // the DB (not behind the mutex), so recover instead of silently
+    // skipping every later drain.
+    let _guard = DRAIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     DRAINING.with(|d| d.set(true));
     if let Some(ws) = workspace {
         drain_workspace(ws);
@@ -929,12 +996,28 @@ mod tests {
         )
     }
 
-    fn enable_feature() {
-        std::env::set_var("K2_HOST_SESSION_SPAWN_QUEUE", "1");
+    /// Every spawn_queue test holds the shared quota test lock (the quota
+    /// counters, `TEST_SPAWN_HOOK` and the DB queue are process-global)
+    /// and sets its config through a per-thread override: no env changes.
+    struct QueueTest {
+        _cfg: TestConfigGuard,
+        _quota: std::sync::MutexGuard<'static, ()>,
     }
 
-    fn disable_feature() {
-        std::env::remove_var("K2_HOST_SESSION_SPAWN_QUEUE");
+    fn queue_test(cfg: SpawnQueueConfig) -> QueueTest {
+        let quota = sandbox_quota::test_quota_lock();
+        QueueTest { _cfg: test_override(cfg), _quota: quota }
+    }
+
+    /// Feature ON. The global depth is lifted far above the leftover rows
+    /// other tests leave in the shared DB, so only the per-workspace depth
+    /// (this test's own rows) can bind.
+    fn enabled() -> SpawnQueueConfig {
+        SpawnQueueConfig {
+            enabled: true,
+            global_depth: 1_000_000,
+            ..SpawnQueueConfig::default()
+        }
     }
 
     fn base_req(ws_path: &str, slug: &str, principal: &str) -> EnqueueRequest {
@@ -971,19 +1054,75 @@ mod tests {
 
     #[test]
     fn feature_default_off() {
-        // May be set by parallel tests — pin OFF for this assertion.
-        let prev = std::env::var("K2_HOST_SESSION_SPAWN_QUEUE").ok();
-        std::env::remove_var("K2_HOST_SESSION_SPAWN_QUEUE");
-        assert!(!feature_enabled(), "default must be OFF");
-        if let Some(v) = prev {
-            std::env::set_var("K2_HOST_SESSION_SPAWN_QUEUE", v);
+        let none = SpawnQueueConfig::from_lookup(|_| None);
+        assert!(!none.enabled, "default must be OFF");
+        assert_eq!(none, SpawnQueueConfig::default());
+        let _t = queue_test(none);
+        assert!(!feature_enabled());
+    }
+
+    #[test]
+    fn config_parses_env_knobs_and_falls_back() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        };
+        let on = SpawnQueueConfig::from_lookup(env(&[
+            ("K2_HOST_SESSION_SPAWN_QUEUE", " ON "),
+            ("K2_HOST_SESSION_QUEUE_DEPTH", "2"),
+            ("K2_HOST_SESSION_QUEUE_GLOBAL_DEPTH", " 9 "),
+            ("K2_HOST_SESSION_QUEUE_MAX_AGE_SECS", "60"),
+        ]));
+        assert_eq!(
+            on,
+            SpawnQueueConfig { enabled: true, ws_depth: 2, global_depth: 9, max_age_secs: 60 }
+        );
+        for flag in ["1", "true", "yes", "on"] {
+            let pairs: &'static [(&'static str, &'static str)] = match flag {
+                "1" => &[("K2_HOST_SESSION_SPAWN_QUEUE", "1")],
+                "true" => &[("K2_HOST_SESSION_SPAWN_QUEUE", "true")],
+                "yes" => &[("K2_HOST_SESSION_SPAWN_QUEUE", "yes")],
+                _ => &[("K2_HOST_SESSION_SPAWN_QUEUE", "on")],
+            };
+            assert!(SpawnQueueConfig::from_lookup(env(pairs)).enabled, "{flag}");
+        }
+        let bad = SpawnQueueConfig::from_lookup(env(&[
+            ("K2_HOST_SESSION_SPAWN_QUEUE", "0"),
+            ("K2_HOST_SESSION_QUEUE_DEPTH", "0"),
+            ("K2_HOST_SESSION_QUEUE_GLOBAL_DEPTH", "lots"),
+            ("K2_HOST_SESSION_QUEUE_MAX_AGE_SECS", "-5"),
+        ]));
+        assert_eq!(bad, SpawnQueueConfig::default(), "zero / junk fall back to defaults");
+    }
+
+    #[test]
+    fn test_override_is_per_thread_and_restored() {
+        let _q = sandbox_quota::test_quota_lock();
+        let base = config();
+        {
+            let _o = test_override(SpawnQueueConfig { ws_depth: 7, ..enabled() });
+            assert!(feature_enabled());
+            assert_eq!(queue_depth(), 7);
+            let other = std::thread::spawn(config).join().unwrap();
+            assert_eq!(other, base, "other threads keep the real config");
+        }
+        assert_eq!(config(), base);
+    }
+
+    /// The module must never change the process env: the config is read
+    /// once, and tests override it per thread.
+    #[test]
+    fn spawn_queue_never_mutates_process_env() {
+        let src = include_str!("spawn_queue.rs");
+        // Built with concat! so this test's own text never matches.
+        for needle in [concat!("env::set", "_var("), concat!("env::remove", "_var(")] {
+            assert_eq!(src.matches(needle).count(), 0, "spawn_queue.rs must not call std::{needle}…)");
         }
     }
 
     #[test]
     fn enqueue_assigns_fifo_positions() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("fifo");
         let p = "p-fifo";
         let (j1, pos1) = enqueue(base_req(&path, &slug, p)).expect("e1");
@@ -999,13 +1138,12 @@ mod tests {
         for j in [&j1, &j2, &j3] {
             mark_terminal(j, JobStatus::Cancelled, None, None, None);
         }
-        disable_feature();
     }
 
     #[test]
     fn enqueue_persists_model_through_peek_head() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("model");
         let mut req = base_req(&path, &slug, "p-model");
         req.model = Some("sonnet".into());
@@ -1018,14 +1156,12 @@ mod tests {
             "drain reconstruction must keep API model"
         );
         mark_terminal(&job_id, JobStatus::Cancelled, None, None, None);
-        disable_feature();
     }
 
     #[test]
     fn depth_full_returns_spawn_queue_full() {
         ensure_table();
-        enable_feature();
-        std::env::set_var("K2_HOST_SESSION_QUEUE_DEPTH", "2");
+        let _t = queue_test(SpawnQueueConfig { ws_depth: 2, ..enabled() });
         let (path, slug) = unique_ws("depth");
         let p = "p-depth";
         enqueue(base_req(&path, &slug, p)).expect("1");
@@ -1035,14 +1171,13 @@ mod tests {
         let resp = queue_full_response();
         assert_eq!(resp.status, "429 Too Many Requests");
         assert!(resp.body.contains("spawn-queue-full"));
-        std::env::remove_var("K2_HOST_SESSION_QUEUE_DEPTH");
-        disable_feature();
+
     }
 
     #[test]
     fn cancel_removes_job_and_updates_positions() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("cancel");
         let p = "p-cancel";
         let (j1, _) = enqueue(base_req(&path, &slug, p)).unwrap();
@@ -1063,13 +1198,12 @@ mod tests {
             .unwrap();
         assert!(prompt.is_none() || prompt.as_deref() == Some(""), "prompt purged");
         mark_terminal(&j2, JobStatus::Cancelled, None, None, None);
-        disable_feature();
     }
 
     #[test]
     fn client_request_id_is_idempotent() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("idem");
         let p = "p-idem";
         let mut r = base_req(&path, &slug, p);
@@ -1078,13 +1212,12 @@ mod tests {
         let (j2, _) = enqueue(r).unwrap();
         assert_eq!(j1, j2, "same clientRequestId → same jobId");
         mark_terminal(&j1, JobStatus::Cancelled, None, None, None);
-        disable_feature();
     }
 
     #[test]
     fn dead_resume_duplicate_returns_existing() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("dres");
         let p = "p-dres";
         let sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -1098,13 +1231,12 @@ mod tests {
             _ => panic!("expected DeadResumeDuplicate"),
         }
         mark_terminal(&j1, JobStatus::Cancelled, None, None, None);
-        disable_feature();
     }
 
     #[test]
     fn release_wakes_fifo_head_with_mock_spawn() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         sandbox_quota::test_reset_all();
         let (path, slug) = unique_ws("wake");
         // "owner" reloads without an api_keys row (drain principal reload).
@@ -1164,13 +1296,12 @@ mod tests {
 
         *TEST_SPAWN_HOOK.lock().unwrap() = None;
         sandbox_quota::test_reset_all();
-        disable_feature();
     }
 
     #[test]
     fn principal_gone_fails_job_and_continues() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         sandbox_quota::test_reset_all();
         let (path, slug) = unique_ws("pgone");
         // Principal id that is NOT owner and NOT in api_keys.
@@ -1181,13 +1312,12 @@ mod tests {
         let v = get_job(&path, &j1).expect("job");
         assert_eq!(v.status, JobStatus::Failed);
         assert_eq!(v.fail_code.as_deref(), Some("principal-gone"));
-        disable_feature();
     }
 
     #[test]
     fn prompt_not_in_job_view_json() {
         ensure_table();
-        enable_feature();
+        let _t = queue_test(enabled());
         let (path, slug) = unique_ws("prompt");
         let (j, _) = enqueue(base_req(&path, &slug, "p")).unwrap();
         let view = get_job(&path, &j).unwrap();
@@ -1197,6 +1327,5 @@ mod tests {
             "prompt must never appear in job status JSON"
         );
         mark_terminal(&j, JobStatus::Cancelled, None, None, None);
-        disable_feature();
     }
 }

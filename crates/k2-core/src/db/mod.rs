@@ -1120,6 +1120,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0136_hostmail_backup",
             include_str!("../../drizzle_sql/0136_hostmail_backup.sql"),
         ),
+        // 0138 — Zen v2 custom-widget grants (prd-zen-user-widgets-v2 UWB5):
+        // signed rows, one live per (garden, placement). New table only.
+        (
+            "0138_zen_widget_grants",
+            include_str!("../../drizzle_sql/0138_zen_widget_grants.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1780,7 +1786,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0136_hostmail_backup",
+            last_name, "0138_zen_widget_grants",
             "unexpected last migration name: {last_name}"
         );
     }

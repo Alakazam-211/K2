@@ -285,21 +285,84 @@ impl GrantKey {
         hex_lower(&Sha256::digest(self.bytes)[..4])
     }
 
-    /// Read the key, or `None` when the file doesn't exist. B2: refuse a
-    /// file that isn't exactly 32 bytes or (on unix) is readable by group or
-    /// others.
+    /// Read the key, or `None` when the file doesn't exist. Refuses a link,
+    /// a file that isn't exactly 32 bytes, and (on unix) a file readable or
+    /// writable by group or others.
     pub fn load(path: &std::path::Path) -> std::io::Result<Option<Self>> {
-        let _ = path;
-        todo!("B2 (UWB4): read ~/.k2/zen-grant.key")
+        use std::io::{Error, ErrorKind};
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("{} must be a plain file K2 made, not a link or folder", path.display()),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    format!("{} is mode {mode:o}; K2 keeps it 600 (owner only)", path.display()),
+                ));
+            }
+        }
+        let bytes = std::fs::read(path)?;
+        let bytes: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("{} holds {} bytes; a grant key is 32", path.display(), bytes.len()),
+            )
+        })?;
+        Ok(Some(Self { bytes }))
     }
 
     /// Read the key, making it (32 bytes from the OS RNG, mode 0600,
-    /// atomic) on the first grant. Only the grant route calls this; resolve
+    /// atomic) on the first grant. Only the grant routes call this; resolve
     /// uses [`GrantKey::load`] and never makes a key.
     pub fn load_or_create(path: &std::path::Path) -> std::io::Result<Self> {
-        let _ = path;
-        todo!("B2 (UWB4): create ~/.k2/zen-grant.key on the first grant")
+        if let Some(k) = Self::load(path)? {
+            return Ok(k);
+        }
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).map_err(|e| std::io::Error::other(format!("OS random: {e}")))?;
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        let tmp = parent.join(format!(".{GRANT_KEY_FILE}.{}.tmp", uuid::Uuid::new_v4().simple()));
+        let written = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&tmp)?;
+            f.write_all(&bytes)?;
+            f.sync_all()?;
+            // Two first grants at once: the first rename wins and both
+            // read it back, so every row is signed with one key.
+            std::fs::hard_link(&tmp, path).or_else(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => Ok(()),
+                _ => Err(e),
+            })
+        })();
+        let _ = std::fs::remove_file(&tmp);
+        written?;
+        Self::load(path)?.ok_or_else(|| std::io::Error::other(format!("{} vanished after writing", path.display())))
     }
+}
+
+/// `~/.k2/zen-grant.key` for a Zen folder at `<k2 home>/zen`: the key sits
+/// next to the folder, never inside it (agents edit `zen/`).
+pub fn key_path_for(zen_root: &std::path::Path) -> std::path::PathBuf {
+    zen_root.parent().unwrap_or(zen_root).join(GRANT_KEY_FILE)
 }
 
 /// The signed text: [`GRANT_CANON_TAG`], a newline, then one compact JSON
@@ -481,11 +544,257 @@ pub fn effective(row: Option<&GrantRow>, key: Option<&GrantKey>, q: &GrantQuery<
     }
 }
 
-/// The placement's live row, or `None`. B2: table `zen_widget_grants`
-/// (0138), `revoked_at IS NULL`.
+// ── Storage: table `zen_widget_grants` (migration 0138) ─────────────────
+
+const ROW_COLUMNS: &str = "garden, placement, widget, caps_json, scope_json, entries_json, ask_json, sending, \
+     granted_at, widget_hash, key_id, sig, paused_json, granted_by_kind";
+
+/// A row as stored. A column whose JSON doesn't parse (a hand edit) gives a
+/// row that can never verify: its signature is replaced, so [`effective`]
+/// answers `invalid` and the widget goes back to review. Never an error:
+/// one bad row must not break every Garden.
+fn row_from_sql(r: &rusqlite::Row<'_>) -> rusqlite::Result<GrantRow> {
+    let garden: String = r.get(0)?;
+    let placement: String = r.get(1)?;
+    let widget: String = r.get(2)?;
+    let caps: Option<Vec<String>> = serde_json::from_str(&r.get::<_, String>(3)?).ok();
+    let scope: Option<Scope> = serde_json::from_str::<J>(&r.get::<_, String>(4)?).ok().and_then(|v| Scope::from_json(&v).ok());
+    let entries: Option<Vec<GrantEntry>> = serde_json::from_str(&r.get::<_, String>(5)?).ok();
+    let ask: Option<PlacementAsk> = serde_json::from_str(&r.get::<_, String>(6)?).ok();
+    let sending: i64 = r.get(7)?;
+    let granted_at: String = r.get(8)?;
+    let widget_hash: String = r.get(9)?;
+    let key_id: String = r.get(10)?;
+    let mut sig: String = r.get(11)?;
+    let paused_raw: Option<String> = r.get(12)?;
+    let granted_by_kind: String = r.get(13)?;
+    let paused: Option<Pause> = paused_raw.as_deref().and_then(|p| serde_json::from_str(p).ok());
+    let corrupt = caps.is_none()
+        || scope.is_none()
+        || entries.is_none()
+        || ask.is_none()
+        || !(sending == 0 || sending == 1)
+        || (paused_raw.is_some() && paused.is_none());
+    if corrupt {
+        sig = "corrupt-row".to_string();
+    }
+    Ok(GrantRow {
+        record: GrantRecord {
+            garden,
+            placement,
+            widget,
+            caps: caps.unwrap_or_default(),
+            scope: scope.unwrap_or(Scope::AllServers),
+            entries: entries.unwrap_or_default(),
+            ask: ask.unwrap_or_default(),
+            sending: sending == 1,
+            granted_at,
+        },
+        widget_hash,
+        key_id,
+        sig,
+        paused,
+        granted_by_kind,
+    })
+}
+
+fn json_text<T: Serialize>(v: &T) -> String {
+    serde_json::to_string(v).unwrap_or_else(|e| panic!("grant field to JSON: {e}"))
+}
+
+/// The placement's live row, or `None`: table `zen_widget_grants` (0138),
+/// `revoked_at IS NULL`.
 pub fn load_row(conn: &rusqlite::Connection, garden: &str, placement: &str) -> rusqlite::Result<Option<GrantRow>> {
-    let _ = (conn, garden, placement);
-    todo!("B2 (UWB5): read zen_widget_grants")
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        &format!(
+            "SELECT {ROW_COLUMNS} FROM zen_widget_grants \
+             WHERE garden = ?1 AND placement = ?2 AND revoked_at IS NULL"
+        ),
+        rusqlite::params![garden, placement],
+        row_from_sql,
+    )
+    .optional()
+}
+
+/// Every live row, by garden then placement.
+pub fn live_rows(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<GrantRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ROW_COLUMNS} FROM zen_widget_grants WHERE revoked_at IS NULL ORDER BY garden, placement"
+    ))?;
+    let rows = stmt.query_map([], row_from_sql)?;
+    rows.collect()
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Sign `record` under `key` and store it as the placement's live row. A
+/// live row already there is revoked first (`replaced`), in one
+/// transaction. Returns the stored row.
+pub fn put(
+    conn: &rusqlite::Connection,
+    key: &GrantKey,
+    record: GrantRecord,
+    widget_hash: &str,
+    granted_by_kind: &str,
+) -> rusqlite::Result<GrantRow> {
+    let row = GrantRow {
+        sig: sign(key, &record),
+        key_id: key.id(),
+        widget_hash: widget_hash.to_string(),
+        paused: None,
+        granted_by_kind: granted_by_kind.to_string(),
+        record,
+    };
+    let r = &row.record;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE zen_widget_grants SET revoked_at = ?3, revoked_by_kind = 'replaced' \
+         WHERE garden = ?1 AND placement = ?2 AND revoked_at IS NULL",
+        rusqlite::params![r.garden, r.placement, now_rfc3339()],
+    )?;
+    tx.execute(
+        &format!("INSERT INTO zen_widget_grants ({ROW_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13)"),
+        rusqlite::params![
+            r.garden,
+            r.placement,
+            r.widget,
+            json_text(&r.caps),
+            json_text(&r.scope.to_json()),
+            json_text(&r.entries),
+            json_text(&r.ask),
+            i64::from(r.sending),
+            r.granted_at,
+            row.widget_hash,
+            row.key_id,
+            row.sig,
+            row.granted_by_kind,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(row)
+}
+
+/// Revoke the placement's live row. Returns whether one was live.
+pub fn revoke(conn: &rusqlite::Connection, garden: &str, placement: &str, by_kind: &str) -> rusqlite::Result<bool> {
+    let n = conn.execute(
+        "UPDATE zen_widget_grants SET revoked_at = ?3, revoked_by_kind = ?4 \
+         WHERE garden = ?1 AND placement = ?2 AND revoked_at IS NULL",
+        rusqlite::params![garden, placement, now_rfc3339(), by_kind],
+    )?;
+    Ok(n > 0)
+}
+
+/// Revoke every live row of one widget (all its placements). Returns the
+/// `(garden, placement)` pairs revoked.
+pub fn revoke_widget(conn: &rusqlite::Connection, widget: &str, by_kind: &str) -> rusqlite::Result<Vec<(String, String)>> {
+    let gone: Vec<(String, String)> = live_rows(conn)?
+        .into_iter()
+        .filter(|r| r.record.widget == widget)
+        .map(|r| (r.record.garden, r.record.placement))
+        .collect();
+    for (g, p) in &gone {
+        revoke(conn, g, p, by_kind)?;
+    }
+    Ok(gone)
+}
+
+/// Change the Sending switch on a live row: re-sign the record with
+/// `sending`, and set or clear the pause. `None` when the placement has no
+/// live row. The caller checks the row is valid ([`effective`]) first, so
+/// a forged row is never re-signed into a good one.
+pub fn set_sending(
+    conn: &rusqlite::Connection,
+    key: &GrantKey,
+    garden: &str,
+    placement: &str,
+    sending: bool,
+    paused: Option<Pause>,
+) -> rusqlite::Result<Option<GrantRow>> {
+    let Some(mut row) = load_row(conn, garden, placement)? else { return Ok(None) };
+    row.record.sending = sending;
+    row.sig = sign(key, &row.record);
+    row.key_id = key.id();
+    row.paused = paused;
+    let paused_json = row.paused.as_ref().map(json_text);
+    conn.execute(
+        "UPDATE zen_widget_grants SET sending = ?3, sig = ?4, key_id = ?5, paused_json = ?6 \
+         WHERE garden = ?1 AND placement = ?2 AND revoked_at IS NULL",
+        rusqlite::params![garden, placement, i64::from(sending), row.sig, row.key_id, paused_json],
+    )?;
+    Ok(Some(row))
+}
+
+/// Drop (revoke as `pruned`) every live row `keep` says no longer has a
+/// Garden, placement or widget (UW20: ignored until the next write, then
+/// dropped). Returns how many went.
+pub fn prune(conn: &rusqlite::Connection, keep: impl Fn(&GrantRow) -> bool) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for r in live_rows(conn)? {
+        if !keep(&r) && revoke(conn, &r.record.garden, &r.record.placement, "pruned")? {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Every live row and the key, read once per request: what `resolve`, the
+/// widget list and the `refresh` fingerprint read. The key is `None` when
+/// the file is missing or unreadable (every row then resolves `invalid`).
+#[derive(Debug, Clone, Default)]
+pub struct GrantSnapshot {
+    pub rows: Vec<GrantRow>,
+    pub key: Option<GrantKey>,
+    /// Why the key couldn't be read (doctor), when it exists but is bad.
+    pub key_error: Option<String>,
+}
+
+impl GrantSnapshot {
+    /// No rows, no key (Zen v1 behaviour; tests).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Read every live row and the key at `key_path`.
+    pub fn load(conn: &rusqlite::Connection, key_path: &std::path::Path) -> rusqlite::Result<Self> {
+        let rows = live_rows(conn)?;
+        let (key, key_error) = match GrantKey::load(key_path) {
+            Ok(k) => (k, None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        Ok(Self { rows, key, key_error })
+    }
+
+    /// The placement's live row.
+    pub fn row(&self, garden: &str, placement: &str) -> Option<&GrantRow> {
+        self.rows.iter().find(|r| r.record.garden == garden && r.record.placement == placement)
+    }
+
+    /// The effective grant for one placement.
+    pub fn view(&self, q: &GrantQuery<'_>) -> GrantView {
+        effective(self.row(q.garden, q.placement), self.key.as_ref(), q)
+    }
+
+    /// Changes whenever a grant, revoke, Sending switch, pause or the key
+    /// changes (UW12: each emits one `zen_changed`).
+    pub fn fingerprint(&self) -> J {
+        let rows: Vec<J> = self
+            .rows
+            .iter()
+            .map(|r| {
+                json!([
+                    canonical(&r.record),
+                    r.sig,
+                    r.key_id,
+                    r.widget_hash,
+                    r.paused.as_ref().map(json_text),
+                ])
+            })
+            .collect();
+        json!({ "rows": rows, "key": self.key.as_ref().map(GrantKey::id) })
+    }
 }
 
 #[cfg(test)]
@@ -646,6 +955,172 @@ mod tests {
         let req = s(&["gardens:manage", "agents:read", "app:navigate"]);
         let granted = s(&["gardens:manage", "agents:read", "app:navigate"]);
         assert_eq!(effective_caps(&req, &granted), s(&["agents:read"]));
+    }
+
+    fn db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open(":memory:").expect("memory db");
+        crate::db::run_migrations(&conn).expect("migrations");
+        conn
+    }
+
+    fn temp_k2(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("k2-zen-grants-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(d.join(".k2").join("zen")).expect("mkdir temp .k2/zen");
+        d
+    }
+
+    #[test]
+    fn key_file_is_made_once_owner_only_and_reused() {
+        let home = temp_k2("key");
+        let path = key_path_for(&home.join(".k2").join("zen"));
+        assert_eq!(path, home.join(".k2").join(GRANT_KEY_FILE));
+        assert!(GrantKey::load(&path).expect("load").is_none(), "no file yet");
+        let a = GrantKey::load_or_create(&path).expect("create");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        assert_eq!(std::fs::read(&path).expect("read").len(), 32);
+        let b = GrantKey::load_or_create(&path).expect("reuse");
+        assert_eq!(a.id(), b.id(), "the second call reads the same key");
+        let leftovers: Vec<_> = std::fs::read_dir(home.join(".k2"))
+            .expect("list")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_bad_key_file_is_refused() {
+        let home = temp_k2("badkey");
+        let path = home.join(".k2").join(GRANT_KEY_FILE);
+        std::fs::write(&path, [1u8; 31]).expect("write short key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        assert!(GrantKey::load(&path).is_err(), "31 bytes");
+        assert!(GrantKey::load_or_create(&path).is_err(), "never overwrites a bad key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&path, [1u8; 32]).expect("write key");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+            let e = GrantKey::load(&path).expect_err("group/world readable");
+            assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn rows_round_trip_replace_and_revoke() {
+        let conn = db();
+        let key = GrantKey::from_bytes([7; 32]);
+        assert!(load_row(&conn, "g-test0001", "arcade").expect("read").is_none());
+        let stored = put(&conn, &key, record(), "hash-1", "owner_token").expect("put");
+        let back = load_row(&conn, "g-test0001", "arcade").expect("read").expect("row");
+        assert_eq!(back, stored);
+        assert!(verify(&key, &back.record, &back.sig));
+
+        let mut again = record();
+        again.caps = s(&["agents:read"]);
+        put(&conn, &key, again, "hash-2", "owner_token").expect("replace");
+        assert_eq!(live_rows(&conn).expect("rows").len(), 1, "one live row per placement");
+        let total: i64 =
+            conn.query_row("SELECT COUNT(*) FROM zen_widget_grants", [], |r| r.get(0)).expect("count");
+        assert_eq!(total, 2, "the replaced row is kept for the audit trail");
+        assert_eq!(load_row(&conn, "g-test0001", "arcade").expect("read").expect("row").widget_hash, "hash-2");
+
+        assert!(revoke(&conn, "g-test0001", "arcade", "owner_token").expect("revoke"));
+        assert!(!revoke(&conn, "g-test0001", "arcade", "owner_token").expect("revoke again"));
+        assert!(load_row(&conn, "g-test0001", "arcade").expect("read").is_none());
+    }
+
+    /// TUWB2: a row edited in SQLite resolves `invalid` with no caps.
+    #[test]
+    fn a_row_edited_in_sqlite_is_invalid() {
+        let conn = db();
+        let key = GrantKey::from_bytes([7; 32]);
+        put(&conn, &key, record(), "hash-1", "owner_token").expect("put");
+        let ask = PlacementAsk { home: Some("Work".into()), agent: None };
+        let req = s(&["agents:read", "thread:read", "thread:post"]);
+        let q = GrantQuery {
+            garden: "g-test0001",
+            placement: "arcade",
+            widget: "agent-arcade",
+            hash: "hash-1",
+            requested: &req,
+            ask: &ask,
+        };
+        let snap = || GrantSnapshot { rows: live_rows(&conn).expect("rows"), key: Some(key.clone()), key_error: None };
+        assert_eq!(snap().view(&q).state, GrantState::Partial);
+        for (col, val) in [
+            ("caps_json", r#"["agents:read","thread:read","thread:post"]"#),
+            ("scope_json", r#"{"allServers":true}"#),
+            ("widget", "agent-arcade-2"),
+            ("ask_json", r#"{"home":"Work","agent":"cortana"}"#),
+            ("sending", "0"),
+            ("caps_json", "not json"),
+        ] {
+            put(&conn, &key, record(), "hash-1", "owner_token").expect("fresh row");
+            conn.execute(&format!("UPDATE zen_widget_grants SET {col} = ?1 WHERE revoked_at IS NULL"), [val])
+                .expect("hand edit");
+            let v = snap().view(&q);
+            assert_eq!(v.state, GrantState::Invalid, "editing {col} must invalidate the grant");
+            assert!(v.caps.is_empty());
+        }
+        put(&conn, &key, record(), "hash-1", "owner_token").expect("fresh row");
+        let other = GrantSnapshot { key: Some(GrantKey::from_bytes([9; 32])), ..snap() };
+        assert_eq!(other.view(&q).state, GrantState::Invalid, "a new key file voids every grant");
+        let none = GrantSnapshot { key: None, ..snap() };
+        assert_eq!(none.view(&q).state, GrantState::Invalid, "a missing key voids every grant");
+    }
+
+    #[test]
+    fn sending_is_resigned_and_pause_is_row_data() {
+        let conn = db();
+        let key = GrantKey::from_bytes([7; 32]);
+        put(&conn, &key, record(), "hash-1", "owner_token").expect("put");
+        let pause = Pause { at: "2026-10-08T12:30:00Z".into(), reason: PauseReason::Runaway };
+        let row = set_sending(&conn, &key, "g-test0001", "arcade", false, Some(pause.clone()))
+            .expect("off")
+            .expect("row");
+        assert!(!row.record.sending);
+        let back = load_row(&conn, "g-test0001", "arcade").expect("read").expect("row");
+        assert!(verify(&key, &back.record, &back.sig), "re-signed");
+        assert_eq!(back.paused, Some(pause));
+        let fp_paused = GrantSnapshot { rows: vec![back], key: Some(key.clone()), key_error: None }.fingerprint();
+        let row = set_sending(&conn, &key, "g-test0001", "arcade", true, None).expect("on").expect("row");
+        assert!(row.record.sending && row.paused.is_none());
+        let fp_on =
+            GrantSnapshot { rows: live_rows(&conn).expect("rows"), key: Some(key.clone()), key_error: None }.fingerprint();
+        assert_ne!(fp_paused, fp_on, "the fingerprint follows the switch");
+        assert!(set_sending(&conn, &key, "g-test0001", "nope", true, None).expect("none").is_none());
+    }
+
+    #[test]
+    fn prune_and_revoke_widget_drop_only_what_they_name() {
+        let conn = db();
+        let key = GrantKey::from_bytes([7; 32]);
+        put(&conn, &key, record(), "h", "owner_token").expect("put");
+        let mut b = record();
+        b.placement = "arcade-2".into();
+        put(&conn, &key, b, "h", "owner_token").expect("put");
+        let mut c = record();
+        c.placement = "clock".into();
+        c.widget = "clock".into();
+        put(&conn, &key, c, "h", "owner_token").expect("put");
+        assert_eq!(prune(&conn, |r| r.record.placement != "arcade-2").expect("prune"), 1);
+        let gone = revoke_widget(&conn, "agent-arcade", "owner_token").expect("revoke widget");
+        assert_eq!(gone, vec![("g-test0001".to_string(), "arcade".to_string())]);
+        let left: Vec<String> = live_rows(&conn).expect("rows").into_iter().map(|r| r.record.placement).collect();
+        assert_eq!(left, vec!["clock".to_string()]);
     }
 
     #[test]

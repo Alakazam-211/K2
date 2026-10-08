@@ -186,6 +186,10 @@ sha2 = "0.10"
 # grant row with HMAC-SHA256. Already in the lock tree; same digest 0.10 as
 # sha2.
 hmac = "0.12"
+# Zen v2: the grant key (32 bytes, UWB4) and each widget bundle's script
+# nonce (16 bytes, UW9) come from the OS RNG. Already in the lock tree (the
+# daemon and the shell use the same 0.2).
+getrandom = "0.2"
 # Ticket HTML brief (prd-ticket-html-brief-v1 H11/H34): the daemon cleans
 # an agent's brief on write. ammonia is MIT/Apache, built on html5ever.
 # html5ever is pinned to ammonia's major so the tokenizer the brief

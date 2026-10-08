@@ -3506,6 +3506,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "fontdue",
+ "getrandom 0.2.17",
  "git2",
  "hmac",
  "html5ever 0.40.1",

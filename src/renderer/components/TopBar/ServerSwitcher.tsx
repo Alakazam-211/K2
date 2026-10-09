@@ -3,7 +3,10 @@
 //
 // Dropdown contents (PRD §1):
 //   - "This computer" (local bundled daemon; "Local" before 0.43.2, Z20) —
-//     always first, never needs auth.
+//     always first, never needs auth. It is PINNED: it sits under the
+//     search box, outside the scrolling list, so a long address book scrolls
+//     under it and the way home is always on screen. It stays pinned while
+//     searching too, even when the query doesn't match it.
 //   - every saved ConnectHost, alphabetical by label (case-insensitive;
 //     hostname as tiebreaker so the list is stable).
 //   - "Add a server…" — routes to Settings → Connections (the address
@@ -68,14 +71,21 @@ export function serverSwitcherOptions(
   return out
 }
 
-/** Search → first match. Idle open → currently connected host, else 0. */
+/** Search → first match. Idle open → currently connected host, else 0.
+ *  This computer is pinned and always in `options`, so while searching it
+ *  is skipped when the query doesn't match it (`localMatches` false) and a
+ *  host does — Enter then picks the first matching host, not home. */
 export function defaultSwitcherHighlight(
   options: SwitcherOption[],
   activeHost: 'local' | ConnectHost,
   searching: boolean,
+  localMatches = true,
 ): number {
   if (options.length === 0) return 0
-  if (searching) return 0
+  if (searching) {
+    if (options[0] === 'local' && !localMatches && options.length > 1) return 1
+    return 0
+  }
   if (activeHost === 'local') {
     const i = options.findIndex((o) => o === 'local')
     return i >= 0 ? i : 0
@@ -204,7 +214,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   const [query, setQuery] = useState('')
   const [highlighted, setHighlighted] = useState(0)
   const searchRef = useRef<HTMLInputElement | null>(null)
-  const listRef = useRef<HTMLDivElement | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
 
   // Close on Escape per copy (idempotent). Outside click is one shared
   // listener — see retainServerSwitcherOutsideClick.
@@ -239,7 +249,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   // Z20: a focused remote room's server, or null (the window's own server).
   const roomServer = followed.room ? followed.label : null
 
-  // Saved remotes only — Local stays pinned first below. Sort by display
+  // Saved remotes only — This computer is pinned above the scroller. Sort by display
   // label so a long address book is scannable; hostname breaks ties.
   const hostsSorted = useMemo(() => {
     const sorted = [...hosts].sort((a, b) => {
@@ -261,15 +271,16 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
     })
   }, [hosts, query])
 
-  const showLocal = useMemo(() => {
+  // Whether the query names This computer. It stays pinned either way (it
+  // is the way home); this only decides whether search highlights it.
+  const localMatches = useMemo(() => {
     const q = query.trim().toLowerCase()
     return !q || 'local'.includes(q) || THIS_COMPUTER_LABEL.toLowerCase().includes(q)
   }, [query])
 
-  const options = useMemo(
-    () => serverSwitcherOptions(showLocal, hostsSorted),
-    [showLocal, hostsSorted],
-  )
+  const options = useMemo(() => serverSwitcherOptions(true, hostsSorted), [hostsSorted])
+  // Nothing matches at all (This computer still shows, pinned).
+  const noMatch = !localMatches && hostsSorted.length === 0
 
   // Search → always highlight the first match. Empty query → the
   // currently connected host (or the first row).
@@ -279,13 +290,15 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
       return
     }
     setHighlighted(
-      defaultSwitcherHighlight(options, activeHost, query.trim().length > 0),
+      defaultSwitcherHighlight(options, activeHost, query.trim().length > 0, localMatches),
     )
-  }, [open, query, options, activeHost])
+  }, [open, query, options, activeHost, localMatches])
 
+  // Only rows in the scroller scroll into view; the pinned row is always
+  // on screen.
   useEffect(() => {
     if (!open) return
-    const el = listRef.current?.querySelector('[data-switcher-highlighted="true"]')
+    const el = scrollRef.current?.querySelector('[data-switcher-highlighted="true"]')
     if (el instanceof HTMLElement) {
       el.scrollIntoView({ block: 'nearest' })
     }
@@ -475,12 +488,11 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
             />
           </div>
 
-          <div
-            ref={listRef}
-            className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-            role="listbox"
-          >
-            {showLocal && (
+          {/* One listbox: the pinned This computer row, then the scroller.
+              The pinned row is outside the scroller so the list scrolls under
+              it, and ↑/↓ (one `options` array) cross between them. */}
+          <div role="listbox" aria-label="Servers" className="flex flex-col min-h-0">
+            <div data-testid="server-switcher-pinned" className="shrink-0">
               <SwitcherRow
                 id="server-switcher-opt-local"
                 label={THIS_COMPUTER_LABEL}
@@ -493,38 +505,43 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
                   if (i >= 0) setHighlighted(i)
                 }}
               />
-            )}
+              {(hostsSorted.length > 0 || noMatch) && (
+                <div className="my-1 h-px bg-[var(--color-border)]" />
+              )}
+            </div>
 
-            {showLocal && hostsSorted.length > 0 && (
-              <div className="my-1 h-px bg-[var(--color-border)]" />
-            )}
+            <div
+              ref={scrollRef}
+              data-testid="server-switcher-scroll"
+              className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+            >
+              {hostsSorted.map((h) => {
+                const isActive = activeHost !== 'local' && activeHost.id === h.id
+                const isHi = options[highlighted] !== 'local' && options[highlighted]?.id === h.id
+                return (
+                  <SwitcherRow
+                    key={h.id}
+                    id={`server-switcher-opt-${h.id}`}
+                    label={h.label}
+                    sublabel={hostDisplayAddress(h)}
+                    active={isActive}
+                    highlighted={isHi}
+                    statusDot={isActive ? connectionStatus : null}
+                    onClick={() => pick(h)}
+                    onHover={() => {
+                      const i = options.findIndex((o) => o !== 'local' && o.id === h.id)
+                      if (i >= 0) setHighlighted(i)
+                    }}
+                  />
+                )
+              })}
 
-            {hostsSorted.map((h) => {
-              const isActive = activeHost !== 'local' && activeHost.id === h.id
-              const isHi = options[highlighted] !== 'local' && options[highlighted]?.id === h.id
-              return (
-                <SwitcherRow
-                  key={h.id}
-                  id={`server-switcher-opt-${h.id}`}
-                  label={h.label}
-                  sublabel={hostDisplayAddress(h)}
-                  active={isActive}
-                  highlighted={isHi}
-                  statusDot={isActive ? connectionStatus : null}
-                  onClick={() => pick(h)}
-                  onHover={() => {
-                    const i = options.findIndex((o) => o !== 'local' && o.id === h.id)
-                    if (i >= 0) setHighlighted(i)
-                  }}
-                />
-              )
-            })}
-
-            {!showLocal && hostsSorted.length === 0 && (
-              <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
-                No matching servers
-              </div>
-            )}
+              {noMatch && (
+                <div className="px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
+                  No matching servers
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="my-1 h-px bg-[var(--color-border)]" />

@@ -59,4 +59,11 @@ describe('serverSwitcherOptions + defaultSwitcherHighlight', () => {
     expect(defaultSwitcherHighlight(opts, 'local', false)).toBe(0)
     expect(defaultSwitcherHighlight(opts, b, false)).toBe(2)
   })
+
+  it('searching skips the pinned This computer when the query misses it and a host matches', () => {
+    const opts = serverSwitcherOptions(true, [a])
+    expect(defaultSwitcherHighlight(opts, 'local', true, false)).toBe(1)
+    expect(defaultSwitcherHighlight(opts, 'local', true, true)).toBe(0)
+    expect(defaultSwitcherHighlight(serverSwitcherOptions(true, []), 'local', true, false)).toBe(0)
+  })
 })

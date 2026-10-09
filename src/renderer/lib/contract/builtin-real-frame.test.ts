@@ -169,8 +169,8 @@ async function realFrame(opts: {
 
 const noFrame = { raf: (_f: unknown) => 0, perf: { now: () => 0 } }
 
-function runDiary(k2: unknown): void {
-  new Function('window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', read('builtin_widgets/diary/diary.js'))(
+const diaryRunner = (dir: string) => (k2: unknown): void => {
+  new Function('window', 'document', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', read(`builtin_widgets/${dir}/diary.js`))(
     { k2 },
     document,
     noFrame.raf,
@@ -181,9 +181,15 @@ function runDiary(k2: unknown): void {
 
 const DIARY_CAPS = ['agents:read', 'thread:read', 'thread:post']
 
-describe('k2:diary@1 on the real runtime, hello after the script', () => {
+// Every released Diary version (`k2:diary@1` stays byte for byte; @2 adds
+// dark ink, markdown and the ghost in the pen).
+describe.each([
+  ['k2:diary@1', 'diary'],
+  ['k2:diary@2', 'diary-2'],
+])('%s on the real runtime, hello after the script', (_id, dir) => {
+  const runDiary = diaryRunner(dir)
   it('renders a page per local agent and posts to it (never "sealed")', async () => {
-    const f = await realFrame({ html: read('builtin_widgets/diary/index.html'), run: runDiary, caps: DIARY_CAPS })
+    const f = await realFrame({ html: read(`builtin_widgets/${dir}/index.html`), run: runDiary, caps: DIARY_CAPS })
     await until('the Diary subscribes to agents', () => f.subscribed('agents.subscribe').length === 1)
     expect(f.$('caption').textContent).not.toBe('the diary is sealed')
     f.push('agents.subscribe', [row('cortana', 0), row('nora', 1)])
@@ -204,7 +210,7 @@ describe('k2:diary@1 on the real runtime, hello after the script', () => {
   })
 
   it('no hello in 10 s: the page says it can’t reach your agents, and asks for nothing', async () => {
-    const f = await realFrame({ html: read('builtin_widgets/diary/index.html'), run: runDiary, caps: DIARY_CAPS, hello: 'never' })
+    const f = await realFrame({ html: read(`builtin_widgets/${dir}/index.html`), run: runDiary, caps: DIARY_CAPS, hello: 'never' })
     expect(f.$('caption').textContent).toBe('the diary is waking')
     f.expire()
     await until('the sealed note', () => f.$('caption').textContent === 'the diary is sealed')

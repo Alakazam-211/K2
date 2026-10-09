@@ -55,8 +55,9 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-/// The Diary template (UWB21): the first catalog entry.
-pub const DIARY_TEMPLATE_ID: &str = "k2.diary@1";
+/// The Diary template (UWB21) New Garden and setup use today: the highest
+/// `diary-<n>.toml` (k2.diary@1 was the first; @2 moves to `k2:diary@2`).
+pub const DIARY_TEMPLATE_ID: &str = "k2.diary@2";
 
 include!(concat!(env!("OUT_DIR"), "/zen_garden_catalog.rs"));
 
@@ -252,7 +253,7 @@ kind = "columns"
     #[test]
     fn an_entry_parses_and_defaults_new_users_off() {
         let e = parse_entry("diary-1.toml", DIARY_FIXTURE).expect("fixture parses");
-        assert_eq!(e.template_id, DIARY_TEMPLATE_ID);
+        assert_eq!(e.template_id, "k2.diary@1");
         assert_eq!(e.version, 1);
         assert!(!e.meta.new_users, "Diary is not preinstalled unless the file says so");
     }

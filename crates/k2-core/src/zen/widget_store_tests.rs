@@ -41,7 +41,7 @@ fn setup_preinstalls_the_diary_once_and_a_deleted_one_never_returns() {
     assert_eq!(diary.template, crate::zen::garden_catalog::DIARY_TEMPLATE_ID);
     let page = f.resolve(Some(&diary.id)).expect("resolve diary");
     let w = &page["page"]["widgets"][0];
-    assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some("k2:diary@1")), "{page}");
+    assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some("k2:diary@2")), "{page}");
     assert_eq!(w["source"], "user");
     assert_eq!(w["origin"], "local");
     assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post"]), "the Diary works with zero clicks: {w}");
@@ -55,7 +55,7 @@ fn setup_preinstalls_the_diary_once_and_a_deleted_one_never_returns() {
     assert_eq!(names, vec!["Garden 1", "Garden 2"], "a deleted Diary never comes back on its own");
     // Loadable again from the catalog by its short name.
     let g = f.new_garden("My diary", Some("diary"), None, None).expect("new from catalog");
-    assert_eq!(g.template, "k2.diary@1");
+    assert_eq!(g.template, "k2.diary@2");
     assert!(matches!(f.new_garden("x", Some("dashboard"), None, None), Err(ZenError::BadRequest(_))));
 }
 

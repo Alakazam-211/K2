@@ -1,0 +1,90 @@
+# Garden catalog entry `k2.diary@2` (prd-zen-user-widgets-v2 UWB21–UWB25,
+# §15.4; Rosson 2026-10-07 and 2026-10-08).
+#
+# The Diary: a haunted journal with one page per agent on THIS computer.
+# Grab a page's corner and turn it to write to another agent; what you
+# write sinks into the paper, and the reply bleeds back in handwriting.
+# One custom widget, the built-in `k2:diary@2`, fills the page. Nothing on
+# the page that isn't haunted: K2's two required controls (the Garden
+# switcher and the Zen toggle) sit in one small ⋯ menu at the top right
+# (Rosson 2026-10-08), and Ctrl+Cmd+Z still leaves Zen.
+#
+# @2 (Rosson 2026-10-08, for 0.45.2): the same page on k2:diary@2, where
+# your sent words stay dark ink, words read as markdown, and a ghost teases
+# in the empty pen. A synced Diary Garden (template k2.diary@1) shows this
+# page; an own copy keeps @1.
+#
+# Released files never change (a better page is diary-3.toml). The
+# [catalog] table is metadata, not part of the page.
+id = "k2.diary@2"
+schema = 1
+
+[catalog]
+short = "diary"
+label = "Diary"
+description = "A haunted journal. Turn the page to write to another agent on this computer; the ink writes back."
+order = 10
+# Rosson 2026-10-08: preinstalled for new users (setup seeds it once, after
+# Gardens 1 and 2; never appended to an existing user's Gardens).
+new_users = true
+# The scene lives in the theme, never in the widget (Rosson 2026-10-08): a
+# Diary Garden shows the built-in `haunted` study until the person picks
+# another theme for it.
+theme = "haunted"
+
+# No permissions (Rosson 2026-10-08): the Diary talks to the agents on
+# this computer the moment it's created.
+
+# The whole window is the page: the ⋯ menu floats over the book, no frame
+# or margin around it, and the haunted study shows behind everything.
+[layout]
+kind = "columns"
+canvas = "full"
+
+[[layout.column]]
+widget = "diary"
+size = 100
+min-width = 360
+
+[[widget]]
+id = "diary"
+kind = "custom"
+widget = "k2:diary@2"
+column = 0
+
+# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top right,
+# holding the Garden switcher and the Zen toggle. No usage chip, no theme
+# control: the Diary has its own candlelit look.
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "end"
+[widget.props]
+icon = "dots"
+label = "Diary"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+
+# Controls (Z27, G24), as every template declares them for `page.controls`:
+# the two required ones sit in the ⋯ menu, so K2 checks the menu's button
+# (FC25); the empty band still drags the window.
+[[control]]
+kind = "garden-switcher"
+placement = "menu:more"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "menu:more"

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "Diary",
+  "description": "A haunted journal with one page per agent on this computer. Turn the page to write to another; the ink writes back.",
+  "entry": "index.html",
+  "caps": ["agents:read", "thread:read", "thread:post"],
+  "reasons": {
+    "agents:read": "to give each agent on this computer its own page, and show when it stirs or calls for you",
+    "thread:read": "to show your conversation with that agent on its page",
+    "thread:post": "so what you write on a page is sent to that agent"
+  },
+  "requires": {
+    "libs": ["perfect-freehand@1", "font-caveat@5"]
+  }
+}

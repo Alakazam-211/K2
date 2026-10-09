@@ -1333,7 +1333,7 @@ fn setup_default_garden_new_garden_is_empty_and_template_is_honoured() {
     assert!(out.created_folder && out.created_default);
     let list = f.gardens();
     assert_eq!(list.len(), 3, "Garden 1, Garden 2 and the preinstalled Diary: {list:?}");
-    assert_eq!((list[2].name.as_str(), list[2].template.as_str()), ("Diary", "k2.diary@1"), "{list:?}");
+    assert_eq!((list[2].name.as_str(), list[2].template.as_str()), ("Diary", "k2.diary@2"), "{list:?}");
     let diary = list[2].clone();
     let d = &list[0];
     assert_eq!(d.name, "Garden 1");

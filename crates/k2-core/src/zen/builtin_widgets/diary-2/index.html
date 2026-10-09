@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Diary</title>
+  <link rel="stylesheet" href="diary.css">
+</head>
+<body>
+  <div class="desk" id="desk">
+    <main class="book" id="book" aria-live="polite">
+      <section class="page" id="page" aria-label="Diary page">
+        <div class="glow" aria-hidden="true"></div>
+        <header class="page-head">
+          <p class="caption" id="caption">this page belongs to</p>
+          <h1 class="who" id="who"></h1>
+          <svg class="flourish" viewBox="0 0 160 16" aria-hidden="true"><path id="flourish"/></svg>
+          <p class="mood" id="mood"></p>
+          <span class="bookmark" id="bookmark" title="Calling for you" hidden></span>
+        </header>
+
+        <div class="sheet" id="sheet">
+          <div class="entries" id="entries"></div>
+          <div class="stir" id="stir" hidden aria-label="The ink stirs"><span></span><span></span><span></span></div>
+          <p class="note" id="note" hidden></p>
+          <form class="pen" id="pen" hidden>
+            <label class="sr" for="ink" id="ink-label">Write to this agent</label>
+            <textarea id="ink" rows="3" placeholder="Write here…" spellcheck="true"></textarea>
+            <div class="soak" id="soak" aria-hidden="true"></div>
+            <div class="ghost" id="ghost" aria-hidden="true" hidden></div>
+            <div class="pen-row">
+              <span class="hint" id="hint">Enter, and the page drinks it</span>
+              <button class="seal" id="send" type="submit">seal</button>
+            </div>
+          </form>
+        </div>
+
+        <footer class="page-foot">
+          <button class="whispers" id="whispers" type="button" aria-pressed="false">whispers: off</button>
+          <span class="folio" id="folio"></span>
+        </footer>
+
+        <button class="corner prev" id="prev" type="button" aria-label="Turn back a page"></button>
+        <button class="corner next" id="next" type="button" aria-label="Turn the page"></button>
+      </section>
+    </main>
+  </div>
+  <script src="diary.js"></script>
+</body>
+</html>

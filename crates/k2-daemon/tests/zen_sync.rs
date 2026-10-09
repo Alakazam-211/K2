@@ -616,7 +616,9 @@ fn gs38_fresh_setup_starts_synced_with_the_catalog_seen() {
     assert_eq!(sf.live_defaults.as_deref(), Some(f.live_defaults().fingerprint()));
     let news = f.news().expect("news");
     assert_eq!(news["items"], json!([]), "a new person sees the catalog as the catalog, not as new: {news}");
-    assert_eq!(f.read_news().catalog_seen.get("diary"), Some(&1));
+    // The binary's newest Diary (k2.diary@2 since 0.45.2) is what setup saw.
+    let newest = zen::sync::template_family(zen::garden_catalog::DIARY_TEMPLATE_ID).expect("a family").1;
+    assert_eq!(f.read_news().catalog_seen.get("diary"), Some(&newest));
     for g in f.gardens() {
         let v = f.resolve(Some(&g.id)).expect("resolve");
         assert_eq!(v["sync"]["page"]["mode"], "synced", "{v}");
@@ -813,7 +815,8 @@ fn gs51_news_catalog_updates_and_seen() {
     let ids: Vec<&str> = news["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str()).collect();
     assert_eq!(ids, vec!["catalog:diary"], "the first run lists the Diary: {news}");
     assert_eq!(news["items"][0]["label"], "Diary");
-    assert_eq!(news["items"][0]["template"], "k2.diary@1");
+    // The binary's newest Diary (k2.diary@2 since 0.45.2) is the one offered.
+    assert_eq!(news["items"][0]["template"], zen::garden_catalog::DIARY_TEMPLATE_ID);
     assert_eq!(news["copiesWithNewerDefault"], 0, "{news}");
 
     // The next release: update items only for synced Gardens that moved.

@@ -23,8 +23,13 @@
 
 use std::fmt;
 
-/// The Diary widget (UWB21, UWB24; Rosson 2026-10-07).
+/// The Diary widget (UWB21, UWB24; Rosson 2026-10-07), as first released.
 pub const DIARY_WIDGET: &str = "k2:diary@1";
+
+/// The Diary every new Diary Garden uses (Rosson 2026-10-08, for 0.45.2):
+/// @1 plus your sent words staying dark ink, markdown built as nodes, and a
+/// ghost teasing in the empty pen. `diary-2.toml` moves the template to it.
+pub const DIARY_WIDGET_LATEST: &str = "k2:diary@2";
 
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
@@ -50,22 +55,36 @@ impl BuiltinWidget {
 /// Every built-in widget version K2 ships, oldest first. An entry is never
 /// removed or edited once released: better code is a new version with its
 /// own folder (`diary-2/`), and only a template moves to it.
-pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[BuiltinWidget {
-    name: "diary",
-    version: 1,
-    files: &[
-        ("manifest.json", include_str!("diary/manifest.json")),
-        ("index.html", include_str!("diary/index.html")),
-        ("diary.css", include_str!("diary/diary.css")),
-        ("diary.js", include_str!("diary/diary.js")),
-    ],
-}];
+pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
+    BuiltinWidget {
+        name: "diary",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("diary/manifest.json")),
+            ("index.html", include_str!("diary/index.html")),
+            ("diary.css", include_str!("diary/diary.css")),
+            ("diary.js", include_str!("diary/diary.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "diary",
+        version: 2,
+        files: &[
+            ("manifest.json", include_str!("diary-2/manifest.json")),
+            ("index.html", include_str!("diary-2/index.html")),
+            ("diary.css", include_str!("diary-2/diary.css")),
+            ("diary.js", include_str!("diary-2/diary.js")),
+        ],
+    },
+];
 
 /// The sha256 of each released built-in's files, `name\0bytes\0` in list
 /// order (TUWB6). A changed byte fails `released_builtins_never_change`:
 /// ship a new version instead.
-pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] =
-    &[("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d")];
+pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
+    ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
+    ("k2:diary@2", "27fe8ebdcf2a215d77d086ca10ade9ebd63fe26bd68705c23a7e548835b22310"),
+];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
 pub fn builtin_widget_hash(w: &BuiltinWidget) -> String {
@@ -190,10 +209,26 @@ mod tests {
         assert_eq!(BUILTIN_WIDGET_HASHES.len(), BUILTIN_WIDGETS.len(), "one pin per built-in");
     }
 
+    /// Every released Diary version, oldest first.
+    fn diaries() -> Vec<&'static BuiltinWidget> {
+        let all: Vec<&BuiltinWidget> = BUILTIN_WIDGETS.iter().filter(|w| w.name == "diary").collect();
+        assert_eq!(all.iter().map(|w| w.id()).collect::<Vec<_>>(), [DIARY_WIDGET, DIARY_WIDGET_LATEST]);
+        all
+    }
+
+    fn file(w: &BuiltinWidget, n: &str) -> &'static str {
+        w.files.iter().find(|(f, _)| *f == n).map(|(_, b)| *b).unwrap_or_else(|| panic!("{} has {n}", w.id()))
+    }
+
     #[test]
     fn the_diary_is_a_clean_custom_widget() {
-        let w = builtin_widget(&parse_widget_ref(DIARY_WIDGET).expect("parses")).expect("k2:diary@1 ships");
-        assert_eq!(w.id(), DIARY_WIDGET);
+        for w in diaries() {
+            clean_diary(w);
+        }
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:diary").expect("parses")).map(|w| w.id()).as_deref(), Some(DIARY_WIDGET_LATEST));
+    }
+
+    fn clean_diary(w: &'static BuiltinWidget) {
         let file = |n: &str| w.files.iter().find(|(f, _)| *f == n).map(|(_, b)| *b).unwrap_or_else(|| panic!("diary has {n}"));
         let manifest: serde_json::Value = serde_json::from_str(file("manifest.json")).expect("manifest is JSON");
         assert_eq!(manifest["schema"], 1);
@@ -247,7 +282,7 @@ mod tests {
             assert!(ok, "diary.js calls k2.{name}, which isn't a widget helper");
         }
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= 256 * 1024, "UW8: the Diary's code is {code} bytes");
+        assert!(code <= 256 * 1024, "UW8: {} is {code} bytes of code", w.id());
         // Rosson 2026-10-08: one page per agent on THIS computer. K2 binds
         // the grant to `{server: "local"}`; the page list keeps only
         // `<handle>::local` rows as a second lock.
@@ -263,6 +298,53 @@ mod tests {
         // theme or model buttons.
         for bad in ["id=\"search\"", "id=\"back\"", "Contents", "theme.get", "theme.changed"] {
             assert!(!html.contains(bad) && !js.contains(bad), "the Diary still has {bad}");
+        }
+    }
+
+    /// k2:diary@2 (Rosson 2026-10-08): what you sent stays dark ink, words
+    /// read as markdown built as nodes, and the ghost in the empty pen only
+    /// ever teases for fears, secrets, names and memories, never anything
+    /// real and sensitive (its words go to an agent).
+    #[test]
+    fn diary_2_keeps_your_ink_reads_markdown_and_its_ghost_asks_for_nothing_real() {
+        let w = builtin_widget(&parse_widget_ref(DIARY_WIDGET_LATEST).expect("parses")).expect("k2:diary@2 ships");
+        let (js, css, html) = (file(w, "diary.js"), file(w, "diary.css"), file(w, "index.html"));
+        // Your words: no rule fades, blurs or slants them.
+        let mine: Vec<&str> = css.split('}').filter(|r| r.split('{').next().is_some_and(|sel| sel.contains(".entry.mine"))).collect();
+        assert!(!mine.is_empty(), "diary.css styles your words");
+        for rule in mine {
+            for bad in ["opacity", "blur", "filter", "italic"] {
+                assert!(!rule.contains(bad), "your sent words fade again ({bad}): {rule}");
+            }
+        }
+        assert!(!js.contains("absorbed"), "nothing marks sent words to fade");
+        // Markdown is built node by node (the clean check refuses innerHTML).
+        for needle in ["function markdown(", "createTreeWalker", "'md-link'", "'md-url'"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        assert!(!js.contains(".href") && !js.contains("'href'") && !js.contains("setAttribute('on"), "a link is words, never a target");
+        // The ghost: a placeholder over the pen, never its value.
+        assert!(html.contains("id=\"ghost\" aria-hidden=\"true\" hidden"), "the ghost is hidden from readers");
+        assert!(!js.contains("ink.value = GHOST") && !js.contains("ink.value = words.charAt"), "the ghost never writes into the textarea");
+        for needle in ["'visibilitychange'", "'focus', ghostStop", "if (reduced()) {", "GHOST_STILL"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        let start = js.find("var GHOST_LINES = [").expect("GHOST_LINES");
+        let end = start + js[start..].find("\n  ]").expect("GHOST_LINES ends");
+        let lines: Vec<String> = js[start..end].lines().skip(1).filter_map(|l| l.trim().strip_prefix('\'')?.strip_suffix("',").map(str::to_string)).collect();
+        assert!((15..=20).contains(&lines.len()), "15 to 20 teases, got {}: {lines:?}", lines.len());
+        let words = ["pin", "pins", "card", "cards", "code", "codes", "ssn", "cvv", "cvc", "otp", "iban", "key", "keys", "bank", "token", "account", "accounts", "zip"];
+        let parts = ["password", "passcode", "passphrase", "login", "log in", "sign in", "credential", "credit", "debit", "social security",
+            "routing", "address", "email", "e-mail", "phone", "birthday", "date of birth", "maiden", "security question", "username",
+            "wallet", "seed phrase", "recovery", "verification", "postcode", "license", "passport"];
+        for l in &lines {
+            let lower = l.to_lowercase();
+            for p in parts {
+                assert!(!lower.contains(p), "the ghost asks for something real ({p}): {l}");
+            }
+            for t in lower.split(|c: char| !c.is_alphanumeric()) {
+                assert!(!words.contains(&t), "the ghost asks for something real ({t}): {l}");
+            }
         }
     }
 

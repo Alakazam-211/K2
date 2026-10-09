@@ -1220,12 +1220,22 @@ impl Node {
     }
 
     pub fn mark_confirmed(&self) {
-        let mut g = self.pin.lock().unwrap();
-        if let Some(p) = g.as_mut() {
-            if !p.confirmed {
-                p.confirmed = true;
-                let _ = identity::write_pin(&self.layout().pin(), p);
+        let changed = {
+            let mut g = self.pin.lock().unwrap();
+            match g.as_mut() {
+                Some(p) if !p.confirmed => {
+                    p.confirmed = true;
+                    let _ = identity::write_pin(&self.layout().pin(), p);
+                    true
+                }
+                _ => false,
             }
+        };
+        // `k2-node status` must stop showing the enroll code the moment the
+        // controller accepts the node (found in the mini-1 smoke: the status
+        // file still said "waiting for confirmation" while online).
+        if changed {
+            self.write_status();
         }
     }
 }

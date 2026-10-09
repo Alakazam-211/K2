@@ -262,8 +262,8 @@ where
         + Send
         + 'static,
 {
-    let (mut sink, mut stream) = ws.split();
-    let (tx, mut rx) = mpsc::channel::<Frame>(1024);
+    let (sink, mut stream) = ws.split();
+    let (tx, rx) = mpsc::channel::<Frame>(1024);
     let session = start.session.clone();
     let spki = start.controller_spki.clone();
 
@@ -285,7 +285,24 @@ where
     let wnode = node.clone();
     let ping_every = node.opts.ping_every;
     let wsession = session.clone();
+    // Why the writer stopped (a failed write or ping), for the session-end
+    // log line: "writer ended" alone hid macOS's EHOSTUNREACH in the smoke.
+    let writer_why: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let ww = writer_why.clone();
     let writer = tokio::spawn(async move {
+        let why = writer_loop(wnode, ping_every, wsession, rx, sink).await;
+        *ww.lock().unwrap() = Some(why);
+    });
+    async fn writer_loop<K>(
+        wnode: Arc<Node>,
+        ping_every: Duration,
+        wsession: String,
+        mut rx: mpsc::Receiver<Frame>,
+        mut sink: K,
+    ) -> String
+    where
+        K: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    {
         let key = &wnode.key;
         let mut seq = 0u64;
         let mut ping = tokio::time::interval(ping_every);
@@ -306,7 +323,7 @@ where
                 }
             }
         }
-    });
+    }
 
     let epoch = node.hub.attach(tx.clone());
 
@@ -379,7 +396,8 @@ where
         let msg = tokio::select! {
             m = stream.next() => m,
             _ = async { while !writer.is_finished() { tokio::time::sleep(Duration::from_millis(200)).await; } } => {
-                break SessionEnd::Closed("writer ended".into());
+                let why = writer_why.lock().unwrap().clone().unwrap_or_else(|| "stopped".into());
+                break SessionEnd::Closed(format!("writer ended: {why}"));
             }
         };
         let text = match msg {

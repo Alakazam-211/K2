@@ -45,6 +45,34 @@ async fn handshake_good_path_sends_snapshot_then_offer() {
     assert_eq!(st.state, "online");
 }
 
+/// Found on mini-1: after the owner confirmed the code, `k2-node status`
+/// still said "waiting for confirmation" while the node was online.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_drops_the_enroll_code_once_the_controller_accepts() {
+    let mut fake = Fake::start().await;
+    let dir = k2_node::util::temp_dir("e2e-confirmed");
+    let layout = Layout::new(dir.join("home"), dir.join("config"));
+    layout.ensure().unwrap();
+    write_policy(&layout, "");
+    let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
+    fake.register_active(&key, "node-1", "mini-1");
+    let mut pin = fake.pin_for("node-1", "mini-1");
+    pin.confirmed = false;
+    pin.sas = "123 456".into();
+    k2_node::identity::write_pin(&layout.pin(), &pin).unwrap();
+    let node = Node::open(options(layout.clone())).await.unwrap();
+    node.spawn_background();
+    let runner = tokio::spawn(k2_node::session::run_forever(node.clone()));
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let st = k2_node::status::read(&layout.status()).unwrap();
+    assert_eq!(st.state, "online");
+    assert_eq!(st.sas, None, "the code is gone once the controller accepted the node");
+    assert!(k2_node::identity::read_pin(&layout.pin()).unwrap().unwrap().confirmed);
+    runner.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wrong_controller_pin_is_refused() {
     let fake = Fake::start().await;

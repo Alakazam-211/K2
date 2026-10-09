@@ -242,8 +242,8 @@ describe('everything else is unchanged', () => {
     expect(document.querySelector('[data-zen-menu-reload]')).toBeNull()
   })
 
-  it('a built-in (the Diary) filling a full canvas: no Reload anywhere', async () => {
-    const p = page({ full: true, widgets: [custom('diary', 'k2:diary@1', 'Diary')], chrome: withMenu() })
+  it.each(['k2:diary@1', 'k2:diary@2'])('a built-in (the Diary, %s) filling a full canvas: no Reload anywhere', async (ref) => {
+    const p = page({ full: true, widgets: [custom('diary', ref, 'Diary')], chrome: withMenu() })
     expect(zenFillReload(p)).toBeNull()
     await show(p)
     q('[data-zen-custom-frame-slot="diary"]')

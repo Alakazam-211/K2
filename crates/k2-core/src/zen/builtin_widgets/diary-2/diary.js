@@ -1503,36 +1503,51 @@
     if (!hidden) scribe.timer = setTimeout(scribeNext, 200)
   }
 
-  // ── how many ghosts are out (Rosson 2026-10-08) ─────────────────────
-  // K2 0.45.2 gives each agent row `counts: {subagents, tools, commands}`.
-  // An older K2 sends none: then the page says nothing extra, and never
-  // makes a number up.
+  // ── how many ghosts are out, and how many scary things (Rosson 2026-10-08)
+  // K2 0.45.2 gives each agent row `counts: {subagents, tools, commands}`:
+  // ghosts are the live subagents, scary things this turn's tool calls.
+  // An older K2 sends none, and a row that can't say sends null: then the
+  // page says nothing extra, and never makes a number up.
 
   var NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']
   var ONE_GHOST = ['a ghost wanders off to look…', 'one ghost slips away to search…', 'a lone ghost drifts down the hall…']
   var SOME_GHOSTS = ['{n} ghosts are stirring…', '{n} ghosts whisper among themselves…', '{n} ghosts drift through the rooms…']
-  var MANY_GHOSTS = ['the house is restless: {n} ghosts', '{n} ghosts crowd the halls…', 'the walls are thick with them: {n} ghosts']
+  var MANY_GHOSTS = ['the house is restless: {n} ghosts…', '{n} ghosts crowd the halls…', 'the walls are thick with them: {n} ghosts…']
   var MANY_AT = 6
-  var CHAINS_AT = 5
+  // After a ghost line, or alone. `{t}` is the exact count, in digits.
+  var ONE_SCARY = ['1 scary thing so far', '1 scary thing has happened', 'the house has seen 1 scary thing']
+  var SOME_SCARY = ['{t} scary things have happened', '{t} scary things so far', 'the house has seen {t} scary things']
 
+  /** A count K2 sent: a whole number, zero or more; anything else is not one. */
+  function whole(v) {
+    return typeof v === 'number' && isFinite(v) && v >= 0 ? Math.floor(v) : null
+  }
+
+  /** `{n, t}` (ghosts, scary things) when K2 sent both and either is out;
+   *  null when there are no counts, a malformed one, or nothing yet. */
   function counted(row) {
     var c = row && row.counts
     if (!c || typeof c !== 'object') return null
-    var n = c.subagents
-    if (typeof n !== 'number' || !isFinite(n) || n < 1) return null
-    var tools = typeof c.tools === 'number' && isFinite(c.tools) ? Math.floor(c.tools) : 0
-    return { n: Math.floor(n), tools: tools }
+    var n = whole(c.subagents)
+    var t = whole(c.tools)
+    if (n === null || t === null || (n === 0 && t === 0)) return null
+    return { n: n, t: t }
   }
 
-  /** The line for `n` ghosts: the wording varies by agent and number, and
-   *  holds still while the number does. */
+  /** The line: ghosts first, then the scary things. Each part's wording
+   *  varies by agent and holds still while its number does (the scary
+   *  part by one vs many, so it doesn't jump on every call). */
   function ghostsLine(addr, c) {
-    var pick = function (list) { return list[hash(addr + ':' + c.n) % list.length] }
-    if (c.n === 1) return pick(ONE_GHOST)
-    var words = c.n < NUMBER_WORDS.length ? NUMBER_WORDS[c.n] : String(c.n)
-    var line = pick(c.n >= MANY_AT ? MANY_GHOSTS : SOME_GHOSTS).replace('{n}', words)
-    if (c.tools >= CHAINS_AT) line += ', rattling ' + c.tools + ' chains'
-    return line
+    var pick = function (list, key) { return list[hash(addr + ':' + key) % list.length] }
+    var ghosts = ''
+    if (c.n === 1) ghosts = pick(ONE_GHOST, 'g1')
+    else if (c.n > 1) {
+      var words = c.n < NUMBER_WORDS.length ? NUMBER_WORDS[c.n] : String(c.n)
+      ghosts = pick(c.n >= MANY_AT ? MANY_GHOSTS : SOME_GHOSTS, 'g' + c.n).replace('{n}', words)
+    }
+    if (c.t === 0) return ghosts
+    var scary = c.t === 1 ? pick(ONE_SCARY, 's1') : pick(SOME_SCARY, 'sn').replace('{t}', String(c.t))
+    return ghosts ? ghosts + ' ' + scary : scary + '…'
   }
 
   /** The scribble shows while the agent works, and never over a reply

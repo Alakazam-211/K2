@@ -558,7 +558,8 @@ html, body {
 
 .entry.bleeding .blot { opacity: 0; transition: none; }
 
-/* How many helpers the agent has sent out (0.45.2's counts), in ink. */
+/* How many ghosts (subagents) are out and scary things (tool calls) have
+   happened this turn (0.45.2's counts), in ink. */
 .ghosts {
   margin-left: 6px;
   font-size: 20px;

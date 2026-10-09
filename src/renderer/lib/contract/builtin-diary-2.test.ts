@@ -93,6 +93,7 @@ interface Libs {
   PIXI?: unknown
   Tone?: unknown
   IntersectionObserver?: unknown
+  ResizeObserver?: unknown
 }
 
 async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; hello?: 'late' | 'never'; libs?: Libs; config?: Record<string, unknown> } = {}) {
@@ -1161,34 +1162,79 @@ describe('k2:diary@2: how many ghosts are out (0.45.2 counts)', () => {
     return { h, line: h.$('ghosts') }
   }
 
-  it('no counts from K2 (0.45.1), null counts, or none out: nothing extra, no made-up number', async () => {
-    for (const [counts, present] of [[undefined, false], [null, true], [{ subagents: 0, tools: 9, commands: 2 }, true], [{ tools: 3 }, true], [{ subagents: 'three' }, true]] as const) {
+  const ghostWords = (s: string): string | null => /\b(\w+) ghosts?\b/.exec(s)?.[1] ?? null
+  const scary = (s: string): string | null => /\b(\d+) scary things?\b/.exec(s)?.[0] ?? null
+
+  it('no counts from K2 (0.45.1), null, malformed, or nothing out yet: nothing extra, no made-up number', async () => {
+    for (const [counts, present] of [
+      [undefined, false],
+      [null, true],
+      [{ subagents: 0, tools: 0, commands: 0 }, true],
+      [{ tools: 3 }, true],
+      [{ subagents: 'three', tools: 2 }, true],
+      [{ subagents: 2, tools: -1 }, true],
+      [{ subagents: Number.NaN, tools: 4 }, true],
+    ] as const) {
       document.body.innerHTML = ''
       const { line } = await working(counts, present)
-      expect(line.hidden).toBe(true)
+      expect(line.hidden, JSON.stringify(counts)).toBe(true)
       expect(line.textContent).toBe('')
     }
   })
 
-  it('one ghost: a singular line', async () => {
-    const { line } = await working({ subagents: 1, tools: 2, commands: 0 })
-    expect(line.hidden).toBe(false)
-    expect(line.textContent).toMatch(/\b(a|one|lone) ghost\b/)
-    expect(line.textContent).not.toMatch(/ghosts/)
+  it('no ghosts, scary things only: 1 is singular, many are plural, the exact number in digits', async () => {
+    const one = await working({ subagents: 0, tools: 1, commands: 1 })
+    expect(one.line.hidden).toBe(false)
+    expect(scary(one.line.textContent ?? '')).toBe('1 scary thing')
+    expect(one.line.textContent).not.toMatch(/scary things|ghost/)
+    document.body.innerHTML = ''
+    const many = await working({ subagents: 0, tools: 14, commands: 5 })
+    expect(scary(many.line.textContent ?? '')).toBe('14 scary things')
+    expect(many.line.textContent).not.toMatch(/ghost/)
+    // Never another number: 5 commands are not shown as anything.
+    expect(many.line.textContent).not.toMatch(/\b5\b/)
   })
 
-  it('three ghosts: a plural line, the number in words; many tools rattle chains', async () => {
-    const { line, h } = await working({ subagents: 3, tools: 2, commands: 1 })
-    expect(line.textContent).toMatch(/\bthree ghosts\b/)
-    expect(line.textContent).not.toMatch(/chains/)
-    h.rows([{ ...row('cortana', 0, { working: true, activity: 'working' }), counts: { subagents: 7, tools: 14, commands: 3 } } as Row])
-    expect(line.textContent).toMatch(/\bseven ghosts\b/)
-    expect(line.textContent).toMatch(/rattling 14 chains$/)
+  it('one ghost: a singular line; no tool calls yet: no scary part', async () => {
+    const { line, h } = await working({ subagents: 1, tools: 0, commands: 0 })
+    expect(line.hidden).toBe(false)
+    expect(line.textContent).toMatch(/\b(a|one|lone) ghost\b/)
+    expect(line.textContent).not.toMatch(/ghosts|scary/)
+    h.rows([{ ...row('cortana', 0, { working: true, activity: 'working' }), counts: { subagents: 1, tools: 1, commands: 0 } } as Row])
+    expect(line.textContent).toMatch(/\b(a|one|lone) ghost\b.*… .*\b1 scary thing\b/)
+    expect(line.textContent).not.toMatch(/scary things/)
+  })
+
+  it('many ghosts and many scary things: both numbers, ghosts in words, scary things in digits', async () => {
+    const { line, h } = await working({ subagents: 3, tools: 14, commands: 1 })
+    expect(ghostWords(line.textContent ?? '')).toBe('three')
+    expect(scary(line.textContent ?? '')).toBe('14 scary things')
+    expect(line.textContent).toMatch(/three ghosts.*… .*\b14 scary things/)
+    h.rows([{ ...row('cortana', 0, { working: true, activity: 'working' }), counts: { subagents: 7, tools: 15, commands: 3 } } as Row])
+    expect(ghostWords(line.textContent ?? '')).toBe('seven')
+    expect(scary(line.textContent ?? '')).toBe('15 scary things')
     // The line goes with the scribble when the reply starts writing.
     h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'done', false)], turn: null })
-    h.rows([{ ...row('cortana', 0), counts: { subagents: 0, tools: 0, commands: 0 } } as Row])
+    h.rows([{ ...row('cortana', 0), counts: { subagents: 0, tools: 15, commands: 3 } } as Row])
     expect(h.$('stir').hidden).toBe(true)
     expect(line.hidden).toBe(true)
+    expect(line.textContent).toBe('')
+  })
+
+  it('the wording varies (agents and numbers get different lines), every one haunted', async () => {
+    const seen = new Set<string>()
+    for (const handle of ['cortana', 'nora', 'mara', 'appa', 'baden', 'julie', 'sterling', 'dannon']) {
+      for (const counts of [{ subagents: 2, tools: 0, commands: 0 }, { subagents: 0, tools: 6, commands: 0 }, { subagents: 1, tools: 1, commands: 0 }]) {
+        document.body.innerHTML = ''
+        const h = await harness({ reduced: true })
+        h.rows([{ ...row(handle, 0, { working: true, activity: 'working' }), counts } as Row])
+        h.view(`${handle}::local`, { items: [item(1, 'hi', true)], turn: { state: 'working', since: 1 } })
+        const text = h.$('ghosts').textContent ?? ''
+        expect(text).toMatch(/ghost|scary/)
+        seen.add(text.replace(/\d+|\b(one|two|a|lone)\b/g, '#'))
+      }
+    }
+    expect(seen.size).toBeGreaterThan(3)
   })
 })
 

@@ -1823,9 +1823,11 @@ describe('k2:diary@2: the room’s music (Tone.js)', () => {
     // Top left, just under K2's floating 52 px top band (which takes every
     // click above it) and the Garden switcher in it; dim until reached for.
     expect(CSS).toMatch(/\.hush \{[^}]*position: absolute;[^}]*top: 58px;[^}]*left: 14px;[^}]*z-index: 6;/)
+    // Below K2's 52 px drag band, which would take its clicks.
+    expect(Number(/\n\.hush \{[^}]*top: (\d+)px;/.exec(CSS)?.[1])).toBeGreaterThanOrEqual(52)
     // The same glass tile as K2's menu and switcher (zen-glass.ts, ZenMenu).
     const glass = /\n\.hush \{([^}]*)\}/.exec(CSS)?.[1] ?? ''
-    for (const d of ['height: 30px;', 'border-radius: 999px;', 'background: var(--zen-surface', 'backdrop-filter: none;', 'inset 0 1px 0 color-mix(in srgb, white 22%, transparent), 0 10px 30px color-mix(in srgb, black 8%, transparent)', 'color: var(--zen-text']) {
+    for (const d of ['height: 36px;', 'width: 36px;', 'border-radius: 999px;', 'background: var(--zen-surface', 'backdrop-filter: none;', 'inset 0 1px 0 color-mix(in srgb, white 22%, transparent), 0 10px 30px color-mix(in srgb, black 8%, transparent)', 'color: var(--zen-text']) {
       expect(glass).toContain(d)
     }
     expect(CSS).toMatch(/\.hush:hover, \.hush:active \{ background: var\(--zen-surface-raised/)

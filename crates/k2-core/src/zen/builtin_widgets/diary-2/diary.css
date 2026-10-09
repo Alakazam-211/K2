@@ -206,7 +206,9 @@ html, body {
    hovered. Always shown; its tooltip says what the music is doing. */
 /* The same glass tile as K2's "Diary Lab" menu and Garden switcher
    (zen-glass.ts, ZenMenu): a flat Zen surface, a soft rim, a top sheen and
-   a faint wide shadow, no blur (K2 dropped it), round, 30 px; hover and
+   a faint wide shadow, no blur (K2 dropped it), round, 36 px (a touch
+   bigger than the menu, Rosson 2026-10-08), top at 58 px, clear of the
+   52 px band; hover and
    pressed take the raised surface. The frame gets K2's --zen-* theme
    tokens; the fallbacks are the haunted theme's. */
 .hush {
@@ -214,10 +216,10 @@ html, body {
   top: 58px;
   left: 14px;
   z-index: 6;
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  padding: 4px; /* the glyph about 57% of the button (Rosson: bigger) */
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 3px; /* the glyph about 60% of the button (Rosson: bigger) */
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--zen-border, #3a2a1e) 55%, color-mix(in srgb, var(--zen-text, #e9dcc4) 14%, transparent));
   background: var(--zen-surface, #17110d);

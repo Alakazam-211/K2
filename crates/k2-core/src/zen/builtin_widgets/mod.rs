@@ -83,7 +83,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
-    ("k2:diary@2", "227f1cdfd243c18352ec43a4f759b115c8d56597a9b164dd70b65d2f6d32f50c"),
+    ("k2:diary@2", "18c7d6e0eef794c9f4e403d86d3eb41b45e1a7353501a1e86aba47b346338102"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.

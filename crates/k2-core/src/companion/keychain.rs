@@ -49,8 +49,8 @@ pub fn write_password_hash(hash: &str) -> Result<(), String> {
     // missing item is a harmless no-op.
     //
     // The hash is never on argv (`-w <hash>` showed it in `ps`): `security`
-    // creates the item with a placeholder and the `-T` list, and the hash
-    // is set in process and read back (`crate::macos_keychain::write`).
+    // creates the item with the `-T` list and the hash on its stdin, and it
+    // is read back (`crate::macos_keychain::write`).
     let opts = crate::macos_keychain::WriteOptions {
         keychain: None,
         label: None,

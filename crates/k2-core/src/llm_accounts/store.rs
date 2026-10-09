@@ -145,12 +145,14 @@ pub fn keychain_enabled() -> bool {
 
 pub mod keychain {
     //! Claude's keychain items (macOS). Callers check
-    //! [`super::keychain_enabled`] first. Reads go through
-    //! `/usr/bin/security` (the trusted reader on Claude's item). Writes
-    //! set the data in process via [`crate::macos_keychain`]: no size
-    //! limit (`security -i` splits lines over ~4 KB, and in 0.45.0 that
-    //! wrote a truncated login), and the secret is never on argv. Every
-    //! write is read back before it returns `Ok`.
+    //! [`super::keychain_enabled`] first. Everything goes through
+    //! [`crate::macos_keychain`]: reads and writes by `/usr/bin/security`
+    //! (secret on stdin, never argv), so an item keeps the `apple-tool:`
+    //! partition Claude Code's own `security` reads need. 0.45.1/0.45.2
+    //! set the data from the daemon process instead, which replaced that
+    //! partition with K2's and made every Claude read prompt. A read of an
+    //! item left that way is refused (never a dialog) with the one-line
+    //! fix; a write repairs it. Every write is read back before `Ok`.
 
     /// Read a generic password. `Ok(None)` = no such item (or empty).
     #[cfg(target_os = "macos")]
@@ -162,9 +164,13 @@ pub mod keychain {
         }
     }
 
-    /// Create or update, then read back and compare. A new item is
-    /// created by `security` itself, so it gets the same access list as
-    /// one Claude Code made.
+    /// Does the item exist? Attributes only: no prompt, readable or not.
+    #[cfg(target_os = "macos")]
+    pub fn exists(service: &str, account: &str) -> Result<bool, String> {
+        crate::macos_keychain::exists(service, account, None).map_err(|e| e.to_string())
+    }
+
+    /// Create or update by `security`, then read back and compare.
     #[cfg(target_os = "macos")]
     pub fn write(service: &str, account: &str, secret: &[u8]) -> Result<(), String> {
         crate::macos_keychain::write(service, account, secret, &Default::default()).map_err(|e| e.to_string())
@@ -175,8 +181,24 @@ pub mod keychain {
         crate::macos_keychain::delete(service, account, None).map_err(|e| e.to_string())
     }
 
+    /// The item needs the partition repair (`Some`), or doesn't / is
+    /// missing (`None`). In process, attributes and ACL only: no prompt.
+    #[cfg(target_os = "macos")]
+    pub fn needs_repair(service: &str, account: &str) -> Result<Option<crate::macos_keychain::Repair>, String> {
+        match crate::macos_keychain::check_item(service, account, None) {
+            Ok(crate::macos_keychain::ItemAccess::NeedsRepair(r)) => Ok(Some(r)),
+            Ok(_) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     #[cfg(not(target_os = "macos"))]
     pub fn read(_service: &str, _account: &str) -> Result<Option<Vec<u8>>, String> {
+        Err("the keychain is macOS-only".into())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn exists(_service: &str, _account: &str) -> Result<bool, String> {
         Err("the keychain is macOS-only".into())
     }
 
@@ -188,6 +210,48 @@ pub mod keychain {
     #[cfg(not(target_os = "macos"))]
     pub fn delete(_service: &str, _account: &str) -> Result<(), String> {
         Err("the keychain is macOS-only".into())
+    }
+}
+
+/// A Claude keychain item macOS won't let `/usr/bin/security` (so Claude
+/// Code) read without a password dialog, and the Terminal fix.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeychainRepair {
+    pub service: String,
+    pub account: String,
+    /// Which login it holds: "server default" or a token label.
+    pub holds: String,
+    pub partitions: Vec<String>,
+    pub command: String,
+}
+
+/// Claude keychain items that need the partition repair: the live item
+/// and each wallet slot's hashed item. Empty when K2 may not touch the
+/// keychain ([`keychain_enabled`]) and off macOS. Never prompts.
+pub fn keychain_repairs(slots: &[(String, String)]) -> Vec<KeychainRepair> {
+    #[cfg(target_os = "macos")]
+    {
+        if !keychain_enabled() {
+            return Vec::new();
+        }
+        let acct = claude_keychain_account();
+        let mut items = vec![(claude_live_keychain_service(), "server default".to_string())];
+        for (id, label) in slots {
+            items.push((claude_keychain_service(Some(&slot_dir(Tool::Claude, id))), format!("token \"{label}\"")));
+        }
+        let mut out = Vec::new();
+        for (svc, holds) in items {
+            if let Ok(Some(r)) = keychain::needs_repair(&svc, &acct) {
+                out.push(KeychainRepair { service: r.service, account: r.account, holds, partitions: r.partitions, command: r.command });
+            }
+        }
+        out
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = slots;
+        Vec::new()
     }
 }
 
@@ -343,10 +407,12 @@ pub(crate) fn write_slot(tool: Tool, id: &str, bytes: &[u8]) -> Result<(), Walle
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
     if tool == Tool::Claude && keychain_enabled() {
         // Keep a hashed item Claude made for this slot in step; the file
-        // is K2's copy and what Claude falls back to.
+        // is K2's copy and what Claude falls back to. "Exists" is checked
+        // without reading the data, so an item an earlier K2 left
+        // unreadable is rewritten (and so repaired), not skipped.
         let svc = claude_keychain_service(Some(&dir));
         let acct = claude_keychain_account();
-        if let Ok(Some(_)) = keychain::read(&svc, &acct) {
+        if let Ok(true) = keychain::exists(&svc, &acct) {
             keychain::write(&svc, &acct, bytes).map_err(WalletError::Io)?;
         }
     }
@@ -386,6 +452,15 @@ pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
         return Err(WalletError::LiveStoreUnavailable(
             "Gemini subscriptions aren't supported; use an API token".into(),
         ));
+    }
+    // A login `security` can't take on stdin is refused before anything
+    // changes (no argv, no in-process write: see `macos_keychain`).
+    #[cfg(target_os = "macos")]
+    if tool == Tool::Claude && keychain_enabled() {
+        let svc = claude_live_keychain_service();
+        crate::macos_keychain::check_fits(&svc, &claude_keychain_account(), bytes).map_err(|e| {
+            WalletError::LiveStoreUnavailable(format!("could not make this Claude login live ({e}); nothing changed"))
+        })?;
     }
     // Can't read what's live → can't restore it → don't write.
     let prev = read_live(tool)?;

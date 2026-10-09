@@ -155,7 +155,9 @@ fn write_credentials(updated_json: &serde_json::Value) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // Never `-w <json>` on argv (visible in `ps`): data set in process.
+        // Never `-w <json>` on argv (visible in `ps`), never set in process
+        // (that drops the item's apple-tool: partition and Claude's reads
+        // prompt): `security -i` with the secret on stdin.
         if let Err(e) = k2_core::macos_keychain::write(
             KEYCHAIN_SERVICE,
             KEYCHAIN_ACCOUNT,

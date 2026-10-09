@@ -328,6 +328,19 @@ pub fn list_for(conn: &Connection, tool: Tool) -> Result<Vec<Entry>, WalletError
     Ok(list(conn)?.into_iter().filter(|e| e.tool == tool.as_str()).collect())
 }
 
+/// Claude keychain items (the live one and each subscription slot's)
+/// that `/usr/bin/security`, and so Claude Code, can't read without a
+/// macOS password dialog, with the Terminal command that fixes each.
+/// Never prompts; empty off macOS.
+pub fn keychain_repairs(conn: &Connection) -> Result<Vec<store::KeychainRepair>, WalletError> {
+    let slots: Vec<(String, String)> = list_for(conn, Tool::Claude)?
+        .into_iter()
+        .filter(|e| !e.is_api_key())
+        .map(|e| (e.id, e.label))
+        .collect();
+    Ok(store::keychain_repairs(&slots))
+}
+
 pub fn get(conn: &Connection, id: &str) -> Result<Option<Entry>, WalletError> {
     Ok(conn
         .query_row(

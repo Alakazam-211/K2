@@ -108,11 +108,23 @@ export interface LlmLogin {
   offerMakeActive: boolean
 }
 
+/** A Claude keychain item macOS won't let Claude read without a password
+ *  dialog (left by K2 0.45.1/0.45.2), and the one-line Terminal fix. */
+export interface KeychainRepair {
+  service: string
+  account: string
+  /** "server default" or `token "<label>"`. */
+  holds: string
+  partitions: string[]
+  command: string
+}
+
 export interface LlmAccountsDoc {
   tools: LlmTool[]
   logins: LlmLogin[]
   airgap: boolean
   switchNote: string
+  keychainRepairs: KeychainRepair[]
 }
 
 export interface AccountsEntry {
@@ -200,6 +212,15 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
     logins: asArray<LlmLogin>(o.logins),
     airgap: o.airgap === true,
     switchNote: typeof o.switchNote === 'string' ? o.switchNote : '',
+    keychainRepairs: asArray<Record<string, unknown>>(o.keychainRepairs)
+      .filter((r) => typeof r.command === 'string' && r.command !== '')
+      .map((r) => ({
+        service: String(r.service ?? ''),
+        account: String(r.account ?? ''),
+        holds: String(r.holds ?? ''),
+        partitions: asArray<unknown>(r.partitions).map(String),
+        command: String(r.command),
+      })),
   }
 }
 

@@ -361,6 +361,23 @@ export function AgentAccountsColumn(): React.JSX.Element {
           Air-gap mode is on: adding subscriptions and refreshing tokens are off. Switching between saved tokens still works.
         </p>
       )}
+      {(doc?.keychainRepairs ?? []).map((r) => (
+        <div
+          key={`${r.service}\u0000${r.account}`}
+          className="border border-amber-500/60 p-2 mb-3"
+          role="alert"
+          data-testid="llm-keychain-repair"
+        >
+          <p className="text-[10px] text-amber-400 leading-relaxed mb-1">
+            macOS asks for your password every time Claude reads its keychain item “{r.service}” ({r.holds}). An
+            earlier K2 update changed who may read it. Run this once in Terminal on this Mac and enter your login
+            password:
+          </p>
+          <code className="block text-[10px] font-mono select-all break-all text-[var(--color-text-primary)]">
+            {r.command}
+          </code>
+        </div>
+      ))}
       {!entry && (
         <p className="text-[10px] text-[var(--color-text-muted)] mb-3" data-testid="llm-accounts-loading">
           Loading tokens…

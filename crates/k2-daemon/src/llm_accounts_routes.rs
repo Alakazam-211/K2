@@ -251,9 +251,14 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
         Some(k) if human => rt::views(&k.to_string()).iter().map(rt::login_json).collect(),
         _ => Vec::new(),
     };
+    // Claude keychain items macOS won't let Claude read without a password
+    // dialog (left by 0.45.1/0.45.2), each with its one-line Terminal fix.
+    // Checked in process from the item's ACL: never a prompt.
+    let keychain_repairs = with_conn(wallet_core::keychain_repairs)?;
     Ok(json!({
         "tools": tools,
         "logins": logins,
+        "keychainRepairs": keychain_repairs,
         "airgap": k2_core::airgap::enabled(),
         "switchNote": rt::SWITCH_NOTE,
     }))

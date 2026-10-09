@@ -315,6 +315,9 @@ async fn wallet_routes_end_to_end() {
     assert!(!r.body.contains(MARKER), "no token in list");
     let list = js(&r);
     assert_eq!(list["tools"].as_array().unwrap().len(), 7);
+    // The keychain check never runs under a temp HOME (it would reach the
+    // real login keychain): an empty list, always present.
+    assert_eq!(list["keychainRepairs"], serde_json::json!([]));
     assert_eq!(
         list["switchNote"],
         "Changing the server default token affects every chat that uses Server default on this server."

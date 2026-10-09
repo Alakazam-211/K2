@@ -379,9 +379,42 @@ describe('Sign-in sheet', () => {
   })
 })
 
+describe('keychain repair warning', () => {
+  const FIX = "security set-generic-password-partition-list -s 'Claude Code-credentials' -a 'appa' -S 'apple-tool:,apple:,teamid:36B8R93HXV'"
+
+  it('shows no warning when the daemon reports none', async () => {
+    await renderColumn()
+    expect(screen.queryByTestId('llm-keychain-repair')).toBeNull()
+  })
+
+  it('shows each item that makes macOS prompt, with the exact Terminal fix', async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) =>
+      route === 'llm/accounts/list'
+        ? {
+            ...doc(),
+            keychainRepairs: [
+              { service: 'Claude Code-credentials', account: 'appa', holds: 'server default', partitions: ['teamid:36B8R93HXV'], command: FIX },
+              { service: 'Claude Code-credentials-1a2b3c4d', account: 'appa', holds: 'token "home"', partitions: ['teamid:36B8R93HXV'], command: 'x' },
+              { service: 'no-command', account: 'appa', holds: 'server default', partitions: [] },
+            ],
+          }
+        : routeGet(route, params),
+    )
+    await renderColumn()
+    const warnings = screen.getAllByTestId('llm-keychain-repair')
+    expect(warnings).toHaveLength(2)
+    expect(warnings[0].getAttribute('role')).toBe('alert')
+    expect(warnings[0].textContent).toContain('Claude Code-credentials')
+    expect(warnings[0].textContent).toContain('server default')
+    expect(warnings[0].textContent).toContain('Run this once in Terminal')
+    expect(warnings[0].querySelector('code')!.textContent).toBe(FIX)
+    expect(warnings[1].textContent).toContain('token "home"')
+  })
+})
+
 describe('store helpers', () => {
   it('parses a malformed list into an empty doc and reads a refusal hint', () => {
-    expect(parseAccountsDoc(null)).toEqual({ tools: [], logins: [], airgap: false, switchNote: '' })
+    expect(parseAccountsDoc(null)).toEqual({ tools: [], logins: [], airgap: false, switchNote: '', keychainRepairs: [] })
     expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change tokens on Settings → LLMs."}}'))).toBe(
       'Change tokens on Settings → LLMs.',
     )

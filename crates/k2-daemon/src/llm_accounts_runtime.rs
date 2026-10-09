@@ -928,6 +928,27 @@ pub fn boot_import() {
             Err(e) => k2_core::log_debug!("[llm-accounts] import {}: {}", tool.as_str(), e),
         }
     }
+    // Claude items an earlier K2 (0.45.1/0.45.2) left unreadable by
+    // `/usr/bin/security`: say so once at boot, with the fix. Settings →
+    // LLMs and `k2 llm tokens list` show the same.
+    let repairs = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet_core::keychain_repairs(&conn)
+    };
+    match repairs {
+        Ok(list) => {
+            for r in list {
+                k2_core::log_debug!(
+                    "[llm-accounts] WARN: keychain item \"{}\" ({}) makes macOS ask for your password on every Claude read; fix once in Terminal: {}",
+                    r.service,
+                    r.holds,
+                    r.command
+                );
+            }
+        }
+        Err(e) => k2_core::log_debug!("[llm-accounts] keychain check: {e}"),
+    }
 }
 
 /// One keep-warm pass: refresh due idle slots, then probe their usage.

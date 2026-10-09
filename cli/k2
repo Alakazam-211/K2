@@ -9479,6 +9479,10 @@ for t in v.get("tools", []):
             print("      %s" % a["detail"])
 if v.get("airgap"):
     print("Air-gap is on: no sign-in, refresh or usage calls.")
+for r in v.get("keychainRepairs") or []:
+    print("WARN keychain: macOS asks for your password on every Claude read of \"%s\" (%s): its partition list is %s, without apple-tool:." % (
+        r.get("service"), r.get("holds"), ",".join(r.get("partitions") or []) or "empty"))
+    print("     Fix once in Terminal (asks for your login password): %s" % r.get("command"))
 print("* = the server default token.")
 print(v.get("switchNote") or "Changing the server default token affects every chat that uses Server default on this server.")
 ' "$tool_filter"

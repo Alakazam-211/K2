@@ -635,9 +635,9 @@ fn purge_legacy_session_items() {
 /// the operation; the only observable change is the (now correct) ACL.
 ///
 /// The token never goes on argv (`security add-generic-password -w <token>`
-/// showed it in `ps`) and has no size limit: `security` creates the item
-/// with a placeholder, the `-l` label and the `-T` list, and the token is
-/// set in process and read back ([`crate::macos_keychain::write`]).
+/// showed it in `ps`) and is never set in process: `security` creates the item
+/// with the `-l` label and the `-T` list and the token on its stdin, and
+/// it is read back ([`crate::macos_keychain::write`]).
 ///
 /// Best-effort throughout: a delete of a missing item is fine, and a write
 /// failure is logged + swallowed (the in-memory token is still good for

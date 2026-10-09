@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 3
+export const ZEN_CATALOG_VERSION = 4
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -68,6 +68,8 @@ export const ZEN_CUSTOM_VERBS = {
   'gardens.switch': { cap: null, reach: 'local', kind: 'call' },
   'theme.get': { cap: null, reach: 'local', kind: 'call' },
   'theme.changed': { cap: null, reach: 'local', kind: 'event' },
+  'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
+  'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
   'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
   'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },

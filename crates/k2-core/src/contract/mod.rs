@@ -168,7 +168,8 @@ pub enum RendererImpl {
     /// Registered by `registerZenVerb` (`zen-data.ts`, `zen-app-nav.ts`,
     /// `zen-add-agent.ts`).
     Registered,
-    /// Handled only by the custom-widget frame host (`theme.changed`).
+    /// Handled only by the custom-widget frame host (`theme.changed`,
+    /// `canvas.setHitRegions`, `window.startDrag`).
     /// Never in the generated `ZEN_VERBS`.
     Frame,
 }

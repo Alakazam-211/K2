@@ -301,6 +301,10 @@ const MIN_BUTTON = { width: 24, height: 24 }
  *  this much empty space (FC12), and the check's "visible" needs it. */
 export const ZEN_DRAG_MIN_WIDTH_PX = 120
 const MIN_DRAG = { width: ZEN_DRAG_MIN_WIDTH_PX, height: 12 }
+/** The drag region's minimum box (`frame.toml` `controls.drag-min-*`): a
+ *  full canvas's holes always leave at least one free piece this big
+ *  (`zen-canvas`). */
+export const ZEN_DRAG_MIN_SIZE: Readonly<{ width: number; height: number }> = Object.freeze({ ...MIN_DRAG })
 const MIN_OPACITY = 0.3
 
 function intersects(a: ZenRect, b: ZenRect): boolean {

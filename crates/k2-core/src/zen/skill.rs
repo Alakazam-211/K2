@@ -527,6 +527,27 @@ returns its unsubscribe. A refused call rejects with a `K2Error` (`.code`: ",
   `<iframe>` or `import … from`: they're blocked, or validate refuses them.\n\
 - Follow the Garden's look: the `--zen-*` CSS variables are set in the frame, and\n\
   `k2.theme.changed(cb)` fires when they change. Respect `k2.motion.reduced`.\n\n\
+### Using the whole canvas\n\n\
+On a full-canvas Garden (`[layout] canvas = \"full\"`) your frame fills the window, and K2's\n\
+top band (about 52 px: the window's drag strip, with K2's controls) floats over it, so clicks\n\
+there don't reach you. `k2.canvas.setHitRegions(rects)` cuts holes in it: `rects` are\n\
+`{x, y, width, height}` in CSS px of your frame's own viewport (pass\n\
+`el.getBoundingClientRect()`); each call replaces the last list, `[]` clears, at most 32.\n\
+Call it again when your layout changes (calling it every frame is fine: K2 coalesces).\n\
+**K2's controls always win** where a rect covers them (the menu, the Garden switcher, the\n\
+Zen toggle, usage), and if your rects cover the whole strip K2 keeps the gaps between its\n\
+controls as drag space. To drag the window from an element of yours, call\n\
+`k2.window.startDrag()` in its `mousedown` (it works only while a mouse button is down in\n\
+your widget). Column Gardens ignore hit regions.\n\n\
+```js\n\
+const bar = document.querySelector('#toolbar')\n\
+const share = () => k2.canvas.setHitRegions([bar.getBoundingClientRect()])\n\
+k2.connected.then(share)\n\
+addEventListener('resize', share)\n\
+document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
+  if (e.button === 0) k2.window.startDrag().catch(() => {})\n\
+})\n\
+```\n\n\
 ### Workflow\n\n\
 1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`) copies a\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
@@ -748,6 +769,10 @@ mod tests {
             "## What's available to a custom widget",
             "**never write grants.json** or `pins.json`",
             "textContent",
+            "### Using the whole canvas",
+            "`k2.canvas.setHitRegions(rects)` cuts holes in it",
+            "**K2's controls always win**",
+            "`k2.window.startDrag()` in its `mousedown`",
         ] {
             assert!(body.contains(must), "skill v12 must say {must:?}");
         }

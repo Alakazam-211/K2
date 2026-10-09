@@ -340,6 +340,79 @@ describe('TUWA6: the frame runtime', () => {
   })
 })
 
+describe('0.45.3: the whole canvas in the runtime', () => {
+  const sent = (heard: unknown[], verb: string): Array<Record<string, unknown>> =>
+    (heard as Array<Record<string, unknown>>).filter((m) => m.verb === verb)
+
+  it('trusted primary-button presses are reported to K2 as they happen; others never', async () => {
+    const r = realm()
+    const { heard } = connect(r)
+    await tick()
+    heard.length = 0
+    r.fire('pointerdown', { isTrusted: false, button: 0 })
+    r.fire('pointerdown', { isTrusted: true, button: 2 })
+    r.fire('pointerup', { isTrusted: true, button: 2 })
+    r.fire('pointerdown', { isTrusted: true, button: 0 })
+    r.fire('pointerup', { isTrusted: true, button: 0 })
+    r.fire('pointerdown', { isTrusted: true, button: 0 })
+    r.fire('blur', {})
+    await tick()
+    expect(heard).toEqual([{ pointer: 'down' }, { pointer: 'up' }, { pointer: 'down' }, { pointer: 'up' }])
+  })
+
+  it('window.startDrag rejects with no press down, and is sent (once per press) while one is', async () => {
+    const r = realm()
+    const { heard, host } = connect(r)
+    await tick()
+    await expect(r.k2.window.startDrag()).rejects.toMatchObject({ name: 'K2Error', code: 'failed', verb: 'window.startDrag' })
+    r.fire('pointerdown', { isTrusted: true, button: 0 })
+    const p = r.k2.call('window.startDrag')
+    await expect(r.k2.window.startDrag()).rejects.toMatchObject({ code: 'failed' })
+    await tick()
+    const msgs = sent(heard, 'window.startDrag')
+    expect(msgs).toHaveLength(1)
+    host.postMessage({ id: msgs[0].id, ok: true, value: null })
+    await expect(p).resolves.toBeNull()
+  })
+
+  it('setHitRegions is coalesced: many calls send the latest list once, plain {x, y, width, height}', async () => {
+    const r = realm()
+    const { heard, host } = connect(r)
+    await tick()
+    const ps = []
+    for (let i = 0; i < 10; i++) ps.push(r.k2.canvas.setHitRegions([{ x: i, y: 0, width: 10, height: 10, extra: 'dropped' }]))
+    await tick()
+    expect(sent(heard, 'canvas.setHitRegions')).toHaveLength(0)
+    r.runTimers()
+    await tick()
+    const msgs = sent(heard, 'canvas.setHitRegions')
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].args).toEqual([[{ x: 9, y: 0, width: 10, height: 10 }]])
+    host.postMessage({ id: msgs[0].id, ok: true, value: null })
+    await expect(Promise.all(ps)).resolves.toEqual(Array(10).fill(null))
+    // The same list again isn't sent; a new one is.
+    await expect(r.k2.canvas.setHitRegions([{ x: 9, y: 0, width: 10, height: 10 }])).resolves.toBeNull()
+    void r.k2.call('canvas.setHitRegions', [])
+    r.runTimers()
+    await tick()
+    expect(sent(heard, 'canvas.setHitRegions').map((m) => m.args)).toEqual([[[{ x: 9, y: 0, width: 10, height: 10 }]], [[]]])
+  })
+
+  it('a refused list rejects every waiting caller with K2’s error', async () => {
+    const r = realm()
+    const { heard, host } = connect(r)
+    await tick()
+    const a = r.k2.canvas.setHitRegions('nope')
+    const b = r.k2.canvas.setHitRegions('still nope')
+    r.runTimers()
+    await tick()
+    const [m] = sent(heard, 'canvas.setHitRegions')
+    host.postMessage({ id: m.id, ok: false, error: { code: 'failed', message: 'takes a list' } })
+    await expect(a).rejects.toMatchObject({ code: 'failed', message: 'takes a list' })
+    await expect(b).rejects.toMatchObject({ code: 'failed' })
+  })
+})
+
 describe('the frame prelude', () => {
   it('theme style, then the nonced runtime, then each library, all nonced; no theme value can break out', () => {
     const html = zenFramePrelude({

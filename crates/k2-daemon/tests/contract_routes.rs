@@ -95,8 +95,9 @@ fn exposure_counts_are_pinned() {
     let app = c.verbs_exposed_to(Exposure::App).len();
     // Cut A: widget rows only (UW16 + UWB10). Changing a count is a
     // reviewed change: update this pin in the same commit.
-    assert_eq!((widget, app), (16, 0), "per-exposure verb counts (widget, app)");
-    assert_eq!(c.verbs.len(), 38, "today's 37 bridge verbs plus theme.changed");
+    // 0.45.3: + canvas.setHitRegions and window.startDrag (frame rows).
+    assert_eq!((widget, app), (18, 0), "per-exposure verb counts (widget, app)");
+    assert_eq!(c.verbs.len(), 40, "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag");
 }
 
 #[test]

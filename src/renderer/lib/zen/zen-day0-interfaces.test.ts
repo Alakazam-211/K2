@@ -42,10 +42,16 @@ describe('day-0: verb tables', () => {
     expect(ZEN_VERBS).toEqual(BRIDGE_ZEN_VERBS)
   })
 
-  it('custom verbs are a subset of the bridge verbs (plus the frame-only theme.changed), with widget caps only', () => {
+  it('custom verbs are a subset of the bridge verbs (plus the frame-only rows), with widget caps only', () => {
     for (const [verb, row] of Object.entries(ZEN_CUSTOM_VERBS)) {
       if (verb === 'theme.changed') {
         expect(row.kind).toBe('event')
+        continue
+      }
+      // 0.45.3: the whole canvas, handled by the frame host only (no cap).
+      if (verb === 'canvas.setHitRegions' || verb === 'window.startDrag') {
+        expect(row).toEqual({ cap: null, reach: 'local', kind: 'call' })
+        expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
       expect(verb in ZEN_VERBS, verb).toBe(true)

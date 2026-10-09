@@ -517,8 +517,11 @@ fn frame_js(c: &Catalog, runtime: Option<&str>) -> String {
     s.push_str("    }),\n  })\n");
     match runtime {
         Some(rt) => {
-            s.push_str(&format!("  // ---- {RUNTIME_JS} ----\n"));
+            s.push_str(&format!("  // ---- {RUNTIME_JS} (its comments are in that file) ----\n"));
             for line in rt.lines() {
+                if is_comment_line(line) {
+                    continue;
+                }
                 if line.is_empty() {
                     s.push('\n');
                 } else {
@@ -530,6 +533,15 @@ fn frame_js(c: &Catalog, runtime: Option<&str>) -> String {
     }
     s.push_str("})()\n");
     s
+}
+
+/// A runtime line that is only a comment: `// …`, or a one-line `/** … */`
+/// (a JSDoc type note for `@ts-check`). The frame never needs them, and the
+/// frame script has a 16 KB budget (UWA5). The runtime holds no multi-line
+/// strings, so a line that starts a comment is never inside one.
+fn is_comment_line(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with("//") || (t.starts_with("/*") && t.ends_with("*/") && !t[2..t.len() - 2].contains("*/"))
 }
 
 // ── k2 zen guide api ─────────────────────────────────────────────────────
@@ -584,6 +596,15 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
         "  unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,",
         "  onError)) to hear a refused subscription (it ends; without onError K2",
         "  logs it as a widget error).",
+        "",
+        "USING THE WHOLE CANVAS ([layout] canvas = \"full\")",
+        "  K2's top band (about 52 px) drags the window, so clicks there never",
+        "  reach you. k2.canvas.setHitRegions(rects) cuts holes in it: rects are",
+        "  {x, y, width, height} in CSS px of your frame's viewport (pass",
+        "  el.getBoundingClientRect()); each call replaces the last, [] clears,",
+        "  32 at most. K2's controls always win where a rect covers them, and a",
+        "  little drag space always stays. k2.window.startDrag() in a mousedown",
+        "  makes any element of yours drag the window.",
         "",
         "RULES",
         "  textContent for anything an agent wrote, never innerHTML. No onclick=:",
@@ -672,7 +693,7 @@ mod tests {
         assert_eq!(rows.len(), 37, "today's ZEN_VERBS has 37 entries");
         assert!(!rows.iter().any(|v| v.verb == "theme.changed"), "a frame row is never in ZEN_VERBS");
         let widget: Vec<&str> = catalog().verbs_exposed_to(Exposure::Widget).iter().map(|v| v.verb.as_str()).collect();
-        assert_eq!(widget.len(), 16, "UW16 + UWB10: 16 widget verbs");
+        assert_eq!(widget.len(), 18, "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag)");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "thread.markRead", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {

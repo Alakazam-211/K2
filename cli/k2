@@ -19964,6 +19964,14 @@ THE FULL GUIDE
   k2 zen guide example --list        whole files you can pipe
   The k2-zen skill has every widget prop and theme token.
 
+USING THE WHOLE CANVAS
+  On a full canvas ([layout] canvas = "full") K2's top band floats over
+  a custom widget and drags the window. The widget takes clicks there
+  with k2.canvas.setHitRegions(rects) (frame-viewport CSS px, [] clears,
+  at most 32) and drags the window from its own element with
+  k2.window.startDrag() in a mousedown. K2's controls always win, and
+  some drag space always stays. Details: k2 zen guide api.
+
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }
@@ -40506,7 +40514,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 3.
+for at once (no review). From K2's verb catalog, version 4.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -40528,6 +40536,8 @@ no cap
   k2.gardens.switch(id)                       local    zen-gardens-v1  await k2.gardens.switch(gardens[1].id)  [rate_limited]
   k2.theme.get()                              local    zen-v1          const {theme, motion} = await k2.theme.get()
   k2.theme.changed(cb)                        local    zen-widgets-v1  k2.theme.changed(({theme}) => paint(theme))
+  k2.canvas.setHitRegions(rects)              local    zen-widgets-v1  await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
+  k2.window.startDrag()                       local    zen-widgets-v1  grip.addEventListener('mousedown', () => k2.window.startDrag())
 agents:read (See agents)
   k2.agents.list()                            portable zen-v1          const rows = await k2.agents.list()
   k2.agents.subscribe(cb)                     portable zen-v1          const off = k2.agents.subscribe((rows) => draw(rows))
@@ -40557,6 +40567,15 @@ ALSO ON k2
   unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,
   onError)) to hear a refused subscription (it ends; without onError K2
   logs it as a widget error).
+
+USING THE WHOLE CANVAS ([layout] canvas = "full")
+  K2's top band (about 52 px) drags the window, so clicks there never
+  reach you. k2.canvas.setHitRegions(rects) cuts holes in it: rects are
+  {x, y, width, height} in CSS px of your frame's viewport (pass
+  el.getBoundingClientRect()); each call replaces the last, [] clears,
+  32 at most. K2's controls always win where a rect covers them, and a
+  little drag space always stays. k2.window.startDrag() in a mousedown
+  makes any element of yours drag the window.
 
 RULES
   textContent for anything an agent wrote, never innerHTML. No onclick=:

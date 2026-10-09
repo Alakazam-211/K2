@@ -7,7 +7,7 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 3,
+    catalogVersion: 4,
     errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'failed']),
     verbs: Object.freeze({
       'gardens.list': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
@@ -15,6 +15,8 @@
       'gardens.switch': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
       'theme.get': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-v1' }),
       'theme.changed': Object.freeze({ cap: null, reach: 'local', kind: 'event', feature: 'zen-widgets-v1' }),
+      'canvas.setHitRegions': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
+      'window.startDrag': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
       'agents.list': Object.freeze({ cap: 'agents:read', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'agents.subscribe': Object.freeze({ cap: 'agents:read', reach: 'portable', kind: 'subscribe', feature: 'zen-v1' }),
       'conversation.open': Object.freeze({ cap: 'agents:read', reach: 'local', kind: 'call', feature: 'zen-v1' }),
@@ -28,36 +30,12 @@
       'compose.draft': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'zen-v1' }),
     }),
   })
-  // ---- sdk/k2-runtime.js ----
-  // @ts-check
-  // K2's frame runtime: the `k2` object a custom Garden widget talks to K2
-  // through (prd-zen-user-widgets-v2 UWA5, UW15, §7). Plain JavaScript, no
-  // dependencies. K2 inlines it as the first nonced script of every sealed
-  // widget frame, so `window.k2` exists before the widget's scripts run.
-  // contract-gen (UWA11) wraps it after the catalog's widget table
-  // (`K2_CONTRACT`) into `sdk/generated/k2-frame.js`; rerun it after an edit.
-  //
-  // Transport: the hello's MessagePort. The frame never holds a token.
-  //   frame → host {id, verb, args} · {sub, verb, args} · {unsub} · {ready}
-  //                {pong} · {error: {message, stack?}} · {chord}
-  //   host → frame {id, ok, value} · {id, ok: false, error} · {sub, value}
-  //                {sub, error} · {ping}
-  // The hello comes on the frame's load, AFTER the widget's top-level script
-  // runs. Calls made before it wait; `k2.can`, `k2.config`, `k2.widget` and
-  // `k2.motion` don't, so a widget awaits `k2.connected` (resolves with the
-  // hello) before reading them. With no hello in 10 s, waiting calls and
-  // `k2.connected` reject with K2Error `failed` "not connected". A refused
-  // subscription gets `{sub, error}` once and ends: its onError (after cb)
-  // runs or, with none, K2 hears of it.
+  // ---- sdk/k2-runtime.js (its comments are in that file) ----
   ;(function () {
     'use strict'
 
-    /** @typedef {{cap: string | null, reach: 'portable' | 'local', kind: 'call' | 'subscribe' | 'event', feature?: string}} VerbRow */
-    /** @typedef {{code: string, message: string, cap?: string, room?: string, feature?: string}} WireError */
 
     var g = /** @type {any} */ (self)
-    /** @type {Record<string, VerbRow>} */
-    // eslint-disable-next-line no-undef
     var TABLE = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.verbs ? K2_CONTRACT.verbs : {}
     if (g.k2) return
 
@@ -77,25 +55,15 @@
       }
     }
 
-    /** @type {MessagePort | null} */
     var port = null
-    /** @type {{caps: string[], features: string[], widget: {id: string, name: string, garden: string}, config: Record<string, unknown>, motion: {reduced: boolean}} | null} */
     var hello = null
     var nextId = 1
-    /** @type {Map<number, {resolve: (v: unknown) => void, reject: (e: unknown) => void, verb: string}>} */
     var pending = new Map()
-    /** @typedef {{cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null, verb: string}} Sub */
-    /** @type {Map<number, Sub>} */
     var subs = new Map()
 
-    // Messages sent before the hello wait, in order; with none in CONNECT_MS
-    // they fail "not connected" (K2 shows "didn't start").
     var CONNECT_MS = 10000
-    /** @type {unknown[] | null} */
     var early = []
-    /** @type {(v: unknown) => void} */
     var helloed = function () {}
-    /** @type {(e: unknown) => void} */
     var unhelloed = helloed
     var connected = new Promise(function (res, rej) {
       helloed = res
@@ -103,13 +71,11 @@
     })
     connected.catch(function () {})
 
-    /** @param {unknown} msg */
     function send(msg) {
       if (port) port.postMessage(msg)
       else if (early && early.length < 1000) early.push(msg)
     }
 
-    /** @param {string} verb */
     function notConnected(verb) {
       return new K2Error({ code: 'failed', message: 'not connected' }, verb)
     }
@@ -129,7 +95,6 @@
       })
     }, CONNECT_MS)
 
-    /** @param {any} r */
     function report(r) {
       send({ error: { message: String(r && r.message ? r.message : r), stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined } })
     }
@@ -179,7 +144,6 @@
       },
     }
 
-    /** @param {MessageEvent} e */
     function onPortMessage(e) {
       var m = e.data
       if (!m || typeof m !== 'object') return
@@ -208,8 +172,6 @@
       }
     }
 
-    /** The pushed theme's `--zen-*` vars and scheme onto :root (UW39). */
-    /** @param {unknown} v */
     function applyTheme(v) {
       if (!v || typeof v !== 'object') return
       var info = /** @type {{theme?: {vars?: Record<string, string>, scheme?: string}}} */ (v)
@@ -224,7 +186,6 @@
       if (t.scheme === 'light' || t.scheme === 'dark') root.setAttribute('data-zen-scheme', t.scheme)
     }
 
-    /** @param {MessageEvent} e */
     function onHello(e) {
       if (port) return
       if (e.source !== g.parent) return
@@ -240,7 +201,6 @@
       }
       port.onmessage = onPortMessage
       g.removeEventListener('message', onHello)
-      // K2's own subscription: the frame follows the Garden's theme.
       transport.subscribe('theme.changed', [], applyTheme, null)
       var waiting = early || []
       early = null
@@ -249,7 +209,6 @@
     }
     g.addEventListener('message', onHello)
 
-    // ── Errors and keys reported to K2 (UW30, UW33) ─────────────────────────
 
     g.addEventListener('error', function (/** @type {ErrorEvent} */ e) {
       report({ message: e.message || 'error', stack: e.error && e.error.stack })
@@ -259,9 +218,6 @@
     })
 
     var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
-    // Mirrors `zenForwardedChordForKey` (lib/zen/zen-shortcut.ts); the host
-    // gates each one again.
-    /** @param {KeyboardEvent} e */
     function chordOf(e) {
       if (e.isTrusted === false || e.repeat) return null
       var altGr = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')
@@ -285,13 +241,84 @@
       true,
     )
 
-    // ── The k2 object ───────────────────────────────────────────────────────
+
+    var down = false
+    g.addEventListener(
+      'pointerdown',
+      function (/** @type {PointerEvent} */ e) {
+        if (e.isTrusted === false || e.button !== 0) return
+        down = true
+        send({ pointer: 'down' })
+      },
+      true,
+    )
+    function up() {
+      if (!down) return
+      down = false
+      send({ pointer: 'up' })
+    }
+    g.addEventListener('pointerup', up, true)
+    g.addEventListener('pointercancel', up, true)
+    g.addEventListener('blur', up)
+
+    function startDrag() {
+      if (!down) return Promise.reject(new K2Error({ code: 'failed', message: 'window.startDrag needs a mouse button down in this widget' }, 'window.startDrag'))
+      down = false
+      return transport.call('window.startDrag', [])
+    }
+
+    var REGION_MS = 100
+    var regionsAt = 0
+    var regionsSent = ''
+    var regionsQ = null
+    function setHitRegions(rects) {
+      var list = Array.isArray(rects)
+        ? rects.map(function (r) {
+            return r && typeof r === 'object' ? { x: r.x, y: r.y, width: r.width, height: r.height } : r
+          })
+        : rects
+      var key = JSON.stringify(list === undefined ? null : list)
+      if (!regionsQ && key === regionsSent) return Promise.resolve(null)
+      if (!regionsQ) {
+        regionsQ = { list: list, key: key, waiters: [] }
+        g.setTimeout(flushRegions, Math.max(0, regionsAt + REGION_MS - Date.now()))
+      }
+      var q = regionsQ
+      q.list = list
+      q.key = key
+      return new Promise(function (res, rej) {
+        q.waiters.push([res, rej])
+      })
+    }
+    function flushRegions() {
+      var q = regionsQ
+      if (!q) return
+      regionsQ = null
+      regionsAt = Date.now()
+      transport.call('canvas.setHitRegions', [q.list]).then(
+        function (v) {
+          regionsSent = q.key
+          q.waiters.forEach(function (w) {
+            w[0](v)
+          })
+        },
+        function (e) {
+          regionsSent = ''
+          q.waiters.forEach(function (w) {
+            w[1](e)
+          })
+        },
+      )
+    }
+
 
     /**
      * @param {string} verb
      * @param {unknown[]} args
      */
     function call(verb, args) {
+      if (verb === 'canvas.setHitRegions') return setHitRegions(args[0])
+      if (verb === 'window.startDrag') return startDrag()
       return transport.call(verb, args)
     }
 
@@ -308,7 +335,6 @@
       return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
     }
 
-    /** @type {Record<string, any>} */
     var k2 = {}
     k2.call = function (/** @type {string} */ verb) {
       return call(verb, Array.prototype.slice.call(arguments, 1))
@@ -336,8 +362,6 @@
     Object.defineProperty(k2, 'widget', { enumerable: true, get: function () { return hello ? hello.widget : null } })
     Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
 
-    // Named helpers, one per row (`surface.action` → k2.surface.action).
-    /** @type {Record<string, Record<string, Function>>} */
     var groups = {}
     Object.keys(TABLE).forEach(function (verb) {
       var dot = verb.indexOf('.')

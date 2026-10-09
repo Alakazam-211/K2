@@ -178,3 +178,17 @@ describe('UW33: forwarded chords', () => {
     expect(s.handled).toEqual([])
   })
 })
+
+describe('0.45.3: press reports for window.startDrag', () => {
+  it('go to onPointer, before the call that follows them, and never to the layer; anything else is the layer’s', () => {
+    const order: string[] = []
+    const s = setup({ onPointer: (down) => void order.push(down ? 'down' : 'up') })
+    s.host.deliver({ pointer: 'down' })
+    s.host.deliver({ id: 3, verb: 'window.startDrag', args: [] })
+    order.push(`handled:${s.handled.length}`)
+    s.host.deliver({ pointer: 'up' })
+    s.host.deliver({ pointer: 'sideways' })
+    expect(order).toEqual(['down', 'handled:1', 'up'])
+    expect(s.handled).toEqual([{ id: 3, verb: 'window.startDrag', args: [] }, { pointer: 'sideways' }])
+  })
+})

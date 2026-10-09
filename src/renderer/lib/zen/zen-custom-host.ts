@@ -12,6 +12,9 @@
 //     last resort is the shell's per-window watchdog, UW32, B3's);
 //   - uncaught errors and rejections are reported; 20 in a minute →
 //     "keeps failing";
+//   - a `{pointer: "down" | "up"}` (the runtime's report of a trusted
+//     primary-button press, for `k2.window.startDrag`) goes to `onPointer`,
+//     before anything that follows it on the port;
 //   - a forwarded chord goes to `onChord` with whether this frame has focus;
 //     the page's one gate (`createZenChordGate`, zen-shortcut.ts) acts on it
 //     only while that frame has focus, at most once every 500 ms (UW33).
@@ -39,6 +42,8 @@ export interface ZenFrameHostOptions {
   focused(): boolean
   /** A forwarded chord (still to be gated: known chord, focus, 500 ms). */
   onChord(chord: unknown, frameFocused: boolean): void
+  /** A trusted primary-button press went down (true) or up in the frame. */
+  onPointer?(down: boolean): void
   /** The widget's name, for logs. */
   label: string
   now?: () => number
@@ -122,6 +127,10 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       const msg = (m.error as { message?: unknown }).message
       console.warn(`[zen] widget ${opts.label}: ${typeof msg === 'string' ? msg.slice(0, 300) : 'error'}`)
       if (errors.length >= ZEN_FRAME_ERRORS_PER_MINUTE) stop('failing')
+      return
+    }
+    if (m.pointer === 'down' || m.pointer === 'up') {
+      opts.onPointer?.(m.pointer === 'down')
       return
     }
     if ('chord' in m) {

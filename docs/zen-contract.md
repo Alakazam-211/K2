@@ -738,6 +738,7 @@ Then, over the port only:
 | `{pong}` | — |
 | `{error: {message, stack?}}` | — |
 | `{chord}` (forwarded keys) | — |
+| `{pointer: "down" \| "up"}` (a trusted primary-button press, for `window.startDrag`) | — |
 
 The frame's first script is `sdk/generated/k2-frame.js` (the shared runtime
 `sdk/k2-runtime.js` joined with the catalog's widget verb table as
@@ -758,6 +759,33 @@ k2.connected.then(() => {
   k2.ready()
 }, () => showNote('K2 didn’t start this widget.'))
 ```
+
+### Using the whole canvas (0.45.3)
+
+On a full canvas (`[layout] canvas = "full"`) the top band (about 52 px,
+the window's drag strip with K2's controls) floats over the widget's frame.
+Two frame rows (renderer impl `frame`, no cap, `zen-widgets-v1`) give that
+strip back to the widget (`src/renderer/lib/zen/zen-canvas.ts`):
+
+- `k2.canvas.setHitRegions(rects)`: `rects` are `{x, y, width, height}` in
+  CSS px of the frame's viewport; each call replaces the last, `[]` clears;
+  at most 32 (`too_large`), finite numbers, width/height ≥ 0 (`failed`),
+  clamped to the frame. The runtime sends at most one list every 100 ms
+  (the latest; an unchanged list isn't sent), and the band re-plans at most
+  every 50 ms. The band then takes no clicks itself: its control groups do
+  (above everything: **K2's chrome always wins**, and K2's Linux/Windows
+  window cluster is above the whole page), the drag pieces left between the
+  holes do (they still drag the window), and a hole lets the click through
+  to the frame. When the holes leave no free piece of at least the drag
+  minimum (`frame.toml` `controls.drag-min-*`, 120 × 12) outside K2's
+  controls, K2 keeps the gaps between its control groups (or, with no
+  controls, a centred minimum) as drag area. Column Gardens ignore regions.
+- `k2.window.startDrag()`: from the widget's `mousedown`, K2 starts the
+  native window drag (`startDragging`, like the band). Honoured only while
+  the runtime has reported a trusted primary-button press in that frame
+  (`{pointer: "down"}`, sent in the capture phase before the widget's own
+  handlers), once per press, within 10 s of it, and only when the frame
+  has focus or the pointer. Otherwise `failed`.
 
 ### Limits (UW8, UW29, UWB8, UWB9, UWB13)
 

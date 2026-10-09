@@ -9,6 +9,7 @@
 // Transport: the hello's MessagePort. The frame never holds a token.
 //   frame → host {id, verb, args} · {sub, verb, args} · {unsub} · {ready}
 //                {pong} · {error: {message, stack?}} · {chord}
+//                {pointer: 'down' | 'up'} (trusted primary-button presses)
 //   host → frame {id, ok, value} · {id, ok: false, error} · {sub, value}
 //                {sub, error} · {ping}
 // The hello comes on the frame's load, AFTER the widget's top-level script
@@ -254,6 +255,85 @@
     true,
   )
 
+  // ── The whole canvas (window.startDrag, canvas.setHitRegions) ───────────
+
+  // A trusted primary-button press in this frame, told to K2 as it happens
+  // (capture phase, before the widget's own handlers): K2 honours
+  // window.startDrag only while one is down. One drag per press.
+  var down = false
+  g.addEventListener(
+    'pointerdown',
+    function (/** @type {PointerEvent} */ e) {
+      if (e.isTrusted === false || e.button !== 0) return
+      down = true
+      send({ pointer: 'down' })
+    },
+    true,
+  )
+  function up() {
+    if (!down) return
+    down = false
+    send({ pointer: 'up' })
+  }
+  g.addEventListener('pointerup', up, true)
+  g.addEventListener('pointercancel', up, true)
+  g.addEventListener('blur', up)
+
+  function startDrag() {
+    if (!down) return Promise.reject(new K2Error({ code: 'failed', message: 'window.startDrag needs a mouse button down in this widget' }, 'window.startDrag'))
+    down = false
+    return transport.call('window.startDrag', [])
+  }
+
+  // Hit regions are coalesced: at most one send every REGION_MS, carrying
+  // the latest list, and an unchanged list isn't sent again. A widget may
+  // call it on every animation frame.
+  var REGION_MS = 100
+  var regionsAt = 0
+  var regionsSent = ''
+  /** @type {{list: unknown, key: string, waiters: Array<[(v: unknown) => void, (e: unknown) => void]>} | null} */
+  var regionsQ = null
+  /** @param {unknown} rects */
+  function setHitRegions(rects) {
+    var list = Array.isArray(rects)
+      ? rects.map(function (r) {
+          return r && typeof r === 'object' ? { x: r.x, y: r.y, width: r.width, height: r.height } : r
+        })
+      : rects
+    var key = JSON.stringify(list === undefined ? null : list)
+    if (!regionsQ && key === regionsSent) return Promise.resolve(null)
+    if (!regionsQ) {
+      regionsQ = { list: list, key: key, waiters: [] }
+      g.setTimeout(flushRegions, Math.max(0, regionsAt + REGION_MS - Date.now()))
+    }
+    var q = regionsQ
+    q.list = list
+    q.key = key
+    return new Promise(function (res, rej) {
+      q.waiters.push([res, rej])
+    })
+  }
+  function flushRegions() {
+    var q = regionsQ
+    if (!q) return
+    regionsQ = null
+    regionsAt = Date.now()
+    transport.call('canvas.setHitRegions', [q.list]).then(
+      function (v) {
+        regionsSent = q.key
+        q.waiters.forEach(function (w) {
+          w[0](v)
+        })
+      },
+      function (e) {
+        regionsSent = ''
+        q.waiters.forEach(function (w) {
+          w[1](e)
+        })
+      },
+    )
+  }
+
   // ── The k2 object ───────────────────────────────────────────────────────
 
   /**
@@ -261,6 +341,8 @@
    * @param {unknown[]} args
    */
   function call(verb, args) {
+    if (verb === 'canvas.setHitRegions') return setHitRegions(args[0])
+    if (verb === 'window.startDrag') return startDrag()
     return transport.call(verb, args)
   }
 

@@ -107,7 +107,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// "what's available"; the verb lists come from the verb catalog. Garden
 /// sync's text (synced vs own copy, `k2 zen sync` / `k2 zen news`, never
 /// write sync.json/news.json/.defaults/) rides the same v12.
-pub const SKILL_VERSION_ZEN: u32 = 12;
+/// v13 = using the whole canvas (0.45.3): `k2.canvas.setHitRegions` and
+/// `k2.window.startDrag` for full-canvas Gardens.
+pub const SKILL_VERSION_ZEN: u32 = 13;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

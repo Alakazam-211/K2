@@ -122,13 +122,15 @@ describe('TUWA5: the generated tables', () => {
     expect(Object.keys(ZEN_VERBS)).toHaveLength(37)
   })
 
-  it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10', () => {
+  it('ZEN_CUSTOM_VERBS is the UW16 list as amended by UWB10, plus the whole canvas (0.45.3)', () => {
     expect(ZEN_CUSTOM_VERBS).toEqual({
       'gardens.list': { cap: null, reach: 'local', kind: 'call' },
       'gardens.current': { cap: null, reach: 'local', kind: 'call' },
       'gardens.switch': { cap: null, reach: 'local', kind: 'call' },
       'theme.get': { cap: null, reach: 'local', kind: 'call' },
       'theme.changed': { cap: null, reach: 'local', kind: 'event' },
+      'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
+      'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
       'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
       'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
       'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },

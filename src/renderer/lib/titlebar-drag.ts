@@ -43,6 +43,13 @@ function startDrag(): void {
   void getCurrentWindow().startDragging().catch(() => {})
 }
 
+/** Start the native window drag now, for a press K2 has already checked
+ *  (a Zen widget's `k2.window.startDrag()`, which runs from the widget's
+ *  own mousedown: no double-click delay here). */
+export function startWindowDragNow(): void {
+  startDrag()
+}
+
 function onPendingMove(e: MouseEvent): void {
   if (!dragStart) return
   const dx = e.clientX - dragStart.x

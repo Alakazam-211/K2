@@ -30,6 +30,7 @@ import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-garden
 import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
 import { useZenConfigStore } from '@/lib/zen/zen-api'
 import { exitZen } from '@/lib/zen/zen-view'
+import { registerZenCanvasFrame, setZenCanvasRegions, startZenCanvasDrag, zenCanvasPointer } from '@/lib/zen/zen-canvas'
 
 /** UW33: one gate for every widget frame in this window (they share the
  *  500 ms budget), acting as K2's own keys would. */
@@ -139,6 +140,14 @@ export function ZenCustomFrame({
 
   useEffect(() => () => hostRef.current?.dispose(), [])
 
+  // The whole canvas (`zen-canvas`): the frame's hit regions and window
+  // drag are keyed by its placement; they go with the frame.
+  useEffect(() => {
+    const el = frameRef.current
+    if (!loaded || !el) return undefined
+    return registerZenCanvasFrame(key, el)
+  }, [loaded, key])
+
   const label = useMemo(() => zenWidgetDisplayName(widget.name), [widget.name])
 
   // 3. The port and the hello, on load.
@@ -164,6 +173,7 @@ export function ZenCustomFrame({
       stop: (reason) => stopZenWidget(key, reason),
       focused: () => zenFrameHasFocus(frameRef.current),
       onChord: (chord, frameFocused) => zenFrameChordGate.run(chord, frameFocused, Date.now(), ZEN_FRAME_CHORD_ACTIONS),
+      onPointer: (down) => zenCanvasPointer(key, down),
       makeLayer: (push) =>
         createZenCustomLayer({
           widget: () => widgetRef.current,
@@ -189,6 +199,10 @@ export function ZenCustomFrame({
               attributeFilter: ['style', 'data-zen-scheme', 'data-zen-reduced-motion', 'data-zen-corners', 'data-zen-stoplights'],
             })
             return () => mo.disconnect()
+          },
+          canvas: {
+            setHitRegions: (rects) => setZenCanvasRegions(key, rects),
+            startDrag: () => startZenCanvasDrag(key),
           },
           now: () => Date.now(),
         }),

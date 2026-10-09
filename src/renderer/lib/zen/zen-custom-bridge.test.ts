@@ -10,6 +10,7 @@ import type { ZenCustomWidgetPayload, ZenFrameReply } from './zen-custom-types'
 import type { ZenAgentRow, ZenThreadView } from './zen-data'
 import { createZenCustomLayer, zenPlain, ZEN_RUNAWAY, type ZenCustomLayerDeps } from './zen-custom-bridge'
 import { projectZenRow, projectZenThreadItem, ZEN_WIDGET_ROW_KEYS } from './zen-custom-projection'
+import { ZenCanvasError } from './zen-canvas'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 
 function row(address: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
@@ -476,5 +477,61 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
 
   it('TUW3.2: functions in a result are dropped', () => {
     expect(zenPlain({ a: 1, f: () => 2, nested: { g: vi.fn() } })).toEqual({ a: 1, nested: {} })
+  })
+})
+
+describe('0.45.3: the whole canvas through the layer', () => {
+  function canvasHarness() {
+    const regions: unknown[] = []
+    let drags = 0
+    let press = false
+    const h = harness({
+      canvas: {
+        setHitRegions: (rects) => void regions.push(rects),
+        startDrag: () => {
+          if (!press) throw new ZenCanvasError('failed', 'window.startDrag needs a mouse button down in this widget.')
+          press = false
+          drags += 1
+        },
+      },
+    })
+    return { h, regions, drags: () => drags, press: () => void (press = true) }
+  }
+
+  it('a widget with no caps may call both (no data, no cap)', async () => {
+    const c = canvasHarness()
+    c.h.widget.current = payload({ caps: [], requested: [] })
+    const layer = createZenCustomLayer(c.h.deps)
+    expect(await call(layer, 'canvas.setHitRegions', [{ x: 1, y: 2, width: 3, height: 4 }])).toEqual({ id: 1, ok: true, value: null })
+    expect(c.regions).toEqual([[{ left: 1, top: 2, width: 3, height: 4 }]])
+    expect(await call(layer, 'canvas.setHitRegions', [])).toMatchObject({ ok: true })
+    expect(c.regions[1]).toEqual([])
+    // Nothing reached K2's own verbs.
+    expect(c.h.calls).toEqual([])
+  })
+
+  it('bad input is refused before anything changes: failed, or too_large over the cap', async () => {
+    const c = canvasHarness()
+    const layer = createZenCustomLayer(c.h.deps)
+    expect(code(await call(layer, 'canvas.setHitRegions', 'all of it'))).toBe('failed')
+    expect(code(await call(layer, 'canvas.setHitRegions', [{ x: 1, y: 2, width: Number.NaN, height: 4 }]))).toBe('failed')
+    expect(code(await call(layer, 'canvas.setHitRegions', Array(33).fill({ x: 0, y: 0, width: 1, height: 1 })))).toBe('too_large')
+    expect(c.regions).toEqual([])
+  })
+
+  it('window.startDrag: refused (failed) with no press; honoured once per press', async () => {
+    const c = canvasHarness()
+    const layer = createZenCustomLayer(c.h.deps)
+    expect(code(await call(layer, 'window.startDrag'))).toBe('failed')
+    c.press()
+    expect(await call(layer, 'window.startDrag')).toMatchObject({ ok: true, value: null })
+    expect(code(await call(layer, 'window.startDrag'))).toBe('failed')
+    expect(c.drags()).toBe(1)
+  })
+
+  it('without a canvas host both are verb_unavailable', async () => {
+    const layer = createZenCustomLayer(harness().deps)
+    expect(code(await call(layer, 'canvas.setHitRegions', []))).toBe('verb_unavailable')
+    expect(code(await call(layer, 'window.startDrag'))).toBe('verb_unavailable')
   })
 })

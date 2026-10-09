@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 3,
+  "catalogVersion": 4,
   "caps": [
     {
       "name": "agents:read",
@@ -1142,6 +1142,53 @@
       "errors": [],
       "doc": "The same value as theme.get, pushed when the theme or motion changes.",
       "example": "k2.theme.changed(({theme}) => paint(theme))"
+    },
+    {
+      "verb": "canvas.setHitRegions",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [
+        {
+          "title": "rects",
+          "type": "array",
+          "items": {
+            "title": "HitRegion",
+            "type": "object",
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"},
+              "width": {"type": "number", "minimum": 0},
+              "height": {"type": "number", "minimum": 0}
+            },
+            "required": ["x", "y", "width", "height"],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "response": {"type": "null"},
+      "errors": ["too_large", "failed"],
+      "doc": "Full-canvas Gardens: up to 32 rects (CSS px, this frame's viewport) where clicks reach you through K2's top drag strip; replaces the last list, [] clears. K2's own controls stay on top.",
+      "example": "await k2.canvas.setHitRegions([bar.getBoundingClientRect()])"
+    },
+    {
+      "verb": "window.startDrag",
+      "cap": null,
+      "exposure": ["widget"],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-widgets-v1",
+      "bindings": {"renderer": {"impl": "frame"}},
+      "request": [],
+      "response": {"type": "null"},
+      "errors": ["failed"],
+      "doc": "Start moving the window, from a mousedown in this widget (only while a button is down here).",
+      "example": "grip.addEventListener('mousedown', () => k2.window.startDrag())"
     }
   ]
 }

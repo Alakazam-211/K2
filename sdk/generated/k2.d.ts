@@ -35,6 +35,13 @@ export interface ThemeInfo {
   readonly theme: ThemeVars
 }
 
+export interface HitRegion {
+  readonly height: number
+  readonly width: number
+  readonly x: number
+  readonly y: number
+}
+
 export interface AgentCounts {
   /** The shell commands among them. */
   readonly commands: number
@@ -169,6 +176,8 @@ export interface K2Verbs {
   'gardens.switch': { args: [id: string]; value: null }
   'theme.get': { args: []; value: ThemeInfo }
   'theme.changed': { args: []; value: ThemeInfo }
+  'canvas.setHitRegions': { args: [rects: HitRegion[]]; value: null }
+  'window.startDrag': { args: []; value: null }
   'agents.list': { args: []; value: AgentRow[] }
   'agents.subscribe': { args: []; value: AgentRow[] }
   'conversation.open': { args: [address: string]; value: null }
@@ -183,7 +192,7 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe'
 
 export interface K2 {
@@ -200,6 +209,14 @@ export interface K2 {
     get(): Promise<ThemeInfo>
     /** The same value as theme.get, pushed when the theme or motion changes. no cap · local · zen-widgets-v1. e.g. `k2.theme.changed(({theme}) => paint(theme))` */
     changed(cb: (value: ThemeInfo) => void, onError?: (error: K2Error) => void): () => void
+  }
+  readonly canvas: {
+    /** Full-canvas Gardens: up to 32 rects (CSS px, this frame's viewport) where clicks reach you through K2's top drag strip; replaces the last list, [] clears. K2's own controls stay on top. no cap · local · zen-widgets-v1. e.g. `await k2.canvas.setHitRegions([bar.getBoundingClientRect()])` */
+    setHitRegions(rects: HitRegion[]): Promise<null>
+  }
+  readonly window: {
+    /** Start moving the window, from a mousedown in this widget (only while a button is down here). no cap · local · zen-widgets-v1. e.g. `grip.addEventListener('mousedown', () => k2.window.startDrag())` */
+    startDrag(): Promise<null>
   }
   readonly agents: {
     /** The agents in the widget's scope, with live status. cap agents:read · portable · zen-v1. e.g. `const rows = await k2.agents.list()` */

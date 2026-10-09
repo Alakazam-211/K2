@@ -28,10 +28,26 @@
 // and clips first. When the row is still too narrow, usage hides, then the
 // theme control, then the Garden switcher's name truncates (FC27,
 // `zenRowOverflow`). Required controls and menu buttons never shrink.
+//
+// On a full canvas (the top band floats over the page) a custom widget can
+// cut holes in the top band's drag strip (`k2.canvas.setHitRegions`,
+// `lib/zen/zen-canvas.ts`). The band then takes no clicks itself: its
+// control groups do (above everything, so K2's controls always win), the
+// drag pieces left between the holes do (they still drag the window), and
+// clicks in a hole fall through to the frame below. Column Gardens never
+// read the holes.
 
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
-import { ZEN_DRAG_MIN_WIDTH_PX } from '@/lib/zen/zen-controls'
+import { ZEN_DRAG_MIN_SIZE, ZEN_DRAG_MIN_WIDTH_PX, type ZenRect } from '@/lib/zen/zen-controls'
+import {
+  subscribeZenCanvas,
+  zenBandDragPlan,
+  zenCanvasHoles,
+  zenCanvasVersion,
+  type ZenBandDragPlan,
+} from '@/lib/zen/zen-canvas'
+import { zenReservedRects } from '@/lib/zen/zen-monitor'
 import { zenRowOverflow, ZEN_OVERFLOW_ORDER, type ZenOverflowKind, type ZenRowOverflow } from '@/lib/zen/zen-overflow'
 import type { ZenAlign, ZenChromeItem, ZenColumnEdge, ZenRowGroups, ZenWidgetDecl } from '@/lib/zen/zen-page'
 import { zenChromeFor } from './zen-registry'
@@ -66,6 +82,13 @@ export const ZEN_CHROME_CSS = `
 [data-zen-root] [data-zen-garden-menu] [role="menuitemradio"]:focus-visible {
   background: var(--zen-surface);
   outline: none;
+}
+[data-zen-root] [data-zen-band-holes] [data-zen-row-inner] {
+  position: relative;
+  z-index: 1;
+}
+[data-zen-root] [data-zen-band-holes] [data-zen-row-group] {
+  pointer-events: auto;
 }
 `
 
@@ -276,10 +299,74 @@ function RowBody({
   )
 }
 
+function rectOf(el: Element): ZenRect {
+  const r = el.getBoundingClientRect()
+  return { left: r.left, top: r.top, width: r.width, height: r.height }
+}
+
+function samePlan(a: ZenBandDragPlan | null, b: ZenBandDragPlan | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** The floating band's drag plan from the widgets' hit regions
+ *  (`zen-canvas`), re-measured after every render, on a (throttled) region
+ *  change, a resize and the band's own resize. Null: no holes, the whole
+ *  band drags as before. Off (always null) unless `enabled`. */
+function useZenBandHoles(band: React.RefObject<HTMLDivElement | null>, enabled: boolean): ZenBandDragPlan | null {
+  // A (throttled) region change re-renders; the layout effect re-measures.
+  useSyncExternalStore(subscribeZenCanvas, zenCanvasVersion, zenCanvasVersion)
+  const [plan, setPlan] = useState<ZenBandDragPlan | null>(null)
+  const measure = useCallback(() => {
+    const el = band.current
+    const next =
+      enabled && el
+        ? zenBandDragPlan({
+            band: rectOf(el),
+            holes: zenCanvasHoles(),
+            chrome: [...Array.from(el.querySelectorAll('[data-zen-row-group]'), rectOf), ...zenReservedRects()],
+            spacers: Array.from(el.querySelectorAll('[data-zen-row-spacer]'), rectOf),
+            min: ZEN_DRAG_MIN_SIZE,
+          })
+        : null
+    setPlan((prev) => (samePlan(prev, next) ? prev : next))
+  }, [band, enabled])
+  useLayoutEffect(() => {
+    measure()
+  })
+  useEffect(() => {
+    if (!enabled) return undefined
+    window.addEventListener('resize', measure)
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null
+    if (ro && band.current) ro.observe(band.current)
+    return () => {
+      window.removeEventListener('resize', measure)
+      ro?.disconnect()
+    }
+  }, [enabled, measure, band])
+  return plan
+}
+
+/** The drag strip left between a widget's holes: each piece drags the
+ *  window (its mousedown reaches the band's `drag-region` binding). */
+function ZenDragPieces({ plan }: { plan: ZenBandDragPlan }): React.JSX.Element {
+  return (
+    <div aria-hidden data-zen-drag-pieces="" style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}>
+      {plan.pieces.map((p, i) => (
+        <div
+          key={i}
+          data-zen-drag-piece=""
+          style={{ position: 'absolute', left: p.left, top: p.top, width: p.width, height: p.height, pointerEvents: 'auto' }}
+        />
+      ))}
+    </div>
+  )
+}
+
 /** The top band, or (FC10) the title strip when it holds nothing. With
  *  `float` (`[layout] canvas = "full"`) it floats over the page at the
  *  window's top edge: transparent, still a drag area, its items over the
- *  content below. */
+ *  content below, with holes where a widget asked for clicks
+ *  (`zen-canvas`). */
 export function ZenTopBand({
   groups,
   src,
@@ -290,24 +377,47 @@ export function ZenTopBand({
   float?: boolean
 }): React.JSX.Element {
   const drag = useZenBind(src.bridge, 'drag-region')
+  const bandRef = useRef<HTMLDivElement | null>(null)
+  const ref = useCallback(
+    (el: HTMLDivElement | null) => {
+      bandRef.current = el
+      const off = drag(el)
+      return () => {
+        bandRef.current = null
+        off?.()
+      }
+    },
+    [drag],
+  )
+  const plan = useZenBandHoles(bandRef, float)
   const floating: React.CSSProperties = float ? { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 3 } : {}
+  // With holes the band itself takes no clicks: its groups and drag pieces do.
+  const holes = {
+    'data-zen-band-holes': plan ? '' : undefined,
+    'data-zen-drag-kept': plan?.kept ? '' : undefined,
+  }
+  const pointer: React.CSSProperties = plan ? { pointerEvents: 'none' } : {}
   if (!groups) {
     return (
       <div
-        ref={drag}
+        ref={ref}
         data-zen-title-strip=""
         data-zen-band-float={float ? '' : undefined}
+        {...holes}
         aria-hidden
         className="flex-shrink-0"
-        style={{ height: float ? 28 : 'var(--zen-stoplight-safe-top, 28px)', ...floating }}
-      />
+        style={{ height: float ? 28 : 'var(--zen-stoplight-safe-top, 28px)', ...floating, ...pointer }}
+      >
+        {plan && <ZenDragPieces plan={plan} />}
+      </div>
     )
   }
   return (
     <div
-      ref={drag}
+      ref={ref}
       data-zen-band-row="top"
       data-zen-band-float={float ? '' : undefined}
+      {...holes}
       data-zen-template-bar=""
       className="flex flex-shrink-0 items-center"
       style={{
@@ -315,8 +425,10 @@ export function ZenTopBand({
         paddingLeft: float ? 'max(var(--zen-stoplight-safe-left, 14px), 14px)' : 'var(--zen-stoplight-safe-left, 14px)',
         paddingRight: 'calc(var(--zen-stoplight-safe-right, 0px) + 14px)',
         ...floating,
+        ...pointer,
       }}
     >
+      {plan && <ZenDragPieces plan={plan} />}
       <RowBody groups={groups} row="top" opens="down" slot="top" src={src} dragMin={ZEN_DRAG_MIN_WIDTH_PX} top />
     </div>
   )

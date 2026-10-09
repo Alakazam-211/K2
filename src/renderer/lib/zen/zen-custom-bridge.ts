@@ -27,7 +27,9 @@
 //      frame keeps running;
 //   7. limits: 16 live subscriptions, 16 Thread subscriptions, at most 8
 //      live servers (`zen-custom-scope`), `gardens.switch` once every 2 s
-//      and never in the first 2 s after mount.
+//      and never in the first 2 s after mount; `canvas.setHitRegions` at
+//      most 32 finite rects (`zen-canvas`), `window.startDrag` only during
+//      a press in that frame.
 // Then K2's own verb runs through the widget's inner bridge (built with the
 // effective caps) and the answer is projected to the guest shape
 // (`zen-custom-projection`) and cloned as plain JSON (functions dropped).
@@ -47,6 +49,8 @@ import {
   projectZenThreadView,
 } from './zen-custom-projection'
 import type { ZenWidgetStopReason } from './zen-custom-run'
+import { ZenCanvasError, zenHitRegionsFrom } from './zen-canvas'
+import type { ZenRect } from './zen-controls'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 
 /** UW29 budgets. */
@@ -100,6 +104,14 @@ export interface ZenCustomLayerDeps {
   /** The Garden's theme now (`ThemeInfo`), and its changes (UW39). */
   theme(): unknown
   onThemeChange(cb: () => void): () => void
+  /** The whole canvas (`zen-canvas`): this frame's hit regions (checked
+   *  frame-coordinate rects) and its window drag. Without it the two
+   *  verbs answer `verb_unavailable`. */
+  canvas?: {
+    setHitRegions(rects: ZenRect[]): void
+    /** Throws `ZenCanvasError` when the press checks fail. */
+    startDrag(): void
+  }
   now(): number
 }
 
@@ -243,6 +255,17 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     },
     // ThemeInfo {theme: {scheme, vars}, chrome: {corners, stoplights}, motion}.
     'theme.get': () => deps.theme(),
+    // The whole canvas (`zen-canvas`): no data, no cap.
+    'canvas.setHitRegions': (args) => {
+      if (!deps.canvas) refuse('verb_unavailable', 'canvas.setHitRegions isn’t available here.')
+      deps.canvas!.setHitRegions(zenHitRegionsFrom(args[0]))
+      return null
+    },
+    'window.startDrag': () => {
+      if (!deps.canvas) refuse('verb_unavailable', 'window.startDrag isn’t available here.')
+      deps.canvas!.startDrag()
+      return null
+    },
     'agents.list': () => projectZenRows(inner('agents.list') as ZenAgentRow[], caps()),
     'conversation.open': async (args) => {
       // In Zen only: `where: "agents"` is never passed through (UW16).
@@ -423,6 +446,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
 /** Any thrown value as the shared error list (UWA10). */
 export function toRefusal(err: unknown): ZenCustomRefusal {
   if (err instanceof ZenCustomRefusal) return err
+  if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
   if (err instanceof ZenBridgeError) {
     if (err.code === 'cap_not_granted') return new ZenCustomRefusal('cap_not_granted', err.message)
     if (err.code === 'verb_unavailable') return new ZenCustomRefusal('verb_unavailable', err.message)

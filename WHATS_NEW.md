@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.2 — A haunted Diary
+
+- **The Diary, reborn.** Your words stay in dark ink once sent, and both sides write in markdown (headings, lists, quotes, code). When the page is empty, a ghost writes teases into it, then smudges them away; it never asks for passwords or account details. While the agent works, a pen scribbles in frustration instead of loading dots, and the page glides up smoothly as the reply writes itself. The paper has grain, candlelight that flickers with the candle in the room, and a little ink bleed; pages have square corners and curl only when you reach for them. One Diary menu sits at the top left.
+- **Music for the study.** Quiet ambient music, made live on your computer (no audio files), fades in when you arrive on the Diary and out when you leave. Mute it with the speaker at the top left, or press M.
+- **A sharper haunted study.** The Haunted theme's room is redrawn at 3840×2400 with far more detail: moonlit window, shelves, cobwebs, and a few things that shouldn't be there.
+- **Ghosts and scary things.** While an agent works, the Diary says how many ghosts are out (its subagents) and how many scary things have happened (its tool calls this turn). The built-in Agents widget shows the same numbers plainly: "2 subagents · 14 tools · 5 commands".
+- **Counts for Gardens and Apps.** Agent rows in Gardens, and the activity pulse Apps receive, now carry `counts` (subagents, tools and commands this turn), numbers only. Custom widgets and Apps can show them; the SDK types include the field.
+- **Reload where it belongs.** A custom widget that fills its whole Garden no longer floats a ⋯ over the page: Reload is in the Garden's menu.
+
+**After updating**
+- Diary Gardens synced to K2's default move to the new Diary and the sharper Haunted room. Gardens you made your own copy of don't change (Settings → Gardens).
+
 ## 0.45.1 — Gardens you build
 
 - **Build your own Zen widgets.** Ask an agent (or write it yourself) and a widget appears in your Garden, running in a sealed frame that can't reach the network or your files. It can talk to your agents right away: no permissions to click through. If a widget posts too much, K2 pauses its posting until you click Resume on it. Widgets that post to Thread show as "You · via <widget>". A standard library ships with K2 (three.js, Phaser, D3, ECharts, Lottie, Tone.js, Leaflet, KaTeX and more), and other libraries download on first use. `k2 zen widget new` gets an agent started.

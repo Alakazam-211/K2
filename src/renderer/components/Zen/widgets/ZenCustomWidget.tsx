@@ -16,10 +16,13 @@
 //      many posts. [Resume]"; the frame keeps running. A widget an agent
 //      wrote has K2's ⋯ menu (Reload) at the box's top right, outside the
 //      frame; K2's own built-ins (the Diary) draw edge to edge with none.
+//      When the widget fills a full-canvas Garden that has a menu, Reload
+//      is "Reload <name>" in that menu instead (`zen-fill-reload`).
 
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { zenWidgetMayRun } from '@/lib/zen/zen-custom-types'
+import { zenIsBuiltinCustomWidget, ZenFillReloadContext } from '@/lib/zen/zen-fill-reload'
 import { resumeZenWidget, zenWidgetError } from '@/lib/zen/zen-widget-routes'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import {
@@ -184,6 +187,8 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   const [problem, setProblem] = useState<ZenCustomLoadProblem | null>(null)
   const [busy, setBusy] = useState(false)
   const [resumeError, setResumeError] = useState<string | null>(null)
+  // This widget fills a full-canvas Garden: its Reload is in the menu.
+  const reloadInMenu = useContext(ZenFillReloadContext)?.widgetId === decl.id
   // A new version of the widget may load fine: forget the last problem.
   useEffect(() => setProblem(null), [widget?.hash, generation])
 
@@ -279,13 +284,13 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
         setResumeError(zenWidgetError(err).message)
       })
   }
-  const builtin = widget.widget.startsWith('k2:')
+  const builtin = zenIsBuiltinCustomWidget(widget.widget)
   return wrap(
     <>
       {(widget.paused !== null || pausedHere) && <PausedStrip onResume={resume} busy={busy} error={resumeError} />}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ZenCustomFrame key={`${widget.hash}:${generation}`} widget={widget} gardenId={gid} bridge={bridge} onProblem={setProblem} />
-        {!builtin && <CornerMenu name={widget.name} onReload={() => reloadZenWidget(key)} />}
+        {!builtin && !reloadInMenu && <CornerMenu name={widget.name} onReload={() => reloadZenWidget(key)} />}
       </div>
     </>,
   )

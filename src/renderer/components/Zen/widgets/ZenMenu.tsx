@@ -16,6 +16,9 @@
 //   - `theme-picker`: Theme: <name> ›, which swaps to the theme list (Back
 //     at the top);
 //   - `usage`: Usage ›, which swaps to the usage panel (Back at the top).
+// Plus, last, "Reload <name>" when a custom widget fills this full-canvas
+// Garden and this is its menu (`zen-fill-reload`; a runtime row, never
+// written to the Garden file).
 //
 // How it opens (FC18): click, or Enter, Space or ↓ on the focused button;
 // never on hover. Toward the page (down from the top band or a top edge,
@@ -32,6 +35,8 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { reloadZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
+import { ZenFillReloadContext } from '@/lib/zen/zen-fill-reload'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { zenMenuLabel, zenThemeLabel, type ZenChromeItem } from '@/lib/zen/zen-page'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
@@ -187,6 +192,8 @@ export function ZenMenu({
   const [panel, setPanel] = useState<Panel>('top')
   const place = useContext(ZenChromePlaceContext)
   const k2 = useContext(ZenK2ChromeContext)
+  const fill = useContext(ZenFillReloadContext)
+  const reload = fill?.menuId === item.id ? fill : null
   const label = zenMenuLabel(item)
   const shownLabel = typeof item.props.label === 'string' && item.props.label.trim() ? item.props.label.trim() : null
   const bind = useZenBind(bridge, 'zen-menu', item.id)
@@ -363,6 +370,26 @@ export function ZenMenu({
 
   const topPanel = (): React.ReactNode => {
     const sections = menuItems.map((m) => [m.id, section(m)] as const).filter(([, node]) => node !== null)
+    if (reload) {
+      sections.push([
+        `reload:${reload.widgetId}`,
+        <div data-zen-menu-section="reload">
+          <button
+            type="button"
+            role="menuitem"
+            data-zen-menu-reload={reload.widgetId}
+            onClick={() => {
+              close()
+              reloadZenWidget(zenPlacementKey(current?.id ?? '', reload.widgetId))
+            }}
+            className="flex w-full items-center gap-3 text-left cursor-pointer"
+            style={ROW_STYLE}
+          >
+            <span className="min-w-0 flex-1 truncate">Reload {reload.name}</span>
+          </button>
+        </div>,
+      ])
+    }
     return sections.map(([id, node], i) => (
       <div key={id} className="flex flex-col" style={{ gap: 2 }}>
         {i > 0 && <MenuSeparator />}

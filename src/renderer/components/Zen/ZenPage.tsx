@@ -66,9 +66,9 @@ import {
   zenGeometry,
   zenReservedRects,
 } from '@/lib/zen/zen-monitor'
+import { zenBodyWidgets, zenFillReload, ZenFillReloadContext } from '@/lib/zen/zen-fill-reload'
 import {
   zenMenuRequiredControls,
-  zenWidgetInBand,
   type ZenResolvedPage,
   type ZenWidgetDecl,
 } from '@/lib/zen/zen-page'
@@ -298,12 +298,8 @@ export function ZenPage({
       </ZenWidgetBoundary>
     )
   }
-  // Content widgets the rows draw (a band, a column edge): by id, with
+  // Content widgets the rows draw (a band, a column edge) by id, with
   // their own bridges. Everything else fills its column's body.
-  const rowIds = new Set<string>()
-  for (const g of [placement.bands.top, placement.bands.bottom, ...placement.edges]) {
-    if (g) for (const id of [...g.start, ...g.center, ...g.end]) rowIds.add(id)
-  }
   const byId = new Map(page.widgets.map((w) => [w.id, w]))
   const items = new Map(placement.items.map((i) => [i.id, i]))
   const src: ZenRowSource = {
@@ -313,83 +309,88 @@ export function ZenPage({
     menuItems: (id) => (placement.menus[id] ?? []).flatMap((m) => items.get(m) ?? []),
     bridge: controlsBridge,
   }
-  const bodyWidgets = page.widgets.filter((w) => !rowIds.has(w.id) && !zenWidgetInBand(w))
+  const bodyWidgets = zenBodyWidgets(page)
   // `[layout] canvas = "full"` (the Diary): the page is the whole window.
   const full = layout.canvas === 'full'
+  // A custom widget that fills a full canvas: its Reload goes in the
+  // Garden's menu, not a floating ⋯ (0.45.2; `zen-fill-reload`).
+  const fillReload = zenFillReload(page)
   return (
-    <div
-      ref={rootRef}
-      className="relative flex h-full min-h-0 w-full flex-col"
-      data-zen-page={page.template}
-      data-zen-view={view}
-      data-zen-chrome-from={placement.from}
-      data-zen-canvas={full ? 'full' : undefined}
-    >
-      <ZenWidgetStyles />
-      <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
-      <ZenTopBand groups={placement.bands.top} src={src} float={full} />
-      {banner}
+    <ZenFillReloadContext.Provider value={fillReload}>
       <div
-        className="flex min-h-0 min-w-0 flex-1"
-        data-zen-layout={layout.kind}
-        style={{
-          gap: full ? 0 : 'var(--zen-gap)',
-          padding: full ? 0 : placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
-        }}
+        ref={rootRef}
+        className="relative flex h-full min-h-0 w-full flex-col"
+        data-zen-page={page.template}
+        data-zen-view={view}
+        data-zen-chrome-from={placement.from}
+        data-zen-canvas={full ? 'full' : undefined}
       >
-        {layout.split.map((pct, col) => {
-          const inCol = bodyWidgets.filter((w) => w.column === col)
-          const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
-          const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
-          // K2 views that draw their own panels (Tickets' glass) get no box;
-          // nor does anything on a full canvas (it draws its own surface).
-          const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
-          // FC9: a column's edges (a row rail, a Zen control) run across its
-          // top and bottom, outside its box.
-          const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
-          const bottom = placement.edges.find((e) => e.column === col && e.edge === 'bottom')
-          const body = (
-            <>
-              {rails.map(draw)}
-              {(boxed.length > 0 || rails.length === 0) && (
-                <div
-                  data-zen-column={col}
-                  className="flex min-h-0 min-w-0 flex-col"
-                  data-zen-column-bare={bare ? '' : undefined}
-                  {...(bare ? {} : ZEN_GLASS_PROPS)}
-                  style={
-                    bare
-                      ? { flex: '1 1 0%' }
-                      : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
-                  }
-                >
-                  {boxed.map(draw)}
+        <ZenWidgetStyles />
+        <style data-zen-chrome-styles="">{ZEN_CHROME_CSS}</style>
+        <ZenTopBand groups={placement.bands.top} src={src} float={full} />
+        {banner}
+        <div
+          className="flex min-h-0 min-w-0 flex-1"
+          data-zen-layout={layout.kind}
+          style={{
+            gap: full ? 0 : 'var(--zen-gap)',
+            padding: full ? 0 : placement.bands.bottom ? '0 var(--zen-gap)' : '0 var(--zen-gap) var(--zen-gap)',
+          }}
+        >
+          {layout.split.map((pct, col) => {
+            const inCol = bodyWidgets.filter((w) => w.column === col)
+            const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
+            const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+            // K2 views that draw their own panels (Tickets' glass) get no box;
+            // nor does anything on a full canvas (it draws its own surface).
+            const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
+            // FC9: a column's edges (a row rail, a Zen control) run across its
+            // top and bottom, outside its box.
+            const top = placement.edges.find((e) => e.column === col && e.edge === 'top')
+            const bottom = placement.edges.find((e) => e.column === col && e.edge === 'bottom')
+            const body = (
+              <>
+                {rails.map(draw)}
+                {(boxed.length > 0 || rails.length === 0) && (
+                  <div
+                    data-zen-column={col}
+                    className="flex min-h-0 min-w-0 flex-col"
+                    data-zen-column-bare={bare ? '' : undefined}
+                    {...(bare ? {} : ZEN_GLASS_PROPS)}
+                    style={
+                      bare
+                        ? { flex: '1 1 0%' }
+                        : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
+                    }
+                  >
+                    {boxed.map(draw)}
+                  </div>
+                )}
+              </>
+            )
+            // FC27: min widths scale down when they don't all fit.
+            const slotStyle = { flex: `${pct} 1 0%`, minWidth: zenColumnMinWidthCss(layout.minWidths, col), gap: 'var(--zen-gap)' }
+            if (!top && !bottom) {
+              return (
+                <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-row" style={slotStyle}>
+                  {body}
                 </div>
-              )}
-            </>
-          )
-          // FC27: min widths scale down when they don't all fit.
-          const slotStyle = { flex: `${pct} 1 0%`, minWidth: zenColumnMinWidthCss(layout.minWidths, col), gap: 'var(--zen-gap)' }
-          if (!top && !bottom) {
+              )
+            }
             return (
-              <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-row" style={slotStyle}>
-                {body}
+              <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-col" style={slotStyle}>
+                {top && <ZenEdgeRow edge={top} src={src} />}
+                <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
+                  {body}
+                </div>
+                {bottom && <ZenEdgeRow edge={bottom} src={src} />}
               </div>
             )
-          }
-          return (
-            <div key={col} data-zen-column-slot={col} className="flex min-h-0 min-w-0 flex-col" style={slotStyle}>
-              {top && <ZenEdgeRow edge={top} src={src} />}
-              <div data-zen-column-body={col} className="flex min-h-0 min-w-0 flex-1 flex-row" style={{ gap: 'var(--zen-gap)' }}>
-                {body}
-              </div>
-              {bottom && <ZenEdgeRow edge={bottom} src={src} />}
-            </div>
-          )
-        })}
+          })}
+        </div>
+        {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
+        <ZenNewGardenHost bridge={controlsBridge} />
       </div>
-      {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
-      <ZenNewGardenHost bridge={controlsBridge} />
-    </div>
+    </ZenFillReloadContext.Provider>
   )
 }

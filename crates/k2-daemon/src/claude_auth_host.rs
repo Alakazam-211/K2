@@ -162,7 +162,7 @@ fn write_credentials(updated_json: &serde_json::Value) -> Result<(), String> {
             KEYCHAIN_SERVICE,
             KEYCHAIN_ACCOUNT,
             json_str.as_bytes(),
-            &Default::default(),
+            &k2_core::llm_accounts::store::keychain::CLAUDE_ITEM,
         ) {
             k2_core::log_debug!("[claude-auth] Keychain write failed: {e}");
         }

@@ -534,19 +534,36 @@ pub fn read_account_session() -> Option<AccountSession> {
 
 #[cfg(target_os = "macos")]
 fn read_keychain_item(service: &str, account: &str) -> Option<String> {
-    let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    // Through `macos_keychain`: never a dialog. 0.45.1/0.45.2 wrote this
+    // item from the daemon process, which left it with K2's partition only,
+    // so every `security` read (every 60 s renewal) prompted "security
+    // wants to access key 'K2 Connect sign-in'". Such an item is read in
+    // process (the daemon is on its ACL and partition) and rewritten by
+    // `security`: repaired on the first read after the update.
+    // Test builds never touch the developer's real login keychain.
+    if cfg!(any(test, feature = "test-util")) {
         return None;
     }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+    crate::macos_keychain::read_k2_owned_text(service, account, &item_write_options(), "tunnel/lease")
+}
+
+/// How the daemon writes (and repairs) the Connect sign-in items: the
+/// friendly label, our trusted-app ACL, delete-then-add so the ACL is
+/// fresh, and K2-owned (never argv).
+#[cfg(target_os = "macos")]
+pub(crate) fn item_write_options() -> crate::macos_keychain::WriteOptions {
+    crate::macos_keychain::WriteOptions {
+        keychain: None,
+        // Friendly label shown in the macOS keychain access dialog instead
+        // of the bare service id.
+        label: Some(ACCOUNT_KEYCHAIN_LABEL.to_string()),
+        // One `-T <path>` per trusted binary (see acl_trusted_apps for the
+        // rationale tied to which process performs each access).
+        trusted_apps: acl_trusted_apps(),
+        // Delete first so a fresh item carries our ACL (`-U` keeps a
+        // legacy creator-only ACL).
+        replace_acl: true,
+        cli_owned: false,
     }
 }
 
@@ -644,19 +661,7 @@ fn purge_legacy_session_items() {
 /// this run).
 #[cfg(target_os = "macos")]
 fn write_token_with_acl(service: &str, account: &str, token: &str) {
-    let opts = crate::macos_keychain::WriteOptions {
-        keychain: None,
-        // Friendly label shown in the macOS keychain access dialog instead
-        // of the bare service id.
-        label: Some(ACCOUNT_KEYCHAIN_LABEL.to_string()),
-        // One `-T <path>` per trusted binary (see acl_trusted_apps for the
-        // rationale tied to which process performs each access).
-        trusted_apps: acl_trusted_apps(),
-        // Delete first so a fresh item carries our ACL (`-U` keeps a
-        // legacy creator-only ACL).
-        replace_acl: true,
-    };
-    if let Err(e) = crate::macos_keychain::write(service, account, token.as_bytes(), &opts) {
+    if let Err(e) = crate::macos_keychain::write(service, account, token.as_bytes(), &item_write_options()) {
         crate::log_debug!("[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service}): {e}");
     }
 }

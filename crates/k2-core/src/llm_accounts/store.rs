@@ -154,6 +154,18 @@ pub mod keychain {
     //! item left that way is refused (never a dialog) with the one-line
     //! fix; a write repairs it. Every write is read back before `Ok`.
 
+    /// Claude's items are CLI-owned: Claude Code reads them through
+    /// `/usr/bin/security`, so a login too big for `security -i` may go
+    /// on `security`'s argv, as Claude writes it itself.
+    #[cfg(target_os = "macos")]
+    pub const CLAUDE_ITEM: crate::macos_keychain::WriteOptions = crate::macos_keychain::WriteOptions {
+        keychain: None,
+        label: None,
+        trusted_apps: Vec::new(),
+        replace_acl: false,
+        cli_owned: true,
+    };
+
     /// Read a generic password. `Ok(None)` = no such item (or empty).
     #[cfg(target_os = "macos")]
     pub fn read(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
@@ -173,7 +185,7 @@ pub mod keychain {
     /// Create or update by `security`, then read back and compare.
     #[cfg(target_os = "macos")]
     pub fn write(service: &str, account: &str, secret: &[u8]) -> Result<(), String> {
-        crate::macos_keychain::write(service, account, secret, &Default::default()).map_err(|e| e.to_string())
+        crate::macos_keychain::write(service, account, secret, &CLAUDE_ITEM).map_err(|e| e.to_string())
     }
 
     #[cfg(target_os = "macos")]
@@ -458,7 +470,7 @@ pub(crate) fn write_live(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
     #[cfg(target_os = "macos")]
     if tool == Tool::Claude && keychain_enabled() {
         let svc = claude_live_keychain_service();
-        crate::macos_keychain::check_fits(&svc, &claude_keychain_account(), bytes).map_err(|e| {
+        crate::macos_keychain::check_fits(&svc, &claude_keychain_account(), bytes, true).map_err(|e| {
             WalletError::LiveStoreUnavailable(format!("could not make this Claude login live ({e}); nothing changed"))
         })?;
     }

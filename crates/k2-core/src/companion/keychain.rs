@@ -17,20 +17,14 @@ const ACCOUNT: &str = "companion-password-hash";
 
 #[cfg(target_os = "macos")]
 pub fn read_password_hash() -> Option<String> {
-    let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    // Test builds never touch the developer's real login keychain (a read
+    // may also repair, i.e. rewrite, the item).
+    if cfg!(any(test, feature = "test-util")) {
         return None;
     }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    // Never a dialog; an item 0.45.1/0.45.2 left with K2's partition only
+    // is read in process and rewritten by `security` (repaired).
+    crate::macos_keychain::read_k2_owned_text(SERVICE, ACCOUNT, &item_write_options(), "companion")
 }
 
 #[cfg(target_os = "macos")]
@@ -51,14 +45,21 @@ pub fn write_password_hash(hash: &str) -> Result<(), String> {
     // The hash is never on argv (`-w <hash>` showed it in `ps`): `security`
     // creates the item with the `-T` list and the hash on its stdin, and it
     // is read back (`crate::macos_keychain::write`).
-    let opts = crate::macos_keychain::WriteOptions {
+    crate::macos_keychain::write(SERVICE, ACCOUNT, hash.as_bytes(), &item_write_options())
+        .map_err(|e| format!("keychain write failed: {e}"))
+}
+
+/// How the companion hash item is written (and repaired): our `-T` ACL,
+/// delete-then-add, K2-owned (never argv).
+#[cfg(target_os = "macos")]
+pub(crate) fn item_write_options() -> crate::macos_keychain::WriteOptions {
+    crate::macos_keychain::WriteOptions {
         keychain: None,
         label: None,
         trusted_apps: acl_trusted_apps(),
         replace_acl: true,
-    };
-    crate::macos_keychain::write(SERVICE, ACCOUNT, hash.as_bytes(), &opts)
-        .map_err(|e| format!("keychain write failed: {e}"))
+        cli_owned: false,
+    }
 }
 
 /// Trusted-application `-T` set for the companion password-hash item.

@@ -215,7 +215,64 @@ fn stdin_line(service: &str, secret: &[u8], opts: &WriteOptions) -> String {
     let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
     assert_eq!(cmd.get_program(), SECURITY);
     assert_eq!(args, vec!["-i".to_string()], "the secret is never on argv");
-    line
+    line.expect("a stdin line")
+}
+
+/// The Claude item's options (CLI-owned) on a throwaway keychain.
+fn claude_opts(kc: &TempKeychain) -> WriteOptions {
+    WriteOptions { keychain: Some(kc.path.clone()), ..crate::llm_accounts::store::keychain::CLAUDE_ITEM }
+}
+
+/// A Claude-shaped credential with MCP OAuth tokens, `n` bytes.
+fn claude_with_mcp(n: usize) -> Vec<u8> {
+    let mut v = serde_json::json!({
+        "claudeAiOauth": {"accessToken": format!("{MARKER}-access"), "refreshToken": format!("{MARKER}-refresh"),
+                          "expiresAt": 1_800_000_000_000i64, "scopes": ["user:inference"], "subscriptionType": "max"},
+        "mcpOAuth": {}
+    });
+    let mut i = 0;
+    while serde_json::to_vec(&v).unwrap().len() < n {
+        v["mcpOAuth"][format!("server-{i}")] =
+            serde_json::json!({"accessToken": format!("{MARKER}-mcp-{i}-{}", "z".repeat(180)), "expiresAt": 1_800_000_000_000i64});
+        i += 1;
+    }
+    let b = serde_json::to_vec(&v).unwrap();
+    assert!(b.len() >= n);
+    b
+}
+
+#[test]
+fn k2_owned_items_never_go_on_argv_and_claudes_big_logins_do_as_one_hex_argument() {
+    // K2-owned: the Connect sign-in and the companion hash, with the exact
+    // options their writers use.
+    for (what, opts) in [
+        ("Connect sign-in", crate::tunnel::lease::item_write_options()),
+        ("companion hash", crate::companion::keychain::item_write_options()),
+    ] {
+        assert!(!opts.cli_owned, "{what} is K2-owned");
+        assert!(opts.replace_acl && opts.trusted_apps.iter().any(|a| a == "/usr/bin/security"), "{what}: {opts:?}");
+        // Realistic size: stdin.
+        let line = stdin_line("svc", br#"{"refreshToken":"abcdefghijklmnop","email":"a@example.test"}"#, &opts);
+        assert!(line.starts_with("add-generic-password -U "), "{what}: {line}");
+        // Any size `-i` can't take: refused, never argv.
+        for n in [4100usize, 10 * 1024, 64 * 1024] {
+            assert_eq!(add_command("svc", ACCT, &json_payload(n, "k2-owned"), &opts).unwrap_err(), KeychainError::TooLarge(n), "{what} {n}");
+        }
+    }
+    // Claude's item above the `-i` limit: ONE `security add-generic-password
+    // -U … -X <hex>`, no shell, no stdin, no `-i`.
+    let big = claude_with_mcp(10 * 1024);
+    let opts = WriteOptions { keychain: Some(PathBuf::from("/tmp/x.keychain-db")), ..crate::llm_accounts::store::keychain::CLAUDE_ITEM };
+    let (cmd, line) = add_command("Claude Code-credentials", ACCT, &big, &opts).unwrap();
+    assert!(line.is_none(), "no stdin on the argv path");
+    assert_eq!(cmd.get_program(), SECURITY);
+    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+    assert_eq!(
+        args,
+        ["add-generic-password", "-U", "-a", ACCT, "-s", "Claude Code-credentials", "-X", &hex(&big), "/tmp/x.keychain-db"]
+    );
+    // Small Claude logins still go on stdin.
+    assert!(stdin_line("Claude Code-credentials", &json_payload(450, "small"), &opts).contains(" -X \""));
 }
 
 #[test]
@@ -225,6 +282,7 @@ fn every_write_is_one_security_stdin_line_hex_then_text_then_refused() {
         label: Some("K2 label".into()),
         trusted_apps: vec!["/usr/bin/security".into(), "/Applications/K2.app/Contents/MacOS/k2".into()],
         replace_acl: false,
+        cli_owned: false,
     };
     // Small: hex, exactly what Claude Code sends.
     let small = json_payload(500, "small");
@@ -331,6 +389,100 @@ fn payloads_round_trip_through_write_and_read() {
     let big = json_payload(8 * 1024, "big");
     assert_eq!(write("k2-test-svc-100", ACCT, &big, &kc.opts()).unwrap_err(), KeychainError::TooLarge(8 * 1024));
     assert_eq!(read("k2-test-svc-100", ACCT, Some(kc.p())).unwrap().unwrap(), json_payload(100, "second"));
+}
+
+#[test]
+fn a_10kb_claude_login_with_mcp_tokens_round_trips_with_apple_tool_intact() {
+    let kc = TempKeychain::new("claude-10k");
+    let svc = "Claude Code-credentials";
+    // Claude made the item (small login), then K2 swaps in big ones.
+    kc.claude_style_add(svc, &json_payload(450, "claude-made"));
+    let before = kc.acl_shape(svc);
+    for n in [10 * 1024usize, 64 * 1024] {
+        let big = claude_with_mcp(n);
+        write(svc, ACCT, &big, &claude_opts(&kc)).unwrap_or_else(|e| panic!("{n}: {e}"));
+        kc.assert_security_readable(svc);
+        assert_eq!(read(svc, ACCT, Some(kc.p())).unwrap().unwrap(), big, "{n}");
+        // Claude Code's own read path.
+        let out = sec(&["find-generic-password", "-a", ACCT, "-s", svc, "-w", kc.s()]);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(out.stdout.strip_suffix(b"\n").unwrap(), big.as_slice());
+    }
+    // Back to a small one (stdin path), ACL as Claude made it.
+    let small = json_payload(450, "restored");
+    write(svc, ACCT, &small, &claude_opts(&kc)).unwrap();
+    kc.assert_security_readable(svc);
+    assert_eq!(kc.acl_shape(svc), before);
+    assert_eq!(kc.count(svc), 1);
+    // A NEW big item (Claude signed out) is created by `security` too.
+    let big = claude_with_mcp(10 * 1024);
+    write("Claude Code-credentials-1a2b3c4d", ACCT, &big, &claude_opts(&kc)).unwrap();
+    kc.assert_security_readable("Claude Code-credentials-1a2b3c4d");
+    assert_eq!(read("Claude Code-credentials-1a2b3c4d", ACCT, Some(kc.p())).unwrap().unwrap(), big);
+}
+
+/// The Connect sign-in / companion items: written with their real
+/// options (on a throwaway keychain), they keep `apple-tool:`; one that
+/// 0.45.1/0.45.2 broke is read silently by K2 (on its ACL) and repaired.
+fn k2_owned_round_trip_and_repair(label: &str, opts: WriteOptions, value: &[u8]) {
+    let kc = TempKeychain::new(label);
+    let opts = WriteOptions { keychain: Some(kc.path.clone()), ..opts };
+    let svc = format!("k2-test-{label}");
+    write(&svc, ACCT, value, &opts).unwrap();
+    kc.assert_security_readable(&svc);
+    assert_eq!(read_k2_owned(&svc, ACCT, &opts).unwrap(), K2Read::Value(value.to_vec()));
+    let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+    assert!(kc.acl(&svc).contains(exe.to_str().unwrap()), "K2's binary is on the item's ACL");
+    // Rotation (same writer again): still readable.
+    let rotated = [value, b"-rotated"].concat();
+    write(&svc, ACCT, &rotated, &opts).unwrap();
+    kc.assert_security_readable(&svc);
+    // What 0.45.1/0.45.2 did on rotation: data set in process.
+    kc.in_process_data_write(&svc, value);
+    assert!(matches!(check_item(&svc, ACCT, Some(kc.p())).unwrap(), ItemAccess::NeedsRepair(_)));
+    // The next read repairs it: in-process read (no dialog possible),
+    // rewritten by `security`.
+    assert_eq!(read_k2_owned(&svc, ACCT, &opts).unwrap(), K2Read::Repaired(value.to_vec()));
+    kc.assert_security_readable(&svc);
+    assert_eq!(read(&svc, ACCT, Some(kc.p())).unwrap().unwrap(), value);
+    assert!(kc.acl(&svc).contains(exe.to_str().unwrap()), "the repaired item keeps K2's ACL");
+    assert_eq!(kc.count(&svc), 1);
+    // The text reader the daemon uses.
+    assert_eq!(read_k2_owned_text(&svc, ACCT, &opts, "test").unwrap(), String::from_utf8(value.to_vec()).unwrap());
+    assert_eq!(read_k2_owned_text("k2-test-missing", ACCT, &opts, "test"), None);
+}
+
+#[test]
+fn the_connect_sign_in_item_keeps_apple_tool_and_a_broken_one_repairs_itself_on_read() {
+    let mut opts = crate::tunnel::lease::item_write_options();
+    assert_eq!(opts.label.as_deref(), Some("K2 Connect sign-in"));
+    opts.label = Some("K2 Connect sign-in (test)".into());
+    let blob = br#"{"refreshToken":"K2TEST_KEYCHAIN_SECRET-v1-refresh-0123456789abcdef","email":"person@example.test"}"#;
+    k2_owned_round_trip_and_repair("connect", opts, blob);
+}
+
+#[test]
+fn the_companion_hash_item_keeps_apple_tool_and_a_broken_one_repairs_itself_on_read() {
+    let hash = b"$argon2id$v=19$m=19456,t=2,p=1$K2TESTsalt0123456$K2TESThashabcdefghijklmnopqrstuvwxyz0123";
+    k2_owned_round_trip_and_repair("companion", crate::companion::keychain::item_write_options(), hash);
+}
+
+#[test]
+fn a_k2_owned_item_k2_is_not_trusted_on_is_reported_never_prompted() {
+    // A broken item whose ACL doesn't include this binary (e.g. a
+    // renderer-made legacy item): the in-process read is refused with
+    // user interaction off, so K2 reports the Terminal fix instead.
+    let kc = TempKeychain::new("untrusted");
+    let svc = "k2-test-untrusted";
+    kc.claude_style_add(svc, b"{\"refreshToken\":\"x\"}"); // trusts security only
+    kc.in_process_data_write(svc, b"{\"refreshToken\":\"y\"}");
+    let opts = WriteOptions { keychain: Some(kc.path.clone()), ..crate::tunnel::lease::item_write_options() };
+    match read_k2_owned(svc, ACCT, &opts) {
+        Err(KeychainError::NeedsRepair(r)) => assert!(r.command.contains("set-generic-password-partition-list"), "{r:?}"),
+        other => panic!("expected NeedsRepair, got {other:?}"),
+    }
+    assert_eq!(read_k2_owned_text(svc, ACCT, &opts, "test"), None);
+    assert!(matches!(check_item(svc, ACCT, Some(kc.p())).unwrap(), ItemAccess::NeedsRepair(_)), "left as it was");
 }
 
 #[test]
@@ -459,6 +611,7 @@ fn a_new_item_gets_securitys_acl_or_the_requested_trusted_apps() {
         label: Some("K2 test label".into()),
         trusted_apps: vec!["/usr/bin/security".into(), "/bin/ls".into()],
         replace_acl: true,
+        cli_owned: false,
     };
     write("k2-test-acl", ACCT, &data, &opts).unwrap();
     kc.assert_security_readable("k2-test-acl");

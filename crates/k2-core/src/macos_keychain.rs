@@ -31,9 +31,12 @@
 //! the rest of a longer line as a second command (0.45.0 field bug). The
 //! secret goes as `-X <hex>` when that fits ([`INTERACTIVE_LINE_MAX`]),
 //! else as `-w "<text>"` (printable ASCII, `"` and `\` escaped; JSON
-//! logins are), which fits about 3.9 KB. Anything bigger is refused with
-//! [`KeychainError::TooLarge`]: the only other ways in are the secret on
-//! argv (other users on the Mac can see it in `ps`) or an in-process write
+//! logins are), which fits about 3.9 KB. Bigger: only for a CLI-owned
+//! item (Claude's; real logins with MCP OAuth tokens pass 4 KB) one
+//! `security add-generic-password … -X <hex>` with the secret on argv,
+//! exactly as Claude Code writes it itself (why that adds no exposure for
+//! that item: [`add_command`]). K2-owned items never go on argv: bigger is
+//! [`KeychainError::TooLarge`]. An in-process write is never an option
 //! (breaks the partition, above).
 //!
 //! ## Reads never prompt
@@ -298,6 +301,12 @@ pub struct WriteOptions {
     /// Delete any existing item first so a new one is created with this
     /// ACL (`-U` would keep the old ACL).
     pub replace_acl: bool,
+    /// The item belongs to a CLI that itself reads it through
+    /// `/usr/bin/security` (Claude Code's `Claude Code-credentials*`).
+    /// Only then may a secret too big for `security -i` go on argv; see
+    /// [`add_command`]. K2-owned items (Connect sign-in, companion hash,
+    /// keys K2 keeps) leave this `false`: never argv, ever.
+    pub cli_owned: bool,
 }
 
 fn check_field(what: &'static str, v: &str) -> Result<(), KeychainError> {
@@ -621,13 +630,35 @@ fn quote_text(secret: &[u8]) -> Option<String> {
     Some(s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// The ONE way K2 writes an item: `/usr/bin/security -i` and its stdin
-/// line `add-generic-password -U … -X "<hex>"` (or `-w "<text>"` when the
-/// hex is too long). argv is just `-i`; the secret is only on stdin.
-/// `-U` updates an existing item in place (its ACL is kept; the data
-/// change gives it `security`'s `apple-tool:` partition, as when Claude
-/// Code writes it). `pub(crate)` so tests can assert on argv and stdin.
-pub(crate) fn add_command(service: &str, account: &str, secret: &[u8], opts: &WriteOptions) -> Result<(Command, String), KeychainError> {
+/// How K2 writes an item: always a `/usr/bin/security` child (never an
+/// in-process data change), spawned directly (no shell). Returns the
+/// command and, for the normal path, its stdin line:
+///
+/// 1. `security -i` + stdin `add-generic-password -U … -X "<hex>"`.
+/// 2. Hex too long for the ~4 KB `-i` line: the same with `-w "<text>"`
+///    (printable ASCII only, `"`/`\` escaped).
+/// 3. Still too long AND `opts.cli_owned` (Claude's item; real Claude
+///    logins carry MCP OAuth tokens and pass 4 KB): ONE
+///    `security add-generic-password -U -a … -s … -X <hex>` with the
+///    secret on argv and no stdin (`None`). This is exactly what Claude
+///    Code itself runs for the same item above 4,032 characters. It adds
+///    no exposure for THIS item: its ACL lets `/usr/bin/security` read it
+///    with no prompt, so any process of this user can already get it with
+///    `security find-generic-password -w`. (argv of a short-lived child is
+///    also visible to other local users in `ps` for a few milliseconds;
+///    Claude Code's own writes have the same property.) The command line
+///    is never logged and never put in an error.
+/// 4. Otherwise [`KeychainError::TooLarge`]. K2-owned items never reach 3.
+///
+/// `-U` updates an existing item in place (ACL kept; the data change
+/// gives it `security`'s `apple-tool:` partition, as when Claude writes
+/// it). `pub(crate)` so tests can assert on argv and stdin.
+pub(crate) fn add_command(
+    service: &str,
+    account: &str,
+    secret: &[u8],
+    opts: &WriteOptions,
+) -> Result<(Command, Option<String>), KeychainError> {
     check_field("service", service)?;
     check_field("account", account)?;
     let mut head = format!("add-generic-password -U -a \"{account}\" -s \"{service}\"");
@@ -649,32 +680,54 @@ pub(crate) fn add_command(service: &str, account: &str, secret: &[u8], opts: &Wr
     let fits = |data: &str| head.len() + data.len() + tail.len() <= INTERACTIVE_LINE_MAX;
     let as_hex = format!(" -X \"{}\"", hex(secret));
     let line = if fits(&as_hex) {
-        format!("{head}{as_hex}{tail}")
+        Some(format!("{head}{as_hex}{tail}"))
     } else {
         match quote_text(secret).map(|t| format!(" -w \"{t}\"")) {
-            Some(as_text) if fits(&as_text) => format!("{head}{as_text}{tail}"),
-            _ => return Err(KeychainError::TooLarge(secret.len())),
+            Some(as_text) if fits(&as_text) => Some(format!("{head}{as_text}{tail}")),
+            _ => None,
         }
     };
     let mut cmd = Command::new(SECURITY);
-    cmd.arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    Ok((cmd, line))
+    match line {
+        Some(line) => {
+            cmd.arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+            Ok((cmd, Some(line)))
+        }
+        None if opts.cli_owned => {
+            cmd.args(["add-generic-password", "-U", "-a", account, "-s", service]);
+            if let Some(l) = &opts.label {
+                cmd.args(["-l", l]);
+            }
+            for app in &opts.trusted_apps {
+                cmd.args(["-T", app]);
+            }
+            cmd.arg("-X").arg(hex(secret));
+            if let Some(kc) = &opts.keychain {
+                cmd.arg(kc);
+            }
+            cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+            Ok((cmd, None))
+        }
+        None => Err(KeychainError::TooLarge(secret.len())),
+    }
 }
 
 /// Would [`write`] accept this secret (size, encoding, fields)? Touches
 /// nothing.
-pub fn check_fits(service: &str, account: &str, secret: &[u8]) -> Result<(), KeychainError> {
-    add_command(service, account, secret, &WriteOptions::default()).map(|_| ())
+pub fn check_fits(service: &str, account: &str, secret: &[u8], cli_owned: bool) -> Result<(), KeychainError> {
+    add_command(service, account, secret, &WriteOptions { cli_owned, ..Default::default() }).map(|_| ())
 }
 
 fn run_add(service: &str, account: &str, secret: &[u8], opts: &WriteOptions) -> Result<(), KeychainError> {
     let (mut cmd, line) = add_command(service, account, secret, opts)?;
     let mut child = cmd.spawn().map_err(|e| KeychainError::Spawn(e.to_string()))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(line.as_bytes()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(KeychainError::Spawn(format!("stdin: {e}")));
+    if let Some(line) = line {
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Err(e) = stdin.write_all(line.as_bytes()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(KeychainError::Spawn(format!("stdin: {e}")));
+            }
         }
     }
     let out = child.wait_with_output().map_err(|e| KeychainError::Spawn(e.to_string()))?;
@@ -689,6 +742,110 @@ fn run_add(service: &str, account: &str, secret: &[u8], opts: &WriteOptions) -> 
         stderr = stderr.replace(&quoted, "[redacted]");
     }
     Err(KeychainError::cli("write keychain item", out.status.code(), stderr.as_bytes(), Some(secret)))
+}
+
+/// Read an item's data IN PROCESS with keychain user interaction off: a
+/// read that would need a dialog fails (-25308/-25293) instead. Succeeds
+/// only when this binary is on the item's ACL AND its partition list,
+/// which is the case for a K2-owned item (trusted apps include the K2
+/// binaries) that 0.45.1/0.45.2 re-stamped with K2's team partition.
+fn read_in_process(service: &str, account: &str, keychain: Option<&Path>) -> Result<Option<Vec<u8>>, KeychainError> {
+    let _ui = NoUi::enter();
+    let kc = keychain.map(open_keychain).transpose()?;
+    let arr;
+    let search: CFTypeRef = match kc.as_ref() {
+        Some(k) => {
+            let kc = unsafe { SecKeychain::wrap_under_get_rule(k.0 as SecKeychainRef) };
+            arr = CFArray::from_CFTypes(&[kc]);
+            arr.as_CFTypeRef()
+        }
+        None => ptr::null(),
+    };
+    let mut len: u32 = 0;
+    let mut data: *mut std::ffi::c_void = ptr::null_mut();
+    let st = unsafe {
+        SecKeychainFindGenericPassword(
+            search,
+            service.len() as u32,
+            service.as_ptr().cast(),
+            account.len() as u32,
+            account.as_ptr().cast(),
+            &mut len,
+            &mut data,
+            ptr::null_mut(),
+        )
+    };
+    match st {
+        0 => {
+            let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, len as usize) }.to_vec();
+            unsafe { security_framework_sys::keychain_item::SecKeychainItemFreeContent(ptr::null_mut(), data) };
+            Ok(Some(bytes))
+        }
+        -25300 => Ok(None),
+        _ => Err(KeychainError::status("read keychain item in process", st)),
+    }
+}
+
+/// [`read_k2_owned`] for a text item, the way the Connect and companion
+/// readers use it: trimmed, `None` when missing or empty. A repair is
+/// logged; an item that can't be read without a dialog is logged ONCE per
+/// process with its Terminal fix and reads as `None` (the 60 s lease
+/// renewal retries; it never prompts).
+pub fn read_k2_owned_text(service: &str, account: &str, opts: &WriteOptions, tag: &str) -> Option<String> {
+    static WARNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let bytes = match read_k2_owned(service, account, opts) {
+        Ok(K2Read::Value(b)) => b,
+        Ok(K2Read::Repaired(b)) => {
+            crate::log_debug!("[{tag}] repaired keychain item {service}/{account}: apple-tool: is back on its partition list (no prompt)");
+            b
+        }
+        Ok(K2Read::Missing) => return None,
+        Err(e) => {
+            let key = format!("{service}\u{0}{account}");
+            let mut w = WARNED.lock().unwrap_or_else(|p| p.into_inner());
+            if !w.contains(&key) {
+                w.push(key);
+                crate::log_debug!("[{tag}] WARN: keychain item {service}/{account} not read (no prompt): {e}");
+            }
+            return None;
+        }
+    };
+    let s = String::from_utf8(bytes).ok()?;
+    let t = s.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// What [`read_k2_owned`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum K2Read {
+    Missing,
+    Value(Vec<u8>),
+    /// The item needed the partition repair, K2 could read it silently
+    /// (it is on the item's ACL), and rewrote it through `security`:
+    /// repaired, no prompt.
+    Repaired(Vec<u8>),
+}
+
+/// Read a K2-owned item (Connect sign-in, companion hash) without ever
+/// raising a dialog, repairing it on the way when an earlier K2 left it
+/// without `apple-tool:`: read it in process (K2 is on its ACL), then
+/// rewrite the same value through `security` with `opts`' ACL. When even
+/// that would need a dialog, [`KeychainError::NeedsRepair`] (with the
+/// Terminal fix) instead of a prompt.
+pub fn read_k2_owned(service: &str, account: &str, opts: &WriteOptions) -> Result<K2Read, KeychainError> {
+    let kc = opts.keychain.as_deref();
+    match check_item(service, account, kc)? {
+        ItemAccess::Missing => Ok(K2Read::Missing),
+        ItemAccess::Ok => Ok(read(service, account, kc)?.map(K2Read::Value).unwrap_or(K2Read::Missing)),
+        ItemAccess::NeedsRepair(r) => match read_in_process(service, account, kc) {
+            Ok(Some(bytes)) => {
+                write(service, account, &bytes, opts)?;
+                Ok(K2Read::Repaired(bytes))
+            }
+            Ok(None) => Ok(K2Read::Missing),
+            Err(_) => Err(KeychainError::NeedsRepair(r)),
+        },
+    }
 }
 
 /// Parse `security find-generic-password -g`'s `password:` line.

@@ -3420,7 +3420,7 @@ dependencies = [
 
 [[package]]
 name = "k2"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "ahash",
  "alacritty_terminal",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "k2-core"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "alacritty_terminal",
  "ammonia",
@@ -3556,7 +3556,7 @@ dependencies = [
 
 [[package]]
 name = "k2-daemon"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",
@@ -3603,7 +3603,7 @@ dependencies = [
 
 [[package]]
 name = "k2-menubar"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "image",
  "libc",

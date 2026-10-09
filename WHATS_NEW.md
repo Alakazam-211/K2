@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.3 — Quiet keychain, your own compute
+
+- **No more password prompts after updating.** After 0.45.1 or 0.45.2, macOS could ask for your password over and over for "K2 Connect sign-in" or for Claude's login. K2 now writes every keychain item the way macOS expects, so reads stay silent. Items an earlier update broke repair themselves the first time K2 starts. If one can't be repaired, Settings → LLMs (and `k2 llm tokens`) shows the one command to run in Terminal. Thanks to Appa (Baden) for the report.
+- **Compute nodes (preview).** Run builds and tests on your own Macs and Linux boxes through K2. Turn it on with `k2 compute preview on`, then `k2 compute node add <name>` prints a one-line installer for the machine you're adding; confirm the 6-digit code it shows, grant it to a workspace, and agents can `k2 compute run <node> -- <command>`. Output streams back and the command's exit code comes with it. The machine's owner can pause or drain it at any time. This is a preview: CLI only, off by default, and it may change. Read `k2 study compute` first.
+- **"This computer" stays put.** It's pinned at the top of the server picker, above the list of other servers, so it never scrolls out of reach.
+
 ## 0.45.2 — A haunted Diary
 
 - **The Diary, reborn.** Your words stay in dark ink once sent, and both sides write in markdown (headings, lists, quotes, code). When the page is empty, a ghost writes teases into it, then smudges them away; it never asks for passwords or account details. While the agent works, a pen scribbles in frustration instead of loading dots, and the page glides up smoothly as the reply writes itself. The paper has grain, candlelight that flickers with the candle in the room, and a little ink bleed; pages have square corners and curl only when you reach for them. One Diary menu sits at the top left.

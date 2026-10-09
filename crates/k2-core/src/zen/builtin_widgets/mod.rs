@@ -83,7 +83,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
-    ("k2:diary@2", "c71ebddf303f4f534451295f444923d44996b706e7d6739fe2bd5e7f95e644a5"),
+    ("k2:diary@2", "2a51282c0d41b23ab9d529c2397b262ac46e9a3950953b1f94b7d7ca56f0510a"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -255,7 +255,15 @@ mod tests {
                 other => panic!("a built-in never loads from a CDN: {other:?}"),
             })
             .collect();
-        assert_eq!(named, [("perfect-freehand".to_string(), "1".to_string()), ("font-caveat".to_string(), "5".to_string())]);
+        // @2 adds PixiJS (the paper under the words) and Tone.js (the room's
+        // music), Rosson 2026-10-08.
+        let want: &[(&str, &str)] = if w.id() == DIARY_WIDGET {
+            &[("perfect-freehand", "1"), ("font-caveat", "5")]
+        } else {
+            &[("perfect-freehand", "1"), ("font-caveat", "5"), ("pixi.js", "8"), ("tone", "15")]
+        };
+        let want: Vec<(String, String)> = want.iter().map(|(i, v)| (i.to_string(), v.to_string())).collect();
+        assert_eq!(named, want, "{} names its libraries by major version", w.id());
         let html = file("index.html");
         let js = file("diary.js");
         // UW10's errors: no inline handlers, no network, no frames.
@@ -343,7 +351,31 @@ mod tests {
         // Ghost counts (0.45.2's AgentRow.counts) are read only when K2 sends
         // them; an older K2's row shows nothing extra.
         assert!(js.contains("function counted(row)") && js.contains("if (!c || typeof c !== 'object') return null"), "counts are feature-detected");
-        assert!(js.contains("clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD)"), "scribble points stay inside the drawing");
+        assert!(js.contains("return [clamp(q[0], m, SCRIBE_W - m), clamp(q[1], m, SCRIBE_H - m)]"), "scribble points stay inside the drawing");
+        // Ink, paper and sound (Rosson 2026-10-08). The ink is perfect-
+        // freehand outlines, kept inside the drawing by the pen's reach.
+        for needle in ["function inkOutline(", "simulatePressure: o.pressure !== false", "return SCRIBE_PAD + inkReach(", "outlineD(outline, SCRIBE_BOX)"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        // The paper: one WebGL canvas under the words, drawn on demand (30
+        // fps at most while ink is wet), halted when unseen, one still frame
+        // under reduced motion; the candle steps with the CSS flicker.
+        for needle in ["window.PIXI", "preference: 'webgl'", "autoStart: false", "var FX_FPS_WET = 30", "function fxHalt()", "var run = shown() && !reduced()", "fxStill()", "dom.page.insertBefore(canvas, dom.page.firstChild)", "getAnimations"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        assert!(css.contains("animation: flicker 3.6s steps(1, end) infinite;") && js.contains("var FLICKER_MS = 3600"), "the shader's candle and the CSS candle share a clock");
+        // The music: made in code, quiet, on arrival, gone when unseen or
+        // removed, muted from the top left or with M; never an AudioWorklet
+        // node (refused in a sealed widget).
+        for needle in ["window.Tone", "var MUSIC_DB = -24", "music.arrived = true", "'pagehide', musicClose", "raw.suspend()", "(e.key === 'm' || e.key === 'M') && e.target !== dom.ink"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        for bad in ["Freeverb", "JCReverb", "FeedbackCombFilter", "BitCrusher", "Tone.start", "Player(", ".mp3", ".ogg", ".wav"] {
+            assert!(!js.contains(bad), "the music uses {bad}");
+        }
+        assert!(html.contains("<button class=\"hush\" id=\"hush\" type=\"button\" aria-label=\"Mute the music (M)\" aria-pressed=\"false\" hidden>"), "the speaker: named, hidden until Tone is there");
+        let hush = css.split(".hush {").nth(1).and_then(|r| r.split('}').next()).expect(".hush rule");
+        assert!(hush.contains("top: 14px;") && hush.contains("left: 14px;") && !hush.contains("right:"), "the speaker sits top left, clear of the ⋯ menu");
         assert!(css.contains(".haunt") && css.contains(":root.asleep .haunt *") && css.contains(":root.reduced .haunt *"), "the room moves, stills and sleeps");
         let start = js.find("var GHOST_LINES = [").expect("GHOST_LINES");
         let end = start + js[start..].find("\n  ]").expect("GHOST_LINES ends");
@@ -392,7 +424,7 @@ mod tests {
             }
         }
         builtin_widget(&parse_widget_ref(DIARY_WIDGET).expect("parses")).expect("k2:diary@1 ships");
-        for (id, v) in [("perfect-freehand", "1"), ("font-caveat", "5")] {
+        for (id, v) in [("perfect-freehand", "1"), ("font-caveat", "5"), ("pixi.js", "8"), ("tone", "15")] {
             let r = LibRef::Named { id: id.into(), version: v.into() };
             let e = find(m, &r).unwrap_or_else(|| panic!("the Diary's {id}@{v} isn't in zen-lib.json"));
             assert_eq!(e.source, LibSource::Bundled, "{id}@{v}");

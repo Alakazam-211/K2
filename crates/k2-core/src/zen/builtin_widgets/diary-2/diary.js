@@ -17,12 +17,28 @@
 // own words stay dark ink on the page once sent. When the pen is empty, a
 // ghost writes teases into it (a placeholder only, never sent).
 //
+// Ink, paper and sound (Rosson 2026-10-08), each from K2's library and each
+// optional (a missing library leaves the Diary as it was):
+//   - perfect-freehand: every stroke of ink is a filled pen outline with
+//     pressure from the hand's speed and tapered ends (the scratching pen,
+//     the flourish under a name, the odd blot under a reply);
+//   - PixiJS: one WebGL canvas UNDER the words (paper fibre and grain, the
+//     candle warming the page in step with the CSS flicker, ink bleeding
+//     into the fibres under freshly written words), drawn on demand (at
+//     most 30 fps while ink is wet; at rest only when the flame flickers),
+//     stopped while hidden, one still frame under reduced motion;
+//   - Tone.js: a quiet haunted room (a low drone, distant detuned bells,
+//     creaks, wind) made in code, starting when you arrive on this Garden
+//     and fading out when you leave; the speaker at the top left, or M,
+//     mutes it.
+//
 // Rules this file keeps (the k2-zen skill's): agent text only ever goes
 // through textContent; no inline handlers; no network or storage.
 (function () {
   'use strict'
 
   var LOCAL_HOST = 'local'
+  var SVG_NS = 'http://www.w3.org/2000/svg'
   var REVEAL_MIN_MS = 900
   var REVEAL_MAX_MS = 6000
   var REVEAL_MS_PER_CHAR = 38
@@ -62,6 +78,8 @@
     folio: $('folio'),
     prev: $('prev'),
     next: $('next'),
+    glow: $('glow'),
+    hush: $('hush'),
   }
 
   var k2 = window.k2
@@ -126,22 +144,126 @@
     return h >>> 0
   }
 
-  /** A pen stroke under the name, its own for each agent (perfect-freehand
-   *  from K2's library; a plain wave without it). */
-  function flourish(seed) {
+  // ── ink: perfect-freehand outlines ───────────────────────────────────
+  // A pen line is a filled outline, not a stroked line: perfect-freehand
+  // (K2's library) widens it where the hand slows and presses, thins it
+  // where it hurries, and tapers its ends. `simulatePressure` reads the
+  // hand's speed from the spacing of the points.
+
+  function n1(v) {
+    return (Math.round(v * 10) / 10).toFixed(1)
+  }
+
+  /** The outline polygon of a pen line, or null without the library. */
+  function inkOutline(points, o) {
     var pf = window.PerfectFreehand
+    if (!pf || typeof pf.getStroke !== 'function' || points.length < 2) return null
+    var out = pf.getStroke(points, {
+      size: o.size,
+      thinning: o.thinning,
+      smoothing: o.smoothing == null ? 0.55 : o.smoothing,
+      streamline: o.streamline == null ? 0.35 : o.streamline,
+      simulatePressure: o.pressure !== false,
+      start: { taper: o.taperStart || 0, cap: true },
+      end: { taper: o.taperEnd || 0, cap: true },
+      last: true,
+    })
+    return out && out.length > 3 ? out : null
+  }
+
+  /** The widest an outline reaches from its centre line: perfect-freehand's
+   *  radius is size × (0.5 − thinning × (0.5 − pressure)), pressure 0..1. */
+  function inkReach(o) {
+    return o.size * (0.5 + Math.abs(o.thinning) * 0.5)
+  }
+
+  /** An outline as a closed SVG path: quadratic curves through the
+   *  midpoints (perfect-freehand's own recipe). `box` [x0, y0, x1, y1]
+   *  keeps every point inside it. */
+  function outlineD(outline, box) {
+    var pts = box
+      ? outline.map(function (p) { return [clamp(p[0], box[0], box[2]), clamp(p[1], box[1], box[3])] })
+      : outline
+    var a = pts[0]
+    var b = pts[1]
+    var c = pts[2]
+    var d = 'M' + n1(a[0]) + ' ' + n1(a[1]) + ' Q' + n1(b[0]) + ' ' + n1(b[1]) + ' ' + n1((b[0] + c[0]) / 2) + ' ' + n1((b[1] + c[1]) / 2) + ' T'
+    for (var i = 2; i < pts.length - 1; i++) d += n1((pts[i][0] + pts[i + 1][0]) / 2) + ' ' + n1((pts[i][1] + pts[i + 1][1]) / 2) + ' '
+    return d + 'Z'
+  }
+
+  /** A seeded die (mulberry32): the same blot for the same message. */
+  function dice(seed) {
+    var a = seed >>> 0
+    return function () {
+      a = (a + 0x6d2b79f5) | 0
+      var t = Math.imul(a ^ (a >>> 15), 1 | a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  /** A pen stroke under the name, its own for each agent (a plain wave
+   *  without the library). */
+  function flourish(seed) {
     var s = seed % 11
     var pts = []
-    for (var x = 2; x <= 156; x += 4) pts.push([x, 8 + Math.sin((x + s * 7) / (11 + (s % 4))) * 3.4 * (1 - x / 220), 0.3 + 0.5 * Math.sin((Math.PI * x) / 160)])
+    for (var x = 4; x <= 154; x += 4) pts.push([x, 8 + Math.sin((x + s * 7) / (11 + (s % 4))) * 3.4 * (1 - x / 220), 0.3 + 0.5 * Math.sin((Math.PI * x) / 160)])
+    var outline = inkOutline(pts, { size: 3.2, thinning: 0.7, smoothing: 0.6, streamline: 0.5, pressure: false, taperStart: 10, taperEnd: 40 })
     var d
-    if (pf && typeof pf.getStroke === 'function') {
-      var outline = pf.getStroke(pts, { size: 3.2, thinning: 0.7, smoothing: 0.6, streamline: 0.5, simulatePressure: false })
-      d = outline.length ? 'M' + outline.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1) }).join(' L') + ' Z' : ''
+    if (outline) {
+      d = outlineD(outline, [0.5, 0.5, 159.5, 15.5])
     } else {
       d = 'M' + pts.map(function (p) { return p[0] + ' ' + p[1].toFixed(1) }).join(' L') +
         ' L' + pts.slice().reverse().map(function (p) { return p[0] + ' ' + (p[1] + 1.1).toFixed(1) }).join(' L') + ' Z'
     }
     dom.flourish.setAttribute('d', d)
+  }
+
+  /** Where the pen rested under a reply: a pressed blob with a short
+   *  dragged tail and a drop or two, drawn with the same pen. Only some
+   *  replies get one (by message id, so it never moves). */
+  var BLOT_W = 40
+  var BLOT_H = 28
+
+  function blot(id) {
+    var h = hash('blot:' + id)
+    if (h % 4 !== 1 || !window.PerfectFreehand) return null
+    var roll = dice(h)
+    var svg = document.createElementNS(SVG_NS, 'svg')
+    svg.setAttribute('class', 'blot')
+    svg.setAttribute('viewBox', '0 0 ' + BLOT_W + ' ' + BLOT_H)
+    svg.setAttribute('aria-hidden', 'true')
+    svg.setAttribute('focusable', 'false')
+    var cx = 15 + roll() * 6
+    var cy = 12 + roll() * 4
+    var pts = []
+    var lobes = 2 + Math.floor(roll() * 3)
+    var phase = roll() * Math.PI * 2
+    for (var t = 0; t < Math.PI * 3.4; t += 0.4) {
+      var r = (0.6 + t * 0.36) * (1 + 0.28 * Math.sin(t * lobes + phase))
+      pts.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r * 0.75, 1])
+    }
+    var ang = roll() * Math.PI * 2
+    var tail = 4 + roll() * 6
+    for (var k = 1; k <= 4; k++) pts.push([cx + Math.cos(ang) * tail * (k / 4), cy + Math.sin(ang) * tail * (k / 4) * 0.7, 1 - k / 5])
+    var strokes = [{ pts: pts, o: { size: 6.5, thinning: 0.55, pressure: false, taperEnd: 6 } }]
+    var drops = 1 + Math.floor(roll() * 3)
+    for (var j = 0; j < drops; j++) {
+      var da = roll() * Math.PI * 2
+      var dd = 9 + roll() * 6
+      var dx = cx + Math.cos(da) * dd
+      var dy = cy + Math.sin(da) * dd * 0.6
+      strokes.push({ pts: [[dx, dy, 1], [dx + 0.6, dy + 0.3, 1]], o: { size: 1.6 + roll() * 1.8, thinning: 0.2, pressure: false } })
+    }
+    strokes.forEach(function (st) {
+      var outline = inkOutline(st.pts, st.o)
+      if (!outline) return
+      var p = document.createElementNS(SVG_NS, 'path')
+      p.setAttribute('d', outlineD(outline, [0.5, 0.5, BLOT_W - 0.5, BLOT_H - 0.5]))
+      svg.appendChild(p)
+    })
+    return svg
   }
 
   function roman(n) {
@@ -249,6 +371,10 @@
         row.appendChild(b)
       })
       el.appendChild(row)
+    }
+    if (!mine) {
+      var b = blot(it.id)
+      if (b) el.appendChild(b)
     }
     return el
   }
@@ -647,6 +773,7 @@
     paint(0)
     var step = function (now) {
       if (state.revealing !== r) return
+      fxWet(now, ink) // read the wet words' box before this frame writes
       var t = Math.min(1, (now - r.start) / r.ms)
       // Ease out: the hand slows a little at the end of a thought.
       paint(Math.ceil(total * (1 - Math.pow(1 - t, 1.6))))
@@ -773,6 +900,7 @@
 
   function glideWrite(top) {
     glide.wrote = top
+    fx.scroll = top
     dom.sheet.scrollTop = top
   }
 
@@ -907,7 +1035,7 @@
     copy.removeAttribute('id')
     copy.setAttribute('aria-hidden', 'true')
     copy.querySelectorAll('[id]').forEach(function (el) { el.removeAttribute('id') })
-    copy.querySelectorAll('.corner').forEach(function (el) { el.remove() })
+    copy.querySelectorAll('.corner, canvas').forEach(function (el) { el.remove() })
     var ta = copy.querySelector('textarea')
     if (ta) {
       ta.value = dom.ink.value
@@ -936,6 +1064,7 @@
   function beginTurn(dir) {
     keepDraft()
     stopReveal(true)
+    fxClear()
     var leaf = make('div', 'leaf ' + (dir > 0 ? 'next' : 'prev'))
     var face = make('div', 'face')
     face.appendChild(pageCopy())
@@ -992,6 +1121,7 @@
     if (reduced()) {
       keepDraft()
       stopReveal(true)
+      fxClear()
       state.at += dir
       draw()
       follow()
@@ -1047,7 +1177,6 @@
   // stroke drawn by its dash offset. It clears the instant the reply starts
   // writing; reduced motion shows one still mark; a hidden frame pauses it.
 
-  var SVG_NS = 'http://www.w3.org/2000/svg'
   var SCRIBE_W = 260 // the viewBox: 0 0 SCRIBE_W SCRIBE_H
   var SCRIBE_H = 44
   // Every point stays this far inside the viewBox: half the widest stroke,
@@ -1058,7 +1187,7 @@
   var SCRIBE_BASE = 27
   var SCRIBE_PX_PER_MS = 0.32
 
-  var scribe = { on: false, paused: false, timer: 0, strokes: [], at: 0 }
+  var scribe = { on: false, paused: false, timer: 0, strokes: [], at: 0, masks: 0 }
 
   function pathOf(points) {
     return 'M' + points.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1) }).join(' L')
@@ -1070,92 +1199,190 @@
     return len
   }
 
-  /** Half a word in a cramped, looping hand. */
-  function scrawl(x0, letters) {
+  // Rosson 2026-10-08: a scrawled word never just stops. Each one fills
+  // its share of the line and ends on purpose: a tapered flick off its last
+  // letter (the pen lifting), or a hard jab down in disgust. Then it is
+  // struck through past its end, scratched out, or blotted where the pen
+  // stabbed. The words together span the drawing, left to right.
+
+  /** A word in a cramped, looping hand, from x0 to x1 exactly. */
+  function scrawl(x0, x1, jab) {
     var pts = []
-    var a = jitter(1.7, 0.9)
-    var b = jitter(3, 1.6)
+    var tail = jab ? jitter(3, 2) : jitter(6, 5)
+    var body = Math.max(12, x1 - x0 - tail)
+    var letters = Math.max(2, Math.round(body / jitter(9, 5)))
+    var turns = letters * Math.PI * 2
+    var a = body / turns // the hand's advance, so the loops fill the word
+    var b = a * jitter(1.35, 0.7) // each letter swings back past itself: a loop
     var tall = []
     for (var l = 0; l <= letters; l++) tall.push(jitter(3, 7))
-    for (var t = 0; t <= letters * Math.PI * 2; t += 0.35) {
+    for (var t = 0; t < turns; t += 0.32) {
       var h = tall[Math.floor(t / (Math.PI * 2))]
-      pts.push([x0 + a * t - b * Math.sin(t) + jitter(-0.4, 0.8), SCRIBE_BASE - h * (1 - Math.cos(t)) / 2 + jitter(-0.5, 1)])
+      pts.push([x0 + a * t - b * Math.sin(t) + jitter(-0.3, 0.6), SCRIBE_BASE - (h * (1 - Math.cos(t))) / 2 + jitter(-0.4, 0.8)])
+    }
+    var ex = x0 + body
+    pts.push([ex, SCRIBE_BASE])
+    if (jab) {
+      // A hard stab down and a short drag: the word given up on.
+      pts.push([ex + tail * 0.5, SCRIBE_BASE + jitter(3, 2)], [ex + tail, SCRIBE_BASE + jitter(5, 3)])
+    } else {
+      // The exit stroke: up and away, the pen lifting (perfect-freehand
+      // tapers it to nothing).
+      var lift = jitter(4, 5)
+      pts.push([ex + tail * 0.4, SCRIBE_BASE - lift * 0.35], [ex + tail * 0.75, SCRIBE_BASE - lift * 0.75], [ex + tail, SCRIBE_BASE - lift])
     }
     return pts
   }
 
+  /** A line through a word that runs on past its end. */
   function strike(x0, x1) {
     var y0 = SCRIBE_BASE - jitter(2, 5)
     var y1 = y0 + jitter(-4, 8)
+    var from = x0 - jitter(2, 4)
+    var to = x1 + jitter(6, 8)
     var pts = []
     for (var i = 0; i <= 12; i++) {
       var k = i / 12
-      pts.push([x0 - 4 + (x1 - x0 + 8) * k, y0 + (y1 - y0) * k + jitter(-0.8, 1.6)])
+      pts.push([from + (to - from) * k, y0 + (y1 - y0) * k + jitter(-0.8, 1.6)])
     }
     return pts
   }
 
-  /** Back and forth over a word, hard and fast. */
+  /** Back and forth over a word, hard and fast, end to end. */
   function scratch(x0, x1) {
     var pts = []
-    var n = Math.round(jitter(9, 8))
+    var n = Math.max(6, Math.round((x1 - x0) / jitter(5, 4)))
     for (var i = 0; i <= n; i++) {
-      var x = x0 + ((x1 - x0) * i) / n + jitter(-3, 6)
+      var x = x0 + ((x1 - x0) * i) / n + jitter(-2, 4)
       pts.push([x, i % 2 ? SCRIBE_BASE + jitter(1, 4) : SCRIBE_BASE - jitter(10, 6)])
     }
     return pts
   }
 
-  /** A furious knot of loops over everything. */
-  function tangle(cx, w) {
+  /** Where the pen stabbed: a small pressed knot of ink. */
+  function stab(x, y) {
     var pts = []
+    for (var t = 0; t < Math.PI * 4; t += 0.7) pts.push([x + Math.cos(t) * (0.4 + t * 0.12), y + Math.sin(t) * (0.4 + t * 0.12)])
+    return pts
+  }
+
+  /** A furious knot of loops over everything, inside the words' span. */
+  function tangle(x0, x1) {
+    var pts = []
+    var w = x1 - x0
+    var cx = (x0 + x1) / 2
     var turns = jitter(3, 3)
     for (var t = 0; t <= turns * Math.PI * 2; t += 0.3) {
-      var r = jitter(0.75, 0.5)
-      pts.push([cx + Math.cos(t) * (w / 2) * r + (t / (turns * Math.PI * 2) - 0.5) * w * 0.6, SCRIBE_BASE - 6 + Math.sin(t * jitter(0.9, 0.3)) * 9 * r])
+      var r = jitter(0.6, 0.4)
+      pts.push([cx + Math.cos(t) * w * 0.22 * r + (t / (turns * Math.PI * 2) - 0.5) * w * 0.5, SCRIBE_BASE - 6 + Math.sin(t * jitter(0.9, 0.3)) * 9 * r])
     }
     return pts
   }
 
-  /** One fit of frustration: what to draw, in order. */
+  /** One fit of frustration: what to draw, in order. The words share the
+   *  line from the left margin to the right, gaps between them. */
   function frustration() {
     var out = []
-    var x = jitter(4, 10)
+    var left = inkMargin('scrawl') + jitter(1, 4)
+    var right = SCRIBE_W - inkMargin('frantic') - 14 // room for a strike to run on
     var words = Math.random() < 0.5 ? 2 : 3
-    var spans = []
-    for (var i = 0; i < words && x < SCRIBE_W - 40; i++) {
-      var pts = scrawl(x, Math.round(jitter(2, 3)))
-      var end = pts[pts.length - 1][0]
-      out.push({ pts: pts, cls: 'scrawl' })
-      out.push({ pts: Math.random() < 0.55 ? strike(x, end) : scratch(x, end), cls: 'frantic' })
-      spans.push([x, end])
-      x = end + jitter(12, 14)
+    var gaps = []
+    var shares = []
+    var gapSum = 0
+    var shareSum = 0
+    for (var i = 0; i < words; i++) {
+      var g = i ? jitter(10, 8) : 0
+      gaps.push(g)
+      gapSum += g
+      var sh = jitter(0.7, 0.6)
+      shares.push(sh)
+      shareSum += sh
     }
-    var last = spans[spans.length - 1]
-    out.push({ pts: tangle((spans[0][0] + last[1]) / 2, last[1] - spans[0][0]), cls: 'frantic' })
+    var room = right - left - gapSum
+    var x = left
+    for (var j = 0; j < words; j++) {
+      x += gaps[j]
+      var x1 = j === words - 1 ? right : x + (room * shares[j]) / shareSum
+      var jab = Math.random() < 0.3
+      out.push({ pts: scrawl(x, x1, jab), cls: 'scrawl' })
+      var cross = Math.random()
+      if (cross < 0.5) out.push({ pts: strike(x, x1), cls: 'frantic' })
+      else out.push({ pts: scratch(x, x1), cls: 'frantic' })
+      if (jab || Math.random() < 0.2) out.push({ pts: stab(x1 + jitter(1, 3), SCRIBE_BASE + jitter(1, 4)), cls: 'stab' })
+      x = x1
+    }
+    out.push({ pts: tangle(left, right), cls: 'frantic' })
     return out
   }
 
+  // The pen's two hands: a cramped scrawl, and thinner, faster fury. The
+  // outline reaches inkReach() past its centre line, so the centre line
+  // keeps that much further in (the box is still SCRIBE_PAD from the edge).
+  var SCRIBE_INK = {
+    scrawl: { size: 2.3, thinning: 0.62 },
+    frantic: { size: 1.7, thinning: 0.7 },
+    stab: { size: 3.4, thinning: 0.3 },
+  }
+  var SCRIBE_BOX = [SCRIBE_PAD, SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD, SCRIBE_H - SCRIBE_PAD]
+
+  function inkMargin(cls) {
+    return SCRIBE_PAD + inkReach(SCRIBE_INK[cls] || SCRIBE_INK.scrawl) + 0.3
+  }
+
   /** Keep the ink inside the drawing, whatever the dice said. */
-  function inside(points) {
+  function inside(points, m) {
     return points.map(function (q) {
-      return [clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD), clamp(q[1], SCRIBE_PAD, SCRIBE_H - SCRIBE_PAD)]
+      return [clamp(q[0], m, SCRIBE_W - m), clamp(q[1], m, SCRIBE_H - m)]
     })
   }
 
+  /** A pen stroke's pace: never the same twice (a fast middle, a slow
+   *  start or a dragging end). */
+  function pace() {
+    return 'cubic-bezier(' + jitter(0.12, 0.3).toFixed(2) + ', ' + jitter(0, 0.3).toFixed(2) + ', ' + jitter(0.45, 0.35).toFixed(2) + ', 1)'
+  }
+
+  /** One stroke: the ink is a filled perfect-freehand outline; a mask
+   *  traces its centre line by dash offset, so the pen draws it. `still`:
+   *  the whole stroke at once (reduced motion), the same every time. */
   function stroke(item, still) {
-    item.pts = inside(item.pts)
-    var p = document.createElementNS(SVG_NS, 'path')
-    p.setAttribute('d', pathOf(item.pts))
-    p.setAttribute('class', item.cls)
-    if (still) return p
+    var o = SCRIBE_INK[item.cls] || SCRIBE_INK.scrawl
+    item.pts = inside(item.pts, inkMargin(item.cls))
+    var outline = inkOutline(item.pts, {
+      size: o.size,
+      thinning: o.thinning,
+      taperStart: still ? 6 : jitter(3, 9),
+      taperEnd: still ? 12 : jitter(8, 16),
+    })
+    var ink = document.createElementNS(SVG_NS, 'path')
+    ink.setAttribute('class', 'ink ' + item.cls + (outline ? '' : ' line'))
+    ink.setAttribute('d', outline ? outlineD(outline, SCRIBE_BOX) : pathOf(item.pts))
+    if (still) return ink
     var len = Math.ceil(lengthOf(item.pts))
-    var ms = Math.round(clamp(len / (item.cls === 'frantic' ? SCRIBE_PX_PER_MS * 2.2 : SCRIBE_PX_PER_MS), 140, 1300))
-    p.style.strokeDasharray = String(len)
-    p.style.strokeDashoffset = String(len)
-    p.style.animationDuration = ms + 'ms'
+    // A whole word takes its time; fury is fast.
+    var ms = Math.round(clamp(len / (item.cls === 'scrawl' ? SCRIBE_PX_PER_MS : SCRIBE_PX_PER_MS * 2.2), 140, item.cls === 'scrawl' ? 2400 : 1300))
     item.ms = ms
-    return p
+    var g = document.createElementNS(SVG_NS, 'g')
+    var mask = document.createElementNS(SVG_NS, 'mask')
+    var id = 'scribe-hand-' + ++scribe.masks
+    mask.setAttribute('id', id)
+    mask.setAttribute('maskUnits', 'userSpaceOnUse')
+    mask.setAttribute('x', '0')
+    mask.setAttribute('y', '0')
+    mask.setAttribute('width', String(SCRIBE_W))
+    mask.setAttribute('height', String(SCRIBE_H))
+    var hand = document.createElementNS(SVG_NS, 'path')
+    hand.setAttribute('class', 'hand')
+    hand.setAttribute('d', pathOf(item.pts))
+    hand.style.strokeDasharray = String(len)
+    hand.style.strokeDashoffset = String(len)
+    hand.style.animationDuration = ms + 'ms'
+    hand.style.animationTimingFunction = pace()
+    mask.appendChild(hand)
+    ink.setAttribute('mask', 'url(#' + id + ')')
+    g.appendChild(mask)
+    g.appendChild(ink)
+    return g
   }
 
   function scribeClear() {
@@ -1174,8 +1401,8 @@
       // One still mark: a word struck through and scratched over.
       dom.scribble.classList.add('still')
       ;[
-        { pts: [[8, 27], [14, 18], [18, 27], [24, 16], [29, 27], [36, 19], [41, 27], [48, 18], [54, 27]], cls: 'scrawl' },
-        { pts: [[4, 23], [58, 20]], cls: 'frantic' },
+        { pts: [[8, 27], [14, 18], [18, 27], [24, 16], [29, 27], [36, 19], [41, 27], [48, 18], [54, 27], [58, 25], [62, 22]], cls: 'scrawl' },
+        { pts: [[4, 23], [70, 20]], cls: 'frantic' },
         { pts: [[10, 15], [20, 30], [28, 14], [38, 31], [46, 15], [56, 29]], cls: 'frantic' },
       ].forEach(function (item) { dom.scribble.appendChild(stroke(item, true)) })
       return
@@ -1452,6 +1679,7 @@
     var words = dom.ink.value.trim()
     var addr = address()
     if (!words || state.sending || !addr || state.turning) return
+    if (!reduced()) fxSpot(dom.ink, FX_SOAK_MS)
     state.sending = true
     ghostStop()
     dom.soak.textContent = dom.ink.value
@@ -1484,6 +1712,743 @@
       .then(function () {
         state.sending = false
       })
+  }
+
+  // ── seen or not ──────────────────────────────────────────────────────
+  // Everything that moves or sounds stops when the Diary can't be seen: the
+  // window hidden (visibilitychange), or this frame laid out of sight
+  // (IntersectionObserver, a second lock; a Garden switch already removes
+  // the frame). Without an observer, a shown document counts as seen.
+
+  var sight = { io: true, observer: null }
+
+  function shown() {
+    return !document.hidden && sight.io
+  }
+
+  function watchSight() {
+    if (typeof window.IntersectionObserver !== 'function') return
+    sight.observer = new window.IntersectionObserver(function (seen) {
+      var last = seen[seen.length - 1]
+      var io = !!last && (last.isIntersecting || last.intersectionRatio > 0)
+      if (io === sight.io) return
+      sight.io = io
+      sightChanged()
+    })
+    sight.observer.observe(dom.desk)
+  }
+
+  function sightChanged() {
+    var hidden = !shown()
+    dom.root.classList.toggle('asleep', hidden)
+    scribePause(hidden)
+    if (hidden) ghostStop()
+    else ghostLater(GHOST_IDLE_MS, true)
+    fxSync()
+    musicSync()
+  }
+
+  // ── the paper under the words (PixiJS) ───────────────────────────────
+  // One WebGL canvas, first in the page, under every word (the text stays
+  // HTML: sharp, selectable, read aloud). One fragment shader paints:
+  //   - paper fibre and grain (a 256 px tile made once, repeated);
+  //   - the candle warming the page, its strength stepping with the CSS
+  //     flicker on .glow (read from that animation's own clock, so the two
+  //     never drift) and its light swaying a hair;
+  //   - ink bleeding into the fibres under freshly written words: while a
+  //     reply bleeds in, the wet words' box is sampled every FX_SAMPLE_MS
+  //     (a read before the frame's writes, never in the paint loop) and
+  //     spreads and dries over FX_WET_MS; sent words soak a stain too.
+  // Frames are drawn on demand, never by a free-running ticker: at most 30
+  // a second while ink is wet; at rest only when the candle's flicker steps
+  // (two or three times a second, the light jumping with the flame). It
+  // all stops when the Diary can't be seen; reduced motion draws one still
+  // frame. No WebGL, no Pixi: the canvas goes and the CSS page stays.
+
+  var FX_FPS_WET = 30
+  var FX_SPOTS = 6
+  var FX_SAMPLE_MS = 140
+  var FX_WET_MS = 1800
+  var FX_SOAK_MS = 3200
+  var FX_TILE = 256
+  // The CSS candle (@keyframes flicker on .glow, steps(1, end), 3.6 s):
+  // [where in the cycle, opacity]. A test holds the two tables together.
+  var FLICKER_MS = 3600
+  var FLICKER = [[0, 0.92], [0.09, 0.74], [0.13, 1], [0.31, 0.86], [0.47, 0.97], [0.52, 0.7], [0.58, 0.93], [0.77, 0.82], [0.88, 1]]
+
+  var FX_VERTEX = [
+    'in vec2 aPosition;',
+    'out vec2 vUV;',
+    'void main(void) {',
+    '  vUV = vec2(aPosition.x * 0.5 + 0.5, 0.5 - aPosition.y * 0.5);',
+    '  gl_Position = vec4(aPosition, 0.0, 1.0);',
+    '}',
+  ].join('\n')
+
+  var FX_FRAGMENT = [
+    'in vec2 vUV;',
+    'out vec4 finalColor;',
+    'uniform sampler2D uPaper;',
+    'uniform vec2 uSize;',
+    'uniform vec4 uLight;',
+    'uniform vec4 uSheet;',
+    'uniform vec4 uSpot0;',
+    'uniform vec4 uSpot1;',
+    'uniform vec4 uSpot2;',
+    'uniform vec4 uSpot3;',
+    'uniform vec4 uSpot4;',
+    'uniform vec4 uSpot5;',
+    'uniform vec4 uWetA;',
+    'uniform vec4 uWetB;',
+    'float bleed(vec4 s, float wet, vec2 p, float fib) {',
+    '  if (wet <= 0.0) return 0.0;',
+    '  vec2 q = abs(p - (s.xy + s.zw * 0.5)) - s.zw * 0.5;',
+    '  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);',
+    '  float reach = 1.0 + 5.0 * (1.0 - wet);',
+    '  d -= fib * 4.0 * (1.0 - wet * 0.5);',
+    '  return (1.0 - smoothstep(-2.0, reach, d)) * wet;',
+    '}',
+    'void main(void) {',
+    '  vec2 px = vUV * uSize;',
+    '  vec4 paper = texture(uPaper, px / ' + FX_TILE.toFixed(1) + ');',
+    '  float grain = paper.r - 0.5;',
+    '  float fib = paper.g;',
+    '  vec2 lc = uLight.xy * uSize;',
+    '  float lit = 1.0 - smoothstep(0.0, uLight.z * uSize.x, distance(px, lc));',
+    '  lit = lit * lit * uLight.w;',
+    '  float ga = abs(grain) * (0.16 + 0.22 * lit) + fib * 0.035;',
+    '  vec3 col = (grain < 0.0 ? vec3(0.20, 0.11, 0.04) : vec3(1.0, 0.93, 0.78)) * ga;',
+    '  float a = ga;',
+    '  float wa = lit * 0.20;',
+    '  col = vec3(1.0, 0.70, 0.36) * wa + col * (1.0 - wa);',
+    '  a = wa + a * (1.0 - wa);',
+    '  float b = bleed(uSpot0, uWetA.x, px, fib);',
+    '  b = max(b, bleed(uSpot1, uWetA.y, px, fib));',
+    '  b = max(b, bleed(uSpot2, uWetA.z, px, fib));',
+    '  b = max(b, bleed(uSpot3, uWetA.w, px, fib));',
+    '  b = max(b, bleed(uSpot4, uWetB.x, px, fib));',
+    '  b = max(b, bleed(uSpot5, uWetB.y, px, fib));',
+    '  float inside = step(uSheet.x, px.x) * step(px.x, uSheet.z) * step(uSheet.y, px.y) * step(px.y, uSheet.w);',
+    '  float ba = clamp(b * inside * (0.05 + 0.13 * fib), 0.0, 0.2);',
+    '  col = vec3(0.16, 0.06, 0.04) * ba + col * (1.0 - ba);',
+    '  a = ba + a * (1.0 - ba);',
+    '  finalColor = vec4(col, a);',
+    '}',
+  ].join('\n')
+
+  var fx = {
+    app: null,
+    canvas: null,
+    group: null,
+    ready: false,
+    failed: false,
+    running: false,
+    timer: 0, // waiting for the candle's next step
+    frame: 0, // a frame asked for
+    last: 0, // when the last frame was drawn
+    jump: [0, 0], // where the flame's light sits this step
+    step: -1, // the flicker step drawn last
+    spots: [], // {x, y, w, h, scroll, born, ms}: page px, the sheet's scroll then
+    sampled: 0,
+    w: 0,
+    h: 0,
+    sheet: [0, 0, 0, 0],
+    scroll: 0,
+    start: 0,
+    observer: null,
+  }
+
+  /** Where the CSS candle is in its cycle: its own animation clock. */
+  function candleClock(now) {
+    var list = typeof dom.glow.getAnimations === 'function' ? dom.glow.getAnimations() : null
+    var a = list && list[0]
+    var t = a && a.currentTime
+    return typeof t === 'number' && isFinite(t) ? t : now
+  }
+
+  /** Which step of the CSS flicker `ms` falls in (steps(1, end): each
+   *  value holds until the next keyframe). */
+  function flickerStep(ms) {
+    var k = (((ms % FLICKER_MS) + FLICKER_MS) % FLICKER_MS) / FLICKER_MS
+    var at = 0
+    for (var i = 0; i < FLICKER.length; i++) if (k >= FLICKER[i][0]) at = i
+    return at
+  }
+
+  function flickerAt(ms) {
+    return FLICKER[flickerStep(ms)][1]
+  }
+
+  /** Milliseconds until the flicker's next step. */
+  function flickerNext(ms) {
+    var into = ((ms % FLICKER_MS) + FLICKER_MS) % FLICKER_MS
+    var i = flickerStep(ms)
+    var end = i + 1 < FLICKER.length ? FLICKER[i + 1][0] * FLICKER_MS : FLICKER_MS
+    return Math.max(16, Math.ceil(end - into) + 4)
+  }
+
+  /** The paper's tile, made once: red = grain (0.5 is none), green =
+   *  fibre. Drawn wrapped, so it repeats without a seam. */
+  function paperTile() {
+    var c = document.createElement('canvas')
+    c.width = FX_TILE
+    c.height = FX_TILE
+    var g = c.getContext('2d')
+    if (!g) return null
+    var img = g.createImageData(FX_TILE, FX_TILE)
+    var roll = dice(0x5eed)
+    for (var i = 0; i < img.data.length; i += 4) {
+      img.data[i] = 128 + Math.round((roll() + roll() + roll() - 1.5) * 46)
+      img.data[i + 1] = 0
+      img.data[i + 2] = 0
+      img.data[i + 3] = 255
+    }
+    g.putImageData(img, 0, 0)
+    g.globalCompositeOperation = 'lighter'
+    g.lineCap = 'round'
+    for (var f = 0; f < 520; f++) {
+      var x = roll() * FX_TILE
+      var y = roll() * FX_TILE
+      var len = 6 + roll() * 34
+      var ang = (roll() - 0.5) * 1.1 + (roll() < 0.18 ? Math.PI / 2 : 0)
+      var bend = (roll() - 0.5) * len * 0.5
+      g.strokeStyle = 'rgba(0, ' + Math.round(60 + roll() * 150) + ', 0, 1)'
+      g.lineWidth = 0.5 + roll() * 1.1
+      for (var ox = -FX_TILE; ox <= FX_TILE; ox += FX_TILE) {
+        for (var oy = -FX_TILE; oy <= FX_TILE; oy += FX_TILE) {
+          var x0 = x + ox
+          var y0 = y + oy
+          g.beginPath()
+          g.moveTo(x0, y0)
+          g.quadraticCurveTo(x0 + Math.cos(ang) * len * 0.5 - Math.sin(ang) * bend, y0 + Math.sin(ang) * len * 0.5 + Math.cos(ang) * bend, x0 + Math.cos(ang) * len, y0 + Math.sin(ang) * len)
+          g.stroke()
+        }
+      }
+    }
+    return c
+  }
+
+  /** The page's size and the sheet's box in it (a ResizeObserver callback
+   *  or the first draw: layout is clean then). */
+  function fxMeasure() {
+    fx.w = dom.page.clientWidth
+    fx.h = dom.page.clientHeight
+    fx.sheet = [dom.sheet.offsetLeft, dom.sheet.offsetTop, dom.sheet.offsetLeft + dom.sheet.clientWidth, dom.sheet.offsetTop + dom.sheet.clientHeight]
+  }
+
+  function fxInit() {
+    var P = window.PIXI
+    if (fx.app || fx.failed || !P || typeof P.Application !== 'function') return
+    var canvas = document.createElement('canvas')
+    canvas.className = 'paperfx'
+    canvas.setAttribute('aria-hidden', 'true')
+    dom.page.insertBefore(canvas, dom.page.firstChild)
+    fx.canvas = canvas
+    fxMeasure()
+    var app = new P.Application()
+    fx.app = app
+    var fail = function () {
+      fx.failed = true
+      fx.ready = false
+      fx.app = null
+      if (canvas.parentNode) canvas.parentNode.removeChild(canvas)
+      dom.root.classList.remove('fx')
+      try {
+        app.destroy()
+      } catch (_e) {
+        // Half-made: nothing more to free.
+      }
+    }
+    var made
+    try {
+      made = app.init({
+        canvas: canvas,
+        width: Math.max(1, fx.w),
+        height: Math.max(1, fx.h),
+        backgroundAlpha: 0,
+        antialias: false,
+        autoDensity: true,
+        resolution: Math.min(window.devicePixelRatio || 1, 1.5),
+        preference: 'webgl',
+        powerPreference: 'low-power',
+        autoStart: false,
+        sharedTicker: false,
+      })
+    } catch (e) {
+      fail()
+      return
+    }
+    Promise.resolve(made)
+      .then(function () {
+        var tile = paperTile()
+        if (!tile) throw new Error('no 2d canvas')
+        var paper = P.Texture.from(tile)
+        paper.source.addressMode = 'repeat'
+        var group = new P.UniformGroup({
+          uSize: { value: new Float32Array([fx.w, fx.h]), type: 'vec2<f32>' },
+          uLight: { value: new Float32Array([0.16, 0.06, 0.95, 1]), type: 'vec4<f32>' },
+          uSheet: { value: new Float32Array(fx.sheet), type: 'vec4<f32>' },
+          uSpot0: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uSpot1: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uSpot2: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uSpot3: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uSpot4: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uSpot5: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uWetA: { value: new Float32Array(4), type: 'vec4<f32>' },
+          uWetB: { value: new Float32Array(4), type: 'vec4<f32>' },
+        })
+        var shader = P.Shader.from({
+          gl: { vertex: FX_VERTEX, fragment: FX_FRAGMENT, name: 'diary-paper' },
+          resources: { fx: group, uPaper: paper.source },
+        })
+        var quad = new P.Geometry({ attributes: { aPosition: [-1, -1, 1, -1, 1, 1, -1, 1] }, indexBuffer: [0, 1, 2, 0, 2, 3] })
+        var mesh = new P.Mesh({ geometry: quad, shader: shader })
+        app.stage.addChild(mesh)
+        fx.group = group
+        fx.start = performance.now()
+        fx.ready = true
+        dom.root.classList.add('fx')
+        if (typeof window.ResizeObserver === 'function') {
+          fx.observer = new window.ResizeObserver(fxResized)
+          fx.observer.observe(dom.page)
+        } else {
+          window.addEventListener('resize', fxResized)
+        }
+        fxSync()
+      })
+      .catch(fail)
+  }
+
+  function fxResized() {
+    if (!fx.ready) return
+    fxMeasure()
+    fx.app.renderer.resize(Math.max(1, fx.w), Math.max(1, fx.h))
+    if (fx.running) fxSoon()
+    else if (shown()) fxStill()
+  }
+
+  /** Set this frame's uniforms. `still`: the candle at rest, no sway, no
+   *  wet ink (reduced motion). */
+  function fxFrame(now, still) {
+    var u = fx.group && fx.group.uniforms
+    if (!u) return
+    u.uSize[0] = fx.w
+    u.uSize[1] = fx.h
+    for (var s = 0; s < 4; s++) u.uSheet[s] = fx.sheet[s]
+    var clock = candleClock(now)
+    var step = still ? -1 : flickerStep(clock)
+    var flick = still ? 1 : FLICKER[step][1]
+    if (step !== fx.step) {
+      // The flame jumps when it gutters, and its light with it.
+      fx.step = step
+      fx.jump = still ? [0, 0] : [jitter(-0.008, 0.016), jitter(-0.006, 0.012)]
+    }
+    u.uLight[0] = 0.16 + fx.jump[0]
+    u.uLight[1] = 0.06 + fx.jump[1]
+    u.uLight[2] = 0.95 * (0.96 + 0.04 * flick)
+    u.uLight[3] = flick
+    if (still) fx.spots = []
+    fx.spots = fx.spots.filter(function (sp) { return now - sp.born < sp.ms })
+    for (var i = 0; i < FX_SPOTS; i++) {
+      var sp = fx.spots[fx.spots.length - 1 - i]
+      var v = u['uSpot' + i]
+      var wet = sp ? 1 - (now - sp.born) / sp.ms : 0
+      v[0] = sp ? sp.x : 0
+      v[1] = sp ? sp.y - (fx.scroll - sp.scroll) : 0
+      v[2] = sp ? sp.w : 0
+      v[3] = sp ? sp.h : 0
+      ;(i < 4 ? u.uWetA : u.uWetB)[i % 4] = wet
+    }
+    fx.group.update()
+    return clock
+  }
+
+  function fxStill() {
+    fxFrame(performance.now(), true)
+    fx.app.render()
+  }
+
+  function fxTick(now) {
+    fx.frame = 0
+    if (!fx.running) return
+    if (fx.spots.length && now - fx.last < 1000 / FX_FPS_WET - 2) {
+      fx.frame = requestAnimationFrame(fxTick) // over the cap: wait a frame
+      return
+    }
+    fx.last = now
+    var clock = fxFrame(now)
+    fx.app.render()
+    // Wet ink: the next frame. Dry: sleep until the flame next gutters.
+    if (fx.spots.length) fx.frame = requestAnimationFrame(fxTick)
+    else fx.timer = setTimeout(fxSoon, flickerNext(clock))
+  }
+
+  /** A frame soon (the next animation frame). */
+  function fxSoon() {
+    clearTimeout(fx.timer)
+    fx.timer = 0
+    if (!fx.running || fx.frame) return
+    fx.frame = requestAnimationFrame(fxTick)
+  }
+
+  function fxHalt() {
+    clearTimeout(fx.timer)
+    fx.timer = 0
+    if (fx.frame) cancelAnimationFrame(fx.frame)
+    fx.frame = 0
+  }
+
+  /** Run while seen and moving; one still frame under reduced motion. */
+  function fxSync() {
+    if (!fx.ready) return
+    var run = shown() && !reduced()
+    if (run && !fx.running) {
+      fx.running = true
+      fx.step = -2
+      fxSoon()
+    } else if (!run && fx.running) {
+      fx.running = false
+      fxHalt()
+    }
+    if (!run && shown()) fxStill()
+  }
+
+  /** Wet ink under `el` (its box now), drying over `ms`. Called before the
+   *  frame writes anything, so the read finds layout already done. */
+  function fxSpot(el, ms) {
+    if (!fx.ready || !fx.running || !el) return
+    var r = el.getBoundingClientRect()
+    if (!r.width || !r.height) return
+    var p = dom.page.getBoundingClientRect()
+    fx.spots.push({ x: r.left - p.left, y: r.top - p.top, w: r.width, h: r.height, scroll: fx.scroll, born: performance.now(), ms: ms })
+    if (fx.spots.length > FX_SPOTS) fx.spots.shift()
+    fxSoon()
+  }
+
+  /** While a reply bleeds in: the wet words now, at most every FX_SAMPLE_MS. */
+  function fxWet(now, ink) {
+    if (!fx.running || now - fx.sampled < FX_SAMPLE_MS) return
+    fx.sampled = now
+    for (var i = ink.nodes.length - 1; i >= 0; i--) {
+      if (ink.nodes[i].wet.firstChild) return fxSpot(ink.nodes[i].wet, FX_WET_MS)
+    }
+  }
+
+  function fxClear() {
+    fx.spots = []
+  }
+
+  // ── the room's sound (Tone.js) ───────────────────────────────────────
+  // Made in code, so there are no sound files: a slow low drone under a
+  // sweeping filter, distant detuned music-box bells through an echo, a
+  // floorboard's creak, and wind that swells and dies, all in one long
+  // reverb. Quiet: the room sits at MUSIC_DB.
+  //
+  // It plays while you are on this Garden: it fades in when the Diary is
+  // shown (K2 mounts the frame when you arrive and removes it when you
+  // leave) and fades out when it is hidden. If the computer holds sound
+  // back until a click, it starts on your first click or key in the Diary.
+  // The speaker at the top left (or M, when you aren't writing) mutes it.
+  // Only Tone's plain nodes are used: AudioWorklet nodes can't load in a
+  // sealed widget.
+
+  var MUSIC_DB = -24
+  var MUSIC_IN_S = 4
+  var MUSIC_OUT_S = 0.8
+  // D minor with a flat second, high and far away.
+  var BELL_NOTES = [74, 75, 77, 81, 82, 84, 86, 89]
+
+  // The Diary's one remembered choice: the music's mute. K2 has no storage
+  // verb for widgets yet, so it is kept here, in memory, for as long as the
+  // frame lives. A Garden can start it muted: `music = "off"` in the
+  // widget's config (k2.config).
+  var prefs = (function () {
+    var memory = {}
+    return {
+      get: function (key, fallback) {
+        return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : fallback
+      },
+      set: function (key, value) {
+        memory[key] = value
+      },
+    }
+  })()
+
+  var music = { arrived: false, muted: false, playing: false, blocked: false, failed: false, ctx: null, n: null, timers: [], rest: 0 }
+
+  function musicAvailable() {
+    var T = window.Tone
+    return !music.failed && !!T && typeof T.Context === 'function' && typeof T.setContext === 'function'
+  }
+
+  function musicWanted() {
+    return music.arrived && shown() && !music.muted && musicAvailable()
+  }
+
+  function dbGain(db) {
+    return Math.pow(10, db / 20)
+  }
+
+  function midiHz(m, cents) {
+    return 440 * Math.pow(2, (m - 69) / 12 + (cents || 0) / 1200)
+  }
+
+  /** The audio context, made on the first arrival (nothing sounds yet). */
+  function musicContext() {
+    var T = window.Tone
+    var ctx = new T.Context({ latencyHint: 'playback', lookAhead: 0.25, updateInterval: 0.1 })
+    T.setContext(ctx)
+    music.ctx = ctx
+  }
+
+  /** Build the room once, the first time the context runs. */
+  function musicBuild() {
+    var T = window.Tone
+    var master = new T.Gain(0).toDestination()
+    var room = new T.Reverb({ decay: 6, preDelay: 0.08, wet: 0.6 }).connect(master)
+    var echo = new T.FeedbackDelay({ delayTime: 0.43, feedback: 0.32, wet: 0.35 }).connect(room)
+    var dry = new T.Gain(0.35).connect(master)
+    // The drone: three low voices a few cents apart, under a slow filter.
+    var low = new T.Filter({ type: 'lowpass', frequency: 220, Q: 0.7 })
+    low.connect(room)
+    low.connect(dry)
+    var voices = [
+      new T.Oscillator({ frequency: midiHz(26), type: 'sine', volume: -6 }),
+      new T.Oscillator({ frequency: midiHz(33, 7), type: 'triangle', volume: -15 }),
+      new T.Oscillator({ frequency: midiHz(38, -9), type: 'sawtooth', volume: -26 }),
+    ]
+    voices.forEach(function (v) { v.connect(low) })
+    var sweep = new T.LFO({ frequency: 1 / 23, min: 140, max: 320 }).connect(low.frequency)
+    // Wind: pink noise in a moving band.
+    var windBand = new T.Filter({ type: 'bandpass', frequency: 460, Q: 1.1 })
+    var wind = new T.Gain(0.03).connect(room)
+    windBand.connect(wind)
+    var air = new T.Noise({ type: 'pink', volume: -6 }).connect(windBand)
+    // Bells: a small FM bell, a little out of tune.
+    var bells = new T.PolySynth(T.FMSynth, {
+      harmonicity: 3.01,
+      modulationIndex: 7,
+      oscillator: { type: 'sine' },
+      modulation: { type: 'sine' },
+      envelope: { attack: 0.002, decay: 1.6, sustain: 0, release: 1.8 },
+      modulationEnvelope: { attack: 0.002, decay: 0.5, sustain: 0, release: 0.5 },
+      volume: -16,
+    }).connect(echo)
+    // A creak: a slow sawtooth (the stick and slip) through a wooden band.
+    var creakPan = new T.Panner(0).connect(room)
+    creakPan.connect(dry)
+    var creakEnv = new T.AmplitudeEnvelope({ attack: 0.06, decay: 0.2, sustain: 0.8, release: 0.3 }).connect(creakPan)
+    var creakBand = new T.Filter({ type: 'bandpass', frequency: 650, Q: 7 }).connect(creakEnv)
+    var creaker = new T.Oscillator({ frequency: 30, type: 'sawtooth', volume: -10 }).connect(creakBand)
+    voices.forEach(function (v) { v.start() })
+    sweep.start()
+    air.start()
+    creaker.start()
+    music.n = { master: master, wind: wind, windBand: windBand, bells: bells, creakPan: creakPan, creakEnv: creakEnv, creakBand: creakBand, creaker: creaker }
+  }
+
+  /** Something in the room, again after `lo`..`lo + spread` seconds. */
+  function musicLater(fn, lo, spread) {
+    var id = setTimeout(function () {
+      music.timers = music.timers.filter(function (t) { return t !== id })
+      if (music.playing) fn()
+    }, Math.round(jitter(lo, spread) * 1000))
+    music.timers.push(id)
+  }
+
+  function bellPhrase() {
+    var T = window.Tone
+    var at = T.now() + 0.05
+    var notes = 2 + Math.floor(Math.random() * 3)
+    var winding = Math.random() < 0.3 // a music box running down
+    for (var i = 0; i < notes; i++) {
+      var m = BELL_NOTES[Math.floor(Math.random() * BELL_NOTES.length)]
+      var cents = jitter(-25, 50) - (winding ? i * 14 : 0)
+      music.n.bells.triggerAttackRelease(midiHz(m, cents), 1.2, at, jitter(0.25, 0.4))
+      at += jitter(0.38, 0.6) * (winding ? 1 + i * 0.25 : 1)
+    }
+    musicLater(bellPhrase, 6, 9)
+  }
+
+  function creak() {
+    var T = window.Tone
+    var n = music.n
+    var at = T.now() + 0.05
+    var dur = jitter(0.5, 0.9)
+    n.creaker.frequency.setValueAtTime(jitter(18, 10), at)
+    n.creaker.frequency.linearRampToValueAtTime(jitter(36, 20), at + dur)
+    n.creakBand.frequency.setValueAtTime(jitter(480, 400), at)
+    n.creakPan.pan.setValueAtTime(jitter(-0.8, 1.6), at)
+    n.creakEnv.triggerAttackRelease(dur, at)
+    musicLater(creak, 16, 26)
+  }
+
+  function windSwell() {
+    var n = music.n
+    n.wind.gain.rampTo(jitter(0.1, 0.08), 5)
+    n.windBand.frequency.rampTo(jitter(750, 300), 5)
+    musicLater(function () {
+      n.wind.gain.rampTo(0.03, 9)
+      n.windBand.frequency.rampTo(460, 9)
+    }, 6, 2)
+    musicLater(windSwell, 20, 25)
+  }
+
+  /** Fade in (or back in); if sound is held back, wait for a gesture. */
+  function musicPlay() {
+    clearTimeout(music.rest)
+    music.rest = 0
+    var silent = function () {
+      // No Web Audio here: the Diary stays silent, and its speaker goes.
+      music.failed = true
+      music.playing = false
+      dom.hush.hidden = true
+    }
+    if (!music.ctx) {
+      try {
+        musicContext()
+      } catch (_e) {
+        return silent()
+      }
+    }
+    var ctx = music.ctx
+    var go = function () {
+      if (music.ctx !== ctx) return
+      if (!musicWanted()) {
+        if (!music.playing && ctx.state === 'running' && ctx.rawContext && typeof ctx.rawContext.suspend === 'function') ctx.rawContext.suspend()
+        return
+      }
+      if (ctx.state !== 'running') {
+        music.blocked = true
+        return
+      }
+      music.blocked = false
+      if (!music.n) {
+        try {
+          musicBuild()
+        } catch (_e) {
+          return silent()
+        }
+      }
+      ctx.updateInterval = 0.1
+      music.n.master.gain.rampTo(dbGain(MUSIC_DB), MUSIC_IN_S)
+      if (music.playing) return
+      music.playing = true
+      musicLater(bellPhrase, 2, 4)
+      musicLater(creak, 8, 12)
+      musicLater(windSwell, 5, 10)
+    }
+    // Until it runs, a click or key in the Diary may start it (a resume
+    // held back for a gesture may never settle, so don't wait to know).
+    if (ctx.state !== 'running') music.blocked = true
+    var resumed
+    try {
+      resumed = ctx.resume()
+    } catch (_e) {
+      resumed = null
+    }
+    Promise.resolve(resumed).then(go, go)
+  }
+
+  /** Fade out, then let the audio rest (a suspended context costs nothing). */
+  function musicRest() {
+    music.blocked = false
+    if (!music.ctx) return
+    var was = music.playing
+    music.playing = false
+    music.timers.forEach(clearTimeout)
+    music.timers = []
+    if (!was || music.rest || !music.n) return
+    var ctx = music.ctx
+    music.n.master.gain.rampTo(0, MUSIC_OUT_S)
+    music.rest = setTimeout(function () {
+      music.rest = 0
+      if (music.playing || music.ctx !== ctx) return
+      ctx.updateInterval = 1
+      var raw = ctx.rawContext
+      if (raw && typeof raw.suspend === 'function') raw.suspend()
+    }, Math.round(MUSIC_OUT_S * 1000) + 100)
+  }
+
+  function musicSync() {
+    if (!musicAvailable()) return
+    if (musicWanted()) musicPlay()
+    else musicRest()
+  }
+
+  /** The frame is going away: stop at once. */
+  function musicClose() {
+    musicRest()
+    clearTimeout(music.rest)
+    music.rest = 0
+    var ctx = music.ctx
+    music.ctx = null
+    if (ctx && typeof ctx.close === 'function') {
+      try {
+        ctx.close()
+      } catch (_e) {
+        // Already closed.
+      }
+    }
+  }
+
+  function musicMute(muted) {
+    music.muted = !!muted
+    prefs.set('music.muted', music.muted)
+    hushDraw()
+    musicSync()
+  }
+
+  /** The speaker: a hand-inked cone and its sound; muted, it is crossed
+   *  out. Built once, its waves and cross shown by class. */
+  function hushDraw() {
+    var b = dom.hush
+    b.setAttribute('aria-pressed', music.muted ? 'true' : 'false')
+    b.setAttribute('aria-label', music.muted ? 'Play the music (M)' : 'Mute the music (M)')
+    b.classList.toggle('muted', music.muted)
+    if (b.firstChild) return
+    var svg = document.createElementNS(SVG_NS, 'svg')
+    svg.setAttribute('viewBox', '0 0 32 32')
+    svg.setAttribute('aria-hidden', 'true')
+    svg.setAttribute('focusable', 'false')
+    var lines = [
+      { cls: 'cone', pts: [[5, 13], [10, 13], [16, 7], [16.5, 16], [16, 25], [10, 19], [5, 19], [5, 13]], o: { size: 2.2, thinning: 0.4 } },
+      { cls: 'wave', pts: [[20, 12.5], [21.6, 16], [20, 19.5]], o: { size: 2.3, thinning: 0.4, taperStart: 2, taperEnd: 2 } },
+      { cls: 'wave', pts: [[23.5, 9], [26.4, 16], [23.5, 23]], o: { size: 2.3, thinning: 0.4, taperStart: 3, taperEnd: 3 } },
+      { cls: 'cross', pts: [[3.5, 27.5], [10, 21], [17, 14.5], [24, 8], [28.5, 4]], o: { size: 2.4, thinning: 0.6, taperStart: 2, taperEnd: 10 } },
+    ]
+    lines.forEach(function (l) {
+      var p = document.createElementNS(SVG_NS, 'path')
+      p.setAttribute('class', l.cls)
+      var outline = inkOutline(l.pts, l.o)
+      if (outline) {
+        p.setAttribute('d', outlineD(outline, [0.5, 0.5, 31.5, 31.5]))
+      } else {
+        p.setAttribute('d', pathOf(l.pts))
+        p.classList.add('line')
+      }
+      svg.appendChild(p)
+    })
+    b.appendChild(svg)
+  }
+
+  function musicWire() {
+    if (!musicAvailable()) return
+    var config = (k2 && k2.config) || {}
+    var cfg = config.music
+    music.muted = !!prefs.get('music.muted', cfg === false || cfg === 'off')
+    dom.hush.hidden = false
+    hushDraw()
+    dom.hush.addEventListener('click', function () {
+      musicMute(!music.muted)
+    })
+    // Held back until a gesture: the first click or key in the Diary.
+    var nudge = function () {
+      if (music.blocked) musicSync()
+    }
+    document.addEventListener('pointerdown', nudge, true)
+    document.addEventListener('keydown', nudge, true)
+    window.addEventListener('pagehide', musicClose)
   }
 
   // ── wiring ───────────────────────────────────────────────────────────
@@ -1532,12 +2497,8 @@
     ;[dom.desk, dom.book, dom.page].forEach(function (el) {
       el.addEventListener('scroll', unslide)
     })
-    document.addEventListener('visibilitychange', function () {
-      dom.root.classList.toggle('asleep', !!document.hidden)
-      scribePause(document.hidden)
-      if (document.hidden) ghostStop()
-      else ghostLater(GHOST_IDLE_MS, true)
-    })
+    document.addEventListener('visibilitychange', sightChanged)
+    watchSight()
     dom.ink.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault()
@@ -1555,11 +2516,18 @@
       if (state.revealing && !dom.pen.contains(e.target)) stopReveal(true)
     })
     dom.sheet.addEventListener('scroll', function () {
+      fx.scroll = dom.sheet.scrollTop
       glideScrolled()
       if (dom.sheet.scrollTop < 24) loadOlder()
     })
     document.addEventListener('keydown', function (e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return
+      if ((e.key === 'm' || e.key === 'M') && e.target !== dom.ink && !dom.hush.hidden) {
+        // M mutes the music, except while you write (then it's a letter).
+        e.preventDefault()
+        musicMute(!music.muted)
+        return
+      }
       var typing = e.target === dom.ink && dom.ink.value.length > 0
       if (e.key === 'PageDown' || (e.key === 'ArrowRight' && !typing)) {
         e.preventDefault()
@@ -1577,6 +2545,11 @@
   function begin() {
     state.reduced = !!(k2.motion && k2.motion.reduced)
     dom.root.classList.toggle('reduced', state.reduced)
+    // You have arrived on this Garden: the paper wakes and the room plays.
+    fxInit()
+    musicWire()
+    music.arrived = true
+    musicSync()
 
     if (!can('agents.subscribe')) {
       drawBlank('the diary is sealed', UNREACHED)

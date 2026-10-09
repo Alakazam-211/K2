@@ -10,6 +10,6 @@
     "thread:post": "so what you write on a page is sent to that agent"
   },
   "requires": {
-    "libs": ["perfect-freehand@1", "font-caveat@5"]
+    "libs": ["perfect-freehand@1", "font-caveat@5", "pixi.js@8", "tone@15"]
   }
 }

@@ -31,6 +31,11 @@ const DIR = process.env.DIARY_DIR || resolve(__dirname, '../../../../crates/k2-c
 const HTML = readFileSync(resolve(DIR, 'index.html'), 'utf8')
 const JS = readFileSync(resolve(DIR, 'diary.js'), 'utf8')
 const CSS = readFileSync(resolve(DIR, 'diary.css'), 'utf8')
+const MANIFEST = JSON.parse(readFileSync(resolve(DIR, 'manifest.json'), 'utf8')) as { requires: { libs: string[] } }
+// K2's real perfect-freehand (the vendored stdlib file the frame inlines).
+const PF = new Function(
+  readFileSync(resolve(__dirname, '../../zen-lib/perfect-freehand@1.2.3/perfect-freehand.js'), 'utf8') + '\nreturn PerfectFreehand',
+)() as { getStroke: (p: number[][], o: object) => number[][] }
 
 interface Row {
   address: string
@@ -76,9 +81,21 @@ const item = (seq: number, body: string, mine: boolean, extra: Record<string, un
 
 type Cb = (v: unknown) => void
 
-const flush = () => new Promise((r) => setTimeout(r, 0))
+// A macrotask: K2's hello and the promises after it settle. Under fake
+// timers (the ink, paper and sound tests) the fake clock runs it.
+const flush = (): Promise<unknown> => (vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : new Promise((r) => setTimeout(r, 0)))
 
-async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; hello?: 'late' | 'never' } = {}) {
+/** K2's libraries the Diary may find on `window` (the real frame inlines
+ *  them before the widget's script): the real perfect-freehand, and fakes
+ *  for PixiJS and Tone.js (no WebGL or Web Audio in jsdom). */
+interface Libs {
+  PerfectFreehand?: unknown
+  PIXI?: unknown
+  Tone?: unknown
+  IntersectionObserver?: unknown
+}
+
+async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; hello?: 'late' | 'never'; libs?: Libs; config?: Record<string, unknown> } = {}) {
   let rowsCb: Cb | null = null
   const threads = new Map<string, Cb>()
   let frames: Array<(t: number) => void> = []
@@ -92,7 +109,7 @@ async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; 
   })
   connected.catch(() => {})
   const k2 = {
-    config: {},
+    config: opts.config ?? {},
     get motion() {
       return { reduced: helloed && opts.reduced === true }
     },
@@ -125,7 +142,13 @@ async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; 
   style.textContent = CSS
   document.head.appendChild(style)
   document.body.innerHTML = HTML.slice(HTML.indexOf('<body>') + 6, HTML.indexOf('<script'))
-  const win = { k2 } as unknown as Window
+  const winListeners: Record<string, Array<() => void>> = {}
+  const win = {
+    k2,
+    ...opts.libs,
+    devicePixelRatio: 2,
+    addEventListener: (type: string, fn: () => void) => void (winListeners[type] ??= []).push(fn),
+  } as unknown as Window
   const raf = (f: (t: number) => void) => {
     frames.push(f)
     return frames.length
@@ -164,6 +187,10 @@ async function harness(opts: { reduced?: boolean; can?: (v: string) => boolean; 
       cb({ address, phase: 'ready', note: null, hasMore: false, turn: null, ...v })
     },
     following: () => [...threads.keys()],
+    /** An event on the frame's window (pagehide: K2 removed the frame). */
+    windowEvent: (type: string) => (winListeners[type] ?? []).forEach((f) => f()),
+    /** The harness's frame clock now. */
+    now: () => now,
     advance(ms: number) {
       now += ms
       const run = frames
@@ -816,17 +843,22 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
     expect(h.$('stir').hidden).toBe(false)
     expect(document.querySelector('#stir span:not(.ghosts)')).toBeNull()
     let most = 0
+    let dashed = 0
     const shapes = new Set<string>()
     for (let i = 0; i < 300; i++) {
       vi.advanceTimersByTime(50)
       most = Math.max(most, paths().length)
-      for (const p of paths()) shapes.add(p.getAttribute('d') ?? '')
+      for (const p of paths()) {
+        shapes.add(p.getAttribute('d') ?? '')
+        expect(p.namespaceURI).toBe('http://www.w3.org/2000/svg')
+        // Each stroke is drawn by a dash offset (between fits the drawing
+        // is briefly empty, so this is read while it's there).
+        if (Number(p.style.strokeDasharray) > 0) dashed++
+      }
     }
     expect(most).toBeGreaterThanOrEqual(4)
     expect(shapes.size).toBeGreaterThan(8)
-    const p = paths()[0] ?? document.createElementNS('http://www.w3.org/2000/svg', 'path')
-    expect(p.namespaceURI).toBe('http://www.w3.org/2000/svg')
-    expect(Number(p.style.strokeDasharray)).toBeGreaterThan(0)
+    expect(dashed).toBeGreaterThan(20)
     // The reply arrives while the turn is still marked working.
     h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'At last, an answer.', false)], turn: { state: 'working', since: 1 } })
     expect(document.querySelector('.entry.bleeding')).not.toBeNull()
@@ -844,6 +876,7 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
   it('every stroke stays inside the drawing, with room for the pen and its shadow, whatever the dice say', async () => {
     const PAD = 4
     let checked = 0
+    let inks = 0
     const seen = new Set<string>()
     for (let seed = 1; seed <= 20; seed++) {
       let a = seed * 0x9e3779b9
@@ -854,7 +887,7 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296
       })
       document.body.innerHTML = ''
-      const h = await harness()
+      const h = await harness({ libs: { PerfectFreehand: PF } })
       vi.useFakeTimers()
       h.rows([row('cortana', 0)])
       h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
@@ -867,6 +900,12 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
           const d = p.getAttribute('d') ?? ''
           if (seen.has(d)) continue
           seen.add(d)
+          if (p.classList.contains('ink')) {
+            inks++
+            expect(p.classList.contains('line')).toBe(false)
+            expect(d).toMatch(/^M[\d. ]+Q[\d. ]+T[\d. ]+Z$/)
+            expect(p.getAttribute('mask')).toMatch(/^url\(#scribe-hand-\d+\)$/)
+          }
           const n = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
           expect(n.length % 2).toBe(0)
           for (let k = 0; k < n.length; k += 2) {
@@ -882,9 +921,82 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
       vi.restoreAllMocks()
     }
     expect(seen.size).toBeGreaterThan(200)
-    expect(checked).toBeGreaterThan(10_000)
+    expect(checked).toBeGreaterThan(40_000)
+    // The real pen drew them: filled outlines, each traced by a mask line.
+    expect(inks).toBeGreaterThan(100)
     // The box around it has real padding, so the drawing never meets the clip.
     expect(CSS).toMatch(/\.stir \{[^}]*padding: 4px 6px 10px 6px/)
+  }, 60_000)
+
+  // Rosson 2026-10-08: "the words just ended early". A scrawled word runs
+  // its full length and ends on purpose: a flick up as the pen lifts, or a
+  // jab down given up on (then a stab of ink); each fit's words span the
+  // line, left margin to right.
+  it('every scrawled word finishes (a lifting flick, or a jab and a stab), and the words span the line', async () => {
+    const W = 260
+    const BASE = 27
+    const nums = (d: string) => d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
+    let fits = 0
+    let words = 0
+    let flicks = 0
+    let jabs = 0
+    for (let seed = 1; seed <= 12; seed++) {
+      let a = seed * 0x2545f491
+      vi.spyOn(Math, 'random').mockImplementation(() => {
+        a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      })
+      document.body.innerHTML = ''
+      const h = await harness({ libs: { PerfectFreehand: PF } })
+      vi.useFakeTimers()
+      h.rows([row('cortana', 0)])
+      h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
+      let fit = new Map<string, { x0: number; x1: number; endY: number; jab: boolean }>()
+      let stabs = 0
+      const close = () => {
+        if (!fit.size) return
+        const ws = [...fit.values()]
+        expect(Math.min(...ws.map((w) => w.x0))).toBeLessThan(W * 0.1)
+        expect(Math.max(...ws.map((w) => w.x1))).toBeGreaterThan(W * 0.85)
+        expect(stabs).toBeGreaterThanOrEqual(ws.filter((w) => w.jab).length)
+        fits++
+        fit = new Map()
+        stabs = 0
+      }
+      for (let i = 0; i < 120; i++) {
+        vi.advanceTimersByTime(200)
+        const groups = [...document.querySelectorAll('#scribble g')]
+        if (!groups.length) close()
+        for (const g of groups) {
+          const hand = g.querySelector('path.hand')?.getAttribute('d') ?? ''
+          if (g.querySelector('path.ink.stab') && !fit.has('stab:' + hand)) {
+            fit.set('stab:' + hand, { x0: Infinity, x1: -Infinity, endY: 0, jab: false })
+            stabs++
+          }
+          if (!g.querySelector('path.ink.scrawl') || fit.has(hand)) continue
+          const n = nums(hand)
+          const xs = n.filter((_, k) => k % 2 === 0)
+          const endY = n[n.length - 1]
+          // It ends off the baseline, never mid-letter on it: up (a flick)
+          // or down (a jab).
+          const jab = endY > BASE + 1.5
+          expect(jab || endY < BASE - 1).toBe(true)
+          if (jab) jabs++
+          else flicks++
+          words++
+          fit.set(hand, { x0: Math.min(...xs), x1: Math.max(...xs), endY, jab })
+        }
+      }
+      for (const k of [...fit.keys()]) if (k.startsWith('stab:')) fit.delete(k)
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+    expect(fits).toBeGreaterThan(12)
+    expect(words).toBeGreaterThan(30)
+    expect(flicks).toBeGreaterThan(0)
+    expect(jabs).toBeGreaterThan(0)
   }, 60_000)
 
   it('pauses while the frame is hidden', async () => {
@@ -1012,13 +1124,14 @@ describe('k2:diary@2: the page glides up as the hand writes', () => {
     expect(f.s.top).toBe(1000)
   })
 
-  it('no seal button and no whispers switch: Enter seals, and nothing on the page makes a sound', async () => {
+  it('no seal button and no whispers switch: Enter seals; the only other control is the music’s speaker, hidden without Tone', async () => {
     const h = await harness({ reduced: true })
     h.rows([row('cortana', 0)])
     h.view('cortana::local', { items: [] })
     expect(document.getElementById('send')).toBeNull()
     expect(document.getElementById('whispers')).toBeNull()
-    expect([...document.querySelectorAll('button')].map((b) => b.id)).toEqual(['prev', 'next'])
+    expect([...document.querySelectorAll('button')].map((b) => b.id)).toEqual(['hush', 'prev', 'next'])
+    expect(h.$('hush').hidden).toBe(true) // no Tone.js here: nothing to mute
     expect(JS).not.toMatch(/AudioContext|whispers|setSound/)
     const ink = h.$('ink') as HTMLTextAreaElement
     ink.value = 'sealed with Enter'
@@ -1073,5 +1186,546 @@ describe('k2:diary@2: how many ghosts are out (0.45.2 counts)', () => {
     h.rows([{ ...row('cortana', 0), counts: { subagents: 0, tools: 0, commands: 0 } } as Row])
     expect(h.$('stir').hidden).toBe(true)
     expect(line.hidden).toBe(true)
+  })
+})
+
+// ── ink, paper and sound (Rosson 2026-10-08) ─────────────────────────────
+// perfect-freehand for the ink, PixiJS for the paper under the words, and
+// Tone.js for the room's music, each from K2's library. jsdom has neither
+// WebGL nor Web Audio, so PixiJS and Tone.js are fakes that record what the
+// Diary asks of them; perfect-freehand is the real vendored file.
+
+/** A 2d context good enough for the paper tile (jsdom has none). */
+function fake2d(): void {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+    () =>
+      ({
+        createImageData: (w: number, hgt: number) => ({ data: new Uint8ClampedArray(w * hgt * 4) }),
+        putImageData: () => {},
+        beginPath: () => {},
+        moveTo: () => {},
+        quadraticCurveTo: () => {},
+        stroke: () => {},
+      }) as unknown as CanvasRenderingContext2D,
+  )
+}
+
+function fakePixi(opts: { fail?: boolean } = {}) {
+  const log = {
+    inits: [] as Array<Record<string, unknown>>,
+    renders: 0,
+    shader: null as null | { gl: { vertex: string; fragment: string } },
+    group: null as null | { uniforms: Record<string, Float32Array> },
+    tickerStarts: 0,
+    resized: [] as number[][],
+    destroyed: 0,
+  }
+  class UniformGroup {
+    uniforms: Record<string, Float32Array>
+    updates = 0
+    constructor(u: Record<string, { value: Float32Array }>) {
+      this.uniforms = Object.fromEntries(Object.entries(u).map(([k, v]) => [k, v.value]))
+      log.group = this
+    }
+    update() {
+      this.updates++
+    }
+  }
+  class Application {
+    stage = { addChild: () => {} }
+    renderer = { resize: (w: number, hgt: number) => void log.resized.push([w, hgt]) }
+    ticker = { start: () => void log.tickerStarts++, stop: () => {}, add: () => {} }
+    init(o: Record<string, unknown>) {
+      log.inits.push(o)
+      return opts.fail ? Promise.reject(new Error('no WebGL')) : Promise.resolve()
+    }
+    render() {
+      log.renders++
+    }
+    destroy() {
+      log.destroyed++
+    }
+  }
+  const PIXI = {
+    Application,
+    UniformGroup,
+    Texture: { from: () => ({ source: {} as Record<string, unknown> }) },
+    Shader: { from: (o: { gl: { vertex: string; fragment: string } }) => ((log.shader = o), {}) },
+    Geometry: class {},
+    Mesh: class {},
+  }
+  return { PIXI, log }
+}
+
+function fakeTone(opts: { blocked?: boolean } = {}) {
+  const log = {
+    contexts: [] as Array<Record<string, unknown>>,
+    resumes: 0,
+    suspends: 0,
+    closes: 0,
+    master: [] as Array<[number, number]>, // the master gain's ramps: [to, seconds]
+    nodes: 0,
+    triggers: 0,
+    allowed: !opts.blocked, // a gesture lets a held-back context run
+  }
+  let first: Node | null = null
+  class Param {
+    value = 0
+    constructor(private owner: Node) {}
+    rampTo(v: number, t: number) {
+      if (this.owner === first) log.master.push([v, t])
+      this.value = v
+      return this
+    }
+    setValueAtTime() {
+      return this
+    }
+    linearRampToValueAtTime() {
+      return this
+    }
+  }
+  class Node {
+    gain = new Param(this)
+    frequency = new Param(this)
+    pan = new Param(this)
+    constructor() {
+      log.nodes++
+      if (!first) first = this // the master gain is the first node made
+    }
+    connect() {
+      return this
+    }
+    toDestination() {
+      return this
+    }
+    start() {
+      return this
+    }
+    triggerAttackRelease() {
+      log.triggers++
+      return this
+    }
+  }
+  class Context {
+    state = 'suspended'
+    updateInterval = 0
+    rawContext: { suspend: () => Promise<void> }
+    constructor(o: Record<string, unknown>) {
+      log.contexts.push(o)
+      this.rawContext = {
+        suspend: () => {
+          log.suspends++
+          this.state = 'suspended'
+          return Promise.resolve()
+        },
+      }
+    }
+    resume() {
+      log.resumes++
+      if (!log.allowed) return new Promise<void>(() => {}) // held back: never settles
+      this.state = 'running'
+      return Promise.resolve()
+    }
+    close() {
+      log.closes++
+      this.state = 'closed'
+    }
+  }
+  const Tone = {
+    Context,
+    setContext: () => {},
+    now: () => 0,
+    Gain: Node,
+    Reverb: Node,
+    FeedbackDelay: Node,
+    Filter: Node,
+    Oscillator: Node,
+    LFO: Node,
+    Noise: Node,
+    PolySynth: Node,
+    FMSynth: Node,
+    Panner: Node,
+    AmplitudeEnvelope: Node,
+  }
+  return { Tone, log }
+}
+
+const hide = (hidden: boolean) => {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+describe('k2:diary@2: ink from perfect-freehand', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('the manifest asks K2 for its libraries by major version', () => {
+    expect(MANIFEST.requires.libs).toEqual(['perfect-freehand@1', 'font-caveat@5', 'pixi.js@8', 'tone@15'])
+  })
+
+  it('the flourish under a name is a filled, tapered outline inside its box', async () => {
+    const h = await harness({ reduced: true, libs: { PerfectFreehand: PF } })
+    h.rows([row('cortana', 0), row('nora', 1)])
+    for (let page = 0; page < 2; page++) {
+      const d = h.$('flourish').getAttribute('d') ?? ''
+      expect(d).toMatch(/^M[\d. ]+Q[\d. ]+T[\d. ]+Z$/)
+      const n = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
+      for (let k = 0; k < n.length; k += 2) {
+        expect(n[k]).toBeGreaterThanOrEqual(0.5)
+        expect(n[k]).toBeLessThanOrEqual(159.5)
+        expect(n[k + 1]).toBeGreaterThanOrEqual(0.5)
+        expect(n[k + 1]).toBeLessThanOrEqual(15.5)
+      }
+      h.key('ArrowRight')
+    }
+  })
+
+  it('some replies get a blot where the pen rested: the same ones every time, inside their box, never on your words', async () => {
+    const h = await harness({ reduced: true, libs: { PerfectFreehand: PF } })
+    h.rows([row('cortana', 0)])
+    const items = Array.from({ length: 40 }, (_, i) => item(i + 1, `line ${i + 1}`, i % 5 === 0))
+    h.view('cortana::local', { items })
+    const blotted = () => [...document.querySelectorAll('.entry')].filter((e) => e.querySelector('.blot')).map((e) => (e as HTMLElement).dataset.id)
+    const first = blotted()
+    expect(first.length).toBeGreaterThan(3)
+    expect(first.length).toBeLessThan(25)
+    expect(document.querySelectorAll('.entry.mine .blot').length).toBe(0)
+    for (const svg of document.querySelectorAll('.blot')) {
+      expect(svg.getAttribute('aria-hidden')).toBe('true')
+      for (const p of svg.querySelectorAll('path')) {
+        const n = (p.getAttribute('d') ?? '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
+        for (let k = 0; k < n.length; k += 2) {
+          expect(n[k]).toBeGreaterThanOrEqual(0.5)
+          expect(n[k]).toBeLessThanOrEqual(39.5)
+          expect(n[k + 1]).toBeGreaterThanOrEqual(0.5)
+          expect(n[k + 1]).toBeLessThanOrEqual(27.5)
+        }
+      }
+    }
+    h.view('cortana::local', { items })
+    expect(blotted()).toEqual(first)
+    // A blot waits for the words to dry.
+    expect(CSS).toMatch(/\.entry\.bleeding \.blot \{ opacity: 0;/)
+  })
+
+  it('without the library: plain lines, no blots, nothing breaks', async () => {
+    const h = await harness()
+    vi.useFakeTimers()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: Array.from({ length: 12 }, (_, i) => item(i + 1, 'x', false)), turn: { state: 'working', since: 1 } })
+    vi.advanceTimersByTime(1500)
+    expect(document.querySelectorAll('.blot').length).toBe(0)
+    expect(document.querySelectorAll('#scribble path.ink.line').length).toBeGreaterThan(0)
+  })
+})
+
+describe('k2:diary@2: the paper under the words (PixiJS)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    fake2d()
+  })
+  afterEach(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** Move both clocks: K2's timers and the frame clock, a frame at a time. */
+  const run = (h: Awaited<ReturnType<typeof harness>>, ms: number) => {
+    for (let t = 0; t < ms; t += 16) {
+      vi.advanceTimersByTime(16)
+      h.advance(16)
+    }
+  }
+
+  it('one WebGL canvas, first in the page and under every word; no ticker of its own', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    const canvas = document.querySelector('canvas.paperfx')
+    expect(canvas).not.toBeNull()
+    expect(h.$('page').firstElementChild).toBe(canvas)
+    expect(canvas?.getAttribute('aria-hidden')).toBe('true')
+    expect(document.documentElement.classList.contains('fx')).toBe(true)
+    expect(log.inits[0]).toMatchObject({ canvas, backgroundAlpha: 0, preference: 'webgl', autoStart: false, sharedTicker: false, resolution: 1.5 })
+    expect(log.tickerStarts).toBe(0)
+    // Everything that shows sits in a positioned box after the canvas.
+    expect(CSS).toMatch(/\.paperfx \{[^}]*position: absolute;[^}]*pointer-events: none;/)
+    expect(CSS).toMatch(/\.page-foot \{\s*position: relative;/)
+    expect(CSS).toMatch(/\.sheet \{\s*position: relative;/)
+    // The shader paints the paper, the candle and the bleed.
+    expect(log.shader?.gl.fragment).toMatch(/uniform sampler2D uPaper;[\s\S]*uLight[\s\S]*bleed\(/)
+  })
+
+  it('at rest it draws only when the candle flickers: a few frames a second, never 30', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [item(1, 'hi', true)] })
+    run(h, 500)
+    const before = log.renders
+    expect(before).toBeGreaterThan(0)
+    run(h, 7200) // two whole flicker cycles: nine steps each
+    const drawn = log.renders - before
+    expect(drawn).toBeGreaterThanOrEqual(12)
+    expect(drawn).toBeLessThanOrEqual(22)
+    // The light's strength is the CSS flicker's value.
+    expect([0.92, 0.74, 1, 0.86, 0.97, 0.7, 0.93, 0.82]).toContain(log.group?.uniforms.uLight[3])
+  })
+
+  it('stops while hidden and starts again when shown', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    run(h, 500)
+    hide(true)
+    const at = log.renders
+    run(h, 10_000)
+    expect(log.renders).toBe(at)
+    hide(false)
+    run(h, 500)
+    expect(log.renders).toBeGreaterThan(at)
+  })
+
+  it('stops while its frame is out of sight (IntersectionObserver), as when hidden', async () => {
+    const { PIXI, log } = fakePixi()
+    let report: (e: Array<{ isIntersecting: boolean; intersectionRatio: number }>) => void = () => {}
+    const IntersectionObserver = class {
+      constructor(cb: typeof report) {
+        report = cb
+      }
+      observe() {}
+    }
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI, IntersectionObserver } })
+    await vi.advanceTimersByTimeAsync(0)
+    run(h, 500)
+    report([{ isIntersecting: false, intersectionRatio: 0 }])
+    expect(document.documentElement.classList.contains('asleep')).toBe(true)
+    const at = log.renders
+    run(h, 8000)
+    expect(log.renders).toBe(at)
+    report([{ isIntersecting: true, intersectionRatio: 1 }])
+    run(h, 500)
+    expect(log.renders).toBeGreaterThan(at)
+  })
+
+  it('reduced motion: one still frame (the candle at rest, no wet ink), then nothing', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ reduced: true, libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.renders).toBe(1)
+    expect(log.group?.uniforms.uLight[3]).toBe(1)
+    expect(log.group?.uniforms.uWetA[0]).toBe(0)
+    run(h, 10_000)
+    expect(log.renders).toBe(1)
+  })
+
+  it('a reply bleeding in wets the paper under its newest words, at most 30 frames a second; it dries and rests', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({ left: 120, top: 200, width: 60, height: 30, right: 180, bottom: 230, x: 120, y: 200, toJSON: () => ({}) }) as DOMRect,
+    )
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [item(1, 'hi', true)] })
+    run(h, 300)
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'A long reply that takes its time to write itself across the page.', false)] })
+    const at = log.renders
+    let wet = 0
+    for (let t = 0; t < 1000; t += 8) {
+      vi.advanceTimersByTime(8)
+      h.advance(8)
+      wet = Math.max(wet, log.group?.uniforms.uWetA[0] ?? 0)
+    }
+    expect(wet).toBeGreaterThan(0.5)
+    const drawn = log.renders - at
+    expect(drawn).toBeGreaterThan(15)
+    expect(drawn).toBeLessThanOrEqual(31)
+    // Done writing and dry: back to the flame's pace.
+    run(h, 9000)
+    expect(log.group?.uniforms.uWetA[0]).toBe(0)
+    const rest = log.renders
+    run(h, 3600)
+    expect(log.renders - rest).toBeLessThanOrEqual(11)
+  })
+
+  it('no WebGL: the canvas goes and the page is as it was', async () => {
+    const { PIXI } = fakePixi({ fail: true })
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(document.querySelector('canvas')).toBeNull()
+    expect(document.documentElement.classList.contains('fx')).toBe(false)
+    h.rows([row('cortana', 0)])
+    expect(h.who()).toBe('Cortana')
+  })
+
+  it('its candle steps with the CSS flicker: the same table in both', () => {
+    const css = /@keyframes flicker \{\n([\s\S]*?)\n\}/.exec(CSS)?.[1] ?? ''
+    const fromCss = [...css.matchAll(/(\d+)% \{ opacity: ([\d.]+); \}/g)].map((m) => [Number(m[1]) / 100, Number(m[2])])
+    const js = /var FLICKER = (\[\[.*\]\])/.exec(JS)?.[1] ?? '[]'
+    expect(JSON.parse(js)).toEqual(fromCss)
+    expect(CSS).toMatch(/animation: flicker 3\.6s steps\(1, end\) infinite;/)
+    expect(JS).toContain('var FLICKER_MS = 3600')
+  })
+})
+
+describe('k2:diary@2: the room’s music (Tone.js)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  const QUIET = Math.pow(10, -24 / 20)
+
+  it('nothing before K2 connects the frame; on arrival it fades in, quietly (-24 dB over 4 s)', async () => {
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { Tone }, hello: 'late' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.contexts).toHaveLength(1)
+    expect(log.contexts[0]).toMatchObject({ latencyHint: 'playback' })
+    expect(log.resumes).toBe(1)
+    expect(log.master.at(-1)?.[0]).toBeCloseTo(QUIET, 5)
+    expect(log.master.at(-1)?.[1]).toBe(4)
+    // Bells, creaks and wind follow on their own.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(log.triggers).toBeGreaterThan(3)
+    expect(h.$('hush').hidden).toBe(false)
+  })
+
+  it('held back until a gesture (an autoplay rule): silent on arrival, then the first click starts it', async () => {
+    const { Tone, log } = fakeTone({ blocked: true })
+    vi.useFakeTimers()
+    const h = await harness({ libs: { Tone } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.resumes).toBe(1)
+    expect(log.master).toEqual([])
+    expect(log.nodes).toBe(0) // the room isn't even built yet
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(log.triggers).toBe(0)
+    log.allowed = true
+    h.$('sheet').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.resumes).toBe(2)
+    expect(log.master.at(-1)?.[0]).toBeCloseTo(QUIET, 5)
+    // Once it runs, more clicks change nothing.
+    h.$('sheet').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.resumes).toBe(2)
+  })
+
+  it('hidden: it fades out and the audio rests; shown again: it comes back', async () => {
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    await harness({ libs: { Tone } })
+    await vi.advanceTimersByTimeAsync(0)
+    hide(true)
+    expect(log.master.at(-1)).toEqual([0, 0.8])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(log.suspends).toBe(1)
+    const triggers = log.triggers
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(log.triggers).toBe(triggers) // no bells in an empty room
+    hide(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.resumes).toBe(2)
+    expect(log.master.at(-1)?.[0]).toBeCloseTo(QUIET, 5)
+  })
+
+  it('leaving the Garden (K2 removes the frame): it stops at once', async () => {
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { Tone } })
+    await vi.advanceTimersByTimeAsync(0)
+    h.windowEvent('pagehide')
+    expect(log.closes).toBe(1)
+    const triggers = log.triggers
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(log.triggers).toBe(triggers)
+  })
+
+  it('the speaker at the top left mutes and unmutes; M does too, but never while you write', async () => {
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { Tone, PerfectFreehand: PF } })
+    await vi.advanceTimersByTimeAsync(0)
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [] })
+    const hush = h.$('hush')
+    expect(hush.parentElement).toBe(h.$('desk')) // over the room, not on the page
+    expect(hush.getAttribute('aria-label')).toBe('Mute the music (M)')
+    expect(hush.getAttribute('aria-pressed')).toBe('false')
+    expect(hush.querySelectorAll('svg path.cone, svg path.wave, svg path.cross').length).toBe(4)
+    hush.click()
+    expect(hush.getAttribute('aria-pressed')).toBe('true')
+    expect(hush.getAttribute('aria-label')).toBe('Play the music (M)')
+    expect(log.master.at(-1)).toEqual([0, 0.8])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(log.suspends).toBe(1)
+    // M, with the pen not in hand.
+    h.key('m')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hush.getAttribute('aria-pressed')).toBe('false')
+    expect(log.master.at(-1)?.[0]).toBeCloseTo(QUIET, 5)
+    // M in the pen is a letter.
+    const ink = h.$('ink') as HTMLTextAreaElement
+    ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }))
+    expect(hush.getAttribute('aria-pressed')).toBe('false')
+    // Hidden while muted, then shown: still muted, still silent.
+    hush.click()
+    hide(true)
+    hide(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hush.getAttribute('aria-pressed')).toBe('true')
+    expect(log.master.at(-1)?.[0]).toBe(0)
+    // Top left, faint until reached for, clear of the ⋯ menu (top right).
+    expect(CSS).toMatch(/\.hush \{[^}]*position: absolute;[^}]*top: 14px;[^}]*left: 14px;[^}]*opacity: 0\.32;/)
+    expect(/\.hush \{[^}]*\bright:/.test(CSS)).toBe(false)
+    expect(CSS).toMatch(/\.hush:hover, \.hush:focus-visible \{ opacity: 1; \}/)
+  })
+
+  it('a Garden can start it muted (config music = "off"); the mute is kept while the frame lives', async () => {
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { Tone }, config: { music: 'off' } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.resumes).toBe(0)
+    expect(h.$('hush').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('no Tone.js, or no Web Audio: silent, and no speaker', async () => {
+    const h1 = await harness()
+    expect(h1.$('hush').hidden).toBe(true)
+    document.body.innerHTML = ''
+    const { Tone } = fakeTone()
+    const Broken = { ...Tone, Context: class { constructor() { throw new Error('no audio') } } }
+    vi.useFakeTimers()
+    const h2 = await harness({ libs: { Tone: Broken } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h2.$('hush').hidden).toBe(true)
+  })
+
+  it('only Tone’s plain nodes: nothing that needs an AudioWorklet (refused in a sealed widget)', () => {
+    for (const bad of ['Freeverb', 'JCReverb', 'FeedbackCombFilter', 'LowpassCombFilter', 'BitCrusher', 'Tone.start', 'ToneAudioWorklet']) {
+      expect(JS).not.toContain(bad)
+    }
   })
 })

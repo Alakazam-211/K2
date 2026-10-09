@@ -2522,7 +2522,9 @@ fn the_diary_garden_shows_the_haunted_study_full_bleed_and_others_stay_as_they_w
     assert_eq!(bg["opacity"], 1, "{bg}");
     assert!(bg["dataUrl"].as_str().is_some_and(|u| u.starts_with("data:image/webp;base64,")), "a data: URL");
     let bytes = bg["bytes"].as_u64().expect("bytes");
-    assert!(bytes > 4_000 && bytes < 300 * 1024, "the study is small: {bytes} bytes");
+    // 0.45.2 (Rosson 2026-10-08, "sharper"): the study is 3840x2400, about
+    // 0.8 MB, still well under the background cap.
+    assert!(bytes > 4_000 && bytes < schema::MAX_BACKGROUND_BYTES / 2, "the study fits the cap with room: {bytes} bytes");
     assert_eq!(r["chrome"]["stoplights"], "hidden", "{}", r["chrome"]);
     assert_eq!(r["page"]["layout"]["canvas"], "full", "{}", r["page"]["layout"]);
 

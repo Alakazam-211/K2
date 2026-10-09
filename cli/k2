@@ -9639,14 +9639,17 @@ j = v.get("job", {})
 q = v.get("queue") or {}
 def s(x):
     return re.sub(r"[^A-Za-z0-9_.:-]", "", str(x if x is not None else ""))
-open(os.environ["K2_CP_STATE"], "w").write("\t".join([
+# "|", not a tab: bash `read` merges runs of IFS whitespace, so an empty
+# field (no signal, no reason) shifted every later one (mini-1 smoke printed
+# the start time as the job id). s() never lets "|" through.
+open(os.environ["K2_CP_STATE"], "w").write("|".join([
     s(v.get("cursor", 0)), "1" if v.get("end") else "0", s(j.get("state")), s(j.get("exitCode")),
     s(j.get("signal")), s(j.get("reason")), s(j.get("short")), s(j.get("node")),
     s(j.get("startedAt")), s(j.get("endedAt")), s(q.get("position")), s(q.get("reason")),
 ]) + "\n")
 '
         local end st code sig reason short node started ended qpos qreason
-        IFS=$'\t' read -r cursor end st code sig reason short node started ended qpos qreason < "$state_file"
+        IFS='|' read -r cursor end st code sig reason short node started ended qpos qreason < "$state_file"
         lost=0
         if [ "$st" = "queued" ] && [ -n "$qreason" ] && [ "$qreason" != "${_CP_LAST_Q:-}" ]; then
             echo "[k2 compute] queued on $node: position $qpos — $qreason" >&2

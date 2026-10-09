@@ -139,6 +139,11 @@ expect_eq "attached run exits with the job's code" "$rc" "7"
 expect_eq "stdout is the job's stdout" "$stdout" "hello from the workspace"
 expect_has "stderr carries the job's stderr" "$(cat "$SANDBOX/err")" "to-stderr"
 expect_has "stderr has the exit line" "$(cat "$SANDBOX/err")" "[k2 compute] exit 7"
+# The exit line names THIS job (not a shifted timestamp) and how long it took.
+SHORT="$(sed -n 's/^\[k2 compute\] job \([0-9a-f]\{8\}\) on mini.*/\1/p' "$SANDBOX/err" | head -1)"
+expect_has "exit line says how long it took" "$(cat "$SANDBOX/err")" "after 0m"
+expect_has "exit line points at this job's logs" "$(cat "$SANDBOX/err")" "k2 compute logs $SHORT --failures"
+[ -n "$SHORT" ] && ok "job line parsed" || bad "job line parsed"
 set +e
 k2 compute run nosuch -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e

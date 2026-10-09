@@ -52,14 +52,15 @@ kind = "custom"
 widget = "k2:diary@2"
 column = 0
 
-# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top right,
+# Chrome (prd-zen-freeform-chrome FC25): one small ⋯ menu, top LEFT
+# (Rosson 2026-10-08; the Diary's music speaker sits just below it),
 # holding the Garden switcher and the Zen toggle. No usage chip, no theme
 # control: the Diary has its own candlelit look.
 [[widget]]
 id = "more"
 kind = "menu"
 slot = "top"
-align = "end"
+align = "start"
 [widget.props]
 icon = "dots"
 label = "Diary"

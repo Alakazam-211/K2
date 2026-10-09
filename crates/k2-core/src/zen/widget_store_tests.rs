@@ -286,14 +286,16 @@ fn catalog_templates_check_clean_and_carry_both_controls() {
         crate::zen::garden_catalog::current_entries().into_iter().find(|e| e.meta.short == "diary").expect("diary");
     assert!(diary.meta.new_users, "Rosson 2026-10-08: preinstalled");
     // Rosson 2026-10-08: nothing on the Diary that isn't haunted. Its only
-    // chrome is one ⋯ menu at the top right holding the two required
-    // controls; no usage chip, no theme control.
+    // chrome is one ⋯ menu, at the top LEFT ("move the top right one to
+    // the left"), holding the two required controls, so exactly one Garden
+    // switcher; no usage chip, no theme control.
     let page = crate::zen::template_page(&diary.template_id).expect("diary page");
     let items = page["chrome"]["items"].as_array().expect("chrome items");
     let kinds: Vec<&str> = items.iter().filter_map(|i| i["kind"].as_str()).collect();
     assert_eq!(kinds, vec!["menu", "garden-switcher", "zen-toggle"], "{page}");
     let menu = &items[0];
-    assert_eq!((menu["slot"].as_str(), menu["align"].as_str()), (Some("top"), Some("end")), "{menu}");
+    assert_eq!((menu["slot"].as_str(), menu["align"].as_str()), (Some("top"), Some("start")), "{menu}");
+    assert_eq!(kinds.iter().filter(|k| **k == "garden-switcher").count(), 1, "one Garden switcher: {page}");
     assert_eq!(menu["props"]["icon"], "dots", "{menu}");
     for i in &items[1..] {
         assert_eq!((i["slot"].as_str(), i["menu"].as_str()), (Some("menu"), Some("more")), "{i}");

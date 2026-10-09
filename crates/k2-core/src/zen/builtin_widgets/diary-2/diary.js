@@ -79,6 +79,7 @@
     prev: $('prev'),
     next: $('next'),
     glow: $('glow'),
+    candle: $('candle'),
     hush: $('hush'),
   }
 
@@ -1132,6 +1133,59 @@
     settle(t, true)
   }
 
+  // ── the corners: no dog-ears (Rosson 2026-10-08) ─────────────────────
+  // At rest a corner is plain paper. Reach for it (hover, or keyboard focus
+  // on the turn control) and it lifts in a soft curl: a curved crease, the
+  // underside lighter at the crease and darker toward the tip, grain on
+  // the back, a soft shadow on the page beneath and the page under showing
+  // through. Drawn once in SVG; CSS scales it from the corner (200 ms), so
+  // every size of lift is the same fold. Touch: a faint static hint.
+  // Reduced motion: a small still curl.
+  var CURL = 64 // the drawing, CURL × CURL, the page's corner at its bottom right
+  var CURL_LIFT = 40 // how far the fold reaches along each edge, fully lifted
+
+  function curlSvg(name) {
+    var S = CURL
+    var A = CURL_LIFT
+    var at = function (k) { return S - A * k }
+    var el = function (tag, attrs, parent) {
+      var n = document.createElementNS(SVG_NS, tag)
+      Object.keys(attrs).forEach(function (k) { n.setAttribute(k, String(attrs[k])) })
+      if (parent) parent.appendChild(n)
+      return n
+    }
+    var svg = el('svg', { class: 'curl', viewBox: '0 0 ' + S + ' ' + S, 'aria-hidden': 'true', focusable: 'false' })
+    var defs = el('defs', {}, svg)
+    var under = el('linearGradient', { id: 'curl-under-' + name, gradientUnits: 'userSpaceOnUse', x1: at(0.42), y1: at(0.42), x2: at(1), y2: at(1) }, defs)
+    el('stop', { offset: '0', 'stop-color': '#f7ecd2' }, under)
+    el('stop', { offset: '0.55', 'stop-color': '#e2cc9e' }, under)
+    el('stop', { offset: '1', 'stop-color': '#bfa271' }, under)
+    var beneath = el('linearGradient', { id: 'curl-beneath-' + name, gradientUnits: 'userSpaceOnUse', x1: at(0.5), y1: at(0.5), x2: S, y2: S }, defs)
+    el('stop', { offset: '0', 'stop-color': '#9c8358' }, beneath)
+    el('stop', { offset: '1', 'stop-color': '#c7b085' }, beneath)
+    var soft = el('filter', { id: 'curl-soft-' + name, x: '-50%', y: '-50%', width: '200%', height: '200%' }, defs)
+    el('feGaussianBlur', { stdDeviation: '2.6' }, soft)
+    var grain = el('filter', { id: 'curl-grain-' + name, x: '0', y: '0', width: '100%', height: '100%' }, defs)
+    el('feTurbulence', { type: 'fractalNoise', baseFrequency: '0.9', numOctaves: '2', seed: name === 'next' ? '7' : '3', result: 'n' }, grain)
+    el('feColorMatrix', { in: 'n', type: 'matrix', values: '0 0 0 0 0.35  0 0 0 0 0.24  0 0 0 0 0.12  0 0 0 0.22 0', result: 'g' }, grain)
+    el('feComposite', { in: 'g', in2: 'SourceGraphic', operator: 'in', result: 'gi' }, grain)
+    var merge = el('feMerge', {}, grain)
+    el('feMergeNode', { in: 'SourceGraphic' }, merge)
+    el('feMergeNode', { in: 'gi' }, merge)
+    var p = function (x, y) { return x.toFixed(1) + ' ' + y.toFixed(1) }
+    // The crease: from the bottom edge to the right edge, bowed a little
+    // toward the corner (paper rolls; it doesn't crease flat).
+    var crease = 'M' + p(at(1), S) + ' Q' + p(at(0.36), at(0.36)) + ' ' + p(S, at(1))
+    // The flap: the corner turned back over the page, its tip rounded.
+    var flap = crease + ' Q' + p(at(0.55), at(0.9)) + ' ' + p(at(0.97), at(0.97)) + ' Q' + p(at(0.9), at(0.55)) + ' ' + p(at(1), S) + ' Z'
+    var lift = el('g', { class: 'lift' }, svg)
+    el('path', { class: 'beneath', d: crease + ' L' + p(S, S) + ' Z', fill: 'url(#curl-beneath-' + name + ')' }, lift)
+    el('path', { class: 'cast', d: flap, transform: 'translate(-2.5 -2.5)', filter: 'url(#curl-soft-' + name + ')' }, lift)
+    el('path', { class: 'under', d: flap, fill: 'url(#curl-under-' + name + ')', filter: 'url(#curl-grain-' + name + ')' }, lift)
+    el('path', { class: 'crease', d: crease }, lift)
+    return svg
+  }
+
   /** Grab a corner and drag it across the page. */
   function grab(corner, dir) {
     var drag = null
@@ -1744,6 +1798,7 @@
     scribePause(hidden)
     if (hidden) ghostStop()
     else ghostLater(GHOST_IDLE_MS, true)
+    flameSync()
     fxSync()
     musicSync()
   }
@@ -1752,29 +1807,105 @@
   // One WebGL canvas, first in the page, under every word (the text stays
   // HTML: sharp, selectable, read aloud). One fragment shader paints:
   //   - paper fibre and grain (a 256 px tile made once, repeated);
-  //   - the candle warming the page, its strength stepping with the CSS
-  //     flicker on .glow (read from that animation's own clock, so the two
-  //     never drift) and its light swaying a hair;
+  //   - the candle warming the page, from the one flame (below) that also
+  //     drives the room's candle and the page's CSS glow;
   //   - ink bleeding into the fibres under freshly written words: while a
   //     reply bleeds in, the wet words' box is sampled every FX_SAMPLE_MS
   //     (a read before the frame's writes, never in the paint loop) and
   //     spreads and dries over FX_WET_MS; sent words soak a stain too.
-  // Frames are drawn on demand, never by a free-running ticker: at most 30
-  // a second while ink is wet; at rest only when the candle's flicker steps
-  // (two or three times a second, the light jumping with the flame). It
-  // all stops when the Diary can't be seen; reduced motion draws one still
-  // frame. No WebGL, no Pixi: the canvas goes and the CSS page stays.
+  // Frames are drawn by the flame's clock (FLAME_FPS, under the 30 fps
+  // cap), never by a free-running ticker. It all stops when the Diary
+  // can't be seen; reduced motion draws one still frame. The canvas covers
+  // the page box edge to edge: sized from the page's own rect on every
+  // resize (a ResizeObserver), at the screen's density. No WebGL, no Pixi:
+  // the canvas goes and the CSS page stays.
 
-  var FX_FPS_WET = 30
   var FX_SPOTS = 6
   var FX_SAMPLE_MS = 140
   var FX_WET_MS = 1800
   var FX_SOAK_MS = 3200
   var FX_TILE = 256
-  // The CSS candle (@keyframes flicker on .glow, steps(1, end), 3.6 s):
-  // [where in the cycle, opacity]. A test holds the two tables together.
-  var FLICKER_MS = 3600
-  var FLICKER = [[0, 0.92], [0.09, 0.74], [0.13, 1], [0.31, 0.86], [0.47, 0.97], [0.52, 0.7], [0.58, 0.93], [0.77, 0.82], [0.88, 1]]
+  // ── one flame (Rosson 2026-10-08: "sync them up") ────────────────────
+  // Every candle effect follows ONE flame: the candle in the room behind
+  // the book, the page's CSS glow and the paper shader's light. The flame
+  // is a seeded noise of time, sampled once a frame at FLAME_FPS; that one
+  // sample sets the room candle's opacity and size, and the page light (the
+  // same flame, a frame softer and dimmer: it follows, never leads) sets
+  // the glow's opacity and the shader's light in the same frame. CSS only
+  // eases within a frame (FLAME_EASE_MS). Hidden or reduced motion: all of
+  // them hold FLAME_REST together.
+
+  var FLAME_FPS = 20
+  var FLAME_EASE_MS = 50
+  var FLAME_REST = 0.9
+  var FLAME_FOLLOW = 0.6 // how much of the flame's change the page light takes each frame
+  var FX_REST_FPS = 10
+
+  var flame = { on: false, frame: 0, last: 0, value: FLAME_REST, page: FLAME_REST }
+
+  /** A smooth seeded noise in [0, 1). */
+  function lattice(i) {
+    var h = Math.imul((i | 0) ^ 0x2f6b9e53, 0x45d9f3b)
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b)
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+  }
+
+  function noise1(x) {
+    var i = Math.floor(x)
+    var f = x - i
+    var u = f * f * (3 - 2 * f)
+    return lattice(i) * (1 - u) + lattice(i + 1) * u
+  }
+
+  /** The flame's brightness at `ms`: a restless flicker, now and then a
+   *  gutter that nearly puts it out. In [0.35, 1]. */
+  function flameAt(ms) {
+    var t = ms / 1000
+    var v = 0.84 + 0.08 * (noise1(t * 3.3) - 0.5) * 2 + 0.05 * (noise1(t * 9.7 + 17) - 0.5) * 2
+    var g = noise1(t * 0.42 + 91)
+    if (g > 0.72) v -= ((g - 0.72) / 0.28) * 0.4
+    return clamp(v, 0.35, 1)
+  }
+
+  /** One sample, everywhere at once. */
+  function flameApply(v, now, still) {
+    flame.value = v
+    flame.page = still ? v : flame.page + (v - flame.page) * FLAME_FOLLOW
+    if (dom.candle) {
+      dom.candle.style.opacity = v.toFixed(3)
+      dom.candle.style.transform = 'scale(' + (0.93 + 0.1 * v).toFixed(3) + ')'
+    }
+    dom.glow.style.opacity = (0.45 + 0.55 * flame.page).toFixed(3)
+    // The paper redraws with the same sample: every flame frame while ink
+    // is wet; at rest only when its light has visibly moved, at most
+    // FX_REST_FPS a second (it never runs ahead of the flame).
+    if (still || fx.spots.length || (now - fx.drawnAt >= 1000 / FX_REST_FPS && Math.abs(flame.page - fx.drawn) >= 0.006)) fxDraw(now, still)
+  }
+
+  function flameTick(now) {
+    flame.frame = 0
+    if (!flame.on) return
+    if (now - flame.last >= 1000 / FLAME_FPS - 2) {
+      flame.last = now
+      flameApply(flameAt(now), now, false)
+    }
+    flame.frame = requestAnimationFrame(flameTick)
+  }
+
+  /** Burn while seen and moving; otherwise hold every candle at rest. */
+  function flameSync() {
+    var on = shown() && !reduced()
+    if (on && !flame.on) {
+      flame.on = true
+      flame.last = -Infinity
+      flame.frame = requestAnimationFrame(flameTick)
+    } else if (!on) {
+      flame.on = false
+      if (flame.frame) cancelAnimationFrame(flame.frame)
+      flame.frame = 0
+      flameApply(FLAME_REST, performance.now(), true)
+    }
+  }
 
   var FX_VERTEX = [
     'in vec2 aPosition;',
@@ -1832,6 +1963,10 @@
     '  float ba = clamp(b * inside * (0.05 + 0.13 * fib), 0.0, 0.2);',
     '  col = vec3(0.16, 0.06, 0.04) * ba + col * (1.0 - ba);',
     '  a = ba + a * (1.0 - ba);',
+    '  float edge = min(min(px.x, uSize.x - px.x), min(px.y, uSize.y - px.y));',
+    '  float worn = (1.0 - smoothstep(0.0, 7.0, edge + (fib - 0.5) * 7.0 + grain * 4.0)) * 0.24;',
+    '  col = vec3(0.30, 0.18, 0.07) * worn + col * (1.0 - worn);',
+    '  a = worn + a * (1.0 - worn);',
     '  finalColor = vec4(col, a);',
     '}',
   ].join('\n')
@@ -1842,13 +1977,9 @@
     group: null,
     ready: false,
     failed: false,
-    running: false,
-    timer: 0, // waiting for the candle's next step
-    frame: 0, // a frame asked for
-    last: 0, // when the last frame was drawn
-    jump: [0, 0], // where the flame's light sits this step
-    step: -1, // the flicker step drawn last
-    spots: [], // {x, y, w, h, scroll, born, ms}: page px, the sheet's scroll then
+    spots: [],
+    drawn: -1, // the page light last drawn
+    drawnAt: -Infinity, // {x, y, w, h, scroll, born, ms}: page px, the sheet's scroll then
     sampled: 0,
     w: 0,
     h: 0,
@@ -1856,35 +1987,6 @@
     scroll: 0,
     start: 0,
     observer: null,
-  }
-
-  /** Where the CSS candle is in its cycle: its own animation clock. */
-  function candleClock(now) {
-    var list = typeof dom.glow.getAnimations === 'function' ? dom.glow.getAnimations() : null
-    var a = list && list[0]
-    var t = a && a.currentTime
-    return typeof t === 'number' && isFinite(t) ? t : now
-  }
-
-  /** Which step of the CSS flicker `ms` falls in (steps(1, end): each
-   *  value holds until the next keyframe). */
-  function flickerStep(ms) {
-    var k = (((ms % FLICKER_MS) + FLICKER_MS) % FLICKER_MS) / FLICKER_MS
-    var at = 0
-    for (var i = 0; i < FLICKER.length; i++) if (k >= FLICKER[i][0]) at = i
-    return at
-  }
-
-  function flickerAt(ms) {
-    return FLICKER[flickerStep(ms)][1]
-  }
-
-  /** Milliseconds until the flicker's next step. */
-  function flickerNext(ms) {
-    var into = ((ms % FLICKER_MS) + FLICKER_MS) % FLICKER_MS
-    var i = flickerStep(ms)
-    var end = i + 1 < FLICKER.length ? FLICKER[i + 1][0] * FLICKER_MS : FLICKER_MS
-    return Math.max(16, Math.ceil(end - into) + 4)
   }
 
   /** The paper's tile, made once: red = grain (0.5 is none), green =
@@ -1928,11 +2030,13 @@
     return c
   }
 
-  /** The page's size and the sheet's box in it (a ResizeObserver callback
-   *  or the first draw: layout is clean then). */
+  /** The page's whole box (its own rect, so nothing short of an edge) and
+   *  the sheet's box in it. A ResizeObserver callback or the first draw:
+   *  layout is clean then. */
   function fxMeasure() {
-    fx.w = dom.page.clientWidth
-    fx.h = dom.page.clientHeight
+    var r = dom.page.getBoundingClientRect()
+    fx.w = Math.ceil(r.width)
+    fx.h = Math.ceil(r.height)
     fx.sheet = [dom.sheet.offsetLeft, dom.sheet.offsetTop, dom.sheet.offsetLeft + dom.sheet.clientWidth, dom.sheet.offsetTop + dom.sheet.clientHeight]
   }
 
@@ -1968,7 +2072,7 @@
         backgroundAlpha: 0,
         antialias: false,
         autoDensity: true,
-        resolution: Math.min(window.devicePixelRatio || 1, 1.5),
+        resolution: Math.min(window.devicePixelRatio || 1, 2),
         preference: 'webgl',
         powerPreference: 'low-power',
         autoStart: false,
@@ -2023,30 +2127,23 @@
     if (!fx.ready) return
     fxMeasure()
     fx.app.renderer.resize(Math.max(1, fx.w), Math.max(1, fx.h))
-    if (fx.running) fxSoon()
-    else if (shown()) fxStill()
+    if (shown()) fxDraw(performance.now(), !flame.on)
   }
 
-  /** Set this frame's uniforms. `still`: the candle at rest, no sway, no
-   *  wet ink (reduced motion). */
-  function fxFrame(now, still) {
+  /** Draw a frame with the flame's page light. `still`: no wet ink (the
+   *  candle at rest, reduced motion or hidden). */
+  function fxDraw(now, still) {
     var u = fx.group && fx.group.uniforms
-    if (!u) return
+    if (!fx.ready || !u) return
     u.uSize[0] = fx.w
     u.uSize[1] = fx.h
     for (var s = 0; s < 4; s++) u.uSheet[s] = fx.sheet[s]
-    var clock = candleClock(now)
-    var step = still ? -1 : flickerStep(clock)
-    var flick = still ? 1 : FLICKER[step][1]
-    if (step !== fx.step) {
-      // The flame jumps when it gutters, and its light with it.
-      fx.step = step
-      fx.jump = still ? [0, 0] : [jitter(-0.008, 0.016), jitter(-0.006, 0.012)]
-    }
-    u.uLight[0] = 0.16 + fx.jump[0]
-    u.uLight[1] = 0.06 + fx.jump[1]
-    u.uLight[2] = 0.95 * (0.96 + 0.04 * flick)
-    u.uLight[3] = flick
+    var light = flame.page
+    // The light leans a hair as the flame bends.
+    u.uLight[0] = 0.16 + (light - FLAME_REST) * 0.03
+    u.uLight[1] = 0.06 + (light - FLAME_REST) * 0.02
+    u.uLight[2] = 0.95 * (0.96 + 0.04 * light)
+    u.uLight[3] = light
     if (still) fx.spots = []
     fx.spots = fx.spots.filter(function (sp) { return now - sp.born < sp.ms })
     for (var i = 0; i < FX_SPOTS; i++) {
@@ -2060,74 +2157,32 @@
       ;(i < 4 ? u.uWetA : u.uWetB)[i % 4] = wet
     }
     fx.group.update()
-    return clock
-  }
-
-  function fxStill() {
-    fxFrame(performance.now(), true)
+    if (!shown()) return // set, ready for the return; nothing to draw unseen
     fx.app.render()
+    fx.drawn = light
+    fx.drawnAt = now
   }
 
-  function fxTick(now) {
-    fx.frame = 0
-    if (!fx.running) return
-    if (fx.spots.length && now - fx.last < 1000 / FX_FPS_WET - 2) {
-      fx.frame = requestAnimationFrame(fxTick) // over the cap: wait a frame
-      return
-    }
-    fx.last = now
-    var clock = fxFrame(now)
-    fx.app.render()
-    // Wet ink: the next frame. Dry: sleep until the flame next gutters.
-    if (fx.spots.length) fx.frame = requestAnimationFrame(fxTick)
-    else fx.timer = setTimeout(fxSoon, flickerNext(clock))
-  }
-
-  /** A frame soon (the next animation frame). */
-  function fxSoon() {
-    clearTimeout(fx.timer)
-    fx.timer = 0
-    if (!fx.running || fx.frame) return
-    fx.frame = requestAnimationFrame(fxTick)
-  }
-
-  function fxHalt() {
-    clearTimeout(fx.timer)
-    fx.timer = 0
-    if (fx.frame) cancelAnimationFrame(fx.frame)
-    fx.frame = 0
-  }
-
-  /** Run while seen and moving; one still frame under reduced motion. */
+  /** The paper follows the flame; just draw once now (the flame's clock
+   *  draws the rest). */
   function fxSync() {
-    if (!fx.ready) return
-    var run = shown() && !reduced()
-    if (run && !fx.running) {
-      fx.running = true
-      fx.step = -2
-      fxSoon()
-    } else if (!run && fx.running) {
-      fx.running = false
-      fxHalt()
-    }
-    if (!run && shown()) fxStill()
+    if (fx.ready && shown()) fxDraw(performance.now(), !flame.on)
   }
 
   /** Wet ink under `el` (its box now), drying over `ms`. Called before the
    *  frame writes anything, so the read finds layout already done. */
   function fxSpot(el, ms) {
-    if (!fx.ready || !fx.running || !el) return
+    if (!fx.ready || !flame.on || !el) return
     var r = el.getBoundingClientRect()
     if (!r.width || !r.height) return
     var p = dom.page.getBoundingClientRect()
     fx.spots.push({ x: r.left - p.left, y: r.top - p.top, w: r.width, h: r.height, scroll: fx.scroll, born: performance.now(), ms: ms })
     if (fx.spots.length > FX_SPOTS) fx.spots.shift()
-    fxSoon()
   }
 
   /** While a reply bleeds in: the wet words now, at most every FX_SAMPLE_MS. */
   function fxWet(now, ink) {
-    if (!fx.running || now - fx.sampled < FX_SAMPLE_MS) return
+    if (!flame.on || now - fx.sampled < FX_SAMPLE_MS) return
     fx.sampled = now
     for (var i = ink.nodes.length - 1; i >= 0; i--) {
       if (ink.nodes[i].wet.firstChild) return fxSpot(ink.nodes[i].wet, FX_WET_MS)
@@ -2174,7 +2229,24 @@
     }
   })()
 
-  var music = { arrived: false, muted: false, playing: false, blocked: false, failed: false, ctx: null, n: null, timers: [], rest: 0 }
+  var music = { arrived: false, muted: false, playing: false, blocked: false, failed: false, nudged: false, ctx: null, n: null, timers: [], rest: 0 }
+
+  function musicLoaded() {
+    var T = window.Tone
+    return !!T && typeof T.Context === 'function' && typeof T.setContext === 'function'
+  }
+
+  /** What the music is doing, in words (the speaker's tooltip and name). */
+  function musicState() {
+    if (!musicLoaded()) return 'the music library didn’t load'
+    if (music.failed) return 'no Web Audio here'
+    if (music.muted) return 'muted'
+    if (music.playing) return 'playing'
+    if (!music.arrived) return 'starting'
+    if (!shown()) return 'resting while the Diary is hidden'
+    if (music.blocked) return music.nudged ? 'blocked by the browser' : 'waiting for a click'
+    return 'starting'
+  }
 
   function musicAvailable() {
     var T = window.Tone
@@ -2208,22 +2280,24 @@
     var room = new T.Reverb({ decay: 6, preDelay: 0.08, wet: 0.6 }).connect(master)
     var echo = new T.FeedbackDelay({ delayTime: 0.43, feedback: 0.32, wet: 0.35 }).connect(room)
     var dry = new T.Gain(0.35).connect(master)
-    // The drone: three low voices a few cents apart, under a slow filter.
-    var low = new T.Filter({ type: 'lowpass', frequency: 220, Q: 0.7 })
-    low.connect(room)
-    low.connect(dry)
+    // The drone: three low voices a few cents apart, under a slow filter,
+    // in breaths (droneSwell), not one endless tone.
+    var drone = new T.Gain(0)
+    drone.connect(room)
+    drone.connect(dry)
+    var low = new T.Filter({ type: 'lowpass', frequency: 420, Q: 0.7 }).connect(drone)
     var voices = [
-      new T.Oscillator({ frequency: midiHz(26), type: 'sine', volume: -6 }),
-      new T.Oscillator({ frequency: midiHz(33, 7), type: 'triangle', volume: -15 }),
-      new T.Oscillator({ frequency: midiHz(38, -9), type: 'sawtooth', volume: -26 }),
+      new T.Oscillator({ frequency: midiHz(38), type: 'sine', volume: -4 }),
+      new T.Oscillator({ frequency: midiHz(45, 7), type: 'triangle', volume: -8 }),
+      new T.Oscillator({ frequency: midiHz(50, -9), type: 'sawtooth', volume: -16 }),
     ]
     voices.forEach(function (v) { v.connect(low) })
-    var sweep = new T.LFO({ frequency: 1 / 23, min: 140, max: 320 }).connect(low.frequency)
+    var sweep = new T.LFO({ frequency: 1 / 23, min: 260, max: 700 }).connect(low.frequency)
     // Wind: pink noise in a moving band.
     var windBand = new T.Filter({ type: 'bandpass', frequency: 460, Q: 1.1 })
     var wind = new T.Gain(0.03).connect(room)
     windBand.connect(wind)
-    var air = new T.Noise({ type: 'pink', volume: -6 }).connect(windBand)
+    var air = new T.Noise({ type: 'pink', volume: 0 }).connect(windBand)
     // Bells: a small FM bell, a little out of tune.
     var bells = new T.PolySynth(T.FMSynth, {
       harmonicity: 3.01,
@@ -2232,7 +2306,7 @@
       modulation: { type: 'sine' },
       envelope: { attack: 0.002, decay: 1.6, sustain: 0, release: 1.8 },
       modulationEnvelope: { attack: 0.002, decay: 0.5, sustain: 0, release: 0.5 },
-      volume: -16,
+      volume: -2,
     }).connect(echo)
     // A creak: a slow sawtooth (the stick and slip) through a wooden band.
     var creakPan = new T.Panner(0).connect(room)
@@ -2244,7 +2318,7 @@
     sweep.start()
     air.start()
     creaker.start()
-    music.n = { master: master, wind: wind, windBand: windBand, bells: bells, creakPan: creakPan, creakEnv: creakEnv, creakBand: creakBand, creaker: creaker }
+    music.n = { drone: drone, voices: voices, master: master, wind: wind, windBand: windBand, bells: bells, creakPan: creakPan, creakEnv: creakEnv, creakBand: creakBand, creaker: creaker }
   }
 
   /** Something in the room, again after `lo`..`lo + spread` seconds. */
@@ -2254,6 +2328,30 @@
       if (music.playing) fn()
     }, Math.round(jitter(lo, spread) * 1000))
     music.timers.push(id)
+  }
+
+  // Rosson 2026-10-08: "the low tone goes for a bit too long". It breathes:
+  // swells in over 3-5 s, holds 8-15 s, fades over 4-7 s, then rests 10-25
+  // s (wind and creaks only). Each breath sits a little higher or lower.
+  var DRONE_ROOTS = [38, 38, 36, 41, 33, 40]
+
+  function droneSwell() {
+    var T = window.Tone
+    var n = music.n
+    var at = T.now() + 0.05
+    var root = DRONE_ROOTS[Math.floor(Math.random() * DRONE_ROOTS.length)]
+    var cents = jitter(-15, 30)
+    n.voices[0].frequency.setValueAtTime(midiHz(root, cents), at)
+    n.voices[1].frequency.setValueAtTime(midiHz(root + 7, cents + 7), at)
+    n.voices[2].frequency.setValueAtTime(midiHz(root + 12, cents - 9), at)
+    var rise = jitter(3, 2)
+    var hold = jitter(8, 7)
+    var fall = jitter(4, 3)
+    n.drone.gain.rampTo(jitter(0.75, 0.25), rise)
+    musicLater(function () {
+      n.drone.gain.rampTo(0, fall)
+    }, rise + hold, 0)
+    musicLater(droneSwell, rise + hold + fall + 10, 15)
   }
 
   function bellPhrase() {
@@ -2299,10 +2397,10 @@
     clearTimeout(music.rest)
     music.rest = 0
     var silent = function () {
-      // No Web Audio here: the Diary stays silent, and its speaker goes.
+      // No Web Audio here: the Diary stays silent; the speaker says so.
       music.failed = true
       music.playing = false
-      dom.hush.hidden = true
+      hushDraw()
     }
     if (!music.ctx) {
       try {
@@ -2320,6 +2418,7 @@
       }
       if (ctx.state !== 'running') {
         music.blocked = true
+        hushDraw()
         return
       }
       music.blocked = false
@@ -2334,6 +2433,9 @@
       music.n.master.gain.rampTo(dbGain(MUSIC_DB), MUSIC_IN_S)
       if (music.playing) return
       music.playing = true
+      hushDraw()
+      music.n.drone.gain.rampTo(0, 1.5) // a breath cut short by leaving ends
+      musicLater(droneSwell, 1, 2)
       musicLater(bellPhrase, 2, 4)
       musicLater(creak, 8, 12)
       musicLater(windSwell, 5, 10)
@@ -2371,9 +2473,11 @@
   }
 
   function musicSync() {
-    if (!musicAvailable()) return
-    if (musicWanted()) musicPlay()
-    else musicRest()
+    if (musicAvailable()) {
+      if (musicWanted()) musicPlay()
+      else musicRest()
+    }
+    hushDraw()
   }
 
   /** The frame is going away: stop at once. */
@@ -2403,9 +2507,13 @@
    *  out. Built once, its waves and cross shown by class. */
   function hushDraw() {
     var b = dom.hush
+    var can = musicAvailable()
+    var words = (music.muted || !can ? 'Play the music (M)' : 'Mute the music (M)') + '. Music: ' + musicState()
     b.setAttribute('aria-pressed', music.muted ? 'true' : 'false')
-    b.setAttribute('aria-label', music.muted ? 'Play the music (M)' : 'Mute the music (M)')
-    b.classList.toggle('muted', music.muted)
+    b.setAttribute('aria-label', words)
+    b.setAttribute('title', words)
+    b.classList.toggle('muted', music.muted || !can || !music.playing)
+    b.classList.toggle('off', !can)
     if (b.firstChild) return
     var svg = document.createElementNS(SVG_NS, 'svg')
     svg.setAttribute('viewBox', '0 0 32 32')
@@ -2432,22 +2540,35 @@
     b.appendChild(svg)
   }
 
+  /** The speaker shows from the first moment, whatever the music can do:
+   *  its tooltip says why it's silent. */
+  function hushShow() {
+    dom.hush.hidden = false
+    hushDraw()
+  }
+
   function musicWire() {
-    if (!musicAvailable()) return
     var config = (k2 && k2.config) || {}
     var cfg = config.music
     music.muted = !!prefs.get('music.muted', cfg === false || cfg === 'off')
-    dom.hush.hidden = false
     hushDraw()
+    if (!musicAvailable()) return
     dom.hush.addEventListener('click', function () {
+      // A click on a held-back speaker starts the music (inside the click);
+      // otherwise it mutes or unmutes.
+      if (music.blocked && !music.muted) return
       musicMute(!music.muted)
     })
-    // Held back until a gesture: the first click or key in the Diary.
+    // Held back until a gesture: any click, tap or key in the Diary resumes
+    // the context right inside the event, never after a promise.
     var nudge = function () {
-      if (music.blocked) musicSync()
+      if (!music.blocked) return
+      music.nudged = true
+      musicSync()
     }
-    document.addEventListener('pointerdown', nudge, true)
-    document.addEventListener('keydown', nudge, true)
+    ;['pointerdown', 'mousedown', 'click', 'touchend', 'keydown', 'keyup'].forEach(function (type) {
+      document.addEventListener(type, nudge, true)
+    })
     window.addEventListener('pagehide', musicClose)
   }
 
@@ -2475,6 +2596,8 @@
   var UNREACHED = 'The diary can’t reach your agents right now.'
 
   function wire() {
+    dom.prev.appendChild(curlSvg('prev'))
+    dom.next.appendChild(curlSvg('next'))
     grab(dom.prev, -1)
     grab(dom.next, 1)
     dom.pen.addEventListener('submit', function (e) {
@@ -2522,7 +2645,7 @@
     })
     document.addEventListener('keydown', function (e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      if ((e.key === 'm' || e.key === 'M') && e.target !== dom.ink && !dom.hush.hidden) {
+      if ((e.key === 'm' || e.key === 'M') && e.target !== dom.ink && musicAvailable()) {
         // M mutes the music, except while you write (then it's a letter).
         e.preventDefault()
         musicMute(!music.muted)
@@ -2547,6 +2670,7 @@
     dom.root.classList.toggle('reduced', state.reduced)
     // You have arrived on this Garden: the paper wakes and the room plays.
     fxInit()
+    flameSync()
     musicWire()
     music.arrived = true
     musicSync()
@@ -2589,6 +2713,7 @@
 
   function start() {
     motes()
+    hushShow()
     if (!k2) {
       drawBlank('the diary is sealed', 'This page only works inside a K2 Garden.')
       return

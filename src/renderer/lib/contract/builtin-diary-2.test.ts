@@ -1124,14 +1124,17 @@ describe('k2:diary@2: the page glides up as the hand writes', () => {
     expect(f.s.top).toBe(1000)
   })
 
-  it('no seal button and no whispers switch: Enter seals; the only other control is the music’s speaker, hidden without Tone', async () => {
+  it('no seal button and no whispers switch: Enter seals; the only other control is the music’s speaker, which says why it’s silent', async () => {
     const h = await harness({ reduced: true })
     h.rows([row('cortana', 0)])
     h.view('cortana::local', { items: [] })
     expect(document.getElementById('send')).toBeNull()
     expect(document.getElementById('whispers')).toBeNull()
     expect([...document.querySelectorAll('button')].map((b) => b.id)).toEqual(['hush', 'prev', 'next'])
-    expect(h.$('hush').hidden).toBe(true) // no Tone.js here: nothing to mute
+    // No Tone.js here: the speaker still shows, crossed out, and says why.
+    expect(h.$('hush').hidden).toBe(false)
+    expect(h.$('hush').classList.contains('off')).toBe(true)
+    expect(h.$('hush').getAttribute('title')).toBe('Play the music (M). Music: the music library didn’t load')
     expect(JS).not.toMatch(/AudioContext|whispers|setSound/)
     const ink = h.$('ink') as HTMLTextAreaElement
     ink.value = 'sealed with Enter'
@@ -1267,6 +1270,7 @@ function fakeTone(opts: { blocked?: boolean } = {}) {
     nodes: 0,
     triggers: 0,
     allowed: !opts.blocked, // a gesture lets a held-back context run
+    gains: [] as Array<Array<[number, number, number]>>, // per Gain node: [to, seconds, at ms]
   }
   let first: Node | null = null
   class Param {
@@ -1274,6 +1278,7 @@ function fakeTone(opts: { blocked?: boolean } = {}) {
     constructor(private owner: Node) {}
     rampTo(v: number, t: number) {
       if (this.owner === first) log.master.push([v, t])
+      if (this.owner.ramps) this.owner.ramps.push([v, t, Date.now()])
       this.value = v
       return this
     }
@@ -1285,6 +1290,7 @@ function fakeTone(opts: { blocked?: boolean } = {}) {
     }
   }
   class Node {
+    ramps: Array<[number, number, number]> | null = null
     gain = new Param(this)
     frequency = new Param(this)
     pan = new Param(this)
@@ -1331,11 +1337,18 @@ function fakeTone(opts: { blocked?: boolean } = {}) {
       this.state = 'closed'
     }
   }
+  class Gain extends Node {
+    constructor() {
+      super()
+      this.ramps = []
+      log.gains.push(this.ramps)
+    }
+  }
   const Tone = {
     Context,
     setContext: () => {},
     now: () => 0,
-    Gain: Node,
+    Gain,
     Reverb: Node,
     FeedbackDelay: Node,
     Filter: Node,
@@ -1453,7 +1466,7 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     expect(h.$('page').firstElementChild).toBe(canvas)
     expect(canvas?.getAttribute('aria-hidden')).toBe('true')
     expect(document.documentElement.classList.contains('fx')).toBe(true)
-    expect(log.inits[0]).toMatchObject({ canvas, backgroundAlpha: 0, preference: 'webgl', autoStart: false, sharedTicker: false, resolution: 1.5 })
+    expect(log.inits[0]).toMatchObject({ canvas, backgroundAlpha: 0, preference: 'webgl', autoStart: false, sharedTicker: false, resolution: 2, autoDensity: true })
     expect(log.tickerStarts).toBe(0)
     // Everything that shows sits in a positioned box after the canvas.
     expect(CSS).toMatch(/\.paperfx \{[^}]*position: absolute;[^}]*pointer-events: none;/)
@@ -1463,7 +1476,7 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     expect(log.shader?.gl.fragment).toMatch(/uniform sampler2D uPaper;[\s\S]*uLight[\s\S]*bleed\(/)
   })
 
-  it('at rest it draws only when the candle flickers: a few frames a second, never 30', async () => {
+  it('at rest it redraws with the flame, at most 10 frames a second, never 30', async () => {
     const { PIXI, log } = fakePixi()
     vi.useFakeTimers()
     const h = await harness({ libs: { PIXI } })
@@ -1473,12 +1486,10 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     run(h, 500)
     const before = log.renders
     expect(before).toBeGreaterThan(0)
-    run(h, 7200) // two whole flicker cycles: nine steps each
+    run(h, 10_000)
     const drawn = log.renders - before
-    expect(drawn).toBeGreaterThanOrEqual(12)
-    expect(drawn).toBeLessThanOrEqual(22)
-    // The light's strength is the CSS flicker's value.
-    expect([0.92, 0.74, 1, 0.86, 0.97, 0.7, 0.93, 0.82]).toContain(log.group?.uniforms.uLight[3])
+    expect(drawn).toBeGreaterThanOrEqual(10)
+    expect(drawn).toBeLessThanOrEqual(101)
   })
 
   it('stops while hidden and starts again when shown', async () => {
@@ -1525,7 +1536,7 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     const h = await harness({ reduced: true, libs: { PIXI } })
     await vi.advanceTimersByTimeAsync(0)
     expect(log.renders).toBe(1)
-    expect(log.group?.uniforms.uLight[3]).toBe(1)
+    expect(log.group?.uniforms.uLight[3]).toBeCloseTo(0.9, 5) // the flame at rest
     expect(log.group?.uniforms.uWetA[0]).toBe(0)
     run(h, 10_000)
     expect(log.renders).toBe(1)
@@ -1559,7 +1570,7 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     expect(log.group?.uniforms.uWetA[0]).toBe(0)
     const rest = log.renders
     run(h, 3600)
-    expect(log.renders - rest).toBeLessThanOrEqual(11)
+    expect(log.renders - rest).toBeLessThanOrEqual(37) // at most 10 a second at rest
   })
 
   it('no WebGL: the canvas goes and the page is as it was', async () => {
@@ -1573,14 +1584,117 @@ describe('k2:diary@2: the paper under the words (PixiJS)', () => {
     expect(h.who()).toBe('Cortana')
   })
 
-  it('its candle steps with the CSS flicker: the same table in both', () => {
-    const css = /@keyframes flicker \{\n([\s\S]*?)\n\}/.exec(CSS)?.[1] ?? ''
-    const fromCss = [...css.matchAll(/(\d+)% \{ opacity: ([\d.]+); \}/g)].map((m) => [Number(m[1]) / 100, Number(m[2])])
-    const js = /var FLICKER = (\[\[.*\]\])/.exec(JS)?.[1] ?? '[]'
-    expect(JSON.parse(js)).toEqual(fromCss)
-    expect(CSS).toMatch(/animation: flicker 3\.6s steps\(1, end\) infinite;/)
-    expect(JS).toContain('var FLICKER_MS = 3600')
+  // Rosson 2026-10-08: "The candle light background flicker is out of sync
+  // with the page light flicker." One flame drives all three.
+  it('one flame: the room’s candle, the page glow and the paper’s light peak together; the page follows, never leads', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    const room: number[] = []
+    const glow: number[] = []
+    const paper: number[] = []
+    for (let f = 0; f < 600; f++) {
+      vi.advanceTimersByTime(50)
+      h.advance(50) // one flame frame each (20 a second)
+      room.push(Number(h.$('candle').style.opacity))
+      glow.push(Number(h.$('glow').style.opacity))
+      paper.push(log.group?.uniforms.uLight[3] ?? NaN)
+    }
+    expect(new Set(room.map((v) => v.toFixed(2))).size).toBeGreaterThan(20) // it flickers
+    // The paper's light is the page glow's light, drawn from the same sample
+    // (or a frame behind it at rest, when the light barely moved).
+    const page = glow.map((g) => (g - 0.45) / 0.55)
+    for (let f = 1; f < page.length; f++) {
+      const near = Math.min(Math.abs(paper[f] - page[f]), Math.abs(paper[f] - page[f - 1]))
+      expect(near).toBeLessThan(0.02)
+    }
+    // The page follows the room: best match at lag 0 or 1 frame, never ahead.
+    const corr = (lag: number) => {
+      const a = room.slice(0, room.length - 2)
+      const b = page.slice(lag, lag + a.length)
+      const ma = a.reduce((x, y) => x + y, 0) / a.length
+      const mb = b.reduce((x, y) => x + y, 0) / b.length
+      let num = 0
+      let da = 0
+      let db = 0
+      for (let i = 0; i < a.length; i++) {
+        num += (a[i] - ma) * (b[i] - mb)
+        da += (a[i] - ma) ** 2
+        db += (b[i] - mb) ** 2
+      }
+      return num / Math.sqrt(da * db)
+    }
+    const lags = [0, 1, 2].map(corr)
+    expect(Math.max(...lags)).toBeGreaterThan(0.9)
+    expect(lags.indexOf(Math.max(...lags))).toBeLessThanOrEqual(1)
+    // No CSS clock of their own: no keyframe flicker or gutter left.
+    expect(CSS).not.toMatch(/animation: (flicker|gutter)/)
+    expect(CSS).not.toMatch(/@keyframes (flicker|gutter)/)
+    // Hidden: every candle holds the same rest, together.
+    hide(true)
+    expect(Number(h.$('candle').style.opacity)).toBeCloseTo(0.9, 5)
+    expect(log.group?.uniforms.uLight[3]).toBeCloseTo(0.9, 5)
+    expect(Number(h.$('glow').style.opacity)).toBeCloseTo(0.45 + 0.55 * 0.9, 3)
+    const at = log.renders
+    run(h, 3000)
+    expect(log.renders).toBe(at)
+    expect(Number(h.$('candle').style.opacity)).toBeCloseTo(0.9, 5)
+    hide(false)
   })
+
+  it('reduced motion: every candle still at the same rest', async () => {
+    const { PIXI, log } = fakePixi()
+    vi.useFakeTimers()
+    const h = await harness({ reduced: true, libs: { PIXI } })
+    await vi.advanceTimersByTimeAsync(0)
+    run(h, 3000)
+    expect(Number(h.$('candle').style.opacity)).toBeCloseTo(0.9, 5)
+    expect(log.group?.uniforms.uLight[3]).toBeCloseTo(0.9, 5)
+  })
+
+  // Rosson 2026-10-08: "doesn't quite reach the bottom or the right side",
+  // then "a tad too high on the bottom left". The paper canvas is the page's
+  // first child, inset 0, sized from the page's own rect on every resize;
+  // the page has no clip, mask or transform of its own (nothing for the
+  // canvas to miss) and square edges; the page stack shows at the fore-edge
+  // only, so nothing hangs below the page.
+  it('the paper covers the whole page box after every resize; one square shape, nothing below the page', async () => {
+    const { PIXI, log } = fakePixi()
+    let observed: (() => void) | null = null
+    const ResizeObserver = class {
+      constructor(cb: () => void) {
+        observed = cb
+      }
+      observe() {}
+    }
+    let size = { width: 720.4, height: 792.6 }
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return (this.id === 'page'
+        ? { left: 140, top: 60, x: 140, y: 60, width: size.width, height: size.height, right: 140 + size.width, bottom: 60 + size.height, toJSON: () => ({}) }
+        : { left: 0, top: 0, x: 0, y: 0, width: 0, height: 0, right: 0, bottom: 0, toJSON: () => ({}) }) as DOMRect
+    })
+    vi.useFakeTimers()
+    const h = await harness({ libs: { PIXI, ResizeObserver } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(log.inits[0]).toMatchObject({ width: 721, height: 793 })
+    for (const s of [{ width: 800.2, height: 880 }, { width: 512, height: 556.5 }]) {
+      size = s
+      ;(observed as unknown as () => void)()
+      expect(log.resized.at(-1)).toEqual([Math.ceil(s.width), Math.ceil(s.height)])
+      expect(log.group?.uniforms.uSize[0]).toBe(Math.ceil(s.width))
+    }
+    expect(h.$('page').firstElementChild?.className).toBe('paperfx')
+    expect(CSS).toMatch(/\.paperfx \{[^}]*inset: 0;[^}]*width: 100% !important;[^}]*height: 100% !important;/)
+    const pageRule = /\n\.page \{([^}]*)\}/.exec(CSS)?.[1] ?? ''
+    expect(pageRule).toMatch(/border-radius: 0;/)
+    expect(pageRule).not.toMatch(/clip-path|mask|transform/)
+    // The stack: x offsets only (fore-edge), never a y offset below.
+    const stack = [...pageRule.matchAll(/(\d+)px (\d+)(?:px)? 0 #/g)]
+    expect(stack.length).toBe(3)
+    for (const m of stack) expect(m[2]).toBe('0')
+  })
+
 })
 
 describe('k2:diary@2: the room’s music (Tone.js)', () => {
@@ -1621,15 +1735,24 @@ describe('k2:diary@2: the room’s music (Tone.js)', () => {
     expect(log.nodes).toBe(0) // the room isn't even built yet
     await vi.advanceTimersByTimeAsync(30_000)
     expect(log.triggers).toBe(0)
+    expect(h.$('hush').getAttribute('title')).toBe('Mute the music (M). Music: waiting for a click')
+    // A key the computer still refuses: now the speaker says so.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.$('hush').getAttribute('title')).toBe('Mute the music (M). Music: blocked by the browser')
     log.allowed = true
+    const before = log.resumes
     h.$('sheet').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    // No await: the context resumed inside the event itself.
+    expect(log.resumes).toBe(before + 1)
     await vi.advanceTimersByTimeAsync(0)
-    expect(log.resumes).toBe(2)
     expect(log.master.at(-1)?.[0]).toBeCloseTo(QUIET, 5)
+    expect(h.$('hush').getAttribute('title')).toBe('Mute the music (M). Music: playing')
     // Once it runs, more clicks change nothing.
+    const resumed = log.resumes
     h.$('sheet').dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
     await vi.advanceTimersByTimeAsync(0)
-    expect(log.resumes).toBe(2)
+    expect(log.resumes).toBe(resumed)
   })
 
   it('hidden: it fades out and the audio rests; shown again: it comes back', async () => {
@@ -1671,12 +1794,13 @@ describe('k2:diary@2: the room’s music (Tone.js)', () => {
     h.view('cortana::local', { items: [] })
     const hush = h.$('hush')
     expect(hush.parentElement).toBe(h.$('desk')) // over the room, not on the page
-    expect(hush.getAttribute('aria-label')).toBe('Mute the music (M)')
+    expect(hush.getAttribute('aria-label')).toBe('Mute the music (M). Music: playing')
+    expect(hush.getAttribute('title')).toBe(hush.getAttribute('aria-label'))
     expect(hush.getAttribute('aria-pressed')).toBe('false')
     expect(hush.querySelectorAll('svg path.cone, svg path.wave, svg path.cross').length).toBe(4)
     hush.click()
     expect(hush.getAttribute('aria-pressed')).toBe('true')
-    expect(hush.getAttribute('aria-label')).toBe('Play the music (M)')
+    expect(hush.getAttribute('aria-label')).toBe('Play the music (M). Music: muted')
     expect(log.master.at(-1)).toEqual([0, 0.8])
     await vi.advanceTimersByTimeAsync(1000)
     expect(log.suspends).toBe(1)
@@ -1696,10 +1820,16 @@ describe('k2:diary@2: the room’s music (Tone.js)', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(hush.getAttribute('aria-pressed')).toBe('true')
     expect(log.master.at(-1)?.[0]).toBe(0)
-    // Top left, faint until reached for, clear of the ⋯ menu (top right).
-    expect(CSS).toMatch(/\.hush \{[^}]*position: absolute;[^}]*top: 14px;[^}]*left: 14px;[^}]*opacity: 0\.32;/)
+    // Top left, just under K2's floating 52 px top band (which takes every
+    // click above it) and the Garden switcher in it; dim until reached for.
+    expect(CSS).toMatch(/\.hush \{[^}]*position: absolute;[^}]*top: 58px;[^}]*left: 14px;[^}]*z-index: 6;/)
+    // The same glass tile as K2's menu and switcher (zen-glass.ts, ZenMenu).
+    const glass = /\n\.hush \{([^}]*)\}/.exec(CSS)?.[1] ?? ''
+    for (const d of ['height: 30px;', 'border-radius: 999px;', 'background: var(--zen-surface', 'backdrop-filter: none;', 'inset 0 1px 0 color-mix(in srgb, white 22%, transparent), 0 10px 30px color-mix(in srgb, black 8%, transparent)', 'color: var(--zen-text']) {
+      expect(glass).toContain(d)
+    }
+    expect(CSS).toMatch(/\.hush:hover, \.hush:active \{ background: var\(--zen-surface-raised/)
     expect(/\.hush \{[^}]*\bright:/.test(CSS)).toBe(false)
-    expect(CSS).toMatch(/\.hush:hover, \.hush:focus-visible \{ opacity: 1; \}/)
   })
 
   it('a Garden can start it muted (config music = "off"); the mute is kept while the frame lives', async () => {
@@ -1711,21 +1841,115 @@ describe('k2:diary@2: the room’s music (Tone.js)', () => {
     expect(h.$('hush').getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('no Tone.js, or no Web Audio: silent, and no speaker', async () => {
+  it('no Tone.js, or no Web Audio: silent, and the speaker says which', async () => {
     const h1 = await harness()
-    expect(h1.$('hush').hidden).toBe(true)
+    expect(h1.$('hush').hidden).toBe(false)
+    expect(h1.$('hush').getAttribute('title')).toMatch(/Music: the music library didn’t load$/)
     document.body.innerHTML = ''
     const { Tone } = fakeTone()
     const Broken = { ...Tone, Context: class { constructor() { throw new Error('no audio') } } }
     vi.useFakeTimers()
     const h2 = await harness({ libs: { Tone: Broken } })
     await vi.advanceTimersByTimeAsync(0)
-    expect(h2.$('hush').hidden).toBe(true)
+    expect(h2.$('hush').hidden).toBe(false)
+    expect(h2.$('hush').classList.contains('off')).toBe(true)
+    expect(h2.$('hush').getAttribute('title')).toMatch(/Music: no Web Audio here$/)
   })
 
   it('only Tone’s plain nodes: nothing that needs an AudioWorklet (refused in a sealed widget)', () => {
     for (const bad of ['Freeverb', 'JCReverb', 'FeedbackCombFilter', 'LowpassCombFilter', 'BitCrusher', 'Tone.start', 'ToneAudioWorklet']) {
       expect(JS).not.toContain(bad)
     }
+  })
+})
+
+describe('k2:diary@2: the low drone breathes', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  // Rosson 2026-10-08: "The underlying low tone goes for a bit too long".
+  it('swells in, holds 8-15 s, fades, then rests 10-25 s before the next swell; never one endless tone', async () => {
+    document.body.innerHTML = ''
+    const { Tone, log } = fakeTone()
+    vi.useFakeTimers()
+    await harness({ libs: { Tone } })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    // The drone's gain: the one that swells to 0.75..1 and back to 0.
+    const drone = log.gains.find((r) => r.some(([v]) => v >= 0.7 && v <= 1)) ?? []
+    const ups = drone.filter(([v]) => v > 0)
+    const downs = drone.filter(([v], i) => v === 0 && i > 0)
+    expect(ups.length).toBeGreaterThanOrEqual(12) // a breath every 25-52 s
+    expect(ups.length).toBeLessThanOrEqual(26)
+    for (const [v, secs] of ups) {
+      expect(v).toBeGreaterThanOrEqual(0.75)
+      expect(v).toBeLessThanOrEqual(1)
+      expect(secs).toBeGreaterThanOrEqual(3)
+      expect(secs).toBeLessThanOrEqual(5)
+    }
+    for (let i = 0; i < ups.length - 1; i++) {
+      const fade = downs.find(([, , at]) => at > ups[i][2]) ?? [0, 0, Infinity]
+      const held = (fade[2] - ups[i][2]) / 1000 // the rise and the hold
+      expect(held).toBeGreaterThanOrEqual(3 + 8 - 0.01)
+      expect(held).toBeLessThanOrEqual(5 + 15 + 0.01)
+      const rest = (ups[i + 1][2] - fade[2]) / 1000 - fade[1] // after the fade
+      expect(rest).toBeGreaterThanOrEqual(10 - 0.01)
+      expect(rest).toBeLessThanOrEqual(25 + 0.01)
+    }
+    expect(JS).toContain('var DRONE_ROOTS = [')
+  }, 30_000)
+})
+
+describe('k2:diary@2: square pages whose corners curl, never dog-eared', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('each turn control holds an SVG curl drawn in code: what is beneath, a cast shadow, the underside, its crease', async () => {
+    const h = await harness({ reduced: true })
+    h.rows([row('cortana', 0), row('nora', 1)])
+    for (const id of ['prev', 'next']) {
+      const svg = h.$(id).querySelector('svg.curl')
+      expect(svg?.namespaceURI).toBe('http://www.w3.org/2000/svg')
+      expect(svg?.getAttribute('aria-hidden')).toBe('true')
+      expect([...(svg?.querySelectorAll('.lift > path') ?? [])].map((p) => p.getAttribute('class'))).toEqual(['beneath', 'cast', 'under', 'crease'])
+      // The crease is a curve, not a straight diagonal.
+      expect(svg?.querySelector('.crease')?.getAttribute('d')).toMatch(/^M[\d. ]+ Q[\d. ]+$/)
+      // The underside: lighter at the crease, darker toward the tip.
+      const stops = [...(svg?.querySelectorAll('[id^="curl-under"] stop') ?? [])].map((s) => s.getAttribute('stop-color'))
+      expect(stops).toEqual(['#f7ecd2', '#e2cc9e', '#bfa271'])
+    }
+    h.key('ArrowRight')
+    expect(h.who()).toBe('Nora')
+  })
+
+  it('plain square paper at rest; hover or focus lifts the curl in 200 ms; touch keeps a faint hint; reduced motion a still curl', () => {
+    expect(CSS).not.toMatch(/\.corner[^{]*::before/)
+    expect(CSS).not.toMatch(/var\(--night\) 0 50%/)
+    expect(CSS).toMatch(/\.page \{[^}]*border-radius: 0;/)
+    expect(CSS).toMatch(/\.leaf \.back \{[^}]*border-radius: 0;/)
+    expect(CSS).toMatch(/\.curl \.lift \{[^}]*transform-origin: 64px 64px;[^}]*transform: scale\(0\);[^}]*transition: transform 200ms/)
+    expect(CSS).toMatch(/\.corner:hover \.curl \.lift, \.corner:focus-visible \.curl \.lift \{ transform: scale\(1\); \}/)
+    expect(CSS).toMatch(/@media \(hover: none\) \{\s*\.curl \.lift \{ transform: scale\(0\.34\);/)
+    expect(CSS).toMatch(/:root\.reduced \.curl \.lift,[^{]*\{ transition: none; transform: scale\(0\.4\); \}/)
+    expect(CSS).toMatch(/\.corner:disabled \.curl \{ display: none; \}/)
+  })
+})
+
+describe('k2:diary@2: the Diary page template', () => {
+  // Rosson 2026-10-08: "We now have two diary lab buttons". One ⋯ menu,
+  // moved to the top left, holds the one Garden switcher and the toggle.
+  it('has exactly one Garden switcher, inside the one menu at the top left', () => {
+    const toml = readFileSync(resolve(__dirname, '../../../../crates/k2-core/src/zen/garden-catalog/diary-2.toml'), 'utf8')
+    const widgets = toml.split('[[widget]]').slice(1).map((w) => w.split(/\n\[\[/)[0])
+    const switchers = widgets.filter((w) => /kind = "garden-switcher"/.test(w))
+    expect(switchers).toHaveLength(1)
+    expect(switchers[0]).toMatch(/slot = "menu"\nmenu = "more"/)
+    const menus = widgets.filter((w) => /kind = "menu"/.test(w))
+    expect(menus).toHaveLength(1)
+    expect(menus[0]).toMatch(/id = "more"\nkind = "menu"\nslot = "top"\nalign = "start"/)
+    expect(toml.match(/\[\[control\]\]\nkind = "garden-switcher"\nplacement = "menu:more"/g)).toHaveLength(1)
   })
 })

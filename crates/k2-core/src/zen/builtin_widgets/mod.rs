@@ -83,7 +83,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
-    ("k2:diary@2", "2a51282c0d41b23ab9d529c2397b262ac46e9a3950953b1f94b7d7ca56f0510a"),
+    ("k2:diary@2", "227f1cdfd243c18352ec43a4f759b115c8d56597a9b164dd70b65d2f6d32f50c"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -360,10 +360,15 @@ mod tests {
         // The paper: one WebGL canvas under the words, drawn on demand (30
         // fps at most while ink is wet), halted when unseen, one still frame
         // under reduced motion; the candle steps with the CSS flicker.
-        for needle in ["window.PIXI", "preference: 'webgl'", "autoStart: false", "var FX_FPS_WET = 30", "function fxHalt()", "var run = shown() && !reduced()", "fxStill()", "dom.page.insertBefore(canvas, dom.page.firstChild)", "getAnimations"] {
+        for needle in ["window.PIXI", "preference: 'webgl'", "autoStart: false", "autoDensity: true", "dom.page.insertBefore(canvas, dom.page.firstChild)", "var r = dom.page.getBoundingClientRect()", "new window.ResizeObserver(fxResized)"] {
             assert!(js.contains(needle), "diary.js lost {needle}");
         }
-        assert!(css.contains("animation: flicker 3.6s steps(1, end) infinite;") && js.contains("var FLICKER_MS = 3600"), "the shader's candle and the CSS candle share a clock");
+        // One flame drives every candle (the room's, the page glow, the
+        // shader's light), sampled once a frame; no CSS clock of its own.
+        for needle in ["function flameAt(ms)", "var FLAME_FPS = 20", "dom.candle.style.opacity", "dom.glow.style.opacity", "u.uLight[3] = light", "var on = shown() && !reduced()"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        assert!(!css.contains("@keyframes flicker") && !css.contains("@keyframes gutter"), "a candle runs on its own CSS clock again");
         // The music: made in code, quiet, on arrival, gone when unseen or
         // removed, muted from the top left or with M; never an AudioWorklet
         // node (refused in a sealed widget).
@@ -373,9 +378,13 @@ mod tests {
         for bad in ["Freeverb", "JCReverb", "FeedbackCombFilter", "BitCrusher", "Tone.start", "Player(", ".mp3", ".ogg", ".wav"] {
             assert!(!js.contains(bad), "the music uses {bad}");
         }
-        assert!(html.contains("<button class=\"hush\" id=\"hush\" type=\"button\" aria-label=\"Mute the music (M)\" aria-pressed=\"false\" hidden>"), "the speaker: named, hidden until Tone is there");
-        let hush = css.split(".hush {").nth(1).and_then(|r| r.split('}').next()).expect(".hush rule");
-        assert!(hush.contains("top: 14px;") && hush.contains("left: 14px;") && !hush.contains("right:"), "the speaker sits top left, clear of the ⋯ menu");
+        assert!(html.contains("<button class=\"hush\" id=\"hush\" type=\"button\" aria-label=\"Mute the music (M)\" aria-pressed=\"false\">"), "the speaker: named and always shown");
+        assert!(js.contains("function musicState()") && js.contains("'blocked by the browser'") && js.contains("'waiting for a click'"), "the speaker says what the music is doing");
+        let hush = css.split("\n.hush {").nth(1).and_then(|r| r.split('}').next()).expect(".hush rule");
+        assert!(hush.contains("top: 58px;") && hush.contains("left: 14px;") && !hush.contains("right:"), "the speaker sits top left, under K2's floating top band");
+        assert!(hush.contains("border-radius: 999px;") && hush.contains("background: var(--zen-surface"), "the speaker is a Zen glass tile");
+        // Corners curl on reach; no dog-ears; square pages.
+        assert!(js.contains("function curlSvg(name)") && !css.contains("var(--night) 0 50%"), "the corners are dog-eared again");
         assert!(css.contains(".haunt") && css.contains(":root.asleep .haunt *") && css.contains(":root.reduced .haunt *"), "the room moves, stills and sleeps");
         let start = js.find("var GHOST_LINES = [").expect("GHOST_LINES");
         let end = start + js[start..].find("\n  ]").expect("GHOST_LINES ends");

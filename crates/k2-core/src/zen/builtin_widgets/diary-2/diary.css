@@ -122,7 +122,10 @@ html, body {
   100% { transform: translate3d(var(--dx, 14px), var(--dy, 70px), 0); opacity: 0; }
 }
 
-/* The candle in the scene (left, a little below the middle) gutters. */
+/* The candle in the scene (left, a little below the middle) gutters: its
+   opacity and size come from diary.js's one flame, sampled every frame
+   (the page's glow and the paper's light follow the same flame), eased
+   only within a frame. */
 .haunt .candlelight {
   left: 13%;
   top: 47%;
@@ -131,19 +134,8 @@ html, body {
   margin: -30vh 0 0 -30vh;
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 160, 70, 0.22), rgba(255, 140, 60, 0.07) 40%, transparent 68%);
-  animation: gutter 3.1s steps(1, end) infinite;
-}
-
-@keyframes gutter {
-  0% { opacity: 0.9; transform: scale(1); }
-  7% { opacity: 0.55; transform: scale(0.96); }
-  11% { opacity: 1; transform: scale(1.03); }
-  29% { opacity: 0.8; }
-  41% { opacity: 0.35; transform: scale(0.94); }
-  44% { opacity: 0.95; transform: scale(1.02); }
-  63% { opacity: 0.75; }
-  78% { opacity: 1; transform: scale(1); }
-  90% { opacity: 0.6; }
+  opacity: 0.9;
+  transition: opacity 50ms linear, transform 50ms linear;
 }
 
 /* Something tall crosses the room behind the desk, about once a minute. */
@@ -206,34 +198,49 @@ html, body {
 :root.asleep .glow { animation-play-state: paused; }
 
 /* ── the music's speaker ───────────────────────────────────────────────
-   Top left of the Diary, clear of the Garden's ⋯ menu (top right, holding
-   the switcher and the Zen toggle). Faint until you reach for it. */
+   Top left, just under the Garden's "Diary Lab" menu (Rosson 2026-10-08:
+   that menu moves to the top left). Not beside it: on a full-canvas Garden
+   K2 lays a transparent 52 px band across the top of the frame (a window
+   drag area, z-index 3, the menu inside it at 14 px from the left, 30
+   px tall), and nothing in the frame under that band can be clicked or
+   hovered. Always shown; its tooltip says what the music is doing. */
+/* The same glass tile as K2's "Diary Lab" menu and Garden switcher
+   (zen-glass.ts, ZenMenu): a flat Zen surface, a soft rim, a top sheen and
+   a faint wide shadow, no blur (K2 dropped it), round, 30 px; hover and
+   pressed take the raised surface. The frame gets K2's --zen-* theme
+   tokens; the fallbacks are the haunted theme's. */
 .hush {
   position: absolute;
-  top: 14px;
+  top: 58px;
   left: 14px;
   z-index: 6;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(222, 204, 168, 0.95);
-  opacity: 0.32;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 4px; /* the glyph about 57% of the button (Rosson: bigger) */
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--zen-border, #3a2a1e) 55%, color-mix(in srgb, var(--zen-text, #e9dcc4) 14%, transparent));
+  background: var(--zen-surface, #17110d);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 22%, transparent), 0 10px 30px color-mix(in srgb, black 8%, transparent);
+  color: var(--zen-text, #e9dcc4);
   cursor: pointer;
-  transition: opacity 240ms ease;
 }
 
-.hush:hover, .hush:focus-visible { opacity: 1; }
-.hush:focus-visible { outline: 1px solid rgba(222, 204, 168, 0.6); outline-offset: 2px; }
+.hush:hover, .hush:active { background: var(--zen-surface-raised, #221812); }
+.hush:focus-visible { outline: 2px solid var(--zen-accent, #d08a3c); outline-offset: 2px; }
+@media (prefers-reduced-transparency: reduce) {
+  .hush { background: var(--zen-surface, #17110d); }
+}
 .hush[hidden] { display: none; }
 .hush svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .hush path { fill: currentColor; }
 .hush path.line { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
-.hush path.cross { fill: #8a1c12; opacity: 0; }
+.hush path.cross { fill: #d0442c; opacity: 0; }
 .hush.muted path.wave { opacity: 0; }
 .hush.muted path.cross { opacity: 1; }
+.hush.off { cursor: help; }
 
 /* ── the book and its page ─────────────────────────────────────────── */
 
@@ -256,13 +263,19 @@ html, body {
   flex-direction: column;
   min-width: 0;
   padding: 26px 30px 16px 40px;
-  border-radius: 3px 12px 12px 3px;
+  border-radius: 0; /* square, like paper (Rosson 2026-10-08) */
   background:
     radial-gradient(circle at 82% 18%, var(--stain) 0, transparent 9%),
     radial-gradient(ellipse at 12% 88%, var(--stain), transparent 22%),
     radial-gradient(ellipse at 60% 50%, transparent 42%, rgba(48, 22, 6, 0.62) 100%),
     linear-gradient(90deg, var(--paper-edge) 0, var(--paper-deep) 10px, var(--paper) 30px, var(--paper) 100%);
   box-shadow:
+    /* the pages beneath, a hair at the fore-edge only (to the right):
+       nothing below the page, so its bottom stays one square edge, and
+       as dark as the page's aged edge, never a fresh strip beside it */
+    1px 0 0 #5f4a2c,
+    2px 0 0 #4c3a22,
+    3px 0 0 #3a2c19,
     0 2px 3px rgba(0, 0, 0, 0.6),
     0 24px 60px -18px rgba(0, 0, 0, 0.9),
     inset 14px 0 22px -16px rgba(40, 20, 5, 0.7),
@@ -270,26 +283,17 @@ html, body {
   overflow: hidden;
 }
 
-/* The candle on the page: a warm light that never sits still. */
+/* The candle on the page: a warm light that never sits still. diary.js
+   sets its opacity from the one flame (a frame behind the room's candle,
+   softer), so the two never drift apart. */
 .glow {
   position: absolute;
   inset: 0;
   pointer-events: none;
   background: radial-gradient(ellipse at 16% 6%, var(--candle), transparent 58%);
   mix-blend-mode: soft-light;
-  animation: flicker 3.6s steps(1, end) infinite;
-}
-
-@keyframes flicker {
-  0% { opacity: 0.92; }
-  9% { opacity: 0.74; }
-  13% { opacity: 1; }
-  31% { opacity: 0.86; }
-  47% { opacity: 0.97; }
-  52% { opacity: 0.7; }
-  58% { opacity: 0.93; }
-  77% { opacity: 0.82; }
-  88% { opacity: 1; }
+  opacity: 0.9;
+  transition: opacity 50ms linear;
 }
 
 /* The paper under the words (PixiJS, diary.js): first in the page, under
@@ -298,8 +302,10 @@ html, body {
 .paperfx {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
+  /* Edge to edge, whatever size PixiJS last drew at (it sets its own
+     width and height; the page's box wins). */
+  width: 100% !important;
+  height: 100% !important;
   pointer-events: none;
 }
 
@@ -659,8 +665,8 @@ html, body {
 .corner {
   position: absolute;
   bottom: 0;
-  width: 46px;
-  height: 46px;
+  width: 64px;
+  height: 64px;
   border: 0;
   padding: 0;
   cursor: grab;
@@ -669,34 +675,44 @@ html, body {
   z-index: 3;
 }
 
-.corner::before {
-  content: "";
-  position: absolute;
-  bottom: 0;
-  width: 26px;
-  height: 26px;
-  transition: width 220ms ease, height 220ms ease;
-}
-
 .corner.next { right: 0; }
 .corner.prev { left: 0; }
 
-/* A dog-ear: the corner folded over, the night showing behind it. */
-.corner.next::before {
+/* No dog-ears: plain paper at rest; reach for a corner and it curls up
+   (diary.js draws the curl in SVG; it scales from the page's corner). */
+.corner .curl {
+  position: absolute;
   right: 0;
-  background: linear-gradient(315deg, var(--night) 0 50%, #f3e6c6 50%, #c9b183 100%);
+  bottom: 0;
+  width: 64px;
+  height: 64px;
+  overflow: visible;
+  pointer-events: none;
 }
 
-.corner.prev::before {
-  left: 0;
-  background: linear-gradient(45deg, var(--night) 0 50%, #f3e6c6 50%, #c9b183 100%);
+.corner.prev .curl { right: auto; left: 0; transform: scaleX(-1); }
+
+.curl .lift {
+  transform-box: view-box;
+  transform-origin: 64px 64px;
+  transform: scale(0);
+  transition: transform 200ms cubic-bezier(0.3, 0.1, 0.3, 1);
 }
 
-.corner:hover::before, .corner:focus-visible::before { width: 40px; height: 40px; }
-.corner:focus-visible { outline: 2px dotted var(--ink-blood); outline-offset: -4px; }
+.corner:hover .curl .lift, .corner:focus-visible .curl .lift { transform: scale(1); }
+.corner:active .curl .lift { transform: scale(1.08); }
+.curl .cast { fill: rgba(30, 14, 4, 0.42); }
+.curl .crease { fill: none; stroke: rgba(255, 248, 230, 0.55); stroke-width: 0.8; }
+.corner:focus-visible { outline: none; }
+.corner:focus-visible .curl .crease { stroke: var(--ink-blood); stroke-width: 1.2; }
 .corner:disabled { cursor: default; }
-.corner:disabled::before { display: none; }
+.corner:disabled .curl { display: none; }
 .corner:active { cursor: grabbing; }
+
+/* Touch has no hover: a faint curl stays, so the turn is findable. */
+@media (hover: none) {
+  .curl .lift { transform: scale(0.34); opacity: 0.85; }
+}
 
 /* Another page calls for you: its corner smoulders. */
 .corner.calls::after {
@@ -742,7 +758,7 @@ html, body {
 
 .leaf .back {
   transform: rotateY(180deg);
-  border-radius: 12px 3px 3px 12px;
+  border-radius: 0;
   background:
     radial-gradient(ellipse at 40% 60%, var(--stain), transparent 40%),
     linear-gradient(270deg, var(--paper-edge) 0, var(--paper-deep) 10px, #d6c49c 30px, #d6c49c 100%);
@@ -769,7 +785,7 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .glow, .bookmark, .scribble path, .soak.on, .who.arrive, .corner.calls::after, .ghost { animation: none; }
-  .corner::before { transition: none; }
+  .curl .lift { transition: none; transform: scale(0.4); }
   .haunt * { animation: none !important; }
   .haunt .mote { opacity: 0.45; }
 }
@@ -781,6 +797,8 @@ html, body {
 :root.reduced .who.arrive,
 :root.reduced .corner.calls::after,
 :root.reduced .ghost { animation: none; }
-:root.reduced .corner::before { transition: none; }
+:root.reduced .curl .lift,
+:root.reduced .corner:hover .curl .lift,
+:root.reduced .corner:focus-visible .curl .lift { transition: none; transform: scale(0.4); }
 :root.reduced .haunt * { animation: none !important; }
 :root.reduced .haunt .mote { opacity: 0.45; }

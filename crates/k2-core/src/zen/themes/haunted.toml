@@ -47,7 +47,10 @@ selection = "#3a2a1e"
 # close and minimize the window, and the menu bar keeps both).
 stoplights = "hidden"
 
+# 0.45.2 (Rosson 2026-10-08, "not haunted enough"): the creepier study,
+# drawn by scripts/zen-themes/haunted-background-2.py. The first image
+# stays compiled in for own-copy Gardens that keep 0.45.1's look.
 [background]
-image = "haunted-background.webp"
+image = "haunted-background-2.webp"
 fit = "cover"
 opacity = 1

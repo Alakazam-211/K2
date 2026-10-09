@@ -91,6 +91,9 @@ pub struct BuiltinTheme {
     /// The image its `[background] image` names, compiled in (a built-in
     /// has no folder). `None` for a theme with no background.
     pub background: Option<BuiltinBackground>,
+    /// Images earlier releases named (still served, so an own-copy Garden
+    /// on an archived set keeps its look: GS45a). Never pruned.
+    pub older_backgrounds: &'static [BuiltinBackground],
 }
 
 /// A built-in theme's background image: the file name its TOML names and
@@ -110,6 +113,7 @@ pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
         summary: "clean, smooth, simple: warm light, soft dark, follows the computer",
         toml: include_str!("themes/basic.toml"),
         background: None,
+        older_backgrounds: &[],
     },
     BuiltinTheme {
         name: "paper",
@@ -117,6 +121,7 @@ pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
         summary: "always light, serif type, ink-blue accent",
         toml: include_str!("themes/paper.toml"),
         background: None,
+        older_backgrounds: &[],
     },
     BuiltinTheme {
         name: "midnight",
@@ -124,19 +129,25 @@ pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
         summary: "always dark, cool blue, JetBrains Mono everywhere",
         toml: include_str!("themes/midnight.toml"),
         background: None,
+        older_backgrounds: &[],
     },
     // The Diary's scene (Rosson 2026-10-08): the Diary template's default
     // theme, and anyone's to use. The image is drawn by
-    // scripts/zen-themes/haunted-background.py.
+    // scripts/zen-themes/haunted-background-2.py (0.45.2; the first,
+    // haunted-background.py, drew 0.45.1's).
     BuiltinTheme {
         name: "haunted",
         label: "Haunted",
         summary: "always dark: a candlelit desk in a misty study, behind the whole Garden",
         toml: include_str!("themes/haunted.toml"),
         background: Some(BuiltinBackground {
+            file: "haunted-background-2.webp",
+            bytes: include_bytes!("themes/haunted-background-2.webp"),
+        }),
+        older_backgrounds: &[BuiltinBackground {
             file: "haunted-background.webp",
             bytes: include_bytes!("themes/haunted-background.webp"),
-        }),
+        }],
     },
 ];
 

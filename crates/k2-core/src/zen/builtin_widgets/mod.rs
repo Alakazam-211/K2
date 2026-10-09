@@ -83,7 +83,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
-    ("k2:diary@2", "27fe8ebdcf2a215d77d086ca10ade9ebd63fe26bd68705c23a7e548835b22310"),
+    ("k2:diary@2", "c71ebddf303f4f534451295f444923d44996b706e7d6739fe2bd5e7f95e644a5"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -326,9 +326,25 @@ mod tests {
         // The ghost: a placeholder over the pen, never its value.
         assert!(html.contains("id=\"ghost\" aria-hidden=\"true\" hidden"), "the ghost is hidden from readers");
         assert!(!js.contains("ink.value = GHOST") && !js.contains("ink.value = words.charAt"), "the ghost never writes into the textarea");
-        for needle in ["'visibilitychange'", "'focus', ghostStop", "if (reduced()) {", "GHOST_STILL"] {
+        for needle in ["'visibilitychange'", "ghostFreeze()", "if (reduced()) {", "GHOST_STILL", "if (!ghost.woke) ghostStart(false)"] {
             assert!(js.contains(needle), "diary.js lost {needle}");
         }
+        // No plain "write here" anywhere, and no buttons on the page but its
+        // corners (Rosson 2026-10-08: no seal, no whispers switch).
+        assert!(!html.contains("placeholder=") && !js.contains(".placeholder = '") && !html.contains("id=\"hint\""), "a plain prompt is back");
+        assert!(html.contains("aria-label=\"Write in the diary\""), "the pen keeps a name for screen readers");
+        assert!(!html.contains("id=\"send\"") && !html.contains("id=\"whispers\"") && !js.contains("AudioContext"), "seal and whispers are gone");
+        // The pen scratches while the agent works: SVG built in code, each
+        // stroke drawn by its dash offset; the page glides, one write a frame.
+        for needle in ["createElementNS(SVG_NS, 'path')", "strokeDashoffset", "function glideStep(", "Math.exp(-dt / GLIDE_TAU_MS)"] {
+            assert!(js.contains(needle), "diary.js lost {needle}");
+        }
+        assert!(!js.contains("scrollIntoView"), "the page glides; it never jumps to a line");
+        // Ghost counts (0.45.2's AgentRow.counts) are read only when K2 sends
+        // them; an older K2's row shows nothing extra.
+        assert!(js.contains("function counted(row)") && js.contains("if (!c || typeof c !== 'object') return null"), "counts are feature-detected");
+        assert!(js.contains("clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD)"), "scribble points stay inside the drawing");
+        assert!(css.contains(".haunt") && css.contains(":root.asleep .haunt *") && css.contains(":root.reduced .haunt *"), "the room moves, stills and sleeps");
         let start = js.find("var GHOST_LINES = [").expect("GHOST_LINES");
         let end = start + js[start..].find("\n  ]").expect("GHOST_LINES ends");
         let lines: Vec<String> = js[start..end].lines().skip(1).filter_map(|l| l.trim().strip_prefix('\'')?.strip_suffix("',").map(str::to_string)).collect();

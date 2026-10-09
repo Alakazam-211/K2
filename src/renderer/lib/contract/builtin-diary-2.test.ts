@@ -636,6 +636,17 @@ describe('k2:diary@2: the ghost in the empty pen', () => {
     return { h, ink, ghost, tick: (ms: number) => vi.advanceTimersByTime(ms) }
   }
 
+  it('never a plain “write here”: no placeholder, no hint; the textarea keeps a name for screen readers', async () => {
+    const { ink, ghost, h } = await haunted()
+    expect(ink.getAttribute('placeholder')).toBeNull()
+    expect(document.getElementById('hint')).toBeNull()
+    expect(h.$('pen').textContent).not.toMatch(/write here|write a message|enter, and/i)
+    expect(HTML).not.toMatch(/placeholder=/)
+    expect(ink.getAttribute('aria-label')).toBe('Write to Cortana in the diary')
+    expect(ghost.hidden).toBe(false)
+    expect(ghost.getAttribute('aria-hidden')).toBe('true')
+  })
+
   it('lines never ask for anything real and sensitive (a guard rail)', () => {
     const lines = ghostLines()
     expect(lines.length).toBeGreaterThanOrEqual(15)
@@ -651,8 +662,7 @@ describe('k2:diary@2: the ghost in the empty pen', () => {
 
   it('writes a tease letter by letter, lingers, unwrites it, then writes another; never into the textarea', async () => {
     const { ink, ghost, tick, h } = await haunted()
-    expect(ghost.hidden).toBe(true)
-    tick(3600)
+    // From the first moment: no "write here", only the ghost.
     expect(ghost.hidden).toBe(false)
     expect(ink.placeholder).toBe('')
     const lines = ghostLines()
@@ -679,35 +689,62 @@ describe('k2:diary@2: the ghost in the empty pen', () => {
     expect(h.k2.thread.post).not.toHaveBeenCalled()
   })
 
-  it('stops the instant you focus or type, and comes back once the pen is empty and left alone', async () => {
+  it('focus freezes its line (still there, faint); the first letter sends it away; it returns after the pen is empty and left 3.5 s', async () => {
     const { ink, ghost, tick } = await haunted()
     tick(3600)
-    tick(2000)
+    tick(1500)
     expect(ghost.hidden).toBe(false)
     ink.focus()
-    expect(ghost.hidden).toBe(true)
-    expect(ghost.textContent).toBe('')
-    expect(ink.placeholder).toBe('Write here…')
+    expect(ghost.hidden).toBe(false)
+    expect(ghost.classList.contains('frozen')).toBe(true)
+    const held = ghost.textContent
+    expect(ghostLines()).toContain(held)
     tick(30_000)
-    expect(ghost.hidden).toBe(true)
-    ink.value = 'I am'
+    expect(ghost.textContent).toBe(held)
+    ink.value = 'I'
     ink.dispatchEvent(new Event('input'))
+    expect(ghost.hidden).toBe(true)
+    expect(ink.placeholder).toBe('')
     ink.value = ''
     ink.dispatchEvent(new Event('input'))
     tick(30_000)
     expect(ghost.hidden).toBe(true)
     ink.blur()
-    tick(2000)
+    tick(3400)
     expect(ghost.hidden).toBe(true)
-    tick(1600)
+    tick(200)
     expect(ghost.hidden).toBe(false)
-    // Typing (without a focus event) stops it too.
-    tick(2000)
-    ink.value = 'x'
-    ink.dispatchEvent(new Event('input'))
-    expect(ghost.hidden).toBe(true)
-    tick(30_000)
-    expect(ghost.hidden).toBe(true)
+    expect(ghost.classList.contains('frozen')).toBe(false)
+    // A frozen ghost left alone moves again after the pen is blurred 3.5 s.
+    tick(4000)
+    ink.focus()
+    const again = ghost.textContent
+    ink.blur()
+    tick(3000)
+    expect(ghost.textContent).toBe(again)
+    let moved = false
+    for (let i = 0; i < 100; i++) {
+      tick(100)
+      if (ghost.textContent !== again) moved = true
+    }
+    expect(moved).toBe(true)
+  })
+
+  it('selecting the pen makes nothing on the page disappear', async () => {
+    const { ink, tick, h } = await haunted()
+    h.view('cortana::local', { items: [item(1, 'what I sent', true), item(2, 'what it said back', false)] })
+    const entries = h.$('entries')
+    const before = [...entries.children]
+    const text = entries.textContent
+    tick(5000)
+    ink.focus()
+    ink.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    tick(10_000)
+    expect([...entries.children]).toEqual(before)
+    expect(entries.textContent).toBe(text)
+    for (const e of before) expect(e.isConnected).toBe(true)
+    expect(h.$('who').textContent).toBe('Cortana')
+    for (const id of ['desk', 'book', 'page']) expect(h.$(id).scrollTop).toBe(0)
   })
 
   it('after your words sink in, it wakes at once, even in the focused pen; your next word sends it away', async () => {
@@ -756,5 +793,285 @@ describe('k2:diary@2: the ghost in the empty pen', () => {
     }
     expect(ink.value).toBe('')
     expect(CSS).toMatch(/:root\.reduced \.ghost[^{]*\{[^}]*animation: none/)
+  })
+})
+
+describe('k2:diary@2: the pen scratches while the agent works', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  const paths = () => [...document.querySelectorAll<SVGPathElement>('#scribble path')]
+
+  it('scribbles while working, a little differently each fit, and clears the instant the reply starts writing', async () => {
+    const h = await harness()
+    vi.useFakeTimers()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [item(1, 'hi', true)], turn: { state: 'working', since: 1 } })
+    expect(h.$('stir').hidden).toBe(false)
+    expect(document.querySelector('#stir span:not(.ghosts)')).toBeNull()
+    let most = 0
+    const shapes = new Set<string>()
+    for (let i = 0; i < 300; i++) {
+      vi.advanceTimersByTime(50)
+      most = Math.max(most, paths().length)
+      for (const p of paths()) shapes.add(p.getAttribute('d') ?? '')
+    }
+    expect(most).toBeGreaterThanOrEqual(4)
+    expect(shapes.size).toBeGreaterThan(8)
+    const p = paths()[0] ?? document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    expect(p.namespaceURI).toBe('http://www.w3.org/2000/svg')
+    expect(Number(p.style.strokeDasharray)).toBeGreaterThan(0)
+    // The reply arrives while the turn is still marked working.
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'At last, an answer.', false)], turn: { state: 'working', since: 1 } })
+    expect(document.querySelector('.entry.bleeding')).not.toBeNull()
+    expect(h.$('stir').hidden).toBe(true)
+    expect(paths()).toEqual([])
+    vi.advanceTimersByTime(5000)
+    expect(paths()).toEqual([])
+    // Done: no scribble.
+    h.advance(7000)
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'At last, an answer.', false)], turn: null })
+    expect(h.$('stir').hidden).toBe(true)
+    expect(paths()).toEqual([])
+  })
+
+  it('every stroke stays inside the drawing, with room for the pen and its shadow, whatever the dice say', async () => {
+    const PAD = 4
+    let checked = 0
+    const seen = new Set<string>()
+    for (let seed = 1; seed <= 20; seed++) {
+      let a = seed * 0x9e3779b9
+      vi.spyOn(Math, 'random').mockImplementation(() => {
+        a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      })
+      document.body.innerHTML = ''
+      const h = await harness()
+      vi.useFakeTimers()
+      h.rows([row('cortana', 0)])
+      h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
+      const svg = h.$('scribble')
+      expect(svg.getAttribute('viewBox')).toBe('0 0 260 44')
+      const [, , w, hgt] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number)
+      for (let i = 0; i < 80; i++) {
+        vi.advanceTimersByTime(250)
+        for (const p of paths()) {
+          const d = p.getAttribute('d') ?? ''
+          if (seen.has(d)) continue
+          seen.add(d)
+          const n = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
+          expect(n.length % 2).toBe(0)
+          for (let k = 0; k < n.length; k += 2) {
+            expect(n[k]).toBeGreaterThanOrEqual(PAD)
+            expect(n[k]).toBeLessThanOrEqual(w - PAD)
+            expect(n[k + 1]).toBeGreaterThanOrEqual(PAD)
+            expect(n[k + 1]).toBeLessThanOrEqual(hgt - PAD)
+            checked++
+          }
+        }
+      }
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
+    expect(seen.size).toBeGreaterThan(200)
+    expect(checked).toBeGreaterThan(10_000)
+    // The box around it has real padding, so the drawing never meets the clip.
+    expect(CSS).toMatch(/\.stir \{[^}]*padding: 4px 6px 10px 6px/)
+  }, 60_000)
+
+  it('pauses while the frame is hidden', async () => {
+    const h = await harness()
+    vi.useFakeTimers()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
+    vi.advanceTimersByTime(1500)
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(h.$('scribble').classList.contains('paused')).toBe(true)
+    const n = paths().length
+    vi.advanceTimersByTime(20_000)
+    expect(paths().length).toBe(n)
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(h.$('scribble').classList.contains('paused')).toBe(false)
+  })
+
+  it('reduced motion: one still mark', async () => {
+    const h = await harness({ reduced: true })
+    vi.useFakeTimers()
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
+    expect(h.$('scribble').classList.contains('still')).toBe(true)
+    const marks = paths().map((p) => p.getAttribute('d'))
+    expect(marks.length).toBeGreaterThan(0)
+    vi.advanceTimersByTime(20_000)
+    expect(paths().map((p) => p.getAttribute('d'))).toEqual(marks)
+    expect(paths().every((p) => p.style.strokeDasharray === '')).toBe(true)
+  })
+})
+
+describe('k2:diary@2: the page glides up as the hand writes', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  /** jsdom has no layout: give the sheet a fake one we control. */
+  function scroller(sheet: HTMLElement) {
+    const s = { height: 300, client: 300, top: 0, writes: 0 }
+    Object.defineProperty(sheet, 'scrollHeight', { configurable: true, get: () => s.height })
+    Object.defineProperty(sheet, 'clientHeight', { configurable: true, get: () => s.client })
+    Object.defineProperty(sheet, 'scrollTop', {
+      configurable: true,
+      get: () => s.top,
+      set: (v: number) => {
+        s.writes++
+        s.top = Math.max(0, Math.min(v, s.height - s.client))
+      },
+    })
+    return {
+      s,
+      /** The reader's hand. */
+      user(top: number) {
+        s.top = top
+        sheet.dispatchEvent(new Event('scroll'))
+      },
+    }
+  }
+
+  it('glides toward the bottom without steps or overshoot, and keeps up while a reply is written', async () => {
+    const h = await harness()
+    const f = scroller(h.$('sheet'))
+    h.rows([row('cortana', 0)])
+    f.s.height = 900
+    h.view('cortana::local', { items: [item(1, 'hi', true)] })
+    expect(f.s.top).toBe(600) // a new page opens at the bottom
+    f.s.height = 1400
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'A long reply, written slowly into the page.', false)] })
+    const tops: number[] = []
+    for (let i = 0; i < 60; i++) {
+      h.advance(16)
+      tops.push(f.s.top)
+    }
+    const target = 1100
+    for (let i = 1; i < tops.length; i++) {
+      expect(tops[i]).toBeGreaterThanOrEqual(tops[i - 1])
+      expect(tops[i]).toBeLessThanOrEqual(target)
+      expect(tops[i] - tops[i - 1]).toBeLessThan(200) // a glide, not a jump
+    }
+    expect(tops[0]).toBeLessThan(target)
+    expect(target - tops[tops.length - 1]).toBeLessThan(1)
+    // The text keeps growing while the hand writes: the page keeps up.
+    f.s.height = 1500
+    for (let i = 0; i < 40; i++) h.advance(16)
+    expect(f.s.top).toBeGreaterThan(1199)
+    expect(f.s.top).toBeLessThanOrEqual(1200)
+  })
+
+  it('scrolling up by hand lets go; coming back to the bottom takes hold again', async () => {
+    const h = await harness()
+    const f = scroller(h.$('sheet'))
+    h.rows([row('cortana', 0)])
+    f.s.height = 900
+    h.view('cortana::local', { items: [item(1, 'hi', true)] })
+    f.s.height = 1400
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'A reply.', false)] })
+    h.advance(16)
+    h.advance(16)
+    f.user(200)
+    for (let i = 0; i < 60; i++) h.advance(16)
+    expect(f.s.top).toBe(200)
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'A reply.', false), item(3, 'and more', false)] })
+    for (let i = 0; i < 60; i++) h.advance(16)
+    expect(f.s.top).toBe(200)
+    f.user(1080) // back near the bottom
+    f.s.height = 1700
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'A reply.', false), item(3, 'and more', false), item(4, 'still more', false)] })
+    for (let i = 0; i < 80; i++) h.advance(16)
+    expect(1400 - f.s.top).toBeLessThan(1)
+  })
+
+  it('reduced motion: it snaps, with no frames', async () => {
+    const h = await harness({ reduced: true })
+    const f = scroller(h.$('sheet'))
+    h.rows([row('cortana', 0)])
+    f.s.height = 900
+    h.view('cortana::local', { items: [item(1, 'hi', true)] })
+    f.s.height = 1300
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'whole at once', false)] })
+    expect(f.s.top).toBe(1000)
+  })
+
+  it('no seal button and no whispers switch: Enter seals, and nothing on the page makes a sound', async () => {
+    const h = await harness({ reduced: true })
+    h.rows([row('cortana', 0)])
+    h.view('cortana::local', { items: [] })
+    expect(document.getElementById('send')).toBeNull()
+    expect(document.getElementById('whispers')).toBeNull()
+    expect([...document.querySelectorAll('button')].map((b) => b.id)).toEqual(['prev', 'next'])
+    expect(JS).not.toMatch(/AudioContext|whispers|setSound/)
+    const ink = h.$('ink') as HTMLTextAreaElement
+    ink.value = 'sealed with Enter'
+    ink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(h.k2.thread.post).toHaveBeenCalledWith('cortana::local', 'sealed with Enter')
+  })
+})
+
+describe('k2:diary@2: how many ghosts are out (0.45.2 counts)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  async function working(counts: unknown, present = true) {
+    const h = await harness({ reduced: true })
+    const r = row('cortana', 0, { working: true, activity: 'working' })
+    h.rows([present ? ({ ...r, counts } as Row) : r])
+    h.view('cortana::local', { items: [item(1, 'hi', true)], turn: { state: 'working', since: 1 } })
+    expect(h.$('stir').hidden).toBe(false)
+    return { h, line: h.$('ghosts') }
+  }
+
+  it('no counts from K2 (0.45.1), null counts, or none out: nothing extra, no made-up number', async () => {
+    for (const [counts, present] of [[undefined, false], [null, true], [{ subagents: 0, tools: 9, commands: 2 }, true], [{ tools: 3 }, true], [{ subagents: 'three' }, true]] as const) {
+      document.body.innerHTML = ''
+      const { line } = await working(counts, present)
+      expect(line.hidden).toBe(true)
+      expect(line.textContent).toBe('')
+    }
+  })
+
+  it('one ghost: a singular line', async () => {
+    const { line } = await working({ subagents: 1, tools: 2, commands: 0 })
+    expect(line.hidden).toBe(false)
+    expect(line.textContent).toMatch(/\b(a|one|lone) ghost\b/)
+    expect(line.textContent).not.toMatch(/ghosts/)
+  })
+
+  it('three ghosts: a plural line, the number in words; many tools rattle chains', async () => {
+    const { line, h } = await working({ subagents: 3, tools: 2, commands: 1 })
+    expect(line.textContent).toMatch(/\bthree ghosts\b/)
+    expect(line.textContent).not.toMatch(/chains/)
+    h.rows([{ ...row('cortana', 0, { working: true, activity: 'working' }), counts: { subagents: 7, tools: 14, commands: 3 } } as Row])
+    expect(line.textContent).toMatch(/\bseven ghosts\b/)
+    expect(line.textContent).toMatch(/rattling 14 chains$/)
+    // The line goes with the scribble when the reply starts writing.
+    h.view('cortana::local', { items: [item(1, 'hi', true), item(2, 'done', false)], turn: null })
+    h.rows([{ ...row('cortana', 0), counts: { subagents: 0, tools: 0, commands: 0 } } as Row])
+    expect(h.$('stir').hidden).toBe(true)
+    expect(line.hidden).toBe(true)
   })
 })

@@ -7,6 +7,15 @@
 </head>
 <body>
   <div class="desk" id="desk">
+    <div class="haunt" id="haunt" aria-hidden="true">
+      <div class="breath"></div>
+      <div class="moonbeam" id="moonbeam"></div>
+      <div class="candlelight"></div>
+      <div class="passer"></div>
+      <div class="face"></div>
+      <div class="fog f1"></div>
+      <div class="fog f2"></div>
+    </div>
     <main class="book" id="book" aria-live="polite">
       <section class="page" id="page" aria-label="Diary page">
         <div class="glow" aria-hidden="true"></div>
@@ -20,22 +29,17 @@
 
         <div class="sheet" id="sheet">
           <div class="entries" id="entries"></div>
-          <div class="stir" id="stir" hidden aria-label="The ink stirs"><span></span><span></span><span></span></div>
+          <div class="stir" id="stir" hidden><svg class="scribble" id="scribble" viewBox="0 0 260 44" role="img" aria-label="The ink stirs"></svg><span class="ghosts" id="ghosts" hidden></span></div>
           <p class="note" id="note" hidden></p>
           <form class="pen" id="pen" hidden>
             <label class="sr" for="ink" id="ink-label">Write to this agent</label>
-            <textarea id="ink" rows="3" placeholder="Write here…" spellcheck="true"></textarea>
+            <textarea id="ink" rows="3" aria-label="Write in the diary" spellcheck="true"></textarea>
             <div class="soak" id="soak" aria-hidden="true"></div>
             <div class="ghost" id="ghost" aria-hidden="true" hidden></div>
-            <div class="pen-row">
-              <span class="hint" id="hint">Enter, and the page drinks it</span>
-              <button class="seal" id="send" type="submit">seal</button>
-            </div>
           </form>
         </div>
 
         <footer class="page-foot">
-          <button class="whispers" id="whispers" type="button" aria-pressed="false">whispers: off</button>
           <span class="folio" id="folio"></span>
         </footer>
 

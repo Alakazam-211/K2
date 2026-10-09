@@ -4,9 +4,9 @@
 // arrow keys) to write to another agent. What you write sinks into the
 // paper; the reply arrives whole (Thread doesn't stream) and bleeds back in
 // handwriting at a natural pace, capped near 6 s, and a tap shows it all.
-// While the agent works, the ink stirs; when it needs you, a bookmark lifts
-// and the corner toward its page smoulders. Whispers only when you turn
-// them on. Reduced motion stills every effect.
+// While the agent works, a pen scratches; when it needs you, a bookmark lifts
+// and the corner toward its page smoulders. Reduced motion stills every
+// effect. No buttons on the page: Enter seals your words.
 //
 // The widget is the journal only (Rosson 2026-10-08): the room around it is
 // the Garden's theme (`haunted`). Only this computer's agents get a page:
@@ -50,15 +50,15 @@
     sheet: $('sheet'),
     entries: $('entries'),
     stir: $('stir'),
+    scribble: $('scribble'),
+    ghosts: $('ghosts'),
+    moonbeam: $('moonbeam'),
     note: $('note'),
     pen: $('pen'),
     ink: $('ink'),
     inkLabel: $('ink-label'),
     soak: $('soak'),
     ghost: $('ghost'),
-    hint: $('hint'),
-    send: $('send'),
-    whispers: $('whispers'),
     folio: $('folio'),
     prev: $('prev'),
     next: $('next'),
@@ -80,8 +80,6 @@
     turning: null, // {dir, leaf, from, p}
     sending: false,
     reduced: false,
-    sound: false,
-    audio: null,
     readyDone: false,
     lastDrawn: null,
   }
@@ -197,54 +195,6 @@
     if (code === 'rate_limited') return 'Too fast. Let the ink dry a moment.'
     if (code === 'too_large') return 'Too many words for one page.'
     return 'The page resists: ' + msg
-  }
-
-  // ── whispers (only when turned on) ───────────────────────────────────
-
-  function audio() {
-    if (!state.sound) return null
-    if (!state.audio) {
-      var Ctx = window.AudioContext || window.webkitAudioContext
-      if (!Ctx) return null
-      state.audio = new Ctx()
-    }
-    if (state.audio.state === 'suspended' && typeof state.audio.resume === 'function') state.audio.resume()
-    return state.audio
-  }
-
-  /** A breath of filtered noise: a whisper (long, low) or a rustle (short, high). */
-  function breathe(kind) {
-    var ctx = audio()
-    if (!ctx) return
-    var long = kind === 'whisper'
-    var secs = long ? 1.6 : 0.32
-    var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * secs), ctx.sampleRate)
-    var data = buf.getChannelData(0)
-    for (var i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
-    var src = ctx.createBufferSource()
-    src.buffer = buf
-    var filter = ctx.createBiquadFilter()
-    filter.type = long ? 'bandpass' : 'highpass'
-    filter.Q.value = long ? 1.4 : 0.7
-    var t = ctx.currentTime
-    filter.frequency.setValueAtTime(long ? 700 : 2400, t)
-    if (long) filter.frequency.linearRampToValueAtTime(1500 + Math.random() * 500, t + secs)
-    var gain = ctx.createGain()
-    gain.gain.setValueAtTime(0, t)
-    gain.gain.linearRampToValueAtTime(long ? 0.045 : 0.03, t + secs * 0.3)
-    gain.gain.linearRampToValueAtTime(0, t + secs)
-    src.connect(filter)
-    filter.connect(gain)
-    gain.connect(ctx.destination)
-    src.start(t)
-    src.stop(t + secs)
-  }
-
-  function setSound(on) {
-    state.sound = on
-    dom.whispers.setAttribute('aria-pressed', on ? 'true' : 'false')
-    text(dom.whispers, on ? 'whispers: on' : 'whispers: off')
-    if (on) breathe('whisper')
   }
 
   // ── the page's writing ───────────────────────────────────────────────
@@ -636,6 +586,8 @@
       markdown(r.body, r.text)
     }
     r.entry.classList.remove('bleeding')
+    stirSync()
+    glideOn()
   }
 
   // The reply's ink in reading order: each text node with its words, a wet
@@ -676,7 +628,7 @@
     var r = { id: entry.dataset.id, entry: entry, body: body, text: full, start: from ? from.start : performance.now(), ms: ms, frame: 0 }
     state.revealing = r
     entry.classList.add('bleeding')
-    if (!from) breathe('whisper')
+    stirSync() // the hand that scratched now writes
     var paint = function (shown) {
       var cut = Math.max(0, shown - WET_CHARS)
       ink.nodes.forEach(function (x) {
@@ -718,6 +670,7 @@
     dom.bookmark.hidden = true
     dom.entries.textContent = ''
     dom.stir.hidden = true
+    scribeStop()
     dom.pen.hidden = true
     showNote(words)
     text(dom.folio, '')
@@ -747,6 +700,7 @@
     dom.mood.className = 'mood' + (m.cls ? ' ' + m.cls : '')
     dom.bookmark.hidden = !needsYou(row, view)
     text(dom.inkLabel, 'Write to ' + row.label)
+    dom.ink.setAttribute('aria-label', 'Write to ' + row.label + ' in the diary')
 
     // A reply still being written carries on where the hand was.
     var keep = state.revealing && state.revealing.entry && arrived === false ? state.revealing : null
@@ -754,7 +708,6 @@
       if (state.revealing.frame) cancelAnimationFrame(state.revealing.frame)
       state.revealing = null
     }
-    var atBottom = dom.sheet.scrollHeight - dom.sheet.scrollTop - dom.sheet.clientHeight < 40
     dom.entries.textContent = ''
     var items = allItems(addr)
     var seen = state.seen[addr]
@@ -772,7 +725,7 @@
     if (keepEl && !(revealEl && revealEl !== keepEl && opts && opts.reveal)) reveal(keepEl, keep)
     else if (revealEl && opts && opts.reveal) reveal(revealEl)
 
-    dom.stir.hidden = !isWorking(row, view)
+    stirSync()
     var phase = view ? view.phase : 'opening'
     if (phase === 'opening') showNote('The ink is waking…')
     else if (phase !== 'ready') showNote((view && view.note) || 'This page is sealed; the agent can’t be reached right now.')
@@ -780,7 +733,6 @@
     else showNote('')
     var canWrite = phase === 'ready' && can('thread.post') && !!row.openable
     dom.pen.hidden = !canWrite
-    dom.send.disabled = state.sending
     if (arrived) dom.ink.value = state.drafts[addr] || ''
 
     var n = state.rows.length
@@ -796,8 +748,85 @@
     })
     dom.prev.classList.toggle('calls', callsBack)
     dom.next.classList.toggle('calls', callsOn)
-    if (atBottom || arrived || (opts && opts.reveal)) dom.sheet.scrollTop = dom.sheet.scrollHeight
+    // A page opened, or its history just arrived: start at the bottom.
+    if (arrived || (opts && opts.snap)) glideSnap()
+    else glideOn()
     ghostSync()
+  }
+
+  // ── the page glides up as the hand writes ────────────────────────────
+  // Rosson 2026-10-08: the writing point stays in view, the page sliding up
+  // continuously while a reply bleeds in or new lines arrive, never in
+  // steps. One loop per frame: read the sheet's layout once, then write
+  // scrollTop once, easing toward the bottom (exponential, so it never
+  // overshoots). Scroll up by hand and it lets go; come back to the bottom
+  // and it follows again. Reduced motion: it snaps.
+
+  var GLIDE_TAU_MS = 110 // how quickly the page catches up
+  var GLIDE_SLACK = 40 // this close to the bottom counts as "at the bottom"
+
+  var glide = { pinned: true, frame: 0, last: 0, wrote: null }
+
+  function glideBottom() {
+    return Math.max(0, dom.sheet.scrollHeight - dom.sheet.clientHeight)
+  }
+
+  function glideWrite(top) {
+    glide.wrote = top
+    dom.sheet.scrollTop = top
+  }
+
+  /** Jump to the bottom at once (a new page, reduced motion). */
+  function glideSnap() {
+    glide.pinned = true
+    if (glide.frame) cancelAnimationFrame(glide.frame)
+    glide.frame = 0
+    glideWrite(glideBottom())
+  }
+
+  /** Follow the writing, if the reader is following. */
+  function glideOn() {
+    if (!glide.pinned) return
+    if (reduced()) return glideWrite(glideBottom())
+    if (glide.frame) return
+    glide.last = 0
+    glide.frame = requestAnimationFrame(glideStep)
+  }
+
+  function glideStep(now) {
+    glide.frame = 0
+    if (!glide.pinned) return
+    // Read once…
+    var target = glideBottom()
+    var top = dom.sheet.scrollTop
+    var dt = glide.last ? Math.min(64, Math.max(0, now - glide.last)) : 16
+    glide.last = now
+    var gap = target - top
+    // …then write once.
+    if (Math.abs(gap) <= 0.5) {
+      if (gap !== 0) glideWrite(target)
+      if (!state.revealing) return // nothing more is coming: rest
+    } else {
+      glideWrite(top + gap * (1 - Math.exp(-dt / GLIDE_TAU_MS)))
+    }
+    glide.frame = requestAnimationFrame(glideStep)
+  }
+
+  /** A scroll we didn't write is the reader's hand: up lets go, back at
+   *  the bottom takes hold again. */
+  function glideScrolled() {
+    var top = dom.sheet.scrollTop
+    if (glide.wrote != null && Math.abs(top - glide.wrote) <= 2) return
+    glide.wrote = null
+    var atBottom = glideBottom() - top < GLIDE_SLACK
+    if (atBottom && !glide.pinned) {
+      glide.pinned = true
+      glideOn()
+    } else if (!atBottom && glide.pinned) {
+      glide.pinned = false
+      if (glide.frame) cancelAnimationFrame(glide.frame)
+      glide.frame = 0
+    }
   }
 
   // ── following the open page's Thread ─────────────────────────────────
@@ -833,7 +862,7 @@
           if (typeof state.seen[addr] !== 'number') state.seen[addr] = items.length ? items[items.length - 1].seq : -1
           state.moreOlder[addr] = !!view.hasMore
         }
-        if (addr === address() && !state.turning) draw({ reveal: true })
+        if (addr === address() && !state.turning) draw({ reveal: true, snap: first && view.phase === 'ready' })
       },
       function (err) {
         if (addr === address()) showNote(inWorld(err))
@@ -855,7 +884,7 @@
         state.moreOlder[addr] = !!page.hasMore
         if (addr !== address()) return
         draw()
-        dom.sheet.scrollTop = dom.sheet.scrollHeight - before
+        glideWrite(dom.sheet.scrollHeight - before)
       })
       .catch(function (e) {
         if (addr === address()) showNote(inWorld(e))
@@ -888,6 +917,16 @@
     return copy
   }
 
+  /** Focus may scroll a clipped box (the desk, the book, the page) to show
+   *  the pen, sliding the page's writing out of sight; only the sheet
+   *  scrolls. */
+  function unslide() {
+    ;[dom.desk, dom.book, dom.page].forEach(function (el) {
+      if (el.scrollTop) el.scrollTop = 0
+      if (el.scrollLeft) el.scrollLeft = 0
+    })
+  }
+
   function keepDraft() {
     var addr = address()
     if (addr) state.drafts[addr] = dom.ink.value
@@ -909,7 +948,6 @@
     state.turning = t
     state.at += dir
     draw()
-    breathe('rustle')
     return t
   }
 
@@ -1001,6 +1039,236 @@
     })
   }
 
+  // ── the pen scratches while the agent works ──────────────────────────
+  // Rosson 2026-10-08: no loading dots. While the agent works, an unseen
+  // hand scrawls half a word, strikes it, starts another, scratches it out
+  // and tangles ink over the lot, then the page drinks it and it begins
+  // again, never quite the same. SVG built with createElementNS, each
+  // stroke drawn by its dash offset. It clears the instant the reply starts
+  // writing; reduced motion shows one still mark; a hidden frame pauses it.
+
+  var SVG_NS = 'http://www.w3.org/2000/svg'
+  var SCRIBE_W = 260 // the viewBox: 0 0 SCRIBE_W SCRIBE_H
+  var SCRIBE_H = 44
+  // Every point stays this far inside the viewBox: half the widest stroke,
+  // the jitter already in the point, and the ink's 1px shadow, with room
+  // to spare. The ancestors clip (the sheet scrolls), so nothing may poke
+  // out (Rosson 2026-10-08: "cut off on the bottom and on the left").
+  var SCRIBE_PAD = 4
+  var SCRIBE_BASE = 27
+  var SCRIBE_PX_PER_MS = 0.32
+
+  var scribe = { on: false, paused: false, timer: 0, strokes: [], at: 0 }
+
+  function pathOf(points) {
+    return 'M' + points.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1) }).join(' L')
+  }
+
+  function lengthOf(points) {
+    var len = 0
+    for (var i = 1; i < points.length; i++) len += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1])
+    return len
+  }
+
+  /** Half a word in a cramped, looping hand. */
+  function scrawl(x0, letters) {
+    var pts = []
+    var a = jitter(1.7, 0.9)
+    var b = jitter(3, 1.6)
+    var tall = []
+    for (var l = 0; l <= letters; l++) tall.push(jitter(3, 7))
+    for (var t = 0; t <= letters * Math.PI * 2; t += 0.35) {
+      var h = tall[Math.floor(t / (Math.PI * 2))]
+      pts.push([x0 + a * t - b * Math.sin(t) + jitter(-0.4, 0.8), SCRIBE_BASE - h * (1 - Math.cos(t)) / 2 + jitter(-0.5, 1)])
+    }
+    return pts
+  }
+
+  function strike(x0, x1) {
+    var y0 = SCRIBE_BASE - jitter(2, 5)
+    var y1 = y0 + jitter(-4, 8)
+    var pts = []
+    for (var i = 0; i <= 12; i++) {
+      var k = i / 12
+      pts.push([x0 - 4 + (x1 - x0 + 8) * k, y0 + (y1 - y0) * k + jitter(-0.8, 1.6)])
+    }
+    return pts
+  }
+
+  /** Back and forth over a word, hard and fast. */
+  function scratch(x0, x1) {
+    var pts = []
+    var n = Math.round(jitter(9, 8))
+    for (var i = 0; i <= n; i++) {
+      var x = x0 + ((x1 - x0) * i) / n + jitter(-3, 6)
+      pts.push([x, i % 2 ? SCRIBE_BASE + jitter(1, 4) : SCRIBE_BASE - jitter(10, 6)])
+    }
+    return pts
+  }
+
+  /** A furious knot of loops over everything. */
+  function tangle(cx, w) {
+    var pts = []
+    var turns = jitter(3, 3)
+    for (var t = 0; t <= turns * Math.PI * 2; t += 0.3) {
+      var r = jitter(0.75, 0.5)
+      pts.push([cx + Math.cos(t) * (w / 2) * r + (t / (turns * Math.PI * 2) - 0.5) * w * 0.6, SCRIBE_BASE - 6 + Math.sin(t * jitter(0.9, 0.3)) * 9 * r])
+    }
+    return pts
+  }
+
+  /** One fit of frustration: what to draw, in order. */
+  function frustration() {
+    var out = []
+    var x = jitter(4, 10)
+    var words = Math.random() < 0.5 ? 2 : 3
+    var spans = []
+    for (var i = 0; i < words && x < SCRIBE_W - 40; i++) {
+      var pts = scrawl(x, Math.round(jitter(2, 3)))
+      var end = pts[pts.length - 1][0]
+      out.push({ pts: pts, cls: 'scrawl' })
+      out.push({ pts: Math.random() < 0.55 ? strike(x, end) : scratch(x, end), cls: 'frantic' })
+      spans.push([x, end])
+      x = end + jitter(12, 14)
+    }
+    var last = spans[spans.length - 1]
+    out.push({ pts: tangle((spans[0][0] + last[1]) / 2, last[1] - spans[0][0]), cls: 'frantic' })
+    return out
+  }
+
+  /** Keep the ink inside the drawing, whatever the dice said. */
+  function inside(points) {
+    return points.map(function (q) {
+      return [clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD), clamp(q[1], SCRIBE_PAD, SCRIBE_H - SCRIBE_PAD)]
+    })
+  }
+
+  function stroke(item, still) {
+    item.pts = inside(item.pts)
+    var p = document.createElementNS(SVG_NS, 'path')
+    p.setAttribute('d', pathOf(item.pts))
+    p.setAttribute('class', item.cls)
+    if (still) return p
+    var len = Math.ceil(lengthOf(item.pts))
+    var ms = Math.round(clamp(len / (item.cls === 'frantic' ? SCRIBE_PX_PER_MS * 2.2 : SCRIBE_PX_PER_MS), 140, 1300))
+    p.style.strokeDasharray = String(len)
+    p.style.strokeDashoffset = String(len)
+    p.style.animationDuration = ms + 'ms'
+    item.ms = ms
+    return p
+  }
+
+  function scribeClear() {
+    clearTimeout(scribe.timer)
+    scribe.timer = 0
+    dom.scribble.textContent = ''
+    dom.scribble.classList.remove('smear', 'still', 'paused')
+  }
+
+  function scribeStart() {
+    if (scribe.on) return
+    scribe.on = true
+    scribe.paused = false
+    scribeClear()
+    if (reduced()) {
+      // One still mark: a word struck through and scratched over.
+      dom.scribble.classList.add('still')
+      ;[
+        { pts: [[8, 27], [14, 18], [18, 27], [24, 16], [29, 27], [36, 19], [41, 27], [48, 18], [54, 27]], cls: 'scrawl' },
+        { pts: [[4, 23], [58, 20]], cls: 'frantic' },
+        { pts: [[10, 15], [20, 30], [28, 14], [38, 31], [46, 15], [56, 29]], cls: 'frantic' },
+      ].forEach(function (item) { dom.scribble.appendChild(stroke(item, true)) })
+      return
+    }
+    scribe.strokes = frustration()
+    scribe.at = 0
+    scribeNext()
+  }
+
+  function scribeNext() {
+    scribe.timer = 0
+    if (!scribe.on || scribe.paused) return
+    if (scribe.at < scribe.strokes.length) {
+      var item = scribe.strokes[scribe.at++]
+      dom.scribble.appendChild(stroke(item, false))
+      scribe.timer = setTimeout(scribeNext, item.ms + jitter(40, 220))
+      return
+    }
+    if (!dom.scribble.classList.contains('smear')) {
+      // The page drinks the mess, and the hand starts over.
+      dom.scribble.classList.add('smear')
+      scribe.timer = setTimeout(scribeNext, jitter(500, 300))
+      return
+    }
+    dom.scribble.textContent = ''
+    dom.scribble.classList.remove('smear')
+    scribe.strokes = frustration()
+    scribe.at = 0
+    scribe.timer = setTimeout(scribeNext, jitter(150, 250))
+  }
+
+  function scribeStop() {
+    if (!scribe.on) return
+    scribe.on = false
+    scribeClear()
+  }
+
+  function scribePause(hidden) {
+    if (!scribe.on || reduced()) return
+    scribe.paused = hidden
+    dom.scribble.classList.toggle('paused', hidden)
+    clearTimeout(scribe.timer)
+    scribe.timer = 0
+    if (!hidden) scribe.timer = setTimeout(scribeNext, 200)
+  }
+
+  // ── how many ghosts are out (Rosson 2026-10-08) ─────────────────────
+  // K2 0.45.2 gives each agent row `counts: {subagents, tools, commands}`.
+  // An older K2 sends none: then the page says nothing extra, and never
+  // makes a number up.
+
+  var NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve']
+  var ONE_GHOST = ['a ghost wanders off to look…', 'one ghost slips away to search…', 'a lone ghost drifts down the hall…']
+  var SOME_GHOSTS = ['{n} ghosts are stirring…', '{n} ghosts whisper among themselves…', '{n} ghosts drift through the rooms…']
+  var MANY_GHOSTS = ['the house is restless: {n} ghosts', '{n} ghosts crowd the halls…', 'the walls are thick with them: {n} ghosts']
+  var MANY_AT = 6
+  var CHAINS_AT = 5
+
+  function counted(row) {
+    var c = row && row.counts
+    if (!c || typeof c !== 'object') return null
+    var n = c.subagents
+    if (typeof n !== 'number' || !isFinite(n) || n < 1) return null
+    var tools = typeof c.tools === 'number' && isFinite(c.tools) ? Math.floor(c.tools) : 0
+    return { n: Math.floor(n), tools: tools }
+  }
+
+  /** The line for `n` ghosts: the wording varies by agent and number, and
+   *  holds still while the number does. */
+  function ghostsLine(addr, c) {
+    var pick = function (list) { return list[hash(addr + ':' + c.n) % list.length] }
+    if (c.n === 1) return pick(ONE_GHOST)
+    var words = c.n < NUMBER_WORDS.length ? NUMBER_WORDS[c.n] : String(c.n)
+    var line = pick(c.n >= MANY_AT ? MANY_GHOSTS : SOME_GHOSTS).replace('{n}', words)
+    if (c.tools >= CHAINS_AT) line += ', rattling ' + c.tools + ' chains'
+    return line
+  }
+
+  /** The scribble shows while the agent works, and never over a reply
+   *  being written. */
+  function stirSync() {
+    var row = current()
+    var view = row ? state.views[row.address] : null
+    var on = !!row && !dom.page.classList.contains('blank') && isWorking(row, view) && !state.revealing
+    var c = on ? counted(row) : null
+    dom.ghosts.hidden = !c
+    text(dom.ghosts, c ? ghostsLine(row.address, c) : '')
+    dom.stir.hidden = !on
+    if (on) scribeStart()
+    else scribeStop()
+    glideOn()
+  }
+
   // ── the ghost in the empty pen ───────────────────────────────────────
   // Rosson 2026-10-08: once your words sink in, something writes back into
   // the empty pen: a tease in faint ink, letter by letter, that lingers,
@@ -1036,10 +1304,10 @@
     'What did you leave buried?',
   ]
   var GHOST_STILL = GHOST_LINES[0]
-  var GHOST_HUSH = 'Write here…' // the pen's own placeholder while the ghost rests
   var GHOST_IDLE_MS = 3500
 
-  var ghost = { on: false, timer: 0, idle: 0, line: -1 }
+  // phase: 'gap' (between lines), 'write', 'erase' (lingers first).
+  var ghost = { woke: false, on: false, frozen: false, timer: 0, idle: 0, line: -1, words: '', n: 0, phase: 'gap' }
 
   function jitter(lo, spread) {
     return lo + Math.random() * spread
@@ -1057,17 +1325,20 @@
     ghost.timer = 0
     ghost.idle = 0
     ghost.on = false
+    ghost.frozen = false
+    ghost.words = ''
+    ghost.n = 0
+    ghost.phase = 'gap'
     dom.ghost.textContent = ''
     dom.ghost.hidden = true
-    dom.ghost.classList.remove('still')
-    dom.ink.placeholder = GHOST_HUSH
+    dom.ghost.classList.remove('still', 'frozen')
   }
 
   /** Paint the first `n` letters of the line, each a little unsteady. */
   function ghostPaint(words, n) {
     dom.ghost.textContent = ''
     for (var i = 0; i < n; i++) {
-      var ch = make('span', i === n - 1 ? 'gl fresh' : 'gl', words.charAt(i))
+      var ch = make('span', i === n - 1 && !ghost.frozen ? 'gl fresh' : 'gl', words.charAt(i))
       ch.style.top = (Math.random() * 2.4 - 1.2).toFixed(1) + 'px'
       ch.style.opacity = jitter(0.62, 0.38).toFixed(2)
       dom.ghost.appendChild(ch)
@@ -1079,62 +1350,100 @@
     clearTimeout(ghost.idle)
     ghost.idle = 0
     ghost.on = true
-    dom.ink.placeholder = ''
+    ghost.woke = true
     dom.ghost.hidden = false
     if (reduced()) {
       dom.ghost.classList.add('still')
       dom.ghost.textContent = GHOST_STILL
       return
     }
-    ghostLine()
+    ghostAfter(0)
   }
 
-  function ghostLine() {
-    var next = Math.floor(Math.random() * GHOST_LINES.length)
-    if (next === ghost.line) next = (next + 1) % GHOST_LINES.length
-    ghost.line = next
-    var words = GHOST_LINES[next]
-    var n = 0
-    var write = function () {
-      if (!ghost.on) return
-      n++
-      ghostPaint(words, n)
-      if (n >= words.length) {
-        ghost.timer = setTimeout(erase, jitter(1600, 1800))
-        return
+  function ghostAfter(ms) {
+    clearTimeout(ghost.timer)
+    ghost.timer = setTimeout(ghostStep, ms)
+  }
+
+  function ghostStep() {
+    ghost.timer = 0
+    if (!ghost.on || ghost.frozen) return
+    if (ghost.phase === 'gap') {
+      var next = Math.floor(Math.random() * GHOST_LINES.length)
+      if (next === ghost.line) next = (next + 1) % GHOST_LINES.length
+      ghost.line = next
+      ghost.words = GHOST_LINES[next]
+      ghost.n = 0
+      ghost.phase = 'write'
+      return ghostAfter(jitter(120, 240))
+    }
+    if (ghost.phase === 'write') {
+      ghost.n++
+      ghostPaint(ghost.words, ghost.n)
+      if (ghost.n >= ghost.words.length) {
+        ghost.phase = 'erase'
+        return ghostAfter(jitter(1600, 1800)) // it lingers
       }
       // The hand hesitates at a pause in the thought.
-      var c = words.charAt(n - 1)
-      ghost.timer = setTimeout(write, jitter(55, 110) + (/[….,?]/.test(c) ? jitter(140, 260) : 0))
+      var c = ghost.words.charAt(ghost.n - 1)
+      return ghostAfter(jitter(55, 110) + (/[….,?]/.test(c) ? jitter(140, 260) : 0))
     }
-    var erase = function () {
-      if (!ghost.on) return
-      n--
-      ghostPaint(words, n)
-      if (n <= 0) {
-        ghost.timer = setTimeout(ghostLine, jitter(700, 1300))
-        return
-      }
-      ghost.timer = setTimeout(erase, jitter(28, 42))
+    ghost.n--
+    ghostPaint(ghost.words, ghost.n)
+    if (ghost.n <= 0) {
+      ghost.phase = 'gap'
+      return ghostAfter(jitter(700, 1300))
     }
-    ghost.timer = setTimeout(write, jitter(120, 240))
+    ghostAfter(jitter(28, 42))
   }
 
-  /** Bring the ghost back after the pen has been left alone a while. */
+  /** You touched the pen: the ghost holds still, its line whole and faint,
+   *  until your first letter (Rosson 2026-10-08: selecting the pen never
+   *  makes writing disappear). */
+  function ghostFreeze() {
+    clearTimeout(ghost.idle)
+    ghost.idle = 0
+    if (!ghost.on || reduced()) return
+    clearTimeout(ghost.timer)
+    ghost.timer = 0
+    ghost.frozen = true
+    if (!ghost.words) {
+      ghost.words = GHOST_STILL
+      ghost.line = 0
+    }
+    ghost.n = ghost.words.length
+    ghost.phase = 'erase'
+    dom.ghost.classList.add('frozen')
+    ghostPaint(ghost.words, ghost.n)
+  }
+
+  /** Bring the ghost back (or set a frozen one moving) after the pen has
+   *  been empty and left alone a while. */
   function ghostLater(ms, restart) {
-    if (ghost.on) return
+    if (ghost.on && !ghost.frozen) return
     if (ghost.idle && !restart) return
     clearTimeout(ghost.idle)
     ghost.idle = setTimeout(function () {
       ghost.idle = 0
-      ghostStart(false)
+      if (ghost.frozen) {
+        if (!ghostMay(false)) return
+        ghost.frozen = false
+        dom.ghost.classList.remove('frozen')
+        ghostAfter(jitter(300, 400))
+      } else {
+        ghostStart(false)
+      }
     }, ms)
   }
 
   /** After a redraw: the pen may be gone, or hold a draft. */
   function ghostSync() {
     if (!ghostMay(true)) return ghostStop()
-    if (document.activeElement !== dom.ink) ghostLater(GHOST_IDLE_MS, false)
+    if (document.activeElement === dom.ink) return
+    // No "write here" ever (Rosson 2026-10-08): an empty pen shows the
+    // ghost from the first moment; later it returns after the idle wait.
+    if (!ghost.woke) ghostStart(false)
+    else ghostLater(GHOST_IDLE_MS, false)
   }
 
   // ── writing: the ink sinks into the page ─────────────────────────────
@@ -1144,7 +1453,6 @@
     var addr = address()
     if (!words || state.sending || !addr || state.turning) return
     state.sending = true
-    dom.send.disabled = true
     ghostStop()
     dom.soak.textContent = dom.ink.value
     dom.ink.value = ''
@@ -1175,7 +1483,6 @@
       })
       .then(function () {
         state.sending = false
-        dom.send.disabled = false
       })
   }
 
@@ -1205,20 +1512,29 @@
   function wire() {
     grab(dom.prev, -1)
     grab(dom.next, 1)
-    dom.whispers.addEventListener('click', function () { setSound(!state.sound) })
     dom.pen.addEventListener('submit', function (e) {
       e.preventDefault()
       send()
     })
     dom.ink.addEventListener('input', function () {
-      ghostStop()
+      if (dom.ink.value !== '') ghostStop()
       keepDraft()
     })
-    dom.ink.addEventListener('focus', ghostStop)
+    // Touching the pen changes nothing on the page: the ghost holds still,
+    // and the page never slides away under the pen (Rosson 2026-10-08).
+    dom.ink.addEventListener('focus', function () {
+      ghostFreeze()
+      unslide()
+    })
     dom.ink.addEventListener('blur', function () {
       if (dom.ink.value === '') ghostLater(GHOST_IDLE_MS, true)
     })
+    ;[dom.desk, dom.book, dom.page].forEach(function (el) {
+      el.addEventListener('scroll', unslide)
+    })
     document.addEventListener('visibilitychange', function () {
+      dom.root.classList.toggle('asleep', !!document.hidden)
+      scribePause(document.hidden)
       if (document.hidden) ghostStop()
       else ghostLater(GHOST_IDLE_MS, true)
     })
@@ -1239,6 +1555,7 @@
       if (state.revealing && !dom.pen.contains(e.target)) stopReveal(true)
     })
     dom.sheet.addEventListener('scroll', function () {
+      glideScrolled()
       if (dom.sheet.scrollTop < 24) loadOlder()
     })
     document.addEventListener('keydown', function (e) {
@@ -1258,10 +1575,8 @@
   // has connected the frame: the hello comes on the frame's load, after
   // this script's top level, and until then k2.can() is always false.
   function begin() {
-    var cfg = k2.config || {}
     state.reduced = !!(k2.motion && k2.motion.reduced)
     dom.root.classList.toggle('reduced', state.reduced)
-    if (cfg.sound === true) setSound(true)
 
     if (!can('agents.subscribe')) {
       drawBlank('the diary is sealed', UNREACHED)
@@ -1283,7 +1598,24 @@
     )
   }
 
+  /** Dust turning in the cold beam: a few motes, each on its own slow
+   *  path (CSS moves them; nothing here runs per frame). */
+  function motes() {
+    for (var i = 0; i < 16; i++) {
+      var m = make('span', 'mote')
+      var k = Math.random()
+      m.style.left = (8 + k * 60 + Math.random() * 30).toFixed(1) + '%'
+      m.style.top = (k * 85).toFixed(1) + '%'
+      m.style.setProperty('--dx', (Math.random() * 30 - 8).toFixed(0) + 'px')
+      m.style.setProperty('--dy', (40 + Math.random() * 70).toFixed(0) + 'px')
+      m.style.animationDuration = (10 + Math.random() * 12).toFixed(1) + 's'
+      m.style.animationDelay = (-Math.random() * 20).toFixed(1) + 's'
+      dom.moonbeam.appendChild(m)
+    }
+  }
+
   function start() {
+    motes()
     if (!k2) {
       drawBlank('the diary is sealed', 'This page only works inside a K2 Garden.')
       return

@@ -1410,10 +1410,11 @@ impl ZenFiles {
                 (file, mime, bytes, true)
             }
             None => {
-                let bg = super::builtin_theme(name)?.background?;
-                if spec["image"].as_str() != Some(bg.file) {
-                    return None;
-                }
+                let t = super::builtin_theme(name)?;
+                let want = spec["image"].as_str()?;
+                // Today's image, or one an earlier release named (an own
+                // copy on an archived set keeps its look).
+                let bg = t.background.iter().chain(t.older_backgrounds.iter()).find(|b| b.file == want)?;
                 let ext = schema::image_ext(bg.file)?;
                 let mime = schema::BACKGROUND_TYPES.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)?;
                 (bg.file.to_string(), mime, bg.bytes.to_vec(), false)

@@ -302,3 +302,30 @@ fn catalog_templates_check_clean_and_carry_both_controls() {
     let content: Vec<&str> = page["widgets"].as_array().expect("widgets").iter().filter_map(|w| w["kind"].as_str()).collect();
     assert_eq!(content, vec!["custom"], "the Diary page is the Diary alone: {page}");
 }
+
+/// 0.45.2 (Rosson 2026-10-08, "not haunted enough"): a Diary shows the
+/// creepier study, and the first image is still compiled in for a theme
+/// that names it (an own copy on an archived set keeps its look; the
+/// lookup is `background_json`'s).
+#[test]
+fn the_diary_shows_the_creepier_study_and_the_first_one_still_ships() {
+    use base64::Engine as _;
+    let (_t, f) = set_up("haunted-2");
+    let haunted = crate::zen::builtin_theme("haunted").expect("haunted ships");
+    let now = haunted.background.expect("a background");
+    assert_eq!(now.file, "haunted-background-2.webp");
+    assert!(haunted.toml.contains("image = \"haunted-background-2.webp\""));
+    let old: Vec<&str> = haunted.older_backgrounds.iter().map(|b| b.file).collect();
+    assert_eq!(old, ["haunted-background.webp"]);
+    for b in std::iter::once(&now).chain(haunted.older_backgrounds) {
+        assert!(b.bytes.starts_with(b"RIFF") && &b.bytes[8..12] == b"WEBP", "{} is a WebP", b.file);
+        assert!((b.bytes.len() as u64) < crate::zen::schema::MAX_BACKGROUND_BYTES, "{}", b.file);
+    }
+    let served = |v: &J| -> Vec<u8> {
+        let url = v["theme"]["background"]["dataUrl"].as_str().unwrap_or_else(|| panic!("a background: {}", v["theme"]));
+        let b64 = url.strip_prefix("data:image/webp;base64,").expect("a WebP data URL");
+        base64::engine::general_purpose::STANDARD.decode(b64).expect("base64")
+    };
+    let diary = gid(&f, "Diary");
+    assert_eq!(served(&f.resolve(Some(&diary)).expect("resolve")), now.bytes, "a new Diary shows the new study");
+}

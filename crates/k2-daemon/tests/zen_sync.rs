@@ -244,8 +244,9 @@ const FROZEN: &[(&str, &str)] = &[
     ("template:k2.blank@1", "3243f8b8edef13c3"),
     ("template:k2.texting@1", "c81d84543be1ef49"),
     ("theme:basic", "7fc5a1fb5062b263"),
-    // The Diary's study (Rosson 2026-10-08), new in 0.45.1.
-    ("theme:haunted", "946208e8e11ee355"),
+    // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
+    // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
+    ("theme:haunted", "ccd919524b13e5f9"),
     ("theme:midnight", "ff5f017a77ab1206"),
     ("theme:paper", "08fe35e01810ae29"),
     ("widget-props", "1f7a0792e682fa1e"),

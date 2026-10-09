@@ -9317,6 +9317,7 @@ Agents:
   k2 compute cancel <job>        k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals):
+  k2 compute preview on|off|status             turn the preview on for this server (owner)
   k2 compute node add <name> [--url URL]       mint a 10-minute enroll code
   k2 compute node confirm <name> <code>        the 6 digits the node shows
   k2 compute node remove <name>                k2 compute node rename <old> <new>
@@ -10095,6 +10096,21 @@ else: print(v.get("state", "ok"))'
             _compute_call GET /cli/compute/grants "${q#&}"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             _compute_render grants
+            ;;
+        preview)
+            # The owner's switch for the whole preview (CN30, `computePreview`).
+            # Not a compute route, so it works while compute is off. Owner
+            # only: run it from a plain terminal, not a K2 tab (a tab sends
+            # its session passport and the daemon refuses).
+            local action="${1:-status}"
+            case "$action" in
+                on|off)
+                    _compute_call POST /cli/settings/update "{\"computePreview\":$([ "$action" = on ] && echo true || echo false)}" tcp
+                    ;;
+                status) _compute_call GET /cli/settings/get "" tcp ;;
+                *) echo "usage: k2 compute preview on|off|status" >&2; exit 2 ;;
+            esac
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Compute nodes (preview): %s on this server" % ("on" if v.get("computePreview") else "off"))'
             ;;
         access)
             local action="${1:-status}" workspace=""

@@ -97,6 +97,10 @@ expect_has "workspace registered" "$reg" "\"path\":\"$WS\""
 cd "$WS"
 export K2_PROJECT_PATH="$WS"
 
+echo "== preview switch =="
+expect_has "preview on" "$(k2 compute preview on)" "Compute nodes (preview): on"
+expect_has "preview status reads it back" "$(k2 compute preview status)" ": on"
+
 echo "== enroll =="
 out="$(k2 compute nodes)"
 expect_has "no nodes yet" "$out" "(no compute nodes"
@@ -175,7 +179,13 @@ expect_has "receipt verified" "$(k2 compute receipt "$JOB")" "verified: yes"
 echo "== the machine owner's pause =="
 out="$(k2 compute local pause)"
 expect_has "local pause" "$out" "paused"
-sleep 1
+# Wait until the controller has heard the pause (the node polls its control
+# file), not a fixed second: a fixed sleep flaked once.
+for _ in $(seq 1 100); do
+    k2 compute nodes | grep -q "paused" && break
+    sleep 0.1
+done
+expect_has "controller sees the pause" "$(k2 compute nodes)" "paused"
 JOB2="$(k2 compute run mini --detach -- echo after-resume 2>/dev/null)"
 sleep 1.5
 expect_has "paused node holds the job" "$(k2 compute get "$JOB2")" "local_paused"

@@ -83,7 +83,7 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 /// ship a new version instead.
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
-    ("k2:diary@2", "d1e7e1971e39a0a500acebc0b3286047754e3627ffb36c84fdcae5299e172470"),
+    ("k2:diary@2", "a38b8bb61324f22d6803d3dc4de38138f913337e90082bcf2b4a9fa3269ec07f"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -351,12 +351,14 @@ mod tests {
         // Ghost counts (0.45.2's AgentRow.counts) are read only when K2 sends
         // them; an older K2's row shows nothing extra.
         assert!(js.contains("function counted(row)") && js.contains("if (!c || typeof c !== 'object') return null"), "counts are feature-detected");
-        assert!(js.contains("return [clamp(q[0], m, SCRIBE_W - m), clamp(q[1], m, SCRIBE_H - m)]"), "scribble points stay inside the drawing");
-        // Ink, paper and sound (Rosson 2026-10-08). The ink is perfect-
-        // freehand outlines, kept inside the drawing by the pen's reach.
-        for needle in ["function inkOutline(", "simulatePressure: o.pressure !== false", "return SCRIBE_PAD + inkReach(", "outlineD(outline, SCRIBE_BOX)"] {
+        assert!(js.contains("clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD)"), "scribble points stay inside the drawing");
+        // Ink, paper and sound (Rosson 2026-10-08). The working scribble is
+        // the old wild stroked pen ("more scary/chaotic"); perfect-freehand
+        // draws only the flourish, the blots and the speaker.
+        for needle in ["function inkOutline(", "simulatePressure: o.pressure !== false", "function frustration()", "p.style.strokeDashoffset = String(len)"] {
             assert!(js.contains(needle), "diary.js lost {needle}");
         }
+        assert!(!js.contains("SCRIBE_INK") && !js.contains("scribe-hand-"), "the scribble went back to filled outlines");
         // The paper: one WebGL canvas under the words, drawn on demand (30
         // fps at most while ink is wet), halted when unseen, one still frame
         // under reduced motion; the candle steps with the CSS flicker.

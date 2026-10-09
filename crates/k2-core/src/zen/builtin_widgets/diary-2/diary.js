@@ -19,9 +19,10 @@
 //
 // Ink, paper and sound (Rosson 2026-10-08), each from K2's library and each
 // optional (a missing library leaves the Diary as it was):
-//   - perfect-freehand: every stroke of ink is a filled pen outline with
-//     pressure from the hand's speed and tapered ends (the scratching pen,
-//     the flourish under a name, the odd blot under a reply);
+//   - perfect-freehand: the flourish under a name and the odd blot under a
+//     reply are filled pen outlines with pressure and tapered ends (the
+//     scratching pen keeps its own wild stroked lines: Rosson 2026-10-08,
+//     "the old scribbles were better and more scary/chaotic");
 //   - PixiJS: one WebGL canvas UNDER the words (paper fibre and grain, the
 //     candle warming the page in step with the CSS flicker, ink bleeding
 //     into the fibres under freshly written words), drawn on demand (at
@@ -170,12 +171,6 @@
       last: true,
     })
     return out && out.length > 3 ? out : null
-  }
-
-  /** The widest an outline reaches from its centre line: perfect-freehand's
-   *  radius is size × (0.5 − thinning × (0.5 − pressure)), pressure 0..1. */
-  function inkReach(o) {
-    return o.size * (0.5 + Math.abs(o.thinning) * 0.5)
   }
 
   /** An outline as a closed SVG path: quadratic curves through the
@@ -1241,7 +1236,7 @@
   var SCRIBE_BASE = 27
   var SCRIBE_PX_PER_MS = 0.32
 
-  var scribe = { on: false, paused: false, timer: 0, strokes: [], at: 0, masks: 0 }
+  var scribe = { on: false, paused: false, timer: 0, strokes: [], at: 0 }
 
   function pathOf(points) {
     return 'M' + points.map(function (p) { return p[0].toFixed(1) + ' ' + p[1].toFixed(1) }).join(' L')
@@ -1253,190 +1248,92 @@
     return len
   }
 
-  // Rosson 2026-10-08: a scrawled word never just stops. Each one fills
-  // its share of the line and ends on purpose: a tapered flick off its last
-  // letter (the pen lifting), or a hard jab down in disgust. Then it is
-  // struck through past its end, scratched out, or blotted where the pen
-  // stabbed. The words together span the drawing, left to right.
-
-  /** A word in a cramped, looping hand, from x0 to x1 exactly. */
-  function scrawl(x0, x1, jab) {
+  /** Half a word in a cramped, looping hand. */
+  function scrawl(x0, letters) {
     var pts = []
-    var tail = jab ? jitter(3, 2) : jitter(6, 5)
-    var body = Math.max(12, x1 - x0 - tail)
-    var letters = Math.max(2, Math.round(body / jitter(9, 5)))
-    var turns = letters * Math.PI * 2
-    var a = body / turns // the hand's advance, so the loops fill the word
-    var b = a * jitter(1.35, 0.7) // each letter swings back past itself: a loop
+    var a = jitter(1.7, 0.9)
+    var b = jitter(3, 1.6)
     var tall = []
     for (var l = 0; l <= letters; l++) tall.push(jitter(3, 7))
-    for (var t = 0; t < turns; t += 0.32) {
+    for (var t = 0; t <= letters * Math.PI * 2; t += 0.35) {
       var h = tall[Math.floor(t / (Math.PI * 2))]
-      pts.push([x0 + a * t - b * Math.sin(t) + jitter(-0.3, 0.6), SCRIBE_BASE - (h * (1 - Math.cos(t))) / 2 + jitter(-0.4, 0.8)])
-    }
-    var ex = x0 + body
-    pts.push([ex, SCRIBE_BASE])
-    if (jab) {
-      // A hard stab down and a short drag: the word given up on.
-      pts.push([ex + tail * 0.5, SCRIBE_BASE + jitter(3, 2)], [ex + tail, SCRIBE_BASE + jitter(5, 3)])
-    } else {
-      // The exit stroke: up and away, the pen lifting (perfect-freehand
-      // tapers it to nothing).
-      var lift = jitter(4, 5)
-      pts.push([ex + tail * 0.4, SCRIBE_BASE - lift * 0.35], [ex + tail * 0.75, SCRIBE_BASE - lift * 0.75], [ex + tail, SCRIBE_BASE - lift])
+      pts.push([x0 + a * t - b * Math.sin(t) + jitter(-0.4, 0.8), SCRIBE_BASE - h * (1 - Math.cos(t)) / 2 + jitter(-0.5, 1)])
     }
     return pts
   }
 
-  /** A line through a word that runs on past its end. */
   function strike(x0, x1) {
     var y0 = SCRIBE_BASE - jitter(2, 5)
     var y1 = y0 + jitter(-4, 8)
-    var from = x0 - jitter(2, 4)
-    var to = x1 + jitter(6, 8)
     var pts = []
     for (var i = 0; i <= 12; i++) {
       var k = i / 12
-      pts.push([from + (to - from) * k, y0 + (y1 - y0) * k + jitter(-0.8, 1.6)])
+      pts.push([x0 - 4 + (x1 - x0 + 8) * k, y0 + (y1 - y0) * k + jitter(-0.8, 1.6)])
     }
     return pts
   }
 
-  /** Back and forth over a word, hard and fast, end to end. */
+  /** Back and forth over a word, hard and fast. */
   function scratch(x0, x1) {
     var pts = []
-    var n = Math.max(6, Math.round((x1 - x0) / jitter(5, 4)))
+    var n = Math.round(jitter(9, 8))
     for (var i = 0; i <= n; i++) {
-      var x = x0 + ((x1 - x0) * i) / n + jitter(-2, 4)
+      var x = x0 + ((x1 - x0) * i) / n + jitter(-3, 6)
       pts.push([x, i % 2 ? SCRIBE_BASE + jitter(1, 4) : SCRIBE_BASE - jitter(10, 6)])
     }
     return pts
   }
 
-  /** Where the pen stabbed: a small pressed knot of ink. */
-  function stab(x, y) {
+  /** A furious knot of loops over everything. */
+  function tangle(cx, w) {
     var pts = []
-    for (var t = 0; t < Math.PI * 4; t += 0.7) pts.push([x + Math.cos(t) * (0.4 + t * 0.12), y + Math.sin(t) * (0.4 + t * 0.12)])
-    return pts
-  }
-
-  /** A furious knot of loops over everything, inside the words' span. */
-  function tangle(x0, x1) {
-    var pts = []
-    var w = x1 - x0
-    var cx = (x0 + x1) / 2
     var turns = jitter(3, 3)
     for (var t = 0; t <= turns * Math.PI * 2; t += 0.3) {
-      var r = jitter(0.6, 0.4)
-      pts.push([cx + Math.cos(t) * w * 0.22 * r + (t / (turns * Math.PI * 2) - 0.5) * w * 0.5, SCRIBE_BASE - 6 + Math.sin(t * jitter(0.9, 0.3)) * 9 * r])
+      var r = jitter(0.75, 0.5)
+      pts.push([cx + Math.cos(t) * (w / 2) * r + (t / (turns * Math.PI * 2) - 0.5) * w * 0.6, SCRIBE_BASE - 6 + Math.sin(t * jitter(0.9, 0.3)) * 9 * r])
     }
     return pts
   }
 
-  /** One fit of frustration: what to draw, in order. The words share the
-   *  line from the left margin to the right, gaps between them. */
+  /** One fit of frustration: what to draw, in order. */
   function frustration() {
     var out = []
-    var left = inkMargin('scrawl') + jitter(1, 4)
-    var right = SCRIBE_W - inkMargin('frantic') - 14 // room for a strike to run on
+    var x = jitter(4, 10)
     var words = Math.random() < 0.5 ? 2 : 3
-    var gaps = []
-    var shares = []
-    var gapSum = 0
-    var shareSum = 0
-    for (var i = 0; i < words; i++) {
-      var g = i ? jitter(10, 8) : 0
-      gaps.push(g)
-      gapSum += g
-      var sh = jitter(0.7, 0.6)
-      shares.push(sh)
-      shareSum += sh
+    var spans = []
+    for (var i = 0; i < words && x < SCRIBE_W - 40; i++) {
+      var pts = scrawl(x, Math.round(jitter(2, 3)))
+      var end = pts[pts.length - 1][0]
+      out.push({ pts: pts, cls: 'scrawl' })
+      out.push({ pts: Math.random() < 0.55 ? strike(x, end) : scratch(x, end), cls: 'frantic' })
+      spans.push([x, end])
+      x = end + jitter(12, 14)
     }
-    var room = right - left - gapSum
-    var x = left
-    for (var j = 0; j < words; j++) {
-      x += gaps[j]
-      var x1 = j === words - 1 ? right : x + (room * shares[j]) / shareSum
-      var jab = Math.random() < 0.3
-      out.push({ pts: scrawl(x, x1, jab), cls: 'scrawl' })
-      var cross = Math.random()
-      if (cross < 0.5) out.push({ pts: strike(x, x1), cls: 'frantic' })
-      else out.push({ pts: scratch(x, x1), cls: 'frantic' })
-      if (jab || Math.random() < 0.2) out.push({ pts: stab(x1 + jitter(1, 3), SCRIBE_BASE + jitter(1, 4)), cls: 'stab' })
-      x = x1
-    }
-    out.push({ pts: tangle(left, right), cls: 'frantic' })
+    var last = spans[spans.length - 1]
+    out.push({ pts: tangle((spans[0][0] + last[1]) / 2, last[1] - spans[0][0]), cls: 'frantic' })
     return out
   }
 
-  // The pen's two hands: a cramped scrawl, and thinner, faster fury. The
-  // outline reaches inkReach() past its centre line, so the centre line
-  // keeps that much further in (the box is still SCRIBE_PAD from the edge).
-  var SCRIBE_INK = {
-    scrawl: { size: 2.3, thinning: 0.62 },
-    frantic: { size: 1.7, thinning: 0.7 },
-    stab: { size: 3.4, thinning: 0.3 },
-  }
-  var SCRIBE_BOX = [SCRIBE_PAD, SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD, SCRIBE_H - SCRIBE_PAD]
-
-  function inkMargin(cls) {
-    return SCRIBE_PAD + inkReach(SCRIBE_INK[cls] || SCRIBE_INK.scrawl) + 0.3
-  }
-
   /** Keep the ink inside the drawing, whatever the dice said. */
-  function inside(points, m) {
+  function inside(points) {
     return points.map(function (q) {
-      return [clamp(q[0], m, SCRIBE_W - m), clamp(q[1], m, SCRIBE_H - m)]
+      return [clamp(q[0], SCRIBE_PAD, SCRIBE_W - SCRIBE_PAD), clamp(q[1], SCRIBE_PAD, SCRIBE_H - SCRIBE_PAD)]
     })
   }
 
-  /** A pen stroke's pace: never the same twice (a fast middle, a slow
-   *  start or a dragging end). */
-  function pace() {
-    return 'cubic-bezier(' + jitter(0.12, 0.3).toFixed(2) + ', ' + jitter(0, 0.3).toFixed(2) + ', ' + jitter(0.45, 0.35).toFixed(2) + ', 1)'
-  }
-
-  /** One stroke: the ink is a filled perfect-freehand outline; a mask
-   *  traces its centre line by dash offset, so the pen draws it. `still`:
-   *  the whole stroke at once (reduced motion), the same every time. */
   function stroke(item, still) {
-    var o = SCRIBE_INK[item.cls] || SCRIBE_INK.scrawl
-    item.pts = inside(item.pts, inkMargin(item.cls))
-    var outline = inkOutline(item.pts, {
-      size: o.size,
-      thinning: o.thinning,
-      taperStart: still ? 6 : jitter(3, 9),
-      taperEnd: still ? 12 : jitter(8, 16),
-    })
-    var ink = document.createElementNS(SVG_NS, 'path')
-    ink.setAttribute('class', 'ink ' + item.cls + (outline ? '' : ' line'))
-    ink.setAttribute('d', outline ? outlineD(outline, SCRIBE_BOX) : pathOf(item.pts))
-    if (still) return ink
+    item.pts = inside(item.pts)
+    var p = document.createElementNS(SVG_NS, 'path')
+    p.setAttribute('d', pathOf(item.pts))
+    p.setAttribute('class', item.cls)
+    if (still) return p
     var len = Math.ceil(lengthOf(item.pts))
-    // A whole word takes its time; fury is fast.
-    var ms = Math.round(clamp(len / (item.cls === 'scrawl' ? SCRIBE_PX_PER_MS : SCRIBE_PX_PER_MS * 2.2), 140, item.cls === 'scrawl' ? 2400 : 1300))
+    var ms = Math.round(clamp(len / (item.cls === 'frantic' ? SCRIBE_PX_PER_MS * 2.2 : SCRIBE_PX_PER_MS), 140, 1300))
+    p.style.strokeDasharray = String(len)
+    p.style.strokeDashoffset = String(len)
+    p.style.animationDuration = ms + 'ms'
     item.ms = ms
-    var g = document.createElementNS(SVG_NS, 'g')
-    var mask = document.createElementNS(SVG_NS, 'mask')
-    var id = 'scribe-hand-' + ++scribe.masks
-    mask.setAttribute('id', id)
-    mask.setAttribute('maskUnits', 'userSpaceOnUse')
-    mask.setAttribute('x', '0')
-    mask.setAttribute('y', '0')
-    mask.setAttribute('width', String(SCRIBE_W))
-    mask.setAttribute('height', String(SCRIBE_H))
-    var hand = document.createElementNS(SVG_NS, 'path')
-    hand.setAttribute('class', 'hand')
-    hand.setAttribute('d', pathOf(item.pts))
-    hand.style.strokeDasharray = String(len)
-    hand.style.strokeDashoffset = String(len)
-    hand.style.animationDuration = ms + 'ms'
-    hand.style.animationTimingFunction = pace()
-    mask.appendChild(hand)
-    ink.setAttribute('mask', 'url(#' + id + ')')
-    g.appendChild(mask)
-    g.appendChild(ink)
-    return g
+    return p
   }
 
   function scribeClear() {
@@ -1455,8 +1352,8 @@
       // One still mark: a word struck through and scratched over.
       dom.scribble.classList.add('still')
       ;[
-        { pts: [[8, 27], [14, 18], [18, 27], [24, 16], [29, 27], [36, 19], [41, 27], [48, 18], [54, 27], [58, 25], [62, 22]], cls: 'scrawl' },
-        { pts: [[4, 23], [70, 20]], cls: 'frantic' },
+        { pts: [[8, 27], [14, 18], [18, 27], [24, 16], [29, 27], [36, 19], [41, 27], [48, 18], [54, 27]], cls: 'scrawl' },
+        { pts: [[4, 23], [58, 20]], cls: 'frantic' },
         { pts: [[10, 15], [20, 30], [28, 14], [38, 31], [46, 15], [56, 29]], cls: 'frantic' },
       ].forEach(function (item) { dom.scribble.appendChild(stroke(item, true)) })
       return

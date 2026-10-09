@@ -877,7 +877,6 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
   it('every stroke stays inside the drawing, with room for the pen and its shadow, whatever the dice say', async () => {
     const PAD = 4
     let checked = 0
-    let inks = 0
     const seen = new Set<string>()
     for (let seed = 1; seed <= 20; seed++) {
       let a = seed * 0x9e3779b9
@@ -888,7 +887,7 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296
       })
       document.body.innerHTML = ''
-      const h = await harness({ libs: { PerfectFreehand: PF } })
+      const h = await harness()
       vi.useFakeTimers()
       h.rows([row('cortana', 0)])
       h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
@@ -901,12 +900,6 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
           const d = p.getAttribute('d') ?? ''
           if (seen.has(d)) continue
           seen.add(d)
-          if (p.classList.contains('ink')) {
-            inks++
-            expect(p.classList.contains('line')).toBe(false)
-            expect(d).toMatch(/^M[\d. ]+Q[\d. ]+T[\d. ]+Z$/)
-            expect(p.getAttribute('mask')).toMatch(/^url\(#scribe-hand-\d+\)$/)
-          }
           const n = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
           expect(n.length % 2).toBe(0)
           for (let k = 0; k < n.length; k += 2) {
@@ -922,82 +915,12 @@ describe('k2:diary@2: the pen scratches while the agent works', () => {
       vi.restoreAllMocks()
     }
     expect(seen.size).toBeGreaterThan(200)
-    expect(checked).toBeGreaterThan(40_000)
-    // The real pen drew them: filled outlines, each traced by a mask line.
-    expect(inks).toBeGreaterThan(100)
+    expect(checked).toBeGreaterThan(10_000)
+    // The old wild pen (Rosson 2026-10-08: "more scary/chaotic"): stroked
+    // lines drawn by dash offset, never filled outlines or masks.
+    expect(document.querySelectorAll('#scribble mask, #scribble path.ink').length).toBe(0)
     // The box around it has real padding, so the drawing never meets the clip.
     expect(CSS).toMatch(/\.stir \{[^}]*padding: 4px 6px 10px 6px/)
-  }, 60_000)
-
-  // Rosson 2026-10-08: "the words just ended early". A scrawled word runs
-  // its full length and ends on purpose: a flick up as the pen lifts, or a
-  // jab down given up on (then a stab of ink); each fit's words span the
-  // line, left margin to right.
-  it('every scrawled word finishes (a lifting flick, or a jab and a stab), and the words span the line', async () => {
-    const W = 260
-    const BASE = 27
-    const nums = (d: string) => d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []
-    let fits = 0
-    let words = 0
-    let flicks = 0
-    let jabs = 0
-    for (let seed = 1; seed <= 12; seed++) {
-      let a = seed * 0x2545f491
-      vi.spyOn(Math, 'random').mockImplementation(() => {
-        a = (a + 0x6d2b79f5) | 0
-        let t = Math.imul(a ^ (a >>> 15), 1 | a)
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-      })
-      document.body.innerHTML = ''
-      const h = await harness({ libs: { PerfectFreehand: PF } })
-      vi.useFakeTimers()
-      h.rows([row('cortana', 0)])
-      h.view('cortana::local', { items: [], turn: { state: 'working', since: 1 } })
-      let fit = new Map<string, { x0: number; x1: number; endY: number; jab: boolean }>()
-      let stabs = 0
-      const close = () => {
-        if (!fit.size) return
-        const ws = [...fit.values()]
-        expect(Math.min(...ws.map((w) => w.x0))).toBeLessThan(W * 0.1)
-        expect(Math.max(...ws.map((w) => w.x1))).toBeGreaterThan(W * 0.85)
-        expect(stabs).toBeGreaterThanOrEqual(ws.filter((w) => w.jab).length)
-        fits++
-        fit = new Map()
-        stabs = 0
-      }
-      for (let i = 0; i < 120; i++) {
-        vi.advanceTimersByTime(200)
-        const groups = [...document.querySelectorAll('#scribble g')]
-        if (!groups.length) close()
-        for (const g of groups) {
-          const hand = g.querySelector('path.hand')?.getAttribute('d') ?? ''
-          if (g.querySelector('path.ink.stab') && !fit.has('stab:' + hand)) {
-            fit.set('stab:' + hand, { x0: Infinity, x1: -Infinity, endY: 0, jab: false })
-            stabs++
-          }
-          if (!g.querySelector('path.ink.scrawl') || fit.has(hand)) continue
-          const n = nums(hand)
-          const xs = n.filter((_, k) => k % 2 === 0)
-          const endY = n[n.length - 1]
-          // It ends off the baseline, never mid-letter on it: up (a flick)
-          // or down (a jab).
-          const jab = endY > BASE + 1.5
-          expect(jab || endY < BASE - 1).toBe(true)
-          if (jab) jabs++
-          else flicks++
-          words++
-          fit.set(hand, { x0: Math.min(...xs), x1: Math.max(...xs), endY, jab })
-        }
-      }
-      for (const k of [...fit.keys()]) if (k.startsWith('stab:')) fit.delete(k)
-      vi.useRealTimers()
-      vi.restoreAllMocks()
-    }
-    expect(fits).toBeGreaterThan(12)
-    expect(words).toBeGreaterThan(30)
-    expect(flicks).toBeGreaterThan(0)
-    expect(jabs).toBeGreaterThan(0)
   }, 60_000)
 
   it('pauses while the frame is hidden', async () => {
@@ -1479,7 +1402,7 @@ describe('k2:diary@2: ink from perfect-freehand', () => {
     h.view('cortana::local', { items: Array.from({ length: 12 }, (_, i) => item(i + 1, 'x', false)), turn: { state: 'working', since: 1 } })
     vi.advanceTimersByTime(1500)
     expect(document.querySelectorAll('.blot').length).toBe(0)
-    expect(document.querySelectorAll('#scribble path.ink.line').length).toBeGreaterThan(0)
+    expect(document.querySelectorAll('#scribble path').length).toBeGreaterThan(0)
   })
 })
 

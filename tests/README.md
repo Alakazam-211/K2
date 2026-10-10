@@ -208,7 +208,8 @@ Files:
 bun run test
 
 # Type-check separately (catches drift even without running tests).
-bunx tsc --noEmit
+# tsc-rs, pinned; see docs/typecheck.md. Bare `tsc --noEmit` checks nothing here.
+bun run typecheck:web
 ```
 
 Current counts (0.37.0): 133 passing, 2 known-pre-existing failing
@@ -227,7 +228,7 @@ From a clean, registered workspace with the daemon running:
 cargo test --release --workspace
 
 # TS type-check + vitest.
-bunx tsc --noEmit && bun run test
+bun run typecheck:web && bun run test
 
 # Shell suites that work without manual setup.
 bash tests/behavior-test-tier3.sh

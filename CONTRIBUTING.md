@@ -26,7 +26,7 @@ This starts Vite's dev server (hot reload) and compiles the Rust backend. The fi
 
 ```bash
 bun run vite:dev       # Frontend only (no Tauri)
-bun run typecheck      # TypeScript type checking
+bun run typecheck      # TypeScript type checking (tsc-rs; see docs/typecheck.md)
 cargo fmt              # Format Rust code
 cargo clippy           # Lint Rust code
 cargo test -p k2-core  # Run Rust tests

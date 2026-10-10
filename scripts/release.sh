@@ -314,12 +314,13 @@ trap 'exit 143' TERM
 # Fail the release BEFORE any version bump or build if regressions slipped in.
 # NOTE: bare `tsc --noEmit` is vacuous here (root tsconfig has files:[] +
 # references) — typecheck:web (tsconfig.web.json) is the real renderer check.
+# typecheck:web runs tsc-rs (pinned, TS 7 rules; docs/typecheck.md).
 # vite:build:web is the hosted-SPA production build (vite.config.web.ts) —
 # typecheck alone does not prove the Vite graph / CSS / assets still bundle.
 # R2 publish is Step 8.6 and stays best-effort; this gate is build-only.
 if [ "$SKIP_BUILD" = 0 ]; then
 echo ""
-echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web, vitest, vite:build:web)..."
+echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web (tsc-rs), vitest, vite:build:web)..."
 RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
 bun run typecheck:web
 bunx vitest run --reporter=dot

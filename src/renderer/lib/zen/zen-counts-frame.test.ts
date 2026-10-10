@@ -338,7 +338,7 @@ describe('0.45.2 counts: k2:diary@2 on the real path says how many ghosts and sc
     // An older K2 (no counts): the scribble stays, the line says nothing.
     activity('working')
     f.pushRows(rowsFor(w))
-    await until('the line goes', () => line().hidden)
+    await until('the line goes', () => line().hidden === true)
     expect(line().textContent).toBe('')
     expect(document.getElementById('stir')?.hidden).toBe(false)
   })

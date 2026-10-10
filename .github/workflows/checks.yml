@@ -5,6 +5,8 @@
 # NOTE: bare `tsc --noEmit` is VACUOUS in this repo (root tsconfig.json is
 # {files: [], references: [...]}, and project references are not checked
 # without --build) — typecheck:web is the real renderer check.
+# typecheck:web runs tsc-rs (pinned; TS 7 rules). Fallback: typecheck:web:tsc.
+# See docs/typecheck.md.
 #
 # The `k2` (src-tauri) crate is deliberately NOT checked here yet: it needs
 # the webkitgtk/gtk stack plus a staged `binaries/frpc-<triple>` external
@@ -55,7 +57,7 @@ jobs:
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 
-      - name: Typecheck renderer (tsconfig.web.json)
+      - name: Typecheck renderer (tsc-rs, tsconfig.web.json)
         run: bun run typecheck:web
 
       - name: Vitest

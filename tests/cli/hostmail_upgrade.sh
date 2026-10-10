@@ -127,6 +127,18 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(out)
     def do_GET(self):
         scen = open(scen_path).read().strip()
+        if scen == "run_lost":
+            # The daemon restarted mid-upgrade: a new owner token, so the
+            # watcher's token is refused from the second poll on.
+            gets["n"] += 1
+            if gets["n"] == 1:
+                obj = {"ok": True, "state": "running",
+                       "upgrade": {"state": "running", "step": "stop", "steps": []}}
+                self._send(200, obj, "-")
+            else:
+                self._send(401, {"error": {"code": "unauthorized",
+                                           "hint": "Invalid or missing auth token"}}, "-")
+            return
         self._send(200, status_reply(scen), "-")
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -211,6 +223,25 @@ run_rc refused hostmail upgrade
 printf '%s' "$ERR" | grep -q 'mail_helper_missing' || fail "refusal must print the code: $ERR"
 printf '%s' "$ERR" | grep -q 'run as root' || fail "refusal must print the root fix: $ERR"
 
+# The daemon restarts mid-upgrade (new owner token): the watcher must stop
+# with daemon_lost and point at status + manualSteps, not poll for 6 h.
+echo run_lost >"$WORK/scenario"
+set +e
+OUT="$(perl -MPOSIX=WNOHANG -e 'my $p = fork(); if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
+  for (1 .. 200) { if (waitpid($p, WNOHANG) == $p) { exit($? >> 8) } select(undef, undef, undef, 0.1) }
+  kill "KILL", -$p; waitpid($p, 0); exit 142' \
+  env -i PATH="$PATH" HOME="$K2_TEST_HOME" \
+  K2_PORT="$PORT" K2_HOOK_TOKEN=test-token K2_HOSTMAIL_UPGRADE_POLL=0.05 \
+  K2_HOSTMAIL_UPGRADE_LOST_SECS=0.5 "$K2" hostmail upgrade 2>"$WORK/stderr")"
+RC=$?
+set -e
+ERR="$(cat "$WORK/stderr")"
+[ "$RC" -ne 142 ] || fail "lost daemon: the watcher must give up, not hang (killed after 20 s)"
+[ "$RC" -eq 1 ] || fail "lost daemon must exit 1, got $RC: $OUT $ERR"
+printf '%s' "$ERR" | grep -q 'daemon_lost' || fail "lost daemon must print daemon_lost: $ERR"
+printf '%s' "$ERR" | grep -q 'manualSteps' || fail "lost daemon must point at manualSteps: $ERR"
+printf '%s' "$ERR" | grep -q 'acknowledge-failed' || fail "lost daemon must name --acknowledge-failed: $ERR"
+
 run_rc ack hostmail upgrade --acknowledge-failed
 [ "$RC" -eq 0 ] || fail "ack rc $RC"
 printf '%s' "$OUT" | grep -q 'acknowledged' || fail "ack output: $OUT"
@@ -219,7 +250,7 @@ cat >"$WORK/check.py" <<'PY'
 import json, sys
 rows = [l.split(" ", 2) for l in open(sys.argv[1]).read().splitlines()]
 posts = [(p, json.loads(b)) for m, p, b in rows if m == "POST"]
-want = [{"dryRun": True}, {"dryRun": True}, {"dryRun": True}, {}, {}, {}, {}, {}, {},
+want = [{"dryRun": True}, {"dryRun": True}, {"dryRun": True}, {}, {}, {}, {}, {}, {}, {},
         {"acknowledgeFailed": True}]
 if [b for _, b in posts] != want:
     sys.exit("FAIL: POST bodies %r != %r" % ([b for _, b in posts], want))

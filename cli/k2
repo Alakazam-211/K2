@@ -30023,11 +30023,27 @@ elif verb == "server_upgrade":
         seen = 0
         final = None
         terminal = ("succeeded", "aborted", "rolled_back", "rollback_failed", "interrupted")
+        # A daemon restart mints a new owner token, so this watcher's
+        # token goes stale and every poll fails from then on. Give up after
+        # a bounded gap instead of polling silently for 6 h.
+        try:
+            lost_after = float(os.environ.get("K2_HOSTMAIL_UPGRADE_LOST_SECS") or "120")
+        except ValueError:
+            lost_after = 120.0
+        last_ok = time.time()
         while time.time() < deadline:
             time.sleep(interval)
             s = request("GET", "/cli/mail/status")
             if not isinstance(s, dict) or s.get("error"):
+                if time.time() - last_ok >= lost_after:
+                    die({"code": "daemon_lost",
+                         "hint": "no upgrade status from the K2 daemon for %ds (it restarted, or "
+                                 "is down). The upgrade may have stopped part way: run "
+                                 "`k2 hostmail status --json` and, if upgrade.state is "
+                                 "'interrupted', follow upgrade.manualSteps, then "
+                                 "`k2 hostmail upgrade --acknowledge-failed`" % int(lost_after)})
                 continue  # daemon busy or restarting — keep watching
+            last_ok = time.time()
             up = s.get("upgrade") or {}
             steps = up.get("steps") or []
             if not as_json:

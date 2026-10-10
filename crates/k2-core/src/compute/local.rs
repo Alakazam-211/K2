@@ -156,21 +156,20 @@ pub fn enable_steps(controller: &str, enroll: &str, name: &str) -> serde_json::V
 mod tests {
     use super::*;
 
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn with_dirs(f: impl FnOnce(&Path, &Path)) {
-        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // The one env lock (re-entrant), held for the whole test.
+        let _env = crate::test_env::lock();
         let base = std::env::temp_dir().join(format!("k2-compute-local-{}-{}", std::process::id(), super::super::now()));
         let home = base.join("home");
         let cfg = base.join("etc");
         std::fs::create_dir_all(home.join("run")).unwrap();
         std::fs::create_dir_all(&cfg).unwrap();
-        std::env::set_var("K2_NODE_HOME", &home);
-        std::env::set_var("K2_NODE_CONFIG_DIR", &cfg);
-        f(&home, &cfg);
-        std::env::remove_var("K2_NODE_HOME");
-        std::env::remove_var("K2_NODE_CONFIG_DIR");
-        let _ = std::fs::remove_dir_all(&base);
+        {
+            let _home = crate::test_env::EnvVar::set("K2_NODE_HOME", &home);
+            let _cfg = crate::test_env::EnvVar::set("K2_NODE_CONFIG_DIR", &cfg);
+            f(&home, &cfg);
+        }
+        let _ =std::fs::remove_dir_all(&base);
     }
 
     #[test]

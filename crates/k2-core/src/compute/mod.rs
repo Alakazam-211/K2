@@ -93,25 +93,24 @@ mod tests {
 
     #[test]
     fn flag_defaults_off_and_env_or_setting_turns_it_on() {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = std::env::var_os("K2_COMPUTE");
-        std::env::remove_var("K2_COMPUTE");
+        // The one env lock (also serializes the computePreview setting);
+        // `_unset` restores the caller's K2_COMPUTE on drop.
+        let _env = crate::test_env::lock();
+        let _unset = crate::test_env::EnvVar::remove("K2_COMPUTE");
         set_enabled(false);
         assert!(!enabled(), "compute must default OFF");
-        std::env::set_var("K2_COMPUTE", "1");
-        assert!(enabled());
-        std::env::set_var("K2_COMPUTE", "off");
-        assert!(!enabled());
-        std::env::remove_var("K2_COMPUTE");
+        {
+            let _on = crate::test_env::EnvVar::set("K2_COMPUTE", "1");
+            assert!(enabled());
+        }
+        {
+            let _off = crate::test_env::EnvVar::set("K2_COMPUTE", "off");
+            assert!(!enabled());
+        }
         set_enabled(true);
         assert!(enabled(), "computePreview setting turns it on");
         set_enabled(false);
         assert!(!enabled());
-        match prev {
-            Some(p) => std::env::set_var("K2_COMPUTE", p),
-            None => std::env::remove_var("K2_COMPUTE"),
-        }
     }
 
     #[test]

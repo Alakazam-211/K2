@@ -24,7 +24,16 @@ use serde_json::Value;
 use crate::crypto::{self, SigningKey};
 
 /// Wire protocol version, compared on every `hello` (CN26).
-pub const PROTOCOL: u32 = 1;
+///
+/// History: 1 = jobs (0.45.3); 2 = node admin (`admin`, `admin_result`,
+/// `update_offer`/`update_chunk`/`update_state`, `admin_keys`, `health`;
+/// prd-k2-node-admin-v1 §7.1). Additive: a protocol-1 node keeps running
+/// jobs, and the controller sends admin frames only to a node whose offer
+/// lists the `admin` feature.
+pub const PROTOCOL: u32 = 2;
+
+/// Oldest node protocol a controller still attaches (jobs only).
+pub const MIN_PROTOCOL: u32 = 1;
 
 /// Largest JSON text message on either socket.
 pub const MAX_FRAME_BYTES: usize = 1 << 20;
@@ -259,6 +268,13 @@ pub enum Frame {
     Cancel(Cancel),
     PolicyNarrow(PolicyNarrow),
     Revoked(Revoked),
+    /// Protocol 2: a signed admin command ([`crate::admin`]).
+    Admin(AdminFrame),
+    /// Protocol 2: a signed `k2-node` build offered for self-update.
+    UpdateOffer(UpdateOffer),
+    UpdateChunk(UpdateChunk),
+    /// Protocol 2: approval key pin/rotation ([`crate::admin::AdminKeys`]).
+    AdminKeys(crate::admin::AdminKeys),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -267,6 +283,10 @@ pub enum Frame {
     Log(LogChunk),
     Receipt(ReceiptFrame),
     Goodbye(Goodbye),
+    /// Protocol 2.
+    AdminResult(crate::admin::AdminResult),
+    UpdateState(UpdateState),
+    Health(crate::health::Health),
 }
 
 impl Frame {
@@ -278,14 +298,21 @@ impl Frame {
             | Frame::TransferFailed(_)
             | Frame::Cancel(_)
             | Frame::PolicyNarrow(_)
-            | Frame::Revoked(_) => Direction::ControllerToNode,
+            | Frame::Revoked(_)
+            | Frame::Admin(_)
+            | Frame::UpdateOffer(_)
+            | Frame::UpdateChunk(_)
+            | Frame::AdminKeys(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
             | Frame::State(_)
             | Frame::Log(_)
             | Frame::Receipt(_)
-            | Frame::Goodbye(_) => Direction::NodeToController,
+            | Frame::Goodbye(_)
+            | Frame::AdminResult(_)
+            | Frame::UpdateState(_)
+            | Frame::Health(_) => Direction::NodeToController,
         }
     }
 
@@ -305,6 +332,13 @@ impl Frame {
             Frame::Log(_) => "log",
             Frame::Receipt(_) => "receipt",
             Frame::Goodbye(_) => "goodbye",
+            Frame::Admin(_) => "admin",
+            Frame::UpdateOffer(_) => "update_offer",
+            Frame::UpdateChunk(_) => "update_chunk",
+            Frame::AdminKeys(_) => "admin_keys",
+            Frame::AdminResult(_) => "admin_result",
+            Frame::UpdateState(_) => "update_state",
+            Frame::Health(_) => "health",
         }
     }
 }
@@ -745,6 +779,63 @@ pub struct ReceiptFrame {
 pub struct Goodbye {
     /// `uninstall`, `shutdown`, `controller_key_changed`, …
     pub reason: String,
+}
+
+// ── node admin (protocol 2) ──────────────────────────────────────────
+
+/// `admin`: one signed command. The node passes `cmd` to its root
+/// executor untouched (or answers read verbs itself).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminFrame {
+    pub cmd: crate::admin::SignedCommand,
+}
+
+/// `update_offer` (prd-k2-node-admin-v1 §8.2 step 2): one signed build
+/// for this node's os/arch. `sig` is the minisign text (root-helper key,
+/// trusted comment `file:k2-node-<os>-<arch> version:<v> protocol:<p>`).
+/// `cmd` is a controller-signed `node.update` command whose args name
+/// this exact build (`version`, `sha256`, `trigger`). Bytes follow as
+/// `update_chunk` frames.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateOffer {
+    pub transfer_id: String,
+    pub version: String,
+    pub protocol: u32,
+    pub os: String,
+    pub arch: String,
+    pub sha256: String,
+    pub size: u64,
+    pub sig: String,
+    pub cmd: crate::admin::SignedCommand,
+}
+
+/// One piece of an offered build (≤ [`TRANSFER_CHUNK`] raw bytes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateChunk {
+    pub transfer_id: String,
+    pub seq: u32,
+    pub data: String,
+    pub last: bool,
+}
+
+/// `update_state`: staged / swapped / healthy / rolled_back / refused / failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateState {
+    #[serde(default)]
+    pub transfer_id: Option<String>,
+    #[serde(default)]
+    pub cmd_id: Option<String>,
+    pub phase: crate::admin::UpdatePhase,
+    /// The version this phase is about.
+    pub version: String,
+    /// The version running before.
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub at: i64,
 }
 
 // ── receipts (§11.6) ─────────────────────────────────────────────────

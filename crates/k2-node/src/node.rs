@@ -31,7 +31,8 @@ use crate::slots::{Lease, Slots};
 use crate::status::Status;
 use crate::sync::{valid_sha, Git};
 
-pub const NODE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The product version (build.rs reads the daemon's), not the crate's.
+pub const NODE_VERSION: &str = crate::PRODUCT_VERSION;
 
 /// Knobs (tests shorten the waits).
 #[derive(Clone)]
@@ -53,6 +54,8 @@ pub struct NodeOptions {
     pub clock: Arc<dyn Clock>,
     /// Override machine facts (tests).
     pub facts: Option<MachineFacts>,
+    /// The root executor's socket (node admin).
+    pub admin_socket: PathBuf,
 }
 
 impl NodeOptions {
@@ -74,6 +77,7 @@ impl NodeOptions {
             rss_every: Duration::from_secs(1),
             clock: Arc::new(crate::ledger::SystemClock::new()),
             facts: None,
+            admin_socket: crate::admin::config::default_socket(),
         }
     }
 }
@@ -218,11 +222,13 @@ pub struct Node {
     pub learned_routes: Mutex<Vec<String>>,
     /// One toolchain install at a time (mise and rustup share caches).
     tool_lock: tokio::sync::Mutex<()>,
+    /// Nonces of node-answered admin verbs.
+    pub admin_nonces: crate::admin::courier::NodeNonces,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
 pub fn node_features() -> Vec<String> {
-    let mut f = vec![k2_node_proto::needs::FEATURE_NEEDS.to_string()];
+    let mut f = vec![k2_node_proto::needs::FEATURE_NEEDS.to_string(), k2_node_proto::admin::FEATURE_ADMIN.to_string()];
     if crate::packages::installer_present() {
         f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
     }
@@ -283,6 +289,7 @@ impl Node {
             keep_awake: Mutex::new(None),
             learned_routes: Mutex::new(Vec::new()),
             tool_lock: tokio::sync::Mutex::new(()),
+            admin_nonces: Default::default(),
             opts,
         });
         node.refresh_local(true);

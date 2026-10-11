@@ -3,6 +3,7 @@
 #
 #   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
 #        [--allow-packages "libssl-dev pkg-config"] [--tools "node@22 rust@stable"]
+#        [--remote-admin off|policy|full]
 #        [--controller https://you.k2.dev --enroll ABCDE-FGHJK.0123456789abcdef --name NAME]
 #   (or: sudo scripts/node/install-node-linux.sh --binary ./k2-node …)
 #
@@ -44,6 +45,11 @@ PRIVATE_HOME=""
 ALLOW_PACKAGES=""
 PACKAGE_RULE=1
 TOOLS=""
+REMOTE_ADMIN=""
+ADMIN_STATE="/var/lib/k2-node-admin"
+ADMIN_SOCKET="/run/k2-node-admin.sock"
+ADMIN_SOCKET_UNIT="/etc/systemd/system/k2-node-admin.socket"
+ADMIN_SERVICE_UNIT="/etc/systemd/system/k2-node-admin.service"
 LABELS=()
 
 die() { echo "install-node-linux: $*" >&2; exit 1; }
@@ -63,6 +69,7 @@ while [ $# -gt 0 ]; do
         --allow-packages) ALLOW_PACKAGES="${2:-}"; shift 2 ;;
         --no-package-installs) PACKAGE_RULE=0; shift ;;
         --tools) TOOLS="${2:-}"; shift 2 ;;
+        --remote-admin) REMOTE_ADMIN="${2:-}"; shift 2 ;;
         -h|--help) usage ;;
         *) die "unknown argument: $1 (see --help)" ;;
     esac
@@ -78,6 +85,7 @@ command -v systemctl >/dev/null || die "systemd is required (no systemctl found)
 if [ -n "$HUMAN" ]; then
     id -u "$HUMAN" >/dev/null 2>&1 || die "--human $HUMAN is not a user here"
 fi
+case "$REMOTE_ADMIN" in ""|off|policy|full) ;; *) die "--remote-admin must be off, policy or full" ;; esac
 if [ -n "$ENROLL" ] || [ -n "$CONTROLLER" ]; then
     [ -n "$ENROLL" ] && [ -n "$CONTROLLER" ] && [ -n "$NAME" ] || die "--enroll needs --controller and --name (mint a code with \`k2 compute node add <name>\` on the controller)"
 fi
@@ -221,9 +229,44 @@ else
     rm -f "$PKG_PATH_UNIT" "$PKG_SERVICE_UNIT"
 fi
 
+# ── remote admin: the root executor (prd-k2-node-admin-v1) ───────────
+# Your K2 server's agents can then look after this machine without SSH:
+#   off    = today: they can only narrow limits (and read health)
+#   policy = also change limits (widening needs your approval), pause,
+#            update k2-node to newer signed builds, roll back
+#   full   = also owner-approved root actions, each one approved by you
+# Raising the level is only possible here, at the machine.
+if [ -z "$REMOTE_ADMIN" ] && [ ! -f "$CONFIG_DIR/admin.toml" ]; then
+    if [ -t 0 ]; then
+        echo "== remote admin for this node"
+        echo "   off    = agents can only narrow limits and read health (today's behaviour)"
+        echo "   policy = also change limits (widening needs your approval), pause, update k2-node"
+        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+        printf "   Remote admin level? [off/policy/full] (off) "
+        read -r answer
+        case "$answer" in policy|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="off" ;; esac
+    else
+        # Not a terminal and no flag: off grants nothing new.
+        REMOTE_ADMIN="off"
+    fi
+fi
+install -d -m 0700 -o root -g root "$ADMIN_STATE"
+level_args=()
+[ -n "$REMOTE_ADMIN" ] && level_args=(--level "$REMOTE_ADMIN")
+"$BIN" admin init --config-dir "$CONFIG_DIR" --home "$HOME_DIR" ${level_args[@]+"${level_args[@]}"} >/dev/null
+chown root:root "$CONFIG_DIR/admin.toml"
+chmod 0644 "$CONFIG_DIR/admin.toml"
+"$BIN" admin install-files --os linux --binary "$BIN" --home "$HOME_DIR" --config-dir "$CONFIG_DIR" \
+    --state-dir "$ADMIN_STATE" --socket "$ADMIN_SOCKET" --group "$NODE_USER" --out "$tmp" >/dev/null
+install -m 0644 -o root -g root "$tmp/k2-node-admin.socket" "$ADMIN_SOCKET_UNIT"
+install -m 0644 -o root -g root "$tmp/k2-node-admin.service" "$ADMIN_SERVICE_UNIT"
+
 echo "== service"
 systemctl daemon-reload
 systemctl enable k2-node.service >/dev/null
+systemctl enable k2-node-admin.socket >/dev/null
+systemctl restart k2-node-admin.socket
+systemctl stop k2-node-admin.service >/dev/null 2>&1 || true
 if [ -f "$PKG_PATH_UNIT" ]; then
     systemctl enable --now k2-node-packages.path >/dev/null
 else
@@ -236,6 +279,10 @@ if [ -n "$ENROLL" ]; then
     [ "$REENROLL" = "1" ] && force=(--force)
     run_as_node "$BIN" enroll --controller "$CONTROLLER" --enroll "$ENROLL" --name "$NAME" \
         --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"}
+fi
+# Enrolled now: let root pin the controller key it will check commands against.
+if [ -f "$HOME_DIR/state/controller.json" ]; then
+    "$BIN" admin pin --config-dir "$CONFIG_DIR" --home "$HOME_DIR" >/dev/null || true
 fi
 systemctl restart k2-node.service
 sleep 2
@@ -266,8 +313,10 @@ Done.
   your access: $ACCESS_STATUS
   packages:    $PKG_STATUS
   toolchains:  $TOOLS_STATUS
+  remote admin: $("$BIN" admin init --config-dir "$CONFIG_DIR" --home "$HOME_DIR" 2>&1) (k2-node-admin.socket)
   status:  $BIN status --home $HOME_DIR
   pause:   $BIN pause [--now]      (you are in k2nodectl after a new login; or use sudo)
   policy:  $BIN policy show | set cpu_cap_percent=50
   remove:  sudo $BIN uninstall
+  admin:   sudo $BIN admin level off|policy|full   |   sudo $BIN admin audit
 EOF

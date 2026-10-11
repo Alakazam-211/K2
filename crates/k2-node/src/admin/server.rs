@@ -1,0 +1,259 @@
+//! The executor's local Unix socket (prd-k2-node-admin-v1 §5): the only
+//! way in. No network door. One request per connection, one at a time.
+//!
+//! Framing: `u32 BE length ‖ bytes`. Request = one JSON
+//! [`LocalRequest`] frame (≤ 1 MiB + 4 KiB); an `update` adds one binary
+//! frame of exactly `size` bytes (≤ [`MAX_UPDATE_BYTES`]). Response = one
+//! JSON [`LocalResponse`] frame.
+//!
+//! Peer check first (before reading a byte): `SO_PEERCRED` on Linux,
+//! `getpeereid` on macOS; only root or the configured node user.
+
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::time::Duration;
+
+use k2_node_proto::admin::{code, AdminRefusal, AdminResult, MAX_COMMAND_BYTES};
+
+use super::exec::{Executor, LocalRequest, LocalResponse};
+
+pub const MAX_HEADER_BYTES: usize = MAX_COMMAND_BYTES + 4096;
+/// Largest `k2-node` build the executor reads into memory.
+pub const MAX_UPDATE_BYTES: u64 = 256 << 20;
+
+pub fn write_frame(w: &mut impl Write, bytes: &[u8]) -> Result<(), String> {
+    let n = u32::try_from(bytes.len()).map_err(|_| "frame too large".to_string())?;
+    w.write_all(&n.to_be_bytes()).map_err(|e| format!("write: {e}"))?;
+    w.write_all(bytes).map_err(|e| format!("write: {e}"))?;
+    w.flush().map_err(|e| format!("write: {e}"))
+}
+
+pub fn read_frame(r: &mut impl Read, max: usize) -> Result<Vec<u8>, String> {
+    let mut len = [0u8; 4];
+    r.read_exact(&mut len).map_err(|e| format!("read: {e}"))?;
+    let n = u32::from_be_bytes(len) as usize;
+    if n > max {
+        return Err(format!("frame of {n} bytes is over the {max} cap"));
+    }
+    let mut buf = vec![0u8; n];
+    r.read_exact(&mut buf).map_err(|e| format!("read: {e}"))?;
+    Ok(buf)
+}
+
+/// The peer's uid.
+pub fn peer_uid(s: &UnixStream) -> Result<u32, String> {
+    let fd = s.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: fd is a live socket; cred/len are valid out-pointers.
+        let rc = unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut libc::c_void, &mut len) };
+        if rc != 0 {
+            return Err(format!("SO_PEERCRED: {}", std::io::Error::last_os_error()));
+        }
+        Ok(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (mut uid, mut gid): (libc::uid_t, libc::gid_t) = (0, 0);
+        // SAFETY: fd is a live socket; uid/gid are valid out-pointers.
+        if unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } != 0 {
+            return Err(format!("getpeereid: {}", std::io::Error::last_os_error()));
+        }
+        Ok(uid)
+    }
+}
+
+/// uid and primary gid of a user name.
+pub fn user_ids(name: &str) -> Option<(u32, u32)> {
+    let c = std::ffi::CString::new(name).ok()?;
+    // SAFETY: getpwnam reads a static buffer; we copy the ids out at once.
+    unsafe {
+        let pw = libc::getpwnam(c.as_ptr());
+        if pw.is_null() {
+            return None;
+        }
+        Some(((*pw).pw_uid, (*pw).pw_gid))
+    }
+}
+
+/// Who may connect.
+#[derive(Debug, Clone)]
+pub struct PeerRule {
+    pub allowed_uids: Vec<u32>,
+}
+
+impl PeerRule {
+    /// Root plus the node user from admin.toml (default `k2node`/`_k2node`).
+    pub fn for_node_user(user: &str) -> Self {
+        let mut allowed_uids = vec![0];
+        if let Some((u, _)) = user_ids(user) {
+            allowed_uids.push(u);
+        }
+        Self { allowed_uids }
+    }
+}
+
+/// Serve one connection.
+pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
+    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
+    let reply = |s: &mut UnixStream, r: LocalResponse| {
+        if let Ok(b) = serde_json::to_vec(&r) {
+            let _ = write_frame(s, &b);
+        }
+    };
+    let refusal = |code_s: &str, msg: &str| LocalResponse::Result(AdminResult::refused("", "", &AdminRefusal::new(code_s, msg)));
+    match peer_uid(&s) {
+        Ok(uid) if rule.allowed_uids.contains(&uid) => {}
+        Ok(_) | Err(_) => {
+            let r = refusal(code::PEER_NOT_ALLOWED, "only root or the node user may talk to the executor");
+            let _ = exec.audit().append(
+                super::store::AuditEntry { event: "refused".into(), code: Some(code::PEER_NOT_ALLOWED.into()), ..Default::default() },
+                exec.now(),
+            );
+            return reply(&mut s, r);
+        }
+    }
+    let header = match read_frame(&mut s, MAX_HEADER_BYTES) {
+        Ok(h) => h,
+        Err(_) => return reply(&mut s, refusal(code::TOO_LARGE, "request unreadable or over 1 MiB")),
+    };
+    let req: LocalRequest = match serde_json::from_slice(&header) {
+        Ok(r) => r,
+        Err(_) => return reply(&mut s, refusal(code::MALFORMED, "request does not parse")),
+    };
+    let payload = if let LocalRequest::Update { size, .. } = &req {
+        if *size == 0 || *size > MAX_UPDATE_BYTES {
+            return reply(&mut s, refusal(code::TOO_LARGE, "build size out of range"));
+        }
+        let _ = s.set_read_timeout(Some(Duration::from_secs(120)));
+        match read_frame(&mut s, MAX_UPDATE_BYTES as usize) {
+            Ok(b) if b.len() as u64 == *size => Some(b),
+            _ => return reply(&mut s, refusal(code::MALFORMED, "build bytes missing or the wrong size")),
+        }
+    } else {
+        None
+    };
+    let resp = exec.handle(&req, payload.as_deref());
+    reply(&mut s, resp);
+}
+
+/// The listener: systemd socket activation (`LISTEN_FDS=1` for this pid),
+/// launchd socket activation (macOS), or bind `path` ourselves.
+pub fn listener(path: &Path, group_gid: Option<u32>) -> Result<UnixListener, String> {
+    if let Some(l) = systemd_listener() {
+        return Ok(l);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(l) = super::launchd::activated_listener() {
+        return Ok(l);
+    }
+    bind(path, group_gid)
+}
+
+fn systemd_listener() -> Option<UnixListener> {
+    let pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    let n: u32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    if pid != std::process::id() || n != 1 {
+        return None;
+    }
+    use std::os::fd::FromRawFd;
+    // SAFETY: systemd passed fd 3 to this pid (checked above) and nothing
+    // else owns it.
+    Some(unsafe { UnixListener::from_raw_fd(3) })
+}
+
+/// Bind the socket: replace a stale *socket* only, 0660, group = the
+/// node user's group.
+pub fn bind(path: &Path, group_gid: Option<u32>) -> Result<UnixListener, String> {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    if let Ok(m) = std::fs::symlink_metadata(path) {
+        if !m.file_type().is_socket() {
+            return Err(format!("{} exists and is not a socket", path.display()));
+        }
+        std::fs::remove_file(path).map_err(|e| format!("remove stale {}: {e}", path.display()))?;
+    }
+    let l = UnixListener::bind(path).map_err(|e| format!("bind {}: {e}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|e| format!("chmod {}: {e}", path.display()))?;
+    if let Some(g) = group_gid {
+        let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string())?;
+        // SAFETY: valid C string path; uid -1 keeps the owner.
+        if unsafe { libc::chown(c.as_ptr(), u32::MAX, g) } != 0 {
+            return Err(format!("chown {}: {}", path.display(), std::io::Error::last_os_error()));
+        }
+    }
+    Ok(l)
+}
+
+/// Serve forever (or until `stop()` says so after a connection).
+pub fn serve(exec: &Executor, rule: &PeerRule, l: UnixListener, stop: &dyn Fn() -> bool) -> Result<(), String> {
+    for conn in l.incoming() {
+        match conn {
+            Ok(s) => serve_conn(exec, rule, s),
+            Err(e) => crate::nlog!("admin: accept: {e}"),
+        }
+        if stop() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Node side: one request to the executor (blocking; call from
+/// `spawn_blocking`).
+pub fn request(socket: &Path, req: &LocalRequest, payload: Option<&[u8]>, timeout: Duration) -> Result<LocalResponse, AdminRefusal> {
+    let unreachable = |e: String| AdminRefusal::new(code::EXECUTOR_UNREACHABLE, e);
+    let mut s = UnixStream::connect(socket).map_err(|e| unreachable(format!("{}: {e}", socket.display())))?;
+    let _ = s.set_read_timeout(Some(timeout));
+    let _ = s.set_write_timeout(Some(timeout));
+    let h = serde_json::to_vec(req).map_err(|e| AdminRefusal::new(code::MALFORMED, e.to_string()))?;
+    write_frame(&mut s, &h).map_err(unreachable)?;
+    if let Some(p) = payload {
+        write_frame(&mut s, p).map_err(unreachable)?;
+    }
+    let r = read_frame(&mut s, 4 << 20).map_err(unreachable)?;
+    serde_json::from_slice(&r).map_err(|e| unreachable(format!("executor answer unreadable: {e}")))
+}
+
+/// Test helper: a socket path short enough for `sun_path` (macOS temp
+/// dirs are too long), unique per test. Removed with the temp dir's owner.
+#[cfg(test)]
+pub fn short_sock(_tag_dir: &Path) -> std::path::PathBuf {
+    let id = k2_node_proto::crypto::random_id().unwrap_or_default();
+    std::path::PathBuf::from(format!("/tmp/k2na-{}.sock", &id[..10]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_round_trip_and_cap() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, b"hello").unwrap();
+        assert_eq!(read_frame(&mut buf.as_slice(), 10).unwrap(), b"hello");
+        assert!(read_frame(&mut buf.as_slice(), 4).is_err());
+        assert!(read_frame(&mut &b"\0\0"[..], 10).is_err());
+    }
+
+    #[test]
+    fn peer_uid_is_ours_on_a_socketpair() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert_eq!(peer_uid(&a).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn bind_refuses_a_non_socket() {
+        let d = crate::util::temp_dir("bind");
+        let p = short_sock(&d);
+        std::fs::write(&p, "file").unwrap();
+        assert!(bind(&p, None).is_err());
+        std::fs::remove_file(&p).unwrap();
+        let _l = bind(&p, None).unwrap();
+        let _l2 = bind(&p, None).unwrap(); // stale socket replaced
+    }
+}

@@ -29,7 +29,7 @@ done
 # Only ever delete the paths this installer made.
 safe_rm() {
     case "$1" in
-        /var/lib/k2node|/etc/k2-node|/usr/local/libexec/k2-node) rm -rf -- "$1" ;;
+        /var/lib/k2node|/etc/k2-node|/usr/local/libexec/k2-node|/var/lib/k2-node-admin) rm -rf -- "$1" ;;
         *) die "refusing to delete $1" ;;
     esac
 }
@@ -37,6 +37,8 @@ safe_rm() {
 if command -v systemctl >/dev/null; then
     systemctl disable --now k2-node.service 2>/dev/null || true
     systemctl disable --now k2-node-packages.path 2>/dev/null || true
+    systemctl disable --now k2-node-admin.socket k2-node-admin.service 2>/dev/null || true
+    rm -f /etc/systemd/system/k2-node-admin.socket /etc/systemd/system/k2-node-admin.service /run/k2-node-admin.sock
     rm -f "$UNIT" /etc/systemd/system/k2-node-packages.path /etc/systemd/system/k2-node-packages.service
     rm -rf /run/k2-node-packages
     systemctl daemon-reload || true
@@ -48,9 +50,11 @@ fi
 getent group "$NODE_USER" >/dev/null && groupdel "$NODE_USER" 2>/dev/null || true
 safe_rm "$HOME_DIR"
 safe_rm "$BIN"
+rm -f "$BIN.prev" "$BIN.bad" "$BIN.new"
 if [ "$KEEP_CONFIG" = "0" ]; then
     safe_rm "$CONFIG_DIR"
     rm -f /etc/k2-node-packages.toml
+    safe_rm /var/lib/k2-node-admin
     getent group k2nodectl >/dev/null && groupdel k2nodectl || true
 fi
 echo "Removed the compute node. Also run on the controller: k2 compute node remove <name>"

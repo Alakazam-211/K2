@@ -3,8 +3,9 @@
 //
 // On: a Home row on another server opens that server's room in Home's main
 // area without switching (M4/M5). Off: the row switches the window's server
-// (H15 / P1.1). On by default from 0.43.2 on macOS and Linux. The setting
-// stays in Settings → General → Experimental as an opt-out.
+// (H15 / P1.1). On by default from 0.43.2 on macOS and Linux, and on every
+// OS (Windows included) from 0.45.5 (Rosson 2026-10-11). The setting stays
+// in Settings → General → Experimental as an opt-out.
 //
 // Per-computer view preference, never a daemon setting: localStorage
 // `k2.homeRemoteRooms.v1`, like `k2.workspaceSwitchFocus`. Every window on
@@ -17,8 +18,8 @@
 //   |-----------------------|------------------------------------------------|
 //   | `'1'`                 | on (this person turned it on), on every OS     |
 //   | `'0'`                 | off (this person turned it off), on every OS   |
-//   | missing               | the platform default: on for macOS and Linux,  |
-//   |                       | off on Windows (and an unknown OS)             |
+//   | missing               | the default: on, on every OS (0.45.5; before   |
+//   |                       | that Windows and an unknown OS read off)       |
 //   | blocked storage       | the platform default; a toggle holds for this  |
 //   |                       | window's session only                          |
 //   | the hosted web client | always off (`webFeatures.multiHost`, MS56)     |
@@ -26,7 +27,10 @@
 // Only the toggle writes the key, and only `'1'` or `'0'` (that was true
 // before 0.43.2 too: `'0'` has always meant someone turned it off). The
 // default is never written, so people who never touched the switch follow
-// the default, including a later flip of the Windows default.
+// the default, including a later flip of the Windows default. That is how
+// 0.45.5 turns it on for Windows without a migration: a stored `'0'` is
+// always someone's explicit off (kept), a missing key is "never touched"
+// (now reads on).
 //
 // The migration (`migrateRemoteRoomsPreview`, once per window at load):
 // `'1'` and `'0'` are kept as they are. Any other stored value (blank,
@@ -41,16 +45,16 @@ import { desktopOsFromNavigator, type DesktopOs } from '@/lib/desktop-chrome'
 export const LS_REMOTE_ROOMS_PREVIEW = 'k2.homeRemoteRooms.v1'
 
 /**
- * Q2 (Rosson 2026-10-03): the default for people who never touched the
- * switch, per OS. Windows stays off until Wesley Stevens (Windows owner)
- * signs off on gate G-Win (prd-home-seamless-0432 §5.2, Q8). Flipping
- * Windows is this one line: `windows: true`.
+ * The default for people who never touched the switch, per OS. Q2 (Rosson
+ * 2026-10-03) turned it on for macOS and Linux in 0.43.2; Rosson 2026-10-11
+ * turned it on everywhere in 0.45.5 so people start to see these menus.
+ * An explicit `'0'` still wins on every OS.
  */
 export const REMOTE_ROOMS_DEFAULT_ON: Readonly<Record<DesktopOs, boolean>> = {
   mac: true,
   linux: true,
-  windows: false,
-  other: false,
+  windows: true,
+  other: true,
 }
 
 /** The minimal storage surface (localStorage shape) this module uses. */

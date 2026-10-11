@@ -134,10 +134,12 @@ function recoveryGateAllows(
 /**
  * Resolve creds → fire ONE request built by `build` → read the body.
  *
- * Stale-session recovery (the runtime half of connect-users #617): a remote
- * daemon restart wipes its in-memory sessions, after which every authed
- * `/cli/*` call returns 403 "Invalid or missing auth token" (NOT 401 — see
- * remote-session.ts). On an auth-classified rejection from a REMOTE host we
+ * Stale-session recovery (the runtime half of connect-users #617): a
+ * remote session goes stale when it expires (7-day TTL) or is revoked.
+ * Sessions are persisted on the daemon, so a daemon restart does NOT wipe
+ * them (`crates/k2-core/src/connect_users.rs`). A stale session makes every
+ * authed `/cli/*` call return 403 "Invalid or missing auth token" (NOT 401
+ * — see remote-session.ts). On an auth-classified rejection from a REMOTE host we
  * run `reviveRemoteSession` (single-flight whoami-confirm + re-login with
  * the remembered password — the same mint flow boot uses) and, ONLY if a
  * fresh token was actually minted, retry the request once with the new

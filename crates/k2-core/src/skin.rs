@@ -2482,7 +2482,8 @@ pub fn set_token_rooms(id: &str, rooms: &[String]) -> Result<SkinTokenMeta, Stri
 }
 
 /// Set principal default rooms. `apply_tokens` copies onto live **sessions**
-/// only — never platform tokens.
+/// only — never platform tokens. Without it, live sessions still lose any
+/// room that is no longer in `rooms` (removal is never deferred).
 pub fn set_principal_default_rooms(
     username: &str,
     rooms: &[String],
@@ -2507,6 +2508,10 @@ pub fn set_principal_default_rooms(
         if apply_tokens {
             let policy = thread_only_policy(&rooms);
             rewrite_live_sessions(conn, &p.id, &policy)?;
+        } else {
+            // Without --apply-tokens an added room waits for the next
+            // login, but a dropped room must leave live sessions now.
+            narrow_live_sessions(conn, &p.id, &rooms)?;
         }
         Ok(SkinPrincipal {
             id: p.id,
@@ -2636,6 +2641,57 @@ fn rewrite_live_sessions(
         ],
     )
     .map_err(|e| format!("skin session rewrite: {e}"))?;
+    Ok(())
+}
+
+/// Drop every room not in `keep` from a principal's live sessions. Caps on
+/// the rooms that stay are unchanged; nothing is added.
+fn narrow_live_sessions(
+    conn: &Connection,
+    principal_id: &str,
+    keep: &[String],
+) -> Result<(), String> {
+    let rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, caps, rooms, room_policy FROM tokens
+                 WHERE principal_id = ?1 AND session = 1 AND revoked_at IS NULL",
+            )
+            .map_err(|e| format!("skin session narrow: {e}"))?;
+        let mapped = stmt
+            .query_map(params![principal_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .map_err(|e| format!("skin session narrow: {e}"))?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("skin session narrow row: {e}"))?
+    };
+    for (id, caps_raw, rooms_raw, policy_raw) in rows {
+        let caps = caps_from_json(&caps_raw);
+        let rooms = rooms_from_json(&rooms_raw);
+        let mut policy = interpret_token_policy(true, &caps, &rooms, policy_raw.as_deref());
+        let before = policy.len();
+        policy.retain(|room, _| keep.iter().any(|k| k == room));
+        if policy.len() == before {
+            continue;
+        }
+        conn.execute(
+            "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3 WHERE id = ?4",
+            params![
+                caps_json(&union_caps(&policy)),
+                rooms_json(&rooms_from_policy(&policy)),
+                room_policy_json(&policy),
+                id
+            ],
+        )
+        .map_err(|e| format!("skin session narrow: {e}"))?;
+    }
     Ok(())
 }
 
@@ -3162,21 +3218,45 @@ pub fn list_grants() -> Result<Vec<SkinGrant>, String> {
     })
 }
 
-/// Delete the grant row. The role bundle stays. Sessions are not rewritten.
+/// Ends every live login session of a grant's principal subject. Called
+/// when that subject loses a grant (disable or delete). Sessions are
+/// snapshots, so a removed grant must not ride on until `expires_at`.
+/// Workspace subjects hold no `k2skn_` sessions; platform passes
+/// (`session=0`) are owner keys with no principal and are never touched.
+fn revoke_sessions_for_grant_subject(
+    conn: &Connection,
+    subject_kind: &str,
+    subject_id: &str,
+) -> Result<usize, String> {
+    if subject_kind != "principal" {
+        return Ok(0);
+    }
+    revoke_sessions_for_principal(conn, subject_id)
+}
+
+/// Delete the grant row. The role bundle stays. A principal subject's live
+/// login sessions are revoked (they log in again against what is left).
 pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("missing grant id".to_string());
     }
     with_conn(|conn| {
+        let Some(grant) = grant_by_id(conn, id)? else {
+            return Ok(false);
+        };
         let n = conn
             .execute("DELETE FROM grants WHERE id = ?1", params![id])
             .map_err(|e| format!("skin grant delete: {e}"))?;
+        if n > 0 {
+            revoke_sessions_for_grant_subject(conn, &grant.subject_kind, &grant.subject_id)?;
+        }
         Ok(n > 0)
     })
 }
 
 /// Delete by the unique (subject, kind, target) key. The role stays.
+/// A principal subject's live login sessions are revoked.
 pub fn delete_grant_by_key(
     subject_kind: &str,
     subject_id: &str,
@@ -3201,6 +3281,9 @@ pub fn delete_grant_by_key(
                 params![subject_kind, subject_id, kind, target_id],
             )
             .map_err(|e| format!("skin grant delete: {e}"))?;
+        if n > 0 {
+            revoke_sessions_for_grant_subject(conn, &subject_kind, subject_id)?;
+        }
         Ok(n > 0)
     })
 }
@@ -3215,7 +3298,9 @@ fn grant_by_id(conn: &Connection, id: &str) -> Result<Option<SkinGrant>, String>
     .map_err(|e| format!("skin grant lookup: {e}"))
 }
 
-/// Set `enabled` to 0 or 1. Does not delete the row.
+/// Set `enabled` to 0 or 1. Does not delete the row. Disabling a
+/// principal's grant revokes that principal's live login sessions;
+/// enabling never revives a revoked pass (the guest logs in again).
 pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
     let id = id.trim();
     if id.is_empty() {
@@ -3232,13 +3317,18 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
         if n == 0 {
             return Err("unknown grant".to_string());
         }
-        grant_by_id(conn, id)?.ok_or_else(|| "unknown grant".to_string())
+        let grant = grant_by_id(conn, id)?.ok_or_else(|| "unknown grant".to_string())?;
+        if !enabled {
+            revoke_sessions_for_grant_subject(conn, &grant.subject_kind, &grant.subject_id)?;
+        }
+        Ok(grant)
     })
 }
 
 /// Present inserts one host grant with `role_id` NULL (`enabled` 1).
-/// Absent deletes that principal+app+host row and does not clear
-/// `principals.role_id`. An existing row is left as the owner wrote it.
+/// Absent deletes that principal+app+host row, does not clear
+/// `principals.role_id`, and revokes that principal's live login sessions.
+/// An existing row is left as the owner wrote it.
 pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
     let username = normalize_username(username)?;
     with_conn(|conn| {
@@ -3257,6 +3347,7 @@ pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
                     params![p.id, HOST_APP_ID],
                 )
                 .map_err(|e| format!("skin host grant delete: {e}"))?;
+            revoke_sessions_for_principal(conn, &p.id)?;
             Ok(n > 0)
         }
     })
@@ -3796,6 +3887,9 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 }
 
 /// Resolve a presented raw key. Revoked / expired / unknown / wrong prefix → `None`.
+/// A login session (`session=1`) also needs its principal and an enabled
+/// host grant at the moment of use: a backstop behind the revocations the
+/// grant writers do. Platform passes (`session=0`) skip that check.
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return None;
@@ -3809,8 +3903,12 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
-                   AND (t.expires_at IS NULL OR t.expires_at > ?2)",
-                params![key_hash, now],
+                   AND (t.expires_at IS NULL OR t.expires_at > ?2)
+                   AND (t.session = 0 OR (p.id IS NOT NULL AND EXISTS (
+                        SELECT 1 FROM grants g
+                        WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
+                          AND g.kind = 'app' AND g.target_id = ?3 AND g.enabled != 0)))",
+                params![key_hash, now, HOST_APP_ID],
                 |r| {
                     let principal_id: Option<String> = r.get(1)?;
                     let session: i64 = r.get(2)?;
@@ -5596,9 +5694,11 @@ mod tests {
             assert!(resolve_skin_token(&raw).is_some());
             assert!(delete_grant_by_id(&matched.id).unwrap());
             assert!(
-                resolve_skin_token(&raw).is_some(),
-                "revoke must not rewrite or drop the live session"
+                resolve_skin_token(&raw).is_none(),
+                "a grant delete must end that guest's live session"
             );
+            let (_meta, raw2) = create_session_token("ada").expect("host grant still allows login");
+            assert!(resolve_skin_token(&raw2).is_some());
         });
     }
 
@@ -5790,6 +5890,229 @@ mod tests {
             let (meta, _) = create_session_token("ada").expect("mint uses principal role");
             assert_eq!(meta.rooms, vec![room_login.clone()]);
             assert!(!meta.rooms.contains(&room_grant), "{meta:?}");
+        });
+    }
+
+    fn session_revoked_at(raw: &str) -> Option<i64> {
+        let hash = sha256_hex(raw);
+        with_conn(|conn| {
+            conn.query_row(
+                "SELECT revoked_at FROM tokens WHERE key_hash = ?1",
+                params![hash],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .map_err(|e| format!("token row: {e}"))
+        })
+        .expect("token row must exist")
+    }
+
+    #[test]
+    fn grant_disable_or_delete_revokes_that_guests_sessions_only() {
+        with_temp_home(|| {
+            let ada = add_principal("ada").expect("ada");
+            add_principal("bob").expect("bob");
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_, ada_raw) = create_session_token("ada").expect("ada session");
+            let (_, ada_raw2) = create_session_token("ada").expect("ada second session");
+            let (_, bob_raw) = create_session_token("bob").expect("bob session");
+            let (_, plat_raw) =
+                create_token("partner", None, std::slice::from_ref(&room)).expect("platform");
+            assert!(resolve_skin_token(&ada_raw).is_some());
+
+            // Disable the host grant: both of ada's sessions end now.
+            let host_id = host_grants(&list_grants().unwrap(), &ada.id)[0].id.clone();
+            set_grant_enabled(&host_id, false).expect("disable");
+            assert!(resolve_skin_token(&ada_raw).is_none(), "disabled grant must end session");
+            assert!(resolve_skin_token(&ada_raw2).is_none(), "every session of ada ends");
+            assert!(
+                session_revoked_at(&ada_raw).is_some(),
+                "disable must revoke the row, not only hide it"
+            );
+            assert!(resolve_skin_token(&bob_raw).is_some(), "bob untouched");
+            assert!(session_revoked_at(&bob_raw).is_none());
+            assert!(resolve_skin_token(&plat_raw).is_some(), "platform pass untouched");
+
+            // Re-enable never revives the old pass; a fresh login works.
+            set_grant_enabled(&host_id, true).expect("enable");
+            assert!(resolve_skin_token(&ada_raw).is_none(), "re-enable must not revive");
+            let (_, ada_raw3) = create_session_token("ada").expect("login again");
+            assert!(resolve_skin_token(&ada_raw3).is_some());
+
+            // Delete by id.
+            assert!(delete_grant_by_id(&host_id).expect("delete"));
+            assert!(resolve_skin_token(&ada_raw3).is_none(), "deleted grant ends session");
+            assert!(session_revoked_at(&ada_raw3).is_some());
+            assert_eq!(
+                create_session_token("ada").expect_err("no grant"),
+                HOST_LOGIN_DENIED
+            );
+
+            // Host switch off.
+            assert!(set_host_login("ada", true).expect("on"));
+            let (_, ada_raw4) = create_session_token("ada").expect("login");
+            assert!(set_host_login("ada", false).expect("off"));
+            assert!(resolve_skin_token(&ada_raw4).is_none(), "host switch off ends session");
+            assert!(session_revoked_at(&ada_raw4).is_some());
+
+            // Any grant of ada (not only host) going away ends her sessions.
+            assert!(set_host_login("ada", true).expect("on"));
+            let mailbox = create_grant(&SkinGrantWrite {
+                subject_kind: "principal".into(),
+                subject_id: ada.id.clone(),
+                kind: "mailbox".into(),
+                target_id: "box".into(),
+                role: None,
+                scope: Some("may-read".into()),
+            })
+            .expect("mailbox");
+            let (_, ada_raw5) = create_session_token("ada").expect("login");
+            assert!(delete_grant_by_key("principal", &ada.id, "mailbox", "box").expect("del"));
+            assert!(resolve_skin_token(&ada_raw5).is_none(), "grant delete by key ends session");
+            let _ = mailbox;
+
+            // A workspace-subject grant change touches no guest session.
+            create_grant(&SkinGrantWrite {
+                subject_kind: "workspace".into(),
+                subject_id: "ws-1".into(),
+                kind: "database".into(),
+                target_id: "db".into(),
+                role: None,
+                scope: Some("read".into()),
+            })
+            .expect("ws grant");
+            assert!(delete_grant_by_key("workspace", "ws-1", "database", "db").expect("del"));
+
+            assert!(resolve_skin_token(&bob_raw).is_some(), "bob still untouched");
+            assert!(resolve_skin_token(&plat_raw).is_some(), "platform still untouched");
+        });
+    }
+
+    #[test]
+    fn session_use_rechecks_host_grant_and_principal() {
+        with_temp_home(|| {
+            let ada = add_principal("ada").expect("ada");
+            add_principal("bob").expect("bob");
+            let room = uuid::Uuid::new_v4().to_string();
+            let (_, ada_raw) = create_session_token("ada").expect("ada");
+            let (_, bob_raw) = create_session_token("bob").expect("bob");
+            let (_, plat_raw) =
+                create_token("partner", None, std::slice::from_ref(&room)).expect("platform");
+            // A write that skips the revoking writers (old code, hand edit).
+            with_conn(|conn| {
+                conn.execute(
+                    "UPDATE grants SET enabled = 0
+                     WHERE subject_kind = 'principal' AND subject_id = ?1 AND target_id = ?2",
+                    params![ada.id, HOST_APP_ID],
+                )
+                .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert!(resolve_skin_token(&ada_raw).is_none(), "use-time check refuses");
+            assert!(resolve_skin_token(&bob_raw).is_some());
+            assert!(resolve_skin_token(&plat_raw).is_some(), "platform skips the grant check");
+
+            assert!(remove_principal("bob").expect("remove bob"));
+            assert!(resolve_skin_token(&bob_raw).is_none(), "removed principal ends session");
+            assert!(resolve_skin_token(&plat_raw).is_some(), "platform survives remove");
+        });
+    }
+
+    #[test]
+    fn role_room_removal_and_role_swap_reach_live_sessions() {
+        with_temp_home(|| {
+            add_principal("ada").expect("ada");
+            add_principal("bob").expect("bob");
+            let a = uuid::Uuid::new_v4().to_string();
+            let b = uuid::Uuid::new_v4().to_string();
+            let mut wide = RoomPolicy::new();
+            wide.insert(a.clone(), vec![CAP_THREAD_READ.into(), CAP_FILES_READ.into()]);
+            wide.insert(b.clone(), vec![CAP_THREAD_READ.into()]);
+            create_role("wide", &wide).expect("wide");
+            create_role("bobs", &thread_only_room_policy(std::slice::from_ref(&b)))
+                .expect("bobs");
+            assign_role("ada", "wide").expect("assign ada");
+            assign_role("bob", "bobs").expect("assign bob");
+            let (_, ada_raw) = create_session_token("ada").expect("ada");
+            let (_, bob_raw) = create_session_token("bob").expect("bob");
+            assert!(resolve_skin_token(&ada_raw).unwrap().has_room(&b));
+
+            clear_role_room("wide", &b).expect("clear b");
+            let p = resolve_skin_token(&ada_raw).expect("rewritten, not revoked");
+            assert!(!p.has_room(&b), "removed room must leave the live session: {p:?}");
+            assert!(p.has_cap_in_room(&a, CAP_FILES_READ));
+
+            update_role(
+                "wide",
+                Some(&thread_only_room_policy(std::slice::from_ref(&a))),
+            )
+            .expect("narrow caps");
+            let p = resolve_skin_token(&ada_raw).unwrap();
+            assert!(!p.has_cap_in_room(&a, CAP_FILES_READ), "dropped cap must leave: {p:?}");
+            assert!(p.has_cap_in_room(&a, CAP_THREAD_READ));
+
+            create_role("dark", &RoomPolicy::new()).expect("dark");
+            assign_role("ada", "dark").expect("swap role");
+            assert!(resolve_skin_token(&ada_raw).unwrap().rooms_empty(), "role swap reaches session");
+
+            // Delete a role: refused while assigned; after unassign the
+            // session carries none of its rooms.
+            assign_role("ada", "wide").expect("back to wide");
+            assert!(resolve_skin_token(&ada_raw).unwrap().has_room(&a));
+            remove_role("wide").expect_err("assigned role cannot be deleted");
+            unassign_role("ada").expect("unassign");
+            assert!(remove_role("wide").expect("delete"));
+            let p = resolve_skin_token(&ada_raw).expect("thread-only defaults");
+            assert!(!p.has_room(&a), "deleted role's rooms must be gone: {p:?}");
+
+            let bp = resolve_skin_token(&bob_raw).expect("bob live");
+            assert!(bp.has_cap_in_room(&b, CAP_THREAD_READ), "bob untouched: {bp:?}");
+        });
+    }
+
+    #[test]
+    fn default_rooms_removal_reaches_sessions_without_apply_tokens() {
+        with_temp_home(|| {
+            add_principal("ada").expect("ada");
+            add_principal("bob").expect("bob");
+            let a = uuid::Uuid::new_v4().to_string();
+            let b = uuid::Uuid::new_v4().to_string();
+            let c = uuid::Uuid::new_v4().to_string();
+            set_principal_default_rooms("ada", &[a.clone(), b.clone()], false).unwrap();
+            set_principal_default_rooms("bob", &[a.clone(), b.clone()], false).unwrap();
+            let (_, ada_raw) = create_session_token("ada").unwrap();
+            let (_, bob_raw) = create_session_token("bob").unwrap();
+            set_principal_default_rooms("ada", &[a.clone(), c.clone()], false).unwrap();
+            let p = resolve_skin_token(&ada_raw).unwrap();
+            assert!(p.has_room(&a));
+            assert!(!p.has_room(&b), "removed default room must leave: {p:?}");
+            assert!(!p.has_room(&c), "added room waits for --apply-tokens: {p:?}");
+            set_principal_default_rooms("ada", &[a.clone(), c.clone()], true).unwrap();
+            assert!(resolve_skin_token(&ada_raw).unwrap().has_room(&c));
+            let bp = resolve_skin_token(&bob_raw).unwrap();
+            assert!(bp.has_room(&a) && bp.has_room(&b), "bob untouched: {bp:?}");
+        });
+    }
+
+    #[test]
+    fn password_set_revokes_every_session_of_that_guest_only() {
+        with_temp_home(|| {
+            add_principal("ada").expect("ada");
+            add_principal("bob").expect("bob");
+            let room = uuid::Uuid::new_v4().to_string();
+            set_principal_password("ada", Some("s3cret-horse")).unwrap();
+            let (_, a1) = create_session_token("ada").unwrap();
+            let (_, a2) = create_session_token("ada").unwrap();
+            let (_, bob_raw) = create_session_token("bob").unwrap();
+            let (_, plat_raw) =
+                create_token("partner", None, std::slice::from_ref(&room)).unwrap();
+            set_principal_password("ada", Some("new-horse-pw")).unwrap();
+            assert!(resolve_skin_token(&a1).is_none(), "password change ends sessions");
+            assert!(resolve_skin_token(&a2).is_none(), "password change ends sessions");
+            assert!(resolve_skin_token(&bob_raw).is_some(), "bob untouched");
+            assert!(resolve_skin_token(&plat_raw).is_some(), "platform untouched");
+            let (_, a3) = create_session_token("ada").unwrap();
+            set_principal_password("ada", None).unwrap();
+            assert!(resolve_skin_token(&a3).is_none(), "password clear ends sessions");
         });
     }
 

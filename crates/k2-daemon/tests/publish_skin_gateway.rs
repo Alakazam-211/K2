@@ -4298,3 +4298,257 @@ async fn boot_reattach_restarts_a_helper_without_frame_headers() {
         let _ = std::fs::remove_dir_all(&path);
     });
 }
+
+fn thread_status(gport: u16, handle: &str, cookie: &str) -> Resp {
+    http_ex(
+        gport,
+        "GET",
+        &format!("/cli/thread?addr={handle}"),
+        None,
+        cookie,
+    )
+}
+
+fn owner_post(dport: u16, route: &str, body: &str) -> Resp {
+    let r = http(
+        dport,
+        "POST",
+        &format!("{route}?token={OWNER_TOKEN}"),
+        Some(body),
+    );
+    assert_eq!(r.status, 200, "{route} {body}; {}", r.body);
+    r
+}
+
+fn host_grant_id(dport: u16, username: &str) -> String {
+    let users = http(
+        dport,
+        "GET",
+        &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+        None,
+    );
+    assert_eq!(users.status, 200, "{}", users.body);
+    let uid = json(&users.body)["users"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|u| u["username"] == username))
+        .and_then(|u| u["id"].as_str())
+        .unwrap_or_else(|| panic!("{username} id in {}", users.body))
+        .to_string();
+    let grants = http(
+        dport,
+        "GET",
+        &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+        None,
+    );
+    assert_eq!(grants.status, 200, "{}", grants.body);
+    json(&grants.body)["grants"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter().find(|g| {
+                g["subjectId"] == uid.as_str()
+                    && g["kind"] == "app"
+                    && g["targetId"] == k2_core::skin::HOST_APP_ID
+            })
+        })
+        .and_then(|g| g["id"].as_str())
+        .unwrap_or_else(|| panic!("{username} host grant in {}", grants.body))
+        .to_string()
+}
+
+fn gateway_login_status(gport: u16, username: &str, password: &str) -> u16 {
+    http(
+        gport,
+        "POST",
+        "/login",
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    )
+    .status
+}
+
+/// Access-model D3: a grant, principal, role or password change must end
+/// (or narrow) the guest's live gateway session right away, not after the
+/// 7-day session TTL. Another guest's session is never touched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("revgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let other = format!("revgx{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        let (_id2, _conv2, other_path) = seed_workspace(&other);
+        for u in ["ada", "bob", "cara"] {
+            add_user(dport, u);
+            set_rooms(dport, u, &handle);
+            set_password(dport, u, "s3cret-horse");
+        }
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+
+        let bob = gateway_login_cookie(gport, "bob", "s3cret-horse");
+        let bob_ok = |label: &str| {
+            let r = thread_status(gport, &handle, &bob);
+            assert_eq!(
+                r.status, 200,
+                "unrelated guest bob after {label}; {}",
+                r.body
+            );
+        };
+        bob_ok("login");
+
+        // 1. Grant disabled: refused at the gateway and at re-login.
+        let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
+        assert_eq!(thread_status(gport, &handle, &ada).status, 200);
+        let host_id = host_grant_id(dport, "ada");
+        owner_post(
+            dport,
+            "/cli/skin/grants/enabled",
+            &format!(r#"{{"id":"{host_id}","enabled":false}}"#),
+        );
+        let r = thread_status(gport, &handle, &ada);
+        assert_eq!(
+            r.status, 401,
+            "disabled grant must end the session; {}",
+            r.body
+        );
+        assert_eq!(
+            gateway_login_status(gport, "ada", "s3cret-horse"),
+            401,
+            "disabled grant must refuse a fresh login"
+        );
+        bob_ok("grant disable");
+        owner_post(
+            dport,
+            "/cli/skin/grants/enabled",
+            &format!(r#"{{"id":"{host_id}","enabled":true}}"#),
+        );
+        let r = thread_status(gport, &handle, &ada);
+        assert_eq!(
+            r.status, 401,
+            "re-enable must not revive the old pass; {}",
+            r.body
+        );
+
+        // 2. Host login switched off (the per-guest off switch).
+        let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
+        assert_eq!(thread_status(gport, &handle, &ada).status, 200);
+        owner_post(
+            dport,
+            "/cli/skin/grants/host",
+            r#"{"username":"ada","present":false}"#,
+        );
+        let r = thread_status(gport, &handle, &ada);
+        assert_eq!(
+            r.status, 401,
+            "host switch off must end the session; {}",
+            r.body
+        );
+        assert_eq!(gateway_login_status(gport, "ada", "s3cret-horse"), 401);
+        bob_ok("host switch off");
+        owner_post(
+            dport,
+            "/cli/skin/grants/host",
+            r#"{"username":"ada","present":true}"#,
+        );
+
+        // 3. Role change: a removed room leaves the live session.
+        owner_post(
+            dport,
+            "/cli/skin/roles",
+            &format!(
+                r#"{{"name":"front","roomAccess":[{{"handle":"{other}","caps":["thread:read"]}}]}}"#
+            ),
+        );
+        owner_post(
+            dport,
+            "/cli/skin/roles/assign",
+            r#"{"username":"ada","role":"front"}"#,
+        );
+        let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
+        let r = thread_status(gport, &other, &ada);
+        assert_eq!(r.status, 200, "role room before removal; {}", r.body);
+        owner_post(
+            dport,
+            "/cli/skin/roles/room",
+            &format!(r#"{{"role":"front","handle":"{other}","clear":true}}"#),
+        );
+        let r = thread_status(gport, &other, &ada);
+        assert_eq!(
+            r.status, 403,
+            "removed role room must leave the session; {}",
+            r.body
+        );
+        assert!(r.body.contains("skin_room"), "{}", r.body);
+        bob_ok("role room removal");
+
+        // 4. Role delete: refused while assigned; after unassign the live
+        //    session no longer carries the role's rooms.
+        owner_post(
+            dport,
+            "/cli/skin/roles/room",
+            &format!(r#"{{"role":"front","handle":"{other}","caps":["thread:read"]}}"#),
+        );
+        assert_eq!(
+            thread_status(gport, &other, &ada).status,
+            200,
+            "room back on the role"
+        );
+        let refused = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/roles/remove?token={OWNER_TOKEN}"),
+            Some(r#"{"name":"front"}"#),
+        );
+        assert_eq!(
+            refused.status, 400,
+            "assigned role cannot go; {}",
+            refused.body
+        );
+        owner_post(dport, "/cli/skin/roles/unassign", r#"{"username":"ada"}"#);
+        owner_post(dport, "/cli/skin/roles/remove", r#"{"name":"front"}"#);
+        let r = thread_status(gport, &other, &ada);
+        assert_eq!(
+            r.status, 403,
+            "deleted role's room must be gone; {}",
+            r.body
+        );
+        assert_eq!(
+            thread_status(gport, &handle, &ada).status,
+            200,
+            "default room stays after unassign"
+        );
+        bob_ok("role delete");
+
+        // 5. Owner password set (`k2 app user password`) ends the sessions.
+        let cara = gateway_login_cookie(gport, "cara", "s3cret-horse");
+        assert_eq!(thread_status(gport, &handle, &cara).status, 200);
+        set_password(dport, "cara", "fresh-horse-pw");
+        let r = thread_status(gport, &handle, &cara);
+        assert_eq!(
+            r.status, 401,
+            "password set must end the session; {}",
+            r.body
+        );
+        bob_ok("password set");
+
+        // 6. Principal removed.
+        let r = thread_status(gport, &handle, &ada);
+        assert_eq!(r.status, 200, "ada live before remove; {}", r.body);
+        owner_post(dport, "/cli/skin/users/remove", r#"{"username":"ada"}"#);
+        let r = thread_status(gport, &handle, &ada);
+        assert_eq!(
+            r.status, 401,
+            "removed principal must end the session; {}",
+            r.body
+        );
+        assert_eq!(gateway_login_status(gport, "ada", "s3cret-horse"), 401);
+        bob_ok("principal remove");
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_dir_all(&other_path);
+    });
+}

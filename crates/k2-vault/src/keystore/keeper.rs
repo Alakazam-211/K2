@@ -77,7 +77,16 @@ impl<T: KeeperTransport> KeeperKeyStore<T> {
         Ok(Key32::from_array(arr))
     }
 
+    /// `keep gen get|bump` reply. The root helper (k2-root-helper `keep`,
+    /// protocol 4) answers JSON `{"gen":N}`; a bare integer is accepted too.
     fn parse_gen(out: &[u8]) -> Result<u64> {
+        #[derive(Deserialize)]
+        struct GenReply {
+            gen: u64,
+        }
+        if let Ok(r) = serde_json::from_slice::<GenReply>(out) {
+            return Ok(r.gen);
+        }
         std::str::from_utf8(out)
             .ok()
             .and_then(|s| s.trim().parse().ok())
@@ -215,11 +224,12 @@ pub mod fake {
                     *self.next.lock() = None;
                     Ok(vec![])
                 }
-                ["keep", "gen", "get"] => Ok(self.gen.lock().to_string().into_bytes()),
+                // Same reply shape as the real helper: one JSON line.
+                ["keep", "gen", "get"] => Ok(format!("{{\"gen\":{}}}\n", self.gen.lock()).into_bytes()),
                 ["keep", "gen", "bump"] => {
                     let mut g = self.gen.lock();
                     *g += 1;
-                    Ok(g.to_string().into_bytes())
+                    Ok(format!("{{\"gen\":{}}}\n", *g).into_bytes())
                 }
                 _ => Err(VaultError::internal("unknown verb")),
             }
@@ -256,5 +266,17 @@ mod tests {
         ks.commit_next().expect("commit");
         assert!(ks.load().expect("load").expect("cur") == n);
         assert_eq!(ks.remove().err().expect("refused").code, "keeper_remove_refused");
+    }
+
+    /// The helper's `keep gen` replies are JSON lines (`{"gen":N}\n`);
+    /// the daemon also takes a bare integer. Anything else is refused.
+    #[test]
+    fn gen_reply_parses_the_helper_json_line() {
+        type Ks = KeeperKeyStore<&'static FakeHelper>;
+        assert_eq!(Ks::parse_gen(b"{\"gen\":7}\n").expect("json"), 7);
+        assert_eq!(Ks::parse_gen(b"{\"gen\":0}").expect("json no newline"), 0);
+        assert_eq!(Ks::parse_gen(b"12\n").expect("bare"), 12);
+        assert!(Ks::parse_gen(b"{\"gen\":\"x\"}").is_err());
+        assert!(Ks::parse_gen(b"").is_err());
     }
 }

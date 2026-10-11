@@ -124,6 +124,9 @@ pub mod wiki_public_chat;
 // label + plist shape.
 pub mod daemon_lifecycle;
 pub mod db;
+// Runtime stage H: the "handed off, drain only" flag the spawn choke
+// points check.
+pub mod handoff_state;
 pub mod migration_home;
 pub mod paths;
 pub mod private_home;

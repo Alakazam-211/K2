@@ -648,6 +648,10 @@ impl DaemonPtySession {
     /// owners (e.g. `session_map` + the WS handler). Returning Arc
     /// eagerly saves every caller from having to re-wrap.
     pub fn spawn(cfg: DaemonPtyConfig) -> Result<Arc<Self>, io::Error> {
+        // Runtime stage H: a daemon that handed off to its successor starts
+        // no PTY — the successor resumes the sessions (two would double-
+        // resume one conversation on the same tree).
+        crate::handoff_state::guard().map_err(io::Error::other)?;
         let cols = cfg.cols.max(1);
         let rows = cfg.rows.max(1);
 

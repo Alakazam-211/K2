@@ -9557,6 +9557,7 @@ Owner / admin (refused for agents and inside K2 terminals):
   k2 compute node add <name> [--url URL]       mint a 10-minute enroll code
   k2 compute node confirm <name> <code>        the 6 digits the node shows
   k2 compute node remove <name>                k2 compute node rename <old> <new>
+  k2 compute node retire <name>                drain, then remove once its jobs end
   k2 compute node pause|drain|resume <name>    this server stops/starts assigning
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
@@ -9564,6 +9565,9 @@ Owner / admin (refused for agents and inside K2 terminals):
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS]
   k2 compute access on|off|status --workspace WS   "Allow compute nodes"
+  k2 compute access on --all-machines --workspace WS
+                   switch on + a grant on every machine (and ones added later);
+                   off --all-machines also removes the workspace's grants
   k2 compute usage [--days N]    k2 compute events [--limit N]
 This computer (its owner):
   k2 compute local status|pause [--now]|drain|resume
@@ -10112,6 +10116,12 @@ cmd_compute_node() {
             _compute_call POST /cli/compute/nodes/remove "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("removed %s (%d jobs cancelled)" % (v["node"], v["jobsCancelled"]))'
             ;;
+        retire)
+            [ $# -ge 1 ] || { echo "usage: k2 compute node retire <name>" >&2; exit 2; }
+            body="$(_compute_json K2_CJ_node="$1")"
+            _compute_call POST /cli/compute/nodes/retire "$body" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s" % (v["node"], "removed" if v["state"] == "revoked" else "draining; removed once its %d running job(s) end" % v.get("running", 0)))'
+            ;;
         rename)
             [ $# -ge 2 ] || { echo "usage: k2 compute node rename <old> <new>" >&2; exit 2; }
             body="$(_compute_json K2_CJ_node="$1" K2_CJ_name="$2")"
@@ -10391,17 +10401,24 @@ else: print(v.get("state", "ok"))'
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Compute nodes (preview): %s on this server" % ("on" if v.get("computePreview") else "off"))'
             ;;
         access)
-            local action="${1:-status}" workspace=""
+            local action="${1:-status}" workspace="" all=""
             shift 2>/dev/null || true
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --workspace) workspace="${2:-}"; shift 2 ;;
-                    *) echo "usage: k2 compute access on|off --workspace WS" >&2; exit 2 ;;
+                    --all-machines) all=1; shift ;;
+                    *) echo "usage: k2 compute access on|off [--all-machines] --workspace WS" >&2; exit 2 ;;
                 esac
             done
             [ -z "$workspace" ] && workspace="$(_compute_ws "")"
             case "$action" in
                 on|off)
+                    if [ -n "$all" ]; then
+                        # Settings → Compute "Agents that can use compute".
+                        _compute_call POST /cli/compute/agents/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
+                        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Compute %s for %s%s" % ("on" if v["agentsCanUseCompute"] else "off", v["workspace"], (": " + ", ".join(v.get("granted", []) + v.get("kept", []))) if v["agentsCanUseCompute"] else " (%d grants removed)" % v.get("grantsRemoved", 0)))'
+                        return
+                    fi
                     _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_toggle=compute K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
                     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Allow compute nodes: %s for %s" % ("on" if v["agentsCanUseCompute"] else "off", v["workspace"]))'
                     ;;

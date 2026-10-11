@@ -813,3 +813,174 @@ async fn one_click_tickets_and_declared_toolchains() {
     running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
     drop(env);
 }
+
+/// A pending node row as an enroll leaves it (no real node needed here).
+fn pending_node(id: &str, name: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::store::insert_pending_node(&conn, id, name, &format!("{id:0>64}"), "pem", &Default::default(), "owner", "123456", 1)
+        .expect("pending node");
+}
+
+/// A running job on `node` for `ws` (straight into the table).
+fn running_job(job: &str, node: &str, ws: &str) {
+    use k2_node_proto::frames::{JobLimits, JobState, Plan};
+    let plan = Plan {
+        job_id: job.into(),
+        node_id: node.into(),
+        workspace_id: ws.into(),
+        workspace_label: "w".into(),
+        requested_by: "agent:w".into(),
+        argv: vec!["sleep".into(), "60".into()],
+        env: Default::default(),
+        cwd: None,
+        limits: JobLimits { max_secs: 60, cpu_millis: None, mem_bytes: None, disk_bytes: 1, log_cap_bytes: 1 },
+        src: None,
+        exclusive: false,
+        created_at: 10,
+        needs: Vec::new(),
+    };
+    let client = format!("client-{job:0>16}");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let new_job = k2_core::compute::store::NewJob {
+        plan: &plan,
+        client_job_id: &client,
+        session_id: None,
+        request_sha256: "h",
+        detach: true,
+        retry_interrupted: false,
+    };
+    k2_core::compute::store::insert_job(&conn, &new_job).expect("job");
+    k2_core::compute::store::set_job_state(&conn, job, JobState::Assigned, None, None, 11).expect("assigned");
+    k2_core::compute::store::set_job_state(&conn, job, JobState::Running, None, None, 12).expect("running");
+}
+
+fn grant_of(ws: &str, node: &str) -> Option<Value> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::store::grant(&conn, node, ws).map(|g| serde_json::to_value(g).unwrap())
+}
+
+fn names(v: &Value) -> Vec<String> {
+    v.as_array().unwrap_or_else(|| panic!("not a list: {v}")).iter().map(|x| x.as_str().unwrap().to_string()).collect()
+}
+
+fn grants_of(ws: &str) -> Vec<k2_core::compute::store::GrantRow> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::store::grants(&conn, None, Some(ws))
+}
+
+fn switch_of(ws: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::store::agents_can_use_compute(&conn, ws)
+}
+
+/// Settings → Compute (Rosson 2026-10-11): an agent's toggle = the switch
+/// plus a grant on every machine; a machine confirmed later is granted to
+/// every agent that's on; off revokes; switching a machine off drains it,
+/// then removes it once its jobs are done.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn settings_toggles_grant_every_machine_and_retire_drains() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let w1 = seed_ws(&env, "tog1");
+    let w2 = seed_ws(&env, "tog2");
+    let (agent, _) = passport(&w1);
+
+    // Owner/admin only: a passport is refused, GET on the setter is 405.
+    let r = post(port, "/cli/compute/agents/set", &agent, json!({"workspace": w1.id, "value": true})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(code(&r), "owner_only");
+    let r = get(port, "/cli/compute/agents/set", OWNER, &format!("workspace={}&value=true", w1.id)).await;
+    assert_eq!(r.status, 405, "{}", r.body);
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": w1.id})).await;
+    assert_eq!(r.status, 400, "value is required: {}", r.body);
+
+    // One machine is on before the agent.
+    pending_node("tnode1", "tog-a");
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": "tog-a", "sas": "123456"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // (Other tests in this binary share the DB: only this test's two
+    // workspaces are checked.)
+    let auto = names(&j(&r)["autoGranted"]);
+    assert!(!auto.contains(&"tog1".to_string()) && !auto.contains(&"tog2".to_string()), "neither has compute on yet: {auto:?}");
+
+    // Agent toggle on → switch + a grant on every machine, default limits.
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": w1.id, "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["agentsCanUseCompute"], true);
+    assert!(names(&j(&r)["granted"]).contains(&"tog-a".to_string()), "{}", r.body);
+    let g = grant_of(&w1.id, "tnode1").expect("grant on tog-a");
+    assert_eq!(
+        (g["maxJobSecs"].as_i64(), g["maxParallel"].as_i64(), g["maxQueued"].as_i64(), g["maxDiskGb"].as_i64()),
+        (Some(7200), Some(1), Some(10), Some(60))
+    );
+    assert!(switch_of(&w1.id));
+    let r = get(port, "/cli/compute/agents", OWNER, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = j(&r)["agents"].as_array().unwrap().clone();
+    let row = |id: &str| rows.iter().find(|a| a["workspaceId"] == id).cloned().unwrap_or_else(|| panic!("no row for {id}"));
+    assert_eq!(row(&w1.id)["agentsCanUseCompute"], true);
+    let granted_nodes: Vec<Value> = row(&w1.id)["grants"].as_array().unwrap().iter().map(|g| g["node"].clone()).collect();
+    assert!(granted_nodes.contains(&json!("tog-a")), "{granted_nodes:?}");
+    assert_eq!(row(&w2.id)["agentsCanUseCompute"], false);
+    assert_eq!(row(&w2.id)["grants"], json!([]));
+    let r = get(port, "/cli/compute/agents", &agent, "").await;
+    assert_eq!(r.status, 403, "agents can't read the owner's list: {}", r.body);
+
+    // A machine added later is granted to every agent that's on (only).
+    pending_node("tnode2", "tog-b");
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": "tog-b", "sas": "123456"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let auto = names(&j(&r)["autoGranted"]);
+    assert!(auto.contains(&"tog1".to_string()) && !auto.contains(&"tog2".to_string()), "{}", r.body);
+    assert!(grant_of(&w1.id, "tnode2").is_some());
+    assert!(grant_of(&w2.id, "tnode2").is_none());
+
+    // Limits from the disclosure apply to every grant of that agent.
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": w1.id, "value": true, "maxParallel": 3})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(grant_of(&w1.id, "tnode1").unwrap()["maxParallel"], 3);
+    assert_eq!(grant_of(&w1.id, "tnode2").unwrap()["maxParallel"], 3);
+
+    // Toggle off → switch off and every grant gone.
+    let had = grants_of(&w1.id).len();
+    assert!(had >= 2, "{had}");
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": w1.id, "value": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["grantsRemoved"].as_u64(), Some(had as u64));
+    assert!(grants_of(&w1.id).is_empty());
+    assert!(grant_of(&w1.id, "tnode1").is_none() && grant_of(&w1.id, "tnode2").is_none());
+    assert!(!switch_of(&w1.id));
+
+    // Machine off: idle → removed now.
+    let r = post(port, "/cli/compute/nodes/retire", &agent, json!({"node": "tog-a"})).await;
+    assert_eq!(r.status, 403, "owner only: {}", r.body);
+    let r = post(port, "/cli/compute/nodes/retire", OWNER, json!({"node": "tog-a"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["state"], "revoked");
+    assert!(node_row(port, "tog-a").await.is_null());
+
+    // Busy → draining (retiring) until its job ends, then removed.
+    running_job("jobretire0000001", "tnode2", &w2.id);
+    let r = post(port, "/cli/compute/nodes/retire", OWNER, json!({"node": "tog-b"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["state"], "draining");
+    let row = node_row(port, "tog-b").await;
+    assert_eq!(row["retiring"], true, "{row}");
+    assert_eq!(row["controllerPause"], "draining", "{row}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::store::set_job_state(&conn, "jobretire0000001", k2_node_proto::frames::JobState::Done, None, None, 20).expect("done");
+    }
+    assert!(node_row(port, "tog-b").await.is_null(), "the sweep removed it once idle");
+    let r = get(port, "/cli/compute/nodes", OWNER, "").await;
+    assert!(j(&r)["ticketSupported"].is_boolean(), "{}", r.body);
+    drop(env);
+}

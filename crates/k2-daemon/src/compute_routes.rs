@@ -31,6 +31,8 @@ pub const MAX_BODY: usize = 1 << 20;
 
 /// Every compute route (the two sockets included).
 pub const ROUTES: &[&str] = &[
+    "/cli/compute/agents",
+    "/cli/compute/agents/set",
     compute_ws::ATTACH_PATH,
     compute_ws::ENROLL_PATH,
     "/cli/compute/events",
@@ -57,6 +59,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/pause",
     "/cli/compute/nodes/remove",
     "/cli/compute/nodes/rename",
+    "/cli/compute/nodes/retire",
     "/cli/compute/nodes/routes",
     "/cli/compute/run",
     "/cli/compute/usage",
@@ -64,6 +67,7 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/compute/agents/set",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
     "/cli/compute/jobs/cancel",
@@ -79,6 +83,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/pause",
     "/cli/compute/nodes/remove",
     "/cli/compute/nodes/rename",
+    "/cli/compute/nodes/retire",
     "/cli/compute/nodes/routes",
     "/cli/compute/run",
 ];
@@ -394,12 +399,15 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/compute/nodes/enroll-code" => enroll_code(&who, body),
         "/cli/compute/nodes/confirm" => node_confirm(&who, body),
         "/cli/compute/nodes/remove" => node_remove(&who, body),
+        "/cli/compute/nodes/retire" => node_retire(&who, body),
         "/cli/compute/nodes/rename" => node_rename(&who, body),
         "/cli/compute/nodes/pause" => node_pause(&who, body),
         "/cli/compute/nodes/routes" => node_routes(&who, body),
         "/cli/compute/grants" => grants_list(&who, params),
         "/cli/compute/grants/set" => grant_set(&who, body),
         "/cli/compute/grants/revoke" => grant_revoke(&who, body),
+        "/cli/compute/agents" => agents_list(&who),
+        "/cli/compute/agents/set" => agents_set(&who, body),
         "/cli/compute/run" => run(&who, body),
         "/cli/compute/jobs" => jobs_list(&who, params),
         "/cli/compute/jobs/get" => job_get(&who, params),
@@ -461,6 +469,7 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     if show_sas && n.state == "pending" {
         v["sas"] = n.sas.as_deref().map(pairing::display_sas).into();
     }
+    v["retiring"] = compute::access::retiring_at(&compute::access::retiring_path()).contains_key(&n.id).into();
     v
 }
 
@@ -473,6 +482,7 @@ fn granted_node_ids(ws: &str) -> Vec<String> {
 fn nodes_list(who: &Who) -> R<serde_json::Value> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
+    sweep_retiring();
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -503,7 +513,14 @@ fn nodes_list(who: &Who) -> R<serde_json::Value> {
     } else {
         Vec::new()
     };
-    Ok(serde_json::json!({ "nodes": nodes, "waitingCodes": codes, "controller": compute_ws::controller_label() }))
+    // `ticketSupported`: this server trusts a one-click ticket key, so a
+    // machine on the same Connect account can join it without a code.
+    Ok(serde_json::json!({
+        "nodes": nodes,
+        "waitingCodes": codes,
+        "controller": compute_ws::controller_label(),
+        "ticketSupported": compute::ticket::supported(),
+    }))
 }
 
 fn node_visible(who: &Who, n: &store::NodeRow) -> R<()> {
@@ -599,39 +616,136 @@ fn node_confirm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             "the code doesn't match what this server computed. Don't confirm: remove the node and enroll again (k2 compute node remove <name>)",
         ));
     }
-    {
+    let auto_granted = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::confirm_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("not_pending", 409, e))?;
         store::record_event(&conn, &who.label(), "confirm", Some(&n.id), None, None, serde_json::json!({"name": n.name}));
-    }
+        // Every agent with compute on gets the new machine (Settings →
+        // Compute, "Agents that can use compute").
+        let granted = compute::access::grant_new_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
+        for ws in &granted {
+            store::record_event(&conn, &who.label(), "grant", Some(&n.id), Some(ws), None, serde_json::json!({"auto": true}));
+        }
+        granted
+    };
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_confirmed"}));
-    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "active",
-        "next": format!("k2 compute grant {} --workspace <ws> (no workspace may use it yet)", n.name)}))
+    let handles: Vec<String> = auto_granted.iter().map(|w| ws_handle(w)).collect();
+    let next = if handles.is_empty() {
+        format!("k2 compute grant {} --workspace <ws> (no workspace may use it yet)", n.name)
+    } else {
+        format!("granted to every workspace with compute on ({}); k2 compute grant {} --workspace <ws> for others", handles.join(", "), n.name)
+    };
+    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "active", "autoGranted": handles, "next": next}))
 }
 
 fn node_remove(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_owner(who)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
+    let ended = remove_now(&who.label(), &n)?;
+    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "revoked", "jobsCancelled": ended}))
+}
+
+/// Revoke a node now: cancel its queued and running jobs, tell it, forget
+/// it in the retiring set. Returns how many jobs were cancelled.
+fn remove_now(by: &str, n: &store::NodeRow) -> R<usize> {
     let ended = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::revoke_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("not_found", 404, e))?;
+        store::revoke_node(&conn, &n.id, by, compute::now()).map_err(|e| no("not_found", 404, e))?;
         let mut ended = Vec::new();
         for j in store::jobs_in_states(&conn, &n.id, &["queued", "assigned", "preparing", "running", "finishing"]) {
             let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("node_removed"), None, compute::now());
             ended.push(j.id);
         }
-        store::record_event(&conn, &who.label(), "remove", Some(&n.id), None, None, serde_json::json!({"name": n.name, "jobsCancelled": ended.len()}));
+        store::record_event(&conn, by, "remove", Some(&n.id), None, None, serde_json::json!({"name": n.name, "jobsCancelled": ended.len()}));
         ended
     };
+    let _ = compute::access::unmark_retiring_at(&compute::access::retiring_path(), &n.id);
     compute_ws::revoke(&n.id);
     for id in &ended {
         compute_ws::finalize(id);
     }
     compute_ws::notify_change();
-    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "revoked", "jobsCancelled": ended.len()}))
+    Ok(ended.len())
+}
+
+/// "Use compute from this machine" OFF (Settings → Compute): queued jobs
+/// are cancelled, running ones finish (the node drains meanwhile), then
+/// the node is removed. Idle → removed now. Owner only, like remove.
+fn node_retire(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    need_owner(who)?;
+    let v = json_body(body)?;
+    let n = node_or_404(s(&v, "node"))?;
+    let now = compute::now();
+    let (cancelled, running) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut cancelled = Vec::new();
+        for j in store::jobs_in_states(&conn, &n.id, &["queued"]) {
+            let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("node_retired"), None, now);
+            cancelled.push(j.id);
+        }
+        (cancelled, store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).len())
+    };
+    for id in &cancelled {
+        compute_ws::finalize(id);
+    }
+    if running == 0 {
+        let more = remove_now(&who.label(), &n)?;
+        return Ok(serde_json::json!({"ok": true, "node": n.name, "state": "revoked", "jobsCancelled": cancelled.len() + more}));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_controller_pause(&conn, &n.id, Some("draining"), &who.label(), now).map_err(|e| no("internal", 500, e))?;
+        store::record_event(
+            &conn,
+            &who.label(),
+            "retire",
+            Some(&n.id),
+            None,
+            None,
+            serde_json::json!({"name": n.name, "running": running, "queuedCancelled": cancelled.len()}),
+        );
+    }
+    compute::access::mark_retiring_at(&compute::access::retiring_path(), &n.id, &who.label(), now).map_err(|e| no("local_write", 500, e))?;
+    compute_ws::kick(&n.id);
+    compute_ws::notify_change();
+    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "draining", "running": running, "jobsCancelled": cancelled.len(),
+        "note": "running jobs finish, then the node is removed"}))
+}
+
+/// Finish retiring nodes whose jobs are done (the compute ticker, the
+/// nodes list and the retire route call this).
+pub fn sweep_retiring() {
+    let path = compute::access::retiring_path();
+    for (id, r) in compute::access::retiring_at(&path) {
+        let step = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            compute::access::retire_step(&conn, &id)
+        };
+        match step {
+            compute::access::RetireStep::Forget => {
+                let _ = compute::access::unmark_retiring_at(&path, &id);
+            }
+            compute::access::RetireStep::Wait { .. } => {}
+            compute::access::RetireStep::Remove => {
+                let row = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    store::node_by_id(&conn, &id)
+                };
+                if let Some(n) = row {
+                    if let Err(e) = remove_now(&r.by, &n) {
+                        eprintln!("[compute] retiring {}: {}", n.name, e.hint);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn node_rename(who: &Who, body: &[u8]) -> R<serde_json::Value> {
@@ -668,6 +782,10 @@ fn node_pause(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let conn = db.lock();
         store::set_controller_pause(&conn, &n.id, pause, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
         store::record_event(&conn, &who.label(), "controller_pause", Some(&n.id), None, None, serde_json::json!({"action": action}));
+    }
+    if pause.is_none() {
+        // Resuming a retiring node keeps it (the machine was switched back on).
+        let _ = compute::access::unmark_retiring_at(&compute::access::retiring_path(), &n.id);
     }
     compute_ws::kick(&n.id);
     Ok(serde_json::json!({"ok": true, "node": n.name, "controllerPause": pause,
@@ -797,6 +915,88 @@ fn grant_revoke(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     store::record_event(&conn, &who.label(), "grant_revoke", Some(&n.id), Some(&ws.id), None, serde_json::json!({"removed": removed}));
     Ok(serde_json::json!({"ok": true, "removed": removed, "node": n.name, "workspace": ws.handle,
         "note": "queued and running jobs keep going; new runs are refused"}))
+}
+
+// ── agents (Settings → Compute) ───────────────────────────────────────
+
+/// Every workspace with its "Allow compute nodes" switch and grants, plus
+/// the default limits a toggle applies. Owner/admin.
+fn agents_list(who: &Who) -> R<serde_json::Value> {
+    need_admin(who)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let names: HashMap<String, String> = store::list_nodes(&conn, false).into_iter().map(|n| (n.id, n.name)).collect();
+    let active = compute::access::active_nodes(&conn).len();
+    let rows: Vec<serde_json::Value> = compute::access::agents(&conn)
+        .into_iter()
+        .map(|a| {
+            let grants: Vec<serde_json::Value> = a
+                .grants
+                .iter()
+                .map(|g| {
+                    let mut v = serde_json::to_value(g).unwrap_or_default();
+                    v["node"] = names.get(&g.node_id).cloned().into();
+                    v
+                })
+                .collect();
+            serde_json::json!({
+                "workspaceId": a.workspace_id,
+                "workspace": k2_core::workspace_session_handles::workspace_address_name(&conn, &a.workspace_id).unwrap_or_else(|_| a.workspace_id.clone()),
+                "name": a.name,
+                "agentsCanUseCompute": a.agents_can_use_compute,
+                "grants": grants,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "agents": rows,
+        "activeNodes": active,
+        "defaults": {
+            "maxJobSecs": compute::DEFAULT_MAX_JOB_SECS,
+            "maxParallel": compute::DEFAULT_MAX_PARALLEL,
+            "maxQueued": compute::DEFAULT_MAX_QUEUED,
+            "maxDiskGb": compute::DEFAULT_MAX_DISK_GB,
+            "disk": "the smaller of 25% of the node's free disk and 60 GB",
+        },
+    }))
+}
+
+/// An agent's compute toggle (Settings → Compute). On: the workspace
+/// switch plus a grant on every active node (default limits, or the ones
+/// sent); nodes added later are granted on confirm. Off: switch off and
+/// every grant of the workspace removed. Owner/admin, never a passport.
+fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    need_admin(who)?;
+    let v = json_body(body)?;
+    let ws = target_ws(who, s(&v, "workspace"))?;
+    let on = b(&v, "value").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass \"value\": true or false"))?;
+    let limits = store::GrantLimits {
+        max_job_secs: n_pos(&v, "maxJobSecs", 60, 7 * 86_400)?,
+        max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
+        max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
+        max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
+    };
+    let now = compute::now();
+    let out = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if on {
+            let out = compute::access::enable_workspace(&conn, &ws.id, &limits, &who.label(), now).map_err(|e| no("internal", 500, e))?;
+            let name_of = |id: &String| store::node_by_id(&conn, id).map(|n| n.name).unwrap_or_else(|| id.clone());
+            let granted: Vec<String> = out.granted.iter().map(name_of).collect();
+            let kept: Vec<String> = out.kept.iter().map(name_of).collect();
+            store::record_event(&conn, &who.label(), "agent_compute_on", None, Some(&ws.id), None, serde_json::json!({"granted": granted, "kept": kept}));
+            serde_json::json!({"ok": true, "workspace": ws.handle, "agentsCanUseCompute": true, "granted": granted, "kept": kept,
+                "note": "agents in this workspace can use every machine switched on here, and ones you add later"})
+        } else {
+            let removed = compute::access::disable_workspace(&conn, &ws.id).map_err(|e| no("internal", 500, e))?;
+            store::record_event(&conn, &who.label(), "agent_compute_off", None, Some(&ws.id), None, serde_json::json!({"grantsRemoved": removed}));
+            serde_json::json!({"ok": true, "workspace": ws.handle, "agentsCanUseCompute": false, "grantsRemoved": removed,
+                "note": "queued and running jobs keep going; new runs are refused"})
+        }
+    };
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "agent_access"}));
+    Ok(out)
 }
 
 // ── run ──────────────────────────────────────────────────────────────

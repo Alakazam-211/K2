@@ -209,6 +209,8 @@ pub const ROUTES: &[Route] = &[
     // enroll are the node's sockets: no HTTP credential, handlers fail
     // closed (CN11). Agent verbs are also `is_agent_verb` rows; owner/admin
     // verbs refuse passports in the handler (`owner_only`).
+    get("/cli/compute/agents", Admin),
+    post("/cli/compute/agents/set", Admin),
     get("/cli/compute/attach", Public),
     get("/cli/compute/enroll", Public),
     get("/cli/compute/events", Admin),
@@ -235,6 +237,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/pause", Admin),
     post("/cli/compute/nodes/remove", Owner),
     post("/cli/compute/nodes/rename", Admin),
+    post("/cli/compute/nodes/retire", Owner),
     post("/cli/compute/nodes/routes", Admin),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),

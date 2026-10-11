@@ -1104,6 +1104,8 @@ fn ensure_ticker() {
                     if n % 17_280 == 1 {
                         logs::sweep(14);
                     }
+                    // Machines switched off in Settings: remove once idle.
+                    crate::compute_routes::sweep_retiring();
                 })
                 .await;
             }

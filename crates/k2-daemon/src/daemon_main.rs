@@ -169,7 +169,26 @@ fn print_daemon_help() {
 
 /// Process-held exclusive flock on `~/.k2/daemon.lock`. Dropped only
 /// when the process exits — that is the singleton guarantee.
-static DAEMON_SINGLETON_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+static DAEMON_SINGLETON_LOCK: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+
+fn keep_singleton_lock(file: std::fs::File) {
+    *DAEMON_SINGLETON_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = Some(file);
+}
+
+/// Runtime stage H: after a hand-off the successor holds the lock (the
+/// same open file description). Close OUR copy, or a successor that dies
+/// later would leave the lock held by this draining process and block the
+/// supervisor's fresh daemon for the whole drain.
+pub(crate) fn release_singleton_lock() {
+    drop(
+        DAEMON_SINGLETON_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take(),
+    );
+}
 
 /// Acquire an exclusive non-blocking flock so a second daemon instance
 /// cannot boot (and therefore cannot mint a second port/token, spawn a
@@ -204,7 +223,7 @@ fn acquire_daemon_singleton(
             let _ = writeln!(f, "{}", std::process::id());
             let _ = f.flush();
         }
-        let _ = DAEMON_SINGLETON_LOCK.set(file);
+        keep_singleton_lock(file);
         let _ = k2_dir;
         return Ok(());
     }
@@ -280,7 +299,7 @@ fn acquire_daemon_singleton(
     }
 
     // Keep the File (and thus the flock) alive for process lifetime.
-    let _ = DAEMON_SINGLETON_LOCK.set(file);
+    keep_singleton_lock(file);
     Ok(())
 }
 
@@ -289,7 +308,11 @@ fn acquire_daemon_singleton(
 #[cfg(unix)]
 pub(crate) fn singleton_lock_fd() -> Option<std::os::unix::io::RawFd> {
     use std::os::unix::io::AsRawFd;
-    DAEMON_SINGLETON_LOCK.get().map(|f| f.as_raw_fd())
+    DAEMON_SINGLETON_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .map(|f| f.as_raw_fd())
 }
 
 async fn async_main() {

@@ -19745,10 +19745,10 @@ cmd_schema() {
     {
       "name": "zen validate",
       "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
-      "description": "Validate what is on disk now; prints file:line:col: message per error and exits 1 on errors. Never changes what Zen shows.",
+      "description": "Validate what is on disk now: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
       "args": [],
       "flags": [
-        {"name": "--json", "arg": null, "description": "{ok, errors, warnings, files}."}
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime}."}
       ]
     },
     {
@@ -42978,6 +42978,9 @@ if as_json:
     print(json.dumps(d, indent=2))
     if verb == "validate" and d.get("ok") is False:
         sys.exit(1)
+    # Loopable (decision-k2-runtime-v1 stage 0 (e)): 2 = saved, not run yet.
+    if verb == "validate" and d.get("status") == "pending":
+        sys.exit(2)
     sys.exit(0)
 
 def diag(e, warn=False):
@@ -43053,7 +43056,13 @@ if verb in ("validate", "reload"):
         sys.exit(1)
     if verb == "validate":
         files = d.get("files") or []
+        rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else None
+        if d.get("status") == "pending":
+            print("pending: %s parses; %s" % (", ".join(files), rt.get("note") if rt else "it hasn\x27t run yet"))
+            sys.exit(2)
         print("ok: %s" % (", ".join(files) if files else "no files"))
+        if rt and rt.get("note"):
+            print("runtime: %s" % rt["note"])
 elif verb == "reset":
     print("reset %s to %s" % (d.get("file"), d.get("restored")))
     if d.get("snapshot"):
@@ -43205,9 +43214,74 @@ elif verb == "widget-list":
 # k2 zen widget <new|list> (prd-zen-user-widgets-v2 UW41). Custom widgets
 # are folders under ~/.k2/zen/widgets/. They need no permissions (Rosson
 # 2026-10-08): `grant` and `revoke` only say so.
+# `k2 zen widget errors <name> [--since <seq>] [--follow] [--json]` — the
+# runtime errors a widget hit in Zen windows (decision-k2-runtime-v1 stage 0
+# (d)). Each has a suggestion; `current` marks errors of the version on disk.
+cmd_zen_widget_errors() {
+    local name="" since="" follow=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since) since="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
+            --since=*) since="${1#*=}"; shift ;;
+            --follow|-f) follow=true; shift ;;
+            --json) as_json=true; shift ;;
+            -h|--help)
+                echo "Usage: k2 zen widget errors <name> [--since <seq>] [--follow] [--json]"
+                echo "Runtime errors your widget hit in a Zen window, oldest first, each with a suggestion."
+                echo "--since <seq> shows only newer ones; --follow keeps printing new ones (Ctrl+C stops)."
+                echo "Exit 0 none for the version on disk now, 1 some (or the widget is unknown)."
+                exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget errors --help)" >&2; exit 2 ;;
+            *) [ -z "$name" ] && name="$1" || { echo "Error: one widget name" >&2; exit 2; }; shift ;;
+        esac
+    done
+    [ -n "$name" ] || { echo "Error: k2 zen widget errors needs a widget name" >&2; exit 2; }
+    case "$since" in ''|*[!0-9]*) [ -z "$since" ] || { echo "Error: --since is a sequence number" >&2; exit 2; } ;; esac
+    local raw code
+    while :; do
+        local -a q=("widget=$(urlencode "$name")")
+        [ -n "$since" ] && q+=("since=$since")
+        raw=$(cli_request "/cli/zen/widget/errors" "${q[@]}") || raw=""
+        code=0
+        ZE_RAW="$raw" ZE_JSON="$as_json" ZE_FOLLOW="$follow" python3 -c '
+import json, os, sys
+raw = os.environ.get("ZE_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: no usable answer from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(3)
+if not isinstance(d, dict) or d.get("error") is not None:
+    print("Error: %s" % ((d.get("message") if isinstance(d, dict) else None) or raw[:200]), file=sys.stderr)
+    sys.exit(3)
+errs = d.get("errors") or []
+if os.environ.get("ZE_JSON") == "true":
+    print(json.dumps(d, indent=None if os.environ.get("ZE_FOLLOW") == "true" else 2))
+else:
+    for e in errs:
+        print("#%s %s%s %s" % (e.get("seq"), e.get("at"), "" if e.get("current") else " (older version)", e.get("message")))
+        for line in (e.get("stack") or "").splitlines()[:6]:
+            print("    %s" % line)
+        if e.get("suggestion"):
+            print("  suggestion: %s" % e["suggestion"])
+    if not errs and os.environ.get("ZE_FOLLOW") != "true":
+        print("no runtime errors%s" % (" since that one" if d.get("last") else ""))
+sys.exit(1 if any(e.get("current") for e in errs) else 0)
+' || code=$?
+        [ "$code" -eq 3 ] && exit 1
+        if [ "$follow" != true ]; then exit "$code"; fi
+        since=$(ZE_RAW="$raw" python3 -c 'import json,os; print(json.loads(os.environ["ZE_RAW"]).get("last", 0))' 2>/dev/null || echo "$since")
+        sleep 2
+    done
+}
+
 cmd_zen_widget() {
     local verb="${1:-}"
     shift || true
+    if [ "$verb" = "errors" ]; then
+        cmd_zen_widget_errors "$@"
+        return
+    fi
     local as_json=false from="" widget="" raw body
     local -a pos=()
     while [ $# -gt 0 ]; do

@@ -163,6 +163,33 @@ describe('TUW3.6: ready, ping, unload', () => {
     expect(s.stops).toEqual(['failing'])
     warn.mockRestore()
   })
+
+  it('reports the first ready and every error (capped) to onReport; a throwing onReport never breaks the host', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const reports: unknown[] = []
+    const s = setup({ onReport: (r) => void reports.push(r) })
+    s.host.deliver({ ready: true })
+    s.host.deliver({ ready: true })
+    s.host.deliver({ error: { message: 'ReferenceError: x is not defined', stack: 'at about:srcdoc:2:3' } })
+    s.host.deliver({ error: { message: 'm'.repeat(900) } })
+    s.host.deliver({ error: { nope: 1 } })
+    expect(reports).toEqual([
+      { event: 'ready' },
+      { event: 'error', message: 'ReferenceError: x is not defined', stack: 'at about:srcdoc:2:3' },
+      { event: 'error', message: 'm'.repeat(500) },
+      { event: 'error', message: 'error' },
+    ])
+    const t = setup({
+      onReport: () => {
+        throw new Error('daemon gone')
+      },
+    })
+    t.host.deliver({ ready: true })
+    t.host.deliver({ error: { message: 'boom' } })
+    expect(t.stops).toEqual([])
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('runtime report failed'))).toBe(true)
+    warn.mockRestore()
+  })
 })
 
 describe('UW33: forwarded chords', () => {

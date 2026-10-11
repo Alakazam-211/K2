@@ -216,6 +216,17 @@ pub struct Node {
     keep_awake: Mutex<Option<tokio::process::Child>>,
     /// Learned routes (Welcome) tried before the pinned ones.
     pub learned_routes: Mutex<Vec<String>>,
+    /// One toolchain install at a time (mise and rustup share caches).
+    tool_lock: tokio::sync::Mutex<()>,
+}
+
+/// What this node understands beyond protocol 1 (the offer says it).
+pub fn node_features() -> Vec<String> {
+    let mut f = vec![k2_node_proto::needs::FEATURE_NEEDS.to_string()];
+    if crate::packages::installer_present() {
+        f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
+    }
+    f
 }
 
 impl Node {
@@ -271,6 +282,7 @@ impl Node {
             status: Mutex::new(Status::default()),
             keep_awake: Mutex::new(None),
             learned_routes: Mutex::new(Vec::new()),
+            tool_lock: tokio::sync::Mutex::new(()),
             opts,
         });
         node.refresh_local(true);
@@ -306,8 +318,14 @@ impl Node {
         ]
     }
 
+    /// The toolchain layer for this node's home.
+    pub fn toolchains(&self) -> crate::toolchain::Toolchains {
+        crate::toolchain::Toolchains::new(&self.layout().home, self.job_env_base())
+    }
+
     pub async fn probe_tools(&self) {
-        let tools = crate::sysinfo::probe_tools(&self.job_env_base()).await;
+        let mut tools = crate::sysinfo::probe_tools(&self.job_env_base()).await;
+        tools.extend(self.toolchains().installed_tools());
         *self.tools.lock().unwrap() = tools;
         self.offer_changed.notify_one();
     }
@@ -465,6 +483,7 @@ impl Node {
             boot_id: self.opts.clock.boot_id(),
             ledger_id,
             node_version: NODE_VERSION.to_string(),
+            features: node_features(),
         };
         let mut last = self.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {
@@ -861,6 +880,16 @@ impl Node {
                 }
             }
         }
+        // Toolchains: explicit needs (required) + what the repo declares
+        // (best effort), installed into the node home, cached.
+        let resolved = match self.resolve_toolchains(&a, &dirs, &mut journal, &mut stop).await {
+            Ok(r) => r,
+            Err((state, code, detail)) => {
+                sys(&mut journal, &format!("toolchains: {detail}"));
+                self.finish_job(&a, Some(&dirs), state, Some(&code), Some(&detail), src_ran, None, Some(journal), lease).await;
+                return;
+            }
+        };
         let target = lease.as_ref().map(|l| l.dir.clone()).unwrap_or_else(|| dirs.private_target.clone());
         let _ = std::fs::create_dir_all(&target);
         let env = match runner::job_env(&runner::EnvInputs {
@@ -871,6 +900,8 @@ impl Node {
             job_id: &job,
             user: &self.opts.user,
             extra: &a.plan.env,
+            tool_paths: &resolved.path_prepend,
+            tool_env: &resolved.env,
         }) {
             Ok(e) => e,
             Err((code, name)) => {
@@ -1001,6 +1032,79 @@ impl Node {
             None => (JobState::Done, None),
         };
         self.finish_job(&a, Some(&dirs), state, reason.as_deref(), None, src_ran, exit, journal, lease).await;
+    }
+
+    /// The job's toolchains. `Err((state, reason, detail))` ends the job.
+    async fn resolve_toolchains(
+        self: &Arc<Self>,
+        a: &Assign,
+        dirs: &JobDirs,
+        journal: &mut JournalWriter,
+        stop: &mut watch::Receiver<Option<StopReason>>,
+    ) -> Result<crate::toolchain::Resolved, (JobState, String, String)> {
+        use crate::toolchain;
+        let explicit = k2_node_proto::needs::parse_all(&a.plan.needs)
+            .map_err(|e| (JobState::Failed, toolchain::codes::NEED_INVALID.to_string(), e))?;
+        let repo_files = a.plan.src.is_some() && self.local.lock().unwrap().policy.repo_toolchains;
+        let (repo, skipped, rust_file) = if repo_files {
+            let (r, s) = toolchain::declared_in_repo(&dirs.src);
+            (r, s, toolchain::rust_toolchain_file(&dirs.src))
+        } else {
+            (Vec::new(), Vec::new(), None)
+        };
+        let mut log = |m: &str| {
+            let _ = journal.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {m}
+").as_bytes());
+        };
+        for s in &skipped {
+            log(&format!("toolchains: skipped {s}"));
+        }
+        if explicit.is_empty() && repo.is_empty() && rust_file.is_none() {
+            return Ok(toolchain::Resolved::default());
+        }
+        let wanted: Vec<String> = explicit
+            .iter()
+            .map(|n| n.token())
+            .chain(repo.iter().map(|(n, src)| format!("{} ({src})", n.token())))
+            .chain(rust_file.iter().map(|r| format!("rust@{} (rust-toolchain)", r.channel)))
+            .collect();
+        log(&format!("toolchains: {}", wanted.join(", ")));
+        let _guard = self.tool_lock.lock().await;
+        let tc = self.toolchains();
+        let r = {
+            let fut = tc.resolve(&explicit, &repo, rust_file.as_ref(), &mut log);
+            tokio::pin!(fut);
+            let mut stop_open = true;
+            loop {
+                tokio::select! {
+                    r = &mut fut => break Some(r),
+                    c = stop.changed(), if stop_open => {
+                        if c.is_err() {
+                            stop_open = false;
+                        } else if stop.borrow().is_some() {
+                            break None;
+                        }
+                    }
+                }
+            }
+        };
+        let Some(r) = r else {
+            let s = stop.borrow().clone().unwrap_or(StopReason { state: JobState::Cancelled, reason: "cancelled".into() });
+            return Err((s.state, s.reason, "stopped while installing toolchains".into()));
+        };
+        match r {
+            Ok(res) => {
+                for n in &res.notes {
+                    log(&format!("toolchains: {n}"));
+                }
+                if res.installed_any {
+                    let node = self.clone();
+                    tokio::spawn(async move { node.probe_tools().await });
+                }
+                Ok(res)
+            }
+            Err((code, detail)) => Err((JobState::Failed, code.to_string(), detail)),
+        }
     }
 
     /// Mirror → (fetch | bundle) → worktree → dirty. `Err((code, detail))`.

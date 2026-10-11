@@ -10,11 +10,25 @@ use k2_node::paths::{default_home, Layout, DEFAULT_CONFIG_DIR};
 use k2_node_proto::frames::Control;
 use k2_node_proto::pairing::EnrollString;
 
-const USAGE: &str = "k2-node — K2 compute node runtime
+const USAGE: &str = r#"k2-node — K2 compute node runtime
+
+Install (root, once; the installers are inside this binary):
+  sudo k2-node setup [--private-home | --no-private-home] [--human USER]
+                     [--allow-packages "libssl-dev pkg-config"]
+                     [--controller URL --enroll CODE.FP --name NAME]
+  sudo k2-node uninstall
+  Over SSH: one sudo call, password on stdin (never in argv):
+    ssh host 'sudo -S -p "" /path/to/k2-node setup --no-private-home …' < password-file
+    (the password comes from stdin, e.g. a secret file you delete after)
 
   k2-node run [--home DIR] [--config-dir DIR] [--dev]
-  k2-node enroll --controller <https://you.k2.dev> --enroll <ABCDE-FGHJK.0123456789abcdef> --name <name>
+  k2-node enroll --controller <https://you.k2.dev> (--enroll <ABCDE-FGHJK.0123456789abcdef> | --ticket T) --name <name>
                  [--label k=v]... [--home DIR] [--force]
+  k2-node request --controller URL (--enroll CODE.FP | --ticket T) --name NAME [--config-dir DIR]
+                 (the machine owner: ask the running node to enroll itself)
+  k2-node tools install <need>... [--home DIR]   (as the node user: node@22 python@3.12 rust@stable cargo-nextest sys:pkg-config)
+  k2-node tools list [--home DIR] [--json]
+  k2-node packages list | allow <pkg>... | disallow <pkg>...   (allow/disallow: root)
   k2-node status [--home DIR] [--json]
   k2-node pause [--now] [--by NAME] [--config-dir DIR]     (machine owner: root or k2nodectl)
   k2-node drain [--by NAME] [--config-dir DIR]
@@ -25,7 +39,7 @@ const USAGE: &str = "k2-node — K2 compute node runtime
   k2-node check-home <dir>        (installer: refuse a home that runs K2)
   k2-node version
 
-Agents never run this: they use `k2 compute` on their K2 server.";
+Agents never run this: they use `k2 compute` on their K2 server."#;
 
 struct Args {
     flags: BTreeMap<String, Vec<String>>,
@@ -33,7 +47,18 @@ struct Args {
     positional: Vec<String>,
 }
 
-const SWITCHES: &[&str] = &["--dev", "--json", "--now", "--force", "-h", "--help"];
+const SWITCHES: &[&str] = &[
+    "--dev",
+    "--json",
+    "--now",
+    "--force",
+    "-h",
+    "--help",
+    "--private-home",
+    "--no-private-home",
+    "--reenroll",
+    "--nextest",
+];
 
 fn parse(args: &[String]) -> Result<Args, String> {
     let mut a = Args { flags: BTreeMap::new(), switches: vec![], positional: vec![] };
@@ -149,8 +174,13 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
         return Err("enroll as the node user (sudo -u k2node k2-node enroll …), not root".into());
     }
     let controller = a.need("controller")?;
-    let es = EnrollString::parse(a.need("enroll")?)
-        .ok_or("--enroll must look like ABCDE-FGHJK.0123456789abcdef (code . first 16 hex of the controller fingerprint)")?;
+    let cred = match (a.get("enroll"), a.get("ticket")) {
+        (Some(e), None) => k2_node::enroll::Credential::Code(EnrollString::parse(e).ok_or(
+            "--enroll must look like ABCDE-FGHJK.0123456789abcdef (code . first 16 hex of the controller fingerprint)",
+        )?),
+        (None, Some(t)) => k2_node::enroll::Credential::Ticket(k2_node_proto::ticket::Ticket::decode(t)?),
+        _ => return Err("pass --enroll <code> or --ticket <ticket>".into()),
+    };
     let name = a.need("name")?;
     let mut labels = BTreeMap::new();
     for l in a.flags.get("label").cloned().unwrap_or_default() {
@@ -173,7 +203,7 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
     }
     let key = k2_node::identity::load_or_create_key(&layout.key())?;
     let mut ws = k2_node::session::connect(controller, k2_node::session::ENROLL_PATH).await?;
-    let done = k2_node::enroll::enroll_on(&mut ws, &key, controller, &es, name, &labels, k2_node::util::now()).await?;
+    let done = k2_node::enroll::enroll_on(&mut ws, &key, controller, &cred, name, &labels, k2_node::util::now()).await?;
     k2_node::identity::write_pin(&layout.pin(), &done.pin)?;
     println!("Enrolled as {} (pending). Code: {}", done.pin.name, done.sas);
     println!("Confirm it on the controller: k2 compute node confirm {} {}", done.pin.name, done.sas.replace(' ', ""));
@@ -260,6 +290,115 @@ fn cmd_check_home(a: &Args) -> Result<(), String> {
     }
 }
 
+fn cmd_request(a: &Args) -> Result<(), String> {
+    let mut labels = BTreeMap::new();
+    for l in a.flags.get("label").cloned().unwrap_or_default() {
+        let (k, v) = l.split_once('=').ok_or_else(|| format!("--label {l:?}: use key=value"))?;
+        labels.insert(k.to_string(), v.to_string());
+    }
+    let r = k2_node::request::Request {
+        id: format!("cli-{}", k2_node_proto::crypto::random_id()?),
+        controller: a.need("controller")?.to_string(),
+        enroll: a.get("enroll").map(str::to_string),
+        ticket: a.get("ticket").map(str::to_string),
+        name: a.need("name")?.to_string(),
+        labels,
+        requested_by: Some(who(a)),
+        requested_at: Some(k2_node::util::now()),
+    };
+    let layout = a.layout();
+    k2_node::request::write_request(&layout, &r)?;
+    println!("Asked the node to enroll as {} (request {}). Watch: k2-node status", r.name, r.id);
+    Ok(())
+}
+
+/// `tools install|list` (as the node user; never root: installs land in
+/// the node home and must stay owned by it).
+async fn cmd_tools(a: &Args) -> Result<(), String> {
+    let layout = a.layout();
+    let base = vec![
+        ("PATH".to_string(), k2_node::util::base_path(&layout.home)),
+        ("HOME".to_string(), layout.git_home().display().to_string()),
+        ("LANG".to_string(), "C".to_string()),
+    ];
+    let tc = k2_node::toolchain::Toolchains::new(&layout.home, base);
+    match a.positional.get(1).map(String::as_str) {
+        Some("list") | None => {
+            let t = tc.installed_tools();
+            if a.has("--json") {
+                println!("{}", serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?);
+            } else if t.is_empty() {
+                println!("(no toolchains installed in {} yet)", tc.root.display());
+            } else {
+                for (k, v) in t {
+                    println!("{k:<18} {v}");
+                }
+            }
+            Ok(())
+        }
+        Some("install") => {
+            if is_root() {
+                return Err("install toolchains as the node user, not root: sudo -u k2node k2-node tools install … (macOS: sudo -u _k2node …)".into());
+            }
+            let mut toks: Vec<String> = a.positional[2..].to_vec();
+            if a.has("--nextest") {
+                toks.push("cargo-nextest".into());
+            }
+            if toks.is_empty() {
+                return Err("tools install <need>…  e.g. node@22 python@3.12 rust@stable cargo-nextest sys:pkg-config".into());
+            }
+            let needs = k2_node_proto::needs::parse_all(&toks)?;
+            layout.ensure()?;
+            let r = tc
+                .resolve(&needs, &[], None, &mut |m: &str| println!("{m}"))
+                .await
+                .map_err(|(code, d)| format!("{code}: {d}"))?;
+            for n in &r.notes {
+                println!("{n}");
+            }
+            println!("ready: {} (k2-node re-probes tools within 10 minutes)", toks.join(" "));
+            Ok(())
+        }
+        Some(o) => Err(format!("tools {o:?}: use install or list")),
+    }
+}
+
+fn cmd_packages(a: &Args) -> Result<(), String> {
+    let names: Vec<String> = a.positional.iter().skip(2).cloned().collect();
+    match a.positional.get(1).map(String::as_str) {
+        Some("list") | None => {
+            let l = k2_node::packages::read_approved(std::path::Path::new(k2_node::packages::APPROVED_FILE))?;
+            let m = k2_node::packages::detect().map(|m| m.name()).unwrap_or("none");
+            let unit = k2_node::packages::installer_present();
+            println!(
+                "package manager: {m}; installer: {}",
+                if unit { k2_node::packages::PATH_UNIT } else { "none (jobs can't install packages; re-run sudo k2-node setup)" }
+            );
+            if l.is_empty() {
+                println!("approved: (none)");
+            }
+            for p in l {
+                let ok = k2_node::packages::installed(k2_node::sysinfo::os_label(), &p);
+                println!("approved: {p}{}", if ok { " (installed)" } else { "" });
+            }
+            Ok(())
+        }
+        Some("allow") => {
+            let l = k2_node::packages::cmd_edit(&names, true)?;
+            println!("approved: {}", l.join(" "));
+            Ok(())
+        }
+        Some("disallow") => {
+            let l = k2_node::packages::cmd_edit(&names, false)?;
+            println!("approved: {}", if l.is_empty() { "(none)".to_string() } else { l.join(" ") });
+            Ok(())
+        }
+        Some("install") => k2_node::packages::cmd_install(&names),
+        Some("serve") => k2_node::packages::cmd_serve(&a.layout().home),
+        Some(o) => Err(format!("packages {o:?}: use list, allow, disallow")),
+    }
+}
+
 fn cmd_install_files(a: &Args) -> Result<(), String> {
     let p = k2_node::install::InstallParams {
         binary: a.need("binary")?,
@@ -298,6 +437,19 @@ async fn main() -> ExitCode {
         Some("resume") => cmd_control(&a, Control::Active),
         Some("policy") => cmd_policy(&a),
         Some("install-files") => cmd_install_files(&a),
+        Some("request") => cmd_request(&a),
+        Some("tools") => cmd_tools(&a).await,
+        Some("packages") => cmd_packages(&a),
+        Some("setup") | Some("uninstall") => {
+            let kind = if a.positional[0] == "setup" { k2_node::setup::Kind::Install } else { k2_node::setup::Kind::Uninstall };
+            // Pass the original argv through untouched (after the verb).
+            let rest: Vec<String> = raw.iter().skip_while(|x| *x != &a.positional[0]).skip(1).cloned().collect();
+            match k2_node::setup::run(kind, &rest) {
+                Ok(0) => Ok(()),
+                Ok(code) => return ExitCode::from(code.clamp(1, 255) as u8),
+                Err(e) => Err(e),
+            }
+        }
         Some("check-home") => cmd_check_home(&a),
         Some("version") => {
             println!("k2-node {NODE_VERSION} (protocol {})", k2_node_proto::PROTOCOL);

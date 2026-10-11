@@ -11,12 +11,16 @@
 //! - [`refusal`]: the one refusal function both ends use.
 //! - [`env`]: job env rules (the daemon-reaching names, the PATH rule).
 //! - [`canonical`]: canonical JSON for digests and signatures.
+//! - [`needs`]: toolchains and system packages a job declares.
+//! - [`ticket`]: one-click enroll tickets from the control plane.
 
 pub mod canonical;
 pub mod crypto;
 pub mod env;
 pub mod frames;
+pub mod needs;
 pub mod pairing;
 pub mod refusal;
+pub mod ticket;
 
 pub use frames::PROTOCOL;

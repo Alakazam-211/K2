@@ -383,6 +383,7 @@ pub mod tests {
             src: None,
             exclusive: false,
             created_at: 1,
+            needs: Vec::new(),
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
     }

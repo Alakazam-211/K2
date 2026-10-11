@@ -26,6 +26,35 @@ pub fn valid_name(n: &str) -> bool {
         && n.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
+/// How the node proves the owner sent it.
+#[derive(Debug, Clone)]
+pub enum Credential {
+    /// `ABCDE-FGHJK.0123456789abcdef` from `k2 compute node add`.
+    Code(EnrollString),
+    /// A control-plane ticket (one-click, same Connect account).
+    Ticket(k2_node_proto::ticket::Ticket),
+}
+
+impl Credential {
+    fn binding(&self) -> String {
+        match self {
+            Credential::Code(e) => pairing::code_binding(&e.code),
+            Credential::Ticket(t) => t.binding(),
+        }
+    }
+}
+
+/// A ticket names its controller by subdomain; the URL we dial must be
+/// exactly that host over https (web TLS proves the host; there is no
+/// fingerprint prefix on this path).
+pub fn ticket_url_ok(url: &str, controller_sub: &str) -> bool {
+    let Some(rest) = url.trim_end_matches('/').strip_prefix("https://") else { return false };
+    let host = rest.split(['/', ':']).next().unwrap_or("").to_ascii_lowercase();
+    let sub = controller_sub.to_ascii_lowercase();
+    let want = if sub.contains('.') { sub } else { format!("{sub}.k2.dev") };
+    host == want && !rest.contains('@')
+}
+
 pub struct Enrolled {
     pub pin: Pin,
     /// Display form (`482 913`).
@@ -37,7 +66,7 @@ pub async fn enroll_on<S>(
     ws: &mut S,
     key: &SigningKey,
     controller_base: &str,
-    enroll: &EnrollString,
+    cred: &Credential,
     name: &str,
     labels: &BTreeMap<String, String>,
     now: i64,
@@ -50,8 +79,30 @@ where
     if !valid_name(name) {
         return Err(format!("node name {name:?}: use 1-32 of a-z, 0-9 and -"));
     }
-    let binding = pairing::code_binding(&enroll.code);
+    let binding = cred.binding();
     let node_fp = key.fingerprint();
+    let ticket = match cred {
+        Credential::Code(_) => None,
+        Credential::Ticket(t) => {
+            if t.node_fp != node_fp {
+                return Err(format!(
+                    "the ticket was made for node key {}…, but this node's key is {}…; ask for a new ticket",
+                    t.node_fp.get(..16).unwrap_or(""),
+                    &node_fp[..16]
+                ));
+            }
+            if t.node_name != name {
+                return Err(format!("the ticket names this node {:?}, not {name:?}", t.node_name));
+            }
+            if !ticket_url_ok(controller_base, &t.controller_sub) {
+                return Err(format!(
+                    "the ticket is for {}; dial https://{}.k2.dev (got {controller_base})",
+                    t.controller_sub, t.controller_sub
+                ));
+            }
+            Some(t.encode()?)
+        }
+    };
     let fut = async {
         send_hs(ws, &HandshakeFrame::EnrollRequest(EnrollRequest {
             code_binding: binding.clone(),
@@ -60,6 +111,7 @@ where
             labels: labels.clone(),
             protocol: PROTOCOL,
             node_version: NODE_VERSION.to_string(),
+            ticket: ticket.clone(),
         }))
         .await?;
         let ch = match parse_hs(&recv_text(ws).await?)? {
@@ -68,6 +120,7 @@ where
             other => return Err(format!("protocol_error: expected enroll_challenge, got {other:?}")),
         };
         let controller_fp = crypto::fingerprint_of_spki_pem(&ch.controller_public_key_pem)?;
+        if let Credential::Code(enroll) = cred {
         if !enroll.matches_controller(&controller_fp) {
             let _ = send_hs(ws, &HandshakeFrame::Refused(Refused {
                 code: "controller_mismatch".into(),
@@ -80,6 +133,7 @@ where
                 &controller_fp[..16],
                 enroll.controller_fp_prefix
             ));
+        }
         }
         let spki = crypto::pem_decode("PUBLIC KEY", &ch.controller_public_key_pem)?;
         if !crypto::verify_domain(
@@ -132,6 +186,8 @@ fn refused_msg(r: &Refused) -> String {
         "code_locked" => " (too many wrong codes: mint a new one on the controller)",
         "name_taken" => " (pick another --name)",
         "compute_off" => " (compute nodes are off on the controller: K2_COMPUTE)",
+        "ticket_invalid" => " (the one-click ticket was refused: get a new one, or use an enroll code)",
+        "ticket_unsupported" => " (this controller doesn't take one-click tickets yet: use an enroll code)",
         _ => "",
     };
     format!("controller refused: {}: {}{hint}", r.code, r.message)
@@ -149,5 +205,17 @@ mod tests {
         assert!(!valid_name("Mini"));
         assert!(!valid_name(""));
         assert!(!valid_name(&"a".repeat(33)));
+    }
+
+    #[test]
+    fn ticket_urls_must_be_the_ticket_host_over_https() {
+        assert!(ticket_url_ok("https://rosson.k2.dev", "rosson"));
+        assert!(ticket_url_ok("https://Rosson.k2.dev/", "rosson"));
+        assert!(ticket_url_ok("https://box.example.com:443", "box.example.com"));
+        assert!(!ticket_url_ok("http://rosson.k2.dev", "rosson"));
+        assert!(!ticket_url_ok("https://evil.k2.dev", "rosson"));
+        assert!(!ticket_url_ok("https://rosson.k2.dev.evil.com", "rosson"));
+        assert!(!ticket_url_ok("https://x@rosson.k2.dev", "rosson"));
+        assert!(!ticket_url_ok("https://192.168.1.5:38471", "rosson"));
     }
 }

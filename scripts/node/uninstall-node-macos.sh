@@ -6,6 +6,7 @@
 # human's home stays private (chmod 700) — that's yours to undo.
 # Remove the node on the controller too: k2 compute node remove <name>
 set -euo pipefail
+cd /
 
 NODE_USER="_k2node"
 HOME_DIR="/var/k2node"

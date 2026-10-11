@@ -455,11 +455,19 @@ pub async fn run_forever(node: Arc<Node>) {
         let pin = node.pin.lock().unwrap().clone();
         let pin = match pin {
             None => {
-                node.set_status_state("unenrolled", None, None);
+                if crate::request::process(&node).await {
+                    continue;
+                }
+                if node.status.lock().unwrap().state != "unenrolled" {
+                    node.set_status_state("unenrolled", None, None);
+                }
                 tokio::time::sleep(Duration::from_secs(5).min(node.opts.backoff_max)).await;
                 continue;
             }
             Some(p) if p.revoked => {
+                if crate::request::process(&node).await {
+                    continue;
+                }
                 node.set_status_state("revoked", None, p.revoked_reason.clone().map(|r| format!("Removed by the controller: {r}")));
                 tokio::time::sleep(Duration::from_secs(30).min(node.opts.backoff_max * 2)).await;
                 continue;

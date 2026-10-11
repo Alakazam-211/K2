@@ -280,6 +280,7 @@ mod tests {
             boot_id: "b".into(),
             ledger_id: "l".into(),
             node_version: "0.1.0".into(),
+            features: Vec::new(),
         };
         assert_eq!(offer_refusal(&o, 0, false, &ask()), None);
         assert_eq!(code(offer_refusal(&o, 1, false, &ask())).as_deref(), Some(PARALLEL_FULL));

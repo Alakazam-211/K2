@@ -99,7 +99,7 @@ async fn enroll_happy_path_and_sas_matches_the_controller() {
     let es = EnrollString::new(&code, &fake.key.fingerprint()).unwrap();
     let key = SigningKey::generate().unwrap();
     let mut ws = k2_node::session::connect(&fake.base, k2_node::session::ENROLL_PATH).await.unwrap();
-    let done = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &es, "mini-1", &BTreeMap::new(), 5).await.unwrap();
+    let done = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &k2_node::enroll::Credential::Code(es.clone()), "mini-1", &BTreeMap::new(), 5).await.unwrap();
     assert_eq!(Some(done.sas.clone()), fake.last_sas.lock().unwrap().clone(), "both ends show the same code");
     assert_eq!(done.pin.controller_fp, fake.key.fingerprint());
     assert_eq!(done.pin.routes, vec![fake.base.clone()]);
@@ -107,7 +107,7 @@ async fn enroll_happy_path_and_sas_matches_the_controller() {
     assert_eq!(fake.nodes.lock().unwrap().get(&key.fingerprint()).unwrap().state, NodeState::Pending);
     // The code is single-use.
     let mut ws = k2_node::session::connect(&fake.base, k2_node::session::ENROLL_PATH).await.unwrap();
-    let err = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &es, "mini-1", &BTreeMap::new(), 5).await.err().unwrap();
+    let err = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &k2_node::enroll::Credential::Code(es.clone()), "mini-1", &BTreeMap::new(), 5).await.err().unwrap();
     assert!(err.contains("code_invalid"), "{err}");
 }
 
@@ -120,7 +120,7 @@ async fn enroll_with_the_wrong_fingerprint_prefix_is_refused() {
     let es = EnrollString::new(&code, &other.fingerprint()).unwrap();
     let key = SigningKey::generate().unwrap();
     let mut ws = k2_node::session::connect(&fake.base, k2_node::session::ENROLL_PATH).await.unwrap();
-    let err = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &es, "mini-1", &BTreeMap::new(), 5).await.err().unwrap();
+    let err = k2_node::enroll::enroll_on(&mut ws, &key, &fake.base, &k2_node::enroll::Credential::Code(es.clone()), "mini-1", &BTreeMap::new(), 5).await.err().unwrap();
     assert!(err.contains("impersonating"), "{err}");
     assert!(fake.nodes.lock().unwrap().is_empty(), "no proof was sent, so nothing was registered");
 }

@@ -59,6 +59,10 @@ pub struct PolicyFile {
     pub foreign_locks: Option<Vec<String>>,
     pub write_smoke_lock: Option<String>,
     pub network: Option<String>,
+    /// Install the toolchains a job's repo declares (`mise.toml`,
+    /// `.tool-versions`, `.nvmrc`, `rust-toolchain.toml`, …). Default on;
+    /// a job's explicit `--needs` are installed either way.
+    pub repo_toolchains: Option<bool>,
 }
 
 /// Facts about the machine the defaults depend on.
@@ -86,6 +90,7 @@ pub struct Policy {
     pub foreign_locks: Vec<String>,
     pub write_smoke_lock: Option<String>,
     pub network: String,
+    pub repo_toolchains: bool,
 }
 
 impl Policy {
@@ -143,6 +148,7 @@ impl Policy {
             foreign_locks,
             write_smoke_lock,
             network,
+            repo_toolchains: f.repo_toolchains.unwrap_or(true),
         })
     }
 
@@ -304,6 +310,8 @@ pub fn default_policy_toml() -> String {
 # foreign_locks = ["/home/sew-ci/sew-build/.job.lock"]
 # write_smoke_lock = "/var/tmp/k2-smoke.lock"
 # network = "full"              # full | none
+# repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
+#                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
 #
 # [[window]]
 # days = "mon-fri"

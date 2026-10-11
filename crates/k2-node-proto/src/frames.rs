@@ -107,6 +107,12 @@ pub struct EnrollRequest {
     pub labels: BTreeMap<String, String>,
     pub protocol: u32,
     pub node_version: String,
+    /// One-click path (§7.2): an enroll ticket from the control plane
+    /// instead of a code. `code_binding` is then
+    /// [`crate::ticket::Ticket::binding`]. Absent on the code path, so
+    /// code-path frames are byte-identical to protocol 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +376,13 @@ pub struct Plan {
     pub src: Option<Src>,
     pub exclusive: bool,
     pub created_at: i64,
+    /// Toolchains and system packages the job needs ([`crate::needs`]
+    /// tokens). Absent when empty, so older plans (and their digests)
+    /// are unchanged; a node that doesn't know the field computes a
+    /// different digest and refuses the assign instead of running
+    /// without the tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 impl Plan {
@@ -570,6 +583,10 @@ pub struct Offer {
     pub boot_id: String,
     pub ledger_id: String,
     pub node_version: String,
+    /// What this node understands beyond protocol 1 (`needs`,
+    /// `system-packages`). Older nodes send none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }
 
 /// Job states shared by the controller registry and the node ledger.
@@ -829,6 +846,7 @@ mod tests {
             }),
             exclusive: false,
             created_at: 1_700_000_000,
+            needs: Vec::new(),
         }
     }
 

@@ -6,6 +6,7 @@
 # k2nodectl group. Remove the node on the controller too:
 #   k2 compute node remove <name>
 set -euo pipefail
+cd /
 
 NODE_USER="k2node"
 HOME_DIR="/var/lib/k2node"
@@ -35,7 +36,9 @@ safe_rm() {
 
 if command -v systemctl >/dev/null; then
     systemctl disable --now k2-node.service 2>/dev/null || true
-    rm -f "$UNIT"
+    systemctl disable --now k2-node-packages.path 2>/dev/null || true
+    rm -f "$UNIT" /etc/systemd/system/k2-node-packages.path /etc/systemd/system/k2-node-packages.service
+    rm -rf /run/k2-node-packages
     systemctl daemon-reload || true
 fi
 pkill -KILL -u "$NODE_USER" 2>/dev/null || true
@@ -47,6 +50,7 @@ safe_rm "$HOME_DIR"
 safe_rm "$BIN"
 if [ "$KEEP_CONFIG" = "0" ]; then
     safe_rm "$CONFIG_DIR"
+    rm -f /etc/k2-node-packages.toml
     getent group k2nodectl >/dev/null && groupdel k2nodectl || true
 fi
 echo "Removed the compute node. Also run on the controller: k2 compute node remove <name>"

@@ -44,6 +44,8 @@ pub const NODE_SET_VARS: &[&str] = &[
     "USER",
     "LOGNAME",
     "SHELL",
+    // Toolchains the node resolved for the job (`needs`).
+    "RUSTUP_TOOLCHAIN",
 ];
 
 /// Longest `--env` value.
@@ -66,7 +68,7 @@ pub fn env_name_refusal(name: &str) -> Option<&'static str> {
     if name.starts_with("K2_") || name.starts_with("K2SO_") {
         return Some("env_k2_reserved");
     }
-    if NODE_SET_VARS.contains(&name) {
+    if NODE_SET_VARS.contains(&name) || name.starts_with("MISE_") {
         return Some("env_node_reserved");
     }
     None

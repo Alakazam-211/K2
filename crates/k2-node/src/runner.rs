@@ -28,6 +28,10 @@ pub struct EnvInputs<'a> {
     pub job_id: &'a str,
     pub user: &'a str,
     pub extra: &'a BTreeMap<String, String>,
+    /// Toolchain bin dirs resolved for this job (first on PATH).
+    pub tool_paths: &'a [PathBuf],
+    /// Toolchain env resolved for this job (`RUSTUP_TOOLCHAIN`, `MISE_*`).
+    pub tool_env: &'a [(String, String)],
 }
 
 /// The job's whole environment. `Err((code, name))` when an extra pair is
@@ -38,7 +42,7 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
     let tc = i.node_home.join("toolchains");
     let mut env: Vec<(String, String)> = vec![
         ("HOME".into(), i.job_home.display().to_string()),
-        ("PATH".into(), crate::util::base_path(i.node_home)),
+        ("PATH".into(), tool_path(i.tool_paths, &crate::util::base_path(i.node_home))),
         ("CARGO_HOME".into(), tc.join("cargo").display().to_string()),
         ("RUSTUP_HOME".into(), tc.join("rustup").display().to_string()),
         ("CARGO_TARGET_DIR".into(), i.target_dir.display().to_string()),
@@ -51,10 +55,20 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
         ("LOGNAME".into(), i.user.into()),
         ("SHELL".into(), "/bin/sh".into()),
     ];
+    for (k, v) in i.tool_env {
+        env.retain(|(ek, _)| ek != k);
+        env.push((k.clone(), v.clone()));
+    }
     for (k, v) in i.extra {
         env.push((k.clone(), v.clone()));
     }
     Ok(env)
+}
+
+fn tool_path(first: &[PathBuf], base: &str) -> String {
+    let mut parts: Vec<String> = first.iter().map(|p| p.display().to_string()).collect();
+    parts.push(base.to_string());
+    k2_node_proto::env::clean_path(&parts.join(":"))
 }
 
 /// Group RSS in bytes (macOS soft cap).
@@ -204,7 +218,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn inputs<'a>(d: &'a Path, extra: &'a BTreeMap<String, String>) -> EnvInputs<'a> {
-        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, job_id: "j1", user: "k2node", extra }
+        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[] }
     }
 
     #[test]

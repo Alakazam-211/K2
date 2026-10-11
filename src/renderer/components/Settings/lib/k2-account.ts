@@ -142,6 +142,20 @@ export async function refreshSession(refreshToken: string): Promise<K2Session> {
  *  the caller. Client filters to **apex tunnel labels only** (no dots) so
  *  nested routing names never appear as tunnel-bind options even if the
  *  control plane returns them in the same table. */
+/** GET a PostgREST path (e.g. `compute_machines?select=…`) as the
+ *  signed-in user; rows are scoped by RLS. The raw response: callers read
+ *  the status (a table the project doesn't have yet answers 404). */
+export function supabaseRestGet(pathAndQuery: string, accessToken: string): Promise<Response> {
+  refuseAirgap()
+  return fetch(`${SUPABASE_URL}/rest/v1/${pathAndQuery}`, {
+    method: 'GET',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  })
+}
+
 export async function listSubdomains(accessToken: string): Promise<K2Subdomain[]> {
   refuseAirgap()
   const res = await fetch(

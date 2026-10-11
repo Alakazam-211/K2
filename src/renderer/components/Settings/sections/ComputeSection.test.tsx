@@ -37,14 +37,23 @@ vi.mock('./compute-api', async (importOriginal) => {
     setLocalPolicy: vi.fn(),
     enableLocalNode: vi.fn(),
     disableLocalNode: vi.fn(),
+    fetchComputeAgents: vi.fn(),
+    setComputeAgent: vi.fn(),
+    retireComputeNode: vi.fn(),
   }
 })
 
 vi.mock('./K2ConnectSection', () => ({ getAccountAccessToken: vi.fn(async () => null) }))
-vi.mock('../lib/compute-account', () => ({
-  listAccountServers: vi.fn(async () => []),
-  requestEnrollTicket: vi.fn(),
-}))
+vi.mock('../lib/compute-account', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/compute-account')>()
+  return {
+    ...orig,
+    listAccountServers: vi.fn(async () => []),
+    requestEnrollTicket: vi.fn(),
+    listComputeMachines: vi.fn(async () => ({ ok: true, machines: [] })),
+    requestEnrollOffer: vi.fn(),
+  }
+})
 
 import * as api from './compute-api'
 import type { ComputeGrant, ComputeNode, LocalStatus } from './compute-api'
@@ -152,6 +161,11 @@ beforeEach(() => {
   m.fetchComputeJobs.mockResolvedValue([])
   m.fetchComputeEvents.mockResolvedValue([])
   m.fetchLocalStatus.mockResolvedValue(LOCAL_OFF)
+  m.fetchComputeAgents.mockResolvedValue({
+    agents: [],
+    activeNodes: 0,
+    defaults: { maxJobSecs: 7200, maxParallel: 1, maxQueued: 10, maxDiskGb: 60 },
+  })
   for (const fn of [
     m.confirmComputeNode,
     m.pauseComputeNode,

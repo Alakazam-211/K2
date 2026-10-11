@@ -62,6 +62,8 @@ export interface ComputeNode {
   offer?: NodeOffer
   /** Owner only, while pending: "123 456". */
   sas?: string | null
+  /** Switched off in Settings: draining, removed once its jobs end. */
+  retiring?: boolean
 }
 
 export interface WaitingCode {
@@ -74,6 +76,33 @@ export interface ComputeNodesList {
   waitingCodes: WaitingCode[]
   /** This server's label as nodes see it, e.g. `rosson.k2.dev`. */
   controller: string
+  /** This server trusts a one-click ticket key (absent on older daemons). */
+  ticketSupported?: boolean
+}
+
+/** One workspace in "Agents that can use compute". */
+export interface ComputeAgentRow {
+  workspaceId: string
+  /** The workspace's address handle. */
+  workspace: string
+  name: string
+  agentsCanUseCompute: boolean
+  grants: (Omit<ComputeGrant, 'node' | 'workspace'> & { node: string | null })[]
+}
+
+export interface ComputeAgentsList {
+  agents: ComputeAgentRow[]
+  activeNodes: number
+  defaults: { maxJobSecs: number; maxParallel: number; maxQueued: number; maxDiskGb: number; disk?: string }
+}
+
+export interface ComputeAgentSetResult {
+  ok: boolean
+  agentsCanUseCompute?: boolean
+  granted?: string[]
+  kept?: string[]
+  grantsRemoved?: number
+  note?: string
 }
 
 export interface ComputeGrant {
@@ -290,7 +319,41 @@ export async function fetchComputeNodes(): Promise<ComputeNodesList> {
     nodes: Array.isArray(res?.nodes) ? res.nodes : [],
     waitingCodes: Array.isArray(res?.waitingCodes) ? res.waitingCodes : [],
     controller: typeof res?.controller === 'string' ? res.controller : '',
+    ticketSupported: res?.ticketSupported === true,
   }
+}
+
+/** "Agents that can use compute": every workspace with its switch and grants. */
+export async function fetchComputeAgents(): Promise<ComputeAgentsList> {
+  const res = await daemonCliGet<Partial<ComputeAgentsList>>(primaryScope(), 'compute/agents')
+  return {
+    agents: Array.isArray(res?.agents) ? res.agents : [],
+    activeNodes: typeof res?.activeNodes === 'number' ? res.activeNodes : 0,
+    defaults: {
+      maxJobSecs: res?.defaults?.maxJobSecs ?? 7200,
+      maxParallel: res?.defaults?.maxParallel ?? 1,
+      maxQueued: res?.defaults?.maxQueued ?? 10,
+      maxDiskGb: res?.defaults?.maxDiskGb ?? 60,
+      disk: res?.defaults?.disk,
+    },
+  }
+}
+
+/** An agent's compute toggle: on = switch + a grant on every machine (with
+ *  `limits` when given); off = switch off + every grant removed. */
+export async function setComputeAgent(
+  workspace: string,
+  value: boolean,
+  limits: GrantLimits = {},
+): Promise<ComputeAgentSetResult> {
+  return daemonCliPost(primaryScope(), 'compute/agents/set', { workspace, value, ...limits })
+}
+
+/** "Use compute from this machine" off: drain, then remove once idle. */
+export async function retireComputeNode(
+  node: string,
+): Promise<{ ok: boolean; state?: 'revoked' | 'draining'; running?: number; jobsCancelled?: number }> {
+  return daemonCliPost(primaryScope(), 'compute/nodes/retire', { node })
 }
 
 /** Grants on one node, or every grant on this server when `node` is omitted

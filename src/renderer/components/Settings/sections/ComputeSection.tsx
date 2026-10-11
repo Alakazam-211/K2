@@ -33,6 +33,7 @@ import {
   disableLocalNode,
   drainLocalNode,
   enableLocalNode,
+  fetchComputeAgents,
   fetchComputeEvents,
   fetchComputeGrants,
   fetchComputeJobs,
@@ -53,6 +54,7 @@ import {
   setLocalPolicy,
   setWorkspaceComputeSwitch,
   validNodeName,
+  type ComputeAgentsList,
   type ComputeEvent,
   type ComputeGrant,
   type ComputeJob,
@@ -68,11 +70,14 @@ import {
 } from './compute-api'
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
+import { AgentsPart, MachinesPart } from './ComputeAccessParts'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Compute nodes (preview)', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
+  { id: 'compute.machines', section: 'compute', label: 'Machines you can use', description: 'Your machines that offer compute; switch one on for this server', keywords: ['compute', 'machine', 'machines', 'use compute', 'cpu', 'ram', 'disk', 'one-click'] },
+  { id: 'compute.agents', section: 'compute', label: 'Agents that can use compute', description: 'Which agents may run jobs on your machines', keywords: ['compute', 'agent', 'agents', 'access', 'grant', 'k2 compute run', 'limits'] },
   { id: 'compute.nodes', section: 'compute', label: 'Nodes of this server', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
-  { id: 'compute.add-node', section: 'compute', label: 'Add a node', description: 'Make an enroll code for another machine', keywords: ['enroll', 'code', 'install', 'pair', 'add node'] },
+  { id: 'compute.add-node', section: 'compute', label: 'Add a machine with an enroll code', description: 'Make an enroll code for another machine', keywords: ['enroll', 'code', 'install', 'pair', 'add node'] },
   { id: 'compute.grants', section: 'compute', label: 'Compute grants', description: 'Which workspaces may use each node', keywords: ['grant', 'revoke', 'workspace', 'allow compute nodes'] },
   { id: 'compute.jobs', section: 'compute', label: 'Recent compute jobs', description: 'Jobs and audit lines', keywords: ['jobs', 'events', 'audit', 'log'] },
   { id: 'compute.this-computer', section: 'compute', label: 'Make this computer a compute node', description: 'Let agents on one of your servers run programs here', keywords: ['this computer', 'k2node', 'node', 'enable', 'policy', 'cpu', 'memory'] },
@@ -116,6 +121,8 @@ export function ComputeSection(): React.JSX.Element {
   const [jobs, setJobs] = useState<ComputeJob[]>([])
   const [events, setEvents] = useState<ComputeEvent[]>([])
   const [sideErrors, setSideErrors] = useState<{ grants?: string; jobs?: string; events?: string }>({})
+  const [agents, setAgents] = useState<ComputeAgentsList | null>(null)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
   const [local, setLocal] = useState<LocalStatus | null>(null)
   const [localState, setLocalState] = useState<LoadState>('loading')
   const [localError, setLocalError] = useState<string | null>(null)
@@ -145,8 +152,17 @@ export function ComputeSection(): React.JSX.Element {
           }
           return
         }
-        const [g, j, e] = await Promise.allSettled([fetchComputeGrants(), fetchComputeJobs(20), fetchComputeEvents(30)])
+        const [g, j, e, a] = await Promise.allSettled([
+          fetchComputeGrants(),
+          fetchComputeJobs(20),
+          fetchComputeEvents(30),
+          fetchComputeAgents(),
+        ])
         if (!mounted.current) return
+        if (a.status === 'fulfilled') {
+          setAgents(a.value)
+          setAgentsError(null)
+        } else if (!isHostSwitched(a.reason)) setAgentsError(computeErrorMessage(a.reason))
         const errs: { grants?: string; jobs?: string; events?: string } = {}
         if (g.status === 'fulfilled') setGrants(g.value)
         else if (!isHostSwitched(g.reason)) errs.grants = computeErrorMessage(g.reason)
@@ -191,6 +207,8 @@ export function ComputeSection(): React.JSX.Element {
     setGrants([])
     setJobs([])
     setEvents([])
+    setAgents(null)
+    setAgentsError(null)
     void refresh()
     const id = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
@@ -237,6 +255,13 @@ export function ComputeSection(): React.JSX.Element {
           </div>
         </div>
       </SettingsGroup>
+
+      {controllerState === 'disabled' || !nodesList ? null : (
+        <>
+          <MachinesPart list={nodesList} onChanged={refresh} />
+          <AgentsPart agents={agents} error={agentsError} onChanged={refresh} />
+        </>
+      )}
 
       {controllerState === 'disabled' ? null : (
         <ControllerPart
@@ -366,7 +391,7 @@ function ControllerPart({
 
   return (
     <div className="space-y-6">
-      <SettingsGroup title={list?.controller ? `Nodes of ${list.controller}` : 'Nodes of this server'}>
+      <SettingsGroup title={list?.controller ? `Node details: ${list.controller}` : 'Node details'}>
         <div data-settings-id="compute.nodes" className="space-y-2 py-1">
           {state === 'loading' && !list ? (
             <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
@@ -789,7 +814,7 @@ function AddNodeForm({ onChanged }: { onChanged: () => Promise<void> }): React.J
   }
 
   return (
-    <SettingsGroup title="Add a node">
+    <SettingsGroup title="Add a machine with an enroll code">
       <div className="space-y-2 py-1" data-settings-id="compute.add-node">
         <p className="text-[11px] text-[var(--color-text-muted)]">
           Name the machine, then run the install command on it. It shows a 6-digit code; confirm that code here.

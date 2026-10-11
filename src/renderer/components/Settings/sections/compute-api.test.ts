@@ -15,6 +15,7 @@ import {
   disableLocalNode,
   drainLocalNode,
   enableLocalNode,
+  fetchComputeAgents,
   fetchComputeEvents,
   fetchComputeGrants,
   fetchComputeJobs,
@@ -29,8 +30,10 @@ import {
   pauseLocalNode,
   removeComputeNode,
   renameComputeNode,
+  retireComputeNode,
   resumeLocalNode,
   revokeComputeGrant,
+  setComputeAgent,
   setComputeGrant,
   setLocalPolicy,
   setWorkspaceComputeSwitch,
@@ -59,7 +62,7 @@ describe('controller routes go to the focused server', () => {
 
   it('nodes list tolerates a body without arrays', async () => {
     get.mockResolvedValue({})
-    expect(await fetchComputeNodes()).toEqual({ nodes: [], waitingCodes: [], controller: '' })
+    expect(await fetchComputeNodes()).toEqual({ nodes: [], waitingCodes: [], controller: '', ticketSupported: false })
   })
 
   it('grants for one node, and all grants', async () => {
@@ -206,5 +209,32 @@ describe('errors and formatting', () => {
     expect(controllerHost('https://Rosson.k2.dev/')).toBe('rosson.k2.dev')
     expect(controllerHost('rosson.k2.dev')).toBe('rosson.k2.dev')
     expect(controllerHost('http://192.168.1.5:38471')).toBe('192.168.1.5')
+  })
+})
+
+describe('Settings toggles (machines and agents)', () => {
+  it('agents list reads the focused server and fills defaults', async () => {
+    get.mockResolvedValue({ agents: [{ workspaceId: 'p1', workspace: 'sales', name: 'sales', agentsCanUseCompute: true, grants: [] }], activeNodes: 2 })
+    const out = await fetchComputeAgents()
+    expect(get).toHaveBeenCalledWith(primaryScope(), 'compute/agents')
+    expect(out.agents).toHaveLength(1)
+    expect(out.activeNodes).toBe(2)
+    expect(out.defaults).toEqual({ maxJobSecs: 7200, maxParallel: 1, maxQueued: 10, maxDiskGb: 60, disk: undefined })
+  })
+
+  it('agent toggle posts value + limits; retire posts the node', async () => {
+    await setComputeAgent('p1', true, { maxParallel: 2 })
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'compute/agents/set', { workspace: 'p1', value: true, maxParallel: 2 })
+    await setComputeAgent('p1', false)
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'compute/agents/set', { workspace: 'p1', value: false })
+    await retireComputeNode('mini-1')
+    expect(post).toHaveBeenCalledWith(primaryScope(), 'compute/nodes/retire', { node: 'mini-1' })
+  })
+
+  it('nodes list carries ticketSupported (false when absent)', async () => {
+    get.mockResolvedValue({ nodes: [], waitingCodes: [], controller: 'x', ticketSupported: true })
+    expect((await fetchComputeNodes()).ticketSupported).toBe(true)
+    get.mockResolvedValue({ nodes: [], waitingCodes: [], controller: 'x' })
+    expect((await fetchComputeNodes()).ticketSupported).toBe(false)
   })
 })

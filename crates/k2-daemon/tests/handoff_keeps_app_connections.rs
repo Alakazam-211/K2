@@ -578,6 +578,17 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     .await;
     let switched_in = t0.elapsed();
     assert!(pid_alive(old_pid), "the old daemon must still be draining its splices");
+    // The draining daemon let go of the singleton lock (a successor that
+    // died later must not be blocked by it for the whole drain).
+    #[cfg(target_os = "linux")]
+    {
+        let lock_path = std::fs::canonicalize(&lock).unwrap();
+        let held = std::fs::read_dir(format!("/proc/{old_pid}/fd"))
+            .unwrap()
+            .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+            .any(|t| t == lock_path);
+        assert!(!held, "the old daemon still holds daemon.lock");
+    }
 
     // Every old WebSocket still works (the old daemon still pumps them).
     for (i, w) in sockets.iter_mut().enumerate() {
@@ -651,6 +662,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     let mut w = ws(tls_port).await.unwrap_or_else(|e| panic!("{}", dump(&format!("ws after the old daemon exited: {e}"))));
     echo(&mut w, "post-exit").await.unwrap_or_else(|e| panic!("{}", dump(&e)));
     let _ = w.close(None).await;
+    drop(w); // closes the TCP connection: the splice ends with it
     let (st, body) = http(
         dport,
         "GET",
@@ -664,6 +676,35 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
         dump(&format!("the successor must have re-attached the App: {body}"))
     );
     assert!(pid_alive(frpc_pid), "frpc survives the old daemon's exit");
+
+    // The successor can hand off again (its own listeners registered, the
+    // lock and the frpc record carried forward).
+    let mut held_ws = ws(tls_port).await.expect("ws before the second hand-off");
+    echo(&mut held_ws, "second-before").await.expect("echo");
+    let (st, body) = http(dport, "POST", &format!("/cli/daemon/handoff?token={new_token}"), Some(""));
+    assert_eq!(st, 202, "{}", dump(&format!("second handoff: {body}")));
+    wait_for(60, "the third daemon to own daemon.lock", || {
+        std::fs::read_to_string(&lock)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .is_some_and(|p| p != new_pid)
+    })
+    .await;
+    let third_pid: i32 = read_trimmed(&lock).parse().unwrap();
+    reaper.pids.push(third_pid);
+    echo(&mut held_ws, "second-after")
+        .await
+        .unwrap_or_else(|e| panic!("{}", dump(&format!("ws across the second hand-off: {e}"))));
+    let mut fresh = ws(tls_port).await.expect("ws via the third daemon");
+    echo(&mut fresh, "third").await.expect("echo");
+    let _ = held_ws.close(None).await;
+    drop(held_ws);
+    let _ = fresh.close(None).await;
+    drop(fresh);
+    wait_for(60, "the second daemon to drain and exit", || !pid_alive(new_pid)).await;
+    let rec: serde_json::Value = serde_json::from_str(&read_trimmed(&pid_rec)).unwrap();
+    assert_eq!(rec["pid"].as_i64().unwrap() as i32, frpc_pid, "still the same frpc");
+    let new_pid = third_pid;
 
     eprintln!(
         "[rt-h] hand-off: {N_WS} websockets + 1 stream kept, {} new connections during the \

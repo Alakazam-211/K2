@@ -235,6 +235,7 @@ pub fn live_splices() -> usize {
 
 static NOTIFY_SOCKET: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
 static BOOT_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
+static HANDOFF_FD: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
 
 /// Call once at process start, before any thread or child exists: keep
 /// systemd's `NOTIFY_SOCKET` for the hand-off and REMOVE it from the
@@ -249,6 +250,13 @@ pub fn capture_process_context() {
     }
     let _ = NOTIFY_SOCKET.set(ns);
     let _ = BOOT_EXE.set(std::env::current_exe().ok());
+    // A successor's socketpair fd: read (and drop from the env, so no child
+    // inherits the name) while this process is still single-threaded.
+    let fd = std::env::var_os(ENV_FD);
+    if fd.is_some() {
+        std::env::remove_var(ENV_FD);
+    }
+    let _ = HANDOFF_FD.set(fd);
 }
 
 /// systemd's notify socket for this unit: the one the process started
@@ -376,10 +384,9 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(30);
 /// return the lock file (already locked: same open file description as the
 /// predecessor's). `Ok(None)` on a normal boot.
 pub fn successor_receive() -> Result<Option<std::fs::File>, String> {
-    let Some(raw) = std::env::var_os(ENV_FD) else {
+    let Some(raw) = HANDOFF_FD.get().cloned().flatten() else {
         return Ok(None);
     };
-    std::env::remove_var(ENV_FD);
     #[cfg(unix)]
     {
         successor_receive_unix(&raw.to_string_lossy()).map(Some)
@@ -619,8 +626,10 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
             return Err(Failed::Quiesced(format!("waiting for ACK: {e}")));
         }
     }
-    // Our copies of the sockets go; the successor's keep them open.
+    // Our copies of the sockets and of the lock go; the successor's keep
+    // them open (and the lock held only by it).
     drop(held);
+    crate::daemon_main::release_singleton_lock();
     HANDED_OFF.store(true, Ordering::SeqCst);
     // Never wait on the successor: it outlives us (the drain exits this
     // process; the kernel reparents N).

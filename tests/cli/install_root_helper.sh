@@ -350,6 +350,127 @@ for body in 'k2 ALL=(ALL) NOPASSWD: ALL' 'k2 ALL=(root) NOPASSWD: /usr/bin/syste
 done
 ok "any other k2-mail-sidecar content is reported and left alone"
 
+echo "== the sidecar's /usr/local/bin PATH shims go with the line, or nothing goes =="
+FLEET_LINE='k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd'
+SHIM_NAMES="k2-if-k2-sudo systemctl chown useradd"
+plant_shims() {
+	# plant_shims <root>: the four files exactly as akzm/lztek have them.
+	local b="$1/usr/local/bin"
+	mkdir -p "$b"
+	printf '#!/bin/sh\nREAL="$1"; shift\nif [ "$(id -un)" = k2 ]; then\n  exec sudo -n "$REAL" "$@"\nfi\nexec "$REAL" "$@"\n' >"$b/k2-if-k2-sudo"
+	printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/systemctl "$@"\n' >"$b/systemctl"
+	printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/chown "$@"\n' >"$b/chown"
+	printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/sbin/useradd "$@"\n' >"$b/useradd"
+	chmod 0755 "$b"/*
+}
+D12="$WORK/box12"
+mkdir -p "$D12/etc/sudoers.d"
+plant_shims "$D12"
+[ "$(wc -c <"$D12/usr/local/bin/k2-if-k2-sudo" | tr -d ' ')" = 106 ] || fail "fixture: k2-if-k2-sudo must be the 106-byte fleet file"
+mkdir -p "$WORK/shims.orig"
+cp -p "$D12"/usr/local/bin/* "$WORK/shims.orig/"
+printf '%s\n' "$FLEET_LINE" >"$D12/etc/sudoers.d/k2-mail-sidecar"
+run "$D12" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "line + shims: $out"
+[ ! -e "$D12/etc/sudoers.d/k2-mail-sidecar" ] || fail "line + shims: the line must be retired"
+BK12="$(ls -d "$D12"/var/backups/k2-root-helper/*/ | head -n1)"
+for n in $SHIM_NAMES; do
+	[ ! -e "$D12/usr/local/bin/$n" ] || fail "line + shims: /usr/local/bin/$n must be retired"
+	cmp -s "$WORK/shims.orig/$n" "$BK12/$n" || fail "line + shims: backup bytes of $n"
+done
+printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "line + shims summary (line): $out"
+printf '%s' "$out" | grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd" || fail "line + shims summary (shims): $out"
+ok "line + the four known shims: all retired and backed up"
+
+# Whitespace and comment lines don't matter; the exec line does.
+D13="$WORK/box13"
+mkdir -p "$D13/etc/sudoers.d"
+plant_shims "$D13"
+printf '#!/bin/sh\n# K2 mail sidecar shim\n\n   exec   /usr/local/bin/k2-if-k2-sudo  /usr/bin/chown "$@"  \n' >"$D13/usr/local/bin/chown"
+printf '%s\n' "$FLEET_LINE" >"$D13/etc/sudoers.d/k2-mail-sidecar"
+run "$D13" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "spaced shim: $out"
+[ ! -e "$D13/usr/local/bin/chown" ] && [ ! -e "$D13/etc/sudoers.d/k2-mail-sidecar" ] || fail "a commented/spaced wrapper still matches: $out"
+ok "comments and whitespace in a wrapper still match"
+
+check_left_in_place() {
+	# check_left_in_place <label> <root> <foreign shim>: line + every shim untouched.
+	local n
+	[ "$rc" -eq 0 ] || fail "$1: must not fail the install: $out"
+	[ "$(cat "$2/etc/sudoers.d/k2-mail-sidecar")" = "$FLEET_LINE" ] || fail "$1: the line must stay"
+	for n in $SHIM_NAMES; do [ -e "$2/usr/local/bin/$n" ] || [ -L "$2/usr/local/bin/$n" ] || fail "$1: /usr/local/bin/$n must stay"; done
+	printf '%s' "$out" | grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "$1: line report: $out"
+	printf '%s' "$out" | grep -q "path-shims  : LEFT IN PLACE:.*not what K2 wrote: $3" || fail "$1: shim report: $out"
+}
+i=0
+for mod in \
+	'k2-if-k2-sudo|#!/bin/sh\nREAL="$1"; shift\nif [ "$(id -un)" = k2 ]; then\n  exec sudo "$REAL" "$@"\nfi\nexec "$REAL" "$@"\n' \
+	'systemctl|#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/systemctl "$@"\nrm -rf /tmp/x\n' \
+	'useradd|#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/useradd "$@"\n' \
+	'chown|exec /usr/local/bin/k2-if-k2-sudo /usr/bin/chown "$@"\n' \
+	'systemctl|#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/systemctl $@\n'; do
+	i=$((i + 1))
+	D="$WORK/box14-$i"
+	mkdir -p "$D/etc/sudoers.d"
+	plant_shims "$D"
+	printf "${mod#*|}" >"$D/usr/local/bin/${mod%%|*}"
+	printf '%s\n' "$FLEET_LINE" >"$D/etc/sudoers.d/k2-mail-sidecar"
+	run "$D" --version 0.45.5
+	check_left_in_place "modified ${mod%%|*} #$i" "$D" "/usr/local/bin/${mod%%|*}"
+	[ ! -e "$D/var/backups/k2-root-helper" ] || fail "modified #$i: nothing may be backed up or removed"
+done
+D="$WORK/box14-link"
+mkdir -p "$D/etc/sudoers.d"
+plant_shims "$D"
+rm "$D/usr/local/bin/useradd"
+ln -s /usr/sbin/useradd "$D/usr/local/bin/useradd"
+printf '%s\n' "$FLEET_LINE" >"$D/etc/sudoers.d/k2-mail-sidecar"
+run "$D" --version 0.45.5
+check_left_in_place "symlinked useradd" "$D" "/usr/local/bin/useradd"
+ok "line + one modified (or symlinked) shim: nothing retired, both reported"
+
+D15="$WORK/box15"
+mkdir -p "$D15/etc/sudoers.d"
+plant_shims "$D15"
+run "$D15" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "shims without the line: $out"
+for n in $SHIM_NAMES; do cmp -s "$WORK/shims.orig/$n" "$D15/usr/local/bin/$n" || fail "shims without the line: $n must stay as is"; done
+printf '%s' "$out" | grep -q "mail-sidecar: none" || fail "shims without the line (line): $out"
+printf '%s' "$out" | grep -q "path-shims  : LEFT IN PLACE: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd (present without /etc/sudoers.d/k2-mail-sidecar)" || fail "shims without the line (report): $out"
+ok "shims without the line: left alone and reported"
+
+D16="$WORK/box16"
+mkdir -p "$D16/etc/sudoers.d"
+printf '%s\n' "$FLEET_LINE" >"$D16/etc/sudoers.d/k2-mail-sidecar"
+plant_shims "$D16"
+K2_TEST_DOOR_OK=0 run "$D16" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "door not ok + shims: $out"
+for n in $SHIM_NAMES; do [ -e "$D16/usr/local/bin/$n" ] || fail "door not ok: $n must stay"; done
+[ -e "$D16/etc/sudoers.d/k2-mail-sidecar" ] || fail "door not ok: line must stay"
+printf '%s' "$out" | grep -q "path-shims  : kept (the root helper did not answer" || fail "door not ok report: $out"
+run "$D16" --version 0.45.5
+printf '%s' "$out" | grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo" || fail "door ok on rerun: $out"
+[ ! -e "$D16/etc/sudoers.d/k2-mail-sidecar" ] || fail "door ok on rerun: line retired"
+run "$D16" --version 0.45.5
+printf '%s' "$out" | grep -q "path-shims  : none" || fail "idempotent rerun: $out"
+ok "shims stay while the root helper doesn't answer; a rerun retires them; a third run sees none"
+
+echo "== --user other than k2: the k2-only shims never match =="
+D17="$WORK/box17"
+mkdir -p "$D17/etc/sudoers.d"
+plant_shims "$D17"
+printf 'bob ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd\n' >"$D17/etc/sudoers.d/k2-mail-sidecar"
+run "$D17" --version 0.45.5 --user bob
+[ "$rc" -eq 0 ] || fail "--user bob + shims: $out"
+[ -e "$D17/etc/sudoers.d/k2-mail-sidecar" ] || fail "--user bob: the line must stay while unknown shims are present"
+for n in $SHIM_NAMES; do [ -e "$D17/usr/local/bin/$n" ] || fail "--user bob: $n must stay"; done
+printf '%s' "$out" | grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "--user bob report: $out"
+rm "$D17"/usr/local/bin/*
+run "$D17" --version 0.45.5 --user bob
+[ ! -e "$D17/etc/sudoers.d/k2-mail-sidecar" ] || fail "--user bob without shims: the line retires as before"
+printf '%s' "$out" | grep -q "path-shims  : retired: (none)" || fail "--user bob without shims report: $out"
+ok "--user bob: k2-form shims count as unknown and hold the line; without shims the line retires"
+
 echo "== daemon older than 0.45.4: refuse, change nothing (iascm 0.41.3) =="
 D9="$WORK/box9"
 legacy "$D9"

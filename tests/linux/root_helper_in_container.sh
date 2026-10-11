@@ -110,15 +110,25 @@ printf 'k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper\n' >/etc/sudoers
 chmod 0440 /etc/sudoers.d/k2-pg-helper
 OLD="$(runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper version)"
 echo "$OLD" | grep -q '"protocol":2' || fail "legacy mail helper protocol 2: $OLD"
-# The older hand-installed mechanism on akzm/lztek, in a shape K2 wrote.
-printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /usr/local/libexec/k2-mail-helper\n' >/etc/sudoers.d/k2-mail-sidecar
+# The older hand-installed mechanism on akzm/lztek, byte for byte: the
+# broad sudoers line plus the /usr/local/bin PATH shims that lean on it.
+printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd\n' >/etc/sudoers.d/k2-mail-sidecar
 chmod 0440 /etc/sudoers.d/k2-mail-sidecar
 visudo -c >/dev/null || fail "k2-mail-sidecar fixture"
+printf '#!/bin/sh\nREAL="$1"; shift\nif [ "$(id -un)" = k2 ]; then\n  exec sudo -n "$REAL" "$@"\nfi\nexec "$REAL" "$@"\n' >/usr/local/bin/k2-if-k2-sudo
+printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/systemctl "$@"\n' >/usr/local/bin/systemctl
+printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/bin/chown "$@"\n' >/usr/local/bin/chown
+printf '#!/bin/sh\nexec /usr/local/bin/k2-if-k2-sudo /usr/sbin/useradd "$@"\n' >/usr/local/bin/useradd
+chmod 0755 /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd
+[ "$(wc -c </usr/local/bin/k2-if-k2-sudo)" = 106 ] || fail "k2-if-k2-sudo fixture is not the 106-byte fleet file"
+K2PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+[ "$(runuser -u k2 -- env PATH="$K2PATH" sh -c 'command -v systemctl')" = /usr/local/bin/systemctl ] || fail "shim first in PATH"
+runuser -u k2 -- env PATH="$K2PATH" systemctl is-active k2-daemon.service >/dev/null || fail "bare systemctl as k2 through the shim + line"
 # The direct-wipe hole the legacy helper leaves open: any process of the
 # daemon user (an agent) can stop Stalwart and wipe/restore the store.
 runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper usage >/dev/null 2>&1 \
 	|| fail "legacy mail helper should answer before the root helper is installed"
-ok "legacy protocol-2 mail helper + pg helper + k2-mail-sidecar installed the old way"
+ok "legacy protocol-2 mail helper + pg helper + k2-mail-sidecar (+ PATH shims) installed the old way"
 
 echo "== phase B: install the root helper over them =="
 K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" >/tmp/irh.log 2>&1 \
@@ -132,7 +142,13 @@ visudo -c >/dev/null || fail "visudo -c"
 [ ! -e /usr/local/libexec/k2-mail-helper ] && [ ! -e /etc/sudoers.d/k2-mail-helper ] || fail "mail legacy not retired at install"
 [ ! -e /etc/sudoers.d/k2-mail-sidecar ] || fail "a K2-shaped k2-mail-sidecar must be retired"
 BK="$(ls -d /var/backups/k2-root-helper/*/ | head -n1)"
-for f in k2-pg-helper k2-mail-helper k2-mail-sidecar; do [ -f "$BK/$f" ] || fail "backup lacks $f"; done
+for f in k2-pg-helper k2-mail-helper k2-mail-sidecar k2-if-k2-sudo systemctl chown useradd; do [ -f "$BK/$f" ] || fail "backup lacks $f"; done
+for f in k2-if-k2-sudo systemctl chown useradd; do [ ! -e "/usr/local/bin/$f" ] || fail "PATH shim /usr/local/bin/$f not retired"; done
+grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd" /tmp/irh.log || fail "summary: path-shims"
+# Without the line AND the shims, a bare read-only systemctl as k2 still
+# works (no sudo in the way) — the failure the shims alone would cause.
+[ "$(runuser -u k2 -- env PATH="$K2PATH" sh -c 'command -v systemctl')" = /usr/bin/systemctl ] || fail "systemctl resolves to /usr/bin after retirement"
+runuser -u k2 -- env PATH="$K2PATH" systemctl is-active k2-daemon.service >/dev/null || fail "bare systemctl is-active as k2 after retirement"
 [ "$(stat -c '%U %a' "$BK")" = "root 700" ] || fail "backup dir mode"
 grep -q "legacy mail : retired:" /tmp/irh.log || fail "summary: legacy mail"
 grep -q "mail-sidecar: retired:" /tmp/irh.log || fail "summary: mail-sidecar"
@@ -145,7 +161,7 @@ if runuser -u k2 -- sudo -n -l /usr/local/libexec/k2-mail-helper >/dev/null 2>&1
 	fail "sudoers still lets k2 run the old mail helper"
 fi
 visudo -c >/dev/null || fail "visudo -c after retirement"
-ok "installed; pg + mail legacy and k2-mail-sidecar retired (backed up 0700); the direct-wipe hole is closed"
+ok "installed; pg + mail legacy, k2-mail-sidecar and its PATH shims retired (backed up 0700); the direct-wipe hole is closed"
 runuser -u k2 -- sudo -n -l "$H" >/dev/null || fail "sudo -n -l as k2"
 V="$(runuser -u k2 -- sudo -n "$H" helper version)"
 echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -q '"protocol":4' || fail "helper version: $V"

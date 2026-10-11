@@ -36,7 +36,11 @@
 #      /usr/local/libexec/k2-mail-helper with their sudoers files (closes
 #      the old `su -c` and direct store-wipe holes), plus an older
 #      /etc/sudoers.d/k2-mail-sidecar when its content is one K2 wrote
-#      (anything else is reported and left alone). Every removed file is
+#      (anything else is reported and left alone), together with the
+#      PATH shims the same provisioning put in /usr/local/bin
+#      (k2-if-k2-sudo, systemctl, chown, useradd). If any shim is present
+#      but not in the known shape, the line and the shims all stay and are
+#      reported (the line alone gone would break them). Every removed file is
 #      copied first to /var/backups/k2-root-helper/<stamp>/. Then
 #      `visudo -c`. A daemon rolled back below 0.45.4 loses mail restarts
 #      and `k2 db` until it updates again.
@@ -78,6 +82,18 @@ LEGACY_MAIL_SUDOERS="/etc/sudoers.d/k2-mail-helper"
 # An older hand-installed mechanism (akzm, lztek): retired only when its
 # content is exactly what K2 wrote (sidecar_is_ours), else reported.
 LEGACY_MAIL_SIDECAR_SUDOERS="/etc/sudoers.d/k2-mail-sidecar"
+# The same 2026-09 provisioning put PATH shims in /usr/local/bin (first in
+# PATH): k2-if-k2-sudo runs its argument through `sudo -n` when the caller
+# is k2, and three wrappers send bare systemctl/chown/useradd through it.
+# With the sidecar line gone every bare call as k2 would fail ("a password
+# is required"), even `systemctl is-active` — so they go with the line, and
+# the line stays while any of them is not exactly what K2 wrote.
+LEGACY_SHIM_SUDO="/usr/local/bin/k2-if-k2-sudo"
+LEGACY_SHIM_WRAPPERS=(
+	"/usr/local/bin/systemctl:/usr/bin/systemctl"
+	"/usr/local/bin/chown:/usr/bin/chown"
+	"/usr/local/bin/useradd:/usr/sbin/useradd"
+)
 BACKUP_BASE="/var/backups/k2-root-helper"
 # The first daemon release that knows the root helper.
 ROOT_HELPER_FROM="0.45.4"
@@ -451,22 +467,91 @@ sidecar_is_ours() {
 	done <"$1"
 	[ "$any" = 1 ]
 }
+# normalized <file>: the script with blank and comment lines dropped (a
+# first-line shebang kept), each line trimmed, whitespace runs collapsed.
+normalized() {
+	awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); gsub(/[[:space:]]+/, " ") }
+		NR == 1 && /^#!/ { print; next }
+		$0 == "" || /^#/ { next }
+		{ print }' "$1"
+}
+# The 2026-09 k2-if-k2-sudo, normalized (106 bytes as written, identical
+# on akzm and lztek). Only the k2 form is known.
+SHIM_SUDO_KNOWN='#!/bin/sh
+REAL="$1"; shift
+if [ "$(id -un)" = k2 ]; then
+exec sudo -n "$REAL" "$@"
+fi
+exec "$REAL" "$@"'
+# shim_is_ours <shim> [<real>]: a regular file in the known shape —
+# k2-if-k2-sudo exactly, or a wrapper that is only a shebang plus
+# `exec /usr/local/bin/k2-if-k2-sudo <real> "$@"`. Never for another
+# daemon user: the shim tests `id -un` against k2 only.
+shim_is_ours() {
+	local d="${DEST_ROOT}$1" body first rest
+	[ "$RUN_USER" = k2 ] && [ -f "$d" ] && [ ! -L "$d" ] || return 1
+	body="$(normalized "$d")"
+	if [ $# -eq 1 ]; then
+		[ "$body" = "$SHIM_SUDO_KNOWN" ]
+		return
+	fi
+	first="${body%%$'\n'*}"
+	rest="${body#*$'\n'}"
+	[ "$first" != "$body" ] || return 1
+	case "$first" in
+		'#!/bin/sh' | '#!/bin/bash' | '#!/usr/bin/env sh' | '#!/usr/bin/env bash') ;;
+		*) return 1 ;;
+	esac
+	[ "$rest" = "exec $LEGACY_SHIM_SUDO $2 \"\$@\"" ]
+}
+# scan_shims: SHIMS_PRESENT = the shim paths on the box; SHIMS_FOREIGN =
+# those not in the known shape (a symlink counts as foreign).
+scan_shims() {
+	local w
+	SHIMS_PRESENT=()
+	SHIMS_FOREIGN=()
+	if [ -e "${DEST_ROOT}$LEGACY_SHIM_SUDO" ] || [ -L "${DEST_ROOT}$LEGACY_SHIM_SUDO" ]; then
+		SHIMS_PRESENT+=("$LEGACY_SHIM_SUDO")
+		shim_is_ours "$LEGACY_SHIM_SUDO" || SHIMS_FOREIGN+=("$LEGACY_SHIM_SUDO")
+	fi
+	for w in "${LEGACY_SHIM_WRAPPERS[@]}"; do
+		if [ -e "${DEST_ROOT}${w%%:*}" ] || [ -L "${DEST_ROOT}${w%%:*}" ]; then
+			SHIMS_PRESENT+=("${w%%:*}")
+			shim_is_ours "${w%%:*}" "${w#*:}" || SHIMS_FOREIGN+=("${w%%:*}")
+		fi
+	done
+}
 PG_RESULT="kept (the root helper did not answer as $RUN_USER)"
 MAIL_RESULT="kept (the root helper did not answer as $RUN_USER)"
 SIDECAR_RESULT="kept (the root helper did not answer as $RUN_USER)"
+SHIM_RESULT="kept (the root helper did not answer as $RUN_USER)"
 if [ "$DOOR_OK" = 1 ]; then
 	PG_RESULT="retired:$(retire "$LEGACY_PG_SUDOERS" "$LEGACY_PG_HELPER")"
 	MAIL_RESULT="retired:$(retire "$LEGACY_MAIL_SUDOERS" "$LEGACY_MAIL_HELPER")"
+	scan_shims
+	SHIM_RESULT="none"
+	[ "${#SHIMS_PRESENT[@]}" -eq 0 ] \
+		|| SHIM_RESULT="LEFT IN PLACE:$(printf ' %s' "${SHIMS_PRESENT[@]}") (kept with $LEGACY_MAIL_SIDECAR_SUDOERS) — review by hand"
 	_sc="${DEST_ROOT}${LEGACY_MAIL_SIDECAR_SUDOERS}"
 	if [ -L "$_sc" ]; then
 		SIDECAR_RESULT="LEFT IN PLACE: $LEGACY_MAIL_SIDECAR_SUDOERS is a symlink — review it by hand"
 	elif [ ! -e "$_sc" ]; then
 		SIDECAR_RESULT="none"
-	elif sidecar_is_ours "$_sc"; then
-		SIDECAR_RESULT="retired:$(retire "$LEGACY_MAIL_SIDECAR_SUDOERS")"
-	else
+		[ "${#SHIMS_PRESENT[@]}" -eq 0 ] \
+			|| SHIM_RESULT="LEFT IN PLACE:$(printf ' %s' "${SHIMS_PRESENT[@]}") (present without $LEGACY_MAIL_SIDECAR_SUDOERS) — review by hand"
+	elif ! sidecar_is_ours "$_sc"; then
 		SIDECAR_RESULT="LEFT IN PLACE: $LEGACY_MAIL_SIDECAR_SUDOERS is not one K2 wrote (unexpected lines) — review it by hand"
 		log "WARNING: $SIDECAR_RESULT"
+	elif [ "${#SHIMS_FOREIGN[@]}" -gt 0 ]; then
+		# Retiring the line alone would make every bare systemctl/chown/
+		# useradd as the daemon user fail through the shims.
+		SHIM_RESULT="LEFT IN PLACE:$(printf ' %s' "${SHIMS_PRESENT[@]}") — not what K2 wrote:$(printf ' %s' "${SHIMS_FOREIGN[@]}") — review by hand"
+		SIDECAR_RESULT="LEFT IN PLACE: $LEGACY_MAIL_SIDECAR_SUDOERS — PATH shims in /usr/local/bin are not what K2 wrote, and retiring the line alone would break them — review by hand"
+		log "WARNING: $SIDECAR_RESULT"
+	else
+		# Shims first: if anything stops here the line is still there.
+		SHIM_RESULT="retired:$(retire ${SHIMS_PRESENT[@]+"${SHIMS_PRESENT[@]}"})"
+		SIDECAR_RESULT="retired:$(retire "$LEGACY_MAIL_SIDECAR_SUDOERS")"
 	fi
 	if [ -z "$DEST_ROOT" ]; then
 		visudo -c >/dev/null 2>&1 || die "visudo -c fails after retiring the legacy helpers — check /etc/sudoers.d (backups in $BACKUP_DIR)"
@@ -491,6 +576,7 @@ echo "  check       : $CHECK"
 echo "  legacy pg   : $PG_RESULT"
 echo "  legacy mail : $MAIL_RESULT"
 echo "  mail-sidecar: $SIDECAR_RESULT"
+echo "  path-shims  : $SHIM_RESULT"
 [ ! -d "$BACKUP_DIR" ] || echo "  backups     : ${BACKUP_DIR#"$DEST_ROOT"}"
 echo "  daemon      : $DAEMON_SEEN"
 [ -z "$INCLUDE_NOTE" ] || echo "  $INCLUDE_NOTE"

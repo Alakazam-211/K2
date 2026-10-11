@@ -966,7 +966,7 @@ impl ZenFiles {
         match text {
             Ok(t) => self.check_src_in(f, t, base, d),
             Err(msg) => Checked {
-                errors: vec![Diagnostic { file: f.label(), line: 1, col: 1, message: msg.clone() }],
+                errors: vec![Diagnostic { suggestion: None, file: f.label(), line: 1, col: 1, message: msg.clone() }],
                 ..Checked::default()
             },
         }
@@ -1392,7 +1392,7 @@ impl ZenFiles {
         let path = self.theme_dir(name).join(&file);
         Some(load_background(&path).map(|(m, b)| (file.clone(), m, b)).map_err(|msg| {
             let (line, col) = eff.positions.get("background.image").copied().unwrap_or((1, 1));
-            Diagnostic { file: ZenFile::Theme(name.to_string()).label(), line, col, message: msg }
+            Diagnostic { suggestion: None, file: ZenFile::Theme(name.to_string()).label(), line, col, message: msg }
         }))
     }
 
@@ -1545,6 +1545,7 @@ impl ZenFiles {
         warnings.extend(gd.warnings());
         if let Some(m) = &active.missing {
             warnings.push(Diagnostic {
+                suggestion: None,
                 file: ACTIVE_FILE.to_string(),
                 line: 1,
                 col: 1,

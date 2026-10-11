@@ -41,6 +41,13 @@ export const REPORTED_FEATURES = {
    *  list this key (an older server refuses nothing but drops the field and
    *  records the post in compose history). */
   'thread-widget-origin': 'thread-widget-origin',
+  /** prd-thread-push-notifications-v1 §5.6: Thread push notifications are
+   *  live on this server (`/cli/notify/*` routes, the agent-post trigger,
+   *  `notify_prefs_changed`, and `viewing` frames on the overlay socket).
+   *  It does NOT mean the server can reach the relay (`push` in
+   *  `GET /cli/notify/prefs` says that). Settings → Notifications, the
+   *  Agent tab's phone switch and the viewing sender all hide without it. */
+  'thread-push-v1': 'thread-push-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

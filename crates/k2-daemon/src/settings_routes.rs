@@ -118,13 +118,75 @@ fn forbidden(msg: String) -> CliResponse {
     }
 }
 
-/// Handler for `GET /cli/settings/get`.
-///
-/// Token check happens in `main.rs` before this is called. Returns
-/// the full `AppSettings` JSON serialized via serde so the renderer
-/// (or `k2so` CLI) sees the same shape Tauri's `settings_get` used to
-/// produce.
+/// Settings keys that hold a credential and are shown only to the owner
+/// daemon token (prd-thread-push-notifications-v1 TP4). The push gateway
+/// token is the FLEET-WIDE shared bearer: before this, any Member login
+/// (and any agent reading settings over its socket) could read it and
+/// spend every server's push budget.
+const SECRET_KEYS: &[&str] = &["pushGatewayToken"];
+
+/// Remove credentials from a serialized `AppSettings` object for anyone
+/// but the owner daemon token (TP4): each [`SECRET_KEYS`] value becomes
+/// `null`, and `pushGatewayUrl` loses any `user:pass@` part. A key that
+/// is absent or already `null` is left alone.
+pub fn redact_settings_value(v: &mut serde_json::Value) {
+    let Some(obj) = v.as_object_mut() else {
+        return;
+    };
+    for key in SECRET_KEYS {
+        if let Some(slot) = obj.get_mut(*key) {
+            if !slot.is_null() {
+                *slot = serde_json::Value::Null;
+            }
+        }
+    }
+    if let Some(serde_json::Value::String(url)) = obj.get_mut("pushGatewayUrl") {
+        *url = strip_url_userinfo(url);
+    }
+}
+
+/// `https://user:pass@host/x` → `https://host/x`. Anything without a
+/// `scheme://…@` authority is returned as is.
+fn strip_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{}{}", &url[..scheme_end + 3], &rest[at + 1..]),
+        None => url.to_string(),
+    }
+}
+
+/// Apply [`redact_settings_value`] to a settings route's JSON response
+/// unless `reveal` (the caller holds the owner daemon token). Error
+/// bodies and non-JSON bodies pass through unchanged.
+pub fn redact_settings_response(resp: CliResponse, reveal: bool) -> CliResponse {
+    if reveal || resp.status != "200 OK" {
+        return resp;
+    }
+    match serde_json::from_str::<serde_json::Value>(&resp.body) {
+        Ok(mut v) => {
+            redact_settings_value(&mut v);
+            CliResponse { body: v.to_string(), ..resp }
+        }
+        Err(_) => resp,
+    }
+}
+
+/// Handler for `GET /cli/settings/get` for every caller EXCEPT the owner
+/// daemon token: the `AppSettings` JSON with credentials redacted (TP4).
+/// This is what `crate::cli::dispatch` serves, so a Connect login of any
+/// role and an agent on its socket never see the push gateway token. The
+/// dispatcher serves [`handle_settings_get_unredacted`] to the owner token.
 pub fn handle_settings_get() -> CliResponse {
+    redact_settings_response(handle_settings_get_unredacted(), false)
+}
+
+/// The full `AppSettings` JSON (the shape Tauri's `settings_get` used to
+/// produce). Only the dispatcher's owner-token arm may serve this.
+pub fn handle_settings_get_unredacted() -> CliResponse {
     let settings = k2_core::app_settings::load();
     match serde_json::to_string(&settings) {
         Ok(body) => CliResponse::ok_json(body),
@@ -521,6 +583,68 @@ mod tests {
                 Some("https://push.example")
             );
         });
+    }
+
+    /// TP4: the fleet push gateway token is shown to the owner daemon
+    /// token only. `handle_settings_get` (what `cli::dispatch` serves to
+    /// logins and agent sockets) nulls it and strips URL userinfo; the
+    /// unredacted handler still has it; the update/reset echo is redacted
+    /// the same way unless `reveal`.
+    #[test]
+    fn push_gateway_token_is_redacted_for_everyone_but_the_owner_token() {
+        with_temp_home(|| {
+            let r = handle_settings_update(
+                br#"{"pushGatewayUrl":"https://svc:pw@push.example/push/dispatch","pushGatewayToken":"fleet-secret-123"}"#,
+                SettingsActor::Owner,
+            );
+            assert_eq!(r.status, "200 OK", "owner write: {}", r.body);
+
+            let owner: serde_json::Value =
+                serde_json::from_str(&handle_settings_get_unredacted().body).expect("json");
+            assert_eq!(owner["pushGatewayToken"], "fleet-secret-123");
+            assert_eq!(owner["pushGatewayUrl"], "https://svc:pw@push.example/push/dispatch");
+
+            for (label, resp) in [
+                ("settings/get handler", handle_settings_get()),
+                ("cli::dispatch GET chain", crate::cli::dispatch("/cli/settings/get", &Default::default())),
+                (
+                    "update echo",
+                    redact_settings_response(
+                        handle_settings_update(br#"{"defaultAgent":"codex"}"#, SettingsActor::Member),
+                        false,
+                    ),
+                ),
+            ] {
+                assert_eq!(resp.status, "200 OK", "{label}: {}", resp.body);
+                assert!(!resp.body.contains("fleet-secret-123"), "{label} leaked the token: {}", resp.body);
+                assert!(!resp.body.contains("svc:pw"), "{label} leaked URL userinfo: {}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+                assert!(v["pushGatewayToken"].is_null(), "{label}: {v}");
+                assert_eq!(v["pushGatewayUrl"], "https://push.example/push/dispatch", "{label}");
+                // The rest of the settings are untouched.
+                assert!(v.get("defaultAgent").is_some(), "{label}: other keys stay");
+            }
+
+            let revealed = redact_settings_response(handle_settings_get_unredacted(), true);
+            assert!(revealed.body.contains("fleet-secret-123"), "reveal=true keeps the owner view");
+            // The redaction is display-only: the stored token is intact.
+            assert_eq!(
+                k2_core::app_settings::load().push_gateway_token.as_deref(),
+                Some("fleet-secret-123")
+            );
+        });
+    }
+
+    #[test]
+    fn strip_url_userinfo_only_touches_the_authority() {
+        assert_eq!(strip_url_userinfo("https://push.k2.dev"), "https://push.k2.dev");
+        assert_eq!(strip_url_userinfo("https://a:b@push.k2.dev/x"), "https://push.k2.dev/x");
+        assert_eq!(strip_url_userinfo("https://a@h/p?q=x@y"), "https://h/p?q=x@y");
+        assert_eq!(strip_url_userinfo("https://h/p@x"), "https://h/p@x");
+        assert_eq!(strip_url_userinfo("not a url"), "not a url");
+        // Error responses pass through untouched.
+        let err = CliResponse::bad_request("nope".to_string());
+        assert_eq!(redact_settings_response(err, false).status, "400 Bad Request");
     }
 
     /// LM5: a reset re-opens the browser door and flips the tunnel login

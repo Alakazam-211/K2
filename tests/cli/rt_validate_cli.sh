@@ -51,8 +51,19 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$SANDBOX/.k2" "$SANDBOX/shim"
-env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K2_PORT -u K2SO_PORT \
-    HOME="$SANDBOX" K2_TEST_AGENT_SHIM_DIR="$SANDBOX/shim" K2SO_WATCHDOG_DISABLED=1 \
+# A stand-in type checker (the real tsc-rs is optional and not needed here):
+# it answers like `tsc --pretty false` for the project it is handed.
+cat >"$SANDBOX/fake-tsc-rs" <<'SH'
+#!/bin/sh
+[ "$1 $2 $3 $4" = "-p tsconfig.json --pretty false" ] || exit 9
+[ -f k2.d.ts ] || exit 8
+echo "hello.js(1,4): error TS2339: Property 'raed' does not exist on type 'ThreadVerbs'."
+echo "hello.js(2,1): error TS2339: Property 'value' does not exist on type 'HTMLElement'."
+exit 2
+SH
+chmod +x "$SANDBOX/fake-tsc-rs"
+env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K2_PORT -u K2SO_PORT -u K2_TS_CHECKER \
+    HOME="$SANDBOX" K2_TEST_AGENT_SHIM_DIR="$SANDBOX/shim" K2SO_WATCHDOG_DISABLED=1 K2_TSC_RS="$SANDBOX/fake-tsc-rs" \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
     "$DAEMON_BIN" >"$SANDBOX/daemon.log" 2>&1 &
 DAEMON_PID=$!
@@ -132,6 +143,17 @@ assert_contains "widget errors shows the message" "$out" "ReferenceError: draw i
 assert_contains "widget errors shows a suggestion" "$out" "suggestion: "
 capture zen widget errors w --since 2
 assert_eq "--since past it shows none (0)" "$rc" "0"
+echo "== validate --types (a stand-in checker) =="
+cp "$ZEN/widgets/w/hello.js" "$SANDBOX/hello.js.keep"
+printf "k2.thread.raed('k2/1')\nel.value = 3\n" >"$ZEN/widgets/w/hello.js"
+capture zen validate --widget w --types
+assert_contains "the k2 line's type finding is a warning" "$out" "widgets/w/hello.js:1:4: warning: type: error TS2339"
+assert_contains "the DOM line is counted, not listed" "$out" "1 finding(s) not on a k2 line were left out"
+capture zen validate --widget w --types=all
+assert_contains "--types=all lists the DOM line" "$out" "widgets/w/hello.js:2:1: warning: type:"
+capture zen validate --types
+assert_eq "--types without --widget is a usage error" "$rc" "2"
+cp "$SANDBOX/hello.js.keep" "$ZEN/widgets/w/hello.js"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/widget/run?token=$TOKEN")"
 assert_eq "GET on the POST-only run route is 405" "$code" "405"
 

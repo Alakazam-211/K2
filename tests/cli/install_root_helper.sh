@@ -332,6 +332,15 @@ run "$D8" --version 0.45.5
 cmp -s "$WORK/sidecar.orig" "$(ls -d "$D8"/var/backups/k2-root-helper/*/ | head -n1)/k2-mail-sidecar" || fail "sidecar backup bytes"
 printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "sidecar summary: $out"
 ok "a K2-written k2-mail-sidecar is backed up and retired"
+
+# The exact line the 2026-09 mail-sidecar provisioning wrote on akzm and lztek.
+legacy "$D8"
+printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd\n' >"$D8/etc/sudoers.d/k2-mail-sidecar"
+run "$D8" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "fleet sidecar install: $out"
+[ ! -e "$D8/etc/sudoers.d/k2-mail-sidecar" ] || fail "the 2026-09 fleet k2-mail-sidecar line must be retired"
+printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "fleet sidecar summary: $out"
+ok "the 2026-09 fleet k2-mail-sidecar line (akzm, lztek) is retired"
 for body in 'k2 ALL=(ALL) NOPASSWD: ALL' 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/bash' 'admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart' '%sudo ALL=(ALL) ALL'; do
 	printf '%s\n' "$body" >"$D8/etc/sudoers.d/k2-mail-sidecar"
 	run "$D8" --version 0.45.5

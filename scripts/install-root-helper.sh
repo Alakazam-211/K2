@@ -423,6 +423,13 @@ retire() {
 # systemctl on the stalwart unit or a /usr/local K2-mail/stalwart binary.
 sidecar_is_ours() {
 	local line cmds cmd u="$RUN_USER" any=0
+	# The 2026-09 mail-sidecar provisioning wrote exactly this one line
+	# (seen on akzm and lztek, sha256 4adef024…). It is broader than the
+	# helper ever needed (bare systemctl/chown/useradd), so it is K2's to
+	# retire once the root helper answers.
+	if [ "$(grep -v '^[[:space:]]*\(#\|$\)' "$1")" = "$u ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/useradd" ]; then
+		return 0
+	fi
 	local sysctl_re='^(/usr)?/bin/systemctl( [a-z-]+)+ stalwart(\.service)?$'
 	local bin_re='^/usr/local/(libexec|bin)/(k2-mail-[a-z-]+|stalwart)( .*)?$'
 	while IFS= read -r line || [ -n "$line" ]; do

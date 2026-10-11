@@ -1,5 +1,7 @@
-//! Settings → Compute, "Agents that can use compute" and "Machines you can
-//! use" (Rosson 2026-10-11): the grant automation behind the two toggles.
+//! The grant automation behind the two compute toggles (Rosson
+//! 2026-10-11): the Agent tab's "Allow compute nodes" (Settings →
+//! Workspaces → <agent> → Agent) and Settings → Compute "Machines you can
+//! use".
 //!
 //! - An agent's toggle ON = the workspace switch (`agents_can_use_compute`)
 //!   plus a grant on **every** active node, with default limits.

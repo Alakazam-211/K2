@@ -1283,28 +1283,20 @@ fn handle_access(
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
     if toggle == "compute" {
-        // K2 compute nodes (CN20): "Allow compute nodes" is written only
-        // here (Owner/Admin), never through workspace/set.
-        {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::compute::store::set_agents_can_use_compute(&conn, &ws.id, value)
-                .map_err(|e| err("workspace_not_found", 404, e))?;
-            k2_core::compute::store::record_event(
-                &conn,
-                &caller.audit_user(),
-                "workspace_switch",
-                None,
-                Some(&ws.id),
-                None,
-                serde_json::json!({ "agentsCanUseCompute": value }),
-            );
-        }
-        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
-        return Ok((
-            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute", "agentsCanUseCompute": value }),
-            format!("ok {} compute={value}", ws.handle),
-        ));
+        // K2 compute nodes (CN20; Rosson 2026-10-11): the Agent tab's
+        // "Allow compute nodes" is the single control. Written only here
+        // (Owner/Admin), never through workspace/set. On also grants every
+        // active machine with default limits, and machines added later are
+        // granted on confirm; off removes the workspace's grants.
+        let out = crate::compute_routes::set_agent_compute(
+            &ws.id,
+            &ws.handle,
+            value,
+            &k2_core::compute::store::GrantLimits::default(),
+            &caller.audit_user(),
+        )
+        .map_err(|e| err("workspace_not_found", 404, e))?;
+        return Ok((out, format!("ok {} compute={value}", ws.handle)));
     }
     if toggle == "vault_manage" {
         // K2 vault (prd-k2-vault-v1 §8.2, 0149): "Allow managing

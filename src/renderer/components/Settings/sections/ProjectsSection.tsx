@@ -60,6 +60,7 @@ import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
+import { computeErrorMessage, setWorkspaceComputeSwitch } from './compute-api'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -92,6 +93,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
+  { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1588,6 +1590,7 @@ function ProjectDetail({
             <SettingsGroup title="Agents">
               <AgentsManageAgentsToggle project={project} />
               <AgentsManageVaultToggle project={project} />
+              <AgentsUseComputeToggle project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -2235,6 +2238,112 @@ export function AgentsManageVaultToggle({
             after them (k2 vault). It can&rsquo;t share them with itself or loosen a secret it uses.
             Seeing a secret&rsquo;s value always needs you. You (the owner) always can.
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// K2 compute nodes — "Allow compute nodes". DEFAULTS OFF. The single
+// control for an agent's compute (Rosson 2026-10-11: it lives here with the
+// other agent permissions, not in Settings → Compute). Writes POST
+// /cli/agent-access/set `{workspace, toggle: 'compute', value}` (Owner/Admin)
+// via `setWorkspaceComputeSwitch`; the daemon then grants every machine
+// switched on (default limits) and grants machines added later; off removes
+// every grant. Optimistic store patch; no projects refetch here.
+export function AgentsUseComputeToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const enabled = (project.agentsCanUseCompute ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanUseCompute
+    setBusy(true)
+    setError(null)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanUseCompute: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      const out = await setWorkspaceComputeSwitch(project.path, next)
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+      if (next) {
+        const machines = [...(out.granted ?? []), ...(out.kept ?? [])]
+        setResult(
+          machines.length === 0
+            ? 'No machines switched on yet. Ones you add in Settings → Compute are granted automatically.'
+            : `Can use ${machines.length === 1 ? '1 machine' : `${machines.length} machines`}: ${machines.join(', ')}.`,
+        )
+      } else {
+        setResult(null)
+      }
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanUseCompute: before } : p,
+        ),
+      }))
+      setError(computeErrorMessage(err))
+      console.error('[agent-access] compute write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Allow compute nodes"
+          disabled={busy}
+          data-settings-id="projects.agents-can-use-compute"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            enabled
+              ? 'This workspace\'s agents may run jobs on your compute machines'
+              : 'This workspace\'s agents cannot use compute machines'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow compute nodes
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve
+            switched on in Settings &rarr; Compute (k2 compute run), and on ones you add later. Defaults
+            per machine: 2 h per job, 1 at a time, 10 queued; change them with k2 compute grant. Off
+            removes its access to every machine; running jobs finish.
+          </div>
+          {result ? (
+            <div className="text-[10px] text-[var(--color-text-secondary)] mt-1" data-testid="agents-compute-result">
+              {result}
+            </div>
+          ) : null}
+          {error ? (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-error">
+              {error}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

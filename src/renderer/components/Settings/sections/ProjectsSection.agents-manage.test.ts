@@ -47,7 +47,7 @@ describe('Agent-tab "Allow managing server-wide secrets" toggle', () => {
     expect(src).toContain('Allow managing server-wide secrets')
     const start = src.indexOf('function AgentsManageVaultToggle')
     expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    const toggle = src.slice(start, src.indexOf('// K2 compute nodes — "Allow compute nodes"', start))
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'vault_manage'")
     expect(toggle).toContain('value: next')
@@ -58,5 +58,29 @@ describe('Agent-tab "Allow managing server-wide secrets" toggle', () => {
     expect(toggle).not.toContain('workspace/set')
     // Never claim agents can't read secrets (prd §18).
     expect(toggle).not.toMatch(/agents can.t read/i)
+  })
+})
+
+// K2 compute nodes (Rosson 2026-10-11): "Allow compute nodes" is the single
+// per-agent compute control and lives here, with the other agent
+// permissions — not in Settings → Compute. It writes through the same Admin
+// route (toggle `compute`), which also grants every machine.
+describe('Agent-tab "Allow compute nodes" toggle', () => {
+  it('has a manifest id, sits in the Agents group, and posts agent-access/set compute', () => {
+    expect(src).toContain("id: 'projects.agents-can-use-compute'")
+    expect(src).toContain('data-settings-id="projects.agents-can-use-compute"')
+    expect(src).toContain('<AgentsUseComputeToggle project={project} />')
+    expect(src.indexOf('<AgentsUseComputeToggle project={project} />')).toBeGreaterThan(
+      src.indexOf('<AgentsManageVaultToggle project={project} />'),
+    )
+    const start = src.indexOf('function AgentsUseComputeToggle')
+    expect(start).toBeGreaterThan(0)
+    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    expect(toggle).toContain('setWorkspaceComputeSwitch(project.path, next)')
+    expect(toggle).toContain('agentsCanUseCompute: next ? 1 : 0')
+    expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
+    expect(toggle).toContain('Allow this agent to use compute nodes')
+    expect(toggle).not.toContain('fetchProjects(')
+    expect(toggle).not.toContain('workspace/set')
   })
 })

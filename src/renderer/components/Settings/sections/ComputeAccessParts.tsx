@@ -1,13 +1,14 @@
-// Settings → Compute, the two everyday sections (Rosson 2026-10-11):
+// Settings → Compute, the everyday section (Rosson 2026-10-11):
 //
-//   1. Machines you can use — this server's nodes plus the account's
-//      machines with "Make this computer a node" on. Each row's toggle
-//      "Use compute from this machine": on = one-click enroll as a node of
-//      THIS server (K2 Connect delivers the ticket to that machine); off =
-//      drain, then remove (daemon `nodes/retire`).
-//   2. Agents that can use compute — one toggle per workspace: on = the
-//      workspace switch plus a grant on every machine (daemon
-//      `agents/set`); machines added later are granted by the daemon.
+//   Machines you can use — this server's nodes plus the account's
+//   machines with "Make this computer a node" on. Each row's toggle
+//   "Use compute from this machine": on = one-click enroll as a node of
+//   THIS server (K2 Connect delivers the ticket to that machine); off =
+//   drain, then remove (daemon `nodes/retire`).
+//
+// Which agents may use the machines is NOT set here: it's the Agent tab's
+// "Allow compute nodes" (Settings → Workspaces → <agent> → Agent;
+// `ProjectsSection.tsx` AgentsUseComputeToggle), Rosson 2026-10-11.
 //
 // Thin client: the daemon owns nodes, grants and the retire sweep; K2
 // Connect owns the account's machine list. The page only re-reads while
@@ -15,9 +16,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SettingsGroup } from '../controls/SettingControls'
-import { Button, Callout, Input, Toggle } from '@/components/ui'
+import { Button, Callout, Toggle } from '@/components/ui'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
-import { useProjectsStore } from '@/stores/projects'
 import { isAirgap } from '@/lib/airgap'
 import {
   computeErrorMessage,
@@ -25,11 +25,7 @@ import {
   formatBytes,
   pauseComputeNode,
   retireComputeNode,
-  setComputeAgent,
-  type ComputeAgentRow,
-  type ComputeAgentsList,
   type ComputeNodesList,
-  type GrantLimits,
 } from './compute-api'
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listComputeMachines, ONE_CLICK_NEEDS_UPDATE, requestEnrollOffer, type ComputeMachine } from '../lib/compute-account'
@@ -189,7 +185,11 @@ export function MachinesPart({
     <SettingsGroup title="Machines you can use">
       <div className="space-y-2 py-1" data-settings-id="compute.machines" data-testid="compute-machines">
         <p className="text-[11px] text-[var(--color-text-muted)]">
-          Your machines with “Make this computer a node” on. Switch one on and agents you allow below can run jobs there.
+          Your machines with “Make this computer a node” on. Switch one on and agents you allow can run jobs there.
+        </p>
+        <p className="text-[11px] text-[var(--color-text-muted)]" data-testid="compute-agents-note">
+          Which agents can use these machines is set per agent: Settings → Workspaces → &lt;agent&gt; → Agent → Allow
+          compute nodes.
         </p>
         {account.kind === 'signed_out' ? (
           <Callout tone="info">
@@ -310,158 +310,6 @@ function MachineLine({
           )}
         </div>
       ) : null}
-    </div>
-  )
-}
-
-// ── 2. Agents that can use compute ───────────────────────────────────
-
-export function AgentsPart({
-  agents,
-  error,
-  onChanged,
-}: {
-  agents: ComputeAgentsList | null
-  error: string | null
-  onChanged: () => Promise<void>
-}): React.JSX.Element {
-  const [override, setOverride] = useState<Record<string, boolean>>({})
-  // A write landed: the next read carries it, so drop the local view.
-  useEffect(() => setOverride({}), [agents])
-  const rows = agents?.agents ?? []
-  return (
-    <SettingsGroup title="Agents that can use compute">
-      <div className="space-y-1 py-1" data-settings-id="compute.agents" data-testid="compute-agents">
-        <p className="text-[11px] text-[var(--color-text-muted)]">
-          On: the agent can run jobs on every machine switched on above (and ones you add later) with <span className="font-mono">k2 compute run</span>.
-          Defaults: {Math.round((agents?.defaults.maxJobSecs ?? 7200) / 3600)} h per job, {agents?.defaults.maxParallel ?? 1} at a time,{' '}
-          {agents?.defaults.maxQueued ?? 10} queued, disk up to a quarter of the machine&apos;s free space (at most{' '}
-          {agents?.defaults.maxDiskGb ?? 60} GB).
-        </p>
-        {error ? <Callout tone="warn">{error}</Callout> : null}
-        {agents && rows.length === 0 ? <p className="text-[11px] text-[var(--color-text-muted)]">No workspaces on this server.</p> : null}
-        {!agents && !error ? <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p> : null}
-        {rows.map((a) => (
-          <AgentLine
-            key={a.workspaceId}
-            row={a}
-            on={override[a.workspaceId] ?? a.agentsCanUseCompute}
-            setOn={(v) => setOverride((o) => ({ ...o, [a.workspaceId]: v }))}
-            onChanged={onChanged}
-          />
-        ))}
-      </div>
-    </SettingsGroup>
-  )
-}
-
-const LIMIT_FIELDS: [keyof GrantLimits, string, string][] = [
-  ['maxJobSecs', 'hours per job', 'h'],
-  ['maxParallel', 'at a time', ''],
-  ['maxQueued', 'queued', ''],
-  ['maxDiskGb', 'disk GB', 'GB'],
-]
-
-function AgentLine({
-  row,
-  on,
-  setOn,
-  onChanged,
-}: {
-  row: ComputeAgentRow
-  on: boolean
-  setOn: (v: boolean) => void
-  onChanged: () => Promise<void>
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [limitsOpen, setLimitsOpen] = useState(false)
-  const first = row.grants[0]
-  const [limits, setLimits] = useState<Record<keyof GrantLimits, string>>({
-    maxJobSecs: '',
-    maxParallel: '',
-    maxQueued: '',
-    maxDiskGb: '',
-  })
-
-  const send = async (value: boolean, body: GrantLimits = {}): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    try {
-      const out = await setComputeAgent(row.workspaceId, value, body)
-      const now = typeof out.agentsCanUseCompute === 'boolean' ? out.agentsCanUseCompute : value
-      setOn(now)
-      // Optimistic projects-store patch (never fetchProjects() from here).
-      useProjectsStore.setState((s) => ({
-        projects: s.projects.map((p) => (p.id === row.workspaceId ? { ...p, agentsCanUseCompute: now ? 1 : 0 } : p)),
-      }))
-    } catch (err) {
-      setError(computeErrorMessage(err))
-    } finally {
-      setBusy(false)
-      void onChanged()
-    }
-  }
-
-  const saveLimits = async (): Promise<void> => {
-    const body: GrantLimits = {}
-    for (const [k] of LIMIT_FIELDS) {
-      const raw = limits[k].trim()
-      if (!raw) continue
-      const n = Number(raw)
-      if (!Number.isFinite(n) || n <= 0) {
-        setError('Limits are positive numbers')
-        return
-      }
-      body[k] = k === 'maxJobSecs' ? Math.round(n * 3600) : Math.round(n)
-    }
-    await send(true, body)
-    setLimitsOpen(false)
-  }
-
-  const machines = row.grants.map((g) => g.node).filter((n): n is string => !!n)
-  return (
-    <div className="border-b border-[var(--color-border)] py-1 space-y-1" data-testid={`compute-agent-${row.workspace}`}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-        <Toggle checked={on} onChange={(v) => void send(v)} disabled={busy} aria-label={`Use compute: ${row.name || row.workspace}`} />
-        <span className="text-xs font-medium text-[var(--color-text-primary)]">{row.name || row.workspace}</span>
-        <span className="text-[var(--color-text-muted)]" data-testid="compute-agent-machines">
-          {on
-            ? machines.length === 0
-              ? 'no machines yet'
-              : `${machines.length} machine${machines.length === 1 ? '' : 's'}: ${machines.join(', ')}`
-            : 'off'}
-        </span>
-        {on && first ? (
-          <span className="text-[var(--color-text-muted)]">
-            ≤{Math.round(first.maxJobSecs / 360) / 10} h · {first.maxParallel} at a time · {first.maxQueued} queued · {first.maxDiskGb} GB
-          </span>
-        ) : null}
-        {on ? (
-          <Button variant="ghost" onClick={() => setLimitsOpen((o) => !o)} aria-expanded={limitsOpen}>
-            limits…
-          </Button>
-        ) : null}
-      </div>
-      {on && limitsOpen ? (
-        <div className="flex flex-wrap items-center gap-2 pl-10" data-testid="compute-agent-limits">
-          {LIMIT_FIELDS.map(([k, label]) => (
-            <Input
-              key={k}
-              value={limits[k]}
-              onChange={(e) => setLimits((l) => ({ ...l, [k]: e.target.value.replace(/[^0-9.]/g, '') }))}
-              placeholder={label}
-              aria-label={`${label} for ${row.name || row.workspace}`}
-              className="w-24"
-            />
-          ))}
-          <Button variant="accent" disabled={busy} onClick={() => void saveLimits()}>
-            Save limits
-          </Button>
-          <span className="text-[10px] text-[var(--color-text-muted)]">Blank = default. Applies to every machine.</span>
-        </div>
-      ) : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
   )
 }

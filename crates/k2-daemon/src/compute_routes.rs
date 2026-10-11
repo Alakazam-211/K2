@@ -342,7 +342,7 @@ fn passport_gate(who: &Who) -> R<Option<String>> {
         return Err(no(
             codes::COMPUTE_OFF,
             403,
-            "compute nodes are off for this workspace: ask your owner to turn on \"Allow compute nodes\" in Workspace settings → Agent",
+            "compute nodes are off for this workspace: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → <agent> → Agent",
         ));
     }
     Ok(Some(own.to_string()))
@@ -621,8 +621,8 @@ fn node_confirm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let conn = db.lock();
         store::confirm_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("not_pending", 409, e))?;
         store::record_event(&conn, &who.label(), "confirm", Some(&n.id), None, None, serde_json::json!({"name": n.name}));
-        // Every agent with compute on gets the new machine (Settings →
-        // Compute, "Agents that can use compute").
+        // Every agent with compute on gets the new machine (the Agent
+        // tab's "Allow compute nodes").
         let granted = compute::access::grant_new_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
         for ws in &granted {
             store::record_event(&conn, &who.label(), "grant", Some(&n.id), Some(ws), None, serde_json::json!({"auto": true}));
@@ -891,7 +891,7 @@ fn grant_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         store::agents_can_use_compute(&conn, &ws.id)
     };
     Ok(serde_json::json!({"ok": true, "node": n.name, "workspace": ws.handle, "grant": g, "agentsCanUseCompute": switch_on,
-        "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need Workspace settings → Agent → Allow compute nodes (k2 compute access on --workspace <ws>)" }}))
+        "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need Settings → Workspaces → <agent> → Agent → Allow compute nodes (k2 compute access on --workspace <ws>)" }}))
 }
 
 fn n_pos(v: &serde_json::Value, k: &str, lo: i64, hi: i64) -> R<Option<i64>> {
@@ -917,10 +917,11 @@ fn grant_revoke(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         "note": "queued and running jobs keep going; new runs are refused"}))
 }
 
-// ── agents (Settings → Compute) ───────────────────────────────────────
+// ── agents (the Agent tab's "Allow compute nodes") ───────────────────
 
 /// Every workspace with its "Allow compute nodes" switch and grants, plus
-/// the default limits a toggle applies. Owner/admin.
+/// the default limits a toggle applies. Owner/admin. (Settings → Compute
+/// no longer lists agents, Rosson 2026-10-11; kept for the CLI/scripts.)
 fn agents_list(who: &Who) -> R<serde_json::Value> {
     need_admin(who)?;
     let db = k2_core::db::shared();
@@ -961,10 +962,48 @@ fn agents_list(who: &Who) -> R<serde_json::Value> {
     }))
 }
 
-/// An agent's compute toggle (Settings → Compute). On: the workspace
-/// switch plus a grant on every active node (default limits, or the ones
-/// sent); nodes added later are granted on confirm. Off: switch off and
-/// every grant of the workspace removed. Owner/admin, never a passport.
+/// The one writer behind an agent's compute toggle — Settings →
+/// Workspaces → <agent> → Agent → "Allow compute nodes"
+/// (`/cli/agent-access/set` toggle `compute`, Rosson 2026-10-11) and the
+/// older `/cli/compute/agents/set`. On: the workspace switch plus a grant
+/// on every active node (default limits, or the ones sent); nodes added
+/// later are granted on confirm ([`compute::access::grant_new_node`]).
+/// Off: switch off and every grant of the workspace removed. The caller
+/// has already checked owner/admin.
+pub(crate) fn set_agent_compute(
+    ws_id: &str,
+    ws_handle: &str,
+    on: bool,
+    limits: &store::GrantLimits,
+    by: &str,
+) -> Result<serde_json::Value, String> {
+    let now = compute::now();
+    let out = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if on {
+            let out = compute::access::enable_workspace(&conn, ws_id, limits, by, now)?;
+            let name_of = |id: &String| store::node_by_id(&conn, id).map(|n| n.name).unwrap_or_else(|| id.clone());
+            let granted: Vec<String> = out.granted.iter().map(name_of).collect();
+            let kept: Vec<String> = out.kept.iter().map(name_of).collect();
+            store::record_event(&conn, by, "agent_compute_on", None, Some(ws_id), None, serde_json::json!({"granted": granted, "kept": kept}));
+            serde_json::json!({"ok": true, "workspace": ws_handle, "toggle": "compute", "agentsCanUseCompute": true, "granted": granted, "kept": kept,
+                "note": "agents in this workspace can use every machine switched on here, and ones you add later"})
+        } else {
+            let removed = compute::access::disable_workspace(&conn, ws_id)?;
+            store::record_event(&conn, by, "agent_compute_off", None, Some(ws_id), None, serde_json::json!({"grantsRemoved": removed}));
+            serde_json::json!({"ok": true, "workspace": ws_handle, "toggle": "compute", "agentsCanUseCompute": false, "grantsRemoved": removed,
+                "note": "queued and running jobs keep going; new runs are refused"})
+        }
+    };
+    // Projects carry the switch (Agent tab); Settings → Compute shows grants.
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "agent_access"}));
+    Ok(out)
+}
+
+/// `/cli/compute/agents/set` (kept for older clients and
+/// scripts): same writer as the Agent tab.
 fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_admin(who)?;
     let v = json_body(body)?;
@@ -976,27 +1015,7 @@ fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
     };
-    let now = compute::now();
-    let out = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        if on {
-            let out = compute::access::enable_workspace(&conn, &ws.id, &limits, &who.label(), now).map_err(|e| no("internal", 500, e))?;
-            let name_of = |id: &String| store::node_by_id(&conn, id).map(|n| n.name).unwrap_or_else(|| id.clone());
-            let granted: Vec<String> = out.granted.iter().map(name_of).collect();
-            let kept: Vec<String> = out.kept.iter().map(name_of).collect();
-            store::record_event(&conn, &who.label(), "agent_compute_on", None, Some(&ws.id), None, serde_json::json!({"granted": granted, "kept": kept}));
-            serde_json::json!({"ok": true, "workspace": ws.handle, "agentsCanUseCompute": true, "granted": granted, "kept": kept,
-                "note": "agents in this workspace can use every machine switched on here, and ones you add later"})
-        } else {
-            let removed = compute::access::disable_workspace(&conn, &ws.id).map_err(|e| no("internal", 500, e))?;
-            store::record_event(&conn, &who.label(), "agent_compute_off", None, Some(&ws.id), None, serde_json::json!({"grantsRemoved": removed}));
-            serde_json::json!({"ok": true, "workspace": ws.handle, "agentsCanUseCompute": false, "grantsRemoved": removed,
-                "note": "queued and running jobs keep going; new runs are refused"})
-        }
-    };
-    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "agent_access"}));
-    Ok(out)
+    set_agent_compute(&ws.id, &ws.handle, on, &limits, &who.label()).map_err(|e| no("internal", 500, e))
 }
 
 // ── run ──────────────────────────────────────────────────────────────

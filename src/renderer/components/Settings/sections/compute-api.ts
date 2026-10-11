@@ -80,22 +80,7 @@ export interface ComputeNodesList {
   ticketSupported?: boolean
 }
 
-/** One workspace in "Agents that can use compute". */
-export interface ComputeAgentRow {
-  workspaceId: string
-  /** The workspace's address handle. */
-  workspace: string
-  name: string
-  agentsCanUseCompute: boolean
-  grants: (Omit<ComputeGrant, 'node' | 'workspace'> & { node: string | null })[]
-}
-
-export interface ComputeAgentsList {
-  agents: ComputeAgentRow[]
-  activeNodes: number
-  defaults: { maxJobSecs: number; maxParallel: number; maxQueued: number; maxDiskGb: number; disk?: string }
-}
-
+/** What the Agent tab's "Allow compute nodes" write did. */
 export interface ComputeAgentSetResult {
   ok: boolean
   agentsCanUseCompute?: boolean
@@ -323,32 +308,6 @@ export async function fetchComputeNodes(): Promise<ComputeNodesList> {
   }
 }
 
-/** "Agents that can use compute": every workspace with its switch and grants. */
-export async function fetchComputeAgents(): Promise<ComputeAgentsList> {
-  const res = await daemonCliGet<Partial<ComputeAgentsList>>(primaryScope(), 'compute/agents')
-  return {
-    agents: Array.isArray(res?.agents) ? res.agents : [],
-    activeNodes: typeof res?.activeNodes === 'number' ? res.activeNodes : 0,
-    defaults: {
-      maxJobSecs: res?.defaults?.maxJobSecs ?? 7200,
-      maxParallel: res?.defaults?.maxParallel ?? 1,
-      maxQueued: res?.defaults?.maxQueued ?? 10,
-      maxDiskGb: res?.defaults?.maxDiskGb ?? 60,
-      disk: res?.defaults?.disk,
-    },
-  }
-}
-
-/** An agent's compute toggle: on = switch + a grant on every machine (with
- *  `limits` when given); off = switch off + every grant removed. */
-export async function setComputeAgent(
-  workspace: string,
-  value: boolean,
-  limits: GrantLimits = {},
-): Promise<ComputeAgentSetResult> {
-  return daemonCliPost(primaryScope(), 'compute/agents/set', { workspace, value, ...limits })
-}
-
 /** "Use compute from this machine" off: drain, then remove once idle. */
 export async function retireComputeNode(
   node: string,
@@ -412,11 +371,14 @@ export async function fetchComputeEvents(limit = 30): Promise<ComputeEvent[]> {
   return Array.isArray(res?.events) ? res.events : []
 }
 
-/** Workspace switch "Allow compute nodes" (Owner/Admin). */
+/** The Agent tab's "Allow compute nodes" (Owner/Admin; the single
+ *  control, Rosson 2026-10-11): on = the switch plus a grant on every
+ *  machine switched on here, default limits (machines added later are
+ *  granted by the daemon); off = switch off and every grant removed. */
 export async function setWorkspaceComputeSwitch(
   workspace: string,
   value: boolean,
-): Promise<{ ok: boolean; agentsCanUseCompute?: boolean }> {
+): Promise<ComputeAgentSetResult> {
   return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute', value, workspace })
 }
 

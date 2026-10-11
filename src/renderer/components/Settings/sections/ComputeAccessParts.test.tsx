@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-// Settings → Compute, "Machines you can use" and "Agents that can use
-// compute" (Rosson 2026-10-11): the rows merge daemon nodes with the
-// account's machines; toggles send one gesture each; one-click degrades to
-// "needs a K2 Connect update" while the account side is missing.
+// Settings → Compute, "Machines you can use" (Rosson 2026-10-11): the rows
+// merge daemon nodes with the account's machines; toggles send one gesture
+// each; one-click degrades to "needs a K2 Connect update" while the account
+// side is missing. Which agents may use the machines is the Agent tab's
+// "Allow compute nodes", not a section here.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
@@ -15,7 +16,6 @@ vi.mock('./compute-api', async (importOriginal) => {
     confirmComputeNode: vi.fn(),
     pauseComputeNode: vi.fn(),
     retireComputeNode: vi.fn(),
-    setComputeAgent: vi.fn(),
   }
 })
 vi.mock('./K2ConnectSection', () => ({ getAccountAccessToken: vi.fn(async () => 'acc-token') }))
@@ -25,8 +25,9 @@ vi.mock('../lib/compute-account', async (importOriginal) => {
 })
 
 import * as api from './compute-api'
-import type { ComputeAgentsList, ComputeNode, ComputeNodesList } from './compute-api'
-import { AgentsPart, MachinesPart } from './ComputeAccessParts'
+import type { ComputeNode, ComputeNodesList } from './compute-api'
+import * as parts from './ComputeAccessParts'
+import { MachinesPart } from './ComputeAccessParts'
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listComputeMachines, ONE_CLICK_NEEDS_UPDATE, requestEnrollOffer, type ComputeMachine } from '../lib/compute-account'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -221,94 +222,14 @@ describe('Machines you can use', () => {
   })
 })
 
-const AGENTS: ComputeAgentsList = {
-  agents: [
-    {
-      workspaceId: 'p-sales',
-      workspace: 'sales',
-      name: 'sales',
-      agentsCanUseCompute: false,
-      grants: [],
-    },
-    {
-      workspaceId: 'p-ops',
-      workspace: 'ops',
-      name: 'ops',
-      agentsCanUseCompute: true,
-      grants: [
-        {
-          nodeId: 'n-1',
-          workspaceId: 'p-ops',
-          scopes: 'run',
-          maxJobSecs: 7200,
-          maxDiskGb: 50,
-          maxParallel: 1,
-          maxQueued: 10,
-          warmAt: null,
-          expiresAt: null,
-          grantedBy: 'owner',
-          grantedAt: 1,
-          node: 'mini-1',
-        },
-      ],
-    },
-  ],
-  activeNodes: 1,
-  defaults: { maxJobSecs: 7200, maxParallel: 1, maxQueued: 10, maxDiskGb: 60 },
-}
-
-describe('Agents that can use compute', () => {
-  it('lists every workspace with its toggle and machines', () => {
-    render(<AgentsPart agents={AGENTS} error={null} onChanged={onChanged} />)
-    const sales = screen.getByTestId('compute-agent-sales')
-    expect(within(sales).getByRole('switch', { name: 'Use compute: sales' }).getAttribute('aria-checked')).toBe('false')
-    expect(within(sales).getByTestId('compute-agent-machines').textContent).toBe('off')
-    const ops = screen.getByTestId('compute-agent-ops')
-    expect(within(ops).getByRole('switch').getAttribute('aria-checked')).toBe('true')
-    expect(within(ops).getByTestId('compute-agent-machines').textContent).toBe('1 machine: mini-1')
-    expect(ops.textContent).toContain('≤2 h · 1 at a time · 10 queued · 50 GB')
-  })
-
-  it('toggle on = access + every machine (one daemon call), with the projects store patched', async () => {
-    m.setComputeAgent.mockResolvedValue({ ok: true, agentsCanUseCompute: true, granted: ['mini-1'] })
-    render(<AgentsPart agents={AGENTS} error={null} onChanged={onChanged} />)
-    fireEvent.click(within(screen.getByTestId('compute-agent-sales')).getByRole('switch'))
-    await waitFor(() => expect(m.setComputeAgent).toHaveBeenCalledWith('p-sales', true, {}))
-    await waitFor(() =>
-      expect(within(screen.getByTestId('compute-agent-sales')).getByRole('switch').getAttribute('aria-checked')).toBe('true'),
+describe('agent access is not set on this page (Rosson 2026-10-11)', () => {
+  it('has no per-agent section; the machines part points at the Agent tab', async () => {
+    expect(Object.keys(parts)).toEqual(['MachinesPart'])
+    vi.mocked(getAccountAccessToken).mockResolvedValue(null)
+    render(<MachinesPart list={list([NODE])} onChanged={onChanged} />)
+    expect(screen.getByTestId('compute-agents-note').textContent).toContain(
+      'Which agents can use these machines is set per agent: Settings → Workspaces → <agent> → Agent → Allow',
     )
-    const p = useProjectsStore.getState().projects.find((x) => x.id === 'p-sales') as { agentsCanUseCompute?: number }
-    expect(p.agentsCanUseCompute).toBe(1)
-    expect(onChanged).toHaveBeenCalled()
-  })
-
-  it('toggle off revokes (one daemon call)', async () => {
-    m.setComputeAgent.mockResolvedValue({ ok: true, agentsCanUseCompute: false, grantsRemoved: 1 })
-    render(<AgentsPart agents={AGENTS} error={null} onChanged={onChanged} />)
-    fireEvent.click(within(screen.getByTestId('compute-agent-ops')).getByRole('switch'))
-    await waitFor(() => expect(m.setComputeAgent).toHaveBeenCalledWith('p-ops', false, {}))
-  })
-
-  it('limits… sends hours as seconds and leaves blanks to the default', async () => {
-    m.setComputeAgent.mockResolvedValue({ ok: true, agentsCanUseCompute: true })
-    render(<AgentsPart agents={AGENTS} error={null} onChanged={onChanged} />)
-    const ops = screen.getByTestId('compute-agent-ops')
-    fireEvent.click(within(ops).getByRole('button', { name: 'limits…' }))
-    fireEvent.change(within(ops).getByLabelText('hours per job for ops'), { target: { value: '3' } })
-    fireEvent.change(within(ops).getByLabelText('at a time for ops'), { target: { value: '2' } })
-    fireEvent.click(within(ops).getByRole('button', { name: 'Save limits' }))
-    await waitFor(() => expect(m.setComputeAgent).toHaveBeenCalledWith('p-ops', true, { maxJobSecs: 10_800, maxParallel: 2 }))
-  })
-
-  it('a refusal shows the daemon hint', async () => {
-    m.setComputeAgent.mockRejectedValue(new Error(JSON.stringify({ error: { code: 'owner_only', hint: 'only the owner' } })))
-    render(<AgentsPart agents={AGENTS} error={null} onChanged={onChanged} />)
-    fireEvent.click(within(screen.getByTestId('compute-agent-sales')).getByRole('switch'))
-    await screen.findByText('only the owner (owner_only)')
-  })
-
-  it('an older daemon without the route shows its error, not a blank list', () => {
-    render(<AgentsPart agents={null} error="no such compute route (not_found)" onChanged={onChanged} />)
-    expect(screen.getByText('no such compute route (not_found)')).toBeTruthy()
+    expect(screen.queryByText('Agents that can use compute')).toBeNull()
   })
 })

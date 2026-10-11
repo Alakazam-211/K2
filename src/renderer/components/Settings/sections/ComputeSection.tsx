@@ -11,6 +11,9 @@
 //   B. Nodes of this server — the focused server (`primaryScope()`) as the
 //      controller: nodes, confirm/pause/rename/remove, grants, enroll codes,
 //      recent jobs and audit lines.
+//      Which agents may use compute is NOT set on this page: it's the Agent
+//      tab's "Allow compute nodes" (Rosson 2026-10-11); node details only
+//      show that switch read-only.
 //   C. This computer — desktop only, this machine's own daemon
 //      (`scopeForHost('local')`): make it a node, the owner's word over it.
 //   D. One-click pairing on the same Connect account (inside C's sheet).
@@ -33,7 +36,6 @@ import {
   disableLocalNode,
   drainLocalNode,
   enableLocalNode,
-  fetchComputeAgents,
   fetchComputeEvents,
   fetchComputeGrants,
   fetchComputeJobs,
@@ -52,9 +54,7 @@ import {
   revokeComputeGrant,
   setComputeGrant,
   setLocalPolicy,
-  setWorkspaceComputeSwitch,
   validNodeName,
-  type ComputeAgentsList,
   type ComputeEvent,
   type ComputeGrant,
   type ComputeJob,
@@ -70,15 +70,14 @@ import {
 } from './compute-api'
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
-import { AgentsPart, MachinesPart } from './ComputeAccessParts'
+import { MachinesPart } from './ComputeAccessParts'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Compute nodes (preview)', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
   { id: 'compute.machines', section: 'compute', label: 'Machines you can use', description: 'Your machines that offer compute; switch one on for this server', keywords: ['compute', 'machine', 'machines', 'use compute', 'cpu', 'ram', 'disk', 'one-click'] },
-  { id: 'compute.agents', section: 'compute', label: 'Agents that can use compute', description: 'Which agents may run jobs on your machines', keywords: ['compute', 'agent', 'agents', 'access', 'grant', 'k2 compute run', 'limits'] },
   { id: 'compute.nodes', section: 'compute', label: 'Nodes of this server', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
   { id: 'compute.add-node', section: 'compute', label: 'Add a machine with an enroll code', description: 'Make an enroll code for another machine', keywords: ['enroll', 'code', 'install', 'pair', 'add node'] },
-  { id: 'compute.grants', section: 'compute', label: 'Compute grants', description: 'Which workspaces may use each node', keywords: ['grant', 'revoke', 'workspace', 'allow compute nodes'] },
+  { id: 'compute.grants', section: 'compute', label: 'Compute grants', description: 'Which workspaces may use each node', keywords: ['grant', 'revoke', 'workspace', 'limits'] },
   { id: 'compute.jobs', section: 'compute', label: 'Recent compute jobs', description: 'Jobs and audit lines', keywords: ['jobs', 'events', 'audit', 'log'] },
   { id: 'compute.this-computer', section: 'compute', label: 'Make this computer a compute node', description: 'Let agents on one of your servers run programs here', keywords: ['this computer', 'k2node', 'node', 'enable', 'policy', 'cpu', 'memory'] },
 ]
@@ -121,8 +120,6 @@ export function ComputeSection(): React.JSX.Element {
   const [jobs, setJobs] = useState<ComputeJob[]>([])
   const [events, setEvents] = useState<ComputeEvent[]>([])
   const [sideErrors, setSideErrors] = useState<{ grants?: string; jobs?: string; events?: string }>({})
-  const [agents, setAgents] = useState<ComputeAgentsList | null>(null)
-  const [agentsError, setAgentsError] = useState<string | null>(null)
   const [local, setLocal] = useState<LocalStatus | null>(null)
   const [localState, setLocalState] = useState<LoadState>('loading')
   const [localError, setLocalError] = useState<string | null>(null)
@@ -152,17 +149,12 @@ export function ComputeSection(): React.JSX.Element {
           }
           return
         }
-        const [g, j, e, a] = await Promise.allSettled([
+        const [g, j, e] = await Promise.allSettled([
           fetchComputeGrants(),
           fetchComputeJobs(20),
           fetchComputeEvents(30),
-          fetchComputeAgents(),
         ])
         if (!mounted.current) return
-        if (a.status === 'fulfilled') {
-          setAgents(a.value)
-          setAgentsError(null)
-        } else if (!isHostSwitched(a.reason)) setAgentsError(computeErrorMessage(a.reason))
         const errs: { grants?: string; jobs?: string; events?: string } = {}
         if (g.status === 'fulfilled') setGrants(g.value)
         else if (!isHostSwitched(g.reason)) errs.grants = computeErrorMessage(g.reason)
@@ -207,8 +199,6 @@ export function ComputeSection(): React.JSX.Element {
     setGrants([])
     setJobs([])
     setEvents([])
-    setAgents(null)
-    setAgentsError(null)
     void refresh()
     const id = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
@@ -257,10 +247,7 @@ export function ComputeSection(): React.JSX.Element {
       </SettingsGroup>
 
       {controllerState === 'disabled' || !nodesList ? null : (
-        <>
-          <MachinesPart list={nodesList} onChanged={refresh} />
-          <AgentsPart agents={agents} error={agentsError} onChanged={refresh} />
-        </>
+        <MachinesPart list={nodesList} onChanged={refresh} />
       )}
 
       {controllerState === 'disabled' ? null : (
@@ -385,9 +372,6 @@ function ControllerPart({
   onChanged: () => Promise<void>
 }): React.JSX.Element {
   const nodes = (list?.nodes ?? []).filter((n) => n.state !== 'revoked')
-  // Local view of the workspace switch where the projects list doesn't carry
-  // it (older daemons) or a write just landed.
-  const [switchOverride, setSwitchOverride] = useState<Record<string, boolean>>({})
 
   return (
     <div className="space-y-6">
@@ -412,8 +396,6 @@ function ControllerPart({
               key={n.id}
               node={n}
               grants={grants.filter((g) => g.nodeId === n.id)}
-              switchOverride={switchOverride}
-              setSwitchOverride={setSwitchOverride}
               onChanged={onChanged}
             />
           ))}
@@ -507,14 +489,10 @@ function eventDetail(d: unknown): string {
 function NodeCard({
   node,
   grants,
-  switchOverride,
-  setSwitchOverride,
   onChanged,
 }: {
   node: ComputeNode
   grants: ComputeGrant[]
-  switchOverride: Record<string, boolean>
-  setSwitchOverride: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   onChanged: () => Promise<void>
 }): React.JSX.Element {
   const { busy, error, run } = useAction(onChanged)
@@ -658,13 +636,7 @@ function NodeCard({
               {node.controllerPause === 'paused' ? 'Paused' : 'Draining'} here: this server sends it no new jobs.
             </p>
           ) : null}
-          <GrantsBlock
-            node={node}
-            grants={grants}
-            switchOverride={switchOverride}
-            setSwitchOverride={setSwitchOverride}
-            onChanged={onChanged}
-          />
+          <GrantsBlock node={node} grants={grants} onChanged={onChanged} />
         </div>
       )}
       {error ? <Callout tone="error">{error}</Callout> : null}
@@ -675,14 +647,10 @@ function NodeCard({
 function GrantsBlock({
   node,
   grants,
-  switchOverride,
-  setSwitchOverride,
   onChanged,
 }: {
   node: ComputeNode
   grants: ComputeGrant[]
-  switchOverride: Record<string, boolean>
-  setSwitchOverride: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   onChanged: () => Promise<void>
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
@@ -711,23 +679,8 @@ function GrantsBlock({
     const out = await run(() => setComputeGrant(node.name, pick, body))
     if (out) {
       setNote(out.note ?? null)
-      if (typeof out.agentsCanUseCompute === 'boolean') {
-        const value = out.agentsCanUseCompute
-        setSwitchOverride((m) => ({ ...m, [pick]: value }))
-      }
       setPick('')
     }
-  }
-
-  const flipSwitch = async (workspaceId: string, next: boolean): Promise<void> => {
-    const out = await run(() => setWorkspaceComputeSwitch(workspaceId, next))
-    if (!out) return
-    const value = typeof out.agentsCanUseCompute === 'boolean' ? out.agentsCanUseCompute : next
-    setSwitchOverride((m) => ({ ...m, [workspaceId]: value }))
-    // Optimistic projects-store patch (never fetchProjects() from here).
-    useProjectsStore.setState((s) => ({
-      projects: s.projects.map((p) => (p.id === workspaceId ? { ...p, agentsCanUseCompute: value ? 1 : 0 } : p)),
-    }))
   }
 
   return (
@@ -739,23 +692,16 @@ function GrantsBlock({
       {grants.map((g) => {
         const project = projects.find((p) => p.id === g.workspaceId)
         const reported = project?.agentsCanUseCompute
-        const on = switchOverride[g.workspaceId] ?? (reported === undefined ? undefined : reported === 1)
+        const on = reported === undefined ? undefined : reported === 1
         return (
           <div key={g.workspaceId} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] border-b border-[var(--color-border)] py-1" data-testid={`compute-grant-${g.workspace}`}>
             <span className="text-[var(--color-text-primary)] font-medium">{project?.name ?? g.workspace}</span>
             <span className="text-[var(--color-text-muted)]">
               ≤{Math.round(g.maxJobSecs / 60)} min · {g.maxDiskGb} GB · {g.maxParallel} at once · {g.maxQueued} queued
             </span>
-            <span className="flex items-center gap-1.5">
-              <Toggle
-                checked={on === true}
-                onChange={(v) => void flipSwitch(g.workspaceId, v)}
-                disabled={busy}
-                aria-label={`Allow compute nodes for ${project?.name ?? g.workspace}`}
-              />
-              <span className="text-[var(--color-text-secondary)]">
-                Allow compute nodes{on === undefined ? ' (not reported by this server)' : ''}
-              </span>
+            {/* Read-only: the switch lives on the Agent tab (Rosson 2026-10-11). */}
+            <span className="text-[var(--color-text-secondary)]" data-testid="compute-grant-switch">
+              Allow compute nodes: {on === undefined ? 'not reported by this server' : on ? 'on' : 'off (set on its Agent tab)'}
             </span>
             <Button variant="quiet" disabled={busy} onClick={() => void run(() => revokeComputeGrant(node.name, g.workspaceId))}>
               Revoke

@@ -330,6 +330,10 @@ async fn compute_end_to_end_with_the_real_node() {
     assert_eq!(code(&r), "compute_off");
     let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "compute", "value": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    // The Agent-tab switch grants every machine that's on; take the grants
+    // away so the switch-on-but-not-granted refusal is still checked.
+    assert!(names(&j(&r)["granted"]).contains(&"n1".to_string()), "{}", r.body);
+    clear_grants(&ws.id);
     let r = post(port, "/cli/compute/run", &agent, run_body("n1", &["true"], "client-0000000001")).await;
     assert_eq!(r.status, 403, "{}", r.body);
     assert_eq!(code(&r), "not_granted");
@@ -872,6 +876,12 @@ fn grants_of(ws: &str) -> Vec<k2_core::compute::store::GrantRow> {
     k2_core::compute::store::grants(&conn, None, Some(ws))
 }
 
+fn clear_grants(ws: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("DELETE FROM compute_node_grants WHERE workspace_id = ?1", [ws]).expect("clear grants");
+}
+
 fn switch_of(ws: &str) -> bool {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -982,5 +992,69 @@ async fn settings_toggles_grant_every_machine_and_retire_drains() {
     assert!(node_row(port, "tog-b").await.is_null(), "the sweep removed it once idle");
     let r = get(port, "/cli/compute/nodes", OWNER, "").await;
     assert!(j(&r)["ticketSupported"].is_boolean(), "{}", r.body);
+    drop(env);
+}
+
+/// The Agent tab's "Allow compute nodes" (Rosson 2026-10-11: the single
+/// control) rides `/cli/agent-access/set` toggle `compute` through the
+/// same writer: on = switch + a grant on every machine with default
+/// limits; a machine confirmed later is granted to it; off revokes all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn agent_tab_switch_grants_every_machine_and_auto_grants_later_ones() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let w1 = seed_ws(&env, "tab1");
+    let w2 = seed_ws(&env, "tab2");
+    let (agent, _) = passport(&w1);
+
+    // An agent can't flip its own switch.
+    let r = post(port, "/cli/agent-access/set", &agent, json!({"workspace": w1.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert!(!switch_of(&w1.id));
+
+    pending_node("tabnode1", "tab-a");
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": "tab-a", "sas": "123456"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // On -> switch + a grant on the machine that's on, default limits.
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": w1.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["agentsCanUseCompute"], true);
+    assert_eq!(j(&r)["toggle"], "compute");
+    assert!(names(&j(&r)["granted"]).contains(&"tab-a".to_string()), "{}", r.body);
+    assert!(switch_of(&w1.id));
+    let g = grant_of(&w1.id, "tabnode1").expect("grant on tab-a");
+    assert_eq!(
+        (g["maxJobSecs"].as_i64(), g["maxParallel"].as_i64(), g["maxQueued"].as_i64(), g["maxDiskGb"].as_i64()),
+        (Some(7200), Some(1), Some(10), Some(60))
+    );
+    assert!(grant_of(&w2.id, "tabnode1").is_none(), "only the workspace switched on");
+
+    // A machine confirmed later is granted to it (and not to tab2).
+    pending_node("tabnode2", "tab-b");
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": "tab-b", "sas": "123456"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let auto = names(&j(&r)["autoGranted"]);
+    assert!(auto.contains(&"tab1".to_string()) && !auto.contains(&"tab2".to_string()), "{}", r.body);
+    assert!(grant_of(&w1.id, "tabnode2").is_some());
+    assert!(grant_of(&w2.id, "tabnode2").is_none());
+
+    // Off -> switch off and every grant gone.
+    let had = grants_of(&w1.id).len();
+    assert!(had >= 2, "{had}");
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": w1.id, "toggle": "compute", "value": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["agentsCanUseCompute"], false);
+    assert_eq!(j(&r)["grantsRemoved"].as_u64(), Some(had as u64));
+    assert!(grants_of(&w1.id).is_empty());
+    assert!(!switch_of(&w1.id));
+
+    // Clean up so other tests in this binary (shared DB) don't see them.
+    for n in ["tab-a", "tab-b"] {
+        let r = post(port, "/cli/compute/nodes/remove", OWNER, json!({"node": n})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
     drop(env);
 }

@@ -37,8 +37,6 @@ vi.mock('./compute-api', async (importOriginal) => {
     setLocalPolicy: vi.fn(),
     enableLocalNode: vi.fn(),
     disableLocalNode: vi.fn(),
-    fetchComputeAgents: vi.fn(),
-    setComputeAgent: vi.fn(),
     retireComputeNode: vi.fn(),
   }
 })
@@ -57,7 +55,7 @@ vi.mock('../lib/compute-account', async (importOriginal) => {
 
 import * as api from './compute-api'
 import type { ComputeGrant, ComputeNode, LocalStatus } from './compute-api'
-import { ComputeSection } from './ComputeSection'
+import { COMPUTE_MANIFEST, ComputeSection } from './ComputeSection'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -161,11 +159,6 @@ beforeEach(() => {
   m.fetchComputeJobs.mockResolvedValue([])
   m.fetchComputeEvents.mockResolvedValue([])
   m.fetchLocalStatus.mockResolvedValue(LOCAL_OFF)
-  m.fetchComputeAgents.mockResolvedValue({
-    agents: [],
-    activeNodes: 0,
-    defaults: { maxJobSecs: 7200, maxParallel: 1, maxQueued: 10, maxDiskGb: 60 },
-  })
   for (const fn of [
     m.confirmComputeNode,
     m.pauseComputeNode,
@@ -185,6 +178,19 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+})
+
+describe('agents are not on this page (Rosson 2026-10-11)', () => {
+  it('no "Agents that can use compute" section, no per-agent switches; a note points at the Agent tab', async () => {
+    render(<ComputeSection />)
+    await screen.findByTestId('compute-machines')
+    expect(screen.queryByText('Agents that can use compute')).toBeNull()
+    expect(screen.queryByTestId('compute-agents')).toBeNull()
+    expect(screen.queryByRole('switch', { name: /^Use compute:/ })).toBeNull()
+    expect(screen.getByTestId('compute-agents-note').textContent).toContain('Agent → Allow')
+    expect(m.setWorkspaceComputeSwitch).not.toHaveBeenCalled()
+    expect(COMPUTE_MANIFEST.map((e) => e.id)).not.toContain('compute.agents')
+  })
 })
 
 describe('preview off', () => {
@@ -256,16 +262,14 @@ describe('nodes of this server', () => {
     await waitFor(() => expect(m.pauseComputeNode).toHaveBeenCalledWith('mini-2', 'resume'))
   })
 
-  it('a grant: revoke and the workspace switch', async () => {
+  it('a grant: revoke; the workspace switch is read-only here (Agent tab owns it)', async () => {
     render(<ComputeSection />)
     const row = await screen.findByTestId('compute-grant-sales')
     expect(row.textContent).toContain('sales')
-    const sw = within(row).getByRole('switch', { name: 'Allow compute nodes for sales' })
-    expect(sw.getAttribute('aria-checked')).toBe('false')
-    fireEvent.click(sw)
-    await waitFor(() => expect(m.setWorkspaceComputeSwitch).toHaveBeenCalledWith('p-sales', true))
-    await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('true'))
-    expect(useProjectsStore.getState().projects.find((p) => p.id === 'p-sales')?.agentsCanUseCompute).toBe(1)
+    expect(within(row).queryByRole('switch')).toBeNull()
+    expect(within(row).getByTestId('compute-grant-switch').textContent).toBe(
+      'Allow compute nodes: off (set on its Agent tab)',
+    )
 
     fireEvent.click(within(row).getByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(m.revokeComputeGrant).toHaveBeenCalledWith('mini-2', 'p-sales'))

@@ -9564,10 +9564,10 @@ Owner / admin (refused for agents and inside K2 terminals):
                    [--max-parallel 1] [--max-queued 10]
   k2 compute revoke <node> --workspace WS
   k2 compute grants [--node N] [--workspace WS]
-  k2 compute access on|off|status --workspace WS   "Allow compute nodes"
-  k2 compute access on --all-machines --workspace WS
-                   switch on + a grant on every machine (and ones added later);
-                   off --all-machines also removes the workspace's grants
+  k2 compute access on|off --workspace WS
+                   the Agent tab's "Allow compute nodes" (Settings → Workspaces →
+                   <agent> → Agent): on = a grant on every machine switched on,
+                   default limits (and ones added later); off removes them all
   k2 compute usage [--days N]    k2 compute events [--limit N]
 This computer (its owner):
   k2 compute local status|pause [--now]|drain|resume
@@ -10407,20 +10407,25 @@ else: print(v.get("state", "ok"))'
                 case "$1" in
                     --workspace) workspace="${2:-}"; shift 2 ;;
                     --all-machines) all=1; shift ;;
-                    *) echo "usage: k2 compute access on|off [--all-machines] --workspace WS" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute access on|off --workspace WS" >&2; exit 2 ;;
                 esac
             done
             [ -z "$workspace" ] && workspace="$(_compute_ws "")"
             case "$action" in
                 on|off)
-                    if [ -n "$all" ]; then
-                        # Settings → Compute "Agents that can use compute".
-                        _compute_call POST /cli/compute/agents/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
-                        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Compute %s for %s%s" % ("on" if v["agentsCanUseCompute"] else "off", v["workspace"], (": " + ", ".join(v.get("granted", []) + v.get("kept", []))) if v["agentsCanUseCompute"] else " (%d grants removed)" % v.get("grantsRemoved", 0)))'
-                        return
-                    fi
+                    # The Agent tab's "Allow compute nodes" (the single
+                    # control, Rosson 2026-10-11): on also grants every
+                    # machine switched on (and ones added later); off removes
+                    # the workspace's grants. --all-machines is accepted for
+                    # old scripts; it's what plain on/off does now.
+                    : "$all"
                     _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_toggle=compute K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
-                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Allow compute nodes: %s for %s" % ("on" if v["agentsCanUseCompute"] else "off", v["workspace"]))'
+                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+on=v["agentsCanUseCompute"]
+m=v.get("granted", []) + v.get("kept", [])
+tail=((": " + ", ".join(m)) if m else ": no machines switched on yet (ones added later are granted)") if on else (" (%d grants removed)" % v.get("grantsRemoved", 0) if "grantsRemoved" in v else "")
+print("Allow compute nodes: %s for %s%s" % ("on" if on else "off", v["workspace"], tail))'
                     ;;
                 *) echo "usage: k2 compute access on|off --workspace WS" >&2; exit 2 ;;
             esac
@@ -21597,8 +21602,10 @@ WHEN
 
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
-  Nothing listed: your owner turns on Workspace settings → Agent →
-  "Allow compute nodes" and grants a node. You can't do either yourself.
+  Nothing listed: your owner turns on "Allow compute nodes" for you in
+  Settings → Workspaces → <you> → Agent. That gives you every machine
+  they switched on in Settings → Compute (and ones added later). You
+  can't turn it on yourself.
 
 RUN
   Attached (default): output streams; the exit code is the command's.

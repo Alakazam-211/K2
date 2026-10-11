@@ -28,13 +28,14 @@ done
 
 safe_rm() {
     case "$1" in
-        /var/k2node|/etc/k2-node|"/Library/Application Support/K2/node") rm -rf -- "$1" ;;
+        /var/k2node|/etc/k2-node|"/Library/Application Support/K2/node"|/var/db/k2-node-admin) rm -rf -- "$1" ;;
         *) die "refusing to delete $1" ;;
     esac
 }
 
 launchctl bootout system/dev.k2.node 2>/dev/null || true
-rm -f "$PLIST"
+launchctl bootout system/dev.k2.node-admin 2>/dev/null || true
+rm -f "$PLIST" /Library/LaunchDaemons/dev.k2.node-admin.plist /var/run/k2-node-admin.sock
 pkill -KILL -u "$NODE_USER" 2>/dev/null || true
 dscl . -read "/Users/$NODE_USER" >/dev/null 2>&1 && dscl . -delete "/Users/$NODE_USER"
 dscl . -read "/Groups/$NODE_USER" >/dev/null 2>&1 && dscl . -delete "/Groups/$NODE_USER"
@@ -43,5 +44,6 @@ safe_rm "$BIN_DIR"
 if [ "$KEEP_CONFIG" = "0" ]; then
     safe_rm "$CONFIG_DIR"
     dscl . -read /Groups/k2nodectl >/dev/null 2>&1 && dscl . -delete /Groups/k2nodectl
+    safe_rm /var/db/k2-node-admin
 fi
 echo "Removed the compute node. Also run on the controller: k2 compute node remove <name>"

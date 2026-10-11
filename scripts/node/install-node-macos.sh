@@ -34,6 +34,10 @@ HOME_DIR="/var/k2node"
 CONFIG_DIR="/etc/k2-node"
 BIN_DIR="/Library/Application Support/K2/node"
 PLIST="/Library/LaunchDaemons/dev.k2.node.plist"
+ADMIN_PLIST="/Library/LaunchDaemons/dev.k2.node-admin.plist"
+ADMIN_STATE="/var/db/k2-node-admin"
+ADMIN_SOCKET="/var/run/k2-node-admin.sock"
+REMOTE_ADMIN=""
 BINARY=""
 CONTROLLER=""
 ENROLL=""
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
         --no-private-home) PRIVATE_HOME=0; shift ;;
         --reenroll) REENROLL=1; shift ;;
         --tools) TOOLS="${2:-}"; shift 2 ;;
+        --remote-admin) REMOTE_ADMIN="${2:-}"; shift 2 ;;
         --allow-packages) echo "note: --allow-packages is Linux-only; on a Mac the owner installs packages with brew" >&2; shift 2 ;;
         -h|--help) usage ;;
         *) die "unknown argument: $1 (see --help)" ;;
@@ -78,6 +83,7 @@ if ! xcode-select -p >/dev/null 2>&1; then
     CLT_STATUS="MISSING: jobs that need git or clang fail until the owner runs: xcode-select --install"
     echo "note: the Xcode Command Line Tools are not installed; jobs that need git or clang will fail (xcode-select --install)" >&2
 fi
+case "$REMOTE_ADMIN" in ""|off|policy|full) ;; *) die "--remote-admin must be off, policy or full" ;; esac
 if [ -n "$ENROLL" ] || [ -n "$CONTROLLER" ]; then
     [ -n "$ENROLL" ] && [ -n "$CONTROLLER" ] && [ -n "$NAME" ] || die "--enroll needs --controller and --name (mint a code with \`k2 compute node add <name>\` on the controller)"
 fi
@@ -207,6 +213,38 @@ if [ -n "$ENROLL" ]; then
         --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"}
 fi
 
+# ── remote admin: the root executor (prd-k2-node-admin-v1 §5.2 option A) ──
+# A LaunchDaemon with a launchd socket (0660 root:$NODE_USER), started on
+# demand. It runs only commands signed by your K2 server, and root ones
+# only with your own approval (Touch ID / password) for each.
+if [ -z "$REMOTE_ADMIN" ] && [ ! -f "$CONFIG_DIR/admin.toml" ]; then
+    if [ -t 0 ]; then
+        echo "== remote admin for this Mac"
+        echo "   off    = agents can only narrow limits and read health (today's behaviour)"
+        echo "   policy = also change limits (widening needs your approval), pause, update k2-node"
+        echo "   full   = also root actions, each approved by you (Touch ID / password) on your K2"
+        printf "   Remote admin level? [off/policy/full] (off) "
+        read -r answer
+        case "$answer" in policy|full) REMOTE_ADMIN="$answer" ;; *) REMOTE_ADMIN="off" ;; esac
+    else
+        REMOTE_ADMIN="off"
+    fi
+fi
+install -d -m 0700 -o root -g wheel "$ADMIN_STATE"
+level_args=()
+[ -n "$REMOTE_ADMIN" ] && level_args=(--level "$REMOTE_ADMIN")
+"$BIN" admin init --config-dir "$CONFIG_DIR" --home "$HOME_DIR" ${level_args[@]+"${level_args[@]}"} >/dev/null
+chown root:wheel "$CONFIG_DIR/admin.toml"
+chmod 0644 "$CONFIG_DIR/admin.toml"
+"$BIN" admin install-files --os macos --binary "$BIN" --home "$HOME_DIR" --config-dir "$CONFIG_DIR" \
+    --state-dir "$ADMIN_STATE" --socket "$ADMIN_SOCKET" --group "$gid" --out "$tmp" >/dev/null
+install -m 0644 -o root -g wheel "$tmp/dev.k2.node-admin.plist" "$ADMIN_PLIST"
+launchctl bootout system/dev.k2.node-admin 2>/dev/null || true
+launchctl bootstrap system "$ADMIN_PLIST" || die "dev.k2.node-admin didn't load (System Settings → General → Login Items may block background items)"
+if [ -f "$HOME_DIR/state/controller.json" ]; then
+    "$BIN" admin pin --config-dir "$CONFIG_DIR" --home "$HOME_DIR" >/dev/null || true
+fi
+
 echo "== LaunchDaemon"
 launchctl bootout system/dev.k2.node 2>/dev/null || true
 launchctl bootstrap system "$PLIST"
@@ -238,9 +276,11 @@ Done.
   Xcode CLT:    $CLT_STATUS
   packages:     jobs can't install system packages on macOS; a job that needs one fails with the brew command to run
   toolchains:   $TOOLS_STATUS
+  remote admin: $("$BIN" admin init --config-dir "$CONFIG_DIR" --home "$HOME_DIR" 2>&1) (dev.k2.node-admin)
   status:  "$BIN" status --home $HOME_DIR
   pause:   "$BIN" pause [--now]     (you are in k2nodectl after a new login; or use sudo)
   policy:  "$BIN" policy show | set cpu_cap_percent=50
   log:     $HOME_DIR/log/k2-node.log
   remove:  sudo "$BIN" uninstall
+  admin:   sudo "$BIN" admin level off|policy|full   |   sudo "$BIN" admin audit
 EOF

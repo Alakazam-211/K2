@@ -208,9 +208,24 @@ function svc(over: Partial<PublishedService> & { name: string }): PublishedServi
     lastExitCode: null,
     kind: 'cmd',
     skinRoot: '',
+    envDeprecation: null,
     ...over,
   }
 }
+
+describe('parsePublishedService envDeprecation', () => {
+  it('reads envDeprecation (camelCase or snake_case); absent or blank is null', () => {
+    const base = { name: 'shop', cmd: 'node s.js', port: 3000 }
+    expect(parsePublishList({ services: [{ ...base, envDeprecation: 'ends in 0.46.0' }] })[0].envDeprecation).toBe(
+      'ends in 0.46.0',
+    )
+    expect(parsePublishList({ services: [{ ...base, env_deprecation: 'ends in 0.46.0' }] })[0].envDeprecation).toBe(
+      'ends in 0.46.0',
+    )
+    expect(parsePublishList({ services: [base] })[0].envDeprecation).toBeNull()
+    expect(parsePublishList({ services: [{ ...base, envDeprecation: '  ' }] })[0].envDeprecation).toBeNull()
+  })
+})
 
 describe('parsePublishList', () => {
   it('reads the frozen { services: [...] } list shape', () => {

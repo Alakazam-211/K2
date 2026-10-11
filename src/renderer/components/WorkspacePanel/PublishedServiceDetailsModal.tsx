@@ -120,6 +120,13 @@ export function PublishedServiceDetailsModal({
           <Field label="Desired">{dash(service.desired)}</Field>
           <Field label="PID">{servicePidLabel(service)}</Field>
           <Field label="Error">{dash(service.error)}</Field>
+          {service.envDeprecation ? (
+            <Field label="Environment">
+              <span data-env-deprecation className="text-[var(--color-status-warn-text)]">
+                {service.envDeprecation}
+              </span>
+            </Field>
+          ) : null}
           <Field label="Last exit">{service.lastExitCode !== null ? String(service.lastExitCode) : '—'}</Field>
           <Field label="Launch" mono={launchMono}>
             {launch}

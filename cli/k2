@@ -11618,6 +11618,8 @@ for s in v.get("secrets") or []:
     print("  %s as %s%s" % (s.get("name"), s.get("delivery"), (" (" + s["envName"] + ")") if s.get("envName") else ""))
 if v.get("inheritedNames"):
     print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
+if v.get("mode") == "legacy":
+    print("  deprecated: inheriting the daemon environment ends in K2 0.46.0 — switch with: k2 publish env %s clean" % v.get("service"))
 if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
@@ -12996,6 +12998,8 @@ if mode == "list":
         ))
         if s.get("frameWarning"):
             warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
+        if s.get("envDeprecation"):
+            warnings.append((str(s.get("name") or "?"), "deprecated: " + str(s.get("envDeprecation"))))
     if not rows:
         print("No published services.")
         sys.exit(0)
@@ -13034,6 +13038,8 @@ if url and url != "-":
     print("  %s" % url)
 if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
+if isinstance(svc, dict) and svc.get("envDeprecation"):
+    print("  deprecated: %s" % svc.get("envDeprecation"))
 sys.exit(0)
 PY
 }

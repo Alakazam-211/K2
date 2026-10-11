@@ -398,6 +398,15 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                         {svc.error}
                       </span>
                     ) : null}
+                    {svc.envDeprecation ? (
+                      <span
+                        data-env-deprecation
+                        className="block text-[10px] text-[var(--color-status-warn-text)] truncate"
+                        title={svc.envDeprecation}
+                      >
+                        Inherits the daemon environment — ends in 0.46.0
+                      </span>
+                    ) : null}
                   </div>
                 )
               })}

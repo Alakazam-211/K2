@@ -131,6 +131,11 @@ pub struct ServiceJson {
     /// `frame-ancestors` or `X-Frame-Options` (daemon probe). Null otherwise.
     #[serde(default)]
     pub frame_warning: Option<String>,
+    /// Set while a service from before the vault still inherits the
+    /// daemon's whole environment (`legacy` mode): that way of running
+    /// ends in 0.46.0 (Rosson 2026-10-10). Null for every other service.
+    #[serde(default)]
+    pub env_deprecation: Option<String>,
 }
 
 impl ServiceJson {
@@ -177,6 +182,7 @@ impl ServiceJson {
                 None
             },
             frame_warning: None,
+            env_deprecation: None,
         }
     }
 }

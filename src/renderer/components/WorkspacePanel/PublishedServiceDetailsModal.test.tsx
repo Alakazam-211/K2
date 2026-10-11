@@ -26,6 +26,7 @@ function svc(over: Partial<PublishedService> & { name: string }): PublishedServi
     lastExitCode: null,
     kind: 'cmd',
     skinRoot: '',
+    envDeprecation: null,
     ...over,
   }
 }
@@ -41,6 +42,22 @@ describe('PublishedServiceDetailsModal', () => {
     expect(within(dialog).queryByRole('button', { name: 'Stop' })).toBeNull()
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('a service still inheriting the daemon environment shows the 0.46.0 notice', () => {
+    const notice = 'This service still inherits the K2 daemon environment. That ends in K2 0.46.0.'
+    const { unmount } = render(
+      <PublishedServiceDetailsModal
+        service={svc({ name: 'shop', envDeprecation: notice })}
+        hostLabel="This Mac"
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByText('Environment')).toBeTruthy()
+    expect(screen.getByText(notice)).toBeTruthy()
+    unmount()
+    render(<PublishedServiceDetailsModal service={svc({ name: 'web' })} hostLabel="This Mac" onClose={() => {}} />)
+    expect(screen.queryByText('Environment')).toBeNull()
   })
 
   it('shows status, desired, pid, and This Mac for a local cmd row', () => {

@@ -243,6 +243,25 @@ describe('UrlsPortsSection', () => {
     expect(screen.queryByText('https://should-not-show.k2.dev')).toBeNull()
   })
 
+  it('a service still inheriting the daemon environment shows the 0.46.0 line', async () => {
+    mockPublishGets({
+      list: {
+        services: [
+          wire({ name: 'shop', envDeprecation: 'Inherits the daemon environment; ends in K2 0.46.0.' }),
+          wire({ name: 'fresh' }),
+        ],
+      },
+    })
+    renderInRoom(overlayRoom, <UrlsPortsSection projectId="proj-1" />)
+    await waitFor(() => {
+      expect(screen.getByText('shop')).toBeTruthy()
+    })
+    const shop = document.querySelector('[data-published-service="shop"]') as HTMLElement
+    const fresh = document.querySelector('[data-published-service="fresh"]') as HTMLElement
+    expect(within(shop).getByText('Inherits the daemon environment — ends in 0.46.0')).toBeTruthy()
+    expect(fresh.querySelector('[data-env-deprecation]')).toBeNull()
+  })
+
   it('skin rows badge Skin; Details Launch is the gateway, not (skin)', async () => {
     mockPublishGets({
       list: { services: [wire({ name: 'agents', kind: 'skin', cmd: '(skin)', skinRoot: 'ui', pid: 7 })] },

@@ -600,6 +600,9 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     if row.kind != KIND_SKIN && status == STATUS_RUNNING {
         json.frame_warning = frame_warning_get(&row.project_id, &row.name);
     }
+    if row.kind != KIND_SKIN && crate::vault::publish_env::is_legacy(&row.id) {
+        json.env_deprecation = Some(crate::vault::publish_env::legacy_env_notice(&row.name));
+    }
     json
 }
 

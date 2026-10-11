@@ -511,6 +511,14 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             }
         }
     }
+    for (name, notice) in legacy_env_services(c) {
+        findings.push(json!({
+            "level": "warning",
+            "code": "publish_env_inherited",
+            "service": name,
+            "message": format!("published service {name}: {notice}"),
+        }));
+    }
     for f in plaintext_env_files(c) {
         findings.push(json!({
             "level": "warning",
@@ -519,6 +527,47 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
         }));
     }
     Ok(json!({ "ok": findings.iter().all(|f| f["level"] != "error"), "findings": findings }))
+}
+
+/// Published services still on the inherited environment (deprecated,
+/// ends in 0.46.0), as (name, notice). Scoped to the caller's workspace
+/// when it has one.
+fn legacy_env_services(c: &VaultCaller) -> Vec<(String, String)> {
+    let ids = crate::vault::publish_env::legacy_ids();
+    if ids.is_empty() {
+        return vec![];
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut st = match conn.prepare("SELECT id, project_id, name, kind FROM published_services") {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let rows = st.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        ))
+    });
+    let mut out = vec![];
+    if let Ok(it) = rows {
+        for (id, project_id, name, kind) in it.flatten() {
+            if kind == k2_core::published_services::KIND_SKIN || !ids.contains(&id) {
+                continue;
+            }
+            if let Some(ws) = c.workspace_id() {
+                if ws != project_id {
+                    continue;
+                }
+            }
+            let notice = crate::vault::publish_env::legacy_env_notice(&name);
+            out.push((name, notice));
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Workspace `.env` files (top level) with sensitive names holding values

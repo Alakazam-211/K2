@@ -96,6 +96,41 @@ pub fn get(service_id: &str) -> ServiceEnv {
     m.services.get(service_id).cloned().unwrap_or(ServiceEnv { mode: default_mode.into(), ..Default::default() })
 }
 
+/// Rosson 2026-10-10: services from before 0.45.4 keep inheriting the
+/// daemon's environment in 0.45.x, with this notice wherever the service
+/// shows (status, `k2 publish list`, the Published drawer, `k2 vault
+/// doctor`). New services start clean.
+pub const LEGACY_ENV_REMOVED_IN: &str = "0.46.0";
+
+/// The deprecation notice for one service (`name` = its publish name).
+pub fn legacy_env_notice(name: &str) -> String {
+    format!(
+        "This service still inherits the K2 daemon's whole environment because it existed \
+         before 0.45.4. That ends in K2 {LEGACY_ENV_REMOVED_IN}: it will then start with a \
+         clean environment plus only the secrets granted to it. Switch now with \
+         `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`)."
+    )
+}
+
+/// `true` only for a service explicitly kept on the inherited environment
+/// (`legacy`), never for one that merely has no entry yet.
+pub fn is_legacy(service_id: &str) -> bool {
+    load()
+        .services
+        .get(service_id)
+        .is_some_and(|e| e.mode == "legacy")
+}
+
+/// The ids of every service kept on the inherited environment.
+pub fn legacy_ids() -> Vec<String> {
+    load()
+        .services
+        .into_iter()
+        .filter(|(_, e)| e.mode == "legacy")
+        .map(|(id, _)| id)
+        .collect()
+}
+
 pub fn set(service_id: &str, mode: Option<&str>, env_file: Option<Option<String>>) -> Result<ServiceEnv, String> {
     let _g = LOCK.lock();
     let mut m = load();
@@ -247,6 +282,26 @@ mod tests {
     fn env_k2_parsing() {
         let v = parse_env_k2("# c\nexport A=1\nSTRIPE_KEY=\"k2v://ws/sales/STRIPE_KEY\"\n\nB='x y'\n");
         assert_eq!(v, vec![("A".into(), "1".into()), ("STRIPE_KEY".into(), "k2v://ws/sales/STRIPE_KEY".into()), ("B".into(), "x y".into())]);
+    }
+
+    /// Rosson 2026-10-10: only a service explicitly kept on the inherited
+    /// environment carries the 0.46.0 deprecation notice; switching it to
+    /// clean removes the notice, and a new service never has one.
+    #[test]
+    fn only_legacy_services_carry_the_046_deprecation_notice() {
+        crate::test_support::with_temp_home(|| {
+            let old = uuid::Uuid::new_v4().to_string();
+            let new = uuid::Uuid::new_v4().to_string();
+            set(&old, Some("legacy"), None).expect("legacy");
+            assert!(is_legacy(&old));
+            assert!(!is_legacy(&new), "a service with no entry is not legacy");
+            assert_eq!(legacy_ids(), vec![old.clone()]);
+            let n = legacy_env_notice("shop");
+            assert!(n.contains("0.46.0") && n.contains("k2 publish env shop clean"), "{n}");
+            set(&old, Some("clean"), None).expect("clean");
+            assert!(!is_legacy(&old));
+            assert!(legacy_ids().is_empty());
+        });
     }
 
     #[test]

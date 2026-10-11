@@ -136,6 +136,9 @@ export interface PublishedService {
   kind: PublishedServiceKind
   /** Workspace-relative UI dir. Empty = bundled skin chrome. */
   skinRoot: string
+  /** Daemon notice while a service from before 0.45.4 still inherits the
+   *  daemon's environment (ends in 0.46.0). Null otherwise. */
+  envDeprecation: string | null
 }
 
 function asString(value: unknown): string {
@@ -182,6 +185,7 @@ export function parsePublishedService(raw: unknown): PublishedService | null {
     lastExitCode: asFiniteOrNull(o.lastExitCode ?? o.last_exit_code),
     kind: parseKind(o.kind),
     skinRoot: parseSkinRoot(o),
+    envDeprecation: asStringOrNull(o.envDeprecation ?? o.env_deprecation),
   }
 }
 

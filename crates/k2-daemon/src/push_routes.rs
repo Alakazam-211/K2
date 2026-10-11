@@ -293,18 +293,119 @@ fn dispatch_push(event: PushEvent) {
         let Some(cloud) = current_cloud() else {
             return;
         };
-        let class = event.budget_class();
-        let per_hour = match class {
-            budget::BudgetClass::Thread => {
-                k2_core::push::RelayPath::of(cloud.config(), unix_now()).thread_per_hour()
+        // Off the route thread: resolving people/devices reads files.
+        std::thread::spawn(move || {
+            for (principal, devices) in ticket_or_project_targets(&event) {
+                // One dispatch per person (TP29), each taking one token
+                // from the ticket/project bucket (never the Thread one).
+                if !budget::global().try_take(budget::BudgetClass::Other, budget::OTHER_PER_HOUR, Instant::now()) {
+                    note_budget_drop(budget::BudgetClass::Other);
+                    return;
+                }
+                if airgap_blocks() {
+                    note_airgap_drop();
+                    return;
+                }
+                if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+                    k2_core::log_debug!("[push] dispatch failed ({}): {e}", cloud.label());
+                }
             }
-            budget::BudgetClass::Other => budget::OTHER_PER_HOUR,
-        };
-        if !budget::global().try_take(class, per_hour, Instant::now()) {
-            note_budget_drop(class);
-            return;
+        });
+    }
+}
+
+/// Ticket/project recipients (§10): the event's targets (assignees, or
+/// every device), minus removed/disabled logins and people whose server
+/// bell is off, grouped by person.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn ticket_or_project_targets(
+    event: &PushEvent,
+) -> Vec<(String, Vec<k2_core::push_devices::PushDevice>)> {
+    let devices = match event.target_usernames() {
+        Some(users) => push_devices::list_devices_for_usernames(users),
+        None => push_devices::list_devices(),
+    }
+    .unwrap_or_default();
+    let people = match k2_core::notify_prefs::People::load() {
+        Ok(p) => p,
+        Err(e) => {
+            k2_core::log_debug!("[push] people load failed: {e}");
+            return Vec::new();
         }
-        dispatch_with(Some(cloud as Arc<dyn PushTarget>), event);
+    };
+    let prefs = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if k2_core::notify_prefs::tables_exist(&conn) {
+            k2_core::notify_prefs::PrefsSnapshot::load(&conn).unwrap_or_default()
+        } else {
+            k2_core::notify_prefs::PrefsSnapshot::default()
+        }
+    };
+    group_by_person(&people, k2_core::notify_prefs::bell_allowed_devices(&people, &prefs, devices))
+}
+
+/// Group devices by their person key (sorted by person).
+pub(crate) fn group_by_person(
+    people: &k2_core::notify_prefs::People,
+    devices: Vec<k2_core::push_devices::PushDevice>,
+) -> Vec<(String, Vec<k2_core::push_devices::PushDevice>)> {
+    let mut out: std::collections::BTreeMap<String, Vec<k2_core::push_devices::PushDevice>> =
+        Default::default();
+    for d in devices {
+        if let Some(person) = people.device_person(&d.username) {
+            out.entry(person).or_default().push(d);
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Take one dispatch from the Thread bucket (§6.3): 30/h on the
+/// per-daemon relay path, 5/h on the shared token. Dormant/test: always
+/// granted (nothing leaves anyway).
+pub(crate) fn take_thread_budget(now: Instant) -> bool {
+    #[cfg(test)]
+    {
+        let _ = now;
+        true
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return true;
+        };
+        let per_hour = k2_core::push::RelayPath::of(cloud.config(), unix_now()).thread_per_hour();
+        budget::global().try_take(budget::BudgetClass::Thread, per_hour, now)
+    }
+}
+
+/// Send one coalesced Thread push (one person's devices) — air-gap is
+/// checked again here, then a detached send. Test: the capture sink.
+pub(crate) fn deliver_thread(event: PushEvent) {
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
+    #[cfg(test)]
+    {
+        test_push_capture::capture(&event);
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return;
+        };
+        let PushEvent::ThreadPost(t) = &event else {
+            return;
+        };
+        let principal = t.principal.clone();
+        let logins = t.device_usernames.clone();
+        std::thread::spawn(move || {
+            let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
+            if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+                k2_core::log_debug!("[push] thread dispatch failed ({}): {e}", cloud.label());
+            }
+        });
     }
 }
 
@@ -316,6 +417,7 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 /// Fire-and-forget core, target injected for testability: `None` =
 /// DORMANT no-op (returns `None`); `Some` sends on a detached thread —
 /// the route handler never waits on the gateway, and per the
@@ -686,5 +788,52 @@ mod tests {
         k2_core::airgap::set_setting_enabled(false);
         let _on = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
         assert!(prod_airgap_on(), "env flip is seen too");
+    }
+
+    /// §10 / Q5: the server bell silences ticket and project pushes too;
+    /// disabled logins get none; each person is its own dispatch (TP29).
+    #[test]
+    fn ticket_and_project_targets_follow_the_bell_per_person() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        for (u, role) in [("bellmo", None), ("bellgina", None), ("belldis", None), ("bellz", Some(k2_core::connect_users::Role::Admin))] {
+            k2_core::connect_users::add_user(u, "password123").expect("user");
+            if let Some(r) = role {
+                k2_core::connect_users::set_role(u, r).expect("role");
+            }
+        }
+        k2_core::connect_users::set_disabled("belldis", true).expect("disable");
+        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["bellz"] })).expect("link");
+        for (id, user) in [("b1", "owner"), ("b2", "bellz"), ("b3", "bellmo"), ("b4", "bellgina"), ("b5", "belldis")] {
+            push_devices::upsert_device(id, "apns", &format!("tok-{id}"), user).expect("device");
+        }
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::notify_prefs::set_server(&conn, "bellgina", false, "bellgina").expect("bell off");
+        }
+        let groups = ticket_or_project_targets(&PushEvent::ProjectMessageCreated {
+            project_name: "Apollo".into(),
+            group_id: "g".into(),
+        });
+        let shape: Vec<(String, Vec<String>)> = groups
+            .into_iter()
+            .map(|(p, d)| (p, d.into_iter().map(|x| x.username).collect()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("bellmo".to_string(), vec!["bellmo".to_string()]),
+                ("owner".to_string(), vec!["owner".to_string(), "bellz".to_string()]),
+            ],
+            "bell-off gina and disabled dis are skipped; the linked login is the owner"
+        );
+        // Assignee targeting still narrows, and still follows the bell.
+        let groups = ticket_or_project_targets(&PushEvent::FeedbackCommented {
+            feedback_id: "f".into(),
+            assignees: vec!["bellgina".into(), "bellmo".into()],
+        });
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "bellmo");
     }
 }

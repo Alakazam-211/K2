@@ -550,6 +550,46 @@ pub struct AppSettings {
     /// `wake_scheduler.wake_on_battery` ("Also on battery", D12).
     #[serde(default)]
     pub keep_awake: KeepAwakeSettings,
+    /// Settings → Tickets (0.45.4): the server-wide rules on agent
+    /// tickets. Owner/Admin only to change (`settings_routes`
+    /// `REMOTE_ACCESS_KEYS` lists `tickets`; the dedicated route is
+    /// `POST /cli/tickets/settings`). Read per ticket by
+    /// `feedback_brief::ticket_rules`.
+    #[serde(default)]
+    pub tickets: TicketSettings,
+}
+
+/// Settings → Tickets: the brief rule, the assignee rule and the default
+/// assignee for agent tickets. Rules are `off | warn | require`; both
+/// default to `warn` (the 0.43.2 behaviour), so nothing changes until the
+/// owner flips one. [`update`] refuses any other string.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketSettings {
+    /// "Require an HTML brief" on agent tickets.
+    #[serde(default = "default_ticket_rule")]
+    pub brief_policy: String,
+    /// "Require an assignee" on agent tickets.
+    #[serde(default = "default_ticket_rule")]
+    pub assignee_policy: String,
+    /// Who an agent ticket with no `--assign` goes to: `owner` or a
+    /// Connect username. Empty = nobody (the default; today's behaviour).
+    #[serde(default)]
+    pub default_assignee: String,
+}
+
+fn default_ticket_rule() -> String {
+    crate::feedback_brief::DEFAULT_TICKET_RULE.as_wire().to_string()
+}
+
+impl Default for TicketSettings {
+    fn default() -> Self {
+        Self {
+            brief_policy: default_ticket_rule(),
+            assignee_policy: default_ticket_rule(),
+            default_assignee: String::new(),
+        }
+    }
 }
 
 /// Heartbeat S6 — Keep awake: Off / While agents are working / Always.
@@ -894,6 +934,7 @@ impl Default for AppSettings {
             companion: CompanionSettings::default(),
             wake_scheduler: WakeSchedulerSettings::default(),
             keep_awake: KeepAwakeSettings::default(),
+            tickets: TicketSettings::default(),
         }
     }
 }
@@ -1096,6 +1137,14 @@ pub fn update(partial: serde_json::Value) -> Result<AppSettings, String> {
             merged.keep_awake.mode
         ));
     }
+    for (key, value) in [
+        ("tickets.briefPolicy", &merged.tickets.brief_policy),
+        ("tickets.assigneePolicy", &merged.tickets.assignee_policy),
+    ] {
+        if crate::feedback_brief::TicketRule::from_wire(value).is_none() {
+            return Err(format!("{key} must be one of off|warn|require (got {value:?})"));
+        }
+    }
 
     let creds_changed = current.companion.password_hash != merged.companion.password_hash
         || current.companion.username != merged.companion.username;
@@ -1182,6 +1231,34 @@ mod tests {
         let loaded = load();
         assert_eq!(loaded.default_agent, "codex");
         assert_eq!(loaded.companion.username, "rosson");
+    }
+
+    /// Settings → Tickets (0.45.4): both rules default to warn and no
+    /// default assignee; update stores a valid rule and refuses any other
+    /// string with nothing written.
+    #[test]
+    fn ticket_rules_default_warn_and_update_validates() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        let s = load();
+        assert_eq!(s.tickets, TicketSettings::default());
+        assert_eq!(s.tickets.brief_policy, "warn");
+        assert_eq!(s.tickets.assignee_policy, "warn");
+        assert_eq!(s.tickets.default_assignee, "");
+        let merged = update(serde_json::json!({
+            "tickets": { "briefPolicy": "require", "defaultAssignee": "julie" }
+        }))
+        .expect("valid rule");
+        assert_eq!(merged.tickets.brief_policy, "require");
+        assert_eq!(merged.tickets.assignee_policy, "warn", "untouched key kept");
+        assert_eq!(merged.tickets.default_assignee, "julie");
+        let err = update(serde_json::json!({ "tickets": { "assigneePolicy": "maybe" } }))
+            .expect_err("bad rule refused");
+        assert!(err.contains("tickets.assigneePolicy must be one of off|warn|require"), "{err}");
+        assert_eq!(load().tickets.assignee_policy, "warn", "nothing written on refusal");
+        let rules = crate::feedback_brief::TicketRules::from_settings(&load().tickets);
+        assert_eq!(rules.brief, crate::feedback_brief::TicketRule::Require);
+        assert_eq!(rules.default_assignee.as_deref(), Some("julie"));
     }
 
     #[test]

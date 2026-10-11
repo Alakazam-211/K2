@@ -821,6 +821,9 @@ pub const ROUTES: &[Route] = &[
     both("/cli/thread/post", Member),
     post("/cli/thread/secret", Member),
     both("/cli/thread/void", Member),
+    // Settings → Tickets (0.45.4): any login reads the rules; changing
+    // them is Owner/Admin (the handler also refuses agent passports).
+    split("/cli/tickets/settings", Member, Admin),
     post("/cli/timer/create", Member),
     post("/cli/timer/delete", Member),
     get("/cli/timer/entries-export", Member),
@@ -1824,6 +1827,19 @@ mod tests {
         assert!(floor.admits(Role::Owner));
         let status = lookup("/cli/power/status").expect("power status is classified");
         assert_eq!(status.get.expect("power status is a GET route").as_wire(), "member");
+    }
+
+    #[test]
+    fn ticket_rules_change_needs_admin_and_reading_stays_member() {
+        // Settings → Tickets (0.45.4): the rules agents are held to.
+        let route = lookup("/cli/tickets/settings").expect("tickets settings is classified");
+        assert_eq!(route.get.expect("GET reads the rules").as_wire(), "member");
+        let floor = route.post.expect("POST changes the rules");
+        assert_eq!(floor.as_wire(), "admin");
+        assert!(!floor.admits(Role::Member));
+        assert!(floor.admits(Role::Admin));
+        assert!(floor.admits(Role::Owner));
+        assert!(post_allowed("/cli/tickets/settings"));
     }
 
     #[test]

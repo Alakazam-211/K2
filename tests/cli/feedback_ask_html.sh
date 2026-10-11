@@ -409,7 +409,7 @@ set +e
 env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" tickets template >"$WORK/tpl.out" 2>"$WORK/tpl.err"
 tpl_rc=$?
 set -e
-if [ "$tpl_rc" -eq 0 ] && grep -q -- '--assign <user>' "$WORK/tpl.err" && grep -q 'required in a future update' "$WORK/tpl.err" && ! grep -q -- '--assign' "$WORK/tpl.out"; then
+if [ "$tpl_rc" -eq 0 ] && grep -q -- '--assign <user>' "$WORK/tpl.err" && grep -q 'k2 tickets settings' "$WORK/tpl.err" && ! grep -q -- '--assign' "$WORK/tpl.out"; then
     ok "template: --assign next step on stderr, brief on stdout stays clean"
 else
     bad "template assign line: rc=$tpl_rc err=$(cat "$WORK/tpl.err")"
@@ -447,7 +447,7 @@ assert any(f["name"] == "--html" for f in cmds["feedback ask"]["flags"]), "ask -
 assert any(f["name"] == "--html" for f in cmds["feedback show"]["flags"]), "show --html"
 assert "feedback template" in cmds, "template"
 ask = cmds["feedback ask"]
-assert "--assign <user>" in ask["description"] and "future update" in ask["description"], "ask description"
+assert "--assign <user>" in ask["description"] and "k2 tickets settings" in ask["description"], "ask description"
 assign_flag = [f for f in ask["flags"] if f["name"] == "--assign"][0]
 assert "assignee_required" in assign_flag["description"], assign_flag
 PY

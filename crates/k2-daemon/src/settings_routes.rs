@@ -57,6 +57,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // the daemon user's agent CLI configs. Same floor as
     // `POST /cli/hooks/install` (Admin): it rewrites those files.
     "agentHooks",
+    // Settings → Tickets (0.45.4): the brief/assignee rules agents are
+    // held to and the default assignee. Same floor as
+    // `POST /cli/tickets/settings` (Admin).
+    "tickets",
 ];
 
 /// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may

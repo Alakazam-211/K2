@@ -5635,6 +5635,84 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Settings → Tickets (0.45.4). GET: any login or the owner token
+        // (canEdit says whether the caller may change them). POST:
+        // Owner/Admin floor in route_policy; the handler also refuses an
+        // agent passport (an agent never loosens its own rules).
+        crate::ticket_settings_routes::PATH => {
+            if is_post {
+                let body_bytes = match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::ticket_settings_routes::MAX_BODY_BYTES,
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let hint = serde_json::json!({
+                            "ok": false,
+                            "error": { "code": "body_too_large", "hint": "the body is at most 16 KiB" },
+                        })
+                        .to_string();
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            &hint,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                };
+                let writer = crate::ticket_settings_routes::writer_from_tcp(
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                let ingress_label = ingress.as_str().to_string();
+                let r = tokio::task::spawn_blocking(move || {
+                    let (r, outcome) = crate::ticket_settings_routes::handle_post(&body_bytes, &writer);
+                    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                        "tickets-settings",
+                        &writer.audit_user(),
+                        outcome,
+                        ingress_label,
+                        "-",
+                        "cli",
+                    ));
+                    r
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                });
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            } else {
+                let _ = stream.read(&mut buf).await;
+                if !super::http::token_ok(&query, state.token.as_str()) {
+                    super::http::send_response(
+                        &mut *stream,
+                        "403 Forbidden",
+                        "application/json",
+                        r#"{"error":"invalid or missing token"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+                let can_edit =
+                    super::http::token_is_owner_or_admin(&query, state.token.as_str());
+                let r = tokio::task::spawn_blocking(move || {
+                    crate::ticket_settings_routes::handle_get(can_edit)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                });
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+            }
+        }
         p if crate::sidecar_routes::is_route(p) => {
             let post_row = crate::sidecar_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

@@ -16,6 +16,9 @@
 //!   A1  assignee policy through the real dispatcher: no assignee warns,
 //!       a Connect user / owner does not, an unknown name warns, fyi exempt
 //!   T12 teaching: the brief AND `--assign <user>`
+//!   S1  Settings → Tickets (0.45.4): GET/POST /cli/tickets/settings, the
+//!       role floor, and the rules enforced at off / warn / require plus
+//!       the default assignee, all through the real dispatcher
 //!
 //! ISOLATION: `$HOME`, connect-user stores and the in-memory DB are
 //! process-wide, so dispatcher tests serialize on `TEST_LOCK`. Rows are
@@ -572,7 +575,7 @@ async fn assignee_policy_through_the_dispatcher() {
         assert!(
             hint.starts_with(
                 "A ticket must be assigned to a user on this server (`--assign <user>`). \
-                 This will be required in a future update."
+                 This server only warns (owner setting: Settings → Tickets"
             ),
             "{hint}"
         );
@@ -632,6 +635,169 @@ async fn assignee_policy_through_the_dispatcher() {
         assert_eq!(codes(&r), vec!["assignee_unknown"], "{}", r.body);
         let r = http(d.port, "GET", &format!("/cli/feedback/assign?token={OWNER_TOKEN}"), None);
         assert_eq!(r.status, 405, "{}", r.body);
+    });
+}
+
+/// S1: Settings → Tickets through the real dispatcher. The rules are
+/// owner settings in `settings.json`; every create below reads them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ticket_settings_through_the_dispatcher() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("ts_admin", "password123").expect("add_user");
+        connect_users::set_role("ts_admin", connect_users::Role::Admin).expect("set_role");
+        connect_users::add_user("ts_member", "password123").expect("add_user");
+        let admin = connect_users::create_session("ts_admin");
+        let member = connect_users::create_session("ts_member");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let path = seed_workspace_path("ticket-settings");
+        let get = |token: &str| {
+            http(d.port, "GET", &format!("/cli/tickets/settings?token={token}"), None)
+        };
+        let post = |token: &str, body: serde_json::Value| {
+            http(
+                d.port,
+                "POST",
+                &format!("/cli/tickets/settings?token={token}"),
+                Some(&body.to_string()),
+            )
+        };
+        let create = |extra: serde_json::Value| -> Resp {
+            let mut body = serde_json::json!({ "project": path, "title": "rules" });
+            for (k, v) in extra.as_object().expect("extra is an object") {
+                body[k] = v.clone();
+            }
+            http(d.port, "POST", &format!("/cli/feedback/create?token={OWNER_TOKEN}"), Some(&body.to_string()))
+        };
+        let codes = |r: &Resp| -> Vec<String> {
+            json(&r.body)["warnings"]
+                .as_array()
+                .expect("warnings array")
+                .iter()
+                .map(|w| w["code"].as_str().expect("code").to_string())
+                .collect()
+        };
+        let brief = serde_json::json!("<p>Why</p><section class=\"k2-need\"><p>Go?</p></section>");
+
+        // Defaults: warn / warn / nobody. The owner may edit; a member may not.
+        let r = get(OWNER_TOKEN);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["briefPolicy"], "warn", "{}", r.body);
+        assert_eq!(v["assigneePolicy"], "warn", "{}", r.body);
+        assert!(v["defaultAssignee"].is_null(), "{}", r.body);
+        assert_eq!(v["canEdit"], true, "{}", r.body);
+        let people: Vec<String> = v["people"]
+            .as_array()
+            .expect("people")
+            .iter()
+            .map(|p| p["value"].as_str().expect("value").to_string())
+            .collect();
+        assert_eq!(people, vec!["owner", "ts_admin", "ts_member"], "{}", r.body);
+        assert_eq!(json(&get(&admin).body)["canEdit"], true);
+        let r = get(&member);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["canEdit"], false, "{}", r.body);
+        assert_eq!(get("not-a-token").status, 403);
+        // A GET never changes anything, whatever its query says.
+        let r = http(
+            d.port,
+            "GET",
+            &format!("/cli/tickets/settings?token={OWNER_TOKEN}&briefPolicy=off"),
+            None,
+        );
+        assert_eq!(json(&r.body)["briefPolicy"], "warn", "{}", r.body);
+
+        // Writes: Member refused (route floor Admin), nothing stored.
+        let r = post(&member, serde_json::json!({ "briefPolicy": "off" }));
+        assert_eq!(r.status, 403, "{}", r.body);
+        let r = post(&member, serde_json::json!({}));
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().tickets.brief_policy, "warn");
+        // …and the generic settings door is closed to a Member too.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/settings/update?token={member}"),
+            Some(&serde_json::json!({ "tickets": { "briefPolicy": "off" } }).to_string()),
+        );
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().tickets.brief_policy, "warn");
+
+        // Bad values are refused with stable codes.
+        let r = post(OWNER_TOKEN, serde_json::json!({ "assigneePolicy": "sometimes" }));
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(json(&r.body)["error"]["code"], "bad_value", "{}", r.body);
+        let r = post(OWNER_TOKEN, serde_json::json!({ "defaultAssignee": "ts_nobody" }));
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert_eq!(json(&r.body)["error"]["code"], "unknown_user", "{}", r.body);
+
+        // Require (set by an Admin login): no brief is refused, naming the setting.
+        let r = post(&admin, serde_json::json!({ "briefPolicy": "require" }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["briefPolicy"], "require", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().tickets.brief_policy, "require");
+        let r = create(serde_json::json!({ "assignees": ["owner"] }));
+        assert_eq!(r.status, 400, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["error"]["code"], "brief_required", "{}", r.body);
+        assert!(
+            v["error"]["hint"].as_str().expect("hint").contains("Settings → Tickets"),
+            "{}",
+            r.body
+        );
+
+        // Default assignee: an agent ticket with no assignee goes to them.
+        let r = post(OWNER_TOKEN, serde_json::json!({ "defaultAssignee": "TS_Member" }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["defaultAssignee"], "ts_member", "stored spelling: {}", r.body);
+        let r = create(serde_json::json!({ "briefHtml": brief }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["assignees"], serde_json::json!(["ts_member"]), "{}", r.body);
+        assert_eq!(v["defaultAssignee"], "ts_member", "{}", r.body);
+        assert!(codes(&r).is_empty(), "{}", r.body);
+        // An explicit assignee wins.
+        let r = create(serde_json::json!({ "briefHtml": brief, "assignees": ["ts_admin"] }));
+        assert_eq!(json(&r.body)["assignees"], serde_json::json!(["ts_admin"]), "{}", r.body);
+        assert!(json(&r.body).get("defaultAssignee").is_none(), "{}", r.body);
+
+        // Assignee Require with no default: refused, naming the setting.
+        let r = post(
+            OWNER_TOKEN,
+            serde_json::json!({ "assigneePolicy": "require", "defaultAssignee": "none" }),
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(json(&r.body)["defaultAssignee"].is_null(), "{}", r.body);
+        let r = create(serde_json::json!({ "briefHtml": brief }));
+        assert_eq!(r.status, 400, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["error"]["code"], "assignee_required", "{}", r.body);
+        assert!(
+            v["error"]["hint"].as_str().expect("hint").contains("Require an assignee"),
+            "{}",
+            r.body
+        );
+
+        // Warn: filed, with the warning.
+        let r = post(OWNER_TOKEN, serde_json::json!({ "assigneePolicy": "warn", "briefPolicy": "warn" }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let r = create(serde_json::json!({}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(codes(&r), vec!["brief_missing", "assignee_required"], "{}", r.body);
+
+        // Off: filed quietly.
+        let r = post(OWNER_TOKEN, serde_json::json!({ "assigneePolicy": "off", "briefPolicy": "off" }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let r = create(serde_json::json!({}));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(codes(&r).is_empty(), "Off warns about nothing: {}", r.body);
+        assert_eq!(json(&r.body)["assignees"], serde_json::json!([]), "{}", r.body);
+
+        let stored = k2_core::app_settings::load().tickets;
+        assert_eq!(stored.brief_policy, "off");
+        assert_eq!(stored.assignee_policy, "off");
+        assert_eq!(stored.default_assignee, "");
     });
 }
 

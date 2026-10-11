@@ -8,12 +8,18 @@
 //! stores it in `feedback_briefs` in the same transaction as the ticket
 //! row (H6/H8, migration 0126). Clients only render what comes back.
 //!
-//! Every open product question Rosson has not answered yet is one
-//! constant in the "Policy" block below, so changing a default is a
-//! one-line edit:
+//! The rules on the agent door are **owner settings** since 0.45.4
+//! (Settings → Tickets, `k2 tickets settings`, `settings.json` →
+//! `tickets`), read per ticket by [`ticket_rules`]:
 //!
-//! - [`BRIEF_POLICY`]: 0.43.2 is the grace release (`Warn`); 0.43.3
-//!   flips it to `Require` (H25, S8).
+//! - the brief rule (`off | warn | require`, default
+//!   [`DEFAULT_BRIEF_POLICY`] = `Warn`);
+//! - the assignee rule (same values, default [`DEFAULT_ASSIGNEE_POLICY`]);
+//! - the default assignee for an agent ticket filed with none (default
+//!   nobody).
+//!
+//! The fixed product defaults stay constants in the "Policy" block:
+//!
 //! - [`FYI_NEEDS_BRIEF`]: `fyi` tickets are exempt (default 2).
 //! - [`MAX_BRIEF_BYTES`]: 1 MiB raw input (default 4, H7).
 //! - [`WARN_WITHOUT_NEED_SECTION`]: a missing `.k2-need` section only
@@ -22,10 +28,9 @@
 //! The owner-token door is the agent door (default 1, H1); the daemon
 //! route decides the door and calls [`brief_required`].
 //!
-//! The same door also carries the **assignee policy** (0.43.2): an agent
+//! The same door also carries the **assignee rule** (0.43.2): an agent
 //! ticket should name a user on this server. See the "Assignee policy"
-//! block: [`ASSIGNEE_POLICY`] is `Warn` now and flips to `Require` in one
-//! line, exactly like [`BRIEF_POLICY`].
+//! block.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -39,23 +44,63 @@ use html5ever::tokenizer::{
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 
-// ── Policy (Rosson's open questions live here) ──────────────────────────
+// ── Policy (owner settings since 0.45.4) ────────────────────────────────
 
-/// Whether the agent door must attach a brief.
+/// One ticket rule on the agent door: the brief rule and the assignee
+/// rule are both an owner setting (Settings → Tickets,
+/// `k2 tickets settings`, stored in `settings.json` under `tickets`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BriefPolicy {
-    /// A missing brief still files the ticket; the response carries a
-    /// `brief_missing` warning (exit 0 in the CLI).
+pub enum TicketRule {
+    /// No check: nothing is warned, nothing is refused.
+    Off,
+    /// The ticket is filed; the response carries a warning
+    /// (`brief_missing` / `assignee_required`, exit 0 in the CLI).
     Warn,
-    /// A missing brief is refused: 400 `brief_required`.
+    /// Refused: 400 `brief_required` / `assignee_required` /
+    /// `assignee_unknown`.
     Require,
 }
 
-/// THE switch. 0.43.2 ships `Warn` (one grace release, H25: long-running
-/// agents still hold the old skill text). **0.43.3 flips this to
-/// `BriefPolicy::Require`** — one line, plus the Require column of the
-/// door-matrix test already runs through [`with_policy_override`].
-pub const BRIEF_POLICY: BriefPolicy = BriefPolicy::Warn;
+impl TicketRule {
+    /// Wire name (`off` | `warn` | `require`).
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            TicketRule::Off => "off",
+            TicketRule::Warn => "warn",
+            TicketRule::Require => "require",
+        }
+    }
+
+    /// Parse a wire name. Case-insensitive; anything else is `None`.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(TicketRule::Off),
+            "warn" => Some(TicketRule::Warn),
+            "require" => Some(TicketRule::Require),
+            _ => None,
+        }
+    }
+
+    /// A stored value: an unknown string (a hand-edited file) reads as
+    /// the default, [`TicketRule::Warn`]. The settings writer refuses one.
+    pub fn from_stored(s: &str) -> Self {
+        Self::from_wire(s).unwrap_or(DEFAULT_TICKET_RULE)
+    }
+}
+
+/// Whether the agent door must attach a brief (the brief rule).
+pub type BriefPolicy = TicketRule;
+
+/// The default for both rules when the owner never set one: `Warn`, the
+/// 0.43.2 behaviour. Nothing changes until the owner flips a rule.
+pub const DEFAULT_TICKET_RULE: TicketRule = TicketRule::Warn;
+
+/// The brief rule a server starts with (the owner changes it in
+/// Settings → Tickets → "Require an HTML brief").
+pub const DEFAULT_BRIEF_POLICY: BriefPolicy = DEFAULT_TICKET_RULE;
+
+/// Where the owner changes the rules, named in every hint.
+pub const TICKET_SETTINGS_WHERE: &str = "Settings → Tickets";
 
 /// Rosson default 2: an `fyi` ticket asks nothing of the human, so it
 /// never needs a brief (it may still carry one). Flip to `true` to make
@@ -83,17 +128,63 @@ pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 /// allowlist bumps it; stored rows are never re-cleaned.
 pub const SANITIZER_TAG: &str = "k2-brief-v1";
 
-/// The live policy. [`BRIEF_POLICY`], unless a test on this thread set
-/// an override with [`with_policy_override`] (H36: one test binary runs
-/// both columns of the door matrix).
-pub fn brief_policy() -> BriefPolicy {
+/// The server's ticket rules, read from the owner's settings
+/// (`AppSettings::tickets`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketRules {
+    pub brief: BriefPolicy,
+    pub assignee: AssigneePolicy,
+    /// Who an agent ticket filed with no assignee goes to (`owner` or a
+    /// Connect username). `None` = nobody (the pre-0.45.4 behaviour).
+    pub default_assignee: Option<String>,
+}
+
+impl TicketRules {
+    /// Parse the stored settings block. Unknown rule strings read as the
+    /// default; a blank / `none` default assignee is `None`.
+    pub fn from_settings(t: &crate::app_settings::TicketSettings) -> Self {
+        Self {
+            brief: TicketRule::from_stored(&t.brief_policy),
+            assignee: TicketRule::from_stored(&t.assignee_policy),
+            default_assignee: normalize_default_assignee(&t.default_assignee),
+        }
+    }
+}
+
+/// `""`, `none` (any case) and whitespace mean "no default assignee".
+pub fn normalize_default_assignee(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// The live rules: the owner's settings, with any test override on this
+/// thread on top (H36: one test binary runs every column of the door
+/// matrix without touching `settings.json`).
+pub fn ticket_rules() -> TicketRules {
+    #[allow(unused_mut)]
+    let mut rules = TicketRules::from_settings(&crate::app_settings::load().tickets);
     #[cfg(any(test, feature = "test-util"))]
     {
         if let Some(p) = POLICY_OVERRIDE.with(|c| c.get()) {
-            return p;
+            rules.brief = p;
+        }
+        if let Some(p) = ASSIGNEE_POLICY_OVERRIDE.with(|c| c.get()) {
+            rules.assignee = p;
+        }
+        if let Some(d) = DEFAULT_ASSIGNEE_OVERRIDE.with(|c| c.borrow().clone()) {
+            rules.default_assignee = d;
         }
     }
-    BRIEF_POLICY
+    rules
+}
+
+/// The live brief rule (see [`ticket_rules`]).
+pub fn brief_policy() -> BriefPolicy {
+    ticket_rules().brief
 }
 
 /// Must a caller through the agent door attach a brief for this kind?
@@ -107,9 +198,14 @@ pub fn brief_required(kind: &str) -> bool {
 thread_local! {
     static POLICY_OVERRIDE: Cell<Option<BriefPolicy>> = const { Cell::new(None) };
     static FAIL_NEXT_INSERT: Cell<bool> = const { Cell::new(false) };
+    /// `Some(None)` = forced "no default assignee"; `None` = not forced.
+    static DEFAULT_ASSIGNEE_OVERRIDE: RefCell<Option<Option<String>>> = const { RefCell::new(None) };
 }
 
-/// Test-only: run `f` with the policy forced to `policy` on THIS thread.
+/// Test-only: run `f` with the brief rule forced to `policy` on THIS
+/// thread, and no default assignee (unless an outer
+/// [`with_default_assignee_override`] set one), so the real HOME's
+/// settings never leak into a door-matrix test.
 #[cfg(any(test, feature = "test-util"))]
 pub fn with_policy_override<R>(policy: BriefPolicy, f: impl FnOnce() -> R) -> R {
     struct Reset(Option<BriefPolicy>);
@@ -119,7 +215,32 @@ pub fn with_policy_override<R>(policy: BriefPolicy, f: impl FnOnce() -> R) -> R 
         }
     }
     let _reset = Reset(POLICY_OVERRIDE.with(|c| c.replace(Some(policy))));
+    with_default_assignee_unless_set(f)
+}
+
+/// Test-only: run `f` with the default assignee forced on THIS thread
+/// (`None` = no default assignee).
+#[cfg(any(test, feature = "test-util"))]
+pub fn with_default_assignee_override<R>(who: Option<&str>, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<Option<String>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            DEFAULT_ASSIGNEE_OVERRIDE.with(|c| *c.borrow_mut() = prev);
+        }
+    }
+    let forced = Some(who.map(str::to_string));
+    let _reset = Reset(DEFAULT_ASSIGNEE_OVERRIDE.with(|c| c.replace(forced)));
     f()
+}
+
+#[cfg(any(test, feature = "test-util"))]
+fn with_default_assignee_unless_set<R>(f: impl FnOnce() -> R) -> R {
+    if DEFAULT_ASSIGNEE_OVERRIDE.with(|c| c.borrow().is_some()) {
+        f()
+    } else {
+        with_default_assignee_override(None, f)
+    }
 }
 
 /// Test-only: make the next [`insert_with`] on THIS thread fail, to
@@ -180,13 +301,26 @@ pub struct BriefWarning {
     pub hint: String,
 }
 
-/// The `brief_missing` warning (Warn policy, agent door, no brief).
+/// The owner setting behind the brief rule, as agents see it in hints.
+pub const BRIEF_SETTING: &str = "Settings → Tickets → \"Require an HTML brief\" \
+    (`k2 tickets settings --brief`)";
+
+/// Hint for the 400 `brief_required` refusal (Require): names the owner
+/// setting that refused it, then how to fix the ticket.
+pub fn brief_required_hint() -> String {
+    format!(
+        "This server requires an HTML brief on agent tickets (owner setting: \
+         {BRIEF_SETTING}). {BRIEF_REQUIRED_HINT}"
+    )
+}
+
+/// The `brief_missing` warning (Warn rule, agent door, no brief).
 pub fn missing_warning() -> BriefWarning {
     BriefWarning {
         code: "brief_missing",
         hint: format!(
-            "{BRIEF_REQUIRED_HINT} This ticket was filed anyway: K2 0.43.2 only warns. \
-             The next release refuses an agent ticket without a brief."
+            "{BRIEF_REQUIRED_HINT} This ticket was filed anyway: this server only warns \
+             (owner setting: {BRIEF_SETTING})."
         ),
     }
 }
@@ -202,37 +336,21 @@ pub fn missing_warning() -> BriefWarning {
 // (`connect_users::list_people_for_agents`). The daemon route builds
 // that list and calls [`unknown_assignees`].
 
-/// Whether the agent door must assign the ticket to a user on this server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssigneePolicy {
-    /// No assignee (or a name that is not a user here) still files the
-    /// ticket; the response carries an `assignee_required` /
-    /// `assignee_unknown` warning (exit 0 in the CLI).
-    Warn,
-    /// Refused: 400 `assignee_required` / `assignee_unknown`.
-    Require,
-}
+/// Whether the agent door must assign the ticket to a user on this
+/// server (the assignee rule). Off / Warn / Require, like the brief.
+pub type AssigneePolicy = TicketRule;
 
-/// THE switch. 0.43.2 ships `Warn` (agents still run the old skill text).
-/// **A later release flips this to `AssigneePolicy::Require`**: one
-/// line; the Require column of the door-matrix test already runs through
-/// [`with_assignee_policy_override`].
-pub const ASSIGNEE_POLICY: AssigneePolicy = AssigneePolicy::Warn;
+/// The assignee rule a server starts with (the owner changes it in
+/// Settings → Tickets → "Require an assignee").
+pub const DEFAULT_ASSIGNEE_POLICY: AssigneePolicy = DEFAULT_TICKET_RULE;
 
 /// `fyi` tickets ask nothing of a person, so they need no assignee (they
 /// may still carry one), same as [`FYI_NEEDS_BRIEF`].
 pub const FYI_NEEDS_ASSIGNEE: bool = false;
 
-/// The live assignee policy: [`ASSIGNEE_POLICY`] unless a test on this
-/// thread set an override.
+/// The live assignee rule (see [`ticket_rules`]).
 pub fn assignee_policy() -> AssigneePolicy {
-    #[cfg(any(test, feature = "test-util"))]
-    {
-        if let Some(p) = ASSIGNEE_POLICY_OVERRIDE.with(|c| c.get()) {
-            return p;
-        }
-    }
-    ASSIGNEE_POLICY
+    ticket_rules().assignee
 }
 
 /// Must a caller through the agent door assign this kind of ticket?
@@ -247,7 +365,9 @@ thread_local! {
     static ASSIGNEE_POLICY_OVERRIDE: Cell<Option<AssigneePolicy>> = const { Cell::new(None) };
 }
 
-/// Test-only: run `f` with the assignee policy forced on THIS thread.
+/// Test-only: run `f` with the assignee rule forced on THIS thread, and
+/// no default assignee unless an outer [`with_default_assignee_override`]
+/// set one.
 #[cfg(any(test, feature = "test-util"))]
 pub fn with_assignee_policy_override<R>(policy: AssigneePolicy, f: impl FnOnce() -> R) -> R {
     struct Reset(Option<AssigneePolicy>);
@@ -257,12 +377,24 @@ pub fn with_assignee_policy_override<R>(policy: AssigneePolicy, f: impl FnOnce()
         }
     }
     let _reset = Reset(ASSIGNEE_POLICY_OVERRIDE.with(|c| c.replace(Some(policy))));
-    f()
+    with_default_assignee_unless_set(f)
 }
 
-/// The rule, in the words agents see (warning, refusal, skill text).
+/// The rule, in the words agents see (warning, refusal).
 pub const ASSIGNEE_REQUIRED_MESSAGE: &str = "A ticket must be assigned to a user on this \
-    server (`--assign <user>`). This will be required in a future update.";
+    server (`--assign <user>`).";
+
+/// The owner setting behind the assignee rule, as agents see it in hints.
+pub const ASSIGNEE_SETTING: &str = "Settings → Tickets → \"Require an assignee\" \
+    (`k2 tickets settings --assignee-required`)";
+
+/// Hint for the 400 `assignee_required` refusal (Require).
+pub fn assignee_required_hint() -> String {
+    format!(
+        "{ASSIGNEE_REQUIRED_MESSAGE} This server requires an assignee on agent tickets \
+         (owner setting: {ASSIGNEE_SETTING}). {ASSIGNEE_REQUIRED_HINT}"
+    )
+}
 
 /// How to fix it: who the users are, and how to assign.
 pub const ASSIGNEE_REQUIRED_HINT: &str = "Run `k2 connections list --users` to see the \
@@ -282,7 +414,10 @@ pub fn assignee_missing_warning(ticket_id: Option<&str>) -> BriefWarning {
     };
     BriefWarning {
         code: "assignee_required",
-        hint: format!("{ASSIGNEE_REQUIRED_MESSAGE}{fix} {ASSIGNEE_REQUIRED_HINT}"),
+        hint: format!(
+            "{ASSIGNEE_REQUIRED_MESSAGE} This server only warns (owner setting: \
+             {ASSIGNEE_SETTING}).{fix} {ASSIGNEE_REQUIRED_HINT}"
+        ),
     }
 }
 
@@ -297,6 +432,16 @@ pub fn assignee_unknown_hint(unknown: &[String]) -> String {
     format!(
         "{who} {noun} on this server (the owner or a Connect user). \
          {ASSIGNEE_REQUIRED_MESSAGE} {ASSIGNEE_REQUIRED_HINT}"
+    )
+}
+
+/// Hint for the 400 `assignee_unknown` refusal (Require): the unknown
+/// names, then the owner setting that refused it.
+pub fn assignee_unknown_refusal_hint(unknown: &[String]) -> String {
+    format!(
+        "{} This server requires an assignee on agent tickets (owner setting: \
+         {ASSIGNEE_SETTING}).",
+        assignee_unknown_hint(unknown)
     )
 }
 
@@ -835,4 +980,45 @@ pub fn get_with(conn: &rusqlite::Connection, feedback_id: &str) -> Option<Stored
         },
     )
     .ok()
+}
+
+#[cfg(test)]
+mod ticket_rule_tests {
+    use super::*;
+
+    #[test]
+    fn ticket_rule_wire_round_trip() {
+        for r in [TicketRule::Off, TicketRule::Warn, TicketRule::Require] {
+            assert_eq!(TicketRule::from_wire(r.as_wire()), Some(r));
+        }
+        assert_eq!(TicketRule::from_wire(" REQUIRE "), Some(TicketRule::Require));
+        assert_eq!(TicketRule::from_wire("sometimes"), None);
+        assert_eq!(TicketRule::from_stored("sometimes"), TicketRule::Warn, "unknown reads as the default");
+        assert_eq!(DEFAULT_TICKET_RULE, TicketRule::Warn);
+    }
+
+    #[test]
+    fn default_assignee_normalizes_blank_and_none() {
+        assert_eq!(normalize_default_assignee(""), None);
+        assert_eq!(normalize_default_assignee("  "), None);
+        assert_eq!(normalize_default_assignee("None"), None);
+        assert_eq!(normalize_default_assignee(" julie "), Some("julie".to_string()));
+    }
+
+    #[test]
+    fn test_overrides_win_and_reset() {
+        // ticket_rules() reads settings.json: never the real HOME.
+        let _g = crate::themes::HOME_LOCK.lock();
+        let _home = crate::test_env::TempHome::new();
+        with_policy_override(TicketRule::Off, || {
+            with_default_assignee_override(Some("julie"), || {
+                assert_eq!(brief_policy(), TicketRule::Off);
+                assert_eq!(ticket_rules().default_assignee.as_deref(), Some("julie"));
+            });
+            assert_eq!(ticket_rules().default_assignee, None, "the brief override pins no default");
+        });
+        with_assignee_policy_override(TicketRule::Require, || {
+            assert_eq!(assignee_policy(), TicketRule::Require);
+        });
+    }
 }

@@ -712,9 +712,11 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
     };
 
     // Ticket brief (H1/H11/H25/H27). Clean BEFORE the DB lock (H33c).
-    // An empty string counts as absent. The policy only binds the owner
-    // door; people (app guests, Connect users) may attach one.
+    // An empty string counts as absent. The rules only bind the owner
+    // door; people (app guests, Connect users) may attach one. The rules
+    // are owner settings (Settings → Tickets, 0.45.4), read once here.
     let kind_for_policy = b.kind.clone().unwrap_or_else(|| "question".to_string());
+    let rules = k2_core::feedback_brief::ticket_rules();
     let mut warnings: Vec<k2_core::feedback_brief::BriefWarning> = Vec::new();
     let brief = match b.brief_html.as_deref().filter(|h| !h.trim().is_empty()) {
         Some(raw) => match k2_core::feedback_brief::clean(raw) {
@@ -728,47 +730,62 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
             if door == CreateDoor::Owner
                 && k2_core::feedback_brief::brief_required(&kind_for_policy)
             {
-                match k2_core::feedback_brief::brief_policy() {
-                    k2_core::feedback_brief::BriefPolicy::Require => {
+                match rules.brief {
+                    k2_core::feedback_brief::TicketRule::Require => {
                         return brief_error(
                             "brief_required",
-                            k2_core::feedback_brief::BRIEF_REQUIRED_HINT,
+                            k2_core::feedback_brief::brief_required_hint(),
                         );
                     }
-                    k2_core::feedback_brief::BriefPolicy::Warn => {
+                    k2_core::feedback_brief::TicketRule::Warn => {
                         warnings.push(k2_core::feedback_brief::missing_warning());
                     }
+                    k2_core::feedback_brief::TicketRule::Off => {}
                 }
             }
             None
         }
     };
 
-    // Assignee policy (0.43.2, `feedback_brief::ASSIGNEE_POLICY`). Same
-    // door and `fyi` exemption as the brief. A name that is not a user on
-    // this server warns on every door; only the agent door under Require
-    // is refused. Checked BEFORE the insert so a refusal stores nothing.
-    let assignees = k2_core::feedback_brief::clean_assignees(b.assignees.as_deref().unwrap_or(&[]));
-    let assignee_policy_applies =
-        door == CreateDoor::Owner && k2_core::feedback_brief::assignee_required(&kind_for_policy);
+    // Assignee rule (owner setting, Settings → Tickets). Same door and
+    // `fyi` exemption as the brief. A name that is not a user on this
+    // server warns on every door; only the agent door under Require is
+    // refused. Checked BEFORE the insert so a refusal stores nothing.
+    //
+    // Default assignee (owner setting): an agent ticket filed with no
+    // assignee goes to that user, any kind, while they are still a user
+    // here. Applied before the rule, so it satisfies Require.
+    let mut assignees =
+        k2_core::feedback_brief::clean_assignees(b.assignees.as_deref().unwrap_or(&[]));
+    let mut default_assigned = None;
+    if door == CreateDoor::Owner && assignees.is_empty() {
+        if let Some(who) = rules.default_assignee.as_deref() {
+            if unknown_assignees_here(&[who.to_string()]).is_empty() {
+                assignees = vec![who.to_string()];
+                default_assigned = Some(who.to_string());
+            } else {
+                k2_core::log_debug!(
+                    "[feedback] default assignee {who:?} is not a user here any more; not applied"
+                );
+            }
+        }
+    }
+    let assignee_policy_applies = door == CreateDoor::Owner
+        && rules.assignee != k2_core::feedback_brief::TicketRule::Off
+        && k2_core::feedback_brief::assignee_required(&kind_for_policy);
     let unknown = unknown_assignees_here(&assignees);
-    let require = k2_core::feedback_brief::assignee_policy()
-        == k2_core::feedback_brief::AssigneePolicy::Require;
+    let require = rules.assignee == k2_core::feedback_brief::TicketRule::Require;
     if assignee_policy_applies && require {
         if assignees.is_empty() {
             return brief_error(
                 "assignee_required",
-                format!(
-                    "{} {}",
-                    k2_core::feedback_brief::ASSIGNEE_REQUIRED_MESSAGE,
-                    k2_core::feedback_brief::ASSIGNEE_REQUIRED_HINT
-                ),
+                k2_core::feedback_brief::assignee_required_hint(),
             );
         }
         if !unknown.is_empty() {
             return brief_error(
                 "assignee_unknown",
-                k2_core::feedback_brief::assignee_unknown_hint(&unknown),
+                k2_core::feedback_brief::assignee_unknown_refusal_hint(&unknown),
             );
         }
     }
@@ -855,6 +872,11 @@ fn handle_create_gated(body: &[u8], skin: Option<&SkinPass>, door: CreateDoor) -
         // H17/H25: `hasBrief`/`briefBytes` ride on the item; warnings are
         // always an array so the CLI (H28 skew check) can rely on it.
         map.insert("warnings".to_string(), serde_json::json!(warnings));
+        // Settings → Tickets default assignee: present only when it was
+        // applied (the agent named nobody), so the CLI can say so.
+        if let Some(who) = default_assigned {
+            map.insert("defaultAssignee".to_string(), serde_json::json!(who));
+        }
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -3076,7 +3098,8 @@ mod tests {
                     hint.starts_with(k2_core::feedback_brief::ASSIGNEE_REQUIRED_MESSAGE),
                     "{hint}"
                 );
-                assert!(hint.contains("required in a future update"), "{hint}");
+                assert!(hint.contains("only warns"), "{hint}");
+                assert!(hint.contains("Settings → Tickets"), "names the owner setting: {hint}");
                 assert!(hint.contains(&format!("k2 tickets assign {}", &id[..8])), "{hint}");
                 assert!(hint.contains("k2 connections list --users"), "{hint}");
                 assert_eq!(v["assignees"], serde_json::json!([]), "{}", r.body);
@@ -3175,11 +3198,16 @@ mod tests {
         });
     }
 
-    /// 0.43.2 ships Warn; the flip is one line in feedback_brief.rs.
+    /// The assignee rule defaults to Warn (0.45.4: an owner setting; the
+    /// stored default is "warn", so nothing changes until the owner flips it).
     #[test]
-    fn assignee_policy_ships_warn_in_0_43_2() {
-        assert_eq!(k2_core::feedback_brief::ASSIGNEE_POLICY, AssigneePolicy::Warn);
-        assert_eq!(k2_core::feedback_brief::assignee_policy(), AssigneePolicy::Warn);
+    fn assignee_policy_defaults_to_warn() {
+        assert_eq!(k2_core::feedback_brief::DEFAULT_ASSIGNEE_POLICY, AssigneePolicy::Warn);
+        let rules = k2_core::feedback_brief::TicketRules::from_settings(
+            &k2_core::app_settings::TicketSettings::default(),
+        );
+        assert_eq!(rules.assignee, AssigneePolicy::Warn);
+        assert_eq!(rules.default_assignee, None);
         assert!(k2_core::feedback_brief::assignee_required("question"));
         assert!(k2_core::feedback_brief::assignee_required("approval"));
         assert!(!k2_core::feedback_brief::assignee_required("fyi"));
@@ -3212,12 +3240,119 @@ mod tests {
         assert_eq!(get.status, "405 Method Not Allowed", "{}", get.body);
     }
 
-    /// The shipped constant is Warn for 0.43.2. 0.43.3 flips it (S8);
-    /// this assertion flips with it.
+    /// The brief rule defaults to Warn (0.45.4: an owner setting).
     #[test]
-    fn brief_policy_ships_warn_in_0_43_2() {
-        assert_eq!(k2_core::feedback_brief::BRIEF_POLICY, BriefPolicy::Warn);
-        assert_eq!(k2_core::feedback_brief::brief_policy(), BriefPolicy::Warn);
+    fn brief_policy_defaults_to_warn() {
+        assert_eq!(k2_core::feedback_brief::DEFAULT_BRIEF_POLICY, BriefPolicy::Warn);
+        let rules = k2_core::feedback_brief::TicketRules::from_settings(
+            &k2_core::app_settings::TicketSettings::default(),
+        );
+        assert_eq!(rules.brief, BriefPolicy::Warn);
+    }
+
+    /// Off column (0.45.4): the owner turned both rules off. No brief and
+    /// no assignee files quietly on the agent door; a name that is nobody
+    /// here is still reported (that is a typo, not the rule).
+    #[test]
+    fn ticket_rules_off_column() {
+        let (name, path) = unique("rules-off");
+        insert_project(&name, &path);
+        with_policy_override(BriefPolicy::Off, || {
+            with_assignee_policy_override(AssigneePolicy::Off, || {
+                let r = create_at(
+                    &path,
+                    CreateDoor::Owner,
+                    serde_json::json!({ "assignees": [] }),
+                );
+                assert_eq!(r.status, "200 OK", "{}", r.body);
+                let v = parse(&r);
+                assert_eq!(v["hasBrief"], false, "{}", r.body);
+                assert!(warning_codes(&v).is_empty(), "Off warns about nothing: {}", r.body);
+                assert_eq!(v["assignees"], serde_json::json!([]), "{}", r.body);
+                let r = create_at(
+                    &path,
+                    CreateDoor::Owner,
+                    serde_json::json!({ "assignees": [no_one_by_this_name()] }),
+                );
+                assert_eq!(r.status, "200 OK", "{}", r.body);
+                assert_eq!(warning_codes(&parse(&r)), vec!["assignee_unknown"], "{}", r.body);
+            })
+        });
+    }
+
+    /// Require refusals name the owner setting that refused them, so the
+    /// CLI's `k2 tickets ask` error says where to change it.
+    #[test]
+    fn require_refusals_name_the_setting() {
+        let (name, path) = unique("rules-name");
+        insert_project(&name, &path);
+        with_policy_override(BriefPolicy::Require, || {
+            let r = create_at(&path, CreateDoor::Owner, serde_json::json!({}));
+            let hint = parse(&r)["error"]["hint"].as_str().expect("hint").to_string();
+            assert!(hint.contains("Settings → Tickets"), "{hint}");
+            assert!(hint.contains("Require an HTML brief"), "{hint}");
+            assert!(hint.contains("k2 tickets settings --brief"), "{hint}");
+        });
+        with_assignee_policy_override(AssigneePolicy::Require, || {
+            let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": [] }));
+            let hint = parse(&r)["error"]["hint"].as_str().expect("hint").to_string();
+            assert!(hint.contains("Require an assignee"), "{hint}");
+            assert!(hint.contains("k2 tickets settings --assignee-required"), "{hint}");
+            let r = create_assign(
+                &path,
+                CreateDoor::Owner,
+                serde_json::json!({ "assignees": [no_one_by_this_name()] }),
+            );
+            assert_eq!(parse(&r)["error"]["code"], "assignee_unknown", "{}", r.body);
+            let hint = parse(&r)["error"]["hint"].as_str().expect("hint").to_string();
+            assert!(hint.contains("Require an assignee"), "{hint}");
+        });
+    }
+
+    /// Default assignee (0.45.4): an agent ticket with no assignee goes to
+    /// the owner's chosen user, which also satisfies Require; an explicit
+    /// assignee wins; people doors are untouched.
+    #[test]
+    fn default_assignee_fills_an_empty_agent_ticket() {
+        use k2_core::feedback_brief::with_default_assignee_override;
+        let (name, path) = unique("default-assignee");
+        insert_project(&name, &path);
+        with_default_assignee_override(Some("owner"), || {
+            with_assignee_policy_override(AssigneePolicy::Require, || {
+                let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": [] }));
+                assert_eq!(r.status, "200 OK", "default satisfies Require: {}", r.body);
+                let v = parse(&r);
+                assert_eq!(v["assignees"], serde_json::json!(["owner"]), "{}", r.body);
+                assert_eq!(v["defaultAssignee"], "owner", "{}", r.body);
+                assert!(warning_codes(&v).is_empty(), "{}", r.body);
+
+                // fyi gets the default too (it routes the ticket).
+                let r = create_assign(
+                    &path,
+                    CreateDoor::Owner,
+                    serde_json::json!({ "kind": "fyi", "assignees": [] }),
+                );
+                assert_eq!(parse(&r)["assignees"], serde_json::json!(["owner"]), "{}", r.body);
+
+                // People doors never get a default.
+                let r = create_assign(&path, CreateDoor::Connect, serde_json::json!({ "assignees": [] }));
+                let v = parse(&r);
+                assert_eq!(v["assignees"], serde_json::json!([]), "{}", r.body);
+                assert!(v.get("defaultAssignee").is_none(), "{}", r.body);
+            });
+        });
+        // A default that is no longer a user here is not applied: the
+        // rule then sees an unassigned ticket.
+        let ghost = no_one_by_this_name();
+        with_default_assignee_override(Some(&ghost), || {
+            with_assignee_policy_override(AssigneePolicy::Warn, || {
+                let r = create_assign(&path, CreateDoor::Owner, serde_json::json!({ "assignees": [] }));
+                assert_eq!(r.status, "200 OK", "{}", r.body);
+                let v = parse(&r);
+                assert_eq!(v["assignees"], serde_json::json!([]), "{}", r.body);
+                assert_eq!(warning_codes(&v), vec!["assignee_required"], "{}", r.body);
+            });
+        });
     }
 
     /// Bad briefs are refused with stable `brief_*` codes on every door,

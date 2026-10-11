@@ -43,6 +43,8 @@
 
 use std::fmt;
 
+pub mod budget;
+
 /// Events the daemon emits to the user's configured push target.
 #[derive(Debug, Clone)]
 pub enum PushEvent {
@@ -85,7 +87,124 @@ pub enum PushEvent {
         project_name: String,
         group_id: String,
     },
+    /// Thread push (prd-thread-push-notifications-v1 §7): an agent posted
+    /// in a Thread. NAME-ONLY: the title is the agent's name, the body is
+    /// a fixed line by message kind or count — never the message text,
+    /// the choice prompt or the secret name.
+    ThreadPost(ThreadPush),
 }
+
+/// The kind of Thread post a push announces (`data.msgKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadMsgKind {
+    /// A text reply.
+    Text,
+    /// A choice card (`k2 thread ask`).
+    Choice,
+    /// A secret card (`k2 thread secret`). Never carries more than this
+    /// payload, even once snippets exist (§7).
+    Secret,
+}
+
+impl ThreadMsgKind {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Choice => "choice",
+            Self::Secret => "secret",
+        }
+    }
+}
+
+/// One Thread push, already coalesced (§6.3): the same payload goes to
+/// every recipient in ONE gateway call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadPush {
+    /// The posting agent's display name (the notification title).
+    pub agent_name: String,
+    pub conversation_id: String,
+    /// The address the conversation answers to now.
+    pub addr: String,
+    /// The seq of the LAST post this push covers.
+    pub seq: i64,
+    pub project_id: String,
+    /// The kind of the last post (used for the body when `count == 1`).
+    pub msg_kind: ThreadMsgKind,
+    /// How many posts this push covers (at least 1).
+    pub count: u32,
+    /// The ONE recipient person key this push is for (TP29: `owner` or a
+    /// Connect username). The phone can hold two accounts on one host, so
+    /// every dispatch is per (Thread, person) and says whose it is.
+    pub principal: String,
+    /// That person's `push_devices.username` values (their logins).
+    /// Empty = nobody, never "everyone".
+    pub device_usernames: Vec<String>,
+}
+
+/// A push's `data` object: string keys and **string values only** (TP7 —
+/// the companion's iOS plugin drops anything else). The type makes a
+/// non-string value impossible; numbers are sent as decimal strings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PushData(pub std::collections::BTreeMap<String, String>);
+
+impl PushData {
+    fn of(pairs: &[(&str, String)]) -> Self {
+        Self(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(String::as_str)
+    }
+
+    pub fn insert(&mut self, key: &str, value: impl Into<String>) {
+        self.0.insert(key.to_string(), value.into());
+    }
+
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::Value::Object(
+            self.0
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
+        )
+    }
+}
+
+impl PartialEq<serde_json::Value> for PushData {
+    fn eq(&self, other: &serde_json::Value) -> bool {
+        &self.to_value() == other
+    }
+}
+
+/// Who is sending, stamped into every mobile push's `data` (TP8, TP25):
+/// the tunnel subdomain (omitted when the daemon has none) and the
+/// daemon's `/boot-status` instance id. The phone matches a server on
+/// `instanceId` first, then `subdomain`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PushStamp {
+    pub subdomain: String,
+    pub instance_id: String,
+}
+
+static INSTANCE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The daemon registers its `/boot-status` instance id once at boot; every
+/// mobile push carries it as `data.instanceId`.
+pub fn set_instance_id(id: &str) {
+    let _ = INSTANCE_ID.set(id.to_string());
+}
+
+/// The registered instance id, or empty before the daemon set it.
+pub fn instance_id() -> String {
+    INSTANCE_ID.get().cloned().unwrap_or_default()
+}
+
+/// The `sound` every mobile push carries (TP3): the platform default.
+pub const PUSH_SOUND_DEFAULT: &str = "default";
+
+/// APNs `apns-collapse-id` limit (bytes).
+pub const COLLAPSE_ID_MAX: usize = 64;
 
 impl PushEvent {
     /// Short one-line title suitable for a mobile notification header.
@@ -102,6 +221,8 @@ impl PushEvent {
             Self::FeedbackCreated { .. }
             | Self::FeedbackCommented { .. }
             | Self::ProjectMessageCreated { .. } => "K2".to_string(),
+            // §7: the agent's display name; name-only.
+            Self::ThreadPost(t) => t.agent_name.clone(),
         }
     }
 
@@ -117,6 +238,7 @@ impl PushEvent {
             Self::ProjectMessageCreated { project_name, .. } => {
                 format!("New message in {project_name}")
             }
+            Self::ThreadPost(t) => thread_body(t.msg_kind, t.count),
         }
     }
 
@@ -127,12 +249,16 @@ impl PushEvent {
             Self::HeartbeatFailed { .. }
             | Self::FeedbackCreated { .. }
             | Self::FeedbackCommented { .. }
-            | Self::ProjectMessageCreated { .. } => "",
+            | Self::ProjectMessageCreated { .. }
+            | Self::ThreadPost(_) => "",
         }
     }
 
     /// When `Some(non-empty)`, only devices for these usernames receive
     /// the push. `None` / empty → all registered devices on this host.
+    ///
+    /// A Thread push is ALWAYS targeted: its (possibly empty) recipient
+    /// list is never widened to every device.
     pub fn target_usernames(&self) -> Option<&[String]> {
         match self {
             Self::FeedbackCreated { assignees, .. } | Self::FeedbackCommented { assignees, .. }
@@ -140,29 +266,91 @@ impl PushEvent {
             {
                 Some(assignees.as_slice())
             }
+            Self::ThreadPost(t) => Some(t.device_usernames.as_slice()),
             _ => None,
         }
+    }
+
+    /// `true` for the kinds the mobile companion routes (ticket, project,
+    /// thread): they carry `sound` and the server stamp.
+    pub fn is_mobile(&self) -> bool {
+        !matches!(self, Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. })
+    }
+
+    /// The local budget a send of this event draws from (TP2).
+    pub fn budget_class(&self) -> budget::BudgetClass {
+        match self {
+            Self::ThreadPost(_) => budget::BudgetClass::Thread,
+            _ => budget::BudgetClass::Other,
+        }
+    }
+
+    /// `aps.thread-id` / grouping key (§7): `thread:<conversationId>`.
+    pub fn thread_id(&self) -> Option<String> {
+        match self {
+            Self::ThreadPost(t) => Some(format!("thread:{}", t.conversation_id)),
+            _ => None,
+        }
+    }
+
+    /// `apns-collapse-id` / FCM `tag` (§7): a trailing push REPLACES the
+    /// earlier banner. Always at most [`COLLAPSE_ID_MAX`] bytes: an
+    /// over-long conversation id is hashed instead of cut (a cut could
+    /// make two Threads collide).
+    pub fn collapse_id(&self) -> Option<String> {
+        let id = self.thread_id()?;
+        if id.len() <= COLLAPSE_ID_MAX {
+            return Some(id);
+        }
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(id.as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        Some(format!("thread:{}", &hex[..COLLAPSE_ID_MAX - "thread:".len()]))
     }
 
     /// The mobile deep-link `data` object ([`K2Cloud`] payloads): IDs
     /// + a `kind` discriminator ([`PUSH_KIND_TICKET`] / [`PUSH_KIND_PROJECT`]) ONLY — tap-to-open navigates on these,
     /// content is pulled in-app (feedback PRD §8.6).
-    pub fn data(&self) -> serde_json::Value {
+    ///
+    /// Strings only (TP7). The server stamp (`subdomain`, `instanceId`) is
+    /// added at send time by [`K2Cloud`], not here.
+    pub fn data(&self) -> PushData {
         match self {
             Self::FeedbackCreated { feedback_id, .. }
-            | Self::FeedbackCommented { feedback_id, .. } => serde_json::json!({
-                "kind": PUSH_KIND_TICKET,
-                "feedbackId": feedback_id,
-            }),
-            Self::ProjectMessageCreated { group_id, .. } => serde_json::json!({
-                "kind": PUSH_KIND_PROJECT,
-                "groupId": group_id,
-            }),
+            | Self::FeedbackCommented { feedback_id, .. } => PushData::of(&[
+                ("kind", PUSH_KIND_TICKET.to_string()),
+                ("feedbackId", feedback_id.clone()),
+            ]),
+            Self::ProjectMessageCreated { group_id, .. } => PushData::of(&[
+                ("kind", PUSH_KIND_PROJECT.to_string()),
+                ("groupId", group_id.clone()),
+            ]),
+            Self::ThreadPost(t) => PushData::of(&[
+                ("kind", PUSH_KIND_THREAD.to_string()),
+                ("addr", t.addr.clone()),
+                ("conversationId", t.conversation_id.clone()),
+                ("seq", t.seq.to_string()),
+                ("projectId", t.project_id.clone()),
+                ("agentName", t.agent_name.clone()),
+                ("msgKind", t.msg_kind.as_wire().to_string()),
+                ("count", t.count.to_string()),
+                ("principal", t.principal.clone()),
+            ]),
             // Legacy desktop-era events carry no mobile deep link.
-            Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => {
-                serde_json::json!({})
-            }
+            Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
         }
+    }
+}
+
+/// The fixed, content-free Thread body (§7).
+pub fn thread_body(kind: ThreadMsgKind, count: u32) -> String {
+    if count > 1 {
+        return format!("{count} new messages");
+    }
+    match kind {
+        ThreadMsgKind::Text => "New message in Thread".to_string(),
+        ThreadMsgKind::Choice => "Asks you to choose".to_string(),
+        ThreadMsgKind::Secret => "Asks for a secret".to_string(),
     }
 }
 
@@ -173,6 +361,9 @@ pub const PUSH_KIND_TICKET: &str = "ticket";
 
 /// Push `data.kind` for a project-group chat message.
 pub const PUSH_KIND_PROJECT: &str = "project";
+
+/// Push `data.kind` for an agent's Thread post (prd-thread-push-notifications-v1).
+pub const PUSH_KIND_THREAD: &str = "thread";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for
@@ -314,24 +505,96 @@ impl PushTarget for NtfySh {
 
 // ── K2Cloud (companion C4) ──────────────────────────────────────────────
 
+/// How the daemon authenticates one dispatch call to the push gateway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayAuth {
+    /// Per-daemon auth (prd-thread-push-notifications-v1 §8, slice S0):
+    /// the daemon's TUNNEL bearer token plus `X-K2-Subdomain: <label>`.
+    /// The gateway validates it like `cert.k2.dev` does and keeps a
+    /// budget per subdomain.
+    Tunnel { token: String, subdomain: String },
+    /// The legacy fleet-wide shared bearer (one global budget). Kept for
+    /// relays without S0 and for daemons with no paired tunnel.
+    Shared { token: String },
+}
+
+impl GatewayAuth {
+    pub fn bearer(&self) -> &str {
+        match self {
+            Self::Tunnel { token, .. } | Self::Shared { token } => token,
+        }
+    }
+
+    /// The `X-K2-Subdomain` header value (per-daemon auth only).
+    pub fn subdomain_header(&self) -> Option<&str> {
+        match self {
+            Self::Tunnel { subdomain, .. } => Some(subdomain),
+            Self::Shared { .. } => None,
+        }
+    }
+
+    pub fn is_tunnel(&self) -> bool {
+        matches!(self, Self::Tunnel { .. })
+    }
+}
+
+/// The response header an S0 gateway sets on EVERY per-daemon-path
+/// response, success or error (k2-connect PR #13 review, finding 2). Its
+/// absence on a refusal means an old gateway that does not know the
+/// per-daemon path — the only case the daemon falls back to the shared
+/// token.
+pub const S0_MARKER_HEADER: &str = "X-K2-Push-Gateway";
+/// The marker's value.
+pub const S0_MARKER_VALUE: &str = "s0";
+
+/// One gateway HTTP response, whatever its status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayResponse {
+    pub status: u16,
+    pub body: String,
+    /// The response carried [`S0_MARKER_HEADER`]: [`S0_MARKER_VALUE`].
+    pub s0: bool,
+}
+
+impl GatewayResponse {
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The gateway's error code (`error.code`, `error` or `code` in the
+    /// JSON body), else `HTTP <status>`.
+    pub fn reason(&self) -> String {
+        let v: serde_json::Value = serde_json::from_str(&self.body).unwrap_or_default();
+        let code = v
+            .pointer("/error/code")
+            .and_then(|c| c.as_str())
+            .or_else(|| v.get("error").and_then(|c| c.as_str()))
+            .or_else(|| v.get("code").and_then(|c| c.as_str()));
+        match code {
+            Some(c) if !c.trim().is_empty() => c.trim().to_string(),
+            _ => format!("HTTP {}", self.status),
+        }
+    }
+}
+
 /// The one HTTP call [`K2Cloud`] makes, behind a seam so tests inject
 /// a recorder instead of a live socket (no network in tests — the
-/// gateway itself is exercised in the k2-connect repo). `Ok` carries
-/// the gateway's parsed JSON response (per-token outcomes, incl.
-/// `dead:true` for `410 Unregistered` tokens the daemon must prune).
+/// gateway itself is exercised in the k2-connect repo). `Ok` carries any
+/// HTTP response (the caller reads the status and the S0 marker); `Err`
+/// is a transport failure only.
 pub trait DispatchSender: Send + Sync {
     fn post(
         &self,
         url: &str,
-        gateway_token: &str,
+        auth: &GatewayAuth,
         body: &serde_json::Value,
-    ) -> Result<serde_json::Value, PushError>;
+    ) -> Result<GatewayResponse, PushError>;
 }
 
-/// Production sender: blocking reqwest POST with the shared gateway
-/// token as a bearer credential. Mirrors the [`Webhook`] transport
-/// idiom (fire-and-forget; no internal retry — the gateway is on the
-/// same relay the daemon already depends on).
+/// Production sender: blocking reqwest POST with the chosen bearer (and
+/// `X-K2-Subdomain` on the per-daemon path). Mirrors the [`Webhook`]
+/// transport idiom (fire-and-forget; no internal retry — the gateway is
+/// on the same relay the daemon already depends on).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HttpDispatchSender;
 
@@ -339,47 +602,281 @@ impl DispatchSender for HttpDispatchSender {
     fn post(
         &self,
         url: &str,
-        gateway_token: &str,
+        auth: &GatewayAuth,
         body: &serde_json::Value,
-    ) -> Result<serde_json::Value, PushError> {
-        let response = reqwest::blocking::Client::new()
+    ) -> Result<GatewayResponse, PushError> {
+        let mut request = reqwest::blocking::Client::new()
             .post(url)
             .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {gateway_token}"))
-            .header("User-Agent", "k2-daemon")
+            .header("Authorization", format!("Bearer {}", auth.bearer()))
+            .header("User-Agent", "k2-daemon");
+        if let Some(sub) = auth.subdomain_header() {
+            request = request.header("X-K2-Subdomain", sub);
+        }
+        let response = request
             .body(body.to_string())
             .send()
             .map_err(|e| PushError::Transport(e.to_string()))?;
-        let status = response.status();
-        let text = response.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(PushError::Remote {
-                status: status.as_u16(),
-                body: text,
-            });
+        let status = response.status().as_u16();
+        let s0 = response
+            .headers()
+            .get(S0_MARKER_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(S0_MARKER_VALUE));
+        let body = response.text().unwrap_or_default();
+        Ok(GatewayResponse { status, body, s0 })
+    }
+}
+
+/// The gateway a paired daemon uses when nothing overrides it (TP6).
+pub const DEFAULT_GATEWAY_URL: &str = "https://push.k2.dev";
+
+/// Most devices one dispatch call may carry (the gateway's
+/// `MAX_DEVICES_PER_DISPATCH`); a larger recipient set is split.
+pub const MAX_DEVICES_PER_CALL: usize = 100;
+
+/// Resolved push-gateway configuration. `None` from the resolvers =
+/// DORMANT (no URL, or no credential at all).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayConfig {
+    /// Gateway base URL (no `/push/dispatch` suffix).
+    pub url: String,
+    /// The paired tunnel's `(token, subdomain)`, when both are set.
+    pub tunnel: Option<(String, String)>,
+    /// The legacy shared gateway token, when configured.
+    pub shared_token: Option<String>,
+    /// The tunnel subdomain stamped into `data.subdomain` (may be set
+    /// without a token; empty = none).
+    pub subdomain: String,
+}
+
+fn non_blank(v: Option<String>) -> Option<String> {
+    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+impl GatewayConfig {
+    /// Pure resolution (TP6): a paired tunnel (token + subdomain) is
+    /// enough — the URL defaults to [`DEFAULT_GATEWAY_URL`]. Without a
+    /// tunnel, the URL and the shared token must both be set (today's
+    /// dormancy gate). An explicit URL always wins.
+    pub fn resolve(
+        url: Option<String>,
+        shared_token: Option<String>,
+        tunnel_token: Option<String>,
+        tunnel_subdomain: Option<String>,
+    ) -> Option<Self> {
+        let subdomain = non_blank(tunnel_subdomain).map(|s| s.to_ascii_lowercase());
+        let tunnel = match (non_blank(tunnel_token), subdomain.clone()) {
+            (Some(t), Some(s)) => Some((t, s)),
+            _ => None,
+        };
+        let shared_token = non_blank(shared_token);
+        let url = match non_blank(url) {
+            Some(u) => K2Cloud::normalize_gateway_base(&u),
+            None if tunnel.is_some() => DEFAULT_GATEWAY_URL.to_string(),
+            None => return None,
+        };
+        if url.is_empty() || (tunnel.is_none() && shared_token.is_none()) {
+            return None;
         }
-        Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+        Some(Self {
+            url,
+            tunnel,
+            shared_token,
+            subdomain: subdomain.unwrap_or_default(),
+        })
+    }
+
+    /// Resolve from the environment, settings and the tunnel config.
+    /// Env wins over settings (the `K2_*`-override house pattern):
+    /// [`ENV_GATEWAY_URL`]/[`ENV_GATEWAY_TOKEN`], falling back to the
+    /// `pushGatewayUrl`/`pushGatewayToken` app settings; the tunnel
+    /// token + subdomain come from `tunnel.json` (or its vault).
+    pub fn from_config() -> Option<Self> {
+        let settings = crate::app_settings::load();
+        let url = std::env::var(ENV_GATEWAY_URL)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or(settings.push_gateway_url);
+        let token = std::env::var(ENV_GATEWAY_TOKEN)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or(settings.push_gateway_token);
+        let tunnel = crate::tunnel::config::load().unwrap_or_default();
+        Self::resolve(url, token, Some(tunnel.token), Some(tunnel.subdomain))
+    }
+}
+
+// ── Relay path state (§6.3, k2-connect PR #13 review finding 2) ─────────
+//
+// Two different refusals of the per-daemon (tunnel-token) auth:
+//
+// - **Old gateway** (no S0 marker on a 401/403): the relay does not know the
+//   per-daemon path. The daemon falls back to the shared token with the
+//   small Thread bucket, and tries the tunnel token again after
+//   [`TUNNEL_RETRY_SECS`].
+// - **Rejected** (an S0-marked 401/403: `subdomain_not_owned`, unknown
+//   token, suspended account): the relay knows this daemon and said no.
+//   The daemon NEVER falls back (a suspended account must not keep pushing
+//   on the shared token), sends nothing, and reports `push: "dormant"` with
+//   the reason until a retry after [`TUNNEL_RETRY_SECS`] succeeds.
+//
+// A 400 never falls back either: the body is wrong, not the auth.
+
+/// How long either refusal holds before the daemon tries the tunnel token
+/// again.
+pub const TUNNEL_RETRY_SECS: i64 = 3600;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TunnelState {
+    /// Never refused, or accepted since.
+    Ok,
+    /// An old gateway refused it at this time (fall back to shared).
+    OldGateway { at: i64 },
+    /// An S0 gateway rejected it at this time, with its reason.
+    Rejected { at: i64, reason: String },
+}
+
+static TUNNEL_STATE: std::sync::Mutex<TunnelState> = std::sync::Mutex::new(TunnelState::Ok);
+
+fn tunnel_state() -> std::sync::MutexGuard<'static, TunnelState> {
+    TUNNEL_STATE.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// An old gateway (no S0 marker) refused the tunnel token at `now`.
+pub fn note_old_gateway(now: i64) {
+    *tunnel_state() = TunnelState::OldGateway { at: now };
+}
+
+/// An S0 gateway rejected the tunnel token at `now` (marked 401/403).
+pub fn note_tunnel_rejected(now: i64, reason: &str) {
+    *tunnel_state() = TunnelState::Rejected { at: now, reason: reason.to_string() };
+}
+
+/// The gateway accepted the tunnel token: forget any refusal.
+pub fn note_tunnel_accepted() {
+    *tunnel_state() = TunnelState::Ok;
+}
+
+/// True while an old-gateway refusal is younger than [`TUNNEL_RETRY_SECS`].
+pub fn old_gateway_recently(now: i64) -> bool {
+    matches!(*tunnel_state(), TunnelState::OldGateway { at } if now - at < TUNNEL_RETRY_SECS)
+}
+
+/// The reason of an S0 rejection younger than [`TUNNEL_RETRY_SECS`].
+pub fn tunnel_rejected_recently(now: i64) -> Option<String> {
+    match &*tunnel_state() {
+        TunnelState::Rejected { at, reason } if now - at < TUNNEL_RETRY_SECS => Some(reason.clone()),
+        _ => None,
+    }
+}
+
+/// Test-only: reset the process-wide relay state.
+#[cfg(any(test, feature = "test-util"))]
+pub fn reset_relay_state_for_test() {
+    note_tunnel_accepted();
+}
+
+/// The `push` field of `GET /cli/notify/prefs` (§5.6, TP25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushStatus {
+    /// Pushes leave this daemon.
+    Ready,
+    /// Nothing is sent: no gateway, no credential, or the gateway rejected
+    /// this daemon (`reason`).
+    Dormant { reason: Option<String> },
+    /// Air-gap is on: no push of any kind (TP5).
+    Airgap,
+}
+
+impl PushStatus {
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Dormant { .. } => "dormant",
+            Self::Airgap => "airgap",
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Dormant { reason } => reason.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Pure: from the resolved config, the air-gap flag and the clock.
+    pub fn of(cfg: Option<&GatewayConfig>, airgap: bool, now: i64) -> Self {
+        if airgap {
+            return Self::Airgap;
+        }
+        let Some(cfg) = cfg else {
+            return Self::Dormant { reason: Some("no push gateway: pair a tunnel".into()) };
+        };
+        if cfg.tunnel.is_some() {
+            if let Some(reason) = tunnel_rejected_recently(now) {
+                return Self::Dormant { reason: Some(format!("the push gateway refused this server: {reason}")) };
+            }
+        }
+        Self::Ready
+    }
+}
+
+/// Which relay budget this daemon is on (§6.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayPath {
+    /// Per-daemon auth: the relay's per-subdomain windows.
+    PerDaemon,
+    /// The shared token: the fleet's one global window of 60 an hour,
+    /// so the daemon's Thread bucket drops to
+    /// [`budget::THREAD_PER_HOUR_SHARED`].
+    Shared,
+}
+
+impl RelayPath {
+    pub fn of(cfg: &GatewayConfig, now: i64) -> Self {
+        if cfg.tunnel.is_some() && !old_gateway_recently(now) {
+            Self::PerDaemon
+        } else {
+            Self::Shared
+        }
+    }
+
+    /// The Thread bucket size on this path (per hour).
+    pub fn thread_per_hour(self) -> usize {
+        match self {
+            Self::PerDaemon => budget::THREAD_PER_HOUR,
+            Self::Shared => budget::THREAD_PER_HOUR_SHARED,
+        }
     }
 }
 
 /// Companion C4 mobile push adapter — the module's reserved cloud
 /// seam, filled (naming: k2, not k2so). `send` reads the daemon-held
 /// device registry ([`crate::push_devices`]) and POSTs
-/// `{devices:[{platform,token}], payload:{title, body, data}}` to
-/// `<gateway>/push/dispatch`; the stateless relay gateway fans out to
-/// APNs/FCM. Tokens the response marks `dead:true` are pruned from
-/// the registry (aggressive dead-token hygiene, §4.5).
+/// `{devices:[{platform,token}], payload:{title, body, data, sound,
+/// threadId?, collapseId?}}` to `<gateway>/push/dispatch`; the stateless
+/// relay gateway fans out to APNs/FCM. Tokens the response marks
+/// `dead:true` are pruned from the registry (aggressive dead-token
+/// hygiene, §4.5).
 ///
-/// Constructed ONLY via [`K2Cloud::from_config`] in production: no
-/// gateway URL + token configured → no instance → dispatch is a
-/// no-op (DORMANT — the shipped-but-inactive state).
+/// Auth (TP1): the per-daemon tunnel token first; when the gateway
+/// refuses it (403/401/400 — a relay without S0), the same body goes
+/// again with the shared token, and the refusal is remembered for
+/// [`TUNNEL_RETRY_SECS`].
 pub struct K2Cloud {
-    gateway_url: String,
-    gateway_token: String,
+    config: GatewayConfig,
     sender: std::sync::Arc<dyn DispatchSender>,
 }
 
-/// The exact env/settings keys [`K2Cloud::from_config`] reads.
+/// The exact env/settings keys [`GatewayConfig::from_config`] reads.
 pub const ENV_GATEWAY_URL: &str = "K2_PUSH_GATEWAY_URL";
 pub const ENV_GATEWAY_TOKEN: &str = "K2_PUSH_GATEWAY_TOKEN";
 
@@ -408,69 +905,199 @@ impl K2Cloud {
         u
     }
 
-    /// Build from resolved config parts. `None` unless BOTH the
-    /// gateway URL and the gateway token are present and non-blank —
-    /// the dormancy gate, kept pure so it's directly testable.
+    /// Shared-token-only construction from resolved parts. `None` unless
+    /// BOTH the gateway URL and the gateway token are present and
+    /// non-blank — the legacy dormancy gate, kept pure so it's directly
+    /// testable.
     pub fn from_parts(url: Option<String>, token: Option<String>) -> Option<Self> {
-        let url = url.map(|s| Self::normalize_gateway_base(&s))?;
-        let token = token.map(|s| s.trim().to_string())?;
-        if url.is_empty() || token.is_empty() {
-            return None;
-        }
-        Some(Self {
-            gateway_url: url,
-            gateway_token: token,
-            sender: std::sync::Arc::new(HttpDispatchSender),
-        })
+        GatewayConfig::resolve(url, token, None, None).map(|c| Self::with_config(c, std::sync::Arc::new(HttpDispatchSender)))
     }
 
-    /// Resolve config and construct, or `None` = DORMANT. Env wins
-    /// over settings (the `K2_*`-override house pattern):
-    /// [`ENV_GATEWAY_URL`]/[`ENV_GATEWAY_TOKEN`], falling back to the
-    /// `pushGatewayUrl`/`pushGatewayToken` app settings.
+    /// Resolve config (env, settings, tunnel) and construct, or `None` =
+    /// DORMANT.
     pub fn from_config() -> Option<Self> {
-        let settings = crate::app_settings::load();
-        let url = std::env::var(ENV_GATEWAY_URL)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or(settings.push_gateway_url);
-        let token = std::env::var(ENV_GATEWAY_TOKEN)
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or(settings.push_gateway_token);
-        Self::from_parts(url, token)
+        GatewayConfig::from_config().map(|c| Self::with_config(c, std::sync::Arc::new(HttpDispatchSender)))
     }
 
-    /// Test seam: same adapter, injected transport.
+    /// Construct from a resolved config with an injected transport.
+    pub fn with_config(config: GatewayConfig, sender: std::sync::Arc<dyn DispatchSender>) -> Self {
+        Self { config, sender }
+    }
+
+    /// Test seam: the shared-token adapter with an injected transport.
     pub fn with_sender(
         gateway_url: &str,
         gateway_token: &str,
         sender: std::sync::Arc<dyn DispatchSender>,
     ) -> Self {
-        Self {
-            gateway_url: Self::normalize_gateway_base(gateway_url),
-            gateway_token: gateway_token.to_string(),
+        Self::with_config(
+            GatewayConfig {
+                url: Self::normalize_gateway_base(gateway_url),
+                tunnel: None,
+                shared_token: Some(gateway_token.to_string()),
+                subdomain: String::new(),
+            },
             sender,
-        }
+        )
     }
 
-    /// The dispatch body: every registered device (V1 fans out to ALL
-    /// — per-user subscriptions later) + the content-free payload.
+    pub fn config(&self) -> &GatewayConfig {
+        &self.config
+    }
+
+    /// The `payload` object for ONE recipient person. Mobile kinds carry
+    /// `sound`, the server stamp and `principal` (TP29); a Thread push
+    /// also carries `threadId` + `collapseId` (§7). No badge, ever (TP27).
+    pub fn payload(event: &PushEvent, stamp: &PushStamp, principal: &str) -> serde_json::Value {
+        let mut data = event.data();
+        if event.is_mobile() {
+            if !principal.is_empty() {
+                data.insert("principal", principal.to_string());
+            }
+            if !stamp.subdomain.is_empty() {
+                data.insert("subdomain", stamp.subdomain.clone());
+            }
+            if !stamp.instance_id.is_empty() {
+                data.insert("instanceId", stamp.instance_id.clone());
+            }
+        }
+        let mut payload = serde_json::json!({
+            "title": event.title(),
+            "body": event.body(),
+            "data": data,
+        });
+        if event.is_mobile() {
+            payload["sound"] = serde_json::json!(PUSH_SOUND_DEFAULT);
+        }
+        if let Some(t) = event.thread_id() {
+            payload["threadId"] = serde_json::json!(t);
+        }
+        if let Some(c) = event.collapse_id() {
+            payload["collapseId"] = serde_json::json!(c);
+        }
+        payload
+    }
+
+    /// One dispatch body: these devices + the payload.
     fn dispatch_body(
         devices: &[crate::push_devices::PushDevice],
-        event: &PushEvent,
+        payload: &serde_json::Value,
     ) -> serde_json::Value {
         serde_json::json!({
             "devices": devices
                 .iter()
                 .map(|d| serde_json::json!({ "platform": d.platform, "token": d.token }))
                 .collect::<Vec<_>>(),
-            "payload": {
-                "title": event.title(),
-                "body": event.body(),
-                "data": event.data(),
-            },
+            "payload": payload,
         })
+    }
+
+    /// POST one body (TP1, PR #13 review finding 2).
+    ///
+    /// With a paired tunnel the per-daemon path goes first:
+    /// - 2xx → done (any earlier refusal is forgotten);
+    /// - an S0-MARKED 401/403 (`subdomain_not_owned`, unknown token,
+    ///   suspended) → logged, `push` turns dormant with the reason, and
+    ///   NOTHING is sent — never the shared token;
+    /// - an UNMARKED 401/403 → an old gateway: fall back to the shared
+    ///   token (when configured) and use it for [`TUNNEL_RETRY_SECS`];
+    /// - a 400 → never falls back (the body is wrong, not the auth);
+    /// - anything else (429, 5xx) → an error, no fallback.
+    ///
+    /// While an S0 rejection is fresh, the per-daemon path is not retried
+    /// and nothing is sent. Without a tunnel the shared token is the only
+    /// path.
+    fn post_with_fallback(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, PushError> {
+        let now = unix_now();
+        let shared = self.config.shared_token.as_ref().map(|t| GatewayAuth::Shared { token: t.clone() });
+        if let Some((token, subdomain)) = self.config.tunnel.as_ref() {
+            if let Some(reason) = tunnel_rejected_recently(now) {
+                return Err(PushError::BadConfig(format!(
+                    "push gateway rejected this server ({reason}); not sending"
+                )));
+            }
+            if !old_gateway_recently(now) || shared.is_none() {
+                let auth = GatewayAuth::Tunnel { token: token.clone(), subdomain: subdomain.clone() };
+                let resp = self.sender.post(url, &auth, body)?;
+                if resp.is_success() {
+                    note_tunnel_accepted();
+                    return Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null));
+                }
+                let refused = matches!(resp.status, 401 | 403);
+                if refused && resp.s0 {
+                    let reason = resp.reason();
+                    note_tunnel_rejected(now, &reason);
+                    crate::log_debug!("[push] gateway rejected this server (HTTP {}, {reason}); push is dormant", resp.status);
+                    return Err(PushError::Remote { status: resp.status, body: resp.body });
+                }
+                if !refused || shared.is_none() {
+                    if refused {
+                        note_old_gateway(now);
+                    }
+                    return Err(PushError::Remote { status: resp.status, body: resp.body });
+                }
+                note_old_gateway(now);
+                crate::log_debug!(
+                    "[push] gateway has no per-daemon path (HTTP {}, no S0 marker); using the shared token",
+                    resp.status
+                );
+            }
+        }
+        let Some(auth) = shared else {
+            return Err(PushError::BadConfig("no push gateway credential".into()));
+        };
+        let resp = self.sender.post(url, &auth, body)?;
+        if resp.is_success() {
+            Ok(serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null))
+        } else {
+            Err(PushError::Remote { status: resp.status, body: resp.body })
+        }
+    }
+
+    /// Send `event` to ONE person's devices (`principal` = their person
+    /// key, stamped into `data`, TP29). The daemon resolved them (Thread
+    /// recipients, or bell-filtered ticket/project targets). One call per
+    /// [`MAX_DEVICES_PER_CALL`] devices; dead tokens are pruned.
+    pub fn dispatch(
+        &self,
+        event: &PushEvent,
+        principal: &str,
+        devices: &[crate::push_devices::PushDevice],
+    ) -> Result<(), PushError> {
+        if devices.is_empty() {
+            return Ok(());
+        }
+        let stamp = PushStamp {
+            subdomain: self.config.subdomain.clone(),
+            instance_id: instance_id(),
+        };
+        let payload = Self::payload(event, &stamp, principal);
+        let url = format!("{}/push/dispatch", self.config.url);
+        for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
+            let body = Self::dispatch_body(chunk, &payload);
+            let response = self.post_with_fallback(&url, &body)?;
+            // Dead-token feedback: the gateway reports per-token outcomes;
+            // `dead:true` (APNs 410 Unregistered / FCM NotRegistered)
+            // tokens are pruned so they never ride another dispatch. A
+            // malformed/missing results array is simply no prunes — the
+            // push itself already succeeded.
+            if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
+                for entry in results {
+                    let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
+                    let token = entry.get("token").and_then(|t| t.as_str());
+                    if let (true, Some(token)) = (dead, token) {
+                        if let Err(e) = crate::push_devices::prune_device_by_token(token) {
+                            crate::log_debug!("[push] dead-token prune failed: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -481,34 +1108,27 @@ impl PushTarget for K2Cloud {
                 .map_err(PushError::BadConfig)?,
             None => crate::push_devices::list_devices().map_err(PushError::BadConfig)?,
         };
-        if devices.is_empty() {
-            // Nobody registered (or no assignee has a device) — no network call.
-            return Ok(());
+        // Nobody registered (or no assignee has a device) — no network call.
+        // One dispatch per login (TP29: never another person's devices in
+        // a payload). The daemon groups by PERSON instead; this direct
+        // path has no Connect-user store, so it groups by login.
+        let mut by_login: std::collections::BTreeMap<String, Vec<crate::push_devices::PushDevice>> =
+            Default::default();
+        for d in devices {
+            by_login.entry(d.username.clone()).or_default().push(d);
         }
-        let url = format!("{}/push/dispatch", self.gateway_url);
-        let body = Self::dispatch_body(&devices, event);
-        let response = self.sender.post(&url, &self.gateway_token, &body)?;
-        // Dead-token feedback: the gateway reports per-token outcomes;
-        // `dead:true` (APNs 410 Unregistered / FCM NotRegistered)
-        // tokens are pruned so they never ride another dispatch. A
-        // malformed/missing results array is simply no prunes — the
-        // push itself already succeeded.
-        if let Some(results) = response.get("results").and_then(|r| r.as_array()) {
-            for entry in results {
-                let dead = entry.get("dead").and_then(|d| d.as_bool()).unwrap_or(false);
-                let token = entry.get("token").and_then(|t| t.as_str());
-                if let (true, Some(token)) = (dead, token) {
-                    if let Err(e) = crate::push_devices::prune_device_by_token(token) {
-                        crate::log_debug!("[push] dead-token prune failed: {e}");
-                    }
-                }
-            }
+        for (login, group) in by_login {
+            let principal = match event {
+                PushEvent::ThreadPost(t) => t.principal.clone(),
+                _ => login,
+            };
+            self.dispatch(event, &principal, &group)?;
         }
         Ok(())
     }
 
     fn label(&self) -> String {
-        format!("K2Cloud({})", self.gateway_url)
+        format!("K2Cloud({})", self.config.url)
     }
 }
 
@@ -621,7 +1241,9 @@ mod tests {
     /// Recording sender: captures every call, answers a canned
     /// response. No network anywhere in these tests.
     struct MockSender {
-        calls: Mutex<Vec<(String, String, serde_json::Value)>>,
+        calls: Mutex<Vec<(String, GatewayAuth, serde_json::Value)>>,
+        /// Scripted responses, in order; when empty, a 200 with `response`.
+        script: Mutex<std::collections::VecDeque<GatewayResponse>>,
         response: serde_json::Value,
     }
 
@@ -629,11 +1251,20 @@ mod tests {
         fn new(response: serde_json::Value) -> Arc<Self> {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
+                script: Mutex::new(Default::default()),
                 response,
             })
         }
 
-        fn calls(&self) -> Vec<(String, String, serde_json::Value)> {
+        fn scripted(responses: Vec<GatewayResponse>) -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                script: Mutex::new(responses.into()),
+                response: serde_json::json!({ "results": [] }),
+            })
+        }
+
+        fn calls(&self) -> Vec<(String, GatewayAuth, serde_json::Value)> {
             self.calls.lock().expect("mock lock").clone()
         }
     }
@@ -642,15 +1273,19 @@ mod tests {
         fn post(
             &self,
             url: &str,
-            gateway_token: &str,
+            auth: &GatewayAuth,
             body: &serde_json::Value,
-        ) -> Result<serde_json::Value, PushError> {
+        ) -> Result<GatewayResponse, PushError> {
             self.calls.lock().expect("mock lock").push((
                 url.to_string(),
-                gateway_token.to_string(),
+                auth.clone(),
                 body.clone(),
             ));
-            Ok(self.response.clone())
+            Ok(self.script.lock().expect("mock lock").pop_front().unwrap_or_else(|| GatewayResponse {
+                status: 200,
+                body: self.response.to_string(),
+                s0: false,
+            }))
         }
     }
 
@@ -687,6 +1322,10 @@ mod tests {
 
     #[test]
     fn k2cloud_dispatch_payload_is_content_free() {
+        // Own DB: an untargeted send lists EVERY device, and other tests'
+        // devices (other logins) would add dispatches.
+        let _db = crate::db::scoped_for_test();
+        set_instance_id(TEST_INSTANCE);
         let token = unique_token("shape");
         let device_id = format!("dev-push-shape-{}", uuid::Uuid::new_v4());
         crate::push_devices::upsert_device(&device_id, "apns", &token, "owner")
@@ -712,26 +1351,33 @@ mod tests {
 
         let calls = sender.calls();
         assert_eq!(calls.len(), 1, "exactly one dispatch POST");
-        let (url, gw_token, body) = &calls[0];
+        let (url, auth, body) = &calls[0];
         assert_eq!(url, "https://push.k2.dev/push/dispatch");
-        assert_eq!(gw_token, "gw-secret");
+        assert_eq!(auth, &GatewayAuth::Shared { token: "gw-secret".into() });
 
-        // Wire shape: {devices:[{platform,token}], payload:{title,body,data}}
-        // and NOTHING else — the §4.5 content-free invariant is
-        // structural: no field exists that could carry ask/message text.
+        // Wire shape: {devices:[{platform,token}], payload:{title,body,
+        // data,sound}} and NOTHING else — the §4.5 content-free invariant
+        // is structural: no field exists that could carry ask/message text.
         let top: Vec<_> = body.as_object().expect("object").keys().collect();
         assert_eq!(top, vec!["devices", "payload"], "no extra top-level fields");
         let payload = body["payload"].as_object().expect("payload object");
         assert_eq!(
             payload.keys().collect::<Vec<_>>(),
-            vec!["body", "data", "title"],
-            "payload carries exactly title/body/data"
+            vec!["body", "data", "sound", "title"],
+            "a ticket push carries exactly title/body/data/sound (no badge, TP27)"
         );
         assert_eq!(body["payload"]["title"], "K2");
         assert_eq!(body["payload"]["body"], "cortana needs you on a ticket");
+        assert_eq!(body["payload"]["sound"], "default");
         assert_eq!(
             body["payload"]["data"],
-            serde_json::json!({ "kind": PUSH_KIND_TICKET, "feedbackId": "fb-77" })
+            serde_json::json!({
+                "kind": PUSH_KIND_TICKET,
+                "feedbackId": "fb-77",
+                "instanceId": TEST_INSTANCE,
+                "principal": "owner",
+            }),
+            "no tunnel subdomain on this config → no subdomain key; instanceId + principal always"
         );
         let devices = body["devices"].as_array().expect("devices array");
         let mine = devices
@@ -798,5 +1444,270 @@ mod tests {
         )
         .expect("fully configured constructs");
         assert_eq!(cloud.label(), "K2Cloud(https://push.k2.dev)");
+    }
+
+    // ── prd-thread-push-notifications-v1 S1 ──────────────────────────
+
+    const TEST_INSTANCE: &str = "feedfacefeedface";
+
+    fn thread_event(kind: ThreadMsgKind, count: u32, cid: &str) -> PushEvent {
+        PushEvent::ThreadPost(ThreadPush {
+            agent_name: "Cortana".into(),
+            conversation_id: cid.into(),
+            addr: "k2/reviewer".into(),
+            seq: 418,
+            project_id: "proj-1".into(),
+            msg_kind: kind,
+            count,
+            principal: "owner".into(),
+            device_usernames: vec!["owner".into()],
+        })
+    }
+
+    fn dev(token: &str) -> crate::push_devices::PushDevice {
+        crate::push_devices::PushDevice {
+            device_id: format!("d-{token}"),
+            platform: "apns".into(),
+            token: token.into(),
+            username: "owner".into(),
+            created_at: 1,
+            updated_at: 1,
+            last_seen_at: 1,
+        }
+    }
+
+    /// TP7: every `data` value of every kind is a string (the type makes a
+    /// non-string impossible; this pins the wire form too).
+    #[test]
+    fn every_push_data_value_is_a_string() {
+        let events = vec![
+            sample_event(),
+            PushEvent::HeartbeatFailed { heartbeat: "h".into(), reason: "r".into() },
+            PushEvent::FeedbackCreated { agent_name: "a".into(), feedback_id: "f".into(), assignees: vec![] },
+            PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec!["gina".into()] },
+            PushEvent::ProjectMessageCreated { project_name: "p".into(), group_id: "g".into() },
+            thread_event(ThreadMsgKind::Text, 1, "c"),
+            thread_event(ThreadMsgKind::Secret, 3, "c"),
+        ];
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        for e in &events {
+            let payload = K2Cloud::payload(e, &stamp, "gina");
+            let data = payload["data"].as_object().expect("data object");
+            for (k, v) in data {
+                assert!(v.is_string(), "{e:?}: data.{k} = {v} is not a string");
+            }
+        }
+    }
+
+    #[test]
+    fn thread_push_payload_is_name_only_with_grouping_and_collapse() {
+        let cid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        let e = thread_event(ThreadMsgKind::Text, 1, cid);
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        let p = K2Cloud::payload(&e, &stamp, "owner");
+        assert_eq!(
+            p,
+            serde_json::json!({
+                "title": "Cortana",
+                "body": "New message in Thread",
+                "sound": "default",
+                "threadId": format!("thread:{cid}"),
+                "collapseId": format!("thread:{cid}"),
+                "data": {
+                    "kind": "thread",
+                    "subdomain": "rosson",
+                    "instanceId": TEST_INSTANCE,
+                    "addr": "k2/reviewer",
+                    "conversationId": cid,
+                    "seq": "418",
+                    "projectId": "proj-1",
+                    "agentName": "Cortana",
+                    "msgKind": "text",
+                    "count": "1",
+                    "principal": "owner",
+                },
+            })
+        );
+        assert!(p.get("badge").is_none() && p.get("aps").is_none(), "no badge (TP27)");
+        // Bodies by kind and count; a secret card says nothing more.
+        assert_eq!(thread_event(ThreadMsgKind::Choice, 1, cid).body(), "Asks you to choose");
+        assert_eq!(thread_event(ThreadMsgKind::Secret, 1, cid).body(), "Asks for a secret");
+        assert_eq!(thread_event(ThreadMsgKind::Secret, 3, cid).body(), "3 new messages");
+        let secret = K2Cloud::payload(&thread_event(ThreadMsgKind::Secret, 1, cid), &stamp, "owner");
+        assert_eq!(secret["data"]["msgKind"], "secret");
+        assert_eq!(secret["data"].as_object().expect("data").len(), 11, "no extra secret fields");
+        // A Thread push is always targeted, never "every device".
+        let empty = PushEvent::ThreadPost(ThreadPush {
+            device_usernames: vec![],
+            ..match thread_event(ThreadMsgKind::Text, 1, cid) {
+                PushEvent::ThreadPost(t) => t,
+                _ => unreachable!(),
+            }
+        });
+        assert_eq!(empty.target_usernames(), Some(&[][..]));
+        assert_eq!(empty.budget_class(), budget::BudgetClass::Thread);
+    }
+
+    #[test]
+    fn collapse_id_never_exceeds_64_bytes() {
+        let long = "x".repeat(200);
+        let a = thread_event(ThreadMsgKind::Text, 1, &long).collapse_id().expect("collapse");
+        let b = thread_event(ThreadMsgKind::Text, 1, &format!("{long}y")).collapse_id().expect("collapse");
+        assert!(a.len() <= COLLAPSE_ID_MAX && a.starts_with("thread:"), "{a}");
+        assert_ne!(a, b, "long ids hash, not cut");
+        let ticket = PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] };
+        assert_eq!(ticket.collapse_id(), None);
+        assert_eq!(ticket.thread_id(), None);
+    }
+
+    #[test]
+    fn gateway_config_defaults_to_push_k2_dev_when_paired() {
+        let c = GatewayConfig::resolve(None, None, Some("tun".into()), Some(" Rosson ".into()))
+            .expect("a paired tunnel is enough");
+        assert_eq!(c.url, DEFAULT_GATEWAY_URL);
+        assert_eq!(c.tunnel, Some(("tun".to_string(), "rosson".to_string())));
+        assert_eq!(c.shared_token, None);
+        assert_eq!(c.subdomain, "rosson");
+        // No tunnel and no shared token: dormant, even with a URL.
+        assert!(GatewayConfig::resolve(Some("https://x".into()), None, None, Some("sub".into())).is_none());
+        // A subdomain without a token is not a tunnel (TP25: dormant alone).
+        assert!(GatewayConfig::resolve(None, None, Some(" ".into()), Some("sub".into())).is_none());
+        // Shared only: today's gate.
+        let s = GatewayConfig::resolve(Some("https://push.k2.dev/push/dispatch".into()), Some("gw".into()), None, None)
+            .expect("shared");
+        assert_eq!((s.url.as_str(), s.tunnel.is_none()), ("https://push.k2.dev", true));
+        // An explicit URL overrides the default for a paired daemon.
+        let o = GatewayConfig::resolve(Some("https://staging/".into()), None, Some("t".into()), Some("s".into()))
+            .expect("override");
+        assert_eq!(o.url, "https://staging");
+    }
+
+    /// The relay state is process-global; these cases run in ONE test so
+    /// they never race each other.
+    #[test]
+    fn per_daemon_auth_falls_back_only_for_an_unmarked_refusal() {
+        set_instance_id(TEST_INSTANCE);
+        let both = GatewayConfig::resolve(None, Some("shared-gw".into()), Some("tun-tok".into()), Some("rosson".into()))
+            .expect("config");
+        let tunnel_auth = GatewayAuth::Tunnel { token: "tun-tok".into(), subdomain: "rosson".into() };
+        let shared_auth = GatewayAuth::Shared { token: "shared-gw".into() };
+        let ev = thread_event(ThreadMsgKind::Text, 1, "c-auth");
+        let refused = |status: u16, s0: bool, code: &str| GatewayResponse {
+            status,
+            body: serde_json::json!({ "error": { "code": code } }).to_string(),
+            s0,
+        };
+        let ok = || GatewayResponse { status: 200, body: r#"{"results":[]}"#.into(), s0: true };
+        let now = unix_now();
+
+        // 1. Accepted: one call, tunnel token + X-K2-Subdomain.
+        reset_relay_state_for_test();
+        let s = MockSender::scripted(vec![ok()]);
+        K2Cloud::with_config(both.clone(), s.clone()).dispatch(&ev, "owner", &[dev("t1")]).expect("send");
+        let calls = s.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, tunnel_auth);
+        assert_eq!(calls[0].1.subdomain_header(), Some("rosson"));
+        assert_eq!(RelayPath::of(&both, now), RelayPath::PerDaemon);
+        assert_eq!(RelayPath::of(&both, now).thread_per_hour(), budget::THREAD_PER_HOUR);
+        assert_eq!(PushStatus::of(Some(&both), false, now), PushStatus::Ready);
+
+        // 2. Old gateway (no S0 marker on a 403): fall back to the shared
+        //    token for the same body, then stay on it with the small bucket.
+        reset_relay_state_for_test();
+        let s = MockSender::scripted(vec![refused(403, false, "bad bearer"), ok(), ok()]);
+        let cloud = K2Cloud::with_config(both.clone(), s.clone());
+        cloud.dispatch(&ev, "owner", &[dev("t2")]).expect("old gateway: shared fallback delivers");
+        let calls = s.calls();
+        assert_eq!(calls.len(), 2, "tunnel try + shared retry");
+        assert_eq!((calls[0].1.clone(), calls[1].1.clone()), (tunnel_auth.clone(), shared_auth.clone()));
+        assert_eq!(calls[0].2, calls[1].2, "the same body");
+        assert_eq!(RelayPath::of(&both, now), RelayPath::Shared);
+        assert_eq!(RelayPath::of(&both, now).thread_per_hour(), budget::THREAD_PER_HOUR_SHARED);
+        assert_eq!(PushStatus::of(Some(&both), false, now), PushStatus::Ready);
+        cloud.dispatch(&ev, "owner", &[dev("t2")]).expect("second send");
+        assert_eq!(s.calls()[2].1, shared_auth, "within the retry window the shared token goes first");
+        assert_eq!(RelayPath::of(&both, now + TUNNEL_RETRY_SECS), RelayPath::PerDaemon, "retried after an hour");
+
+        // 3. A marked 403 (subdomain_not_owned / suspended): NO fallback,
+        //    nothing more sent, status dormant with the reason.
+        reset_relay_state_for_test();
+        let s = MockSender::scripted(vec![refused(403, true, "subdomain_not_owned")]);
+        let cloud = K2Cloud::with_config(both.clone(), s.clone());
+        let err = cloud.dispatch(&ev, "owner", &[dev("t3")]).expect_err("rejected");
+        assert!(matches!(err, PushError::Remote { status: 403, .. }), "{err}");
+        assert_eq!(s.calls().len(), 1, "the shared token is never tried after a marked 403");
+        let status = PushStatus::of(Some(&both), false, now);
+        assert_eq!(status.as_wire(), "dormant");
+        assert!(status.reason().expect("reason").contains("subdomain_not_owned"), "{status:?}");
+        cloud.dispatch(&ev, "owner", &[dev("t3")]).expect_err("still rejected");
+        assert_eq!(s.calls().len(), 1, "while rejected, nothing is sent at all");
+        assert_eq!(PushStatus::of(Some(&both), false, now + TUNNEL_RETRY_SECS), PushStatus::Ready);
+
+        // 4. A 400 never falls back, marked or not.
+        for s0 in [false, true] {
+            reset_relay_state_for_test();
+            let s = MockSender::scripted(vec![refused(400, s0, "invalid_body")]);
+            K2Cloud::with_config(both.clone(), s.clone())
+                .dispatch(&ev, "owner", &[dev("t4")])
+                .expect_err("400 is an error");
+            assert_eq!(s.calls().len(), 1, "no fallback on 400 (s0={s0})");
+            assert_eq!(RelayPath::of(&both, now), RelayPath::PerDaemon, "a 400 says nothing about auth");
+        }
+
+        // 5. Air-gap wins over everything in the status.
+        assert_eq!(PushStatus::of(Some(&both), true, now), PushStatus::Airgap);
+        assert_eq!(PushStatus::of(None, false, now).as_wire(), "dormant");
+        reset_relay_state_for_test();
+    }
+
+    #[test]
+    fn gateway_response_reason_reads_the_error_code() {
+        let r = |b: &str| GatewayResponse { status: 403, body: b.into(), s0: true }.reason();
+        assert_eq!(r(r#"{"error":{"code":"suspended"}}"#), "suspended");
+        assert_eq!(r(r#"{"error":"unknown_token"}"#), "unknown_token");
+        assert_eq!(r(r#"{"code":"subdomain_not_owned"}"#), "subdomain_not_owned");
+        assert_eq!(r("not json"), "HTTP 403");
+    }
+
+    #[test]
+    fn dispatch_splits_at_the_gateway_device_cap() {
+        let s = MockSender::new(serde_json::json!({ "results": [] }));
+        let cloud = K2Cloud::with_sender("https://push.k2.dev", "gw", s.clone());
+        let devices: Vec<_> = (0..(MAX_DEVICES_PER_CALL + 1)).map(|i| dev(&format!("split-{i}"))).collect();
+        cloud.dispatch(&thread_event(ThreadMsgKind::Text, 1, "c-split"), "owner", &devices).expect("send");
+        let calls = s.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].2["devices"].as_array().expect("devices").len(), MAX_DEVICES_PER_CALL);
+        assert_eq!(calls[1].2["devices"].as_array().expect("devices").len(), 1);
+        cloud.dispatch(&thread_event(ThreadMsgKind::Text, 1, "c-split"), "owner", &[]).expect("no devices");
+        assert_eq!(s.calls().len(), 2, "no devices, no call");
+    }
+
+    /// TP29: one dispatch per person, each saying whose it is; nobody's
+    /// devices or name ride another person's call.
+    #[test]
+    fn untargeted_send_is_one_dispatch_per_login_with_its_principal() {
+        let _db = crate::db::scoped_for_test();
+        crate::push_devices::upsert_device("p-own", "apns", "tok-own", "owner").expect("owner device");
+        crate::push_devices::upsert_device("p-gina", "fcm", "tok-gina", "gina").expect("gina device");
+        let s = MockSender::new(serde_json::json!({ "results": [] }));
+        K2Cloud::with_sender("https://push.k2.dev", "gw", s.clone())
+            .send(&PushEvent::ProjectMessageCreated { project_name: "Apollo".into(), group_id: "g".into() })
+            .expect("send");
+        let calls = s.calls();
+        assert_eq!(calls.len(), 2, "one call per person");
+        for (_, _, body) in &calls {
+            let principal = body["payload"]["data"]["principal"].as_str().expect("principal").to_string();
+            let tokens: Vec<&str> = body["devices"]
+                .as_array()
+                .expect("devices")
+                .iter()
+                .map(|d| d["token"].as_str().expect("token"))
+                .collect();
+            assert_eq!(tokens, vec![format!("tok-{}", if principal == "owner" { "own" } else { "gina" })]);
+            let other = if principal == "owner" { "gina" } else { "owner" };
+            assert!(!body.to_string().contains(&format!("\"{other}\"")), "{other} leaked into {principal}'s call");
+        }
     }
 }

@@ -56,6 +56,8 @@ pub struct NodeOptions {
     pub facts: Option<MachineFacts>,
     /// The root executor's socket (node admin).
     pub admin_socket: PathBuf,
+    /// Send health facts (node admin §10). Off in tests.
+    pub health: bool,
 }
 
 impl NodeOptions {
@@ -78,6 +80,7 @@ impl NodeOptions {
             clock: Arc::new(crate::ledger::SystemClock::new()),
             facts: None,
             admin_socket: crate::admin::config::default_socket(),
+            health: true,
         }
     }
 }
@@ -227,6 +230,8 @@ pub struct Node {
     tool_lock: tokio::sync::Mutex<()>,
     /// Nonces of node-answered admin verbs.
     pub admin_nonces: crate::admin::courier::NodeNonces,
+    /// One pending-updates refresh at a time (it hits the network).
+    pub updates_refreshing: std::sync::atomic::AtomicBool,
     /// Offered self-update builds being received (in memory only).
     pub admin_updates: crate::admin::courier::IncomingUpdates,
 }
@@ -237,6 +242,7 @@ pub fn node_features() -> Vec<String> {
         k2_node_proto::needs::FEATURE_NEEDS.to_string(),
         k2_node_proto::admin::FEATURE_ADMIN.to_string(),
         k2_node_proto::admin::FEATURE_SELF_UPDATE.to_string(),
+        k2_node_proto::admin::FEATURE_HEALTH.to_string(),
     ];
     if crate::packages::installer_present() {
         f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
@@ -301,6 +307,7 @@ impl Node {
             tool_lock: tokio::sync::Mutex::new(()),
             admin_nonces: Default::default(),
             admin_updates: Default::default(),
+            updates_refreshing: Default::default(),
             opts,
         });
         node.refresh_local(true);
@@ -452,6 +459,11 @@ impl Node {
         let cpu: u64 = jobs.values().map(|j| j.cpu_millis.unwrap_or_else(|| share(cap_cpu))).sum();
         let mem: u64 = jobs.values().map(|j| j.mem_bytes.unwrap_or_else(|| share(cap_mem))).sum();
         (cpu, mem, jobs.len() as u32, jobs.values().any(|j| j.exclusive))
+    }
+
+    /// Jobs that look stuck (node admin S9 fills this in).
+    pub fn stuck_jobs(&self) -> Vec<k2_node_proto::health::StuckJob> {
+        Vec::new()
     }
 
     /// The session (in-memory) narrowing, for `policy.show`.

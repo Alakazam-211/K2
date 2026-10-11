@@ -20,6 +20,7 @@ pub mod cli;
 pub mod config;
 pub mod courier;
 pub mod exec;
+pub mod health;
 #[cfg(target_os = "macos")]
 pub mod launchd;
 pub mod policy;

@@ -102,6 +102,11 @@ pub async fn handle(node: Arc<Node>, cmd: SignedCommand) -> AdminResult {
 /// Verbs the node answers itself (read + job housekeeping).
 async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, AdminRefusal> {
     match verb {
+        "health" => {
+            super::exec::only_keys(args, &["refresh_updates"])?;
+            let refresh = args.get("refresh_updates").and_then(|v| v.as_bool()).unwrap_or(false);
+            serde_json::to_value(super::health::collect(node, refresh).await).map_err(|e| AdminRefusal::new(code::FAILED, e.to_string()))
+        }
         "policy.show" => {
             super::exec::no_args(args)?;
             Ok(super::policy::show(node.layout(), &node.facts, &node.session_narrow()))

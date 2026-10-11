@@ -337,6 +337,57 @@ fn after_tag(src: &str, line: u64, open: &str) -> (usize, usize) {
     }
 }
 
+/// One inline `<script>` in an HTML page (for App pages, `jscheck::app`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineScript {
+    /// Where the body starts in the page: 1-based `(line, col)`.
+    pub base: (usize, usize),
+    pub body: String,
+    /// The `type` attribute, if any.
+    pub type_attr: Option<String>,
+    /// A `src` script: the browser ignores its body.
+    pub has_src: bool,
+}
+
+/// Every `<script>` body in `html`, read with the same tokenizer the
+/// bundler uses (so a `</script>` inside a string ends it the same way).
+pub fn inline_scripts(html: &str) -> Vec<InlineScript> {
+    let mut out = Vec::new();
+    let mut open: Option<InlineScript> = None;
+    let mut open_line = 0u64;
+    for (token, line) in tokenize(html) {
+        if let Some(s) = open.as_mut() {
+            match token {
+                CharacterTokens(t) => {
+                    s.body.push_str(&t);
+                    continue;
+                }
+                NullCharacterToken => {
+                    s.body.push('\u{FFFD}');
+                    continue;
+                }
+                _ => {
+                    let mut done = open.take().unwrap_or_else(|| unreachable!("open script"));
+                    done.base = after_tag(html, open_line, "<script");
+                    out.push(done);
+                }
+            }
+        }
+        if let TagToken(Tag { kind: StartTag, ref name, ref attrs, .. }) = token {
+            if &**name == "script" {
+                let attr = |k: &str| attrs.iter().find(|a| &*a.name.local == k).map(|a| a.value.to_string());
+                open_line = line;
+                open = Some(InlineScript { base: (1, 1), body: String::new(), type_attr: attr("type"), has_src: attr("src").is_some() });
+            }
+        }
+    }
+    if let Some(mut s) = open.take() {
+        s.base = after_tag(html, open_line, "<script");
+        out.push(s);
+    }
+    out
+}
+
 /// Builds the output document with nonce slots.
 struct Out {
     parts: Vec<String>,

@@ -735,6 +735,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/publish/stop", Member),
     post("/cli/publish/subdomain/claim", Member),
     post("/cli/publish/subdomain/unclaim", Member),
+    // decision-k2-runtime-v1 stage 0: `k2 app validate` (parse + leak lints).
+    get("/cli/publish/validate", Member),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
     post("/cli/relations/create", Member),
@@ -1753,6 +1755,7 @@ mod tests {
         ("/cli/publish/leftovers", "lists published-service leftovers"),
         ("/cli/publish/list", "lists published services"),
         ("/cli/publish/logs", "reads service logs"),
+        ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
     ];
 
     fn path_words(path: &str) -> Vec<String> {

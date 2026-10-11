@@ -88,6 +88,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/publish/list" => handle_list(params),
         "/cli/publish/logs" => handle_logs(params),
         "/cli/publish/leftovers" => handle_leftovers(params),
+        "/cli/publish/validate" => handle_validate(params),
         "/cli/publish/run"
         | "/cli/publish/start"
         | "/cli/publish/stop"
@@ -352,6 +353,92 @@ fn handle_logs(params: &HashMap<String, String>) -> CliResponse {
         serde_json::json!({
             "name": name,
             "text": text,
+        })
+        .to_string(),
+    )
+}
+
+/// GET `/cli/publish/validate?name=` or `?dir=` (`k2 app validate`,
+/// decision-k2-runtime-v1 stage 0): parse every JS/TS file and inline
+/// script of an App's folder and run the leak lints. `name` checks a
+/// published App's own folder (its `--skin` dir, else its `--cwd`); `dir`
+/// a workspace-relative folder (default: the workspace). Read-only.
+/// `status` is `ok` or `failed` (`k2 app validate` exits 0 or 1).
+fn handle_validate(params: &HashMap<String, String>) -> CliResponse {
+    let project = match need_project(params) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let project_id = match resolve_project_id(&project) {
+        Ok(id) => id,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let Some(ws) = resolve_project_path(&project_id) else {
+        return CliResponse::bad_request("workspace has no path");
+    };
+    let name = str_param(params, "name");
+    let dir_param = str_param(params, "dir");
+    let (dir, shown) = if !name.trim().is_empty() {
+        let row = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::get_by_project_name(&conn, &project_id, &name)
+        };
+        let row = match row {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return CliResponse {
+                    status: "404 Not Found",
+                    content_type: "application/json",
+                    body: serde_json::json!({
+                        "error": "not_found",
+                        "message": format!("no published App named '{}' in this workspace", name.trim()),
+                        "suggestion": "list them with k2 publish ps, or check a folder with k2 app validate --dir <path>",
+                    })
+                    .to_string(),
+                }
+            }
+            Err(e) => return CliResponse::internal_error(format!("published_services: {e}")),
+        };
+        let base = PathBuf::from(&row.cwd);
+        let dir = if row.kind == k2_core::published_services::KIND_SKIN && row.skin_root.trim().is_empty() {
+            return CliResponse::bad_request(format!(
+                "'{}' serves K2's bundled app pages, not code of its own; nothing to validate",
+                row.name
+            ));
+        } else if row.kind == k2_core::published_services::KIND_SKIN {
+            base.join(row.skin_root.trim())
+        } else {
+            base
+        };
+        (dir, row.name.clone())
+    } else {
+        let rel = if dir_param.trim().is_empty() { "." } else { dir_param.trim() };
+        let checked = if rel == "." {
+            Ok(String::new())
+        } else {
+            publish_runtime::validate_skin_root(std::path::Path::new(&ws), rel)
+        };
+        match checked {
+            Ok(r) => (PathBuf::from(&ws).join(&r), if r.is_empty() { ".".to_string() } else { r }),
+            Err(e) => return CliResponse::bad_request(e.replace("skinRoot", "dir")),
+        }
+    };
+    if !dir.is_dir() {
+        return CliResponse::bad_request(format!("{} is not a folder", dir.display()));
+    }
+    let r = k2_core::jscheck::app::check_dir(&dir);
+    let ok = r.errors.is_empty();
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": ok,
+            "status": if ok { "ok" } else { "failed" },
+            "target": shown,
+            "dir": dir.display().to_string(),
+            "files": r.files,
+            "errors": r.errors,
+            "warnings": r.warnings,
+            "skipped": r.skipped,
         })
         .to_string(),
     )
@@ -671,6 +758,42 @@ mod tests {
             rusqlite::params![id, path, name],
         )
         .expect("seed workspace");
+    }
+
+    /// `k2 app validate --dir`: parse errors fail it with file:line and a
+    /// suggestion; leak lints are warnings; `..` and absolute dirs are refused.
+    #[test]
+    fn validate_checks_a_workspace_folder_and_refuses_escapes() {
+        let pid = std::process::id();
+        let ws = std::env::temp_dir().join(format!("k2-validate-ws-{pid}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(ws.join("app/src")).expect("mkdir");
+        std::fs::write(ws.join("app/server.js"), "const seen = new Map()\nserver.on('request', (req) => { seen.set(req.url, 1) })\n")
+            .expect("write server.js");
+        std::fs::write(ws.join("app/src/page.ts"), "export const n: number = \n").expect("write page.ts");
+        let ws_path = ws.canonicalize().expect("canon").display().to_string();
+        let id = format!("validate-ws-{pid}");
+        seed_ws(&id, &ws_path, "Validate");
+        let call = |dir: &str| {
+            let mut p = HashMap::new();
+            p.insert("project".to_string(), ws_path.clone());
+            p.insert("dir".to_string(), dir.to_string());
+            dispatch("/cli/publish/validate", &p).expect("GET row")
+        };
+        let r = call("app");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["status"], "failed", "{v}");
+        assert_eq!(v["files"], 2, "{v}");
+        assert_eq!(v["errors"][0]["file"], "src/page.ts", "{v}");
+        assert_eq!(v["errors"][0]["line"], 2, "unexpected end of input: {v}");
+        assert!(v["errors"][0]["suggestion"].as_str().is_some_and(|s| !s.is_empty()), "{v}");
+        assert_eq!(v["warnings"][0]["file"], "server.js", "{v}");
+        assert_eq!(v["warnings"][0]["line"], 2, "{v}");
+        for bad in ["../", "/etc", "app/../.."] {
+            let r = call(bad);
+            assert_eq!(r.status, "400 Bad Request", "{bad}: {}", r.body);
+        }
+        let _ = std::fs::remove_dir_all(&ws);
     }
 
     fn leftovers_json(project: &str) -> serde_json::Value {

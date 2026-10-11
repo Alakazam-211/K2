@@ -311,9 +311,12 @@ pub fn legacy_retire(ctx: &Ctx, which: Legacy) -> HResult<serde_json::Value> {
 pub fn audit_tail(ctx: &Ctx) -> HResult<serde_json::Value> {
     let out = ctx.run_ok(
         JOURNALCTL,
+        // `_UID=0`: only lines the root helper itself logged — any user
+        // can `logger -t k2-root-helper` (security review #7).
         &[
             "-t",
             "k2-root-helper",
+            "_UID=0",
             "-n",
             "100",
             "-o",

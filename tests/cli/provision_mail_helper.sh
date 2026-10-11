@@ -39,11 +39,15 @@ printf '%s' "$BLOCK" | grep -q -- '--unit "${K2_UNIT_NAME}.service" --scope syst
 	|| fail "7a must name this unit + system scope for daemon.toml (RH15)"
 ok "uses install-root-helper.sh at the daemon's version, with this unit"
 if printf '%s' "$BLOCK" | grep -q 'NOPASSWD'; then fail "7a must not write sudo policy itself"; fi
-[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "0" ] || fail "the provisioner writes no sudo policy itself (the root installer does)"
-ok "no sudo policy in the provisioner"
+[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "1" ] || fail "only the legacy (pre-0.45.5) pg branch writes a sudoers line"
+grep -q 'visudo -cf "$PG_SUDO_TMP"' "$PROVISION" || fail "the legacy pg sudoers line must be visudo-checked"
+if grep -Eq 'cat > /etc/sudoers' "$PROVISION"; then fail "an unchecked sudoers write is back (RH11)"; fi
+ok "no sudo policy in 7a; the legacy pg line is visudo-checked"
 DB_BLOCK="$(sed -n '/^# ── 7b\./,/bake complete/p' "$PROVISION")"
-if printf '%s\n' "$DB_BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper|sudoers'; then
-	fail "7b must not install k2-pg-helper or write a sudoers file (RH11)"
+ROOT_DB="$(printf '%s\n' "$DB_BLOCK" | sed -n '/^\telse$/,/^\tfi$/p')"
+[ -n "$ROOT_DB" ] || fail "7b root-helper branch not found"
+if printf '%s\n' "$ROOT_DB" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper|sudoers'; then
+	fail "7b (root helper) must not install k2-pg-helper or write a sudoers file (RH11)"
 fi
 printf '%s' "$DB_BLOCK" | grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
 ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
@@ -105,7 +109,28 @@ if [ "\$1" = "-c" ]; then
 fi
 exec "$REAL_STAT" "\$@"
 SH
+cat >"$SHIMS/curl" <<SH
+#!/bin/sh
+# curl … -o <dest> <url>: serve https://github.com/…/download/<path> from the mirror.
+dest=""; url=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in -o) dest="\$2"; shift 2 ;; -*) shift ;; *) url="\$1"; shift ;; esac
+done
+src="$WORK/rel/\${url##*/releases/download/}"
+[ -f "\$src" ] || exit 22
+cp "\$src" "\$dest"
+SH
 chmod +x "$SHIMS"/*
+mkdir -p "$WORK/rel/v0.45.0"
+cat >"$WORK/rel/v0.45.0/install-mail-helper.sh" <<SH
+#!/usr/bin/env bash
+echo "legacy \$*" >>"$WORK/installer.log"
+mkdir -p "\$K2_INSTALL_ROOT/usr/local/libexec" "\$K2_INSTALL_ROOT/etc/sudoers.d"
+printf 'mail helper' >"\$K2_INSTALL_ROOT/usr/local/libexec/k2-mail-helper"
+chmod 0755 "\$K2_INSTALL_ROOT/usr/local/libexec/k2-mail-helper"
+printf 'k2 line' >"\$K2_INSTALL_ROOT/etc/sudoers.d/k2-mail-helper"
+chmod 0440 "\$K2_INSTALL_ROOT/etc/sudoers.d/k2-mail-helper"
+SH
 
 # Fake daemon home + fake script dir holding a fake installer.
 K2_HOME_T="$WORK/home/k2"
@@ -113,7 +138,7 @@ mkdir -p "$K2_HOME_T/.local/bin"
 cat >"$K2_HOME_T/.local/bin/k2-daemon" <<SH
 #!/bin/sh
 echo "\${SHIM_VIA_RUNUSER:-direct}" >>"$WORK/daemon-runs.log"
-[ "\$1" = "--version" ] && echo "k2-daemon \${FAKE_DAEMON_VERSION-0.45.0}"
+[ "\$1" = "--version" ] && echo "k2-daemon \${FAKE_DAEMON_VERSION-0.45.5}"
 SH
 chmod +x "$K2_HOME_T/.local/bin/k2-daemon"
 SD="$WORK/scripts"
@@ -147,7 +172,7 @@ run_step() {
 	set +e
 	out="$(PATH="$SHIMS:$PATH" K2_INSTALL_ROOT="$dest" K2_HOME="$K2_HOME_T" \
 		SCRIPT_DIR="$SD" K2_RUN_USER="${K2_RUN_USER:-k2}" K2_UNIT_NAME="${K2_UNIT_NAME:-k2-daemon}" \
-		K2_VERSION="${K2_VERSION-0.45.0}" RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
+		K2_VERSION="${K2_VERSION-0.45.5}" RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
 	rc=$?
 	set -e
 }
@@ -156,17 +181,17 @@ echo "== success: installs at the daemon's version, verifies, prints the line ==
 run_step "$WORK/box1"
 [ "$rc" -eq 0 ] || fail "success exit $rc: $out"
 printf '%s\n' "$out" | sed 's/^/    | /'
-grep -qx -- '--version 0.45.0 --user k2 --unit k2-daemon.service --scope system' "$WORK/installer.log" \
+grep -qx -- '--version 0.45.5 --user k2 --unit k2-daemon.service --scope system' "$WORK/installer.log" \
 	|| fail "installer argv: $(cat "$WORK/installer.log")"
-ok "installer called with --version 0.45.0 --user k2 --unit k2-daemon.service --scope system"
+ok "installer called with --version 0.45.5 --user k2 --unit k2-daemon.service --scope system"
 K2_UNIT_NAME=k2-daemon-std run_step "$WORK/box1b"
 grep -q -- '--unit k2-daemon-std.service' "$WORK/installer.log" || fail "custom unit: $(cat "$WORK/installer.log")"
 ok "K2_UNIT_NAME reaches daemon.toml"
 grep -qx 'visudo -c' "$WORK/visudo.log" || fail "visudo -c never ran"
 ok "visudo -c ran after install"
-printf '%s' "$out" | grep -q 'root helper: installed (v0.45.0)' || fail "missing 'root helper: installed (v0.45.0)': $out"
-printf '%s' "$out" | grep -q 'SUMMARY=installed (v0.45.0)' || fail "summary var: $out"
-ok "prints 'root helper: installed (v0.45.0)'"
+printf '%s' "$out" | grep -q 'root helper: installed (v0.45.5)' || fail "missing 'root helper: installed (v0.45.5)': $out"
+printf '%s' "$out" | grep -q 'SUMMARY=installed (v0.45.5)' || fail "summary var: $out"
+ok "prints 'root helper: installed (v0.45.5)'"
 grep -qx k2 "$WORK/runuser.log" || fail "the version cross-check must run as k2"
 if grep -qx direct "$WORK/daemon-runs.log"; then fail "k2-daemon was executed without dropping to k2"; fi
 ok "the installed daemon ran only as k2 (runuser), never as the caller"
@@ -174,7 +199,7 @@ ok "the installed daemon ran only as k2 (runuser), never as the caller"
 echo "== installer fails: provisioning stops with a clear message =="
 FAKE_INSTALL_RC=7 run_step "$WORK/box2"
 [ "$rc" -ne 0 ] || fail "installer failure must fail the step: $out"
-printf '%s' "$out" | grep -q 'root helper: install-root-helper.sh --version 0.45.0 failed' || fail "message: $out"
+printf '%s' "$out" | grep -q 'root helper: install-root-helper.sh --version 0.45.5 failed' || fail "message: $out"
 printf '%s' "$out" | grep -q 'provisioning stopped' || fail "message: $out"
 if printf '%s' "$out" | grep -q 'SUMMARY='; then fail "must not continue past a failed install"; fi
 ok "installer failure is fatal and says so"
@@ -201,21 +226,30 @@ echo "== same version guard + unreadable daemon version =="
 K2_VERSION=0.44.4 run_step "$WORK/box7"
 [ "$rc" -ne 0 ] || fail "K2_VERSION mismatch must fail"
 printf '%s' "$out" | grep -q 'must match the daemon' || fail "mismatch message: $out"
-K2_VERSION=v0.45.0 run_step "$WORK/box8"
-[ "$rc" -eq 0 ] || fail "K2_VERSION=v0.45.0 should match 0.45.0: $out"
+K2_VERSION=v0.45.5 run_step "$WORK/box8"
+[ "$rc" -eq 0 ] || fail "K2_VERSION=v0.45.5 should match 0.45.5: $out"
 FAKE_DAEMON_VERSION="" run_step "$WORK/box9"
 [ "$rc" -ne 0 ] || fail "unreadable daemon version must fail: $out"
 printf '%s' "$out" | grep -q 'could not read the installed daemon version' || fail "message: $out"
 ok "version guards"
 
 echo "== K2_VERSION is required and must be plain x.y.z =="
-for bad in "" "latest" "0.45" "0.45.0-rc1" '0.45.0;id' '0.45.0/../x'; do
+for bad in "" "latest" "0.45" "0.45.5-rc1" '0.45.5;id' '0.45.5/../x'; do
 	K2_VERSION="$bad" run_step "$WORK/box-badver"
 	[ "$rc" -ne 0 ] || fail "K2_VERSION='$bad' must fail: $out"
 	printf '%s' "$out" | grep -q 'plain x.y.z' || fail "K2_VERSION='$bad' message: $out"
 	[ ! -e "$WORK/installer.log" ] || fail "K2_VERSION='$bad': installer must not run"
 done
 ok "missing or malformed K2_VERSION stops before anything runs"
+
+echo "== daemon older than the root helper: that release's k2-mail-helper =="
+FAKE_DAEMON_VERSION=0.45.0 K2_VERSION=0.45.0 run_step "$WORK/box-legacy"
+[ "$rc" -eq 0 ] || fail "legacy path: $out"
+grep -qx -- 'legacy --version 0.45.0 --user k2' "$WORK/installer.log" || fail "legacy installer argv: $(cat "$WORK/installer.log")"
+[ -f "$WORK/box-legacy/usr/local/libexec/k2-mail-helper" ] || fail "legacy helper not installed"
+[ ! -e "$WORK/box-legacy/usr/local/libexec/k2-root-helper" ] || fail "no root helper for an old daemon"
+printf '%s' "$out" | grep -q 'installed legacy k2-mail-helper (v0.45.0 predates the root helper)' || fail "legacy summary: $out"
+ok "a pre-0.45.5 daemon (raw-main provisioner) still gets its own release's mail helper"
 
 echo "== not Linux: skipped with a note, nothing run =="
 SHIM_OS=Darwin run_step "$WORK/box10"

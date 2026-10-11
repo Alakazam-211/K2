@@ -230,9 +230,38 @@ pub fn psql(ctx: &Ctx, db: &DbName, flags: PsqlFlags, sql: &[u8]) -> HResult<()>
         .map_err(|e| Fail::io(format!("runuser: {}", e.kind_str())))?;
     ctx.print(&out.stdout);
     if out.status != 0 {
-        let err = String::from_utf8_lossy(&out.stderr);
+        let err = redact_passwords(&String::from_utf8_lossy(&out.stderr));
         let err: String = err.trim().chars().take(2000).collect();
         return Err(Fail::io(format!("psql exit {}: {err}", out.status)));
     }
     Ok(())
+}
+
+/// Postgres echoes the failing statement (`LINE 1: … PASSWORD '…'`); drop
+/// every line that mentions a password before it reaches the daemon's
+/// errors and HTTP answers (security review #10).
+pub fn redact_passwords(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|l| {
+            if l.to_ascii_lowercase().contains("password") {
+                "[line with a password redacted]"
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn password_lines_are_redacted() {
+        let e = "ERROR:  syntax error at or near \"x\"\nLINE 1: CREATE ROLE a PASSWORD 'hunter2' x;\n        ^";
+        let r = super::redact_passwords(e);
+        assert!(!r.contains("hunter2"));
+        assert!(r.contains("syntax error"));
+        assert!(r.contains("[line with a password redacted]"));
+    }
 }

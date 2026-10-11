@@ -316,6 +316,39 @@ else
 	if [ "$INSTALLED_VERSION" != "$DAEMON_VERSION" ]; then
 		root_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${INSTALLED_VERSION}; the helper must match the daemon"
 	fi
+	# Daemons older than the root helper (it ships from 0.45.5) have no
+	# install-root-helper.sh in their release: they get that release's
+	# protocol-2 k2-mail-helper exactly as it shipped (this provisioner is
+	# fetched from raw main while K2_VERSION may still be older).
+	ROOT_HELPER_FROM="0.45.5"
+	ROOT_HELPER_MODE="root"
+	IFS=. read -r _dv1 _dv2 _dv3 <<<"$DAEMON_VERSION"
+	IFS=. read -r _rf1 _rf2 _rf3 <<<"$ROOT_HELPER_FROM"
+	if [ "$_dv1" -lt "$_rf1" ] || { [ "$_dv1" -eq "$_rf1" ] && { [ "$_dv2" -lt "$_rf2" ] \
+		|| { [ "$_dv2" -eq "$_rf2" ] && [ "$_dv3" -lt "$_rf3" ]; }; }; }; then
+		ROOT_HELPER_MODE="legacy"
+	fi
+	if [ "$ROOT_HELPER_MODE" = "legacy" ]; then
+		LEGACY_TMP="$(mktemp -d)" || root_helper_die "mktemp failed"
+		LEGACY_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-mail-helper.sh"
+		log "daemon v${DAEMON_VERSION} predates the root helper — installing its k2-mail-helper (${LEGACY_URL})"
+		curl -fsSL --retry 3 --retry-delay 2 "$LEGACY_URL" -o "$LEGACY_TMP/install-mail-helper.sh" \
+			|| root_helper_die "could not download $LEGACY_URL"
+		bash "$LEGACY_TMP/install-mail-helper.sh" --version "$DAEMON_VERSION" --user "$K2_RUN_USER" \
+			|| root_helper_die "install-mail-helper.sh --version $DAEMON_VERSION failed (output above)"
+		ROOT_HELPER_PATH="${K2_INSTALL_ROOT:-}/usr/local/libexec/k2-mail-helper"
+		ROOT_HELPER_SUDOERS="${K2_INSTALL_ROOT:-}/etc/sudoers.d/k2-mail-helper"
+		for _p in "$ROOT_HELPER_PATH" "$ROOT_HELPER_SUDOERS"; do
+			{ [ -f "$_p" ] && [ ! -L "$_p" ]; } || root_helper_die "$_p is missing after the legacy install"
+		done
+		[ "$(stat -c '%U:%G %a' "$ROOT_HELPER_PATH")" = "root:root 755" ] \
+			|| root_helper_die "$ROOT_HELPER_PATH is not root:root 755"
+		[ "$(stat -c '%U:%G %a' "$ROOT_HELPER_SUDOERS")" = "root:root 440" ] \
+			|| root_helper_die "$ROOT_HELPER_SUDOERS is not root:root 440"
+		visudo -c >/dev/null 2>&1 || root_helper_die "visudo -c fails after the legacy helper install"
+		MAIL_HELPER_LINE="installed legacy k2-mail-helper (v${DAEMON_VERSION} predates the root helper)"
+		log "root helper: ${MAIL_HELPER_LINE}"
+	else
 	ROOT_HELPER_SRC=""
 	if [ -n "${K2_ROOT_HELPER_BIN:-}" ]; then
 		[ -f "$K2_ROOT_HELPER_BIN" ] || root_helper_die "K2_ROOT_HELPER_BIN is set but missing: $K2_ROOT_HELPER_BIN"
@@ -350,6 +383,7 @@ else
 	fi
 	verify_root_helper
 	log "root helper: ${MAIL_HELPER_LINE}"
+	fi
 fi
 
 # ── 7b. optional Postgres sidecar bake (`--with-db` / K2_BAKE_DB=1) ──
@@ -374,14 +408,36 @@ if [ "$WITH_DB" = 1 ]; then
 		done
 	fi
 	systemctl enable postgresql >/dev/null 2>&1 || true
-	# D29: MemoryHigh/Max drop-ins + GUC caps, canned inside the root
-	# helper (never follows a link under /etc/postgresql, RH9).
-	[ -x /usr/local/libexec/k2-root-helper ] \
-		|| die "--with-db needs the root helper from step 7a"
-	/usr/local/libexec/k2-root-helper pg install-ram-fence >/dev/null \
-		|| die "root helper: pg install-ram-fence failed"
-	systemctl daemon-reload
-	log "Postgres sidecar baked (unit enabled, empty cluster, RAM fence via k2-root-helper)"
+	if [ "${ROOT_HELPER_MODE:-root}" = "legacy" ]; then
+		# A daemon older than the root helper still calls k2-pg-helper.
+		# Same script as before, but always present (fetched next to the
+		# provisioner when it ran alone) and a visudo-checked sudoers line.
+		PG_HELPER_SRC="$SCRIPT_DIR/k2-pg-helper"
+		if [ ! -f "$PG_HELPER_SRC" ]; then
+			PG_TMP="$(mktemp -d)" || die "mktemp failed"
+			PG_HELPER_SRC="$PG_TMP/k2-pg-helper"
+			curl -fsSL --retry 3 "$RAW_BASE/scripts/k2-pg-helper" -o "$PG_HELPER_SRC" \
+				|| die "could not download k2-pg-helper for the legacy daemon"
+		fi
+		install -d -m 0755 /usr/local/libexec
+		install -m 0755 -o root -g root "$PG_HELPER_SRC" /usr/local/libexec/k2-pg-helper
+		PG_SUDO_TMP="$(mktemp -d)/k2-pg-helper"
+		printf '%s ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper\n' "$K2_RUN_USER" >"$PG_SUDO_TMP"
+		visudo -cf "$PG_SUDO_TMP" >/dev/null || die "visudo rejected the k2-pg-helper sudoers line"
+		install -m 0440 -o root -g root "$PG_SUDO_TMP" /etc/sudoers.d/k2-pg-helper
+		/usr/local/libexec/k2-pg-helper install-ram-fence
+		systemctl daemon-reload
+		log "Postgres sidecar baked (legacy k2-pg-helper for daemon v${DAEMON_VERSION:-?})"
+	else
+		# D29: MemoryHigh/Max drop-ins + GUC caps, canned inside the root
+		# helper (never follows a link under /etc/postgresql, RH9).
+		[ -x /usr/local/libexec/k2-root-helper ] \
+			|| die "--with-db needs the root helper from step 7a"
+		/usr/local/libexec/k2-root-helper pg install-ram-fence >/dev/null \
+			|| die "root helper: pg install-ram-fence failed"
+		systemctl daemon-reload
+		log "Postgres sidecar baked (unit enabled, empty cluster, RAM fence via k2-root-helper)"
+	fi
 fi
 
 if [ "$BAKE_ONLY" = 1 ]; then

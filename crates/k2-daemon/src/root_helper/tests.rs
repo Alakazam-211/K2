@@ -104,6 +104,20 @@ fn caller_not_daemon_teaches_the_fix() {
     )
     .unwrap_err();
     assert!(e.contains("k2 root-helper update"), "{e}");
+    // A refused INPUT (not an unknown verb) is reported as-is.
+    let e = map_call(
+        &argv,
+        CallOut {
+            code: 2,
+            stdout: vec![],
+            stderr: "k2-root-helper: install-bin: tarball sha256 mismatch".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("sha256 mismatch") && !e.contains("older than"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -372,6 +386,11 @@ struct FakeHeal {
     updates: RefCell<Vec<usize>>,
     rollbacks: RefCell<u32>,
     fetches: RefCell<Vec<String>>,
+    /// `false` = the hosted-mail busy latch is held elsewhere.
+    latch_free: bool,
+    busy: RefCell<bool>,
+    /// Was the latch held during self_update?
+    busy_during_update: RefCell<bool>,
 }
 
 impl HealOps for FakeHeal {
@@ -388,12 +407,22 @@ impl HealOps for FakeHeal {
         self.files.get(url).cloned().ok_or(FetchError::NotFound)
     }
     fn self_update(&self, payload: &[u8]) -> Result<Value, String> {
+        *self.busy_during_update.borrow_mut() = *self.busy.borrow();
         self.updates.borrow_mut().push(payload.len());
         Ok(json!({"result": "updated"}))
     }
     fn self_rollback(&self) -> Result<Value, String> {
         *self.rollbacks.borrow_mut() += 1;
         Ok(json!({"result": "rolled_back"}))
+    }
+    fn begin_busy(&self) -> bool {
+        if self.latch_free {
+            *self.busy.borrow_mut() = true;
+        }
+        self.latch_free
+    }
+    fn end_busy(&self) {
+        *self.busy.borrow_mut() = false;
     }
 }
 
@@ -432,6 +461,9 @@ fn fake(states: Vec<RootHelperState>, files: HashMap<String, Vec<u8>>) -> FakeHe
         updates: RefCell::default(),
         rollbacks: RefCell::default(),
         fetches: RefCell::default(),
+        latch_free: true,
+        busy: RefCell::default(),
+        busy_during_update: RefCell::default(),
     }
 }
 
@@ -514,14 +546,27 @@ fn heal_skips_and_refusals() {
 }
 
 #[test]
-fn heal_defers_while_a_mail_window_holds_the_latch() {
-    // Serialized with every other latch user (the mail test lock).
-    let _g = crate::mail::mail_server_test_lock();
-    assert!(crate::mail::supervisor::try_begin_enable());
-    let f = fake(vec![root_at("0.45.5", 4)], signed_assets("0.45.6"));
-    assert_eq!(heal::run_once(&f, &plan(), "test"), Outcome::Deferred);
-    assert!(f.fetches.borrow().is_empty());
-    crate::mail::supervisor::end_enable();
+fn heal_takes_the_mail_latch_only_for_the_install_window() {
+    // Up to date: never asks for the latch.
+    let mut f = fake(vec![root_at("0.45.6", 4)], HashMap::new());
+    f.latch_free = false;
+    assert!(matches!(heal_with(&f, &plan()), Outcome::UpToDate { .. }));
+    // Latch held by a mail window: downloaded + verified, not installed.
+    let mut f = fake(vec![root_at("0.45.5", 4)], signed_assets("0.45.6"));
+    f.latch_free = false;
+    assert_eq!(heal_with(&f, &plan()), Outcome::Deferred);
+    assert!(f.updates.borrow().is_empty());
+    // Latch free: held exactly around self-update + re-check, then released.
+    let f = fake(
+        vec![root_at("0.45.5", 4), root_at("0.45.6", 4)],
+        signed_assets("0.45.6"),
+    );
+    assert!(matches!(heal_with(&f, &plan()), Outcome::Updated { .. }));
+    assert!(
+        *f.busy_during_update.borrow(),
+        "self-update ran inside the latch"
+    );
+    assert!(!*f.busy.borrow(), "latch released");
 }
 
 #[test]
@@ -548,4 +593,13 @@ fn status_shape() {
     assert_eq!(v["state"], "legacy");
     let v = status_json(&RootHelperState::missing(), "missing", false, None);
     assert_eq!(v["state"], "missing");
+    let not_allowed = RootHelperState {
+        kind: Kind::NotAllowed,
+        ..RootHelperState::missing()
+    };
+    let v = status_json(&not_allowed, "installed", true, None);
+    assert_eq!(
+        v["state"], "not_allowed",
+        "an installed-but-refused root helper is not 'legacy'"
+    );
 }

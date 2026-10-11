@@ -202,9 +202,14 @@ PROVENANCE=""
 WANT_COMMENT_VERSION=""
 if [ -n "$FILE" ]; then
 	[ -f "$FILE" ] || die "--file not found: $FILE"
-	SRC="$FILE"
+	# Copy into root's own temp dir FIRST and check/install only that copy:
+	# a --file the daemon user can write must not be swapped between the
+	# checks and the install (security review #4).
+	cp -- "$FILE" "$TMP/candidate"
+	SRC="$TMP/candidate"
 	if [ -f "$FILE.sig" ]; then
-		COMMENT="$(verify_sig "$FILE" "$FILE.sig")" || die "MINISIGN VERIFICATION FAILED for $FILE (with $FILE.sig) — refusing to install"
+		cp -- "$FILE.sig" "$TMP/candidate.sig"
+		COMMENT="$(verify_sig "$SRC" "$TMP/candidate.sig")" || die "MINISIGN VERIFICATION FAILED for $FILE (with $FILE.sig) — refusing to install"
 		PROVENANCE="local file $FILE (minisign verified: $COMMENT)"
 	else
 		COMMENT=""
@@ -335,7 +340,8 @@ if [ -n "$DEST_ROOT" ]; then
 elif ! id "$RUN_USER" >/dev/null 2>&1; then
 	CHECK="user '$RUN_USER' does not exist yet (the line applies once it does); legacy helpers left in place"
 elif ANSWER="$(runuser -u "$RUN_USER" -- sudo -n "$HELPER_PATH" helper version 2>/dev/null)" \
-	&& printf '%s' "$ANSWER" | grep -q '"protocol":[3-9]'; then
+	&& P="$(printf '%s' "$ANSWER" | grep -o '"protocol":[0-9]*' | head -n1 | cut -d: -f2)" \
+	&& [ -n "$P" ] && [ "$P" -ge "$MIN_PROTOCOL" ]; then
 	CHECK="$RUN_USER may run it: $(printf '%s' "$ANSWER" | grep -o '"version":"[0-9.]*"' | head -n1)"
 	DOOR_OK=1
 else

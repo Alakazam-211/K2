@@ -11,7 +11,11 @@
 //!    parent with a PAM session or `use_pty` monitor, and sudo exec'ing);
 //! 3. its real uid must be a configured daemon user's;
 //! 4. it must equal the unit's `MainPID` (systemd, right scope);
-//! 5. every held process must still be alive (no pid reuse).
+//! 5. the process just below it (the outermost sudo, or the helper when
+//!    sudo exec'd) must be in the daemon's session (sid == MainPID): a
+//!    terminal the daemon spawned has its own session (setsid), so a shell
+//!    tab that `exec sudo …` is refused;
+//! 6. every held process must still be alive (no pid reuse).
 //!
 //! Any doubt is a refusal (exit 77), never an allow.
 
@@ -114,9 +118,13 @@ pub struct Caller {
 }
 
 /// Steps 1–2: the first non-sudo ancestor plus every handle taken.
-fn walk(ctx: &Ctx) -> (i32, Vec<Box<dyn ProcHandle>>) {
+/// Steps 1–2. Returns (first non-sudo ancestor, the process just below it
+/// — the outermost sudo, or `None` when the helper's own parent is it —,
+/// every handle taken).
+fn walk(ctx: &Ctx) -> (i32, Option<i32>, Vec<Box<dyn ProcHandle>>) {
     let mut held = Vec::new();
     let mut p = ctx.procs.parent_pid();
+    let mut below: Option<i32> = None;
     if let Some(h) = ctx.procs.hold(p) {
         held.push(h);
     }
@@ -131,12 +139,13 @@ fn walk(ctx: &Ctx) -> (i32, Vec<Box<dyn ProcHandle>>) {
         let Some(pp) = ctx.procs.ppid_of(p) else {
             break;
         };
+        below = Some(p);
         p = pp;
         if let Some(h) = ctx.procs.hold(p) {
             held.push(h);
         }
     }
-    (p, held)
+    (p, below, held)
 }
 
 /// The unit's main pid in its scope, through `systemctl show` (env cleared,
@@ -184,7 +193,7 @@ pub fn main_pid(ctx: &Ctx, d: &DaemonEntry) -> Option<i32> {
 /// Identify the caller. `full` runs the MainPID check (only `daemon` verbs
 /// need it; `open` verbs record pid/uid for the audit line).
 pub fn identify(ctx: &Ctx, full: bool) -> Caller {
-    let (pid, held) = walk(ctx);
+    let (pid, below, held) = walk(ctx);
     let uid = ctx.procs.ruid_of(pid);
     let daemons = load_daemons(ctx);
     let mut c = Caller {
@@ -219,6 +228,22 @@ pub fn identify(ctx: &Ctx, full: bool) -> Caller {
     }
     for d in &mine {
         if main_pid(ctx, d) == Some(pid) {
+            // The process that the daemon spawned (the outermost sudo, or
+            // the helper itself when sudo exec'd it) must still be in the
+            // daemon's session. systemd makes every service's main process
+            // a session leader; the daemon's own `sudo` calls inherit that
+            // session, while terminals and published services `setsid()`.
+            // Without this, a K2 shell tab (a direct child of the daemon)
+            // that `exec sudo …` would be "the daemon's child sudo".
+            let sid = match below {
+                Some(s) => ctx.procs.sid_of(s),
+                None => ctx.procs.own_sid(),
+            };
+            if sid != Some(pid) {
+                c.why_not =
+                    Some("caller is not in the daemon's session (setsid child of the daemon)");
+                return c;
+            }
             if held.is_empty() || !held.iter().all(|h| h.alive()) {
                 c.why_not = Some("caller process changed during the check");
                 return c;

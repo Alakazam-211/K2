@@ -90,21 +90,24 @@ pub fn ensure_user(ctx: &Ctx) -> HResult<()> {
 /// 0755 root; a symlink (or a file) at the path is a refusal.
 pub fn mkdir(ctx: &Ctx, t: MkdirTarget) -> HResult<()> {
     let (d, name) = parent_dir(ctx, mkdir_path(t))?;
-    match d.kind(name).map_err(|e| Fail::io_err("stat", e))? {
-        Kind::Missing => d.mkdir(name, 0o755).or_else(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                Ok(())
-            } else {
-                Err(Fail::io_err("mkdir", e))
-            }
-        })?,
-        Kind::Dir => {}
+    let created = match d.kind(name).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Missing => match d.mkdir(name, 0o755) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(e) => return Err(Fail::io_err("mkdir", e)),
+        },
+        Kind::Dir => false,
         Kind::Symlink => return Err(Fail::state("mkdir refused: symlink")),
         _ => return Err(Fail::state("mkdir refused")),
-    }
+    };
     let sub = d.sub(name).map_err(|e| Fail::io_err("mkdir refused", e))?;
-    if let Some((u, g)) = ctx.root_owner() {
-        sub.fchown(u, g).map_err(|e| Fail::io_err("chown", e))?;
+    // Parity with protocol 2: an existing directory keeps its owner (the
+    // enable flow chowns data/config/log to stalwart right after); only a
+    // directory this call created is made root's.
+    if created {
+        if let Some((u, g)) = ctx.root_owner() {
+            sub.fchown(u, g).map_err(|e| Fail::io_err("chown", e))?;
+        }
     }
     sub.fchmod(0o755).map_err(|e| Fail::io_err("chmod", e))
 }
@@ -119,9 +122,21 @@ fn chown_tree(dir: &Dir, uid: u32, gid: u32) -> HResult<()> {
                 let sub = dir.sub(&name).map_err(|e| Fail::io_err("chown", e))?;
                 chown_tree(&sub, uid, gid)?;
             }
-            _ => dir
-                .chown_at(&name, uid, gid)
-                .map_err(|e| Fail::io_err("chown", e))?,
+            _ => {
+                // A hard link to a file elsewhere (/etc/shadow, a setuid
+                // binary) planted in the tree would be handed to stalwart:
+                // chown follows hard links by nature. Refuse loudly unless
+                // it already belongs to the target (security review #5).
+                let st = dir
+                    .lstat(&name)
+                    .map_err(|e| Fail::io_err("stat", e))?
+                    .ok_or_else(|| Fail::state("chown refused: entry vanished"))?;
+                if st.st_nlink > 1 && st.st_uid != uid {
+                    return Err(Fail::state("chown refused: hard-linked file"));
+                }
+                dir.chown_at(&name, uid, gid)
+                    .map_err(|e| Fail::io_err("chown", e))?
+            }
         }
     }
     Ok(())

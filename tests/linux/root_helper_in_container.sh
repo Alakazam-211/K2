@@ -42,6 +42,11 @@ while true; do
 	if [ "$mode" = daemon ]; then
 		sudo -n /usr/local/libexec/k2-root-helper "$@" <"$in" >"$D/$id.out" 2>"$D/$id.err"
 		echo $? >"$D/$id.rc.tmp"
+	elif [ "$mode" = tab ]; then
+		# A K2 shell tab: a DIRECT child of the daemon in its own session
+		# (setsid, like the PTY spawn) that `exec sudo …` (review #1).
+		( exec setsid sudo -n /usr/local/libexec/k2-root-helper "$@" ) <"$in" >"$D/$id.out" 2>"$D/$id.err"
+		echo $? >"$D/$id.rc.tmp"
 	else
 		bash -c 'sudo -n /usr/local/libexec/k2-root-helper "$@"; rc=$?; exit $rc' agent "$@" \
 			<"$in" >"$D/$id.out" 2>"$D/$id.err"
@@ -139,10 +144,13 @@ runuser -u k2 -- sudo -n "$H" keep kek get >/tmp/x 2>/tmp/e
 rc=$?
 set -e
 [ "$rc" = 77 ] && [ ! -s /tmp/x ] || fail "a k2 shell outside the unit got the kek (rc $rc)"
+req tab keep kek get
+expect_rc 77 "a setsid'd direct child of the daemon that exec's sudo (shell tab)"
+[ ! -s "$OUT" ] || fail "the shell tab got KEK bytes"
 req agent keep status
 expect_rc 0 "agent keep status (open)"
 grep -q '"kek":"present"' "$OUT" || fail "status: $(cat "$OUT")"
-ok "daemon gets the KEK; a daemon child and a k2 shell get 77; open status works for agents"
+ok "daemon gets the KEK; a daemon child, a setsid shell tab that exec sudo, and a k2 shell get 77; open status works for agents"
 for pty in use_pty '!use_pty'; do
 	printf 'Defaults %s\n' "$pty" >/etc/sudoers.d/zz-pty && chmod 0440 /etc/sudoers.d/zz-pty
 	visudo -c >/dev/null || fail "visudo $pty"

@@ -229,6 +229,13 @@ impl Ledger {
         Ok(())
     }
 
+    /// The process group leader's pid of an attempt (set when it ran).
+    pub fn pid(&self, job_id: &str, generation: u32) -> Result<Option<i64>, String> {
+        self.conn
+            .query_row("SELECT pid FROM jobs WHERE job_id = ?1 AND generation = ?2", params![job_id, generation], |r| r.get::<_, Option<i64>>(0))
+            .map_err(sqlerr)
+    }
+
     pub fn set_src(&self, job_id: &str, generation: u32, src: &SrcRan) -> Result<(), String> {
         let src_json = serde_json::to_string(src).map_err(|e| format!("encode src: {e}"))?;
         self.conn

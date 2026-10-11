@@ -71,6 +71,20 @@ impl Slots {
         }
     }
 
+    pub fn is_busy(&self, project_key: &str, n: u32) -> bool {
+        self.busy.contains(&(project_key.to_string(), n))
+    }
+
+    /// Drop a slot's last-sha record (its directory was removed).
+    pub fn forget(&self, project_cache: &Path, n: u32) {
+        let mut state = read_state(project_cache);
+        if state.remove(&n).is_some() {
+            if let Ok(body) = serde_json::to_vec(&state) {
+                let _ = crate::util::atomic_write(&state_path(project_cache), &body, 0o644);
+            }
+        }
+    }
+
     /// Every known slot under `cache` for the offer.
     pub fn list(&self, cache: &Path) -> Vec<SlotInfo> {
         let mut out = Vec::new();

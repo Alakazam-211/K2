@@ -232,6 +232,8 @@ pub struct Node {
     pub admin_nonces: crate::admin::courier::NodeNonces,
     /// One pending-updates refresh at a time (it hits the network).
     pub updates_refreshing: std::sync::atomic::AtomicBool,
+    /// CPU samples for the stuck-job watch.
+    pub stuck_track: crate::admin::housekeeping::StuckTrack,
     /// Offered self-update builds being received (in memory only).
     pub admin_updates: crate::admin::courier::IncomingUpdates,
 }
@@ -307,6 +309,7 @@ impl Node {
             tool_lock: tokio::sync::Mutex::new(()),
             admin_nonces: Default::default(),
             admin_updates: Default::default(),
+            stuck_track: Default::default(),
             updates_refreshing: Default::default(),
             opts,
         });
@@ -461,9 +464,39 @@ impl Node {
         (cpu, mem, jobs.len() as u32, jobs.values().any(|j| j.exclusive))
     }
 
-    /// Jobs that look stuck (node admin S9 fills this in).
+    /// Jobs that look stuck (no output, no CPU for 30 min): an alert in
+    /// health, never a kill (node admin S9).
     pub fn stuck_jobs(&self) -> Vec<k2_node_proto::health::StuckJob> {
-        Vec::new()
+        crate::admin::housekeeping::stuck_jobs(self)
+    }
+
+    /// Remove idle warm slots (not busy, untouched since `cutoff`), under
+    /// the slot lock so no lease races the delete. (dir, bytes freed).
+    pub fn gc_slots(&self, cutoff: i64) -> Vec<(PathBuf, u64)> {
+        let slots = self.slots.lock().unwrap();
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir(self.layout().cache()) else { return out };
+        for project in rd.flatten() {
+            let key = project.file_name().to_string_lossy().into_owned();
+            let Ok(inner) = std::fs::read_dir(project.path()) else { continue };
+            for e in inner.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let Some(n) = name.strip_prefix("target-").and_then(|n| n.parse::<u32>().ok()) else { continue };
+                if slots.is_busy(&key, n) {
+                    continue;
+                }
+                let m = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+                if m.is_none_or(|t| t.as_secs() as i64 > cutoff) {
+                    continue;
+                }
+                let bytes = du(&e.path());
+                if std::fs::remove_dir_all(e.path()).is_ok() {
+                    slots.forget(&project.path(), n);
+                    out.push((e.path(), bytes));
+                }
+            }
+        }
+        out
     }
 
     /// The session (in-memory) narrowing, for `policy.show`.
@@ -1395,6 +1428,14 @@ impl Node {
 }
 
 /// Paths of a finished attempt's journal (shipper).
+fn du(p: &Path) -> u64 {
+    let Ok(m) = std::fs::symlink_metadata(p) else { return 0 };
+    if !m.is_dir() {
+        return m.len();
+    }
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| du(&e.path())).sum()).unwrap_or(0)
+}
+
 pub fn journal_path(layout: &Layout, job_id: &str, generation: u32) -> PathBuf {
     layout.job_dir(job_id, generation).join("log")
 }

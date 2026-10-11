@@ -37,6 +37,7 @@ use html5ever::tokenizer::{
 use sha2::{Digest, Sha256};
 
 use super::schema::Diagnostic;
+use crate::jscheck::{self, Lang, Severity, Surface};
 
 /// Code (HTML + JS + CSS that is inlined; assets excluded) per widget (UW8).
 pub const MAX_CODE_BYTES: usize = 256 * 1024;
@@ -231,76 +232,9 @@ const URL_ATTRS: &[&str] = &[
     "manifest", "codebase", "archive", "icon",
 ];
 
-/// `(pattern, needs a word boundary before, message)`: UW10's warnings.
-const JS_WARNINGS: &[(&str, &str)] = &[
-    ("innerHTML", "if this shows agent or ticket text, use textContent"),
-    ("outerHTML", "if this shows agent or ticket text, use textContent"),
-    ("insertAdjacentHTML", "if this shows agent or ticket text, use textContent"),
-    ("document.write", "if this shows agent or ticket text, use textContent"),
-    ("fetch(", "blocked: widgets have no network in this version"),
-    ("XMLHttpRequest", "blocked: widgets have no network in this version"),
-    ("WebSocket", "blocked: widgets have no network in this version"),
-    ("EventSource", "blocked: widgets have no network in this version"),
-    ("localStorage", "not available in a sealed widget"),
-    ("sessionStorage", "not available in a sealed widget"),
-    ("indexedDB", "not available in a sealed widget"),
-    ("eval(", "blocked by the widget's security policy"),
-    ("new Function", "blocked by the widget's security policy"),
-];
-
-fn is_ident(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
-}
-
 /// 1-based `(line, col)` of byte `off` in `text`.
 fn line_col(text: &str, off: usize) -> (usize, usize) {
-    let before = &text[..off.min(text.len())];
-    let line = before.matches('\n').count() + 1;
-    let start = before.rfind('\n').map_or(0, |i| i + 1);
-    (line, before[start..].chars().count() + 1)
-}
-
-/// UW10's JS warnings for `text`, at most one per pattern. `base` is where
-/// the text starts in its file (an inline `<script>` in the HTML).
-pub fn scan_js(file: &str, text: &str, base: (usize, usize)) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    let at = |off: usize| {
-        let (l, c) = line_col(text, off);
-        if l == 1 { (base.0, base.1 + c - 1) } else { (base.0 + l - 1, c) }
-    };
-    for (pat, msg) in JS_WARNINGS {
-        let mut from = 0;
-        while let Some(i) = text[from..].find(pat).map(|i| i + from) {
-            let before_ok = text[..i].chars().next_back().is_none_or(|c| !is_ident(c));
-            let after_ok = pat.ends_with('(') || text[i + pat.len()..].chars().next().is_none_or(|c| !is_ident(c));
-            if before_ok && after_ok {
-                let (line, col) = at(i);
-                let name = pat.trim_end_matches('(');
-                out.push(Diagnostic { file: file.to_string(), line, col, message: format!("{name}: {msg}") });
-                break;
-            }
-            from = i + pat.len();
-        }
-    }
-    let mut off = 0;
-    for line in text.split_inclusive('\n') {
-        let t = line.trim_start();
-        let is_import = (t.starts_with("import ") || t.starts_with("import{"))
-            && (t.contains(" from ") || t.contains("}from") || t.trim_start_matches("import").trim_start().starts_with(['"', '\'']));
-        if is_import {
-            let (l, c) = at(off + (line.len() - t.len()));
-            out.push(Diagnostic {
-                file: file.to_string(),
-                line: l,
-                col: c,
-                message: "import: one script per file; imports between files don't load (list each file in a <script src>)"
-                    .to_string(),
-            });
-            break;
-        }
-        off += line.len();
-    }
-    out
+    crate::jscheck::line_col(text, off)
 }
 
 /// Escape inlined JS so it can't end its `<script>` early or enter the
@@ -428,7 +362,7 @@ impl Out {
 enum Raw {
     /// A `<script>`: `emit` is false when its `src` was inlined (or
     /// refused): the body is dropped, as a browser ignores it.
-    Script { emit: bool, body: String, line: u64 },
+    Script { emit: bool, body: String, line: u64, lang: Option<Lang> },
     Style { body: String, line: u64 },
     /// `noscript`, `xmp`, …: passed through as written.
     Other { name: String },
@@ -451,13 +385,28 @@ impl Ctx<'_> {
     }
 
     fn error_at(&mut self, file: &str, pos: (usize, usize), msg: impl Into<String>) {
-        self.errors.push(Diagnostic { file: self.label(file), line: pos.0, col: pos.1, message: msg.into() });
+        self.errors.push(Diagnostic { suggestion: None, file: self.label(file), line: pos.0, col: pos.1, message: msg.into() });
     }
 
     fn html_error(&mut self, line: u64, needle: &str, msg: impl Into<String>) {
         let pos = find_col(self.src, line, needle);
         let entry = self.entry.to_string();
         self.error_at(&entry, pos, msg);
+    }
+
+    /// Parse and lint a script's text (crate::jscheck): parse errors stop
+    /// the version, rule findings are warnings. `base` is where the text
+    /// starts in `file` (an inline `<script>`); `None` = not JavaScript.
+    fn js(&mut self, file: &str, text: &str, base: (usize, usize), lang: Option<Lang>) {
+        let Some(lang) = lang else { return };
+        for f in jscheck::check(text, lang, Surface::Widget) {
+            let (line, col) = jscheck::line_col_from(text, f.offset as usize, base);
+            let d = Diagnostic { file: self.label(file), line, col, message: f.message, suggestion: Some(f.suggestion) };
+            match f.severity {
+                Severity::Error => self.errors.push(d),
+                Severity::Warning => self.warnings.push(d),
+            }
+        }
     }
 
     /// A folder file as a `data:` URL, or the message why not.
@@ -554,6 +503,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
     let mut out = BundleOut::default();
     let Some(raw) = files.get(entry) else {
         out.errors.push(Diagnostic {
+            suggestion: None,
             file: format!("{prefix}/manifest.json"),
             line: 1,
             col: 1,
@@ -563,6 +513,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
     };
     let Ok(text) = std::str::from_utf8(raw) else {
         out.errors.push(Diagnostic {
+            suggestion: None,
             file: format!("{prefix}/{entry}"),
             line: 1,
             col: 1,
@@ -604,10 +555,10 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                 continue;
             }
             match raw_state.take() {
-                Some(Raw::Script { emit, body, line: l }) => {
+                Some(Raw::Script { emit, body, line: l, lang }) => {
                     if emit {
                         let base = after_tag(src, l, "<script");
-                        cx.warnings.extend(scan_js(&cx.label(&entry_owned), &body, base));
+                        cx.js(&entry_owned, &body, base, lang);
                         doc.push(&body);
                     }
                     doc.push("</script>");
@@ -674,12 +625,13 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                     }
                     let mut emit_body = true;
                     let mut opened = false;
+                    let lang = jscheck::script_lang(attr("type").as_deref());
                     if let Some(s) = attr("src") {
                         emit_body = false;
                         match classify(&s) {
                             Ref::Local(file) => match cx.text_file(&file, ".js") {
                                 Ok(js) => {
-                                    cx.warnings.extend(scan_js(&cx.label(&file), &js, (1, 1)));
+                                    cx.js(&file, &js, (1, 1), lang);
                                     copied_library_warning(&mut cx, &file);
                                     write_start(&mut doc, "script", &tag, &["src", "nonce", "integrity", "crossorigin", "async", "defer"]);
                                     doc.nonce_attr();
@@ -702,13 +654,13 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                         opened = true;
                     }
                     if opened {
-                        raw_state = Some(Raw::Script { emit: emit_body, body: String::new(), line });
+                        raw_state = Some(Raw::Script { emit: emit_body, body: String::new(), line, lang });
                     } else {
                         // Refused: swallow its body and end tag.
                         doc.push("<script");
                         doc.nonce_attr();
                         doc.push(">");
-                        raw_state = Some(Raw::Script { emit: false, body: String::new(), line });
+                        raw_state = Some(Raw::Script { emit: false, body: String::new(), line, lang: None });
                     }
                     continue;
                 }
@@ -731,6 +683,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                         _ => {
                             let pos = find_col(src, line, "<link");
                             cx.warnings.push(Diagnostic {
+                                suggestion: None,
                                 file: cx.label(&entry_owned),
                                 line: pos.0,
                                 col: pos.1,
@@ -804,8 +757,9 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
     }
     // An unterminated script or style: close it like a browser at EOF.
     match raw_state.take() {
-        Some(Raw::Script { emit, body, .. }) => {
+        Some(Raw::Script { emit, body, line, lang }) => {
             if emit {
+                cx.js(&entry_owned, &body, after_tag(src, line, "<script"), lang);
                 doc.push(&body);
             }
             doc.push("</script>");
@@ -820,6 +774,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
     }
     if cx.code_bytes > MAX_CODE_BYTES {
         cx.errors.push(Diagnostic {
+            suggestion: None,
             file: cx.label(&entry_owned),
             line: 1,
             col: 1,
@@ -832,6 +787,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
     let bundle = Bundle::new(doc.finish(), cx.code_bytes);
     if bundle.bytes() > MAX_BUNDLE_BYTES {
         cx.errors.push(Diagnostic {
+            suggestion: None,
             file: cx.label(&entry_owned),
             line: 1,
             col: 1,
@@ -902,6 +858,7 @@ fn copied_library_warning(cx: &mut Ctx<'_>, file: &str) {
     if let Some(id) = hit {
         let label = cx.label(file);
         cx.warnings.push(Diagnostic {
+            suggestion: None,
             file: label,
             line: 1,
             col: 1,
@@ -996,7 +953,7 @@ mod tests {
             ("index.html", b"<script src=\"a.js\"></script>"),
             (
                 "a.js",
-                b"import x from './b.js'\nel.innerHTML = t\nfetch('/x')\nlocalStorage.x = 1\nconst y = eval('1')\nmyfetch(1)\n",
+                b"// fetch( in a comment\nel.innerHTML = t\nfetch('/x')\nlocalStorage.x = 1\nconst y = eval('1')\nmyfetch(1)\n",
             ),
         ]);
         let out = bundle("widgets/w", "index.html", &f);
@@ -1004,11 +961,52 @@ mod tests {
         assert!(out.bundle.is_some());
         let got: Vec<(usize, usize, String)> =
             out.warnings.iter().map(|d| (d.line, d.col, d.message.split(':').next().unwrap_or("").to_string())).collect();
-        for want in [(2, 4, "innerHTML"), (3, 1, "fetch"), (4, 1, "localStorage"), (5, 11, "eval"), (1, 1, "import")] {
+        for want in [(2, 1, "innerHTML"), (3, 1, "fetch"), (4, 1, "localStorage"), (5, 11, "eval")] {
             assert!(got.contains(&(want.0, want.1, want.2.to_string())), "missing {want:?} in {got:?}");
         }
-        assert_eq!(got.len(), 5, "myfetch( is not fetch(: {got:?}");
+        assert_eq!(got.len(), 4, "myfetch( is not fetch(, and a comment is not code: {got:?}");
         assert!(out.warnings.iter().all(|d| d.file == "widgets/w/a.js"));
+        assert!(out.warnings.iter().all(|d| d.suggestion.as_deref().is_some_and(|s| !s.is_empty())), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn a_script_that_does_not_parse_stops_the_version_at_its_place() {
+        let f = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", b"const a = 1\nconst b = ;\n")]);
+        let out = bundle("widgets/w", "index.html", &f);
+        assert!(out.bundle.is_none(), "a parse error stops the version");
+        assert_eq!(out.errors.len(), 1, "{:?}", out.errors);
+        let e = &out.errors[0];
+        assert_eq!((e.file.as_str(), e.line), ("widgets/w/a.js", 2), "{e:?}");
+        assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("doesn't parse")), "{e:?}");
+    }
+
+    #[test]
+    fn inline_script_findings_are_placed_in_the_html_file() {
+        let html = b"<!doctype html>\n<p>hi</p>\n<script>\n  const ok = 1\n  el.innerHTML = ok\n</script>\n";
+        let out = bundle("widgets/w", "index.html", &files(&[("index.html", html)]));
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        let w: Vec<(&str, usize, usize)> = out.warnings.iter().map(|d| (d.file.as_str(), d.line, d.col)).collect();
+        assert_eq!(w, vec![("widgets/w/index.html", 5, 3)]);
+        let broken = b"<!doctype html>\n<script>\n  const ok = 1\n  const no = ;\n</script>\n";
+        let out = bundle("widgets/w", "index.html", &files(&[("index.html", broken)]));
+        let e: Vec<(&str, usize)> = out.errors.iter().map(|d| (d.file.as_str(), d.line)).collect();
+        assert_eq!(e, vec![("widgets/w/index.html", 4)]);
+    }
+
+    #[test]
+    fn import_needs_a_module_script_and_json_scripts_are_not_code() {
+        let classic = files(&[("index.html", b"<script src=\"a.js\"></script>"), ("a.js", b"import x from './b.js'\nx()\n")]);
+        let out = bundle("widgets/w", "index.html", &classic);
+        assert_eq!(out.errors.iter().map(|d| (d.line, d.col)).collect::<Vec<_>>(), vec![(1, 1)], "{:?}", out.errors);
+        assert!(out.errors[0].message.contains("type=\"module\""), "{:?}", out.errors);
+        let module =
+            files(&[("index.html", b"<script type=\"module\" src=\"a.js\"></script>"), ("a.js", b"import x from './b.js'\nx()\n")]);
+        let out = bundle("widgets/w", "index.html", &module);
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(out.warnings.iter().any(|d| d.message.starts_with("import:")), "{:?}", out.warnings);
+        let data = files(&[("index.html", b"<script type=\"application/json\" id=\"cfg\">{\"a\": 1, \"b\": [}</script>")]);
+        let out = bundle("widgets/w", "index.html", &data);
+        assert!(out.errors.is_empty() && out.warnings.is_empty(), "{:?} {:?}", out.errors, out.warnings);
     }
 
     #[test]

@@ -94,11 +94,31 @@ pub fn insert_pending_node(
     sas: &str,
     at: i64,
 ) -> Result<NodeRow, String> {
+    insert_pending_node_via(conn, id, name, fingerprint, public_key_pem, labels, enrolled_by, sas, at, "code")
+}
+
+/// [`insert_pending_node`] with the enroll path (`code` | `ticket`).
+#[allow(clippy::too_many_arguments)]
+pub fn insert_pending_node_via(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    fingerprint: &str,
+    public_key_pem: &str,
+    labels: &BTreeMap<String, String>,
+    enrolled_by: &str,
+    sas: &str,
+    at: i64,
+    via: &str,
+) -> Result<NodeRow, String> {
+    if via != "code" && via != "ticket" {
+        return Err(format!("enrolled_via {via:?}"));
+    }
     let os = labels.get("os").cloned();
     let arch = labels.get("arch").cloned();
     conn.execute(
         "INSERT INTO compute_nodes (id, name, fingerprint, public_key_pem, os, arch, labels_json, state, \
-         enrolled_via, enrolled_by, enrolled_at, sas) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 'code', ?8, ?9, ?10)",
+         enrolled_via, enrolled_by, enrolled_at, sas) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?11, ?8, ?9, ?10)",
         params![
             id,
             name,
@@ -109,7 +129,8 @@ pub fn insert_pending_node(
             serde_json::to_string(labels).map_err(|e| e.to_string())?,
             enrolled_by,
             at,
-            sas
+            sas,
+            via
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -816,6 +837,7 @@ mod tests {
             src: Some(Src { project_key: "pk".into(), remote_url: None, commit: "c".repeat(40), dirty: None, slots: 1 }),
             exclusive: false,
             created_at: 10,
+            needs: Vec::new(),
         }
     }
 

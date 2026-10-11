@@ -20,6 +20,7 @@ pub mod message;
 pub mod scheduler;
 pub mod store;
 pub mod sync;
+pub mod ticket;
 
 pub use k2_node_proto as proto;
 

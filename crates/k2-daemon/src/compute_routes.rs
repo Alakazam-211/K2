@@ -19,7 +19,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
-use k2_core::compute::proto::{crypto, env as penv, pairing};
+use k2_core::compute::proto::{crypto, env as penv, needs, pairing};
 use k2_core::compute::{self as compute, codes, logs, scheduler, store};
 use k2_core::connect_users::Role;
 
@@ -415,7 +415,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/compute/local/resume" => local_control(&who, body, "resume"),
         "/cli/compute/local/policy" => local_policy(&who, body),
         "/cli/compute/local/enable" => local_enable(&who, body),
-        "/cli/compute/local/disable" => local_disable(&who),
+        "/cli/compute/local/disable" => local_disable(&who, body),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -455,6 +455,7 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
             "tools": o.tools,
             "slots": o.slots,
             "protocol": o.protocol,
+            "features": o.features,
         });
     }
     if show_sas && n.state == "pending" {
@@ -808,6 +809,31 @@ fn valid_cwd(c: &str) -> bool {
     !c.starts_with('/') && !c.split('/').any(|p| p == "..") && !c.contains('\0') && c.len() < 1024
 }
 
+/// `needs` from a run body: an array of tokens (or one comma string),
+/// checked with the same parser the node uses; canonical tokens out.
+fn needs_from(v: &serde_json::Value) -> R<Vec<String>> {
+    let raw: Vec<String> = match v.get("needs") {
+        None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        Some(serde_json::Value::Array(a)) => {
+            let mut out = Vec::new();
+            for x in a {
+                out.push(x.as_str().ok_or_else(|| no("need_invalid", 400, "needs are strings like node@22"))?.to_string());
+            }
+            out
+        }
+        Some(_) => return Err(no("need_invalid", 400, "needs is a list like [\"node@22\", \"python@3.12\"]")),
+    };
+    let parsed = needs::parse_all(&raw).map_err(|e| no("need_invalid", 400, format!("--needs: {e}")))?;
+    Ok(parsed.iter().map(|n| n.token()).collect())
+}
+
+/// What a node's k2-node understands (live offer, else the last one).
+fn node_features(n: &store::NodeRow) -> Vec<String> {
+    let (_, _, live) = compute_ws::live_view(&n.id);
+    live.or_else(|| n.last_offer.clone()).map(|o| o.features).unwrap_or_default()
+}
+
 fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
@@ -851,8 +877,31 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if cwd.as_deref().is_some_and(|c| !valid_cwd(c)) {
         return Err(no(codes::BAD_REQUEST, 400, "cwd must be relative to the repo root, without '..'"));
     }
+    // Toolchains / system packages the job needs (compute polish v1).
+    let needs = needs_from(&v)?;
     // Node: by name, or --any.
     let node = pick_node(who, &v, &ws, gate.as_deref())?;
+    let mut warnings: Vec<String> = Vec::new();
+    if !needs.is_empty() {
+        let feats = node_features(&node);
+        if !feats.iter().any(|f| f == needs::FEATURE_NEEDS) {
+            return Err(no(
+                "node_upgrade_required",
+                409,
+                format!(
+                    "'{}' runs an older k2-node that can't install --needs; update k2-node on that machine (sudo k2-node setup), or run without --needs",
+                    node.name
+                ),
+            ));
+        }
+        let wants_sys = needs.iter().any(|n| n.starts_with("sys:"));
+        if wants_sys && !feats.iter().any(|f| f == needs::FEATURE_SYSTEM_PACKAGES) {
+            warnings.push(format!(
+                "'{}' can't install system packages itself (macOS, or no sudo rule): the job fails if one is missing, with the command its owner should run",
+                node.name
+            ));
+        }
+    }
     // Grant (owner/admin may run on any active node without one).
     let grant = {
         let db = k2_core::db::shared();
@@ -895,7 +944,6 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
-    let mut warnings: Vec<String> = Vec::new();
     let src = if b(&v, "noSource") == Some(true) {
         None
     } else {
@@ -922,6 +970,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         src,
         exclusive: b(&v, "exclusive") == Some(true),
         created_at: compute::now(),
+        needs: needs.clone(),
     };
     let job = {
         let db = k2_core::db::shared();
@@ -939,7 +988,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             Some(&node.id),
             Some(&ws.id),
             Some(&j.id),
-            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach}),
+            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs}),
         );
         j
     };
@@ -985,6 +1034,7 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
         store::list_nodes(&conn, false)
     };
     let granted = granted_node_ids(&ws.id);
+    let wants_needs = !needs_from(v)?.is_empty();
     let mut cands = Vec::new();
     let mut by_id = HashMap::new();
     for n in rows.into_iter().filter(|n| n.state == "active") {
@@ -993,6 +1043,9 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
         }
         let (online, _, offer) = compute_ws::live_view(&n.id);
         let Some(offer) = offer.filter(|_| online) else { continue };
+        if wants_needs && !offer.features.iter().any(|f| f == needs::FEATURE_NEEDS) {
+            continue;
+        }
         let label = |k: &str| offer.labels.get(k).map(String::as_str);
         if want_os.is_some_and(|o| label("os") != Some(o)) || want_arch.is_some_and(|a| label("arch") != Some(a)) {
             continue;
@@ -1279,7 +1332,12 @@ fn events(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
 
 fn local_status(who: &Who) -> R<serde_json::Value> {
     need_credential(who)?;
-    Ok(compute::local::status())
+    // Passports (agents) see the node's state, not the machine owner's
+    // binary paths, home check or install route.
+    if who.passport().is_some() {
+        return Ok(compute::local::status());
+    }
+    Ok(crate::compute_local::status())
 }
 
 /// The machine owner's word: owner only, never a passport (Rosson
@@ -1315,29 +1373,28 @@ fn local_policy(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     Ok(serde_json::json!({"ok": true, "policy": serde_json::to_value(t).unwrap_or_default()}))
 }
 
+/// "Make this computer a compute node" (compute polish v1): install once
+/// (root helper → passwordless sudo → macOS prompt → a command to copy),
+/// then enroll with a code or a one-click ticket. Owner only, never a
+/// passport (a K2 terminal included).
 fn local_enable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_owner(who)?;
     let v = json_body(body)?;
-    let controller = s(&v, "controller").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass --controller https://<server>"))?;
-    let enroll = s(&v, "enroll").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass --enroll <code from k2 compute node add>"))?;
-    if pairing::EnrollString::parse(enroll).is_none() {
-        return Err(no(codes::BAD_REQUEST, 400, "the enroll string looks like ABCDE-FGHJK.0123456789abcdef"));
-    }
-    let name = s(&v, "name").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass --name"))?;
-    if !compute::enroll::valid_name(name) {
-        return Err(no(codes::BAD_REQUEST, 400, "node names are 1–32 of a-z, 0-9 and '-'"));
-    }
-    Ok(compute::local::enable_steps(controller, enroll, name))
+    let req = crate::compute_local::EnableReq {
+        controller: s(&v, "controller").map(|c| c.trim_end_matches('/').to_string()),
+        enroll: s(&v, "enroll").map(str::to_string),
+        ticket: s(&v, "ticket").map(str::to_string),
+        name: s(&v, "name").map(str::to_string),
+        private_home: b(&v, "privateHome"),
+        allow_prompt: b(&v, "elevate") == Some(true),
+    };
+    crate::compute_local::enable(&req, &who.label()).map_err(|(code, status, hint)| no(code, status, hint))
 }
 
-fn local_disable(who: &Who) -> R<serde_json::Value> {
+fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_owner(who)?;
-    let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
-    Ok(serde_json::json!({
-        "rootNeeded": true,
-        "command": format!("sudo scripts/node/uninstall-node-{os}.sh"),
-        "message": "Run this once as an admin: it stops the node's jobs, removes the service, the hidden user and its home.",
-    }))
+    let v = json_body(body)?;
+    crate::compute_local::disable(&who.label(), b(&v, "elevate") == Some(true)).map_err(|(code, status, hint)| no(code, status, hint))
 }
 
 #[cfg(test)]

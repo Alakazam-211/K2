@@ -295,14 +295,14 @@ async fn compute_end_to_end_with_the_real_node() {
     let layout = node_layout(&env, "n1");
     let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
     let mut sock = k2_node::session::connect(&base, k2_node::session::ENROLL_PATH).await.expect("enroll connect");
-    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &es, "n1", &Default::default(), k2_node::util::now())
+    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &k2_node::enroll::Credential::Code(es.clone()), "n1", &Default::default(), k2_node::util::now())
         .await
         .expect("enroll");
     k2_node::identity::write_pin(&layout.pin(), &done.pin).unwrap();
     // The code is single use.
     let mut again = k2_node::session::connect(&base, k2_node::session::ENROLL_PATH).await.unwrap();
     let key2 = k2_node_proto::crypto::SigningKey::generate().unwrap();
-    assert!(k2_node::enroll::enroll_on(&mut again, &key2, &base, &es, "n1b", &Default::default(), k2_node::util::now()).await.is_err());
+    assert!(k2_node::enroll::enroll_on(&mut again, &key2, &base, &k2_node::enroll::Credential::Code(es.clone()), "n1b", &Default::default(), k2_node::util::now()).await.is_err());
 
     // Pending, with the same SAS on both ends.
     let row = node_row(port, "n1").await;
@@ -472,7 +472,7 @@ async fn enrolled_node(env: &Env, port: u16, name: &str) -> Layout {
     let layout = node_layout(env, name);
     let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
     let mut sock = k2_node::session::connect(&base, k2_node::session::ENROLL_PATH).await.unwrap();
-    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &es, name, &Default::default(), k2_node::util::now())
+    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &k2_node::enroll::Credential::Code(es.clone()), name, &Default::default(), k2_node::util::now())
         .await
         .unwrap();
     k2_node::identity::write_pin(&layout.pin(), &done.pin).unwrap();
@@ -575,6 +575,7 @@ async fn node_sockets_fail_closed_over_the_tunnel() {
         labels: Default::default(),
         protocol: k2_node_proto::PROTOCOL,
         node_version: "test".into(),
+        ticket: None,
     });
     ws.send(Message::Text(serde_json::to_string(&req).unwrap())).await.unwrap();
     let msg = ws.next().await.expect("an answer").expect("frame").into_text().unwrap();
@@ -668,6 +669,145 @@ async fn agents_use_compute_over_their_cell_socket() {
     assert_eq!(st, 403);
     let (st, _) = uds(&sock, post_req("/cli/compute/local/pause", &json!({}))).await;
     assert_eq!(st, 403, "an agent never pauses a node");
+
+    running.runner.abort();
+    running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+    drop(env);
+}
+
+/// Compute polish v1: one-click tickets on the controller (the control
+/// plane's signature, this server's sub, the node's key and name, single
+/// use) and `--needs` end to end (the real node installs through a fake
+/// mise into its own home and puts the tool first on the job's PATH; a bad
+/// need is a 400; an unapproved system package fails the job before it
+/// starts, with the owner's command).
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn one_click_tickets_and_declared_toolchains() {
+    use futures_util::{SinkExt, StreamExt};
+    use k2_node_proto::frames::{EnrollProof, EnrollRequest, HandshakeFrame};
+    use tokio_tungstenite::tungstenite::Message;
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig { subdomain: "ctest".into(), ..Default::default() }).unwrap();
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let base = format!("ws://127.0.0.1:{port}/cli/compute/enroll");
+    let kid = k2_core::compute::ticket::FIRST_KID;
+    let seed = [9u8; 32];
+    let now = k2_node::util::now();
+    let key = k2_node_proto::crypto::SigningKey::generate().unwrap();
+    let fp = key.fingerprint();
+
+    let enroll_raw = |ticket: String, name: &str, key: &k2_node_proto::crypto::SigningKey| {
+        let t = k2_node_proto::ticket::Ticket::decode(&ticket).unwrap();
+        HandshakeFrame::EnrollRequest(EnrollRequest {
+            code_binding: t.binding(),
+            node_public_key_pem: key.spki_pem(),
+            name: name.into(),
+            labels: Default::default(),
+            protocol: k2_node_proto::PROTOCOL,
+            node_version: "test".into(),
+            ticket: Some(ticket),
+        })
+    };
+    let first_answer = |frame: HandshakeFrame| {
+        let base = base.clone();
+        async move {
+            let (mut ws, _) = tokio_tungstenite::connect_async(base).await.unwrap();
+            ws.send(Message::Text(serde_json::to_string(&frame).unwrap())).await.unwrap();
+            let msg = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            (ws, msg)
+        }
+    };
+
+    // No trusted ticket key yet → ticket_unsupported (codes still work).
+    let (_, t0) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "ctest", &fp, "tk1", now + 600, "nonce-0").unwrap();
+    let (_, msg) = first_answer(enroll_raw(t0, "tk1", &key)).await;
+    assert!(msg.contains("\"code\":\"ticket_unsupported\""), "{msg}");
+
+    // Trust the test key (the owner's rotation file).
+    let (pubk, _) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "x", "y", "z", 1, "n").unwrap();
+    std::fs::write(env.home.join(".k2/compute-ticket-keys.json"), json!({"keys": [{"kid": kid, "pub": pubk}]}).to_string()).unwrap();
+
+    // Refusals: another server's ticket, another key's signature, another node's key.
+    let (_, other_sub) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "akzm", &fp, "tk1", now + 600, "nonce-1").unwrap();
+    assert!(first_answer(enroll_raw(other_sub, "tk1", &key)).await.1.contains("ticket_invalid"));
+    let (_, forged) = k2_core::compute::ticket::mint_with_seed(&[3u8; 32], kid, "ctest", &fp, "tk1", now + 600, "nonce-2").unwrap();
+    assert!(first_answer(enroll_raw(forged, "tk1", &key)).await.1.contains("ticket_invalid"));
+    let key2 = k2_node_proto::crypto::SigningKey::generate().unwrap();
+    let (_, someone_elses) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "ctest", &fp, "tk1", now + 600, "nonce-3").unwrap();
+    assert!(first_answer(enroll_raw(someone_elses, "tk1", &key2)).await.1.contains("ticket_invalid"), "a ticket is bound to one node key");
+
+    // A good ticket → challenge → proof → pending, via "ticket".
+    let (_, good) = k2_core::compute::ticket::mint_with_seed(&seed, kid, "ctest", &fp, "tk1", now + 600, "nonce-4").unwrap();
+    let binding = k2_node_proto::ticket::Ticket::decode(&good).unwrap().binding();
+    let (mut ws, msg) = first_answer(enroll_raw(good.clone(), "tk1", &key)).await;
+    let HandshakeFrame::EnrollChallenge(ch) = serde_json::from_str::<HandshakeFrame>(&msg).unwrap() else { panic!("{msg}") };
+    let cfp = k2_node_proto::crypto::fingerprint_of_spki_pem(&ch.controller_public_key_pem).unwrap();
+    let sig = key
+        .sign_domain(k2_node_proto::frames::DOMAIN_ENROLL_NODE, &[cfp.as_bytes(), ch.enroll_nonce.as_bytes(), binding.as_bytes(), fp.as_bytes()])
+        .unwrap();
+    ws.send(Message::Text(serde_json::to_string(&HandshakeFrame::EnrollProof(EnrollProof { sig })).unwrap())).await.unwrap();
+    let done = ws.next().await.unwrap().unwrap().into_text().unwrap();
+    assert!(done.contains("enroll_done"), "{done}");
+    let row = node_row(port, "tk1").await;
+    assert_eq!(row["state"], "pending", "a ticket only gets the node to pending: {row}");
+    assert_eq!(row["enrolledVia"], "ticket");
+    assert_eq!(row["enrolledBy"], format!("ticket:{kid}"));
+    // Single use.
+    assert!(first_answer(enroll_raw(good, "tk1", &key)).await.1.contains("ticket_invalid"));
+
+    // ── --needs ─────────────────────────────────────────────────────
+    let ws_ = seed_ws(&env, "epsilon");
+    let layout = enrolled_node(&env, port, "n5").await;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mise = layout.home.join("toolchains/mise-bin/mise/bin/mise");
+        std::fs::create_dir_all(mise.parent().unwrap()).unwrap();
+        let script = format!(
+            "#!/bin/sh\nD=\"$MISE_DATA_DIR/installs\"\ncase \"$1\" in\n  --version) echo \"{} fake\" ;;\n  install) t=\"${{2%@*}}\"; v=\"${{2#*@}}\"; mkdir -p \"$D/$t/$v/bin\"; printf '#!/bin/sh\\necho fake-%s-%s\\n' \"$t\" \"$v\" > \"$D/$t/$v/bin/$t\"; chmod +x \"$D/$t/$v/bin/$t\" ;;\n  bin-paths) t=\"${{2%@*}}\"; v=\"${{2#*@}}\"; [ -d \"$D/$t/$v/bin\" ] && echo \"$D/$t/$v/bin\" ;;\n  *) exit 9 ;;\nesac\n",
+            k2_node::toolchain::MISE_VERSION
+        );
+        std::fs::write(&mise, script).unwrap();
+        std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let running = start_node(&layout).await;
+    wait_for("node online", 20, || Box::pin(async move { node_row(port, "n5").await["offer"].is_object() })).await;
+    let feats = node_row(port, "n5").await["offer"]["features"].clone();
+    assert!(feats.as_array().unwrap().iter().any(|f| f == "needs"), "{feats}");
+
+    let mut body = run_body("n5", &["sh", "-c", "node; echo PATH=$PATH"], "client-0000000201");
+    body["workspace"] = json!(ws_.id);
+    body["needs"] = json!(["nodejs@v22"]);
+    let r = post(port, "/cli/compute/run", OWNER, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (out, _, fin) = follow(port, OWNER, &job).await;
+    assert_eq!(fin["state"], "done", "{fin}");
+    assert_eq!(fin["exitCode"], 0, "{fin}");
+    assert!(out.starts_with("fake-node-22\n"), "the installed tool runs: {out}");
+    let path_line = out.lines().find(|l| l.starts_with("PATH=")).unwrap();
+    assert!(path_line.starts_with(&format!("PATH={}", layout.home.join("toolchains/mise/installs/node/22/bin").display())), "{path_line}");
+
+    let mut bad = run_body("n5", &["true"], "client-0000000202");
+    bad["workspace"] = json!(ws_.id);
+    bad["needs"] = json!(["node@22;reboot"]);
+    let r = post(port, "/cli/compute/run", OWNER, bad).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(code(&r), "need_invalid");
+
+    let mut sys = run_body("n5", &["true"], "client-0000000203");
+    sys["workspace"] = json!(ws_.id);
+    sys["needs"] = json!(["sys:k2-test-no-such-package-xyz"]);
+    let r = post(port, "/cli/compute/run", OWNER, sys).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (_, _, fin) = follow(port, OWNER, &job).await;
+    assert_eq!(fin["state"], "failed", "{fin}");
+    let want = if cfg!(target_os = "macos") { "package_missing" } else { "package_not_approved" };
+    assert_eq!(fin["reason"], want, "{fin}");
+    let hint = if cfg!(target_os = "macos") { "brew install" } else { "sudo k2-node packages allow" };
+    assert!(fin["detail"].as_str().unwrap().contains(hint), "{fin}");
 
     running.runner.abort();
     running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");

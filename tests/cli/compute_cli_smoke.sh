@@ -157,6 +157,19 @@ set +e
 k2 compute run mini --env K2_HOOK_TOKEN=x -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 expect_eq "a daemon-reaching --env is a bad request" "$rc" "2"
+set +e
+k2 compute run mini --needs 'node@22;reboot' -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a hostile --needs is a bad request" "$rc" "2"
+expect_has "need_invalid" "$(cat "$SANDBOX/err")" "need_invalid"
+set +e
+k2 compute run mini --needs sys:k2-smoke-no-such-pkg -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a missing system package fails before the job runs" "$rc" "3"
+expect_has "and says what the owner should do" "$(cat "$SANDBOX/err")" "package_"
+st="$(k2 compute local status --json)"
+expect_has "local status reports the home check" "$st" '"homeCheck"'
+expect_has "local status reports where k2-node comes from" "$st" '"binary"'
 
 echo "== detach, jobs, logs, receipt =="
 JOB="$(k2 compute run mini --detach -- sh -c 'echo test result: FAILED. 1 passed; 2 failed; echo detached-done')"

@@ -73,6 +73,9 @@ pub fn status() -> serde_json::Value {
         "node": status,
         "control": control.map(|t| serde_json::to_value(t).unwrap_or_default()),
         "policy": policy.map(|t| serde_json::to_value(t).unwrap_or_default()),
+        "platform": platform(),
+        "enrollResult": enroll_result(),
+        "enrollRequestPending": cfg.join("enroll-request.toml").exists(),
     })
 }
 
@@ -93,6 +96,7 @@ const POLICY_KEYS: &[(&str, &str)] = &[
     ("on_owner_return", "enum"),
     ("max_parallel", "int"),
     ("network", "enum"),
+    ("repo_toolchains", "bool"),
 ];
 
 fn enum_ok(key: &str, v: &str) -> bool {
@@ -114,6 +118,11 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
             return Err(format!("unknown policy key '{k}'"));
         };
         let val = match *kind {
+            "bool" => match v.trim() {
+                "true" | "on" | "yes" | "1" => toml::Value::Boolean(true),
+                "false" | "off" | "no" | "0" => toml::Value::Boolean(false),
+                _ => return Err(format!("{k} is true or false")),
+            },
             "int" => {
                 let n: i64 = v.trim().trim_end_matches(['%', 'G', 'g']).parse().map_err(|_| format!("{k} needs a number"))?;
                 let max = if k == "cpu_cap_percent" { 100 } else { 1 << 20 };
@@ -137,19 +146,102 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
     Ok(t)
 }
 
-/// What enabling this computer takes (dogfood A: a CLI one-liner run as
-/// root; the Settings sheet and the one-click account path come later).
-pub fn enable_steps(controller: &str, enroll: &str, name: &str) -> serde_json::Value {
-    let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
-    let line = format!(
-        "sudo scripts/node/install-node-{os}.sh --binary <path to k2-node> --controller {controller} --enroll {enroll} --name {name} --human \"$USER\""
-    );
-    serde_json::json!({
-        "os": os,
-        "rootNeeded": true,
-        "command": line,
-        "message": "Run this once as an admin. It creates the hidden k2node user and the service, enrolls the node and prints the confirmation code to check on the controller.",
-    })
+/// `linux` | `macos`.
+pub fn platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
+/// Spots in a home that jobs could read when the home is open to others.
+pub const HOME_SPOTS: &[&str] = &[".ssh", ".k2", ".env", ".config", ".aws", ".gnupg", "DevProjects", "Projects", "projects", "src", "code", "Documents", "Desktop"];
+
+/// The home-folder check the enable sheet shows (§5.1 step 3): is the
+/// human's home readable by other users (and so by jobs), and what's in it.
+pub fn home_check(home: &Path) -> Option<serde_json::Value> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(home).ok()?.permissions().mode() & 0o7777;
+    let private = mode & 0o005 == 0;
+    let readable: Vec<String> = if private {
+        Vec::new()
+    } else {
+        HOME_SPOTS.iter().map(|s| home.join(s)).filter(|p| p.exists()).map(|p| p.display().to_string()).collect()
+    };
+    Some(serde_json::json!({
+        "home": home.display().to_string(),
+        "mode": format!("{mode:o}"),
+        "private": private,
+        "readable": readable,
+    }))
+}
+
+/// Ask the running node to enroll itself (`enroll-request.toml` in the
+/// config dir; `k2-node` reads it within seconds). Exactly one of
+/// `enroll` (a code) or `ticket`. Returns the request id.
+pub fn write_enroll_request(
+    controller: &str,
+    enroll: Option<&str>,
+    ticket: Option<&str>,
+    name: &str,
+    by: &str,
+) -> Result<String, String> {
+    if enroll.is_some() == ticket.is_some() {
+        return Err("pass an enroll code or a ticket".into());
+    }
+    if !super::enroll::valid_name(name) {
+        return Err("node names are 1–32 of a-z, 0-9 and '-'".into());
+    }
+    if !(controller.starts_with("https://") || controller.starts_with("http://")) || controller.contains(['"', '\n', '\\']) {
+        return Err("controller must be an http(s) URL".into());
+    }
+    let id = format!("k2-{}", super::proto::crypto::random_id()?);
+    let mut t = toml::Table::new();
+    t.insert("id".into(), toml::Value::String(id.clone()));
+    t.insert("controller".into(), toml::Value::String(controller.trim_end_matches('/').to_string()));
+    if let Some(e) = enroll {
+        t.insert("enroll".into(), toml::Value::String(e.trim().to_string()));
+    }
+    if let Some(tk) = ticket {
+        t.insert("ticket".into(), toml::Value::String(tk.trim().to_string()));
+    }
+    t.insert("name".into(), toml::Value::String(name.to_string()));
+    let by: String = by.chars().filter(|c| !c.is_control()).take(64).collect();
+    t.insert("requested_by".into(), toml::Value::String(by));
+    t.insert("requested_at".into(), toml::Value::Integer(super::now()));
+    let body = toml::to_string(&t).map_err(|e| e.to_string())?;
+    // 0644: the node user reads it (it isn't in k2nodectl); it is
+    // single-use and removed once the node answers.
+    let p = config_dir().join("enroll-request.toml");
+    write_atomic(&p, &body)?;
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644));
+    Ok(id)
+}
+
+/// The machine owner's approved system packages (`/etc/k2-node-packages.toml`,
+/// root-owned; `K2_NODE_PACKAGES_FILE` overrides for tests).
+pub fn approved_packages() -> Vec<String> {
+    let p = std::env::var_os("K2_NODE_PACKAGES_FILE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/k2-node-packages.toml"));
+    read_toml(&p)
+        .and_then(|t| t.get("approved").and_then(|a| a.as_array()).cloned())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// The node's answer to a request (`run/enroll-result.json`).
+pub fn enroll_result() -> Option<serde_json::Value> {
+    let s = std::fs::read_to_string(node_home().join("run/enroll-result.json")).ok()?;
+    serde_json::from_str(&s).ok()
+}
+
+/// Remove the request file once answered (best effort).
+pub fn clear_enroll_request() {
+    let _ = std::fs::remove_file(config_dir().join("enroll-request.toml"));
 }
 
 #[cfg(test)]
@@ -192,6 +284,43 @@ mod tests {
             assert_eq!(s["node"]["state"], "online");
             assert_eq!(s["control"]["state"], "paused");
             assert_eq!(s["policy"]["cpu_cap_percent"], 60);
+        });
+    }
+
+    #[test]
+    fn enroll_requests_round_trip_and_home_check_reports_open_homes() {
+        use std::os::unix::fs::PermissionsExt;
+        with_dirs(|home, cfg| {
+            let id = write_enroll_request("https://rosson.k2.dev/", Some("ABCDE-FGHJK.0123456789abcdef"), None, "mini-1", "rosson").unwrap();
+            let p = cfg.join("enroll-request.toml");
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o644);
+            let t: toml::Table = std::fs::read_to_string(&p).unwrap().parse().unwrap();
+            assert_eq!(t["id"].as_str(), Some(id.as_str()));
+            assert_eq!(t["controller"].as_str(), Some("https://rosson.k2.dev"));
+            assert_eq!(t["enroll"].as_str(), Some("ABCDE-FGHJK.0123456789abcdef"));
+            assert!(t.get("ticket").is_none());
+            assert_eq!(status()["enrollRequestPending"], true);
+            assert!(write_enroll_request("https://x.k2.dev", Some("a"), Some("b"), "n", "x").is_err(), "one credential only");
+            assert!(write_enroll_request("https://x.k2.dev", None, None, "n", "x").is_err());
+            assert!(write_enroll_request("ftp://x", Some("a"), None, "n", "x").is_err());
+            assert!(write_enroll_request("https://x\"\n", Some("a"), None, "n", "x").is_err());
+            assert!(write_enroll_request("https://x.k2.dev", Some("a"), None, "Bad Name", "x").is_err());
+            std::fs::write(home.join("run/enroll-result.json"), format!(r#"{{"id":"{id}","ok":true,"sas":"123 456"}}"#)).unwrap();
+            assert_eq!(status()["enrollResult"]["sas"], "123 456");
+            clear_enroll_request();
+            assert_eq!(status()["enrollRequestPending"], false);
+
+            let h = home.join("human");
+            std::fs::create_dir_all(h.join(".ssh")).unwrap();
+            std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let c = home_check(&h).unwrap();
+            assert_eq!(c["private"], false);
+            assert_eq!(c["mode"], "755");
+            assert_eq!(c["readable"][0], h.join(".ssh").display().to_string());
+            std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let c = home_check(&h).unwrap();
+            assert_eq!(c["private"], true);
+            assert_eq!(c["readable"].as_array().unwrap().len(), 0);
         });
     }
 

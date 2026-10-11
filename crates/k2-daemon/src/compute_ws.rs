@@ -238,16 +238,44 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
         Ok(d) => d,
         Err(_) => return refuse(&mut ws, "bad_key", "the node key is unreadable").await,
     };
-    let binding = req.code_binding.trim().to_ascii_lowercase();
-    let entry = match compute::enroll::take(&binding) {
-        Ok(e) => e,
-        Err(r) => {
-            audit("node", "enroll_refused", None, serde_json::json!({"reason": r.code(), "route": route_label(ingress), "fp": node_fp}));
-            let msg = match r {
-                compute::enroll::CodeRefusal::LockedOut => "too many wrong codes: every waiting code was voided; ask the owner for a new one",
-                compute::enroll::CodeRefusal::Invalid => "the enroll code is wrong, used, or expired",
-            };
-            return refuse(&mut ws, r.code(), msg).await;
+    let mut binding = req.code_binding.trim().to_ascii_lowercase();
+    let (entry, via) = if let Some(ticket) = req.ticket.as_deref() {
+        // One-click (same Connect account): the control plane's signed
+        // ticket stands in for the code. Still only `pending`.
+        let own = k2_core::tunnel::config::load().map(|c| c.subdomain.trim().to_ascii_lowercase()).unwrap_or_default();
+        match compute::ticket::verify(ticket, &own, &node_fp, &req.name, compute::now()) {
+            Ok(t) => {
+                let tb = t.binding();
+                if !crypto::ct_eq(tb.as_bytes(), binding.as_bytes()) {
+                    return refuse(&mut ws, "protocol_error", "code_binding must be the ticket's binding").await;
+                }
+                binding = tb;
+                (
+                    compute::enroll::CodeEntry {
+                        binding: binding.clone(),
+                        name: t.node_name.clone(),
+                        minted_by: format!("ticket:{}", t.kid),
+                        expires_at: t.exp,
+                    },
+                    "ticket",
+                )
+            }
+            Err(r) => {
+                audit("node", "enroll_refused", None, serde_json::json!({"reason": r.code(), "detail": r.message(), "route": route_label(ingress), "fp": node_fp}));
+                return refuse(&mut ws, r.code(), &r.message()).await;
+            }
+        }
+    } else {
+        match compute::enroll::take(&binding) {
+            Ok(e) => (e, "code"),
+            Err(r) => {
+                audit("node", "enroll_refused", None, serde_json::json!({"reason": r.code(), "route": route_label(ingress), "fp": node_fp}));
+                let msg = match r {
+                    compute::enroll::CodeRefusal::LockedOut => "too many wrong codes: every waiting code was voided; ask the owner for a new one",
+                    compute::enroll::CodeRefusal::Invalid => "the enroll code is wrong, used, or expired",
+                };
+                return refuse(&mut ws, r.code(), msg).await;
+            }
         }
     };
     let key = match compute::controller_key() {
@@ -299,7 +327,7 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
     let inserted = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let r = store::insert_pending_node(
+        let r = store::insert_pending_node_via(
             &conn,
             &node_id,
             &entry.name,
@@ -309,6 +337,7 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
             &entry.minted_by,
             &sas,
             compute::now(),
+            via,
         );
         if r.is_ok() {
             store::record_event(
@@ -318,7 +347,7 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
                 Some(&node_id),
                 None,
                 None,
-                serde_json::json!({"name": entry.name, "fp": node_fp, "route": route_label(ingress), "version": req.node_version}),
+                serde_json::json!({"name": entry.name, "fp": node_fp, "route": route_label(ingress), "version": req.node_version, "via": via}),
             );
         }
         r

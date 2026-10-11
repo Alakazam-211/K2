@@ -170,6 +170,7 @@ pub mod settings_routes;
 pub mod sidecar_routes;
 pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
+pub mod compute_local;
 pub mod compute_routes;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.

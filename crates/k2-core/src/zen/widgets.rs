@@ -57,6 +57,7 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-widget-origin",
     "thread-address-stable",
     "daemon-activity",
+    "thread-push-v1",
 ];
 
 /// A widget's manifest after checking (UW5, UWA7, UWB13).

@@ -151,6 +151,11 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/compute-api.ts',
   // 0.45.4 federation: peer-list change events for the window's server.
   'components/Settings/sections/ConnectionsSection.tsx',
+  // 0.45.5 Settings → Notifications (Thread push): the window's server's
+  // push prefs, its `thread-push-v1` feature, and its refetch event.
+  'components/Settings/sections/NotificationsSection.tsx',
+  'components/Settings/sections/notify-api.ts',
+  'components/Settings/sections/useNotifyPrefs.ts',
   'components/Sidebar/ActiveBar.tsx',
   'components/Sidebar/IconRail.tsx',
   'components/Sidebar/ProjectAvatar.tsx',

@@ -52,6 +52,9 @@ export type SettingsSection =
   | 'project-groups'
   /** Settings → Tickets (0.45.4): server ticket rules + the person's landing tab. */
   | 'tickets'
+  /** Settings → Notifications (0.45.5, prd-thread-push-notifications-v1 §9):
+   *  your phone pushes, workspace defaults, people. Needs `thread-push-v1`. */
+  | 'notifications'
   /** Settings → Gardens (this computer's Zen Gardens; desktop only, like the Zen toggle). */
   | 'zen-gardens'
   | 'context-catalog'

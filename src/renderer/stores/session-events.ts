@@ -280,6 +280,14 @@ export interface FederationPeersChangedEvent {
   reason: string
 }
 
+/** APP-LEVEL — someone's Thread push prefs changed on this server
+ *  (prd-thread-push-notifications-v1 §5.5). No payload on purpose (TP21: it
+ *  must not say who changed what). Refetch signal for Settings →
+ *  Notifications and the Agent tab's phone switch. */
+export interface NotifyPrefsChangedEvent {
+  kind: 'notify_prefs_changed'
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -627,6 +635,7 @@ export type SessionEventMessage =
   | MailChangedEvent
   | DomainsChangedEvent
   | FederationPeersChangedEvent
+  | NotifyPrefsChangedEvent
   | RemoteSessionAccessDeniedEvent
 
 export interface SessionEventHandlers {
@@ -1097,6 +1106,8 @@ type MailChangedHandler = (reason: string) => void
 type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 // 0.45.2 — Settings → Connections' refetch signal.
 type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
+// Thread push §5.5 — Settings → Notifications' refetch signal.
+type NotifyPrefsChangedHandler = () => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1139,6 +1150,7 @@ interface AppBusHandlers {
   mailChanged: Set<MailChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
+  notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
@@ -1180,6 +1192,7 @@ function createBusState(scopeId: string): BusState {
       mailChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
+      notifyPrefsChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       hooksInstallFailed: new Set(),
@@ -1430,6 +1443,14 @@ export function onFederationPeersChanged(
   return addHandler(busFor(scope).handlers.federationPeersChanged, fn)
 }
 
+/** prd-thread-push-notifications-v1 §5.5 — subscribe to APP-LEVEL
+ *  `notify_prefs_changed` on `scope`'s server. Refetch signal (no payload):
+ *  re-read `GET /cli/notify/prefs` (and `/cli/notify/admin` on the admin
+ *  page). */
+export function onNotifyPrefsChanged(scope: ServerScope, fn: NotifyPrefsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.notifyPrefsChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1575,6 +1596,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   federation_peers_changed: (h, m) => {
     for (const fn of h.federationPeersChanged) fn(m)
+  },
+  notify_prefs_changed: (h) => {
+    for (const fn of h.notifyPrefsChanged) fn()
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

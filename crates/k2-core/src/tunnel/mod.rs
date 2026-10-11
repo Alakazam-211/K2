@@ -52,6 +52,7 @@ pub mod config;
 pub mod connector;
 pub mod cp_proxy;
 pub mod failover;
+pub(crate) mod frpc_proc;
 pub mod identity;
 pub mod ingress;
 pub mod lease;

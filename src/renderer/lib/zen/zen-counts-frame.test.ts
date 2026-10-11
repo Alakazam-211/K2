@@ -116,8 +116,12 @@ type Listener = (e: unknown) => void
 interface Wired {
   /** Push zen-data's rows now to the widget's live `agents.subscribe`. */
   pushRows(rows: ZenAgentRow[]): void
-  /** Push a Thread view to the widget's `thread.subscribe`. */
-  pushThread(view: ZenThreadView): void
+  /**
+   * Push a Thread view to the widget's `thread.subscribe`. Waits for the
+   * subscribe first: the widget asks over the frame's port after it paints
+   * its page, so the call can land a few ticks after the page shows.
+   */
+  pushThread(view: ZenThreadView): Promise<void>
   host: ZenFrameHost
 }
 
@@ -220,7 +224,8 @@ async function wire(w: ZenCustomWidgetPayload, html: string, run: (k2: unknown) 
       if (!rowsCb) throw new Error('no agents.subscribe')
       rowsCb(rows)
     },
-    pushThread: (view) => {
+    pushThread: async (view) => {
+      await until('the widget subscribes to its Thread', () => threadCb !== null)
       if (!threadCb) throw new Error('no thread.subscribe')
       threadCb(view)
     },
@@ -325,7 +330,7 @@ describe('0.45.2 counts: k2:diary@2 on the real path says how many ghosts and sc
     activity('working', { subagents: 3, tools: 14, commands: 5 })
     f.pushRows(rowsFor(w))
     await until('a page for Cortana', () => document.getElementById('who')?.textContent === 'Cortana')
-    f.pushThread(thread({ state: 'working', since: 1 }))
+    await f.pushThread(thread({ state: 'working', since: 1 }))
     await until('the ghost line', () => !line().hidden)
     expect(line().textContent).toMatch(/\bthree ghosts\b/)
     expect(line().textContent).toMatch(/\b14 scary things\b/)

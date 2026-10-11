@@ -26,10 +26,13 @@
 //! later).
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::cli_response::CliResponse;
 use k2_core::push::{K2Cloud, PushEvent, PushTarget};
+#[cfg(not(test))]
+use k2_core::push::budget;
 use k2_core::push_devices;
 
 // ── Route dispatch ────────────────────────────────────────────────────
@@ -161,34 +164,121 @@ pub fn notify_project_message_created(project_name: &str, group_id: &str) {
     });
 }
 
-/// The process-wide push target, resolved ONCE from config
-/// (`K2_PUSH_GATEWAY_URL`/`K2_PUSH_GATEWAY_TOKEN` env, falling back to
-/// the `pushGatewayUrl`/`pushGatewayToken` settings — see
-/// `K2Cloud::from_config`). `None` = DORMANT: leaving dormancy takes a
-/// daemon restart after configuring, per the PRD's "startup no-op"
-/// contract.
-// Unreachable under cfg(test): dispatch_push short-circuits into the
-// capture sink before the configured target is ever consulted.
+/// How long a resolved gateway config is reused before it is read again
+/// (settings JSON + `tunnel.json`, maybe the token vault). Short, so a
+/// pairing or a settings change applies without a restart.
+const CONFIG_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The push gateway as configured NOW (TP6): a paired tunnel defaults to
+/// `https://push.k2.dev` with per-daemon auth; the env/settings URL and
+/// shared token still override and back it up. `None` = DORMANT.
+/// Cached for [`CONFIG_TTL`].
+// Unreachable under cfg(test): every send short-circuits into the capture
+// sink before the configured target is consulted.
 #[cfg_attr(test, allow(dead_code))]
-fn configured_target() -> Option<Arc<dyn PushTarget>> {
-    static TARGET: OnceLock<Option<Arc<dyn PushTarget>>> = OnceLock::new();
-    TARGET
-        .get_or_init(|| K2Cloud::from_config().map(|c| Arc::new(c) as Arc<dyn PushTarget>))
-        .clone()
+pub(crate) fn current_cloud() -> Option<Arc<K2Cloud>> {
+    static CACHE: Mutex<Option<(Instant, Option<Arc<K2Cloud>>)>> = Mutex::new(None);
+    k2_core::push::set_instance_id(crate::boot_status::instance_id());
+    let mut slot = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((at, cloud)) = slot.as_ref() {
+        if at.elapsed() < CONFIG_TTL {
+            return cloud.clone();
+        }
+    }
+    let cloud = K2Cloud::from_config().map(Arc::new);
+    *slot = Some((Instant::now(), cloud.clone()));
+    cloud
 }
 
+/// The production air-gap probe: [`k2_core::airgap::enabled`], read on
+/// EVERY send because air-gap can flip at runtime (TP5).
+pub(crate) fn prod_airgap_on() -> bool {
+    k2_core::airgap::enabled()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only air-gap for THIS thread's sends. Flipping the real
+    /// process-wide flag would silence every other test's pushes.
+    static TEST_AIRGAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only: turn this thread's air-gap on or off.
+#[cfg(test)]
+pub(crate) fn set_test_airgap(on: bool) {
+    TEST_AIRGAP.with(|c| c.set(on));
+}
+
+/// The air-gap check every push passes, all kinds (TP5).
+pub(crate) fn airgap_blocks() -> bool {
+    #[cfg(test)]
+    {
+        TEST_AIRGAP.with(|c| c.get())
+    }
+    #[cfg(not(test))]
+    {
+        prod_airgap_on()
+    }
+}
+
+/// Log an air-gap drop once per boot (TP5), not once per push.
+pub(crate) fn note_airgap_drop() {
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        k2_core::log_debug!("[push] air-gap is on: no push of any kind leaves this daemon");
+    }
+}
+
+/// Log a budget drop at most once a minute (§6.3).
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn note_budget_drop(class: k2_core::push::budget::BudgetClass) {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+    if last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(60)) {
+        *last = Some(Instant::now());
+        k2_core::log_debug!("[push] local {class:?} budget spent; dropping pushes (not queued)");
+    }
+}
+
+/// The ticket/project send chokepoint: air-gap → (test: capture) →
+/// the `Other` budget → a detached send. Never waits on the gateway.
 fn dispatch_push(event: PushEvent) {
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
     // Test seam: unit tests capture the event instead of touching
     // config or spawning senders (no live network in tests).
     #[cfg(test)]
     {
         test_push_capture::capture(&event);
-        return;
     }
     #[cfg(not(test))]
     {
-        dispatch_with(configured_target(), event);
+        let Some(cloud) = current_cloud() else {
+            return;
+        };
+        let class = event.budget_class();
+        let per_hour = match class {
+            budget::BudgetClass::Thread => {
+                k2_core::push::RelayPath::of(cloud.config(), unix_now()).thread_per_hour()
+            }
+            budget::BudgetClass::Other => budget::OTHER_PER_HOUR,
+        };
+        if !budget::global().try_take(class, per_hour, Instant::now()) {
+            note_budget_drop(class);
+            return;
+        }
+        dispatch_with(Some(cloud as Arc<dyn PushTarget>), event);
     }
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Fire-and-forget core, target injected for testability: `None` =
@@ -460,5 +550,57 @@ mod tests {
             mine[1].data(),
             serde_json::json!({ "kind": "project", "groupId": gid })
         );
+    }
+
+    /// TP5: air-gap is checked on EVERY send, for every kind — flipped
+    /// between two sends, the second is dropped, and turning it off lets
+    /// the next one through again.
+    #[test]
+    fn airgap_is_checked_on_every_send() {
+        let fid = format!("fb-airgap-{}", uuid::Uuid::new_v4());
+        let ours = |events: Vec<PushEvent>| {
+            events
+                .into_iter()
+                .filter(|e| matches!(e, PushEvent::FeedbackCommented { feedback_id, .. } if feedback_id == &fid))
+                .count()
+        };
+        let mark = test_push_capture::mark();
+        notify_feedback_commented(&fid, &[]);
+        assert_eq!(ours(test_push_capture::since(mark)), 1, "air-gap off: sent");
+
+        set_test_airgap(true);
+        let mark = test_push_capture::mark();
+        notify_feedback_commented(&fid, &[]);
+        notify_project_message_created("Apollo", &fid);
+        set_test_airgap(false);
+        let after: Vec<_> = test_push_capture::since(mark)
+            .into_iter()
+            .filter(|e| match e {
+                PushEvent::FeedbackCommented { feedback_id, .. } => feedback_id == &fid,
+                PushEvent::ProjectMessageCreated { group_id, .. } => group_id == &fid,
+                _ => false,
+            })
+            .collect();
+        assert!(after.is_empty(), "air-gap on: zero sends of any kind, got {after:?}");
+
+        let mark = test_push_capture::mark();
+        notify_feedback_commented(&fid, &[]);
+        assert_eq!(ours(test_push_capture::since(mark)), 1, "air-gap off again: sent");
+    }
+
+    /// The production probe is the real air-gap flag, read live: the
+    /// runtime setting mirror (`airgap::set_setting_enabled`) and the env
+    /// both flip it without a restart.
+    #[test]
+    fn prod_airgap_probe_reads_the_live_flag() {
+        let _env = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
+        let _home = crate::test_support::TempHome::new();
+        k2_core::airgap::set_setting_enabled(false);
+        assert!(!prod_airgap_on() || k2_core::airgap::baked());
+        k2_core::airgap::set_setting_enabled(true);
+        assert!(prod_airgap_on(), "runtime setting flip is seen on the next send");
+        k2_core::airgap::set_setting_enabled(false);
+        let _on = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
+        assert!(prod_airgap_on(), "env flip is seen too");
     }
 }

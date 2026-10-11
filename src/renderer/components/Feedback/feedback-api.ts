@@ -328,8 +328,9 @@ export const TICKET_SCOPES: ReadonlyArray<{ value: TicketScope; label: string }>
   { value: 'all', label: 'All' },
 ]
 
-/** The board opens on Mine (Rosson). */
-export const DEFAULT_TICKET_SCOPE: TicketScope = 'mine'
+/** The board opens on Waiting on me (GitHub #75, Rosson 2026-10-10); a
+ *  person can change it in Settings → Tickets (`lib/ticket-open-pref.ts`). */
+export const DEFAULT_TICKET_SCOPE: TicketScope = 'waiting'
 
 /** The assignee names that mean "me" for the current login. The owner is
  *  `owner` (the wire literal) or the owner's display name; a Connect user

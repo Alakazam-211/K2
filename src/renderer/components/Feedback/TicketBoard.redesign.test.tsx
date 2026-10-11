@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// 0.43.2 tickets redesign (Rosson): the board opens on Mine, the list
+// 0.43.2 tickets redesign (Rosson): the board opens on Waiting on me
+// (GitHub #75, 0.45.4; the person's "Open the Tickets page on" pref), the list
 // width (400 px default) + collapsed state are remembered per window, the
 // brief's Options become quick-answer buttons that answer the ticket (free
 // text starts a discussion). The chat rail — open by default, toggled from
@@ -76,6 +77,7 @@ import { TicketBoard } from './TicketBoard'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import { readTicketBoardChrome, writeTicketBoardChrome } from '@/lib/ticket-board-chrome'
 import { useToastStore } from '@/stores/toast'
+import { writeTicketOpenOn } from '@/lib/ticket-open-pref'
 
 const NOW = 1_759_241_200
 
@@ -141,20 +143,84 @@ function board(rows: FeedbackListRow[] = [mine, julies]): ReturnType<typeof rend
 }
 
 describe('TicketBoard filters', () => {
-  it('opens on Mine (assigned to the current login); All shows everyone’s', async () => {
-    board()
-    expect(screen.getByTestId('ticket-scope-mine').getAttribute('aria-selected')).toBe('true')
+  it('opens on Waiting on me (GitHub #75); Mine and All are one click away', async () => {
+    const answeredMine = makeRow({
+      id: 'cccccccc-0000-4000-8000-00000000000c',
+      title: 'Answered mine',
+      status: 'answered',
+      assignees: ['owner'],
+    })
+    board([mine, julies, answeredMine])
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
     await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(1))
     expect(screen.getByTestId('ticket-card').textContent).toContain('Mine ticket')
     expect(screen.queryByText('Julie ticket')).toBeNull()
 
-    fireEvent.click(screen.getByTestId('ticket-scope-all'))
-    expect(screen.getAllByTestId('ticket-card')).toHaveLength(2)
-
-    fireEvent.click(screen.getByTestId('ticket-scope-waiting'))
+    fireEvent.click(screen.getByTestId('ticket-scope-mine'))
     expect(screen.getAllByTestId('ticket-card').map((c) => c.textContent)).toEqual([
       expect.stringContaining('Mine ticket'),
+      expect.stringContaining('Answered mine'),
     ])
+
+    fireEvent.click(screen.getByTestId('ticket-scope-all'))
+    expect(screen.getAllByTestId('ticket-card')).toHaveLength(3)
+  })
+
+  it('an empty Waiting tab says so (never silently shows All) and links to All', async () => {
+    const answeredMine = makeRow({
+      id: 'cccccccc-0000-4000-8000-00000000000c',
+      title: 'Answered mine',
+      status: 'answered',
+      assignees: ['owner'],
+    })
+    board([julies, answeredMine])
+    const empty = await screen.findByTestId('ticket-waiting-empty')
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    expect(empty.textContent).toContain('Nothing is waiting on you')
+    expect(empty.textContent).toContain('1 other waiting ticket is assigned to someone else or no one.')
+    expect(screen.queryByTestId('ticket-card')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('ticket-waiting-empty-all'))
+    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getAllByTestId('ticket-card')).toHaveLength(2)
+  })
+
+  it('an empty Waiting tab with nothing waiting anywhere explains what shows up there', async () => {
+    const answeredMine = makeRow({
+      id: 'cccccccc-0000-4000-8000-00000000000c',
+      title: 'Answered mine',
+      status: 'answered',
+      assignees: ['owner'],
+    })
+    board([answeredMine])
+    const empty = await screen.findByTestId('ticket-waiting-empty')
+    expect(empty.textContent).toContain('Nothing is waiting on you')
+    expect(empty.textContent).toContain('Tickets assigned to you that need an answer show up here.')
+    expect(screen.getByTestId('ticket-waiting-empty-all').textContent).toBe('Show all tickets')
+  })
+
+  it('honours "Open the Tickets page on: All"', async () => {
+    writeTicketOpenOn('all')
+    board()
+    expect(screen.getByTestId('ticket-scope-all').getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(2))
+  })
+
+  it('honours "Remember my last tab", and only then', async () => {
+    writeTicketOpenOn('last')
+    const first = board()
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(screen.getByTestId('ticket-scope-mine'))
+    first.unmount()
+
+    board()
+    expect(screen.getByTestId('ticket-scope-mine').getAttribute('aria-selected')).toBe('true')
+    cleanup()
+
+    // Back on the default: the remembered tab is ignored.
+    writeTicketOpenOn('waiting')
+    board()
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
   })
 
   it('search narrows the list', async () => {

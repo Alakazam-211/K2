@@ -70,8 +70,8 @@ describe('scopes', () => {
     { id: 'd', status: 'waiting' as const, assignees: [] },
   ]
 
-  it('defaults to Mine', () => {
-    expect(DEFAULT_TICKET_SCOPE).toBe('mine')
+  it('defaults to Waiting on me (GitHub #75)', () => {
+    expect(DEFAULT_TICKET_SCOPE).toBe('waiting')
   })
 
   it('me = owner + display name for the owner, the username for a Connect user', () => {

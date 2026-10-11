@@ -50,6 +50,8 @@ export type SettingsSection =
   | 'keybindings'
   | 'projects'
   | 'project-groups'
+  /** Settings → Tickets (0.45.4): server ticket rules + the person's landing tab. */
+  | 'tickets'
   /** Settings → Gardens (this computer's Zen Gardens; desktop only, like the Zen toggle). */
   | 'zen-gardens'
   | 'context-catalog'

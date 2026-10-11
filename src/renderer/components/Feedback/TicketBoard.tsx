@@ -3,9 +3,13 @@
 //
 //   - A narrow list (default 400 px) on the left, resizable with a drag
 //     handle; the detail (header + HTML brief + action bar) takes the rest.
-//   - Filters on top of the list: Mine (assigned to me, the default),
-//     Waiting on me, All, plus search. The caller may add one extra control
-//     (the Tickets page adds its workspace filter).
+//   - Filters on top of the list: Mine (assigned to me), Waiting on me
+//     (the default, GitHub #75), All, plus search. Which tab it opens on is
+//     the person's "Open the Tickets page on" preference (Settings →
+//     Tickets, `lib/ticket-open-pref.ts`). An empty Waiting tab says
+//     "Nothing is waiting on you" instead of falling back to All. The
+//     caller may add one extra control (the Tickets page adds its
+//     workspace filter).
 //   - A collapse button folds the list into a slim rail of agent avatars
 //     with status dots; clicking one selects that ticket.
 //   - List width and the collapsed state are remembered PER WINDOW in
@@ -20,7 +24,6 @@ import {
   type TicketBoardChrome,
 } from '@/lib/ticket-board-chrome'
 import {
-  DEFAULT_TICKET_SCOPE,
   filterByScope,
   filterBySearch,
   groupByStatus,
@@ -32,6 +35,7 @@ import {
 import { FeedbackCard, SectionHeader, TicketRailItem } from './TicketCard'
 import { FeedbackItemView } from './FeedbackItemView'
 import { useTicketMe } from './useTicketMe'
+import { initialTicketScope, writeLastTicketTab } from '@/lib/ticket-open-pref'
 
 export interface TicketBoardProps {
   /** Rows to show (the caller's own scoping — workspace filter, project
@@ -63,7 +67,12 @@ export function TicketBoard({
   const projects = useProjectsStore((s) => s.projects)
   const me = useTicketMe()
 
-  const [scope, setScope] = useState<TicketScope>(DEFAULT_TICKET_SCOPE)
+  const [scope, setScopeState] = useState<TicketScope>(() => initialTicketScope())
+  // Every pick is remembered for "Remember my last tab".
+  const setScope = useCallback((next: TicketScope): void => {
+    setScopeState(next)
+    writeLastTicketTab(next)
+  }, [])
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId)
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
@@ -159,7 +168,15 @@ export function TicketBoard({
     [chrome.listWidth],
   )
 
-  const emptyList = filtered !== null && filtered.length === 0
+  // Mine / Waiting wait for whoami before saying the list is empty.
+  const emptyList = filtered !== null && filtered.length === 0 && (me !== null || scope === 'all')
+  // Waiting tickets on someone else's board (or nobody's): told in the
+  // empty Waiting state so "nothing is waiting on you" is never a lie by
+  // omission.
+  const otherWaiting = useMemo(
+    () => (searched ? searched.filter((r) => r.status === 'waiting').length - scopeCounts.waiting : 0),
+    [searched, scopeCounts],
+  )
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex" data-testid="ticket-board">
@@ -272,7 +289,24 @@ export function TicketBoard({
             )}
             {emptyList && (
               <div data-testid="ticket-list-empty" className="flex flex-col items-center justify-center h-full text-center px-4">
-                {rows !== null && rows.length > 0 ? (
+                {rows !== null && rows.length > 0 && scope === 'waiting' && !search ? (
+                  <div data-testid="ticket-waiting-empty" className="flex flex-col items-center">
+                    <p className="text-xs text-[var(--color-text-secondary)]">Nothing is waiting on you</p>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-1 opacity-70">
+                      {otherWaiting > 0
+                        ? `${otherWaiting} other waiting ${otherWaiting === 1 ? 'ticket is' : 'tickets are'} assigned to someone else or no one.`
+                        : 'Tickets assigned to you that need an answer show up here.'}
+                    </p>
+                    <button
+                      type="button"
+                      data-testid="ticket-waiting-empty-all"
+                      onClick={() => setScope('all')}
+                      className="mt-1.5 text-[11px] text-[var(--color-accent)] hover:underline cursor-pointer"
+                    >
+                      Show all tickets
+                    </button>
+                  </div>
+                ) : rows !== null && rows.length > 0 ? (
                   <>
                     <p className="text-xs text-[var(--color-text-secondary)]">
                       {scope === 'all' || search ? 'No tickets match your search' : 'Nothing assigned to you here'}

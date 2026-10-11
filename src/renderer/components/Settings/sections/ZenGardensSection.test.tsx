@@ -302,18 +302,19 @@ afterEach(() => {
 })
 
 describe('Settings → Gardens: where it shows', () => {
-  it('sits between Projects and Context Catalog in the sidebar', () => {
+  it('sits between Tickets (under Projects) and Context Catalog in the sidebar', () => {
     const ids = settingsNav({ zenGardens: true }).flatMap((b) => (b.kind === 'item' ? [b.id] : []))
     const at = ids.indexOf('zen-gardens')
     expect(at).toBeGreaterThan(0)
-    expect(ids[at - 1]).toBe('project-groups')
+    expect(ids[at - 1]).toBe('tickets')
+    expect(ids[at - 2]).toBe('project-groups')
     expect(ids[at + 1]).toBe('context-catalog')
     const label = settingsNav({ zenGardens: true }).find((b) => b.kind === 'item' && b.id === 'zen-gardens')
     expect(label).toEqual({ kind: 'item', id: 'zen-gardens', label: 'Gardens' })
     expect(settingsNav({ zenGardens: false }).some((b) => b.kind === 'item' && b.id === 'zen-gardens')).toBe(false)
   })
 
-  it('desktop Mac: the rendered sidebar shows Gardens right after Projects, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows Gardens right after Projects → Tickets, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -324,7 +325,8 @@ describe('Settings → Gardens: where it shows', () => {
     const ids = navIds()
     const at = ids.indexOf('zen-gardens')
     expect(at).toBeGreaterThan(0)
-    expect(ids[at - 1]).toBe('project-groups')
+    expect(ids[at - 1]).toBe('tickets')
+    expect(ids[at - 2]).toBe('project-groups')
     expect(ids[at + 1]).toBe('context-catalog')
     expect(screen.getByRole('button', { name: 'Gardens' })).toBeTruthy()
     // The same window shows the Zen toggle.

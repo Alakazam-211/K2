@@ -41,6 +41,7 @@ import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTe
 // (id 'projects', label "Workspaces").
 import ProjectGroupSettings from '../Projects/ProjectSettings'
 import { ContextCatalogSection, CONTEXT_CATALOG_MANIFEST } from './sections/ContextCatalogSection'
+import { TicketsSection, TICKETS_MANIFEST } from './sections/TicketsSection'
 import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSection'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
@@ -72,7 +73,8 @@ type NavBlock =
 
 /** The sidebar. `zenGardens`: show Settings → Gardens, which is
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
- *  item 17). Placed between Projects and Context Catalog. */
+ *  item 17). Placed between Tickets and Context Catalog. Tickets sits
+ *  directly beneath Projects (0.45.4, Rosson). */
 export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
@@ -81,6 +83,7 @@ export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[]
     { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
+    { kind: 'item', id: 'tickets', label: 'Tickets' },
     ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'token-usage', label: 'Token Usage' },
@@ -167,6 +170,7 @@ export default function Settings(): React.JSX.Element {
       ...TOKEN_USAGE_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
+      ...TICKETS_MANIFEST,
       ...CONTEXT_CATALOG_MANIFEST,
       ...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),
       ...AGENT_SKILLS_MANIFEST,
@@ -494,6 +498,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'project-groups' && (
           <SectionErrorBoundary>
             <ProjectGroupSettings />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'tickets' && (
+          <SectionErrorBoundary>
+            <TicketsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'context-catalog' && (

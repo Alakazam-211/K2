@@ -143,6 +143,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/email-api.ts',
   // Settings → Vault is the window's server, like the other Settings pages.
   'components/Settings/sections/vault-api.ts',
+  // 0.45.4 Settings → Tickets: the window's server's ticket rules.
+  'components/Settings/sections/tickets-settings-api.ts',
   'components/Sidebar/ActiveBar.tsx',
   'components/Sidebar/IconRail.tsx',
   'components/Sidebar/ProjectAvatar.tsx',
@@ -166,6 +168,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'lib/llmDaemonClient.ts',
   'lib/pick-remote-image.ts',
   'lib/start-clone-to.ts',
+  // 0.45.4: the landing-tab pref is keyed by the window's server + login.
+  'lib/ticket-open-pref.ts',
   // Home M3 / Q4: the assistant acts only on rooms on the window's server.
   'lib/workspace-ops-router.ts',
   'stores/active-agents.ts',

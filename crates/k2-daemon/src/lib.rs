@@ -106,6 +106,8 @@ pub mod push_routes;
 pub mod notify_routes;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
+// `viewing` frames from the overlay WS: who looks at which Thread (S4).
+pub mod thread_viewers;
 pub mod review_checklist_routes;
 pub mod routes;
 // K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json. Exposed

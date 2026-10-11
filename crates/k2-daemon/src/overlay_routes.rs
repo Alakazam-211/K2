@@ -2008,6 +2008,9 @@ mod tests {
 
     #[test]
     fn compose_via_thread_post_records_workspace_history() {
+        // Reads `$HOME` (the owner display name): hold the env lock so a
+        // concurrent temp-HOME test cannot swap it mid-test.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlhist{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let conv = uuid::Uuid::new_v4().to_string();
@@ -2049,6 +2052,9 @@ mod tests {
 
     #[test]
     fn widget_post_stores_origin_wakes_the_agent_and_skips_compose_history() {
+        // Reads `$HOME` (the owner display name): hold the env lock so a
+        // concurrent temp-HOME test cannot swap it mid-test.
+        let _home_lock = crate::test_support::lock_home();
         // The audit line goes to `$HOME/.k2/auth-audit.jsonl`: a temp HOME.
         let _home = crate::test_support::TempHome::new();
         let handle = format!("ovlwidget{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -3429,6 +3435,9 @@ mod tests {
 
     #[test]
     fn owner_token_owner_shaped_from_stores_room_handle() {
+        // Reads `$HOME` (the owner display name): hold the env lock so a
+        // concurrent temp-HOME test cannot swap it mid-test.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlown{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let other = format!("ovlpeer{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
@@ -3501,6 +3510,9 @@ mod tests {
 
     #[test]
     fn compose_without_principal_ignores_body_from() {
+        // Reads `$HOME` (the owner display name): hold the env lock so a
+        // concurrent temp-HOME test cannot swap it mid-test.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlcmp{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -3661,6 +3673,9 @@ mod tests {
 
     #[test]
     fn ask_and_secret_follow_from_rules_and_echo_from() {
+        // Reads `$HOME` (the owner display name): hold the env lock so a
+        // concurrent temp-HOME test cannot swap it mid-test.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlcard{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let other = format!("ovlcardp{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);

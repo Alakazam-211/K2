@@ -1,0 +1,13 @@
+# Throwaway systemd box for tests/linux/root_helper_in_container.sh.
+# Ubuntu 24.04 (the fleet's distro): systemd as PID 1, logind for the
+# user-scope case, real sudo / visudo / runuser / minisign / Postgres.
+FROM docker.io/library/ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus libpam-systemd sudo minisign postgresql \
+      curl ca-certificates util-linux procps python3-minimal \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -s /bin/bash k2
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

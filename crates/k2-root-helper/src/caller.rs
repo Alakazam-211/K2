@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 
-use k2_root_proto::paths::{DAEMON_TOML, SUDO_EXES, SYSTEMCTL};
+use k2_root_proto::paths::{DAEMON_TOML, RUNUSER, SUDO_EXES, SYSTEMCTL};
 
 use crate::ctx::{Ctx, Fail, HResult, ProcHandle};
 
@@ -141,22 +141,44 @@ fn walk(ctx: &Ctx) -> (i32, Vec<Box<dyn ProcHandle>>) {
 
 /// The unit's main pid in its scope, through `systemctl show` (env cleared,
 /// `LC_ALL=C`). `None` when systemd doesn't know it or it isn't running.
+///
+/// User scope asks `systemctl --user -M <user>@` first (needs the user's
+/// D-Bus session bus, `dbus-user-session`), then falls back to the user
+/// manager's private socket: `runuser -u <user> -- env
+/// XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user show …` (server images
+/// often have no user bus). Both ask the same manager — which the daemon
+/// user itself controls, so user scope is weaker than system scope (any
+/// process of that user can change what the unit runs).
 pub fn main_pid(ctx: &Ctx, d: &DaemonEntry) -> Option<i32> {
-    let mut args: Vec<String> = Vec::new();
-    if d.scope == "user" {
-        args.push("--user".into());
-        args.push("-M".into());
-        args.push(format!("{}@", d.user));
+    let show = ["show", "-p", "MainPID", "--value", d.unit.as_str()];
+    let parse = |out: crate::ctx::ExecOut| -> Option<i32> {
+        if out.status != 0 {
+            return None;
+        }
+        let pid: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+        (pid > 0).then_some(pid)
+    };
+    if d.scope != "user" {
+        let args: Vec<String> = show.iter().map(|s| s.to_string()).collect();
+        return parse(ctx.exec.run(SYSTEMCTL, &args, None).ok()?);
     }
-    for a in ["show", "-p", "MainPID", "--value", &d.unit] {
-        args.push(a.to_string());
+    let mut args: Vec<String> = vec!["--user".into(), "-M".into(), format!("{}@", d.user)];
+    args.extend(show.iter().map(|s| s.to_string()));
+    if let Some(pid) = ctx.exec.run(SYSTEMCTL, &args, None).ok().and_then(parse) {
+        return Some(pid);
     }
-    let out = ctx.exec.run(SYSTEMCTL, &args, None).ok()?;
-    if out.status != 0 {
-        return None;
-    }
-    let pid: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
-    (pid > 0).then_some(pid)
+    let uid = ctx.procs.uid_of_user(&d.user)?;
+    let mut args: Vec<String> = vec![
+        "-u".into(),
+        d.user.clone(),
+        "--".into(),
+        "/usr/bin/env".into(),
+        format!("XDG_RUNTIME_DIR=/run/user/{uid}"),
+        SYSTEMCTL.into(),
+        "--user".into(),
+    ];
+    args.extend(show.iter().map(|s| s.to_string()));
+    parse(ctx.exec.run(RUNUSER, &args, None).ok()?)
 }
 
 /// Identify the caller. `full` runs the MainPID check (only `daemon` verbs

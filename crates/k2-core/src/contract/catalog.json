@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 5,
+  "catalogVersion": 6,
   "caps": [
     {
       "name": "agents:read",
@@ -507,7 +507,7 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number"},
+                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {
@@ -586,7 +586,7 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number"},
+                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {

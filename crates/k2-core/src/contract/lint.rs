@@ -236,8 +236,59 @@ fn lint_row(c: &Catalog, v: &VerbRow, out: &mut Vec<String>) {
         check_schema(c, name, &format!("argument {i}"), a, out);
     }
     check_schema(c, name, "response", &v.response, out);
+    for (i, a) in items.iter().enumerate() {
+        lint_units(name, &format!("argument {i}"), a, out);
+    }
+    lint_units(name, "response", &v.response, out);
     if v.response.as_object().is_some_and(|o| o.is_empty()) {
         out.push(format!("{name}: an exposed row says what it answers (response is empty)"));
+    }
+}
+
+/// Is a field name a time (a moment or a duration)? `at`, `since`,
+/// `until`, `ts`, `…At`, `…_at`, `…Ms`, `…Secs`/`…Seconds`, `expires…`,
+/// `timeout…`, `interval…`.
+pub fn is_time_field(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(lower.as_str(), "at" | "since" | "until" | "ts" | "time" | "when")
+        || name.ends_with("At")
+        || lower.ends_with("_at")
+        || name.ends_with("Ms")
+        || lower.ends_with("_ms")
+        || name.ends_with("Secs")
+        || name.ends_with("Seconds")
+        || lower.starts_with("expires")
+        || lower.starts_with("timeout")
+        || lower.starts_with("interval")
+}
+
+/// Units on every time field (decision-k2-runtime-v1 stage 0 (f); research
+/// A's port finding: `ThreadDoc.created_at` is seconds while `ThreadTurn.since`
+/// is milliseconds, and nothing said so). A numeric time field's
+/// `description` names its unit: seconds or milliseconds (or, for a
+/// counter such as a store revision, says it is "not a time").
+fn lint_units(verb: &str, at: &str, s: &J, out: &mut Vec<String>) {
+    let Some(o) = s.as_object() else { return };
+    if let Some(props) = o.get("properties").and_then(J::as_object) {
+        for (k, p) in props {
+            let numeric = types_of(p).iter().any(|t| matches!(*t, "number" | "integer"));
+            if numeric && is_time_field(k) {
+                let d = p.get("description").and_then(J::as_str).unwrap_or("").to_ascii_lowercase();
+                // A counter that only shares a time's name (store.changes'
+                // `since` is a revision) says "not a time" instead.
+                if !d.contains("second") && !d.contains("millisecond") && !d.contains("not a time") {
+                    out.push(format!(
+                        "{verb}: {at}: time field '{k}' needs its unit in its description (seconds or milliseconds; since the epoch, or a duration)"
+                    ));
+                }
+            }
+            lint_units(verb, &format!("{at}.{k}"), p, out);
+        }
+    }
+    for key in ["items", "additionalProperties"] {
+        if let Some(sub) = o.get(key) {
+            lint_units(verb, at, sub, out);
+        }
     }
 }
 
@@ -502,6 +553,23 @@ mod tests {
         assert_one(&with_rows(&format!("[{bad}]")), "reach local");
         let bad = LOCAL.replace(r#""cap":"store:read""#, r#""cap":"files:read""#);
         assert_one(&with_rows(&format!("[{bad}]")), "its cap 'files:read' isn't");
+    }
+
+    #[test]
+    fn a_time_field_without_its_unit_fails_and_with_it_passes() {
+        let bad = GOOD.replace(r#""properties":{"a":{"type":"string"}}"#, r#""properties":{"a":{"type":"string"},"createdAt":{"type":"number"}}"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "seed.good: response: time field 'createdAt' needs its unit");
+        let deep = GOOD.replace(
+            r#""properties":{"a":{"type":"string"}}"#,
+            r#""properties":{"a":{"type":"array","items":{"type":"object","properties":{"since":{"type":["integer","null"],"description":"When."}},"required":[],"additionalProperties":false}}}"#,
+        );
+        assert_one(&with_rows(&format!("[{deep}]")), "time field 'since'");
+        let good = GOOD.replace(
+            r#""properties":{"a":{"type":"string"}}"#,
+            r#""properties":{"a":{"type":"string"},"created_at":{"type":"number","description":"Seconds since the epoch."},"waitMs":{"type":"integer","description":"Milliseconds to wait."}}"#,
+        );
+        assert!(lint(&with_rows(&format!("[{good}]"))).is_empty(), "{:#?}", lint(&with_rows(&format!("[{good}]"))));
+        assert!(is_time_field("lastSeenAt") && is_time_field("created_at") && is_time_field("since") && !is_time_field("seq"));
     }
 
     #[test]

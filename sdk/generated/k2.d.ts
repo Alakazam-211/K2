@@ -126,6 +126,7 @@ export interface ChoiceCard {
 export interface ThreadDoc {
   readonly body?: string | null
   readonly choice?: ChoiceCard | null
+  /** Seconds since the epoch (not milliseconds: multiply by 1000 for new Date). */
   readonly created_at?: number
   readonly from?: string
   readonly id: string
@@ -322,6 +323,7 @@ export interface StoreChange {
 
 export interface StoreCursor {
   readonly after?: string
+  /** The store revision to pass back as since; not a time. */
   readonly since: number
 }
 

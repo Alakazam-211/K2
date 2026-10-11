@@ -13,6 +13,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Compute nodes get a home in Settings → Compute.** See your nodes, grant them to workspaces, and pause or remove them. "Make this computer a node" installs the node program for you. Jobs can declare the tools they need (Node, Python, Rust and more), and nodes install them on demand. System packages install only from a list the node's owner approves.
 - **Safer federation pairing.** Connected servers now pair with a commit-then-reveal code, so the 6-digit code can only be checked live during pairing. Federation also gets its own identity key: pairs survive a server rename, and peers get a signed "same server, new address" notice. Older pairs keep working and show "Re-pair recommended".
 - **Switch your Connect name without a restart.** Changing a server's K2 Connect subdomain moves its listener, certificate and routes in one step, and rolls back if anything fails.
+- **Turning off access takes effect right away.** Switching off or removing an App user's access now ends their open sessions immediately instead of when the session expires, and taking a room away from a user removes it from their open sessions too.
 - **URL labels belong to one workspace.** A workspace can no longer take over a published label another workspace owns. Owners can still move one on purpose with `--transfer`, and every move is logged.
 - **Readable tables in Thread.** Markdown tables keep short columns readable instead of squeezing them to one letter per line; wide tables scroll sideways.
 

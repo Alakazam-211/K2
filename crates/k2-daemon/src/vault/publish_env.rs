@@ -331,11 +331,11 @@ mod tests {
             .expect("grant");
             std::fs::write(t.path().join(".env.k2"), format!("MODE=prod\nDB_PASSWORD=literal-not-allowed\n")).expect("env.k2");
             set(&svc, Some("clean"), None).expect("clean");
-            std::env::set_var("K2_VAULT_TEST_LEAK", "should-not-pass");
+            let leak = k2_core::test_env::EnvVar::set("K2_VAULT_TEST_LEAK", "should-not-pass");
             let mut cmd = Command::new("/usr/bin/env");
             let _ = apply(&mut cmd, &svc, &ws, t.path(), 4321);
             let out = cmd.output().expect("run env");
-            std::env::remove_var("K2_VAULT_TEST_LEAK");
+            drop(leak);
             let envs: HashMap<String, String> = String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))

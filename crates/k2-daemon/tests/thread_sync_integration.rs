@@ -374,6 +374,9 @@ async fn every_thread_write_reaches_every_live_view() {
                 assert_eq!(f["doc"]["choice"]["answer"], "Ship", "{f}");
             }
 
+            // Secret cards live in the K2 vault (0.45.4); the in-process
+            // harness doesn't run daemon_main, so open this temp home's vault.
+            k2_daemon::vault::boot(&k2_core::paths::k2_home());
             let secret = post_as(port, OWNER_TOKEN, "/cli/thread/secret", serde_json::json!({
                 "addr": sales, "name": "API_TOKEN", "from": sales
             }));

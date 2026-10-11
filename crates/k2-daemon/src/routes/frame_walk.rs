@@ -34,6 +34,11 @@ const EXEMPT: &[(&str, &str, &str)] = &[
         "UDS / vsock cell API, never reached by a browser",
     ),
     (
+        "k2-daemon/src/vault/human.rs",
+        "write",
+        "vault human-confirm Unix socket (owner's local CLI), never reached by a browser",
+    ),
+    (
         "k2-daemon/src/domains/acme.rs",
         "spawn",
         "Http01Guard::spawn: ACME HTTP-01 token for the CA, text/plain",

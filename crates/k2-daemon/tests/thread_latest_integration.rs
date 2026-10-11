@@ -185,7 +185,10 @@ async fn t2_1_thread_latest_previews_errors_limits_and_refusals() {
             assert!(d[k].is_null(), "an empty thread has null {k}: {d}");
         }
 
-        // A secret card never previews its name or value.
+        // A secret card never previews its name or value. Cards live in the
+        // K2 vault (0.45.4); the in-process harness doesn't run daemon_main,
+        // so open this temp home's vault the way boot does.
+        k2_daemon::vault::boot(&k2_core::paths::k2_home());
         post(port, "/cli/thread/secret", serde_json::json!({ "addr": h1, "name": "STRIPE_KEY", "prompt": "Paste the live key" }));
         let r = http(port, "GET", &format!("/cli/thread/latest?token={OWNER_TOKEN}&addrs={h1}"), None);
         let v = r.json();

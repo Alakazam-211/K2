@@ -444,24 +444,16 @@ pub(crate) mod test_util {
     /// Holds HOME isolation (so the air-gap setting reads a temp file) and
     /// pins `K2_AIRGAP` for the test; restores it on drop.
     pub(crate) struct AirgapEnv {
-        prev: Option<std::ffi::OsString>,
+        // Field order = drop order: restore K2_AIRGAP, then leave HOME.
+        _airgap: k2_core::test_env::EnvVar,
         _home: crate::test_support::TempHome,
     }
     impl AirgapEnv {
         pub(crate) fn set(on: bool) -> AirgapEnv {
             let home = crate::test_support::TempHome::new();
-            let prev = std::env::var_os(k2_core::airgap::ENV_VAR);
-            std::env::set_var(k2_core::airgap::ENV_VAR, if on { "1" } else { "0" });
+            let airgap = k2_core::test_env::EnvVar::set(k2_core::airgap::ENV_VAR, if on { "1" } else { "0" });
             assert_eq!(k2_core::airgap::enabled(), on, "air-gap flag took effect");
-            AirgapEnv { prev, _home: home }
-        }
-    }
-    impl Drop for AirgapEnv {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(p) => std::env::set_var(k2_core::airgap::ENV_VAR, p),
-                None => std::env::remove_var(k2_core::airgap::ENV_VAR),
-            }
+            AirgapEnv { _airgap: airgap, _home: home }
         }
     }
 }

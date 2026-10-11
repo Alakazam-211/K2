@@ -18,9 +18,8 @@
 //! ([`FrpcBinary`]) so tests can inject a fake and production can locate
 //! `frpc` via PATH or common install dirs.
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -29,6 +28,7 @@ use serde::Serialize;
 
 use super::config::{self, RelayEndpoint, TunnelConfig, SUBDOMAIN_HOST};
 use super::failover::{RelaySelector, RelaySwitch};
+use super::frpc_proc::{self, FrpcProc};
 use super::render::render_frpc_toml_for_relay;
 use super::watchdog::DisconnectTracker;
 
@@ -322,8 +322,9 @@ struct ConnectorState {
     /// self-heal path when the frozen target is unreachable. Shared so
     /// `status()` and the supervisor always agree after a heal.
     resolved_local_port: Arc<AtomicU16>,
-    /// The frpc child handle. `None` between restarts.
-    child: Arc<Mutex<Option<Child>>>,
+    /// The frpc process (our child, or one adopted from the previous
+    /// daemon — runtime stage H). `None` between restarts.
+    child: Arc<Mutex<Option<FrpcProc>>>,
     /// Desired state: `true` = should be running (supervisor restarts on
     /// exit); `false` = stop requested (supervisor must not restart).
     running: Arc<AtomicBool>,
@@ -339,6 +340,28 @@ struct ConnectorState {
 }
 
 static STATE: OnceLock<Mutex<Option<ConnectorState>>> = OnceLock::new();
+
+/// Runtime stage H: this daemon handed off to a successor, which adopts
+/// the running frpc. Every supervisor then lets go of its process WITHOUT
+/// killing it ([`detach_for_handoff`]).
+static DETACHED: AtomicBool = AtomicBool::new(false);
+
+/// Hand-off: stop supervising frpc but leave it running for the successor
+/// to adopt (its pid record stays). Lease renewal and the subdomain
+/// refresh stop too (the successor starts its own). Returns the frpc pid
+/// when one was running. One-way.
+pub fn detach_for_handoff() -> Option<i32> {
+    DETACHED.store(true, Ordering::SeqCst);
+    let guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    let st = guard.as_ref()?;
+    st.running.store(false, Ordering::SeqCst);
+    let pid = frpc_proc::read_pid_record(&frpc_config_path()).map(|r| r.pid);
+    pid.filter(|p| frpc_proc::pid_alive(*p))
+}
+
+fn detached() -> bool {
+    DETACHED.load(Ordering::SeqCst)
+}
 
 fn state() -> &'static Mutex<Option<ConnectorState>> {
     STATE.get_or_init(|| Mutex::new(None))
@@ -478,6 +501,8 @@ pub fn start(
     default_local_port: u16,
     bin: &FrpcBinary,
 ) -> Result<TunnelStatus, String> {
+    // A daemon that handed off never starts frpc: the successor adopts it.
+    crate::handoff_state::guard()?;
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
 
     // Idempotent: already supervising a live child — for the SAME tunnel
@@ -587,7 +612,29 @@ pub fn start(
     // for a legacy single-endpoint config that IS `server_addr`/`server_port`,
     // so the rendered TOML is byte-identical to the pre-failover path.
     let frpc = resolve_frpc(bin)?;
-    write_relay_config(&cfg, &cfg.relay_list()[0], resolved_local_port, e2e)?;
+    let rendered = render_frpc_toml_for_relay(&cfg, &cfg.relay_list()[0], resolved_local_port, e2e);
+
+    // Runtime stage H (AR3/K37): adopt the frpc the previous daemon left
+    // running (hand-off, crash, `KillMode=process` restart) when it still
+    // runs exactly this config — no relay re-dial, no tunnel blip. Any
+    // mismatch falls through to the reap + fresh spawn below.
+    let adopted = match frpc_proc::try_adopt(&frpc_config_path(), &rendered) {
+        Ok(rec) => {
+            crate::log_debug!(
+                "[tunnel] adopting running frpc pid {} (same config, localPort {resolved_local_port})",
+                rec.pid
+            );
+            Some(rec)
+        }
+        Err(frpc_proc::NoAdopt::NoRecord) => None,
+        Err(why) => {
+            crate::log_debug!("[tunnel] not adopting the recorded frpc ({why:?}) — fresh spawn");
+            None
+        }
+    };
+    if adopted.is_none() {
+        write_config_file(&rendered)?;
+    }
 
     // Invariant: after render, frpc.toml localPort must match the live
     // resolution we just froze (debug-visible in journal on mismatch).
@@ -615,8 +662,12 @@ pub fn start(
     // keeps the first registrant) — the orphan serves EOFs and the new
     // client is rejected with "proxy already exists", silently breaking
     // remote access. We reach here only when no live child is tracked
-    // (guard returned early otherwise), so every match is genuinely stale.
-    reap_stray_frpc(&frpc_config_path());
+    // (guard returned early otherwise), so every match is genuinely stale
+    // — except the one frpc we just adopted, which is left alone.
+    if adopted.is_none() {
+        reap_stray_frpc(&frpc_config_path());
+        frpc_proc::clear_pid_record(&frpc_config_path());
+    }
     let legacy = legacy_frpc_config_path();
     if legacy != frpc_config_path() {
         reap_stray_frpc(&legacy);
@@ -644,6 +695,7 @@ pub fn start(
         default_local_port,
         e2e,
         proxy.clone(),
+        adopted,
     )?;
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
@@ -691,10 +743,11 @@ pub fn stop() -> Result<(), String> {
         // 2) Kill the Child handle if the supervisor hasn't taken it yet.
         if let Some(child) = st.child.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
             // Best-effort kill. frpc has no special signal protocol.
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill_and_wait();
         }
     }
+    // A stopped tunnel leaves nothing to adopt.
+    frpc_proc::clear_pid_record(&frpc_config_path());
     // 3) Always reap by config pattern — independent of Child ownership.
     //    Covers: supervisor-held child (slot empty), orphans from prior
     //    crashes, and solo-mode waits that never observed `running=false`
@@ -1032,6 +1085,9 @@ enum ChildOutcome {
     /// Supervisor re-resolves the live port, rewrites frpc.toml, and
     /// respawns frpc only — no daemon restart, agent PTYs survive.
     LocalPortUnreachable,
+    /// Runtime stage H: the daemon handed off; the child keeps running for
+    /// the successor to adopt. The supervisor exits without a kill.
+    Detached,
 }
 
 /// Shared per-child-run state for the MID-SESSION relay-death watchdog.
@@ -1100,7 +1156,7 @@ impl SessionWatch {
 ///   mid-session watchdog ([`SessionWatch`]) for live-but-stuck children
 ///   whose relay died AFTER login (frpc never exits on its own then).
 fn wait_for_exit(
-    child: &mut Child,
+    child: &mut FrpcProc,
     running: &AtomicBool,
     selector: &mut RelaySelector,
     spawned_at: Instant,
@@ -1114,7 +1170,7 @@ fn wait_for_exit(
     if selector.is_solo() {
         loop {
             match child.try_wait() {
-                Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
+                Ok(Some(code)) => return ChildOutcome::Exited(code),
                 Ok(None) => {}
                 Err(e) => {
                     crate::log_debug!("[tunnel] wait on frpc child failed: {e}");
@@ -1122,8 +1178,10 @@ fn wait_for_exit(
                 }
             }
             if !running.load(Ordering::SeqCst) {
-                let _ = child.kill();
-                let _ = child.wait();
+                if detached() {
+                    return ChildOutcome::Detached;
+                }
+                child.kill_and_wait();
                 return ChildOutcome::Exited(None);
             }
             if probe_local_desync(
@@ -1132,8 +1190,7 @@ fn wait_for_exit(
                 e2e,
                 daemon_http_port,
             ) {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.kill_and_wait();
                 return ChildOutcome::LocalPortUnreachable;
             }
             std::thread::sleep(SUPERVISE_POLL);
@@ -1141,7 +1198,7 @@ fn wait_for_exit(
     }
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
+            Ok(Some(code)) => return ChildOutcome::Exited(code),
             Ok(None) => {} // still running
             Err(e) => {
                 crate::log_debug!("[tunnel] wait on frpc child failed: {e}");
@@ -1149,10 +1206,13 @@ fn wait_for_exit(
             }
         }
         if !running.load(Ordering::SeqCst) {
+            // Hand-off: the successor adopts this frpc — let go, no kill.
+            if detached() {
+                return ChildOutcome::Detached;
+            }
             // Stop requested while the child lives: we hold the handle,
             // so the kill is ours to do. The caller returns right after.
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill_and_wait();
             return ChildOutcome::Exited(None);
         }
         // Mid-session relay death: the watchdog (fed by the pump threads)
@@ -1166,8 +1226,7 @@ fn wait_for_exit(
                     "[tunnel] mid-session relay death detected ({n} errors/{}s) — cycling frpc",
                     window.as_secs()
                 );
-                let _ = child.kill();
-                let _ = child.wait();
+                child.kill_and_wait();
                 return ChildOutcome::WatchdogKill;
             }
         }
@@ -1180,8 +1239,7 @@ fn wait_for_exit(
             e2e,
             daemon_http_port,
         ) {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill_and_wait();
             return ChildOutcome::LocalPortUnreachable;
         }
         // A child alive past HEALTHY_UPTIME is a working relay: reset the
@@ -1189,8 +1247,7 @@ fn wait_for_exit(
         // says when the streak has earned a return to the primary.
         if spawned_at.elapsed() >= HEALTHY_UPTIME {
             if let Some(sw) = selector.on_success(Instant::now()) {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.kill_and_wait();
                 return ChildOutcome::FailBack(sw);
             }
         }
@@ -1310,7 +1367,7 @@ fn ensure_live_local_port_before_respawn(
 /// the **live** E2E port (never a freshly-picked free port).
 fn spawn_supervised(
     frpc: PathBuf,
-    child_slot: Arc<Mutex<Option<Child>>>,
+    child_slot: Arc<Mutex<Option<FrpcProc>>>,
     running: Arc<AtomicBool>,
     current_relay: Arc<Mutex<RelayEndpoint>>,
     cfg: &TunnelConfig,
@@ -1318,6 +1375,7 @@ fn spawn_supervised(
     daemon_http_port: u16,
     e2e: bool,
     proxy: Arc<ProxyRegistration>,
+    adopted: Option<frpc_proc::PidRecord>,
 ) -> Result<(), String> {
     // Mid-session watchdog only in multi-relay mode: it exists to drive
     // ROTATION. Solo still polls for stop (orphan fix) but never arms a
@@ -1327,9 +1385,13 @@ fn spawn_supervised(
     let new_watch = move || multi.then(|| Arc::new(SessionWatch::new()));
 
     // First spawn happens synchronously so `start()` fails loud if the
-    // very first launch can't even exec.
+    // very first launch can't even exec. An adopted frpc (stage H) is
+    // supervised exactly like one we spawned.
     let mut watch = new_watch();
-    let first = spawn_once(&frpc, watch.clone(), &proxy)?;
+    let (first, mut tail_stop) = match adopted {
+        Some(rec) => adopt_once(&rec, watch.clone(), &proxy),
+        None => spawn_once(&frpc, watch.clone(), &proxy)?,
+    };
     *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(first);
 
     let frpc_thread = frpc.clone();
@@ -1380,7 +1442,10 @@ fn spawn_supervised(
                         }
                         watch = new_watch();
                         match spawn_once(&frpc_thread, watch.clone(), &proxy) {
-                            Ok(c) => c,
+                            Ok((c, stop)) => {
+                                tail_stop = stop;
+                                c
+                            }
                             Err(e) => {
                                 crate::log_debug!("[tunnel] respawn failed: {e}");
                                 std::thread::sleep(backoff);
@@ -1402,11 +1467,24 @@ fn spawn_supervised(
                     e2e,
                     daemon_http_port,
                 );
+                // This run's log tail ends with the run (an adopted or
+                // detached frpc keeps writing, but not for us).
+                tail_stop.store(true, Ordering::SeqCst);
+                if matches!(outcome, ChildOutcome::Detached) {
+                    crate::log_debug!(
+                        "[tunnel] hand-off: leaving frpc pid {} running for the successor",
+                        child.pid()
+                    );
+                    // Never kill or reap it: the successor adopts it.
+                    std::mem::forget(child);
+                    return;
+                }
                 if !running.load(Ordering::SeqCst) {
                     // Stop requested — do not restart.
                     return;
                 }
                 match outcome {
+                    ChildOutcome::Detached => unreachable!("handled above"),
                     ChildOutcome::FailBack(sw) => {
                         // Deliberate switch back to the preferred relay:
                         // re-render, reset backoff, respawn immediately
@@ -1586,7 +1664,8 @@ fn spawn_supervised(
                 }
                 watch = new_watch();
                 match spawn_once(&frpc_thread, watch.clone(), &proxy) {
-                    Ok(c) => {
+                    Ok((c, stop)) => {
+                        tail_stop = stop;
                         *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(c);
                     }
                     Err(e) => {
@@ -1797,15 +1876,19 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
     }
 }
 
-/// Spawn a single `frpc -c <config>` child, redirecting stdout+stderr
-/// into the append-mode log. When a `watch` is given (multi-relay mode),
-/// every line is ALSO fed to the mid-session watchdog — a tee, so the
-/// `~/.k2/frpc.log` contract is untouched. Returns the child handle.
+/// Spawn a single `frpc -c <config>` child that writes stdout+stderr
+/// straight into the append-mode `~/.k2/frpc.log` (no pipe: a pipe would
+/// kill frpc with `SIGPIPE` once this daemon exits — runtime stage H), in
+/// its own session. A tail thread feeds every new line to the mid-session
+/// watchdog (multi-relay) and the proxy-registration tracker, so the
+/// `~/.k2/frpc.log` contract is untouched. Records `frpc.pid` for the next
+/// daemon. Returns the child and its tail's stop flag.
 fn spawn_once(
     frpc: &Path,
     watch: Option<Arc<SessionWatch>>,
     proxy: &Arc<ProxyRegistration>,
-) -> Result<Child, String> {
+) -> Result<(FrpcProc, Arc<AtomicBool>), String> {
+    crate::handoff_state::guard()?;
     let cfg_path = frpc_config_path();
     // A new run: not registered until this child logs success.
     let run = proxy.begin_run();
@@ -1813,12 +1896,28 @@ fn spawn_once(
     let log_err = log
         .try_clone()
         .map_err(|e| format!("clone log handle: {e}"))?;
+    let offset = frpc_proc::log_len(&frpc_log_path());
     let mut cmd = Command::new(frpc);
     cmd.arg("-c")
         .arg(&cfg_path)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+    // Its own session: never in the daemon's process group or session, so
+    // a signal to the daemon's group (or a terminal hangup) misses it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     // frpc is a console-subsystem binary; without this, each tunnel start
     // flashes (or leaves) a black cmd window on the Windows desktop.
     #[cfg(windows)]
@@ -1827,43 +1926,60 @@ fn spawn_once(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("spawn frpc ({}): {e}", frpc.display()))?;
-
-    // Pump stdout/stderr to the log on detached threads so the pipes
-    // never fill and block the child. We do NOT log the rendered config
-    // or token — only frpc's own output (which never echoes the meta).
-    if let Some(out) = child.stdout.take() {
-        pump(out, log, watch.clone(), (proxy.clone(), run));
+    let pid = child.id() as i32;
+    if let Some(identity) = frpc_proc::proc_identity(pid) {
+        frpc_proc::write_pid_record(&frpc_proc::PidRecord {
+            pid,
+            identity,
+            cfg: cfg_path.clone(),
+            log_offset: offset,
+        });
     }
-    if let Some(err) = child.stderr.take() {
-        pump(err, log_err, watch, (proxy.clone(), run));
-    }
-    Ok(child)
+    let stop = Arc::new(AtomicBool::new(false));
+    tail_run(offset, pid, stop.clone(), watch, (proxy.clone(), run));
+    Ok((FrpcProc::Spawned(child), stop))
 }
 
-fn pump(
-    reader: impl std::io::Read + Send + 'static,
-    mut sink: std::fs::File,
+/// Supervise an frpc the previous daemon left running (stage H). Replays
+/// the run's log so far into the proxy-registration tracker (its
+/// `start proxy success` line was written before this daemon existed),
+/// then tails new lines as for a spawned child. Old lines never reach the
+/// watchdog: they carry no time this daemon can trust.
+fn adopt_once(
+    rec: &frpc_proc::PidRecord,
+    watch: Option<Arc<SessionWatch>>,
+    proxy: &Arc<ProxyRegistration>,
+) -> (FrpcProc, Arc<AtomicBool>) {
+    let run = proxy.begin_run();
+    let log = frpc_log_path();
+    let now = frpc_proc::log_len(&log);
+    if let Ok(bytes) = std::fs::read(&log) {
+        let from = (rec.log_offset as usize).min(bytes.len());
+        let to = (now as usize).min(bytes.len()).max(from);
+        for line in String::from_utf8_lossy(&bytes[from..to]).lines() {
+            proxy.observe_line(run, line);
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    tail_run(now, rec.pid, stop.clone(), watch, (proxy.clone(), run));
+    (FrpcProc::Adopted { pid: rec.pid }, stop)
+}
+
+fn tail_run(
+    offset: u64,
+    pid: i32,
+    stop: Arc<AtomicBool>,
     watch: Option<Arc<SessionWatch>>,
     proxy: (Arc<ProxyRegistration>, u64),
 ) {
-    use std::io::Write;
-    std::thread::spawn(move || {
-        let buf = BufReader::new(reader);
-        for line in buf.lines() {
-            match line {
-                Ok(l) => {
-                    let _ = writeln!(sink, "{l}");
-                    if let Some(w) = &watch {
-                        w.observe_line(&l);
-                    }
-                    proxy.0.observe_line(proxy.1, &l);
-                }
-                Err(_) => break,
-            }
+    frpc_proc::spawn_tail(frpc_log_path(), offset, pid, stop, move |l| {
+        if let Some(w) = &watch {
+            w.observe_line(l);
         }
+        proxy.0.observe_line(proxy.1, l);
     });
 }
 
@@ -2826,6 +2942,134 @@ mod tests {
                 clean,
                 "solo stop must leave no process matching `{pattern}`"
             );
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// A long-lived frpc stand-in that registers its proxy, never `exec`s
+    /// (its argv stays `<sh> <…/frpc> -c <cfg>`), and logs straight into
+    /// the file the connector hands it.
+    fn registering_frpc(dir: &Path) -> PathBuf {
+        let script = dir.join("frpc");
+        crate::test_env::write_executable(
+            &script,
+            "#!/bin/sh\n\
+             echo '[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success'\n\
+             while :; do sleep 1; done\n",
+        );
+        script
+    }
+
+    /// Simulate the daemon process going away after a hand-off: the
+    /// supervisor lets go (no kill), and the connector singleton is
+    /// forgotten as a fresh daemon would have it.
+    fn hand_off_and_forget() -> i32 {
+        let pid = detach_for_handoff().expect("a live frpc to hand off");
+        // The supervisor polls every second; give it time to let go.
+        std::thread::sleep(SUPERVISE_POLL * 2);
+        *state().lock().unwrap_or_else(|p| p.into_inner()) = None;
+        DETACHED.store(false, Ordering::SeqCst);
+        pid
+    }
+
+    /// Runtime stage H (AR3/K37): a new daemon adopts the frpc the previous
+    /// one left running — same pid, no reap, registration recovered from
+    /// the log — and a later stop() still kills it.
+    #[test]
+    fn a_restarted_daemon_adopts_the_running_frpc() {
+        with_temp_home(|| {
+            let dir = crate::test_env::unique_temp_path("adopt-frpc");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = registering_frpc(&dir);
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46124)));
+            let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+
+            start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !proxy_registered() {
+                assert!(Instant::now() < deadline, "registration line never seen");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let rec = frpc_proc::read_pid_record(&frpc_config_path()).expect("pid record");
+
+            let pid = hand_off_and_forget();
+            assert_eq!(pid, rec.pid);
+            assert!(frpc_proc::pid_alive(pid), "hand-off must leave frpc running");
+            assert!(!status().running, "the forgotten connector reports stopped");
+
+            let st = start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("adopting start");
+            assert!(st.running);
+            assert_eq!(
+                frpc_proc::read_pid_record(&frpc_config_path()).expect("record").pid,
+                pid,
+                "the same frpc is supervised — no respawn"
+            );
+            assert!(frpc_proc::pid_alive(pid), "adoption must not reap it");
+            assert!(
+                proxy_registered(),
+                "the run's `start proxy success` line was replayed from the log"
+            );
+            let log = std::fs::read_to_string(frpc_log_path()).expect("log");
+            assert_eq!(
+                log.matches("start proxy success").count(),
+                1,
+                "exactly one frpc ever ran:\n{log}"
+            );
+
+            stop().expect("stop");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while frpc_proc::pid_alive(pid) {
+                assert!(Instant::now() < deadline, "stop() must kill the adopted frpc");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(
+                frpc_proc::read_pid_record(&frpc_config_path()).is_none(),
+                "a stopped tunnel leaves nothing to adopt"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// A changed config (here: a moved `localPort`) is never adopted: the
+    /// old frpc is reaped and a fresh one dials with the new config.
+    #[test]
+    fn a_changed_config_is_not_adopted() {
+        with_temp_home(|| {
+            let dir = crate::test_env::unique_temp_path("adopt-frpc-changed");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = registering_frpc(&dir);
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46124)));
+            let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+            start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
+            let old = hand_off_and_forget();
+
+            // The ingress seam is first-write-wins, so move the port by
+            // editing what the rendered config must match: a different
+            // subdomain renders a different proxy name.
+            config::update(|c| c.subdomain = "rosson2".to_string()).expect("edit config");
+            start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("fresh start");
+            let new = frpc_proc::read_pid_record(&frpc_config_path()).expect("record").pid;
+            assert_ne!(new, old, "a changed config must spawn a fresh frpc");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while frpc_proc::pid_alive(old) {
+                assert!(Instant::now() < deadline, "the stale frpc must be reaped");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            stop().expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }

@@ -6806,10 +6806,132 @@ EOF
     _validate_print "$as_json" "$raw" "${name:-${dir:-this workspace}}"
 }
 
+# ── App runtime (prd-k2-app-runtime-v1 stage 1) ─────────────────────
+# k2 app build/validate (S6), deploy/rollback/stop/start/restart/install
+# (S7), list/inspect/history/logs/errors/uninstall (S8). Preview only
+# (K2_APPS=1 or Settings appsPreview). Exit codes: 3 infra/permission,
+# 2 bad usage or a pending state, 1 a failed check (validate errors, a
+# failed health gate), 0 ok.
+
+_app_rt_usage() {
+    cat <<'EOF'
+k2 app — host Apps on this box (preview: K2_APPS=1 or Settings appsPreview)
+
+Make and ship:
+  k2 app validate <folder|seed> [--types] [--json]
+                                       Check manifest.json and the K2 contract.
+                                       --types also runs the TypeScript checker
+                                       (its errors block).
+  k2 app build <folder> [--types] [--json]
+                                       Store the folder as an immutable Seed
+                                       and print its hash. Deploys nothing.
+
+Read `k2 study apps` first. Guests, roles and tokens: k2 app user|role|grant|token.
+EOF
+}
+
+# POST a JSON body to an App route; on a refusal print it and exit.
+# The body lands in _CP_BODY, the status in _CP_STATUS.
+_app_rt_post() {
+    local path="$1" body="$2" raw
+    raw="$(_compute_send POST "$path" "$body")"
+    _compute_split "$raw"
+}
+
+# Print a validate report (stdin = {report:{…}} or {error:{report}}).
+_app_rt_report() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("report") or (v.get("error") or {}).get("report") or {}
+for e in r.get("errors", []):
+    at = (" (" + e["at"] + ")") if e.get("at") else ""
+    print("error   %s%s: %s" % (e.get("code", ""), at, e.get("message", "")))
+for w in r.get("warnings", []):
+    at = (" (" + w["at"] + ")") if w.get("at") else ""
+    print("warning %s%s: %s" % (w.get("code", ""), at, w.get("message", "")))
+checks = ", ".join(r.get("checks", []))
+print(("ok" if r.get("ok") else "FAILED") + (" — checks: " + checks if checks else ""))
+'
+}
+
+_app_rt_abs() {
+    local p="$1"
+    if [ -d "$p" ]; then (cd "$p" && pwd -P); else printf '%s' "$p"; fi
+}
+
+cmd_app_validate() {
+    local target="" types=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --types) types=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) target="$1"; shift ;;
+        esac
+    done
+    [ -z "$target" ] && { echo "usage: k2 app validate <folder|seed> [--types] [--json]" >&2; exit 2; }
+    local body
+    if [ -d "$target" ]; then
+        body="$(_compute_json K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_types_b="$types")"
+    else
+        body="$(_compute_json K2_CJ_seed="$target" K2_CJ_types_b="$types")"
+    fi
+    _app_rt_post /cli/app/validate "$body"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | _app_rt_report
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") else 1)'
+}
+
+cmd_app_build() {
+    local folder="" types=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --types) types=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) folder="$1"; shift ;;
+        esac
+    done
+    [ -z "$folder" ] && { echo "usage: k2 app build <folder> [--types] [--json]" >&2; exit 2; }
+    [ -d "$folder" ] || { echo "k2 app build: $folder is not a folder" >&2; exit 2; }
+    _app_rt_post /cli/app/build "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_types_b="$types")"
+    if [ "$_CP_STATUS" = "422" ]; then
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_rt_report >&2; fi
+        exit 1
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+        return 0
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v["seed"]
+print("Seed %s" % s["hash"])
+print("  %s %s  %s files, %s bytes%s" % (s["seedId"], s.get("version") or "", v.get("entries"), s["sizeBytes"],
+      "  (already stored)" if v.get("reused") else ""))
+if s.get("sourceRef"):
+    print("  commit %s" % s["sourceRef"])
+for w in (s.get("report") or {}).get("warnings", []):
+    print("  warning %s: %s" % (w.get("code", ""), w.get("message", "")))
+print("Deploy it: k2 app deploy <app-id> %s" % s["hash"][:12])
+'
+}
+
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 cmd_app() {
     case "${1:-}" in
+        validate) shift; cmd_app_validate "$@" ;;
+        build) shift; cmd_app_build "$@" ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"

@@ -5,6 +5,8 @@
 
 import { useEffect } from 'react'
 import { DialogFrame, DialogScrim } from '@/components/ui'
+import type { ServerScope } from '@/kessel/server-scope'
+import { AppDeploys, APP_CMD_SENTINEL } from './AppDeploys'
 import {
   isServiceHealthy,
   serviceKindLabel,
@@ -18,6 +20,9 @@ interface PublishedServiceDetailsModalProps {
   service: PublishedService
   hostLabel: string
   onClose: () => void
+  /** The service's server. With it, an App row (`cmd === '(app)'`) shows
+   *  its deploy history and Roll back (App runtime S8). */
+  scope?: ServerScope
 }
 
 export interface PublishedByoDetails {
@@ -57,6 +62,7 @@ export function PublishedServiceDetailsModal({
   service,
   hostLabel,
   onClose,
+  scope,
 }: PublishedServiceDetailsModalProps): React.JSX.Element {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
@@ -143,6 +149,7 @@ export function PublishedServiceDetailsModal({
           <Field label="Expose">{dash(service.expose)}</Field>
           <Field label="Kind">{serviceKindLabel(service)}</Field>
           <Field label="Host">{dash(hostLabel)}</Field>
+          {scope && service.cmd === APP_CMD_SENTINEL ? <AppDeploys scope={scope} app={service.name} /> : null}
         </div>
       </DialogFrame>
     </>

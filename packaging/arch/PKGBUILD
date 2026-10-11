@@ -137,6 +137,9 @@ build() {
     # Never `--features airgap` (O12).
     cargo build --release -p k2-daemon --bin k2-daemon
     assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR}/release/k2-daemon"
+    # Compute nodes: "Make this computer a compute node" installs from
+    # this binary (k2-node setup copies it to /usr/local/libexec as root).
+    cargo build --release -p k2-node --bin k2-node
 }
 
 package() {
@@ -146,6 +149,9 @@ package() {
 
     install -Dm755 "${tree}/cli/k2" "${pkgdir}/usr/bin/k2"
     install -Dm755 "${target}/release/k2-daemon" "${pkgdir}/usr/bin/k2-daemon"
+    # Not enabled: the owner turns this machine into a node from Settings →
+    # Compute or `k2 compute local enable` (root once, via k2-node setup).
+    install -Dm755 "${target}/release/k2-node" "${pkgdir}/usr/bin/k2-node"
 
     # O14: PATH k2 is the CLI. GUI is k2-gui even if the crate bin is still `k2`
     # (Darwin Contents/MacOS/k2 must not move).

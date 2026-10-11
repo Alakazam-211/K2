@@ -71,7 +71,9 @@ require_mail_oauth_build_env
 
 echo "package-daemon-deb: building k2-daemon v$VERSION ($ARCH, release)"
 cargo build --release -p k2-daemon --bin k2-daemon
+cargo build --release -p k2-node --bin k2-node
 BIN="${CARGO_TARGET_DIR:-target}/release/k2-daemon"
+NODE_BIN="${CARGO_TARGET_DIR:-target}/release/k2-node"
 [ -x "$BIN" ] || { echo "package-daemon-deb: FATAL — $BIN missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "$BIN"
 
@@ -80,6 +82,8 @@ trap 'rm -rf "$STAGE"' EXIT
 PKGROOT="$STAGE/k2-daemon_${VERSION}_${ARCH}"
 
 install -D -m 0755 "$BIN" "$PKGROOT/usr/bin/k2-daemon"
+# Compute nodes: installed, never enabled (k2 compute local enable).
+install -D -m 0755 "$NODE_BIN" "$PKGROOT/usr/bin/k2-node"
 install -d "$PKGROOT/usr/lib/systemd/user"
 cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon.service" <<'UNIT'
 # k2-daemon systemd USER unit — Linux twin of the macOS launchd agent

@@ -456,6 +456,18 @@ fi
 cp "$POWER_HELPER_SRC" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-power-helper"
 echo "  k2-power-helper copied into K2.app/Contents/MacOS/"
+# Compute nodes (polish v1): k2-node rides inside K2.app so Settings →
+# Compute → "Make this computer a compute node" installs it with one
+# admin prompt (k2-node setup copies it to /Library/Application Support/
+# K2/node). Separate crate: it never links k2-core.
+cargo build --release -p k2-node --bin k2-node
+NODE_SRC="target/release/k2-node"
+if [ ! -x "$NODE_SRC" ]; then
+    echo "  FATAL: k2-node not at $NODE_SRC after cargo build" >&2
+    exit 1
+fi
+cp "$NODE_SRC" "target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
+echo "  k2-node copied into K2.app/Contents/MacOS/"
 
 # Menu-bar helper. Staged out of the bundle to ~/.k2/bin on first GUI
 # open (same shape as frpc). Not executed from Contents/MacOS.
@@ -501,6 +513,9 @@ codesign --force --options runtime --timestamp \
 codesign --force --options runtime --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2-power-helper"
+codesign --force --options runtime --timestamp \
+    --sign "$SIGNING_IDENTITY" \
+    "target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
 # frpc tunnel sidecar (Tauri externalBin → Contents/MacOS/frpc). Re-sign
 # with hardened runtime so the binary the app stages to ~/.k2/bin/frpc
 # is notarization-covered and runs without a Gatekeeper quarantine block.

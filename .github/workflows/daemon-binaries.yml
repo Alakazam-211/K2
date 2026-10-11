@@ -85,10 +85,12 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             asset: k2-daemon-linux-x86_64
             root_asset: k2-root-helper-linux-x86_64
+            node_asset: k2-node-linux-x86_64
             cross: false
           - target: aarch64-unknown-linux-gnu
             asset: k2-daemon-linux-aarch64
             root_asset: k2-root-helper-linux-aarch64
+            node_asset: k2-node-linux-aarch64
             cross: true
 
     steps:
@@ -154,7 +156,7 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Build k2-daemon + k2-root-helper (release, standalone bins)
+      - name: Build k2-daemon + k2-node + k2-root-helper (release, standalone bins)
         env:
           # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
@@ -167,7 +169,8 @@ jobs:
           require_mail_oauth_build_env
           cargo build --release \
             --target ${{ matrix.target }} \
-            --bin k2-daemon
+            --bin k2-daemon \
+            --bin k2-node
           # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
           TARGET_DIR="${CARGO_TARGET_DIR:-target}"
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
@@ -183,7 +186,13 @@ jobs:
             echo "root helper was built with test-keys — refusing" >&2; exit 1
           fi
           test "$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.root_asset }}" | wc -l)" = 1
-          file "${{ matrix.asset }}" "${{ matrix.root_asset }}"
+          # Compute nodes (polish v1): k2-node ships beside the daemon so
+          # `k2 compute local enable` never needs a hand-copied binary. The
+          # daemon downloads k2-node-linux-<arch> for its own version and
+          # checks the .sig with the updater key before anything runs it.
+          cp "$TARGET_DIR/${{ matrix.target }}/release/k2-node" \
+             "${{ matrix.node_asset }}"
+          file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Sign with the Tauri updater key via the tauri CLI signer (produces a
@@ -199,7 +208,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          for f in "${{ matrix.asset }}"; do
+          for f in "${{ matrix.asset }}" "${{ matrix.node_asset }}"; do
             cargo tauri signer sign \
               --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
               --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
@@ -224,6 +233,7 @@ jobs:
           sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
           # sign-root-helper.sh checks the downloaded asset against this.
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
+          sha256sum "${{ matrix.node_asset }}" | tee "${{ matrix.node_asset }}.sha256"
 
       # Attach the binaries + .sig to the release for this tag. The daemon
       # manifest (daemon-latest.json) is produced by release.sh; the daemon
@@ -238,6 +248,9 @@ jobs:
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sig" \
+            "${{ matrix.node_asset }}" \
+            "${{ matrix.node_asset }}.sig" \
+            "${{ matrix.node_asset }}.sha256" \
             "${{ matrix.root_asset }}" \
             "${{ matrix.root_asset }}.sha256" \
             --clobber

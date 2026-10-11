@@ -72,6 +72,11 @@ k2_daemon_helper_verify "$APP" || exit 1
 [ -x "target/release/k2-power-helper" ] || { echo "FATAL: k2-power-helper missing after build" >&2; exit 1; }
 cp "target/release/k2-power-helper" "$APP/Contents/MacOS/k2-power-helper"
 echo "  k2-power-helper copied into the bundle."
+# Compute nodes: k2-node inside K2.app (Settings → Compute installs it).
+cargo build --release -p k2-node --bin k2-node || { echo "FATAL: k2-node build failed" >&2; exit 1; }
+[ -x "target/release/k2-node" ] || { echo "FATAL: k2-node missing after build" >&2; exit 1; }
+cp "target/release/k2-node" "$APP/Contents/MacOS/k2-node"
+echo "  k2-node copied into the bundle."
 
 echo ""; echo "Step 2b: bundling k2-menubar helper..."
 cargo build --release -p k2-menubar || { echo "FATAL: k2-menubar build failed" >&2; exit 1; }
@@ -88,6 +93,7 @@ DAEMON_ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
 k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
+codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-node"
 FRPC_BIN="$APP/Contents/MacOS/frpc"
 if [ -x "$FRPC_BIN" ]; then
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$FRPC_BIN"

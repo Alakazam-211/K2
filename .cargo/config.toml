@@ -1,0 +1,6 @@
+# CMake 4 dropped compatibility with cmake_minimum_required < 3.5, which some
+# vendored C deps (prost-build's protobuf, llama.cpp) still declare. Without
+# this, fresh builds fail on Macs that have CMake 4 (z3mbpZ, z3mbp).
+# Harmless on older CMake and on Linux.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

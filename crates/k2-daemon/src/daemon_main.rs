@@ -369,6 +369,10 @@ async fn async_main() {
     // Node admin: offline alerts and request expiry, headless (60 s).
     crate::compute_admin::spawn_watch();
     k2_core::deploy::set_enabled(k2_core::app_settings::load().apps_preview);
+    if k2_core::deploy::enabled() {
+        // App runtime preview: re-adopt running Apps, open front ports.
+        crate::apps::supervisor::ensure_started();
+    }
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API

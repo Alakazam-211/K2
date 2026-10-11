@@ -27,8 +27,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod audit;
+pub mod backoff;
 pub mod build;
+pub mod engine;
 pub mod framing;
+pub mod health;
 pub mod manifest;
 pub mod seed;
 pub mod store;
@@ -189,7 +192,7 @@ pub const RESERVED_APP_IDS: &[&str] = &[
     "list", "inspect", "history", "logs", "errors", "top", "audit", "stop", "start", "restart", "exec",
     "shell", "suspend", "resume", "soak", "guest", "config", "approvals", "approve", "deny", "adopt",
     "transfer", "pack", "access", "doctor", "call", "user", "users", "role", "roles", "grant", "grants",
-    "token", "tokens", "hydra", "front-door", "help", "verbs", "box",
+    "token", "tokens", "hydra", "front-door", "help", "verbs", "box", "deployment", "status",
 ];
 
 /// Core `k2` nouns an App id can't take either (§8.4).
@@ -218,10 +221,41 @@ pub fn app_id_problem(id: &str) -> Option<(&'static str, String)> {
     None
 }
 
+/// A per-App memory limit (`k2 app config --memory 8G|512M|none`). `none`
+/// (the default) = no per-App limit: the user decides App memory (Rosson
+/// 2026-10-10); stage R keeps a protected reserve for K2 and the cores.
+pub fn parse_memory(raw: &str) -> Result<Option<i64>, String> {
+    let s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let (num, mult) = match s.char_indices().last() {
+        Some((i, 'G' | 'g')) => (&s[..i], 1i64 << 30),
+        Some((i, 'M' | 'm')) => (&s[..i], 1i64 << 20),
+        _ => (s, 1i64),
+    };
+    let n: i64 = num.trim().parse().map_err(|_| format!("'{raw}' is not a size; use 8G, 512M or none"))?;
+    let bytes = n.checked_mul(mult).ok_or_else(|| format!("'{raw}' is too large"))?;
+    if bytes < 32 << 20 {
+        return Err(format!("'{raw}' is below 32M; no App runs in that"));
+    }
+    Ok(Some(bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_env::EnvVar;
+
+    #[test]
+    fn memory_limit_parse_defaults_to_none() {
+        assert_eq!(parse_memory("none"), Ok(None));
+        assert_eq!(parse_memory(""), Ok(None));
+        assert_eq!(parse_memory("8G"), Ok(Some(8 << 30)));
+        assert_eq!(parse_memory("512m"), Ok(Some(512 << 20)));
+        assert!(parse_memory("1M").is_err());
+        assert!(parse_memory("lots").is_err());
+    }
 
     #[test]
     fn preview_flag_env_and_setting() {

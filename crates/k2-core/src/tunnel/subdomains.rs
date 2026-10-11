@@ -157,6 +157,24 @@ impl SubdomainMap {
     ///   * anything else (incl. an empty host, or a host outside this user's
     ///     subdomain space) → [`Route::Daemon`] (fail safe — never strand the
     ///     daemon's own traffic over a routing-map miss)
+    /// The nested label a host names when it routes to a configured target
+    /// (`jim` for `jim.<primary>.k2.dev`). `None` for the primary, unknown
+    /// labels and hosts outside this account. Used by the App runtime's
+    /// daemon-local route override (AR4): only a label the control plane
+    /// already routes here can be overridden, so entitlement stays there.
+    pub fn nested_label(&self, host: &str) -> Option<String> {
+        if !matches!(self.route_for_host(host), Route::Internal(_)) {
+            return None;
+        }
+        let host = host.trim().to_ascii_lowercase();
+        let host = host.split(':').next().unwrap_or("").trim_end_matches('.').to_string();
+        if self.primary.is_empty() {
+            return Some(host);
+        }
+        let suffix = format!(".{}.{}", self.primary, SUBDOMAIN_HOST);
+        host.strip_suffix(&suffix).map(str::to_string)
+    }
+
     pub fn route_for_host(&self, host: &str) -> Route {
         let host = host.trim().to_ascii_lowercase();
         // Drop any port suffix (`host:443`).
@@ -646,6 +664,18 @@ mod tests {
             primary,
             ..SubdomainRow::default()
         }
+    }
+
+    #[test]
+    fn nested_label_only_for_configured_targets() {
+        let map = SubdomainMap::from_rows(
+            "rosson",
+            vec![row("rosson", None, true), row("jim", Some("127.0.0.1:40000"), false)],
+        );
+        assert_eq!(map.nested_label("JIM.rosson.k2.dev:443").as_deref(), Some("jim"));
+        assert_eq!(map.nested_label("rosson.k2.dev"), None, "primary is never an App");
+        assert_eq!(map.nested_label("nope.rosson.k2.dev"), None, "unknown label");
+        assert_eq!(map.nested_label("jim.other.k2.dev"), None);
     }
 
     #[test]

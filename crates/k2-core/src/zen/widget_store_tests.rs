@@ -392,6 +392,7 @@ fn runtime_errors_are_logged_per_version_and_validate_loops_on_them() {
     assert!(msgs[1].starts_with("runtime error #2: ReferenceError"), "{v}");
     let logged = f.widget_errors("agent-arcade", None).expect("errors");
     assert!(logged["errors"][0]["suggestion"].as_str().is_some_and(|s| s.contains("<script src> order")), "{logged}");
+    assert!(v["errors"][1]["suggestion"].as_str().is_some_and(|s| s.contains("<script src> order")), "{v}");
     let (all_errors, _, _) = f.validate_all_widgets();
     assert!(all_errors.iter().any(|d| d.message.contains("runtime error")), "{all_errors:?}");
 

@@ -490,11 +490,42 @@ impl ZenFiles {
         };
         errors.extend(c.errors.iter().cloned());
         warnings.extend(c.warnings.iter().cloned());
+        // Runtime (decision-k2-runtime-v1 stage 0 (d), (e)): the version on
+        // disk is the one an agent just saved. Its runtime errors fail
+        // validate; "pending" until a Zen window has run it, when it's placed.
+        let mut runtime = J::Null;
+        let mut status = if errors.is_empty() { "ok" } else { "failed" };
+        if let (Ok(WidgetRef::User(name)), true, Some(b)) = (parse_widget_ref(widget), errors.is_empty(), c.bundle.as_ref()) {
+            let s = self.widget_run_summary(&name, &b.hash);
+            let placed = self.widget_is_placed(&name);
+            errors.extend(runtime_diagnostics(&name, &s));
+            status = if s.errors > 0 {
+                "failed"
+            } else if placed && !s.ran {
+                "pending"
+            } else {
+                "ok"
+            };
+            runtime = json!({
+                "hash": b.hash,
+                "errorsSinceSave": s.errors,
+                "ran": s.ran,
+                "placed": placed,
+                "note": match status {
+                    "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors",
+                    "failed" => "these runtime errors happened in the version on disk now; fix, save and validate again",
+                    _ if !placed => "not placed in any Garden: it runs once a Garden places it",
+                    _ => "ran in a Zen window with no runtime errors",
+                },
+            });
+        }
         Ok(json!({
             "ok": errors.is_empty(),
+            "status": status,
             "errors": errors,
             "warnings": warnings,
             "files": [widget_label(widget)],
+            "runtime": runtime,
         }))
     }
 
@@ -505,6 +536,11 @@ impl ZenFiles {
         let mut labels = Vec::new();
         for name in self.widget_names() {
             if let Some((c, e, w, _)) = self.check_now(&name) {
+                if e.is_empty() && c.errors.is_empty() {
+                    if let Some(b) = c.bundle.as_ref() {
+                        errors.extend(runtime_diagnostics(&name, &self.widget_run_summary(&name, &b.hash)));
+                    }
+                }
                 errors.extend(e);
                 errors.extend(c.errors.iter().cloned());
                 warnings.extend(w);
@@ -803,6 +839,35 @@ impl ZenFiles {
         Ok(json!({ "ok": true, "widgets": out }))
     }
 }
+
+/// "N runtime errors since your last save" as validate errors: one line
+/// per distinct message (newest three), placed at the widget's folder.
+fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
+    if s.errors == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![Diagnostic {
+        suggestion: Some(format!("read them with k2 zen widget errors {name}; fix, save and validate again")),
+        file: widget_label(name),
+        line: 1,
+        col: 1,
+        message: format!("{} runtime error(s) since your last save", s.errors),
+    }];
+    for r in &s.last {
+        out.push(Diagnostic {
+            suggestion: r["suggestion"].as_str().map(str::to_string),
+            file: widget_label(name),
+            line: 1,
+            col: 1,
+            message: format!("runtime error #{}: {}", r["seq"], r["message"].as_str().unwrap_or("error")),
+        });
+    }
+    out
+}
+
+// Runtime errors from widget frames (decision-k2-runtime-v1 stage 0 (d)).
+#[path = "widget_runs.rs"]
+pub mod runs;
 
 #[cfg(test)]
 #[path = "widget_store_tests.rs"]

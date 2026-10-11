@@ -72,6 +72,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/widget/new",
     "/cli/zen/widget/pause",
     "/cli/zen/widget/resume",
+    "/cli/zen/widget/run",
 ];
 
 /// The GET rows (G45, UW35, UWB23). `/cli/zen/lib/file` is B3's.
@@ -89,6 +90,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/theme/list",
     "/cli/zen/validate",
     "/cli/zen/widget/bundle",
+    "/cli/zen/widget/errors",
     "/cli/zen/widgets",
 ];
 
@@ -473,6 +475,38 @@ fn handle_widget_pause(body: &[u8], caller: &Caller, ingress: &str) -> Result<J,
     audit("zen.widget.pause", caller, format!("{id}/{} widget={widget} reason=runaway", b.placement), ingress);
     let changed = refresh_and_emit()?;
     Ok(json!({ "ok": true, "paused": pause, "changed": changed }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunBody {
+    widget: String,
+    hash: String,
+    event: String,
+    message: Option<String>,
+    stack: Option<String>,
+}
+
+/// Error reports kept per widget per minute; the frame host already stops a
+/// widget at 20 a minute, this bounds the log against anything else.
+const RUN_ERRORS_PER_MINUTE: usize = 30;
+static RUN_ERRORS: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mutex::new(None);
+
+/// POST `/cli/zen/widget/run` (the renderer, decision-k2-runtime-v1 stage 0
+/// (d)): a frame's `ready` or uncaught error, for the bundle hash it ran.
+fn handle_widget_run(body: &[u8]) -> Result<J, ZenError> {
+    let b: RunBody = parse_body(body, "widget/run takes {widget, hash, event, message?, stack?}")?;
+    if b.event == "error" {
+        let now = std::time::Instant::now();
+        let mut g = RUN_ERRORS.lock().unwrap_or_else(|e| e.into_inner());
+        let seen = g.get_or_insert_with(HashMap::new).entry(b.widget.clone()).or_default();
+        seen.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(60));
+        if seen.len() >= RUN_ERRORS_PER_MINUTE {
+            return Ok(json!({ "ok": true, "logged": false, "dropped": true }));
+        }
+        seen.push(now);
+    }
+    files().record_widget_run(&b.widget, &b.hash, &b.event, b.message.as_deref(), b.stack.as_deref())
 }
 
 #[derive(Deserialize)]
@@ -938,6 +972,17 @@ pub fn handle(
             set_up(&f).and_then(|_| refresh_and_emit()).and_then(|_| handle_widget_bundle(params))
         }
         "/cli/zen/widget/new" => handle_widget_new(body),
+        "/cli/zen/widget/run" => handle_widget_run(body),
+        "/cli/zen/widget/errors" => match param(params, "widget") {
+            None => Err(ZenError::BadRequest("widget/errors needs widget=<name>".into())),
+            Some(w) => {
+                let since = match param(params, "since") {
+                    None => Ok(None),
+                    Some(s) => s.parse::<u64>().map(Some).map_err(|_| ZenError::BadRequest("since is a sequence number".into())),
+                };
+                since.and_then(|s| files().widget_errors(w, s))
+            }
+        },
         "/cli/zen/widget/pause" => handle_widget_pause(body, caller, ingress),
         "/cli/zen/widget/resume" => handle_widget_resume(body, caller, ingress),
         "/cli/zen/theme/list" => refuse_home(params).and_then(|_| files().theme_list(param(params, "garden"))),

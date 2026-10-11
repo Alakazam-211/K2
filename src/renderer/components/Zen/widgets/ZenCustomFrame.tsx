@@ -17,7 +17,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameHello } from '@/lib/zen/zen-custom-types'
-import { fetchZenWidgetBundle, pauseZenWidget, zenWidgetError, type ZenWidgetErrorCode } from '@/lib/zen/zen-widget-routes'
+import {
+  fetchZenWidgetBundle,
+  pauseZenWidget,
+  reportZenWidgetRun,
+  zenWidgetError,
+  type ZenWidgetErrorCode,
+} from '@/lib/zen/zen-widget-routes'
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
 import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
@@ -90,7 +96,7 @@ export function zenFrameThemeInfo(root: HTMLElement | null): {
   }
 }
 
-type Loaded = { html: string; nonce: string; prelude: string }
+type Loaded = { html: string; nonce: string; prelude: string; hash: string }
 
 export function ZenCustomFrame({
   widget,
@@ -104,6 +110,8 @@ export function ZenCustomFrame({
   onProblem(problem: ZenCustomLoadProblem): void
 }): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const loadedRef = useRef<Loaded | null>(null)
+  loadedRef.current = loaded
   const boxRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
   const hostRef = useRef<{ dispose(): void } | null>(null)
@@ -121,7 +129,7 @@ export function ZenCustomFrame({
       .then(([bundle, libs]) => {
         if (!live) return
         const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs })
-        setLoaded({ html: bundle.html, nonce: bundle.nonce, prelude })
+        setLoaded({ html: bundle.html, nonce: bundle.nonce, prelude, hash: bundle.hash })
       })
       .catch((err: unknown) => {
         if (!live) return
@@ -174,6 +182,15 @@ export function ZenCustomFrame({
       focused: () => zenFrameHasFocus(frameRef.current),
       onChord: (chord, frameFocused) => zenFrameChordGate.run(chord, frameFocused, Date.now(), ZEN_FRAME_CHORD_ACTIONS),
       onPointer: (down) => zenCanvasPointer(key, down),
+      // Runtime errors reach agents (decision-k2-runtime-v1 stage 0 (d)):
+      // logged by the daemon against the bundle hash this frame runs.
+      onReport: (r) => {
+        const hash = loadedRef.current?.hash
+        if (!hash) return
+        void reportZenWidgetRun({ widget: w.widget, hash, ...r }).catch((err: unknown) =>
+          console.warn('[zen] the widget runtime report failed:', err),
+        )
+      },
       makeLayer: (push) =>
         createZenCustomLayer({
           widget: () => widgetRef.current,

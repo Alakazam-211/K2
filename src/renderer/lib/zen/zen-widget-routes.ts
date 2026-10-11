@@ -7,6 +7,7 @@
 //   POST /cli/zen/widget/pause                 the runaway guard tripped
 //   POST /cli/zen/widget/resume                the person's Resume click
 //                                              (owner token only)
+//   POST /cli/zen/widget/run                   a frame's ready or uncaught error
 // Every body is parsed here. Errors carry a code the UI words.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -112,6 +113,27 @@ async function post(route: string, body: object): Promise<unknown> {
 /** The runaway guard tripped (R6): posting pauses in every window. */
 export async function pauseZenWidget(req: ZenWidgetPauseRequest): Promise<void> {
   await post('zen/widget/pause', req)
+}
+
+/** One frame's `ready` or uncaught error, for the bundle `hash` it ran
+ *  (decision-k2-runtime-v1 stage 0 (d)): the daemon logs it so an agent
+ *  sees it with `k2 zen widget errors <name>` and `k2 zen validate`.
+ *  User widgets only: K2's built-ins (`k2:…`) aren't logged. */
+export interface ZenWidgetRunReport {
+  widget: string
+  hash: string
+  event: 'ready' | 'error'
+  message?: string
+  stack?: string
+}
+
+export function zenWidgetRunLogged(widget: string): boolean {
+  return !widget.startsWith('k2:')
+}
+
+export async function reportZenWidgetRun(req: ZenWidgetRunReport): Promise<void> {
+  if (!zenWidgetRunLogged(req.widget)) return
+  await post('zen/widget/run', req)
 }
 
 /** "Paused: too many posts. Resume" (owner only). */

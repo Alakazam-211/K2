@@ -1019,9 +1019,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/theme/set", Member),
     get("/cli/zen/validate", Member),
     get("/cli/zen/widget/bundle", Member),
+    get("/cli/zen/widget/errors", Member),
     post("/cli/zen/widget/new", Member),
     post("/cli/zen/widget/pause", Member),
     post("/cli/zen/widget/resume", Member),
+    // A frame's ready / uncaught error, from the renderer (stage 0 (d)).
+    post("/cli/zen/widget/run", Member),
     get("/cli/zen/widgets", Member),
 ];
 

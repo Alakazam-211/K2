@@ -10,7 +10,8 @@
 //   - after ready, a ping every 5 s; three missed in a row → "stopped
 //     responding" (a frozen frame blocks the window's main thread, so the
 //     last resort is the shell's per-window watchdog, UW32, B3's);
-//   - uncaught errors and rejections are reported; 20 in a minute →
+//   - uncaught errors and rejections are reported (console, and `onReport`
+//     to the daemon's runtime log for `k2 zen widget errors`); 20 in a minute →
 //     "keeps failing";
 //   - a `{pointer: "down" | "up"}` (the runtime's report of a trusted
 //     primary-button press, for `k2.window.startDrag`) goes to `onPointer`,
@@ -44,11 +45,18 @@ export interface ZenFrameHostOptions {
   onChord(chord: unknown, frameFocused: boolean): void
   /** A trusted primary-button press went down (true) or up in the frame. */
   onPointer?(down: boolean): void
+  /** The frame's first `ready` and every uncaught error it reports, for
+   *  the daemon's runtime log (decision-k2-runtime-v1 stage 0 (d)): agents
+   *  read them with `k2 zen widget errors`. Never throws into the host. */
+  onReport?(report: ZenFrameReport): void
   /** The widget's name, for logs. */
   label: string
   now?: () => number
   channel?: () => MessageChannel
 }
+
+/** What the host passes to `onReport`. */
+export type ZenFrameReport = { event: 'ready' } | { event: 'error'; message: string; stack?: string }
 
 export interface ZenFrameHost {
   /** Ready seen (tests). */
@@ -73,6 +81,13 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
     if (!disposed) port.postMessage(msg)
   }
   const layer = opts.makeLayer((sub, value) => post({ sub, value }))
+  const report = (r: ZenFrameReport): void => {
+    try {
+      opts.onReport?.(r)
+    } catch (err) {
+      console.warn(`[zen] widget ${opts.label}: the runtime report failed:`, err)
+    }
+  }
 
   const dispose = (): void => {
     if (disposed) return
@@ -113,6 +128,7 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       ready = true
       clearTimeout(readyTimer)
       pingTimer = setInterval(ping, ZEN_FRAME_PING_MS)
+      report({ event: 'ready' })
       return
     }
     if (typeof m.pong === 'number') {
@@ -125,7 +141,13 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       errors.push(t)
       while (errors.length > 0 && t - errors[0] > 60_000) errors.shift()
       const msg = (m.error as { message?: unknown }).message
+      const stack = (m.error as { stack?: unknown }).stack
       console.warn(`[zen] widget ${opts.label}: ${typeof msg === 'string' ? msg.slice(0, 300) : 'error'}`)
+      report({
+        event: 'error',
+        message: typeof msg === 'string' ? msg.slice(0, 500) : 'error',
+        ...(typeof stack === 'string' && stack ? { stack: stack.slice(0, 2000) } : {}),
+      })
       if (errors.length >= ZEN_FRAME_ERRORS_PER_MINUTE) stop('failing')
       return
     }

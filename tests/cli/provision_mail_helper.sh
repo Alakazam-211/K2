@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Hermetic test for step 7a of scripts/provision-k2-server.sh (the hosted-mail
-# root helper). provision-k2-server.sh has no dry-run mode and must never run
-# for real here, so this test:
+# Hermetic test for step 7a (the root helper) and 7b (db sidecar bake) of
+# scripts/provision-k2-server.sh. provision-k2-server.sh has no dry-run mode
+# and must never run for real here, so this test:
 #   1. checks the script's shape statically (the step exists, sits after the
-#      daemon install and before the bake exit, adds no sudo policy), and
+#      daemon install and before the bake exit, adds no sudo policy, 7b no
+#      longer installs k2-pg-helper or writes its sudoers), and
 #   2. cuts the 7a block out of the script and runs it alone against a temp
-#      K2_INSTALL_ROOT, with a fake daemon, a fake install-mail-helper.sh and
+#      K2_INSTALL_ROOT, with a fake daemon, a fake install-root-helper.sh and
 #      PATH shims for uname/stat/visudo/timeout. No root, no network.
 # Run with: bash tests/cli/provision_mail_helper.sh
 set -euo pipefail
@@ -23,21 +24,29 @@ bash -n "$PROVISION" || fail "bash -n"
 ok "bash -n"
 line_of() { grep -n -- "$1" "$PROVISION" | head -n1 | cut -d: -f1; }
 L_DAEMON="$(line_of 'sh "$INSTALLER"')"
-L_MAIL="$(line_of '# ── 7a. mail root helper')"
+L_HELPER="$(line_of '# ── 7a. root helper')"
 L_BAKE_EXIT="$(line_of 'bake complete')"
-[ -n "$L_DAEMON" ] && [ -n "$L_MAIL" ] && [ -n "$L_BAKE_EXIT" ] || fail "markers not found"
-[ "$L_DAEMON" -lt "$L_MAIL" ] || fail "mail helper step must come after the daemon install"
-[ "$L_MAIL" -lt "$L_BAKE_EXIT" ] || fail "mail helper step must run before the bake exit (bake images get it too)"
+[ -n "$L_DAEMON" ] && [ -n "$L_HELPER" ] && [ -n "$L_BAKE_EXIT" ] || fail "markers not found"
+[ "$L_DAEMON" -lt "$L_HELPER" ] || fail "root helper step must come after the daemon install"
+[ "$L_HELPER" -lt "$L_BAKE_EXIT" ] || fail "root helper step must run before the bake exit (bake images get it too)"
 ok "step 7a runs after the daemon install and before the bake exit"
-BLOCK="$(sed -n '/^# ── 7a\. mail root helper/,/^# ── 7b\./p' "$PROVISION")"
-printf '%s' "$BLOCK" | grep -q 'install-mail-helper.sh' || fail "7a must use install-mail-helper.sh"
+BLOCK="$(sed -n '/^# ── 7a\. root helper/,/^# ── 7b\./p' "$PROVISION")"
+printf '%s' "$BLOCK" | grep -q 'install-root-helper.sh' || fail "7a must use install-root-helper.sh"
 printf '%s' "$BLOCK" | grep -q -- '--version "$DAEMON_VERSION"' || fail "7a must pass the daemon version"
-printf '%s' "$BLOCK" | grep -q 'releases/download/v${DAEMON_VERSION}/install-mail-helper.sh' \
+printf '%s' "$BLOCK" | grep -q 'releases/download/v${DAEMON_VERSION}/install-root-helper.sh' \
 	|| fail "7a must fetch the installer from the same-version release"
-ok "uses install-mail-helper.sh at the daemon's version"
+printf '%s' "$BLOCK" | grep -q -- '--unit "${K2_UNIT_NAME}.service" --scope system' \
+	|| fail "7a must name this unit + system scope for daemon.toml (RH15)"
+ok "uses install-root-helper.sh at the daemon's version, with this unit"
 if printf '%s' "$BLOCK" | grep -q 'NOPASSWD'; then fail "7a must not write sudo policy itself"; fi
-[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "1" ] || fail "provision must keep exactly one NOPASSWD line (k2-pg-helper)"
-ok "no new sudo policy in the provisioner"
+[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "0" ] || fail "the provisioner writes no sudo policy itself (the root installer does)"
+ok "no sudo policy in the provisioner"
+DB_BLOCK="$(sed -n '/^# ── 7b\./,/bake complete/p' "$PROVISION")"
+if printf '%s\n' "$DB_BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper|sudoers'; then
+	fail "7b must not install k2-pg-helper or write a sudoers file (RH11)"
+fi
+printf '%s' "$DB_BLOCK" | grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
+ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
 if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'hostmail|k2 dns|/cli/mail|/cli/dns'; then fail "7a must not enable mail or touch DNS"; fi
 ok "does not enable mail or touch DNS"
 # Root never executes the daemon user's binary: every line that runs the
@@ -57,7 +66,7 @@ if grep -Ev '^[[:space:]]*#' "$PROVISION" | grep -Eq '/tmp/k2-install'; then
 fi
 ok "no fixed /tmp installer paths"
 
-WORK="$(mktemp -d -t k2-provision-mail-helper-XXXXXX)"
+WORK="$(mktemp -d -t k2-provision-root-helper-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 SHIMS="$WORK/shims"
 mkdir -p "$SHIMS"
@@ -103,23 +112,24 @@ K2_HOME_T="$WORK/home/k2"
 mkdir -p "$K2_HOME_T/.local/bin"
 cat >"$K2_HOME_T/.local/bin/k2-daemon" <<SH
 #!/bin/sh
-# Record whether this ran through runuser (as the daemon user) or not.
 echo "\${SHIM_VIA_RUNUSER:-direct}" >>"$WORK/daemon-runs.log"
 [ "\$1" = "--version" ] && echo "k2-daemon \${FAKE_DAEMON_VERSION-0.45.0}"
 SH
 chmod +x "$K2_HOME_T/.local/bin/k2-daemon"
 SD="$WORK/scripts"
 mkdir -p "$SD"
-cat >"$SD/install-mail-helper.sh" <<SH
+cat >"$SD/install-root-helper.sh" <<SH
 #!/usr/bin/env bash
-# Fake installer: record argv, then either fail or lay down the two files.
+# Fake installer: record argv, then either fail or lay down the three files.
 echo "\$*" >>"$WORK/installer.log"
 [ "\${FAKE_INSTALL_RC:-0}" = "0" ] || { echo "fake installer failing" >&2; exit "\$FAKE_INSTALL_RC"; }
-mkdir -p "\$K2_INSTALL_ROOT/usr/local/libexec" "\$K2_INSTALL_ROOT/etc/sudoers.d"
-printf 'helper' >"\$K2_INSTALL_ROOT/usr/local/libexec/k2-mail-helper"
-chmod "\${FAKE_HELPER_MODE:-0755}" "\$K2_INSTALL_ROOT/usr/local/libexec/k2-mail-helper"
-printf 'k2 line' >"\$K2_INSTALL_ROOT/etc/sudoers.d/k2-mail-helper"
-chmod "\${FAKE_SUDOERS_MODE:-0440}" "\$K2_INSTALL_ROOT/etc/sudoers.d/k2-mail-helper"
+mkdir -p "\$K2_INSTALL_ROOT/usr/local/libexec" "\$K2_INSTALL_ROOT/etc/sudoers.d" "\$K2_INSTALL_ROOT/etc/k2-root-helper"
+printf 'helper' >"\$K2_INSTALL_ROOT/usr/local/libexec/k2-root-helper"
+chmod "\${FAKE_HELPER_MODE:-0755}" "\$K2_INSTALL_ROOT/usr/local/libexec/k2-root-helper"
+printf 'k2 line' >"\$K2_INSTALL_ROOT/etc/sudoers.d/k2-root-helper"
+chmod "\${FAKE_SUDOERS_MODE:-0440}" "\$K2_INSTALL_ROOT/etc/sudoers.d/k2-root-helper"
+printf '[[daemon]]' >"\$K2_INSTALL_ROOT/etc/k2-root-helper/daemon.toml"
+chmod "\${FAKE_TOML_MODE:-0644}" "\$K2_INSTALL_ROOT/etc/k2-root-helper/daemon.toml"
 SH
 
 STEP="$WORK/step.sh"
@@ -132,13 +142,12 @@ STEP="$WORK/step.sh"
 } >"$STEP"
 
 run_step() {
-	# run_step <dest-root>; sets out/rc. Extra env comes from the caller.
 	local dest="$1"
 	rm -f "$WORK/installer.log" "$WORK/visudo.log" "$WORK/runuser.log" "$WORK/daemon-runs.log"
 	set +e
 	out="$(PATH="$SHIMS:$PATH" K2_INSTALL_ROOT="$dest" K2_HOME="$K2_HOME_T" \
-		SCRIPT_DIR="$SD" K2_RUN_USER="${K2_RUN_USER:-k2}" K2_VERSION="${K2_VERSION-0.45.0}" \
-		RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
+		SCRIPT_DIR="$SD" K2_RUN_USER="${K2_RUN_USER:-k2}" K2_UNIT_NAME="${K2_UNIT_NAME:-k2-daemon}" \
+		K2_VERSION="${K2_VERSION-0.45.0}" RAW_BASE="file:///nonexistent" bash "$STEP" 2>&1)"
 	rc=$?
 	set -e
 }
@@ -147,56 +156,57 @@ echo "== success: installs at the daemon's version, verifies, prints the line ==
 run_step "$WORK/box1"
 [ "$rc" -eq 0 ] || fail "success exit $rc: $out"
 printf '%s\n' "$out" | sed 's/^/    | /'
-grep -qx -- '--version 0.45.0 --user k2' "$WORK/installer.log" || fail "installer argv: $(cat "$WORK/installer.log")"
-ok "installer called with --version 0.45.0 --user k2"
+grep -qx -- '--version 0.45.0 --user k2 --unit k2-daemon.service --scope system' "$WORK/installer.log" \
+	|| fail "installer argv: $(cat "$WORK/installer.log")"
+ok "installer called with --version 0.45.0 --user k2 --unit k2-daemon.service --scope system"
+K2_UNIT_NAME=k2-daemon-std run_step "$WORK/box1b"
+grep -q -- '--unit k2-daemon-std.service' "$WORK/installer.log" || fail "custom unit: $(cat "$WORK/installer.log")"
+ok "K2_UNIT_NAME reaches daemon.toml"
 grep -qx 'visudo -c' "$WORK/visudo.log" || fail "visudo -c never ran"
 ok "visudo -c ran after install"
-printf '%s' "$out" | grep -q 'mail helper: installed (v0.45.0)' || fail "missing 'mail helper: installed (v0.45.0)': $out"
+printf '%s' "$out" | grep -q 'root helper: installed (v0.45.0)' || fail "missing 'root helper: installed (v0.45.0)': $out"
 printf '%s' "$out" | grep -q 'SUMMARY=installed (v0.45.0)' || fail "summary var: $out"
-ok "prints 'mail helper: installed (v0.45.0)'"
-grep -qx k2 "$WORK/runuser.log" || fail "the version cross-check must run as k2: $(cat "$WORK/runuser.log" 2>/dev/null)"
+ok "prints 'root helper: installed (v0.45.0)'"
+grep -qx k2 "$WORK/runuser.log" || fail "the version cross-check must run as k2"
 if grep -qx direct "$WORK/daemon-runs.log"; then fail "k2-daemon was executed without dropping to k2"; fi
 ok "the installed daemon ran only as k2 (runuser), never as the caller"
 
 echo "== installer fails: provisioning stops with a clear message =="
 FAKE_INSTALL_RC=7 run_step "$WORK/box2"
 [ "$rc" -ne 0 ] || fail "installer failure must fail the step: $out"
-printf '%s' "$out" | grep -q 'mail helper: install-mail-helper.sh --version 0.45.0 failed' || fail "message: $out"
+printf '%s' "$out" | grep -q 'root helper: install-root-helper.sh --version 0.45.0 failed' || fail "message: $out"
 printf '%s' "$out" | grep -q 'provisioning stopped' || fail "message: $out"
 if printf '%s' "$out" | grep -q 'SUMMARY='; then fail "must not continue past a failed install"; fi
 ok "installer failure is fatal and says so"
 
-echo "== wrong helper mode / owner, wrong sudoers mode, visudo -c failure: fatal =="
+echo "== wrong modes / owner, visudo -c failure: fatal =="
 FAKE_HELPER_MODE=0775 run_step "$WORK/box3"
 [ "$rc" -ne 0 ] || fail "helper 0775 must fail"
 printf '%s' "$out" | grep -q "expected 'root:root 755'" || fail "helper mode message: $out"
-ok "helper not 0755 is fatal"
 SHIM_OWNER=k2:k2 run_step "$WORK/box4"
 [ "$rc" -ne 0 ] || fail "helper owned by k2 must fail"
 printf '%s' "$out" | grep -q "is 'k2:k2 755'" || fail "owner message: $out"
-ok "helper not root:root is fatal"
 FAKE_SUDOERS_MODE=0644 run_step "$WORK/box5"
 [ "$rc" -ne 0 ] || fail "sudoers 0644 must fail"
 printf '%s' "$out" | grep -q "expected 'root:root 440'" || fail "sudoers mode message: $out"
-ok "sudoers not 0440 is fatal"
+FAKE_TOML_MODE=0666 run_step "$WORK/box5b"
+[ "$rc" -ne 0 ] || fail "daemon.toml 0666 must fail"
+printf '%s' "$out" | grep -q "expected 'root:root 644'" || fail "toml mode message: $out"
 VISUDO_FAIL=1 run_step "$WORK/box6"
 [ "$rc" -ne 0 ] || fail "visudo -c failure must fail"
 printf '%s' "$out" | grep -q 'visudo -c fails' || fail "visudo message: $out"
-ok "visudo -c failure is fatal"
+ok "helper / owner / sudoers / daemon.toml modes and visudo -c are fatal"
 
 echo "== same version guard + unreadable daemon version =="
 K2_VERSION=0.44.4 run_step "$WORK/box7"
 [ "$rc" -ne 0 ] || fail "K2_VERSION mismatch must fail"
 printf '%s' "$out" | grep -q 'must match the daemon' || fail "mismatch message: $out"
-ok "K2_VERSION != installed daemon is fatal"
 K2_VERSION=v0.45.0 run_step "$WORK/box8"
 [ "$rc" -eq 0 ] || fail "K2_VERSION=v0.45.0 should match 0.45.0: $out"
-ok "K2_VERSION with a v prefix matches"
 FAKE_DAEMON_VERSION="" run_step "$WORK/box9"
-# The fake daemon prints "k2-daemon " with no version -> unreadable.
 [ "$rc" -ne 0 ] || fail "unreadable daemon version must fail: $out"
 printf '%s' "$out" | grep -q 'could not read the installed daemon version' || fail "message: $out"
-ok "unreadable daemon version is fatal"
+ok "version guards"
 
 echo "== K2_VERSION is required and must be plain x.y.z =="
 for bad in "" "latest" "0.45" "0.45.0-rc1" '0.45.0;id' '0.45.0/../x'; do
@@ -210,9 +220,9 @@ ok "missing or malformed K2_VERSION stops before anything runs"
 echo "== not Linux: skipped with a note, nothing run =="
 SHIM_OS=Darwin run_step "$WORK/box10"
 [ "$rc" -eq 0 ] || fail "non-Linux skip exit $rc: $out"
-printf '%s' "$out" | grep -q 'mail helper: skipped' || fail "skip note: $out"
+printf '%s' "$out" | grep -q 'root helper: skipped' || fail "skip note: $out"
 [ ! -e "$WORK/installer.log" ] || fail "installer must not run off Linux"
 ok "non-Linux skips with a note"
 
 echo ""
-echo "PASS: provision mail helper ($pass checks)"
+echo "PASS: provision root helper ($pass checks)"

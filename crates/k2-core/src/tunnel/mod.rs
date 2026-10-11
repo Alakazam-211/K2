@@ -48,6 +48,7 @@ pub mod cert_broker;
 pub mod config;
 pub mod connector;
 pub mod failover;
+pub(crate) mod frpc_proc;
 pub mod identity;
 pub mod ingress;
 pub mod lease;

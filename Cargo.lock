@@ -3640,6 +3640,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-root-helper"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "k2-root-proto",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "k2-root-proto"
 version = "0.1.0"
 dependencies = [

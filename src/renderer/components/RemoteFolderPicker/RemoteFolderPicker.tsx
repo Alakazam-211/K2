@@ -5,6 +5,7 @@ import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { primaryScope } from '@/kessel/server-scope'
+import { HOST_PICKER_Z } from '@/lib/overlay-layers'
 
 // A lightweight, self-contained directory browser over the REMOTE daemon's
 // filesystem. Deliberately does NOT reuse the full FileTree component (too
@@ -179,8 +180,12 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center no-drag"
-      style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
+      data-testid="remote-folder-picker"
+      className="fixed inset-0 flex items-center justify-center no-drag"
+      // Above the Settings overlay: this picker is opened from Settings
+      // (agent image Upload, New Workspace on a remote server). At z-60 it
+      // opened hidden behind Settings (z-200).
+      style={{ zIndex: HOST_PICKER_Z, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
       onClick={cancel}
     >
       <div

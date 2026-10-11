@@ -89,6 +89,7 @@ import { useStyleStore } from './stores/style'
 import { toKesselColors } from './lib/style-resolve'
 import { getPalette } from './styles.generated'
 import { primaryScope } from '@/kessel/server-scope'
+import { SETTINGS_OVERLAY_Z } from '@/lib/overlay-layers'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
@@ -1074,7 +1075,10 @@ function AppRoot(): React.JSX.Element {
 
       {/* Settings overlay — covers the (still-mounted) workspace */}
       {settingsOpen && (
-        <div className="fixed inset-0 z-[200] flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
+        <div
+          className="fixed inset-0 flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]"
+          style={{ zIndex: SETTINGS_OVERLAY_Z }}
+        >
           {/* Settings renders its OWN top-bar (same left cluster as
               other pages: K2 + server picker + ⚙/Agents/Projects/Tickets). */}
           <div className="flex-1 min-h-0">

@@ -4,13 +4,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use base64::Engine as _;
 use k2_vault::confirm::KdfCost;
 use k2_vault::fsutil::TestDir;
 use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::{Actor, AgentActor, KeyStore, LocalVault, OpenOptions, Role};
 use serde_json::{json, Value};
 
+// Also brings the parent's `base64::Engine as _` (encode/decode below); a
+// second import of it here is unused to rustc 1.99 (Linux gate).
 use super::*;
 use crate::vault::actor::{Channel, VaultCaller};
 

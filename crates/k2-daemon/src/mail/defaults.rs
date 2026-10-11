@@ -16,10 +16,13 @@
 //!    at first start. v3.0.2 (live 2026-09-22 11:32 UTC) uses `bit_and`,
 //!    which first exists in Stalwart 0.16.23; the 3 DNSBL rules then fail
 //!    to load and every `ReloadSettings` is refused. K2 pins the rules URL
-//!    to v3.0.1 (only while it is Stalwart's `releases/latest` default)
-//!    and rewrites those 3 rules' `tag` to the v3.0.1 body — only when the
-//!    INSTALLED Stalwart lacks `bit_and` (HF3). Runs BEFORE A1 so the
-//!    reload that follows is not refused (HF6 correction).
+//!    for the INSTALLED Stalwart (only while it is Stalwart's
+//!    `releases/latest` default): v3.0.1 below 0.16.23, v3.0.2 from it;
+//!    a K2 pin moves with the installed version after `k2 hostmail
+//!    upgrade` (HF2, 0.45.4: the 0.16.25 pin). It rewrites those 3 rules'
+//!    `tag` to the v3.0.1 body — only when the INSTALLED Stalwart lacks
+//!    `bit_and` (HF3). Runs BEFORE A1 so the reload that follows is not
+//!    refused (HF6 correction).
 //! 3. **A1 outbound** — the `mx` route goes `v4ThenV6` → `v4Only` ONCE
 //!    (whole object written back minus `id`/`name`), recorded, never
 //!    touched again (HF6). On Stalwart < 0.16.20 every `optional` DANE
@@ -355,11 +358,39 @@ fn str_field<'a>(obj: &'a Value, key: &str) -> Option<&'a str> {
 /// Stalwart's default: always the newest rules, whatever the server.
 pub const RULES_URL_LATEST: &str =
     "https://github.com/stalwartlabs/spam-filter/releases/latest/download/spam-filter-rules.json.gz";
-/// The newest rules 0.16.x can parse (v3.0.2 needs 0.16.23's `bit_and`).
-/// Moves with the Stalwart pin (HF2: at the `0.16.25-k2.1` move, together
-/// with dropping the repair).
+/// The newest rules a Stalwart WITHOUT `bit_and` (before 0.16.23) can
+/// parse (v3.0.2 needs 0.16.23's `bit_and`).
 pub const RULES_URL_PINNED: &str =
     "https://github.com/stalwartlabs/spam-filter/releases/download/v3.0.1/spam-filter-rules.json.gz";
+/// The newest rules the 0.16.25 pin parses (HF2, K2 0.45.4). Checked
+/// 2026-10-10: every expression in the v3.0.2 release asset calls only
+/// functions in 0.16.25's `FUNCTIONS` + `ASYNC_FUNCTIONS` (0.16.20's
+/// table + `bit_and`). Since 0.16.24 a rules update also rewrites
+/// existing objects, so the 3 DNSBL rules K2 rewrote to v3.0.1 get their
+/// v3.0.2 bodies back from Stalwart itself — the repair stays only for
+/// boxes still below 0.16.23.
+pub const RULES_URL_PINNED_BIT_AND: &str =
+    "https://github.com/stalwartlabs/spam-filter/releases/download/v3.0.2/spam-filter-rules.json.gz";
+
+/// The rules URL K2 pins for the INSTALLED Stalwart (unknown → the one
+/// every 0.16.x parses).
+pub fn rules_url_for(installed: Option<Ver>) -> &'static str {
+    match installed {
+        Some(v) if v >= V_BIT_AND => RULES_URL_PINNED_BIT_AND,
+        _ => RULES_URL_PINNED,
+    }
+}
+
+/// A short name for a rules URL in log lines.
+pub fn rules_url_label(url: &str) -> &str {
+    match url.trim() {
+        RULES_URL_LATEST => "releases/latest",
+        RULES_URL_PINNED => "v3.0.1",
+        RULES_URL_PINNED_BIT_AND => "v3.0.2",
+        "" => "unset",
+        other => other,
+    }
+}
 
 /// The three DNSBL rules spam-filter v3.0.2 moved to `bit_and` (the only
 /// objects that differ between v3.0.1 and v3.0.2, HF1).
@@ -556,13 +587,37 @@ pub fn plan_spam_repair(servers: &[Value], installed: Ver) -> Vec<RepairWrite> {
     out
 }
 
-/// A4 URL pin (pure, HF4): only while the URL is Stalwart's `latest`
-/// default and K2 has not pinned it before.
-pub fn plan_spam_url(current: Option<&str>, mark: Option<&UrlMark>) -> Option<&'static str> {
-    if mark.is_some() {
-        return None;
+/// A4 URL pin (pure, HF4 + HF2):
+/// - no K2 pin yet: pin [`rules_url_for`] the installed version, only
+///   while the URL is Stalwart's `latest` default;
+/// - K2 pinned it before and the URL is still exactly K2's pin: move it
+///   with the installed version (v3.0.1 → v3.0.2 after the 0.16.25
+///   upgrade). A URL a person changed is never touched, and with the
+///   installed version unknown nothing moves.
+pub fn plan_spam_url(
+    current: Option<&str>,
+    mark: Option<&UrlMark>,
+    installed: Option<Ver>,
+) -> Option<&'static str> {
+    let want = rules_url_for(installed);
+    let cur = current.map(str::trim);
+    let Some(m) = mark else {
+        return (cur == Some(RULES_URL_LATEST)).then_some(want);
+    };
+    let cur = cur?;
+    let k2_pin = cur == RULES_URL_PINNED || cur == RULES_URL_PINNED_BIT_AND;
+    (installed.is_some() && k2_pin && cur == m.to.trim() && cur != want).then_some(want)
+}
+
+/// The mark after K2 (re)pins the URL: the ORIGINAL `from` survives a move.
+fn url_mark(previous: Option<&UrlMark>, current: Option<String>, to: &str, at: i64) -> UrlMark {
+    UrlMark {
+        from: previous
+            .map(|m| m.from.clone())
+            .unwrap_or_else(|| current.unwrap_or_default()),
+        to: to.to_string(),
+        at,
     }
-    (current.map(str::trim) == Some(RULES_URL_LATEST)).then_some(RULES_URL_PINNED)
 }
 
 // ── A1: outbound route + DANE ───────────────────────────────────────────
@@ -857,18 +912,17 @@ pub fn reconcile(
     if markers_ok {
         match api.spam_rules_url() {
             Ok(cur) => {
-                if let Some(to) = plan_spam_url(cur.as_deref(), m.spam_url.as_ref()) {
+                if let Some(to) = plan_spam_url(cur.as_deref(), m.spam_url.as_ref(), installed) {
                     match api.set_spam_rules_url(to) {
                         Ok(()) => {
                             written += 1;
                             lines.push(format!(
-                                "{P} spam rules URL pinned to v3.0.1 (was releases/latest)"
+                                "{P} spam rules URL pinned to {} (was {}; Stalwart {})",
+                                rules_url_label(to),
+                                rules_url_label(cur.as_deref().unwrap_or("")),
+                                ctx.installed.unwrap_or("unknown")
                             ));
-                            m.spam_url = Some(UrlMark {
-                                from: cur.unwrap_or_default(),
-                                to: to.to_string(),
-                                at: ctx.now,
-                            });
+                            m.spam_url = Some(url_mark(m.spam_url.as_ref(), cur, to, ctx.now));
                         }
                         Err(e) => lines.push(format!("{P} spam rules URL: FAILED: {e}")),
                     }
@@ -1116,11 +1170,13 @@ fn run_live(reason: &'static str) {
                     return;
                 }
             };
+            let installed = supervisor::row_field("installed_version");
+            let installed = installed.as_deref().and_then(parse_version);
             if let Ok(cur) = client.spam_rules_url() {
-                if let Some(to) = plan_spam_url(cur.as_deref(), m.spam_url.as_ref()) {
+                if let Some(to) = plan_spam_url(cur.as_deref(), m.spam_url.as_ref(), installed) {
                     match client.set_spam_rules_url(to) {
                         Ok(()) => {
-                            m.spam_url = Some(UrlMark { from: cur.unwrap_or_default(), to: to.into(), at: now_secs() });
+                            m.spam_url = Some(url_mark(m.spam_url.as_ref(), cur, to, now_secs()));
                             if let Err(e) = save_markers(&m) {
                                 k2_core::log_debug!("{P} enable: {e}");
                             }
@@ -1128,7 +1184,8 @@ fn run_live(reason: &'static str) {
                             // below reloads after its own writes.
                             let reload = client.action_reload_settings();
                             k2_core::log_debug!(
-                                "{P} enable: spam rules URL pinned to v3.0.1 (reload: {})",
+                                "{P} enable: spam rules URL pinned to {} (reload: {})",
+                                rules_url_label(to),
                                 reload.err().unwrap_or_else(|| "ok".into())
                             );
                         }
@@ -1603,14 +1660,14 @@ pub fn dane_disabled_check(
     if !by_k2.is_empty() {
         parts.push(format!(
             "K2 turned it off on {} because Stalwart before 0.16.20 can't check DNSSEC \
-             reliably; `k2 hostmail upgrade` (0.16.20) and K2 turns it back on",
+             reliably; `k2 hostmail upgrade` (to 0.16.25) and K2 turns it back on",
             by_k2.join(", ")
         ));
     }
     if !by_hand.is_empty() {
         parts.push(if old {
             format!(
-                "set by hand on {}; after `k2 hostmail upgrade` (0.16.20) turn it back on: \
+                "set by hand on {}; after `k2 hostmail upgrade` (to 0.16.25) turn it back on: \
                  `k2 hostmail outbound dane on`",
                 by_hand.join(", ")
             )

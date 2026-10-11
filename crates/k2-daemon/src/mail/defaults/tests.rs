@@ -428,12 +428,119 @@ fn spam_repair_rewrites_exactly_the_three_bit_and_rules() {
 
 #[test]
 fn spam_url_is_pinned_only_from_stalwarts_latest_default_and_once() {
-    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), None), Some(RULES_URL_PINNED));
-    assert_eq!(plan_spam_url(Some("https://example.com/rules.json.gz"), None), None, "a person set it");
-    assert_eq!(plan_spam_url(None, None), None, "unset = no downloads; leave it");
-    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED), None), None);
+    let old = Some(v("0.16.20"));
+    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), None, old), Some(RULES_URL_PINNED));
+    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), None, None), Some(RULES_URL_PINNED), "unknown → v3.0.1");
+    assert_eq!(plan_spam_url(Some("https://example.com/rules.json.gz"), None, old), None, "a person set it");
+    assert_eq!(plan_spam_url(None, None, old), None, "unset = no downloads; leave it");
+    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED), None, old), None);
     let mark = UrlMark { from: RULES_URL_LATEST.into(), to: RULES_URL_PINNED.into(), at: 1 };
-    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), Some(&mark)), None, "K2 pinned once already");
+    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), Some(&mark), old), None, "K2 pinned once already");
+    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED), Some(&mark), old), None, "already right");
+}
+
+/// HF2 (0.45.4): the pin moves with the installed Stalwart. 0.16.25 has
+/// `bit_and`, so a fresh box pins v3.0.2 and K2's own v3.0.1 pin moves
+/// to v3.0.2 after the upgrade. A URL a person changed never moves.
+#[test]
+fn spam_url_pin_moves_to_v3_0_2_on_a_stalwart_with_bit_and() {
+    assert_eq!(rules_url_for(Some(v("0.16.22"))), RULES_URL_PINNED);
+    assert_eq!(rules_url_for(Some(v("0.16.23"))), RULES_URL_PINNED_BIT_AND);
+    assert_eq!(rules_url_for(Some(v(crate::mail::supervisor::STALWART_PINNED_VERSION))), RULES_URL_PINNED_BIT_AND);
+    assert_eq!(rules_url_for(None), RULES_URL_PINNED);
+    let new = Some(v("0.16.25"));
+    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), None, new), Some(RULES_URL_PINNED_BIT_AND));
+    let k2_v301 = UrlMark { from: RULES_URL_LATEST.into(), to: RULES_URL_PINNED.into(), at: 1 };
+    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED), Some(&k2_v301), new), Some(RULES_URL_PINNED_BIT_AND));
+    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED), Some(&k2_v301), None), None, "version unknown: no move");
+    // A person changed it after K2's pin (to latest, or another URL).
+    assert_eq!(plan_spam_url(Some(RULES_URL_LATEST), Some(&k2_v301), new), None);
+    assert_eq!(plan_spam_url(Some("https://example.com/r.json.gz"), Some(&k2_v301), new), None);
+    // K2 set v3.0.2 already → nothing; on an old version it would go back.
+    let k2_v302 = UrlMark { to: RULES_URL_PINNED_BIT_AND.into(), ..k2_v301.clone() };
+    assert_eq!(plan_spam_url(Some(RULES_URL_PINNED_BIT_AND), Some(&k2_v302), new), None);
+    assert_eq!(
+        plan_spam_url(Some(RULES_URL_PINNED_BIT_AND), Some(&k2_v302), Some(v("0.16.20"))),
+        Some(RULES_URL_PINNED)
+    );
+    assert_eq!(rules_url_label(RULES_URL_PINNED_BIT_AND), "v3.0.2");
+    assert_eq!(rules_url_label(RULES_URL_LATEST), "releases/latest");
+}
+
+/// The functions v3.0.2 calls (release asset, 2026-10-10) all exist in
+/// the 0.16.25 table: K2 can pin it there and never repair it.
+#[test]
+fn spam_filter_v3_0_2_functions_load_on_0_16_25() {
+    let v302 = [
+        "bit_and", "contains", "contains_ignore_case", "ends_with", "has_digits", "hash",
+        "if_then", "is_empty", "is_intersect", "key_exists", "len", "split", "split_once",
+        "starts_with", "to_lowercase", "to_uppercase", "trim",
+    ];
+    let known = known_functions(v("0.16.25"));
+    for f in v302 {
+        assert!(known.contains(&f), "{f} missing from 0.16.25");
+    }
+    assert!(!known_functions(v("0.16.20")).contains(&"bit_and"));
+}
+
+/// The 0.16.25 function table, copied verbatim from upstream
+/// `crates/common/src/expr/functions/mod.rs` at v0.16.25: 0.16.20's
+/// table plus `bit_and` and nothing else.
+#[test]
+fn function_list_matches_stalwart_0_16_25() {
+    let copy: Vec<&str> = include_str!("../fixtures/stalwart-0.16.25-expr-functions.txt")
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .collect();
+    let mut ours = known_functions(v("0.16.25"));
+    let mut theirs = copy.clone();
+    ours.sort_unstable();
+    theirs.sort_unstable();
+    assert_eq!(ours, theirs);
+}
+
+/// A box K2 pinned to v3.0.1 on 0.16.20, after the 0.16.25 upgrade:
+/// the URL moves to v3.0.2 (original `from` kept), DANE comes back, no
+/// rule is rewritten, one reload.
+#[test]
+fn reconcile_after_the_0_16_25_upgrade_moves_k2s_rules_pin() {
+    let api = Fake::new();
+    *api.dnsbl.borrow_mut() = dnsbl_from("v3.0.2");
+    let k2 = Inputs { owner: CertOwner::K2, ..Inputs::stalwart() };
+    let (out, _) = run(&api, &k2, "0.16.10", Some(Markers::default()), true);
+    assert_eq!(out.markers.spam_url.as_ref().map(|u| u.to.as_str()), Some(RULES_URL_PINNED));
+    assert_eq!(out.markers.spam_repair.len(), 3);
+    api.calls.borrow_mut().clear();
+    let (out2, _) = run(&api, &k2, "0.16.25", Some(out.markers), true);
+    let w = api.writes();
+    assert!(w.contains(&format!("set-url {RULES_URL_PINNED_BIT_AND}")), "{w:?}");
+    assert!(!w.iter().any(|c| c.starts_with("set-dnsbl")), "0.16.25 has bit_and: {w:?}");
+    assert_eq!(w.iter().filter(|c| c.starts_with("set-tls")).count(), 2, "DANE back: {w:?}");
+    assert_eq!(w.last().map(String::as_str), Some("reload"));
+    assert_eq!(w.iter().filter(|c| *c == "reload").count(), 1);
+    let mark = out2.markers.spam_url.clone().expect("mark");
+    assert_eq!(mark.to, RULES_URL_PINNED_BIT_AND);
+    assert_eq!(mark.from, RULES_URL_LATEST, "the original from survives the move");
+    assert!(out2.lines.iter().any(|l| l.contains("pinned to v3.0.2 (was v3.0.1; Stalwart 0.16.25)")), "{:?}", out2.lines);
+    // And then it is settled.
+    api.calls.borrow_mut().clear();
+    let (out3, _) = run(&api, &k2, "0.16.25", Some(out2.markers.clone()), true);
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+    assert_eq!(out3.markers, out2.markers);
+}
+
+/// A fresh enable on 0.16.25 pins v3.0.2 straight away.
+#[test]
+fn reconcile_on_a_fresh_0_16_25_box_pins_v3_0_2() {
+    let api = Fake::new();
+    *api.dnsbl.borrow_mut() = dnsbl_from("v3.0.2");
+    let (out, _) = run(&api, &Inputs::stalwart(), "0.16.25", Some(Markers::default()), true);
+    let w = api.writes();
+    assert!(w.contains(&format!("set-url {RULES_URL_PINNED_BIT_AND}")), "{w:?}");
+    assert!(!w.iter().any(|c| c.starts_with("set-dnsbl")), "{w:?}");
+    assert!(!w.iter().any(|c| c.starts_with("set-tls")), "0.16.25 keeps DANE optional: {w:?}");
+    assert!(out.markers.spam_repair.is_empty());
+    assert!(out.markers.dane.is_empty());
 }
 
 #[test]

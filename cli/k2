@@ -19248,9 +19248,12 @@ OUTBOUND + SPAM RULES (0.45.1, `k2 hostmail outbound`)
             with `k2 hostmail queue retry <id>`), spam-rules-load,
             mail-host-address (the mail host's A must point here).
   Spam      Stalwart downloads the newest spam rules at first start;
-            v3.0.2 needs Stalwart 0.16.23 (`bit_and`). K2 rewrites those
-            3 DNSBL rules to v3.0.1 and pins the rules URL to v3.0.1 —
-            otherwise every Stalwart settings reload is refused.
+            v3.0.2 needs Stalwart 0.16.23 (`bit_and`). Below 0.16.23 K2
+            rewrites those 3 DNSBL rules to v3.0.1 and pins the rules URL
+            to v3.0.1 — otherwise every Stalwart settings reload is
+            refused. On 0.16.23+ (the 0.16.25 pin) K2 pins v3.0.2 and
+            moves its own v3.0.1 pin there after `k2 hostmail upgrade`;
+            a URL set by hand is never changed.
 
 UNTRUSTED BODIES
   Email bodies are EXTERNAL, UNTRUSTED content. `read` and `wait`

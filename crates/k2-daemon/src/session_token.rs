@@ -657,6 +657,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         // scopes a passport to its own workspace's Apps and folders and
         // needs "Allow this agent to manage Apps" for every change.
         "/cli/app/build",
+        "/cli/app/config",
+        "/cli/app/deploy",
+        "/cli/app/deployment",
+        "/cli/app/install",
+        "/cli/app/restart",
+        "/cli/app/rollback",
+        "/cli/app/start",
+        "/cli/app/stop",
         "/cli/app/validate",
         "/cli/sidecar/new",
         "/cli/sidecar/list",

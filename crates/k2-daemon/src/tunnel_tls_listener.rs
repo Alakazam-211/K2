@@ -789,6 +789,22 @@ async fn serve_one(
             res
         }
         Route::Internal(target) => {
+            // App runtime (AR4): a deploy moves an App's backend by the
+            // daemon-local override, never by a control-plane write. Only a
+            // label the control plane already routes here can be overridden.
+            if let Some(be) = subdomains::current()
+                .nested_label(&sni)
+                .and_then(|label| crate::apps::router::live(&label))
+            {
+                log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
+                if let Err(e) = crate::apps::router::splice(&mut tls, be).await {
+                    log_debug!("[daemon/e2e] {sni}: {e} — answering 502");
+                    write_unreachable_502(&mut tls).await;
+                    return Ok(());
+                }
+                let _ = tls.shutdown().await;
+                return Ok(());
+            }
             // Configured nested subdomain → proxy the decrypted stream to the
             // user's chosen internal endpoint on this same machine.
             // H2: bound the upstream dial. `localhost` targets try 127.0.0.1
@@ -1214,6 +1230,66 @@ mod tests {
             "the 502 body must not leak the internal target, got:\n{down}"
         );
 
+        subdomains::store(SubdomainMap::default());
+    }
+
+    /// App runtime AR4: a deploy's switch is the daemon-local override.
+    /// The control-plane target of the label points at a dead port; with
+    /// the override set, the TLS splice reaches the App's live backend, and
+    /// the (fake) control plane sees zero requests.
+    #[tokio::test]
+    async fn app_route_override_wins_without_a_control_plane_call() {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let daemon_port = install_test_ingress_state();
+
+        // A control plane that counts every connection it gets.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let cp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let cp_url = format!("http://{}", cp.local_addr().unwrap());
+        let h2 = hits.clone();
+        std::thread::spawn(move || {
+            for s in cp.incoming().flatten() {
+                h2.fetch_add(1, Ordering::SeqCst);
+                drop(s);
+            }
+        });
+        let _cp = k2_core::test_env::EnvVar::set(subdomains::CONTROL_PLANE_BASE_ENV, &cp_url);
+
+        let live = spawn_tagged_stub("LIVE-SEED").await;
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("ovr".to_string(), format!("localhost:{}", closed.port()));
+        subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
+
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
+        let server_config = k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config");
+        let shared = Arc::new(ArcSwap::from_pointee(server_config));
+        let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let https_port = tls_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            accept_loop(tls_listener, shared, daemon_port).await;
+        });
+
+        let before = tls_client_get(&cert_pem, https_port, "ovr.example.k2.dev", "/").await;
+        assert!(before.starts_with("HTTP/1.1 502"), "no override: the dead target answers 502, got:\n{before}");
+
+        crate::apps::router::switch("ovr", live);
+        let got = tls_client_get(&cert_pem, https_port, "ovr.example.k2.dev", "/").await;
+        assert!(got.contains("LIVE-SEED"), "the override must win over the control-plane target, got:\n{got}");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "a switch never calls the control plane");
+
+        // An unknown label is still a 404, override or not.
+        crate::apps::router::switch("nope", live);
+        let unknown = tls_client_get(&cert_pem, https_port, "nope.example.k2.dev", "/").await;
+        assert!(unknown.contains("404"), "only labels the control plane routes here: {unknown}");
+
+        crate::apps::router::clear("ovr");
+        crate::apps::router::clear("nope");
         subdomains::store(SubdomainMap::default());
     }
 

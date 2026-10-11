@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use k2_core::connect_users::Role;
+use k2_core::deploy::store::{self, AppRow};
 use k2_core::deploy::{self, codes};
 use serde_json::{json, Value as J};
 
@@ -28,10 +29,31 @@ pub use crate::compute_routes::Who;
 pub const MAX_BODY: usize = 256 * 1024;
 
 /// Every runtime route.
-pub const ROUTES: &[&str] = &["/cli/app/build", "/cli/app/validate"];
+pub const ROUTES: &[&str] = &[
+    "/cli/app/build",
+    "/cli/app/config",
+    "/cli/app/deploy",
+    "/cli/app/deployment",
+    "/cli/app/install",
+    "/cli/app/restart",
+    "/cli/app/rollback",
+    "/cli/app/start",
+    "/cli/app/stop",
+    "/cli/app/validate",
+];
 
 /// POST-only rows (`require_post` → 405 on GET).
-pub const POST_ROUTES: &[&str] = &["/cli/app/build", "/cli/app/validate"];
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/build",
+    "/cli/app/config",
+    "/cli/app/deploy",
+    "/cli/app/install",
+    "/cli/app/restart",
+    "/cli/app/rollback",
+    "/cli/app/start",
+    "/cli/app/stop",
+    "/cli/app/validate",
+];
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -54,6 +76,12 @@ pub(crate) type R<T> = Result<T, Refusal>;
 
 pub(crate) fn no(code: &'static str, status: u16, hint: impl Into<String>) -> Refusal {
     Refusal { code, status, hint: hint.into(), extra: None }
+}
+
+impl From<super::supervisor::Fail> for Refusal {
+    fn from(f: super::supervisor::Fail) -> Self {
+        no(f.code, f.status, f.message)
+    }
 }
 
 fn status_line(code: u16) -> &'static str {
@@ -105,6 +133,19 @@ pub(crate) fn ws_handle(project_id: &str) -> String {
     k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.to_string())
 }
 
+/// The audit actor for a caller (`agent:<ws>` | `owner` | `user:<name>`).
+pub(crate) fn actor(who: &Who) -> String {
+    match who {
+        Who::Owner => "owner".into(),
+        Who::Login { username, role: Role::Owner } => format!("owner:{username}"),
+        Who::Login { username, .. } => format!("user:{username}"),
+        Who::Agent { project_id, .. } => format!("agent:{}", ws_handle(project_id)),
+        Who::Shell { project_id, .. } => format!("shell:{}", ws_handle(project_id)),
+        Who::Wrong => "wrong-credential".into(),
+        Who::Invalid => "-".into(),
+    }
+}
+
 pub(crate) fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no(codes::FORBIDDEN, 403, "invalid or missing token")),
@@ -145,6 +186,7 @@ pub(crate) fn need_manage(who: &Who) -> R<()> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ws {
+    pub id: String,
     pub path: String,
 }
 
@@ -152,7 +194,50 @@ pub(crate) fn ws_by_id(id: &str) -> Option<Ws> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let p = k2_core::db::schema::Project::get(&conn, id).ok()?;
-    Some(Ws { path: p.path })
+    Some(Ws { id: p.id, path: p.path })
+}
+
+pub(crate) fn ws_by_token(token: &str) -> Option<Ws> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Some(w) = ws_by_id(t) {
+        return Some(w);
+    }
+    let path = crate::workspace_msg::resolve_workspace(t).or_else(|| {
+        t.starts_with('/')
+            .then(|| std::fs::canonicalize(t).ok())
+            .flatten()
+            .and_then(|c| crate::workspace_msg::resolve_workspace(&c.to_string_lossy()))
+    })?;
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)?
+    };
+    ws_by_id(&id)
+}
+
+/// The workspace a call acts for: a passport's own (naming another is
+/// `forbidden`); others name one with `workspace`.
+pub(crate) fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
+    let requested = requested.map(str::trim).filter(|s| !s.is_empty());
+    let own = match who {
+        Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => Some(project_id.as_str()),
+        _ => None,
+    };
+    if let Some(own) = own {
+        let ws = ws_by_id(own).ok_or_else(|| no(codes::FORBIDDEN, 404, "your workspace is not registered"))?;
+        if let Some(req) = requested {
+            if ws_by_token(req).is_none_or(|o| o.id != ws.id) {
+                return Err(no(codes::FORBIDDEN, 403, "an agent acts only for its own workspace"));
+            }
+        }
+        return Ok(ws);
+    }
+    let req = requested.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace (--workspace)"))?;
+    ws_by_token(req).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{req}'")))
 }
 
 /// A folder an agent names must be inside its own workspace.
@@ -218,10 +303,18 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     if !deploy::enabled() {
         return dark();
     }
-    let _ = params;
+    super::supervisor::ensure_started();
     let r = match path {
         "/cli/app/build" => build(&who, body),
         "/cli/app/validate" => validate(&who, body),
+        "/cli/app/install" => install(&who, body),
+        "/cli/app/deploy" => deploy_route(&who, body),
+        "/cli/app/rollback" => rollback(&who, body),
+        "/cli/app/stop" => stop(&who, body),
+        "/cli/app/start" => start(&who, body, store::KIND_START),
+        "/cli/app/restart" => start(&who, body, store::KIND_RESTART),
+        "/cli/app/deployment" => deployment(&who, params),
+        "/cli/app/config" => config(&who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     match r {
@@ -274,5 +367,316 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
         "seed": hash,
         "id": manifest.as_ref().map(|m| m.id.clone()),
         "version": manifest.as_ref().map(|m| m.version.clone()),
+    }))
+}
+
+// ── S7: install, deploy, rollback, stop/start/restart, config ────────
+
+/// The App a call names. A passport sees only its own workspace's Apps (a
+/// foreign App is `app_not_found`, never "forbidden": no existence leak).
+pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
+    let id = app_id.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the App (its App id)"))?.to_ascii_lowercase();
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_app(&conn, &id).map_err(db_err)?
+    };
+    let row = row.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' on this box (k2 app list)")))?;
+    if let Some(ws) = agent_ws(who) {
+        if row.owner_workspace != ws {
+            return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace (k2 app list)")));
+        }
+    }
+    Ok(row)
+}
+
+/// `~/.k2/apps/<id>/app.json`: a read-only mirror of the row (§4.4).
+/// Editing it does nothing.
+pub(crate) fn mirror(app_id: &str) {
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_app(&conn, app_id).ok().flatten()
+    };
+    if let Some(r) = row {
+        let p = deploy::app_dir(app_id).join("app.json");
+        let mut v = serde_json::to_value(&r).unwrap_or(J::Null);
+        v["_note"] = json!("Read-only mirror of the App's row. Change it with `k2 app config`; editing this file does nothing.");
+        let _ = std::fs::create_dir_all(deploy::app_dir(app_id));
+        let _ = k2_core::fs_atomic::atomic_write_str(&p, &(serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"));
+    }
+}
+
+fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, app_id, event, &actor(who), None, &payload) {
+        k2_core::log_debug!("[apps] audit {app_id} {event}: {e}");
+    }
+}
+
+/// POST `/cli/app/install {app, workspace?, tunnel?, memory?, seed?|folder?}`.
+/// Creates the App (its `published_services` row with the `(app)`
+/// sentinel, AR5), its folder and its front listener; with `tunnel` the
+/// URL `<app>.<sub>.k2.dev` points at the front port (one control-plane
+/// write, here, never per deploy). With a Seed or folder it deploys too.
+fn install(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app_id = s(&v, "app").ok_or_else(|| no(codes::BAD_REQUEST, 400, "app is required (the App id)"))?.to_ascii_lowercase();
+    if let Some((code, msg)) = deploy::app_id_problem(&app_id) {
+        return Err(no(code, 400, msg));
+    }
+    let ws = target_ws(who, s(&v, "workspace"))?;
+    let memory = deploy::parse_memory(s(&v, "memory").unwrap_or("none")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    let tunnel = b(&v, "tunnel");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::get_app(&conn, &app_id).map_err(db_err)?.is_some() {
+            return Err(no(codes::APP_EXISTS, 409, format!("App '{app_id}' already exists on this box (k2 app deploy {app_id} …)")));
+        }
+        let holders: Vec<String> = {
+            let mut st = conn.prepare("SELECT project_id FROM published_services WHERE name = ?1").map_err(db_err)?;
+            let rows = st.query_map(rusqlite::params![app_id], |r| r.get::<_, String>(0)).map_err(db_err)?;
+            rows.collect::<Result<_, _>>().map_err(db_err)?
+        };
+        if holders.iter().any(|h| h == &ws.id) {
+            return Err(no(
+                codes::APP_EXISTS,
+                409,
+                format!("this workspace already publishes a service named '{app_id}'; pick another App id (adopting a published service comes later)"),
+            ));
+        }
+        if !holders.is_empty() {
+            return Err(no(codes::LABEL_TAKEN, 409, format!("'{app_id}' is already a published label on this box; App ids are unique box-wide")));
+        }
+    }
+    crate::label_owner::check(&app_id, &ws.id, false).map_err(|r| no(codes::LABEL_TAKEN, 409, r.message()))?;
+    let tunnel_cfg = if tunnel {
+        Some(crate::publish_runtime::nested_preflight().map_err(|e| no(codes::ENGINE_UNAVAILABLE, 503, e.message))?)
+    } else {
+        None
+    };
+    let dir = deploy::app_dir(&app_id);
+    std::fs::create_dir_all(dir.join("logs")).map_err(|e| no("io_error", 500, e.to_string()))?;
+    let actor_s = actor(who);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let svc = k2_core::published_services::insert(
+            &conn,
+            &ws.id,
+            &app_id,
+            k2_core::published_services::CMD_APP_SENTINEL,
+            &dir.to_string_lossy(),
+            0,
+            if tunnel { k2_core::published_services::EXPOSE_TUNNEL } else { k2_core::published_services::EXPOSE_LOCAL },
+            k2_core::published_services::DESIRED_STOPPED,
+            k2_core::published_services::KIND_CMD,
+            "",
+        )
+        .map_err(db_err)?;
+        store::insert_app(
+            &conn,
+            &store::NewApp {
+                app_id: &app_id,
+                service_id: &svc.id,
+                seed_id: None,
+                owner_workspace: &ws.id,
+                isolation: "process",
+                memory_limit_bytes: memory,
+                front_port: 0,
+                created_by: &actor_s,
+            },
+        )
+        .map_err(db_err)?;
+        store::set_state(&conn, &app_id, store::STATE_STOPPED, Some("installed; no Seed deployed yet")).map_err(db_err)?;
+    }
+    let undo = |why: String| -> Refusal {
+        super::supervisor::forget(&app_id);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let _ = store::delete_app(&conn, &app_id);
+        let _ = k2_core::published_services::delete(&conn, &ws.id, &app_id);
+        no(codes::ENGINE_UNAVAILABLE, 503, why)
+    };
+    let row = app_for(&Who::Owner, Some(&app_id))?;
+    let port = match super::supervisor::ensure_front(&row) {
+        Ok(p) => p,
+        Err(f) => return Err(undo(f.message)),
+    };
+    if let Some((cfg, _)) = tunnel_cfg {
+        if let Err(e) = crate::publish_runtime::attach_hostname(&ws.id, &app_id, port, &cfg.token, &cfg.subdomain, false) {
+            return Err(undo(format!("the URL step failed: {e}")));
+        }
+    }
+    audit_human(&app_id, "install", who, json!({ "workspace": ws.id, "tunnel": tunnel, "frontPort": port, "memoryLimitBytes": memory }));
+    mirror(&app_id);
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: ws.id.clone() });
+    let mut out = json!({ "ok": true, "app": app_for(&Who::Owner, Some(&app_id))?, "frontPort": port });
+    if s(&v, "seed").is_some() || s(&v, "folder").is_some() {
+        let mut dv = v.clone();
+        dv["app"] = json!(app_id);
+        let d = deploy_inner(who, &dv)?;
+        out["deploy"] = d;
+    }
+    Ok(out)
+}
+
+/// The Seed a deploy names: a stored one, or a folder built now.
+fn seed_for_deploy(who: &Who, v: &J) -> R<String> {
+    if let Some(f) = s(v, "folder") {
+        let folder = resolve_folder(who, f)?;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        return match deploy::build::build_folder(&conn, &folder, &signer(who), &validate_opts(v)) {
+            Ok(b) => Ok(b.seed.hash),
+            Err(f) => {
+                let mut r = no(f.code, 422, f.message);
+                r.extra = f.report.map(|rep| json!({ "report": rep }));
+                Err(r)
+            }
+        };
+    }
+    let t = s(v, "seed").ok_or_else(|| no(codes::BAD_REQUEST, 400, "give a seed (hash) or a folder"))?;
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::find_seed(&conn, t).map_err(db_err)?
+    }
+    .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' (k2 app build prints the hash)")))?;
+    if row.report.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+        return Err(no(codes::SEED_INVALID, 422, "this Seed's validate report has errors; it can't be deployed"));
+    }
+    Ok(row.hash)
+}
+
+/// `{deployment, done}`; waits up to `wait` seconds (max 900).
+fn deployment_answer(id: &str, wait: u64) -> R<J> {
+    let row = if wait > 0 {
+        super::supervisor::wait_done(id, wait.min(900))
+    } else {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_deployment(&conn, id).map_err(db_err)?
+    }
+    .ok_or_else(|| no("not_found", 404, format!("no deployment '{id}'")))?;
+    let done = !matches!(row.result.as_str(), store::RESULT_PENDING | store::RESULT_STARTING);
+    Ok(json!({ "ok": true, "deployment": row, "done": done }))
+}
+
+fn wait_secs(v: &J) -> u64 {
+    v.get("wait").and_then(|x| x.as_u64()).unwrap_or(0)
+}
+
+fn deploy_inner(who: &Who, v: &J) -> R<J> {
+    let app = app_for(who, s(v, "app"))?;
+    let seed = seed_for_deploy(who, v)?;
+    let dep = super::supervisor::begin(&app, &seed, store::KIND_DEPLOY, &actor(who), s(v, "reason"))?;
+    deployment_answer(&dep, wait_secs(v))
+}
+
+/// POST `/cli/app/deploy {app, seed|folder, reason?, wait?, types?}`.
+fn deploy_route(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    deploy_inner(who, &v)
+}
+
+/// POST `/cli/app/rollback {app, to?, wait?}` (§7.3): instant when the
+/// previous instance is still warm; otherwise through the health gate.
+fn rollback(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let target = super::supervisor::rollback_target(&app, s(&v, "to"))?;
+    super::supervisor::check_data_revision(&app, &target)?;
+    if let Some(id) = super::supervisor::rollback_to_warm(&app, &target, &actor(who))? {
+        let mut out = deployment_answer(&id, 0)?;
+        out["instant"] = json!(true);
+        return Ok(out);
+    }
+    let dep = super::supervisor::begin(&app, &target, store::KIND_ROLLBACK, &actor(who), s(&v, "reason"))?;
+    deployment_answer(&dep, wait_secs(&v))
+}
+
+/// POST `/cli/app/stop {app}`: drain, stop, no restarts.
+fn stop(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    super::supervisor::stop_app(&app, &actor(who))?;
+    mirror(&app.app_id);
+    Ok(json!({ "ok": true, "app": app.app_id, "state": store::STATE_STOPPED }))
+}
+
+/// POST `/cli/app/start|restart {app, wait?}`: start the live Seed again
+/// (restart is zero-downtime: the new instance passes the gate first).
+fn start(who: &Who, body: &[u8], kind: &'static str) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let seed = app
+        .live_seed
+        .clone()
+        .ok_or_else(|| no(codes::NOTHING_TO_ROLL_BACK, 409, format!("{} has no Seed deployed yet (k2 app deploy {} <folder|seed>)", app.app_id, app.app_id)))?;
+    if kind == store::KIND_START && super::supervisor::live_instance(&app.app_id).is_some() {
+        return Ok(json!({ "ok": true, "app": app.app_id, "already": "running" }));
+    }
+    super::supervisor::reset_backoff(&app.app_id);
+    let dep = super::supervisor::begin(&app, &seed, kind, &actor(who), s(&v, "reason"))?;
+    deployment_answer(&dep, wait_secs(&v))
+}
+
+/// GET `/cli/app/deployment?app=&id=` (litmus L3): who, commit, state
+/// (live / failed / stalled / …) of one deployment, or the newest.
+fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match params.get("id").map(|x| x.trim()).filter(|x| !x.is_empty()) {
+            Some(id) => store::get_deployment(&conn, id).map_err(db_err)?.filter(|d| d.app_id == app.app_id),
+            None => store::list_deployments(&conn, &app.app_id, 1).map_err(db_err)?.into_iter().next(),
+        }
+    }
+    .ok_or_else(|| no("not_found", 404, format!("no such deployment of {}", app.app_id)))?;
+    Ok(json!({
+        "ok": true,
+        "app": app.app_id,
+        "deployment": row,
+        "who": row.actor,
+        "commit": row.commit_ref,
+        "state": row.result,
+    }))
+}
+
+/// POST `/cli/app/config {app, memory}`: stage 1 holds only the per-App
+/// memory limit (`none` by default; the user decides). The rest of §4.4 is
+/// S13.
+fn config(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let raw = v.get("memory").ok_or_else(|| no(codes::BAD_REQUEST, 400, "nothing to change (memory: 8G | 512M | none)"))?;
+    let raw = match raw {
+        J::Null => "none".to_string(),
+        J::String(x) => x.clone(),
+        other => other.to_string(),
+    };
+    let bytes = deploy::parse_memory(&raw).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_memory_limit(&conn, &app.app_id, bytes).map_err(db_err)?;
+    }
+    audit_human(&app.app_id, "config", who, json!({ "memoryLimitBytes": bytes, "was": app.memory_limit_bytes }));
+    mirror(&app.app_id);
+    Ok(json!({
+        "ok": true,
+        "app": app_for(who, Some(&app.app_id))?,
+        "note": "The process engine in this preview doesn't enforce memory limits; the walled engines do (a later 0.46 release).",
     }))
 }

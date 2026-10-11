@@ -594,7 +594,12 @@ fn compute_status(row: &ps::PublishedService, live: Option<&LiveChild>) -> (&'st
 
 pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     let live = live_get(&row.project_id, &row.name);
-    let (status, pid) = compute_status(row, live.as_deref());
+    let (status, pid) = if row.cmd == ps::CMD_APP_SENTINEL {
+        // An App runtime row (AR5): the App supervisor owns it.
+        (crate::apps::supervisor::service_status(&row.id).unwrap_or(STATUS_STOPPED), None)
+    } else {
+        compute_status(row, live.as_deref())
+    };
     let url = if status == STATUS_STOPPED && row.error.is_some() && row.desired == DESIRED_STOPPED {
         // Hostname-fail path: do not advertise a public URL.
         if row.error.as_deref().is_some_and(|e| {
@@ -627,7 +632,7 @@ fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
     ps::get_by_project_name(&conn, project_id, name).ok().flatten()
 }
 
-fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
+pub(crate) fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
     k2_core::airgap::refuse().map_err(PublishError::fail)?;
     let cfg = tunnel_config::load().map_err(PublishError::fail)?;
     if cfg.token.trim().is_empty() {
@@ -656,7 +661,7 @@ fn gate_hint(kind: &str) -> String {
     )
 }
 
-fn attach_hostname(
+pub(crate) fn attach_hostname(
     project_id: &str,
     name: &str,
     port: u16,
@@ -868,6 +873,9 @@ pub struct RunSpec {
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_name(&spec.name).map_err(PublishError::bad)?;
+    if let Some(row) = load_row(&spec.project_id, &name) {
+        refuse_app_row(&row)?;
+    }
     if spec.skin && spec.cwd_explicit {
         return Err(PublishError::bad(
             "--cwd and --skin are mutually exclusive",
@@ -982,9 +990,23 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     }
 }
 
+/// App runtime rows are driven by `k2 app`, never by the publish verbs.
+fn refuse_app_row(row: &ps::PublishedService) -> Result<(), PublishError> {
+    if row.cmd == ps::CMD_APP_SENTINEL {
+        return Err(PublishError::bad(format!(
+            "{}: '{}' is an App; use k2 app start|stop|deploy|uninstall {}",
+            k2_core::deploy::codes::IS_AN_APP,
+            row.name,
+            row.name
+        )));
+    }
+    Ok(())
+}
+
 pub fn start(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
+    refuse_app_row(&row)?;
     if is_running_now(project_id, &name, &row) {
         return Ok(to_json(&row));
     }
@@ -1103,6 +1125,7 @@ fn rollback_hostname_fail(project_id: &str, name: &str, entry: &LiveChild, error
 pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
+    refuse_app_row(&row)?;
     if let Some(entry) = live_remove(project_id, &name) {
         kill_tree(&entry);
     } else if let Some(pid) = row.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -1152,6 +1175,9 @@ fn kill_pid_tree(pid: i32) {
 pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), PublishError> {
     let name = ps::normalize_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name);
+    if let Some(r) = &row {
+        refuse_app_row(r)?;
+    }
     let _ = stop(project_id, &name);
     // Only ever release THIS workspace's label: a label another workspace
     // holds keeps its attribution and its control-plane hostname.
@@ -1445,6 +1471,8 @@ pub fn boot_desired_running() {
         let conn = db.lock();
         ps::list_desired_running(&conn).unwrap_or_default()
     };
+    // App runtime rows (AR5) belong to the App supervisor.
+    let rows: Vec<_> = rows.into_iter().filter(|r| r.cmd != ps::CMD_APP_SENTINEL).collect();
     for (i, row) in rows.into_iter().enumerate() {
         if i > 0 {
             thread::sleep(stagger());

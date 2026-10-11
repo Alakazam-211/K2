@@ -6332,12 +6332,219 @@ print("Deploy it: k2 app deploy <app-id> %s" % s["hash"][:12])
 '
 }
 
+# Print one deployment answer ({deployment, done}) and exit by its result:
+# live 0, failed/rolled back 1, pending/starting 2, stalled 3.
+_app_rt_deployment_exit() {
+    local json_out="$1"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d = v.get("deployment") or {}
+seed = (d.get("toSeed") or "")[:12]
+line = "%s %s  %s → %s  by %s  commit %s" % (d.get("kind", ""), d.get("id", ""), (d.get("fromSeed") or "-")[:12], seed,
+                                               d.get("actor", ""), (d.get("commitRef") or "-")[:12])
+print(line)
+r = d.get("result", "")
+if r == "live":
+    print("live on port %s" % d.get("port") + ("  (instant: the previous instance was still warm)" if v.get("instant") else ""))
+elif r in ("pending", "starting"):
+    print("%s — not live yet; check: k2 app deployment %s %s" % (r, d.get("appId", ""), d.get("id", "")))
+else:
+    print("%s: %s" % (r, d.get("error") or ""))
+'
+    fi
+    local result
+    result="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("deployment") or {}).get("result",""))')"
+    case "$result" in
+        live) return 0 ;;
+        pending|starting) exit 2 ;;
+        stalled) exit 3 ;;
+        *) exit 1 ;;
+    esac
+}
+
+# k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--json]
+cmd_app_install() {
+    local app="" ws="" tunnel=0 memory="" seed="" folder="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace) ws="${2:-}"; shift 2 ;;
+            --tunnel) tunnel=1; shift ;;
+            --memory) memory="${2:-}"; shift 2 ;;
+            --seed) seed="${2:-}"; shift 2 ;;
+            --folder) folder="$(_app_rt_abs "${2:-}")"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S|--folder F]" >&2; exit 2; }
+    ws="$(_compute_ws "$ws")"
+    local wait=""
+    { [ -n "$seed" ] || [ -n "$folder" ]; } && wait=150
+    _app_rt_post /cli/app/install "$(_compute_json K2_CJ_app="$app" K2_CJ_workspace="$ws" K2_CJ_tunnel_b="$tunnel" \
+        K2_CJ_memory="$memory" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a = v["app"]
+print("App %s installed (front port %s, memory limit %s)" % (a["appId"], v["frontPort"],
+      "none" if a.get("memoryLimitBytes") is None else "%d MiB" % (a["memoryLimitBytes"] >> 20)))
+d = (v.get("deploy") or {}).get("deployment")
+if d:
+    print("deploy %s: %s %s" % (d["id"], d["result"], d.get("error") or ""))
+else:
+    print("Deploy it: k2 app deploy %s <folder|seed>" % a["appId"])
+'
+}
+
+# k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
+cmd_app_deploy() {
+    local app="" target="" reason="" wait=150 types=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) reason="${2:-}"; shift 2 ;;
+            --no-wait) wait=0; shift ;;
+            --types) types=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else target="$1"; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait]" >&2; exit 2; }
+    local body
+    if [ -d "$target" ]; then
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types")"
+    else
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait")"
+    fi
+    _app_rt_post /cli/app/deploy "$body"
+    if [ "$_CP_STATUS" = "422" ]; then
+        printf '%s' "$_CP_BODY" | _app_rt_report >&2
+        exit 1
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    _app_rt_deployment_exit "$json_out"
+}
+
+# k2 app rollback <app-id> [--to SEED] [--no-wait] [--json]
+cmd_app_rollback() {
+    local app="" to="" wait=150 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) to="${2:-}"; shift 2 ;;
+            --no-wait) wait=0; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app rollback <app-id> [--to SEED]" >&2; exit 2; }
+    _app_rt_post /cli/app/rollback "$(_compute_json K2_CJ_app="$app" K2_CJ_to="$to" K2_CJ_wait_n="$wait")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    _app_rt_deployment_exit "$json_out"
+}
+
+# k2 app stop|start|restart <app-id> [--json]
+cmd_app_lifecycle() {
+    local verb="$1"; shift
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app $verb <app-id>" >&2; exit 2; }
+    local wait=150
+    [ "$verb" = "stop" ] && wait=""
+    _app_rt_post "/cli/app/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_wait_n="$wait")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if "deployment" in json.load(sys.stdin) else 1)'; then
+        _app_rt_deployment_exit "$json_out"
+        return $?
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: %s" % (v.get("app"), v.get("state") or v.get("already") or "ok"))'
+    fi
+}
+
+# k2 app deployment <app-id> [<deployment-id>] [--json] — who, commit, state (L3).
+cmd_app_deployment() {
+    local app="" id="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else id="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app deployment <app-id> [<deployment-id>]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$id" ] && q="${q}&id=$(urlencode "$id")"
+    _compute_call GET /cli/app/deployment "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d = v["deployment"]
+print("%s %s (%s)" % (v["app"], d["id"], d["kind"]))
+print("  state   %s%s" % (v["state"], ("  — " + d["error"]) if d.get("error") else ""))
+print("  who     %s" % v["who"])
+print("  commit  %s" % (v.get("commit") or "-"))
+print("  seed    %s → %s" % ((d.get("fromSeed") or "-")[:12], (d.get("toSeed") or "-")[:12]))'
+}
+
+# k2 app config <app-id> --memory 8G|512M|none [--json]
+cmd_app_config() {
+    local app="" memory="" have=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --memory) memory="${2:-}"; have=1; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (this release sets --memory only)" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ "$have" = 0 ]; } && { echo "usage: k2 app config <app-id> --memory 8G|512M|none" >&2; exit 2; }
+    _app_rt_post /cli/app/config "$(_compute_json K2_CJ_app="$app" K2_CJ_memory="${memory:-none}")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+m = v["app"].get("memoryLimitBytes")
+print("%s: memory limit %s" % (v["app"]["appId"], "none (the App may use any memory outside the K2 reserve)" if m is None else "%d MiB" % (m >> 20)))
+print(v.get("note", ""))'
+}
+
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 cmd_app() {
     case "${1:-}" in
         validate) shift; cmd_app_validate "$@" ;;
         build) shift; cmd_app_build "$@" ;;
+        install) shift; cmd_app_install "$@" ;;
+        deploy) shift; cmd_app_deploy "$@" ;;
+        rollback) shift; cmd_app_rollback "$@" ;;
+        stop|start|restart) cmd_app_lifecycle "$@" ;;
+        deployment) shift; cmd_app_deployment "$@" ;;
+        config) shift; cmd_app_config "$@" ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"

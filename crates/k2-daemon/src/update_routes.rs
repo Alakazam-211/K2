@@ -1061,6 +1061,33 @@ pub fn handle_apply(
             "[daemon] P3 update/apply — swapped {} in place (linux, pre-exit)",
             plan.running_path.display()
         );
+        // Runtime stage H: when this daemon can hand off (systemd unit with
+        // the drop-in, or no supervisor), the NEW binary takes the listening
+        // sockets over and adopts frpc; this one drains its live App splices
+        // — nothing refused, nothing dropped. The successor runs the same
+        // boot-time verifier, so a new binary that can't come up fails the
+        // hand-off (this daemon keeps serving or restarts plainly) and the
+        // crash-loop rollback still applies.
+        if crate::handoff::capable().is_ok() {
+            match crate::handoff::start(plan.running_path.clone(), Some(tx.clone())) {
+                Ok(()) => {
+                    set_phase(&plan.job_id, Phase::Restarting);
+                    k2_core::log_debug!("[daemon] P3 update/apply — handing off to the new binary");
+                    return CliResponse::ok_json(
+                        serde_json::json!({
+                            "ok": true,
+                            "applying": true,
+                            "job_id": plan.job_id,
+                            "handoff": true,
+                        })
+                        .to_string(),
+                    );
+                }
+                Err(e) => k2_core::log_debug!(
+                    "[daemon] P3 update/apply — hand-off refused ({e}); plain restart"
+                ),
+            }
+        }
         // Best-effort frpc reap before shutdown_tx (Bug B defense-in-depth).
         // stop_tunnel is idempotent and already used from HTTP tunnel routes;
         // if the tunnel was never up this is a no-op. Main shutdown also

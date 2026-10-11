@@ -1,0 +1,709 @@
+//! Front-door hand-off — no-downtime daemon upgrades (runtime stage H,
+//! `prd-k2-app-runtime-v1` §7.6, vs-live AR3/K37).
+//!
+//! ## Pattern (why this one)
+//!
+//! Three known ways to restart a server without dropping connections:
+//!
+//! - **systemd socket activation** (`.socket` units, `LISTEN_FDS`): the
+//!   listening sockets outlive the process, so a restart refuses nothing —
+//!   but systemd stops the old process before it starts the new one, so
+//!   every *established* connection (a TLS-terminated App splice, a
+//!   WebSocket) still dies. It needs root-owned `.socket` units, and does
+//!   nothing on launchd or a supervisor-less box.
+//! - **Pingora** (`SCM_RIGHTS` over an upgrade socket): an operator starts
+//!   the new binary with `--upgrade`, signals the old one, which sends its
+//!   listeners and drains. Keeps established connections, but needs an
+//!   outside actor to start the successor in the right order.
+//! - **shellflip** (Cloudflare): the old process starts the successor
+//!   itself, passes the listeners over an inherited socketpair
+//!   (`SCM_RIGHTS`), waits for it to come up, tells systemd the new main
+//!   pid, and drains.
+//!
+//! K2 uses the **shellflip** shape: it keeps established splices alive
+//! (the old daemon drains them), the daemon can drive it from its own
+//! self-update path with no operator, and it works the same under a
+//! system unit, a user unit (Arch / `k2 daemon install`) and no supervisor
+//! at all. Implemented in-tree (~libc `sendmsg`/`recvmsg`) instead of the
+//! crate so it fits the daemon's boot order (the singleton lock and the
+//! listeners are handed over before the DB opens).
+//!
+//! ## Sequence
+//!
+//! ```text
+//!  old daemon (O)                              successor (N)
+//!  spawn N (setsid, fd 3 = socketpair end) ──▶ boots to just before the
+//!                                              singleton lock
+//!                                    ◀── HELLO {pid, version}
+//!  quiesce: accept loops stop (sockets stay
+//!  open, the kernel queues new connections),
+//!  drain flag on (no PTY/frpc/service spawn),
+//!  agent PTYs killed, frpc detached,
+//!  DB query_only
+//!  TAKE {roles} + SCM_RIGHTS [lock, listeners] ──▶ adopts the singleton
+//!                                              lock + the listeners
+//!                                    ◀── ACK
+//!  sd_notify MAINPID=N (systemd), verify
+//!  main runtime shut down (every loop stops)
+//!  pump live splices on the splice runtime     serves new connections
+//!  until none left or the deadline → exit      adopts frpc + published
+//!                                              services, resumes agents
+//! ```
+//!
+//! A failure before TAKE leaves O serving as if nothing happened (N is
+//! killed). A failure after quiesce makes O exit for a plain supervisor
+//! restart.
+//!
+//! ## Supervisors
+//!
+//! - **systemd**: needs `NotifyAccess=main` on the unit (the root helper's
+//!   `daemon handoff-dropin`, or the provisioning templates). Without it
+//!   the `MAINPID=` message is dropped and O's exit would restart the unit
+//!   under N, so [`capable`] refuses. `NotifyAccess=all` is never used: any
+//!   process in the unit (an agent) could then claim the main pid and pass
+//!   the root helper's daemon-caller check.
+//! - **launchd** (macOS): there is no way to move a job's pid; O's exit
+//!   would relaunch the job against N's singleton lock. Refused; macOS
+//!   keeps the plain restart (launchd already leaves frpc, published
+//!   services and skin helpers running across it).
+//! - **none** (dev, tests): works as is.
+
+#[cfg(unix)]
+mod fdpass;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use k2_core::log_debug;
+
+/// The env var naming the inherited socketpair fd in the successor.
+pub const ENV_FD: &str = "K2_HANDOFF_FD";
+/// The fd number the socketpair end lands on in the successor.
+#[cfg(unix)]
+const CHILD_FD: i32 = 3;
+/// Default drain deadline for the old daemon (PRD: 10 min).
+pub const DEFAULT_DRAIN_SECS: u64 = 600;
+/// Override (tests, ops): seconds.
+pub const DRAIN_ENV: &str = "K2_HANDOFF_DRAIN_SECS";
+
+/// The listening sockets a hand-off carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Role {
+    /// The main HTTP listener (`daemon.port`).
+    Main,
+    /// The tunnel-ingress listener (frpc's cleartext target / the E2E
+    /// listener's decrypted splice target).
+    TunnelIngress,
+    /// The E2E TLS listener frpc dials (`tunnel-https.port`).
+    TunnelTls,
+}
+
+// ── Successor side: what the predecessor handed over ────────────────────
+
+fn inherited() -> &'static Mutex<HashMap<Role, std::net::TcpListener>> {
+    static M: OnceLock<Mutex<HashMap<Role, std::net::TcpListener>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Take the listener handed over for `role` (once). `None` on a normal
+/// boot, or once taken.
+pub fn take_inherited(role: Role) -> Option<std::net::TcpListener> {
+    inherited()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&role)
+}
+
+/// Close every handed-over listener nobody took (E2E turned off since the
+/// predecessor bound it): a socket left open with no accept loop would let
+/// frpc connect and then hang.
+pub fn drop_untaken() {
+    let left: Vec<Role> = {
+        let mut m = inherited().lock().unwrap_or_else(|p| p.into_inner());
+        let roles = m.keys().copied().collect();
+        m.clear();
+        roles
+    };
+    if !left.is_empty() {
+        log_debug!("[daemon/handoff] closed handed-over listener(s) this daemon does not serve: {left:?}");
+    }
+}
+
+/// A listener for `role` is waiting to be taken.
+pub fn has_inherited(role: Role) -> bool {
+    inherited()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .contains_key(&role)
+}
+
+static WAS_HANDED_OFF: AtomicBool = AtomicBool::new(false);
+
+/// This daemon booted from a hand-off (it received the predecessor's
+/// sockets).
+pub fn booted_from_handoff() -> bool {
+    WAS_HANDED_OFF.load(Ordering::SeqCst)
+}
+
+// ── Predecessor side: the live listeners and the quiesce signal ─────────
+
+fn live() -> &'static Mutex<HashMap<Role, Weak<tokio::net::TcpListener>>> {
+    static M: OnceLock<Mutex<HashMap<Role, Weak<tokio::net::TcpListener>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record the live listener for `role` (a re-bind replaces it). Weak: a
+/// listener whose accept loop died must close, not linger in the registry
+/// accepting connections nobody serves.
+pub fn register(role: Role, l: &Arc<tokio::net::TcpListener>) {
+    live()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(role, Arc::downgrade(l));
+}
+
+fn quiesce_tx() -> &'static tokio::sync::watch::Sender<bool> {
+    static TX: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+    TX.get_or_init(|| tokio::sync::watch::channel(false).0)
+}
+
+/// Resolves once the daemon stops accepting (hand-off). Every accept
+/// loop selects on it next to `accept()`, and stops WITHOUT closing the
+/// socket it holds an `Arc` of (the hand-off code holds its own).
+pub async fn quiesced() {
+    let mut rx = quiesce_tx().subscribe();
+    while !*rx.borrow_and_update() {
+        if rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+pub fn is_quiesced() -> bool {
+    *quiesce_tx().borrow()
+}
+
+// ── The splice runtime and the drain count ──────────────────────────────
+
+/// A runtime of its own for the connections that must outlive a hand-off
+/// (E2E TLS splices: published services, skin gateway, App links). The
+/// main runtime is shut down when the daemon hands off — every loop and
+/// every daemon-served connection stops — while this one keeps pumping
+/// the splices it owns until they close.
+pub fn splice_handle() -> tokio::runtime::Handle {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("k2-splice")
+            .enable_all()
+            .build()
+            .expect("build the splice runtime")
+    })
+    .handle()
+    .clone()
+}
+
+static LIVE_SPLICES: AtomicUsize = AtomicUsize::new(0);
+
+/// Held by a splice for its whole life; the old daemon drains until none
+/// are left.
+pub struct SpliceGuard(());
+
+impl Drop for SpliceGuard {
+    fn drop(&mut self) {
+        LIVE_SPLICES.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub fn splice_guard() -> SpliceGuard {
+    LIVE_SPLICES.fetch_add(1, Ordering::SeqCst);
+    SpliceGuard(())
+}
+
+pub fn live_splices() -> usize {
+    LIVE_SPLICES.load(Ordering::SeqCst)
+}
+
+// ── Supervisor glue: NOTIFY_SOCKET and the boot executable ──────────────
+
+static NOTIFY_SOCKET: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
+static BOOT_EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Call once at process start, before any thread or child exists: keep
+/// systemd's `NOTIFY_SOCKET` for the hand-off and REMOVE it from the
+/// environment, so no agent, terminal or published service inherits a
+/// path to the unit's notify socket. Also records the executable path
+/// (after a self-update swap, `/proc/self/exe` names a deleted inode; the
+/// successor must exec the path).
+pub fn capture_process_context() {
+    let ns = std::env::var_os("NOTIFY_SOCKET");
+    if ns.is_some() {
+        std::env::remove_var("NOTIFY_SOCKET");
+    }
+    let _ = NOTIFY_SOCKET.set(ns);
+    let _ = BOOT_EXE.set(std::env::current_exe().ok());
+}
+
+/// systemd's notify socket for this unit: the one the process started
+/// with, or — when the hand-off drop-in was installed after this process
+/// started (no `NOTIFY_SOCKET` in its env then) and the unit now reports
+/// `NotifyAccess=main` — the manager's fixed socket.
+fn notify_socket() -> Option<std::ffi::OsString> {
+    if let Some(s) = NOTIFY_SOCKET.get().cloned().flatten() {
+        return Some(s);
+    }
+    if !under_systemd() {
+        return None;
+    }
+    match systemctl_show("NotifyAccess").as_deref() {
+        Some("main") | Some("exec") | Some("all") => {}
+        _ => return None,
+    }
+    let (_user, _unit, scope) = crate::root_helper::own_unit();
+    let path = if scope == "user" {
+        let rt = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            // SAFETY: getuid has no preconditions.
+            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+        rt.join("systemd").join("notify")
+    } else {
+        PathBuf::from("/run/systemd/notify")
+    };
+    path.exists().then(|| path.into_os_string())
+}
+
+/// The path this daemon was started from.
+pub fn boot_exe() -> Option<PathBuf> {
+    BOOT_EXE.get().cloned().flatten()
+}
+
+fn under_systemd() -> bool {
+    std::env::var_os("INVOCATION_ID").is_some()
+}
+
+fn under_launchd() -> bool {
+    cfg!(target_os = "macos")
+        && std::env::var("XPC_SERVICE_NAME")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+}
+
+/// `systemctl [--user] show -p <prop> --value <unit>`.
+fn systemctl_show(prop: &str) -> Option<String> {
+    let (_user, unit, scope) = crate::root_helper::own_unit();
+    let mut cmd = std::process::Command::new("systemctl");
+    if scope == "user" {
+        cmd.arg("--user");
+    }
+    cmd.args(["show", "-p", prop, "--value", &unit]);
+    let out = cmd.output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Can this daemon hand off right now? `Err` says why not (and what fixes
+/// it). The caller then falls back to a plain restart.
+pub fn capable() -> Result<(), String> {
+    if !cfg!(unix) {
+        return Err("hand-off needs a Unix daemon".into());
+    }
+    if IN_PROGRESS.load(Ordering::SeqCst) {
+        return Err("a hand-off is already in progress".into());
+    }
+    if k2_core::handoff_state::draining() {
+        return Err("this daemon already handed off".into());
+    }
+    if under_launchd() {
+        return Err(
+            "launchd cannot move a job to a new process — macOS keeps the plain restart \
+             (frpc, published services and skin helpers already survive it there)"
+                .into(),
+        );
+    }
+    if under_systemd() && notify_socket().is_none() {
+        return Err(
+            "the systemd unit has no NotifyAccess=main, so the new daemon cannot become the \
+             unit's main process — install the hand-off drop-in (`POST \
+             /cli/daemon/handoff/setup`; root helper `daemon handoff-dropin install`)"
+                .into(),
+        );
+    }
+    if boot_exe().is_none() {
+        return Err("the daemon's executable path is unknown".into());
+    }
+    Ok(())
+}
+
+static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static HANDED_OFF: AtomicBool = AtomicBool::new(false);
+
+/// This daemon completed a hand-off and now only drains.
+pub fn handed_off() -> bool {
+    HANDED_OFF.load(Ordering::SeqCst)
+}
+
+// ── Wire protocol ───────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+enum Msg {
+    Hello { pid: u32, version: String },
+    /// Followed in the same `sendmsg` by the fds: the singleton lock
+    /// first, then one listener per role, in `roles` order.
+    Take { roles: Vec<Role> },
+    Ack,
+}
+
+/// How long the predecessor waits for the successor's HELLO (it boots to
+/// just before the singleton lock first: login-shell PATH capture,
+/// migrations of the home dir).
+const HELLO_TIMEOUT: Duration = Duration::from_secs(120);
+const ACK_TIMEOUT: Duration = Duration::from_secs(30);
+
+// ── Successor: receive ──────────────────────────────────────────────────
+
+/// Called at boot right before the singleton lock. When this process was
+/// started by a hand-off (`K2_HANDOFF_FD`), say HELLO, receive the lock
+/// and the listeners, store the listeners for [`take_inherited`], ACK, and
+/// return the lock file (already locked: same open file description as the
+/// predecessor's). `Ok(None)` on a normal boot.
+pub fn successor_receive() -> Result<Option<std::fs::File>, String> {
+    let Some(raw) = std::env::var_os(ENV_FD) else {
+        return Ok(None);
+    };
+    std::env::remove_var(ENV_FD);
+    #[cfg(unix)]
+    {
+        successor_receive_unix(&raw.to_string_lossy()).map(Some)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = raw;
+        Err("hand-off is Unix-only".into())
+    }
+}
+
+#[cfg(unix)]
+fn successor_receive_unix(fd_str: &str) -> Result<std::fs::File, String> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::net::UnixStream;
+    let fd: i32 = fd_str
+        .trim()
+        .parse()
+        .map_err(|_| format!("{ENV_FD}={fd_str:?} is not an fd"))?;
+    // SAFETY: the predecessor put the socketpair end on this fd for us.
+    let sock = unsafe { UnixStream::from_raw_fd(fd) };
+    fdpass::set_cloexec(fd);
+    sock.set_read_timeout(Some(ACK_TIMEOUT * 2))
+        .map_err(|e| format!("hand-off socket timeout: {e}"))?;
+    fdpass::send_msg(
+        &sock,
+        &serde_json::to_vec(&Msg::Hello {
+            pid: std::process::id(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+        .expect("serialize hello"),
+        &[],
+    )
+    .map_err(|e| format!("send HELLO: {e}"))?;
+    let (body, mut fds) = fdpass::recv_msg(&sock, 8).map_err(|e| format!("receive TAKE: {e}"))?;
+    let roles = match serde_json::from_slice::<Msg>(&body) {
+        Ok(Msg::Take { roles }) => roles,
+        Ok(other) => return Err(format!("expected TAKE, got {other:?}")),
+        Err(e) => return Err(format!("unreadable TAKE: {e}")),
+    };
+    if fds.len() != roles.len() + 1 {
+        return Err(format!(
+            "TAKE carried {} fds for {} roles + the lock",
+            fds.len(),
+            roles.len()
+        ));
+    }
+    let lock = fds.remove(0);
+    let lock = std::fs::File::from(lock);
+    {
+        let mut m = inherited().lock().unwrap_or_else(|p| p.into_inner());
+        for (role, fd) in roles.iter().zip(fds) {
+            let l = std::net::TcpListener::from(fd);
+            log_debug!(
+                "[daemon/handoff] inherited {role:?} listener {:?}",
+                l.local_addr().ok()
+            );
+            m.insert(*role, l);
+        }
+    }
+    WAS_HANDED_OFF.store(true, Ordering::SeqCst);
+    fdpass::send_msg(&sock, &serde_json::to_vec(&Msg::Ack).expect("ack"), &[])
+        .map_err(|e| format!("send ACK: {e}"))?;
+    log_debug!("[daemon/handoff] took over from the previous daemon ({} listeners)", roles.len());
+    Ok(lock)
+}
+
+// ── Predecessor: run ────────────────────────────────────────────────────
+
+/// Where a failed hand-off left this daemon.
+#[derive(Debug)]
+pub enum Failed {
+    /// Nothing changed; this daemon keeps serving.
+    Untouched(String),
+    /// The daemon had already quiesced; it must exit for a plain restart.
+    Quiesced(String),
+}
+
+/// Start a hand-off to `exe` (the binary now at the boot path, after a
+/// self-update swap, or the same binary). Returns at once; the work runs
+/// on its own task. On success the daemon's shutdown is triggered in
+/// drain mode; on a failure after quiesce, a plain shutdown (the
+/// supervisor restarts it).
+pub fn start(exe: PathBuf, shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>) -> Result<(), String> {
+    capable()?;
+    if IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return Err("a hand-off is already in progress".into());
+    }
+    tokio::spawn(async move {
+        let res = tokio::task::spawn_blocking(move || run_blocking(&exe)).await;
+        let res = match res {
+            Ok(r) => r,
+            Err(e) => Err(Failed::Untouched(format!("hand-off task: {e}"))),
+        };
+        match res {
+            Ok(pid) => {
+                log_debug!(
+                    "[daemon/handoff] successor pid {pid} owns the front door; draining {} live \
+                     splice(s)",
+                    live_splices()
+                );
+                if let Some(tx) = shutdown_tx {
+                    let _ = tx.send(());
+                }
+            }
+            Err(Failed::Untouched(e)) => {
+                log_debug!("[daemon/handoff] FAILED before taking anything over — still serving: {e}");
+                IN_PROGRESS.store(false, Ordering::SeqCst);
+            }
+            Err(Failed::Quiesced(e)) => {
+                log_debug!(
+                    "[daemon/handoff] FAILED after quiescing — exiting for a plain supervisor \
+                     restart: {e}"
+                );
+                if let Some(tx) = shutdown_tx {
+                    let _ = tx.send(());
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_blocking(_exe: &std::path::Path) -> Result<u32, Failed> {
+    Err(Failed::Untouched("hand-off is Unix-only".into()))
+}
+
+#[cfg(unix)]
+fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+
+    let (ours, theirs) =
+        UnixStream::pair().map_err(|e| Failed::Untouched(format!("socketpair: {e}")))?;
+    let theirs_fd = theirs.as_raw_fd();
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(std::env::args_os().skip(1))
+        .env(ENV_FD, CHILD_FD.to_string())
+        .stdin(std::process::Stdio::null());
+    if let Some(ns) = notify_socket() {
+        // Only the successor gets it back (children of this daemon never
+        // had it): it becomes the unit's main process and may hand off
+        // again.
+        cmd.env("NOTIFY_SOCKET", ns);
+    }
+    // SAFETY: dup2/setsid/fcntl are async-signal-safe.
+    unsafe {
+        cmd.pre_exec(move || {
+            // Its own session: the root helper's caller check wants the
+            // unit's main process to be a session leader whose sudo calls
+            // share its session.
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::dup2(theirs_fd, CHILD_FD) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let flags = libc::fcntl(CHILD_FD, libc::F_GETFD);
+            if flags == -1 || libc::fcntl(CHILD_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Failed::Untouched(format!("spawn successor {}: {e}", exe.display())))?;
+    drop(theirs);
+    let pid = child.id();
+    log_debug!("[daemon/handoff] started successor pid {pid} ({})", exe.display());
+    let abort = |child: &mut std::process::Child, why: String| -> Failed {
+        let _ = child.kill();
+        let _ = child.wait();
+        Failed::Untouched(why)
+    };
+
+    // HELLO
+    if let Err(e) = ours.set_read_timeout(Some(HELLO_TIMEOUT)) {
+        return Err(abort(&mut child, format!("socket timeout: {e}")));
+    }
+    let hello = fdpass::recv_msg(&ours, 0).map_err(|e| format!("waiting for HELLO: {e}"));
+    let version = match hello.and_then(|(b, _)| {
+        serde_json::from_slice::<Msg>(&b).map_err(|e| format!("unreadable HELLO: {e}"))
+    }) {
+        Ok(Msg::Hello { pid: p, version }) if p == pid => version,
+        Ok(other) => return Err(abort(&mut child, format!("expected HELLO from {pid}, got {other:?}"))),
+        Err(e) => return Err(abort(&mut child, e)),
+    };
+    log_debug!("[daemon/handoff] successor {pid} (k2-daemon {version}) is ready for the sockets");
+
+    // Collect the live listeners (strong refs from here: the accept loops
+    // drop theirs when they quiesce).
+    let held: Vec<(Role, Arc<tokio::net::TcpListener>)> = {
+        let m = live().lock().unwrap_or_else(|p| p.into_inner());
+        let mut v: Vec<_> = m
+            .iter()
+            .filter_map(|(r, w)| w.upgrade().map(|l| (*r, l)))
+            .collect();
+        v.sort_by_key(|(r, _)| *r as u8);
+        v
+    };
+    if !held.iter().any(|(r, _)| *r == Role::Main) {
+        return Err(abort(&mut child, "the main listener is not registered".into()));
+    }
+    let Some(lock_fd) = crate::daemon_main::singleton_lock_fd() else {
+        return Err(abort(&mut child, "this daemon holds no singleton lock".into()));
+    };
+
+    // QUIESCE — from here a failure means exit + plain restart.
+    quiesce();
+
+    let roles: Vec<Role> = held.iter().map(|(r, _)| *r).collect();
+    let mut fds = vec![lock_fd];
+    fds.extend(held.iter().map(|(_, l)| l.as_raw_fd()));
+    let take = serde_json::to_vec(&Msg::Take { roles: roles.clone() }).expect("serialize take");
+    if let Err(e) = fdpass::send_msg(&ours, &take, &fds) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(Failed::Quiesced(format!("send TAKE: {e}")));
+    }
+    let _ = ours.set_read_timeout(Some(ACK_TIMEOUT));
+    match fdpass::recv_msg(&ours, 0)
+        .map_err(|e| e.to_string())
+        .and_then(|(b, _)| serde_json::from_slice::<Msg>(&b).map_err(|e| e.to_string()))
+    {
+        Ok(Msg::Ack) => {}
+        Ok(other) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Failed::Quiesced(format!("expected ACK, got {other:?}")));
+        }
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Failed::Quiesced(format!("waiting for ACK: {e}")));
+        }
+    }
+    // Our copies of the sockets go; the successor's keep them open.
+    drop(held);
+    HANDED_OFF.store(true, Ordering::SeqCst);
+    // Never wait on the successor: it outlives us (the drain exits this
+    // process; the kernel reparents N).
+    std::mem::forget(child);
+    log_debug!("[daemon/handoff] successor {pid} acknowledged {roles:?}");
+
+    if let Some(ns) = notify_socket() {
+        match fdpass::sd_notify(&ns, &format!("MAINPID={pid}")) {
+            Ok(()) => {
+                std::thread::sleep(Duration::from_millis(200));
+                match systemctl_show("MainPID") {
+                    Some(p) if p == pid.to_string() => {
+                        log_debug!("[daemon/handoff] systemd now tracks the successor (MainPID={p})")
+                    }
+                    other => log_debug!(
+                        "[daemon/handoff] WARN: systemd MainPID is {other:?}, not {pid} — this \
+                         process stays resident as the unit's main process"
+                    ),
+                }
+            }
+            Err(e) => log_debug!("[daemon/handoff] WARN: sd_notify MAINPID={pid}: {e}"),
+        }
+    }
+    Ok(pid)
+}
+
+/// Stop accepting, stop starting things, release what the successor
+/// takes over. Idempotent.
+fn quiesce() {
+    let _ = quiesce_tx().send(true);
+    k2_core::handoff_state::set_draining();
+    // Agent PTYs: the successor resumes them. Kill in parallel (each kill
+    // has a 100 ms SIGHUP grace).
+    let sessions = crate::v2_session_map::snapshot();
+    let n = sessions.len();
+    let joins: Vec<_> = sessions
+        .into_iter()
+        .map(|(_, s)| std::thread::spawn(move || s.kill()))
+        .collect();
+    for j in joins {
+        let _ = j.join();
+    }
+    // frpc: the successor adopts it.
+    let frpc = k2_core::tunnel::connector::detach_for_handoff();
+    // The DB: the successor owns it now.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = conn.execute_batch("PRAGMA query_only = ON;") {
+            log_debug!("[daemon/handoff] WARN: DB query_only: {e}");
+        }
+    }
+    log_debug!(
+        "[daemon/handoff] quiesced: accept loops stopped, {n} agent PTY(s) killed, frpc {} left \
+         for the successor, DB read-only",
+        frpc.map(|p| format!("pid {p}")).unwrap_or_else(|| "(none)".into())
+    );
+}
+
+/// After the main runtime is gone: pump the live splices until none are
+/// left or the deadline passes, then exit. Never returns.
+pub fn drain_then_exit() -> ! {
+    let secs = std::env::var(DRAIN_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_DRAIN_SECS);
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    let start = live_splices();
+    let mut last = start;
+    while live_splices() > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+        let now = live_splices();
+        if now != last {
+            last = now;
+        }
+    }
+    let left = live_splices();
+    log_debug!(
+        "[daemon/handoff] drain done: {start} splice(s) at hand-off, {left} cut at the {secs}s \
+         deadline — exiting"
+    );
+    std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests;

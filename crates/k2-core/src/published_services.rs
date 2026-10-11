@@ -25,6 +25,10 @@ pub const KIND_CMD: &str = "cmd";
 pub const KIND_SKIN: &str = "skin";
 /// Display sentinel stored in `cmd` for `kind=skin`. Never a shell string.
 pub const CMD_SKIN_SENTINEL: &str = "(skin)";
+/// `cmd` of an App runtime service row (prd-k2-app-runtime-v1 AR5): the
+/// App runtime (`apps` row keyed by this service's id) owns the process;
+/// the publish supervisor never starts, stops or respawns it.
+pub const CMD_APP_SENTINEL: &str = "(app)";
 
 /// Computed runtime status (not a SQLite column).
 pub const STATUS_RUNNING: &str = "running";

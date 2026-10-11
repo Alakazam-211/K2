@@ -161,6 +161,16 @@ pub const ROUTES: &[Route] = &[
     // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
     // (own workspace + "Allow this agent to manage Apps") in the handler.
     post("/cli/app/build", Member),
+    // Stage 1 holds only the per-App memory limit (the rest is S13).
+    post("/cli/app/config", Member),
+    post("/cli/app/deploy", Member),
+    // Litmus L3: who, commit, live/failed/stalled of one deployment.
+    get("/cli/app/deployment", Member),
+    post("/cli/app/install", Member),
+    post("/cli/app/restart", Member),
+    post("/cli/app/rollback", Member),
+    post("/cli/app/start", Member),
+    post("/cli/app/stop", Member),
     post("/cli/app/validate", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),

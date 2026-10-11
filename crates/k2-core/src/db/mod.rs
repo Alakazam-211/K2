@@ -1936,6 +1936,33 @@ mod tests {
         );
     }
 
+    /// 0.45.5 tail: compute nodes, vault, node admin, Thread push prefs
+    /// apply in release order, and 0156 (node admin) lands before 0157.
+    #[test]
+    fn release_tail_migrations_apply_in_order() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM _migrations WHERE name >= '0147' ORDER BY id")
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "0147_compute_nodes",
+                "0148_vault_secret_refs",
+                "0149_vault_manage",
+                "0156_compute_node_admin",
+                "0157_notify_prefs",
+            ],
+            "tail migrations out of order: {names:?}"
+        );
+    }
+
     /// 0135 (Thread survives a tab rename, TR22): applied, right after
     /// 0134, and its tables exist. Re-running the SQL is a no-op (TR7).
     #[test]

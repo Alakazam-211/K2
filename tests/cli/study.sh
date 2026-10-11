@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -488,6 +488,26 @@ pf_json="$("$K2" study publish-framing --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="publish-framing" and "frame-ancestors" in d["body"], d["id"]' "$pf_json"
 echo "  PASS: publish-framing --json id+body"
 pass=$((pass + 1))
+
+echo "== k2 study notifications (prd-thread-push-notifications-v1 S6) =="
+nt_out="$("$K2" study notifications)"
+assert_contains "title" "$nt_out" "k2 study notifications"
+assert_contains "text post pushes" "$nt_out" "New message in Thread"
+assert_contains "ask pushes" "$nt_out" "Asks you to choose"
+assert_contains "secret pushes" "$nt_out" "Asks for a secret"
+assert_contains "name only" "$nt_out" "your name and that line only"
+assert_contains "settings page" "$nt_out" "Settings → Notifications"
+assert_contains "no notify cli" "$nt_out" "There is no \`k2 notify\`."
+assert_contains "coalescing" "$nt_out" "45 s"
+assert_contains "budget" "$nt_out" "30"
+assert_contains "airgap" "$nt_out" "air-gapped"
+nt_json="$("$K2" study notifications --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="notifications" and "New message in Thread" in d["body"], d["id"]' "$nt_json"
+echo "  PASS: notifications --json id+body"
+pass=$((pass + 1))
+human_out="$("$K2" study human)"
+assert_contains "human page points at notifications" "$human_out" "k2 study notifications"
+assert_contains "thread schema mentions pushes" "$(grep -F '"name": "thread",' -A2 "$K2_CLI")" "k2 study notifications"
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

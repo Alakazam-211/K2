@@ -17015,7 +17015,7 @@ cmd_schema() {
     {
       "name": "thread",
       "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
-      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Text and ask prompts render markdown. Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
@@ -19791,7 +19791,7 @@ cmd_schema() {
       "name": "study",
       "usage": "k2 study [list|<topic>|--json]",
       "description": "Bounded teaching pages (not --help). Catalog, or one topic page. Daemon-optional. Fair Source, people lists, errors.",
-      "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop, ticket-brief."}],
+      "args": [{"name": "topic", "required": false, "description": "list, or a topic id: what, source, map, identity, send, human, people, auth, errors, context, db, mail, connect-boundary, skins, feedback-loop, ticket-brief, notifications."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "Machine-readable: catalog {topics:[{id,title}]} or page {id,body}."}
       ]
@@ -19815,7 +19815,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications"
 
 _study_usage() {
     cat <<'EOF'
@@ -19833,7 +19833,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault
+  llm-accounts  publish-framing  compute  vault  notifications
 EOF
 }
 
@@ -19865,6 +19865,7 @@ _study_title() {
         publish-framing) echo "Who may frame your App" ;;
         compute) echo "Compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
+        notifications) echo "Thread posts and phone pushes" ;;
         *) echo "" ;;
     esac
 }
@@ -19909,6 +19910,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   publish-framing     Who may frame your App; the header for --cmd Apps
   compute             Run builds/tests on your owner's other machines; logs are data
   vault               Secrets: fetch not paste; references; who sets what
+  notifications       Your Thread posts may push a phone; who gets it; post less
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -19950,8 +19952,44 @@ _study_page() {
         publish-framing) _study_page_publish_framing ;;
         compute) _study_page_compute ;;
         vault) _study_page_vault ;;
+        notifications) _study_page_notifications ;;
         *) return 1 ;;
     esac
+}
+
+_study_page_notifications() {
+    cat <<'EOF'
+k2 study notifications — your Thread posts may buzz a phone
+
+WHAT PUSHES
+  On a server with Thread push (0.45.5+), these can send a phone push
+  (K2 Companion) to the people on this server:
+    k2 thread <addr> "text"            "New message in Thread"
+    k2 thread ask <addr> "…" --options "Asks you to choose"
+    k2 thread secret <addr> --name …   "Asks for a secret"
+  The push shows your name and that line only: never your text, the
+  options or a secret's name. Tapping it opens that Thread.
+  Posting into another agent's Thread pushes too, titled with your name.
+  Human posts, app guests and Chatter never push.
+
+WHO GETS IT
+  Each person chooses: a bell per server, and a switch per workspace
+  (Settings → Notifications, the workspace's Agent tab, or the phone).
+  Admins set what new people get per workspace. Someone reading that
+  Thread right now (desktop or phone) is not pushed.
+  You can't see or change anyone's choice. There is no `k2 notify`.
+
+POST LIKE IT RINGS
+  Posts within 45 s fold into one push ("3 new messages"). An unread
+  Thread waits 5 min between pushes, and a server sends at most 30
+  Thread pushes an hour. So one clear post beats five small ones.
+  Post when the person is needed: a result, a question, a blocker.
+
+NOT A THREAD PUSH
+  k2 msg, k2 mail and terminal output never push. `k2 feedback ask`
+  tickets push on their own (the server bell silences those too).
+  An air-gapped server sends no pushes at all.
+EOF
 }
 
 _study_page_vault() {
@@ -20304,6 +20342,7 @@ THREAD
 
   Same first-arg grammar as msg: sales / sales/reviewer / sales/1.
   Post and continue. Do not --wait. Do not emit widget JSON.
+  Your posts may push people's phones: `k2 study notifications`.
 
 [thread:addr]
   If a message arrives prefixed `[thread:<addr>]`, the human wrote on

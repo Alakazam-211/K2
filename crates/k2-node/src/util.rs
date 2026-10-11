@@ -85,6 +85,34 @@ pub async fn run_cmd(
     }
 }
 
+/// Run a prepared command (blocking) with a time limit; stdout on
+/// success. Kills it on timeout. For fixed, absolute-path probes.
+pub fn output_limited(mut cmd: std::process::Command, limit: Duration) -> Result<String, String> {
+    use std::io::Read;
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let mut out = child.stdout.take().ok_or("no stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out.read_to_string(&mut s);
+        s
+    });
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {}s", limit.as_secs()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(reader.join().unwrap_or_default())
+}
+
 /// The base PATH for jobs and node-run tools.
 pub fn base_path(home: &Path) -> String {
     k2_node_proto::env::clean_path(&format!(

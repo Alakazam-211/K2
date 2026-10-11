@@ -340,6 +340,8 @@ pub fn options(layout: Layout) -> NodeOptions {
     o.backoff_min = Duration::from_millis(50);
     o.backoff_max = Duration::from_millis(300);
     o.keep_awake = false;
+    // Never probe the real machine's update lists / power settings in tests.
+    o.health = false;
     o.use_cgroups = false;
     o.facts = Some(facts());
     o

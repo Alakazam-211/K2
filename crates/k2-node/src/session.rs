@@ -359,6 +359,32 @@ where
         tokio::spawn(async move { crate::admin::courier::report_last_update(n, t).await });
     }
 
+    // Health (node admin §10): at once, then on change (checked every
+    // minute) and at least every HEALTH_SECS.
+    let health_node = node.clone();
+    let health_tx = tx.clone();
+    let health = tokio::spawn(async move {
+        if !health_node.opts.health {
+            return;
+        }
+        let mut last: Option<(k2_node_proto::health::Health, std::time::Instant)> = None;
+        loop {
+            crate::admin::health::refresh_updates_in_background(&health_node);
+            let h = crate::admin::health::collect(&health_node, false).await;
+            let due = match &last {
+                None => true,
+                Some((prev, at)) => !crate::admin::health::same_facts(prev, &h) || at.elapsed() >= Duration::from_secs(k2_node_proto::health::HEALTH_SECS),
+            };
+            if due {
+                if health_tx.send(Frame::Health(h.clone())).await.is_err() {
+                    return;
+                }
+                last = Some((h, std::time::Instant::now()));
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
+
     // Shipper.
     let ship_node = node.clone();
     let ship_tracks = tracks.clone();
@@ -458,6 +484,7 @@ where
     node.hub.detach(epoch);
     shipper.abort();
     offers.abort();
+    health.abort();
     drop(tx);
     // Let queued frames (e.g. a goodbye) flush briefly, then stop.
     let _ = tokio::time::timeout(Duration::from_millis(200), async {

@@ -1229,9 +1229,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         ),
         // 0147 — K2 compute nodes (prd-k2-compute-nodes-v1 §13/§21.3): nodes,
         // grants, jobs, usage, the compute audit log, and
-        // projects.agents_can_use_compute. New tables + one column. 0144–0146
-        // are claimed by 0.45.x / the vault; 0148 is reserved for a separate
-        // receipts/usage slice. The integrator orders the list.
+        // projects.agents_can_use_compute. New tables + one column.
+        // 0147 shipped in 0.45.3, so 0144–0146 are retired and never used
+        // (they would apply out of release order). Next numbers, assigned in
+        // release order (2026-10-10): 0148–0149 vault, 0150–0153 App runtime
+        // stages, 0154 Gardens local services, 0155 compute receipts/usage.
+        // The integrator still orders the list and renumbers on slips.
         (
             "0147_compute_nodes",
             include_str!("../../drizzle_sql/0147_compute_nodes.sql"),

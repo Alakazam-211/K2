@@ -1460,13 +1460,18 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
         let rv = json(&room_deny.body);
         assert_eq!(rv["error"]["code"], "skin_room", "{}", room_deny.body);
 
+        // Secret cards answer into the K2 vault (0.45.4). The in-process
+        // harness doesn't run daemon_main, so open this temp home's vault
+        // the way boot does (a file key store: never the Keychain).
+        k2_daemon::vault::boot(&k2_core::paths::k2_home());
         let secret_val = "s3cr3t-NEVER-IN-DAEMON-ANSWER-xyz";
         let secret = http(
             dport,
             "POST",
             &format!("/cli/thread/secret?token={OWNER_TOKEN}"),
             Some(&format!(
-                r#"{{"addr":"{handle}","name":"API_TOKEN","prompt":"Paste"}}"#
+                // A guest may fill a vault card only for a named site.
+                r#"{{"addr":"{handle}","name":"API_TOKEN","prompt":"Paste","for":"api.example.com"}}"#
             )),
         );
         assert_eq!(secret.status, 200, "{}", secret.body);

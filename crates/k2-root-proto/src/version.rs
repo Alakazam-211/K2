@@ -4,7 +4,8 @@
 //! - 1 = the original `k2-mail-helper` verbs;
 //! - 2 = `version`/`usage`/`snapshot-data`/`restore-data`/`stop` (0.45.0);
 //! - 3 = self-update + backup + `harden-store` + the `pg` namespace;
-//! - 4 = `keep`.
+//! - 4 = `keep`;
+//! - 5 = `daemon handoff-dropin install|remove` (runtime stage H, 0.46.0).
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -13,7 +14,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -30,6 +31,8 @@ pub const BACKUP_MIN_PROTOCOL: u32 = 3;
 pub const PG_MIN_PROTOCOL: u32 = 3;
 /// The vault keeper (`keep …`).
 pub const KEEP_MIN_PROTOCOL: u32 = 4;
+/// The daemon unit's hand-off drop-in (`daemon handoff-dropin …`).
+pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 

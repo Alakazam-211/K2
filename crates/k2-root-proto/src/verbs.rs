@@ -179,6 +179,12 @@ pub enum Verb {
     KeepKekAbort,
     KeepGenGet,
     KeepGenBump,
+    // daemon (protocol 5, runtime stage H)
+    /// Write the daemon unit's hand-off drop-in (`KillMode=process`,
+    /// `NotifyAccess=main`, `ExecReload=` SIGUSR2) and `daemon-reload`.
+    DaemonHandoffDropinInstall,
+    /// Remove it again and `daemon-reload`.
+    DaemonHandoffDropinRemove,
 }
 
 const REFUSED: &str = "refused arguments";
@@ -339,6 +345,9 @@ impl Verb {
             ["keep", "kek", "abort"] => Verb::KeepKekAbort,
             ["keep", "gen", "get"] => Verb::KeepGenGet,
             ["keep", "gen", "bump"] => Verb::KeepGenBump,
+
+            ["daemon", "handoff-dropin", "install"] => Verb::DaemonHandoffDropinInstall,
+            ["daemon", "handoff-dropin", "remove"] => Verb::DaemonHandoffDropinRemove,
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -435,6 +444,8 @@ impl Verb {
             Verb::KeepKekAbort => s(&["keep", "kek", "abort"]),
             Verb::KeepGenGet => s(&["keep", "gen", "get"]),
             Verb::KeepGenBump => s(&["keep", "gen", "bump"]),
+            Verb::DaemonHandoffDropinInstall => s(&["daemon", "handoff-dropin", "install"]),
+            Verb::DaemonHandoffDropinRemove => s(&["daemon", "handoff-dropin", "remove"]),
         }
     }
 
@@ -474,6 +485,11 @@ impl Verb {
             | Verb::KeepKekCommit
             | Verb::KeepKekAbort
             | Verb::KeepGenBump => Daemon,
+
+            // Changes how systemd stops the daemon's own unit (what
+            // survives a stop) and which process may name its main pid:
+            // only the daemon itself may ask.
+            Verb::DaemonHandoffDropinInstall | Verb::DaemonHandoffDropinRemove => Daemon,
         }
     }
 
@@ -532,6 +548,7 @@ impl Verb {
             "helper" => "helper",
             "mail" => "mail",
             "pg" => "pg",
+            "daemon" => "daemon",
             _ => "keep",
         }
     }
@@ -584,6 +601,8 @@ pub fn catalog() -> Vec<Verb> {
         Verb::KeepKekAbort,
         Verb::KeepGenGet,
         Verb::KeepGenBump,
+        Verb::DaemonHandoffDropinInstall,
+        Verb::DaemonHandoffDropinRemove,
     ];
     for t in [
         MkdirTarget::Config,
@@ -681,6 +700,8 @@ mod tests {
             &["keep", "kek", "commit"],
             &["keep", "kek", "abort"],
             &["keep", "gen", "bump"],
+            &["daemon", "handoff-dropin", "install"],
+            &["daemon", "handoff-dropin", "remove"],
         ];
         let open: &[&[&str]] = &[
             &["helper", "version"],
@@ -790,6 +811,12 @@ mod tests {
             // Unknown namespaces.
             &["cell", "prepare"],
             &["daemon", "update"],
+            // The daemon namespace takes no unit, path or setting.
+            &["daemon", "handoff-dropin"],
+            &["daemon", "handoff-dropin", "install", "k2-daemon.service"],
+            &["daemon", "handoff-dropin", "/etc/systemd/system/x.service.d"],
+            &["daemon", "handoff-dropin", "KillMode=none"],
+            &["daemon", "systemctl", "restart"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

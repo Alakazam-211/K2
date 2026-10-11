@@ -97,6 +97,14 @@ pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
 /// that still has it locked still has the store open.
 pub const STALWART_STORE_LOCK: &str = "/var/lib/stalwart/data/LOCK";
 
+// ── The daemon's own unit (runtime stage H) ─────────────────────────────
+
+/// System unit directory. The daemon's drop-in dir is
+/// `<this>/<unit from daemon.toml>.d` (the unit never comes from argv).
+pub const SYSTEMD_SYSTEM_DIR: &str = "/etc/systemd/system";
+/// The hand-off drop-in's file name, inside that unit's `.d` dir.
+pub const HANDOFF_DROPIN_FILE: &str = "k2-handoff.conf";
+
 // ── Postgres sidecar ────────────────────────────────────────────────────
 
 /// Distro-owned unit — K2 drops in, never rewrites postgresql.service.

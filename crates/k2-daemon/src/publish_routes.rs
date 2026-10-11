@@ -582,6 +582,50 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request");
     }
 
+    /// 0.45.4: the list route says which services still inherit the
+    /// daemon's environment (`envMode: legacy`, ends in 0.46.0) and which
+    /// run clean, so `k2 publish ps` can warn agents.
+    #[test]
+    fn list_reports_env_mode_and_the_046_end_for_legacy_services() {
+        crate::test_support::with_temp_home(|| {
+            let ws = format!("envmode-ws-{}", uuid::Uuid::new_v4().simple());
+            let path = format!("/tmp/{ws}");
+            seed_ws(&ws, &path, "EnvMode");
+            let (old, new) = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let old = k2_core::published_services::insert(&conn, &ws, "oldshop", "true", &path, 41001, "local", "stopped", "cmd", "")
+                    .expect("insert legacy");
+                let new = k2_core::published_services::insert(&conn, &ws, "newshop", "true", &path, 41002, "local", "stopped", "cmd", "")
+                    .expect("insert clean");
+                (old.id, new.id)
+            };
+            crate::vault::publish_env::set(&old, Some("legacy"), None).expect("legacy");
+            crate::vault::publish_env::set(&new, Some("clean"), None).expect("clean");
+
+            let mut p = HashMap::new();
+            p.insert("project".to_string(), path.clone());
+            let resp = dispatch("/cli/publish/list", &p).expect("list route");
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            let rows = v["services"].as_array().expect("services[]");
+            let row = |n: &str| rows.iter().find(|r| r["name"] == n).unwrap_or_else(|| panic!("{n} missing: {v}")).clone();
+            let o = row("oldshop");
+            assert_eq!(o["envMode"], "legacy", "{o}");
+            assert_eq!(o["envRemovedIn"], "0.46.0", "{o}");
+            assert!(o["envDeprecation"].as_str().expect("notice").contains("k2 publish env oldshop clean"), "{o}");
+            let n = row("newshop");
+            assert_eq!(n["envMode"], "clean", "{n}");
+            assert!(n["envRemovedIn"].is_null(), "{n}");
+            assert!(n["envDeprecation"].is_null(), "{n}");
+
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::delete(&conn, &ws, "oldshop").expect("cleanup");
+            k2_core::published_services::delete(&conn, &ws, "newshop").expect("cleanup");
+        });
+    }
+
     #[test]
     fn unknown_publish_path_is_404() {
         let resp = dispatch("/cli/publish/nope", &HashMap::new()).unwrap();

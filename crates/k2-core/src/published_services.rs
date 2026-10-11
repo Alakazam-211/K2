@@ -136,6 +136,15 @@ pub struct ServiceJson {
     /// ends in 0.46.0 (Rosson 2026-10-10). Null for every other service.
     #[serde(default)]
     pub env_deprecation: Option<String>,
+    /// `legacy` (inherits the daemon's environment) or `clean`, for a
+    /// `--cmd` service; null for a `--skin` App (no process env of its
+    /// own). Added in 0.45.4 so agents and scripts can branch on it.
+    #[serde(default)]
+    pub env_mode: Option<String>,
+    /// The K2 version the `legacy` mode ends in (`0.46.0`) on a legacy
+    /// service; null otherwise. `env_deprecation` keeps the full notice.
+    #[serde(default)]
+    pub env_removed_in: Option<String>,
 }
 
 impl ServiceJson {
@@ -183,6 +192,8 @@ impl ServiceJson {
             },
             frame_warning: None,
             env_deprecation: None,
+            env_mode: None,
+            env_removed_in: None,
         }
     }
 }
@@ -583,6 +594,9 @@ mod tests {
             "frameAncestors",
             "framePolicy",
             "frameWarning",
+            "envDeprecation",
+            "envMode",
+            "envRemovedIn",
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }

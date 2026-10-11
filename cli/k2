@@ -12824,7 +12824,8 @@ USAGE
   k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel] [--transfer]
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
-  k2 publish ps|status [--json]
+  k2 publish ps|status [--json]       (ps = list)
+  k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
   k2 publish subdomain <create|list|point|rm|claim|unclaim> ...
 
@@ -12855,6 +12856,8 @@ rm
   <name> on run is the subdomain label. It cannot differ.
 
 ps     hosted processes for THIS workspace (running/stopped, port, URL if any)
+       [legacy env (ends 0.46.0)] = a service from before 0.45.4 that still
+       inherits the daemon's whole environment. Switch: k2 publish env <name> clean
 logs   that process's log file (--tail follows)
 status Connect plan + primary host. Not "is my app up" — use ps.
 
@@ -13001,6 +13004,29 @@ if mode == "logs":
         sys.stdout.write("\n")
     sys.exit(0)
 
+def env_legacy(s):
+    # 0.45.4: envMode from the daemon; older daemons only sent the notice.
+    if not isinstance(s, dict):
+        return False
+    m = s.get("envMode")
+    if m is not None:
+        return m == "legacy"
+    return bool(s.get("envDeprecation"))
+
+def env_ends(s):
+    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.0")
+
+def env_warning(n, s):
+    return ("warning: %s still inherits the daemon environment; this ends in K2 %s. "
+            "Switch with: k2 publish env %s clean (grant secrets with k2 publish secret add)."
+            % (n, env_ends(s), n))
+
+# run/start of a legacy service: one stderr line, so --json stdout stays clean.
+if mode == "service" and verb in ("run", "start"):
+    _s = d.get("service") if isinstance(d.get("service"), dict) else d
+    if env_legacy(_s):
+        sys.stderr.write(env_warning(str(_s.get("name") or "?"), _s) + "\n")
+
 if as_json:
     print(json.dumps(d, separators=(",", ":")))
     sys.exit(0)
@@ -13039,22 +13065,27 @@ if mode == "list":
         services = []
     rows = []
     warnings = []
+    legacy = []
+    ends = "0.46.0"
     for s in services:
         if not isinstance(s, dict):
             continue
         port = s.get("port")
         port_s = "-" if port is None or str(port) == "" else str(port)
+        u = url_or_target(s)
+        if env_legacy(s):
+            legacy.append(str(s.get("name") or "?"))
+            ends = env_ends(s)
+            u += "  [legacy env (ends %s)]" % ends
         rows.append((
             str(s.get("name") or "?"),
             str(s.get("status") or s.get("desired") or "-"),
             port_s,
             frame_label(s),
-            url_or_target(s),
+            u,
         ))
         if s.get("frameWarning"):
             warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
-        if s.get("envDeprecation"):
-            warnings.append((str(s.get("name") or "?"), "deprecated: " + str(s.get("envDeprecation"))))
     if not rows:
         print("No published services.")
         sys.exit(0)
@@ -13067,6 +13098,11 @@ if mode == "list":
         print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, fw, f, u))
     for n, w in warnings:
         print("warning: %s: %s" % (n, w))
+    if legacy:
+        print("warning: %d service%s still inherit%s the daemon environment (%s); this ends in K2 %s. "
+              "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."
+              % (len(legacy), "" if len(legacy) == 1 else "s", "s" if len(legacy) == 1 else "",
+                 ", ".join(legacy), ends))
     sys.exit(0)
 
 svc = d.get("service") if isinstance(d.get("service"), dict) else d
@@ -13093,8 +13129,9 @@ if url and url != "-":
     print("  %s" % url)
 if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
-if isinstance(svc, dict) and svc.get("envDeprecation"):
-    print("  deprecated: %s" % svc.get("envDeprecation"))
+if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
+    # run/start already warned on stderr; stop/rm still name the end.
+    print("  deprecated: inherits the daemon environment; ends in K2 %s (k2 publish env %s clean)" % (env_ends(svc), name))
 sys.exit(0)
 PY
 }
@@ -13123,7 +13160,7 @@ cmd_publish() {
         rm)
             cmd_publish_rm "$@"
             ;;
-        ps)
+        ps|list|ls)
             cmd_publish_ps "$@"
             ;;
         logs)
@@ -19949,6 +19986,13 @@ MOVING TO ANOTHER BOX
   --out carry.age`, then on the new box `k2 vault carry import carry.age`
   (it lists first; add --apply). The file opens only in that vault. The
   recovery key is never used for this.
+
+PUBLISHED SERVICES
+  New services start clean (base env + granted secrets). Ones from before
+  0.45.4 show [legacy env (ends 0.46.0)] in k2 publish ps: they inherit the
+  daemon's whole environment until K2 0.46.0. Switch now with
+  `k2 publish env <name> clean`; grant what it needs with
+  `k2 publish secret add <name> NAME` (or k2v:// refs in its .env.k2).
 
 HONEST LIMITS
   Fetch can't stop a harmful call to the allowed site (use restricted

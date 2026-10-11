@@ -1168,8 +1168,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["state"], "error");
         assert_eq!(v["version"], "0.16.10");
-        // CAL15: the pin moved to 0.16.20, so this box has an upgrade.
-        assert_eq!(v["pinnedVersion"], "0.16.20");
+        // CAL15: the pin moved (0.16.25 since 0.45.4), so this box has an
+        // upgrade.
+        assert_eq!(v["pinnedVersion"], "0.16.25");
         assert_eq!(v["upgradeAvailable"], true, "{v}");
         assert!(v["upgrade"].is_null(), "never upgraded: {v}");
         assert_eq!(v["hostname"], "mail.acme.dev");

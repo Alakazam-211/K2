@@ -14,11 +14,11 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use super::supervisor::{
-    artifact_for_arch, hardening_dropin, previous_artifact_for_arch, systemd_unit, STALWART_BIN,
-    STALWART_BIN_STAGING,
-    STALWART_CONFIG_DIR, STALWART_DATA_DIR, STALWART_DROPIN_DIR, STALWART_DROPIN_PATH,
-    STALWART_LOG_DIR, STALWART_PINNED_VERSION, STALWART_PREVIOUS_VERSION, STALWART_SNAPSHOT_DIR,
-    STALWART_UNIT, STALWART_UNIT_PATH, STALWART_USER,
+    artifact_for_arch, hardening_dropin, previous_artifact_for_arch, systemd_unit,
+    upgrade_from_artifact, STALWART_BIN, STALWART_BIN_STAGING, STALWART_CONFIG_DIR,
+    STALWART_DATA_DIR, STALWART_DROPIN_DIR, STALWART_DROPIN_PATH, STALWART_LOG_DIR,
+    STALWART_PINNED_VERSION, STALWART_PREVIOUS_VERSION, STALWART_SNAPSHOT_DIR, STALWART_UNIT,
+    STALWART_UNIT_PATH, STALWART_UPGRADE_FROM, STALWART_USER,
 };
 
 pub const HELPER_PATH: &str = "/usr/local/libexec/k2-mail-helper";
@@ -31,10 +31,15 @@ pub const SUDO_PATH: &str = "/usr/bin/sudo";
 /// - 2: calendars S1 upgrade — `version`, `usage`, `snapshot-data`,
 ///   `restore-data`, `systemctl stop stalwart`; `install-bin` accepts the
 ///   pin OR the previous version's tarball and installs atomically.
-pub const HELPER_PROTOCOL: u32 = 2;
+/// - 3: pin 0.16.25 (K2 0.45.4) — `install-bin` accepts the pin OR any
+///   [`STALWART_UPGRADE_FROM`] tarball (0.16.20, 0.16.10: a rollback
+///   reinstalls whatever the box had); `version` lists them as
+///   `stalwartUpgradeFrom`.
+pub const HELPER_PROTOCOL: u32 = 3;
 
-/// `k2 hostmail upgrade` refuses below this protocol.
-pub const UPGRADE_MIN_PROTOCOL: u32 = 2;
+/// `k2 hostmail upgrade` refuses below this protocol (a protocol-2
+/// helper can only roll back to one version).
+pub const UPGRADE_MIN_PROTOCOL: u32 = 3;
 
 /// Free space a snapshot needs beyond the bytes it copies (CAL14).
 pub const SNAPSHOT_FREE_MARGIN: u64 = 1 << 30;
@@ -262,34 +267,36 @@ pub fn write_bytes_accepted(path: &str, stdin: &[u8]) -> Result<u32, String> {
     Err("write refused".into())
 }
 
-/// Stdin is the tarball, checked against EXACTLY two compiled-in entries
-/// for this process's arch: the pin ([`artifact_for_arch`]) and the
-/// previous version ([`previous_artifact_for_arch`], the upgrade
-/// rollback). Returns which version matched. A member hash is not a pin.
+/// Stdin is the tarball, checked against EXACTLY the compiled-in entries
+/// for this process's arch: the pin ([`artifact_for_arch`]) and each
+/// upgrade source ([`STALWART_UPGRADE_FROM`], the upgrade rollback).
+/// Returns which version matched. A member hash is not a pin.
 pub fn install_archive_allowed(bytes: &[u8]) -> Result<&'static str, String> {
     install_archive_allowed_for(bytes, std::env::consts::ARCH)
 }
 
 pub fn install_archive_allowed_for(bytes: &[u8], arch: &str) -> Result<&'static str, String> {
-    match_archive(
-        bytes,
-        artifact_for_arch(arch)?,
-        previous_artifact_for_arch(arch)?,
-    )
+    let mut sources = Vec::with_capacity(STALWART_UPGRADE_FROM.len());
+    for rel in STALWART_UPGRADE_FROM {
+        sources.push((rel.version, upgrade_from_artifact(rel.version, arch)?));
+    }
+    match_archive(bytes, artifact_for_arch(arch)?, &sources)
 }
 
-/// The two-entry check itself: the pin first, then the previous version.
+/// The check itself: the pin first, then each upgrade source in order.
 /// Nothing else is ever accepted.
 pub fn match_archive(
     bytes: &[u8],
     pin: &super::supervisor::StalwartArtifact,
-    previous: &super::supervisor::StalwartArtifact,
+    sources: &[(&'static str, &super::supervisor::StalwartArtifact)],
 ) -> Result<&'static str, String> {
     if crate::update_routes::verify_sha256(bytes, pin.sha256) {
         return Ok(STALWART_PINNED_VERSION);
     }
-    if crate::update_routes::verify_sha256(bytes, previous.sha256) {
-        return Ok(STALWART_PREVIOUS_VERSION);
+    for (version, art) in sources {
+        if crate::update_routes::verify_sha256(bytes, art.sha256) {
+            return Ok(version);
+        }
     }
     Err("install-bin: tarball sha256 mismatch".into())
 }
@@ -310,6 +317,13 @@ pub fn version_json_for(arch: &str) -> serde_json::Value {
         "stalwartPinSha256": artifact_for_arch(arch).map(|a| a.sha256).ok(),
         "stalwartPrevious": STALWART_PREVIOUS_VERSION,
         "stalwartPreviousSha256": previous_artifact_for_arch(arch).map(|a| a.sha256).ok(),
+        "stalwartUpgradeFrom": STALWART_UPGRADE_FROM
+            .iter()
+            .map(|rel| serde_json::json!({
+                "version": rel.version,
+                "sha256": upgrade_from_artifact(rel.version, arch).map(|a| a.sha256).ok(),
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -1808,41 +1822,50 @@ mod tests {
         reject(b"", STALWART_DROPIN_PATH);
     }
 
-    /// CAL14: install-bin accepts exactly {pin, previous} — the upgrade
-    /// target and the rollback binary — and nothing else.
+    /// CAL14 + protocol 3: install-bin accepts exactly the pin and each
+    /// upgrade source (0.16.20, 0.16.10) — the upgrade target and every
+    /// rollback binary — and nothing else.
     #[test]
-    fn install_bin_accepts_only_the_pin_or_the_previous_tarball() {
-        use super::super::supervisor::StalwartArtifact;
+    fn install_bin_accepts_only_the_pin_or_an_upgrade_source_tarball() {
+        use super::super::supervisor::{StalwartArtifact, STALWART_OLDER_VERSION};
         use sha2::{Digest, Sha256};
         let hex = |b: &[u8]| -> &'static str {
             let h: String = Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect();
             Box::leak(h.into_boxed_str())
         };
-        let pin = StalwartArtifact {
+        let art = |b: &[u8]| StalwartArtifact {
             arch: "x86_64",
             triple: "x86_64-unknown-linux-gnu",
-            sha256: hex(b"pin-tarball"),
+            sha256: hex(b),
         };
-        let prev = StalwartArtifact {
-            arch: "x86_64",
-            triple: "x86_64-unknown-linux-gnu",
-            sha256: hex(b"previous-tarball"),
-        };
+        let pin = art(b"pin-tarball");
+        let prev = art(b"previous-tarball");
+        let older = art(b"older-tarball");
+        let sources = [
+            (STALWART_PREVIOUS_VERSION, &prev),
+            (STALWART_OLDER_VERSION, &older),
+        ];
         assert_eq!(
-            match_archive(b"pin-tarball", &pin, &prev),
+            match_archive(b"pin-tarball", &pin, &sources),
             Ok(STALWART_PINNED_VERSION)
         );
         assert_eq!(
-            match_archive(b"previous-tarball", &pin, &prev),
+            match_archive(b"previous-tarball", &pin, &sources),
             Ok(STALWART_PREVIOUS_VERSION)
         );
-        let err = match_archive(b"some-other-tarball-CANARY", &pin, &prev).expect_err("other");
+        assert_eq!(
+            match_archive(b"older-tarball", &pin, &sources),
+            Ok(STALWART_OLDER_VERSION)
+        );
+        let err = match_archive(b"some-other-tarball-CANARY", &pin, &sources).expect_err("other");
         assert_eq!(err, "install-bin: tarball sha256 mismatch");
-        // The real tables: both arches, two distinct real checksums each.
+        assert!(match_archive(b"older-tarball", &pin, &sources[..1]).is_err());
+        // The real tables: both arches, three distinct real checksums each.
         for arch in ["x86_64", "aarch64"] {
-            let p = artifact_for_arch(arch).expect("pin");
-            let q = previous_artifact_for_arch(arch).expect("previous");
-            assert_ne!(p.sha256, q.sha256, "{arch}");
+            let p = artifact_for_arch(arch).expect("pin").sha256;
+            let q = upgrade_from_artifact(STALWART_PREVIOUS_VERSION, arch).expect("previous").sha256;
+            let o = upgrade_from_artifact(STALWART_OLDER_VERSION, arch).expect("older").sha256;
+            assert!(p != q && q != o && p != o, "{arch}: {p} {q} {o}");
             assert!(install_archive_allowed_for(b"bogus", arch).is_err());
         }
         assert!(install_archive_allowed_for(b"bogus", "riscv64")
@@ -1851,11 +1874,13 @@ mod tests {
     }
 
     #[test]
-    fn version_json_names_the_protocol_and_both_checksums() {
+    fn version_json_names_the_protocol_and_every_checksum() {
         let v = version_json_for("x86_64");
         assert_eq!(v["helper"], "k2-mail-helper");
+        assert_eq!(v["protocol"], 3);
         assert_eq!(v["protocol"], HELPER_PROTOCOL);
         assert!(HELPER_PROTOCOL >= UPGRADE_MIN_PROTOCOL);
+        assert_eq!(v["stalwartPin"], "0.16.25");
         assert_eq!(v["stalwartPin"], STALWART_PINNED_VERSION);
         assert_eq!(v["stalwartPrevious"], STALWART_PREVIOUS_VERSION);
         assert_eq!(
@@ -1866,8 +1891,16 @@ mod tests {
             v["stalwartPreviousSha256"],
             previous_artifact_for_arch("x86_64").unwrap().sha256
         );
+        assert_eq!(
+            v["stalwartUpgradeFrom"],
+            serde_json::json!([
+                {"version": "0.16.20", "sha256": "55184f166f89a0918c6523bb70be300370b63934357731b199dc26a12ca15abf"},
+                {"version": "0.16.10", "sha256": "3ec4ab7eff49f61280f2fe2e4f9645ce5308d1840286ef0c0437524f92ac6a33"},
+            ])
+        );
         assert_eq!(v["k2Version"], env!("CARGO_PKG_VERSION"));
         assert!(version_json_for("riscv64")["stalwartPinSha256"].is_null());
+        assert!(version_json_for("riscv64")["stalwartUpgradeFrom"][1]["sha256"].is_null());
     }
 
     #[test]

@@ -613,7 +613,7 @@ pub fn extra_name_certs_check(
         problems.push(format!(
             "{} have a K2 certificate on this box, but Stalwart does not present it for \
              that name yet (the leaf it serves is not the one K2 planted) — the hot reload \
-             did not land. Restart Stalwart: `sudo systemctl restart stalwart` (on boxes \
+             did not land. Restart Stalwart: `sudo /usr/bin/systemctl restart stalwart` (on boxes \
              without the mail helper that is the way; never `k2 hostmail disable/enable`)",
             not_live.join(", ")
         ));
@@ -2891,7 +2891,7 @@ mod tests {
             assert_eq!(c.status, ST_WARN, "{}", c.detail);
             assert!(c.detail.contains("autoconfig.example.com"), "{}", c.detail);
             assert!(c.detail.contains("hot reload did not land"), "{}", c.detail);
-            assert!(c.detail.contains("sudo systemctl restart stalwart"), "{}", c.detail);
+            assert!(c.detail.contains("sudo /usr/bin/systemctl restart stalwart"), "{}", c.detail);
             assert!(c.detail.contains("never `k2 hostmail disable/enable`"), "{}", c.detail);
         }
         // K2 never issued it: a valid certificate from elsewhere is fine.

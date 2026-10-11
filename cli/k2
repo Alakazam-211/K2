@@ -19225,7 +19225,7 @@ WHO OWNS THE MAIL CERTIFICATE
     tls-cert          what :443 serves right now.
   Planted but not loaded: `k2 hostmail cert renew` succeeded but tls-cert
   still shows the old leaf → the hot reload did not land. Restart
-  Stalwart: `sudo systemctl restart stalwart` (boxes without the mail
+  Stalwart: `sudo /usr/bin/systemctl restart stalwart` (boxes without the mail
   helper allow it in sudoers). Never the helper by hand.
   Never fix a certificate with `k2 hostmail disable/enable`.
   Since 0.45.1 the boot reconcile locks a stalwart-acme box's names to
@@ -30038,9 +30038,11 @@ elif verb == "server_upgrade":
                 if time.time() - last_ok >= lost_after:
                     die({"code": "daemon_lost",
                          "hint": "no upgrade status from the K2 daemon for %ds (it restarted, or "
-                                 "is down). The upgrade may have stopped part way: run "
-                                 "`k2 hostmail status --json` and, if upgrade.state is "
-                                 "'interrupted', follow upgrade.manualSteps, then "
+                                 "is down). A restarted daemon finishes or rolls back the "
+                                 "upgrade at start and starts Stalwart again: run "
+                                 "`k2 hostmail status --json` (upgrade.state, upgrade.recovery). "
+                                 "Only if upgrade.state is still 'interrupted', follow "
+                                 "upgrade.manualSteps, then "
                                  "`k2 hostmail upgrade --acknowledge-failed`" % int(lost_after)})
                 continue  # daemon busy or restarting — keep watching
             last_ok = time.time()
@@ -36163,7 +36165,8 @@ verb. POST /cli/mail/server/upgrade.
 Preflight (refuses, changes nothing):
   - hosted mail not installed, or enable not finished
   - already on the pin → no-op, exit 0
-  - installed version is not the one this daemon can roll back to
+  - installed version is not one this daemon upgrades from (and can
+    roll back to): 0.16.20 or 0.16.10 → 0.16.25
   - the mail helper is missing or older than this daemon (needs the
     `version`, `snapshot-data` and `restore-data` verbs) — the error is
     the one root command that installs the matching helper
@@ -36189,6 +36192,13 @@ the old binary → start + health check (if it was running) → "rolled_back"
 and exact manual steps on stderr (also `k2 hostmail status --json` →
 upgrade.manualSteps); the next upgrade is blocked until
 `k2 hostmail upgrade --acknowledge-failed`.
+
+If the daemon dies mid-upgrade, its next start finishes the run (install
+again, start, health check) or rolls it back, and starts Stalwart again
+if it was serving. Only a run it cannot safely act on (no completed
+snapshot recorded) stays "interrupted" for the owner. The watcher stops
+after 120 s without a daemon answer (daemon_lost); re-check with
+`k2 hostmail status`.
 
 Never uses hostmail disable/enable. Never re-runs a Maildir import; mail
 not yet imported (e.g. a cPanel tail) is not in the snapshot. Pick a

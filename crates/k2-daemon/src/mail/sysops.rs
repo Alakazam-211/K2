@@ -213,7 +213,8 @@ impl SystemOps for RealSystemOps {
     }
 
     fn systemctl_query(&self, args: &[&str]) -> String {
-        Self::run("systemctl", args)
+        // Absolute, like the helper's verbs and the plain-sudo door.
+        Self::run(super::imap_listeners::SYSTEMCTL_PATH, args)
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
             .unwrap_or_default()
     }

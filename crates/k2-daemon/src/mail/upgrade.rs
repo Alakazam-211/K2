@@ -6,11 +6,12 @@
 //!
 //! **Preflight** (read-only; any blocker refuses with no side effect):
 //! hosted mail installed and enable finished · installed == pin → no-op ·
-//! installed must be [`STALWART_PREVIOUS_VERSION`] (the only version this
-//! build can roll back to) · no interrupted / failed-rollback upgrade
-//! awaiting the owner · no enable / upgrade / Maildir import running ·
-//! the mail helper installed, protocol ≥ [`UPGRADE_MIN_PROTOCOL`], built
-//! for exactly this pin + previous (its `version` verb; else the root
+//! installed must be one of [`supervisor::STALWART_UPGRADE_FROM`]
+//! (0.16.20 or 0.16.10 — the versions this build can roll back to) · no
+//! interrupted / failed-rollback upgrade awaiting the owner · no enable /
+//! upgrade / Maildir import running · the mail helper installed, protocol
+//! ≥ [`UPGRADE_MIN_PROTOCOL`], built for exactly this pin and able to
+//! reinstall the installed version (its `version` verb; else the root
 //! `install_command()`, CAL40) · free space ≥ data + config + 1 GiB
 //! (helper `usage`, counted on the snapshot's filesystem, the old
 //! snapshot counted as free since it is replaced).
@@ -21,7 +22,8 @@
 //! serving) → stop (helper `systemctl stop stalwart`) → helper
 //! `snapshot-data` → `install-bin` (pin) → start through the IMAP-listener
 //! restart doors ([`super::imap_listeners::restart_once`]: helper
-//! `systemctl restart stalwart`, else plain `sudo -n systemctl restart`)
+//! `systemctl restart stalwart`, else plain
+//! `sudo -n /usr/bin/systemctl restart stalwart`)
 //! → health (unit active + JMAP `ping()` + IMAP greeting). Success records
 //! `installed_version`. A box that was not running before is stopped
 //! again afterwards (CAL15: works from stopped / disabled / error).
@@ -39,9 +41,8 @@ use std::sync::atomic::Ordering;
 use super::helper::{self, SNAPSHOT_FREE_MARGIN, UPGRADE_MIN_PROTOCOL};
 use super::imap_listeners::{self, RestartDoors, RestartReport};
 use super::supervisor::{
-    self, artifact_for_arch, previous_artifact_for_arch, tarball_url_for, StalwartArtifact,
-    STALWART_BIN, STALWART_CONFIG, STALWART_PINNED_VERSION, STALWART_PREVIOUS_VERSION,
-    STALWART_SNAPSHOT_DIR, STALWART_SNAPSHOT_MARKER, STALWART_UNIT,
+    self, artifact_for_arch, tarball_url_for, StalwartArtifact, STALWART_BIN, STALWART_CONFIG,
+    STALWART_PINNED_VERSION, STALWART_SNAPSHOT_DIR, STALWART_SNAPSHOT_MARKER, STALWART_UNIT,
 };
 use super::sysops::SystemOps;
 
@@ -134,9 +135,22 @@ pub struct Plan {
     pub prior_status: Option<String>,
     pub was_running: bool,
     pub target: Option<&'static StalwartArtifact>,
+    /// The installed version's tarball: what a rollback reinstalls.
     pub previous: Option<&'static StalwartArtifact>,
+    /// The version [`Plan::previous`] is (= the installed version, one of
+    /// [`supervisor::STALWART_UPGRADE_FROM`]).
+    pub rollback_version: Option<&'static str>,
     pub helper: Option<serde_json::Value>,
     pub usage: Option<serde_json::Value>,
+}
+
+impl Plan {
+    /// The version a rollback reinstalls, for messages.
+    fn rollback_label(&self) -> &str {
+        self.rollback_version
+            .or(self.from.as_deref())
+            .unwrap_or("the previous version")
+    }
 }
 
 impl Plan {
@@ -175,6 +189,7 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
         was_running: false,
         target: None,
         previous: None,
+        rollback_version: None,
         helper: None,
         usage: None,
     };
@@ -202,13 +217,15 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
     if installed == STALWART_PINNED_VERSION {
         return Preflight::Noop(installed);
     }
-    if installed != STALWART_PREVIOUS_VERSION {
+    let source = supervisor::upgrade_from_release(&installed);
+    if source.is_none() {
         blockers.push(Blocker::new(
             "unknown_version",
             format!(
-                "installed Stalwart {installed} is not {STALWART_PREVIOUS_VERSION} — this daemon \
-                 only upgrades {STALWART_PREVIOUS_VERSION} → {STALWART_PINNED_VERSION} (a \
-                 rollback must be able to reinstall the old binary)"
+                "installed Stalwart {installed} is not one this daemon upgrades from ({}) — it \
+                 only moves those to {STALWART_PINNED_VERSION} (a rollback must be able to \
+                 reinstall the old binary)",
+                supervisor::upgrade_from_versions().join(", ")
             ),
         ));
     }
@@ -284,12 +301,20 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
         ));
     }
 
-    match (artifact_for_arch(arch), previous_artifact_for_arch(arch)) {
-        (Ok(t), Ok(p)) => {
+    match artifact_for_arch(arch) {
+        Ok(t) => {
             plan.target = Some(t);
-            plan.previous = Some(p);
+            if let Some(rel) = source {
+                match supervisor::upgrade_from_artifact(rel.version, arch) {
+                    Ok(p) => {
+                        plan.previous = Some(p);
+                        plan.rollback_version = Some(rel.version);
+                    }
+                    Err(e) => blockers.push(Blocker::new("unsupported_arch", e)),
+                }
+            }
         }
-        (Err(e), _) | (_, Err(e)) => blockers.push(Blocker::new("unsupported_arch", e)),
+        Err(e) => blockers.push(Blocker::new("unsupported_arch", e)),
     }
 
     // The root door: present, allowed, and built for exactly this table.
@@ -311,7 +336,9 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
                     helper_fix_hint("the mail helper's `version` answer is not JSON"),
                 )),
                 Ok(v) => {
-                    if let Some(why) = helper_mismatch(&v, plan.target, plan.previous) {
+                    if let Some(why) =
+                        helper_mismatch(&v, plan.target, plan.rollback_version, plan.previous)
+                    {
                         blockers.push(Blocker::new("mail_helper_outdated", helper_fix_hint(&why)));
                     }
                     plan.helper = Some(v);
@@ -346,10 +373,12 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
     }
 }
 
-/// `None` when the helper's `version` JSON matches this daemon exactly.
+/// `None` when the helper's `version` JSON can install this daemon's pin
+/// AND reinstall the rollback version (same checksums as this daemon).
 fn helper_mismatch(
     v: &serde_json::Value,
     target: Option<&StalwartArtifact>,
+    rollback_version: Option<&str>,
     previous: Option<&StalwartArtifact>,
 ) -> Option<String> {
     let protocol = v["protocol"].as_u64().unwrap_or(0);
@@ -359,19 +388,31 @@ fn helper_mismatch(
         ));
     }
     let pin = v["stalwartPin"].as_str().unwrap_or("");
-    let prev = v["stalwartPrevious"].as_str().unwrap_or("");
-    if pin != STALWART_PINNED_VERSION || prev != STALWART_PREVIOUS_VERSION {
+    if pin != STALWART_PINNED_VERSION {
         return Some(format!(
-            "the mail helper was built for Stalwart {pin} (previous {prev}); this daemon \
-             needs {STALWART_PINNED_VERSION} (previous {STALWART_PREVIOUS_VERSION})"
+            "the mail helper was built for Stalwart {pin}; this daemon needs \
+             {STALWART_PINNED_VERSION}"
         ));
     }
-    let shas_match = |key: &str, art: Option<&StalwartArtifact>| match art {
-        Some(a) => v[key].as_str() == Some(a.sha256),
-        None => true,
-    };
-    if !shas_match("stalwartPinSha256", target) || !shas_match("stalwartPreviousSha256", previous) {
-        return Some("the mail helper's Stalwart checksums differ from this daemon's".to_string());
+    if let Some(a) = target {
+        if v["stalwartPinSha256"].as_str() != Some(a.sha256) {
+            return Some(
+                "the mail helper's Stalwart checksums differ from this daemon's".to_string(),
+            );
+        }
+    }
+    if let (Some(version), Some(a)) = (rollback_version, previous) {
+        let accepts = v["stalwartUpgradeFrom"].as_array().is_some_and(|list| {
+            list.iter().any(|e| {
+                e["version"].as_str() == Some(version) && e["sha256"].as_str() == Some(a.sha256)
+            })
+        });
+        if !accepts {
+            return Some(format!(
+                "the mail helper cannot reinstall Stalwart {version} (the rollback binary) \
+                 with this daemon's checksum"
+            ));
+        }
     }
     None
 }
@@ -478,8 +519,9 @@ fn plan_steps(plan: &Plan) -> Vec<String> {
         .unwrap_or_else(|| "size unknown".into());
     let mut steps = vec![
         format!(
-            "download + sha256-verify Stalwart {STALWART_PINNED_VERSION} and \
-             {STALWART_PREVIOUS_VERSION} (Stalwart keeps serving)"
+            "download + sha256-verify Stalwart {STALWART_PINNED_VERSION} and {} (Stalwart \
+             keeps serving)",
+            plan.rollback_label()
         ),
         "stop Stalwart (mail helper: systemctl stop stalwart) — the outage starts".to_string(),
         format!(
@@ -509,7 +551,7 @@ fn rollback_steps(plan: &Plan) -> Vec<String> {
             .to_string(),
         "after the snapshot: stop Stalwart".to_string(),
         format!("restore {STALWART_SNAPSHOT_DIR} over the data + config dirs (mail helper)"),
-        format!("reinstall Stalwart {STALWART_PREVIOUS_VERSION}"),
+        format!("reinstall Stalwart {}", plan.rollback_label()),
     ];
     if plan.was_running {
         steps.push("start Stalwart + the same health check".to_string());
@@ -594,10 +636,11 @@ pub fn interrupted_steps(p: &serde_json::Value) -> Vec<String> {
          {STALWART_SNAPSHOT_MARKER} createdAt >= the upgrade's startedAt ({}) before restoring",
         p["startedAt"]
     )];
-    steps.extend(manual_steps(
-        previous_artifact_for_arch(std::env::consts::ARCH).ok(),
-        was_running,
-    ));
+    let from = p["from"].as_str().unwrap_or("");
+    let rollback = supervisor::upgrade_from_artifact(from, std::env::consts::ARCH)
+        .ok()
+        .and_then(|a| supervisor::upgrade_from_release(from).map(|r| (r.version, a)));
+    steps.extend(manual_steps(rollback, was_running));
     steps
 }
 
@@ -610,13 +653,21 @@ pub fn untouched_steps(step: &str, was_running: bool) -> Vec<String> {
          (do NOT restore {STALWART_SNAPSHOT_DIR}; it may be older)"
     )];
     if was_running {
-        steps.push("sudo systemctl start stalwart && k2 hostmail status".into());
+        steps.push(format!(
+            "{SUDO_SYSTEMCTL} start stalwart && k2 hostmail status"
+        ));
     } else {
         steps.push("k2 hostmail status   # it was stopped before the upgrade".into());
     }
     steps.push("k2 hostmail upgrade --acknowledge-failed".into());
     steps
 }
+
+/// The manual systemctl spelling: the absolute path, as the mail helper
+/// and the plain-sudo door run it. sudoers lines name `/usr/bin/systemctl`
+/// (akzm's is `/usr/bin/systemctl restart stalwart`), and an owner's
+/// secure_path is not assumed.
+pub const SUDO_SYSTEMCTL: &str = "sudo /usr/bin/systemctl";
 
 /// `upgradeAvailable`: installed and not the pin (CAL15/CAL56: `!=`).
 pub fn upgrade_available(installed: Option<&str>) -> bool {
@@ -777,12 +828,14 @@ pub fn health_check(ops: &dyn SystemOps, probe: &dyn UpgradeProbe) -> Result<Str
 }
 
 /// Manual repair when the automatic rollback failed (arch-specific sha).
-pub fn manual_steps(previous: Option<&StalwartArtifact>, was_running: bool) -> Vec<String> {
+/// `previous` = the rollback version and its tarball (the version the
+/// box had before the upgrade).
+pub fn manual_steps(previous: Option<(&str, &StalwartArtifact)>, was_running: bool) -> Vec<String> {
     let snap = STALWART_SNAPSHOT_DIR;
     let data = supervisor::STALWART_DATA_DIR;
     let config = supervisor::STALWART_CONFIG_DIR;
     let mut steps = vec![
-        "sudo systemctl stop stalwart".to_string(),
+        format!("{SUDO_SYSTEMCTL} stop stalwart"),
         format!(
             "sudo ls {snap}/{STALWART_SNAPSHOT_MARKER}   # must exist: the snapshot is complete"
         ),
@@ -791,11 +844,11 @@ pub fn manual_steps(previous: Option<&StalwartArtifact>, was_running: bool) -> V
             "sudo mv {config} {config}.k2-failed-$(date +%s) && sudo cp -a {snap}/config {config}"
         ),
     ];
-    if let Some(p) = previous {
-        let tgz = format!("/tmp/stalwart-{STALWART_PREVIOUS_VERSION}.tar.gz");
+    if let Some((version, p)) = previous {
+        let tgz = format!("/tmp/stalwart-{version}.tar.gz");
         steps.push(format!(
             "curl -fsSLo {tgz} {}",
-            tarball_url_for(STALWART_PREVIOUS_VERSION, p.triple)
+            tarball_url_for(version, p.triple)
         ));
         steps.push(format!("echo '{}  {tgz}' | sha256sum -c -", p.sha256));
         steps.push(format!(
@@ -804,7 +857,9 @@ pub fn manual_steps(previous: Option<&StalwartArtifact>, was_running: bool) -> V
         ));
     }
     if was_running {
-        steps.push("sudo systemctl start stalwart && k2 hostmail status".to_string());
+        steps.push(format!(
+            "{SUDO_SYSTEMCTL} start stalwart && k2 hostmail status"
+        ));
     } else {
         steps.push("k2 hostmail status   # Stalwart stays stopped, as before the upgrade".into());
     }
@@ -829,7 +884,9 @@ pub fn run(
         progress: initial_progress(plan),
     };
     save_progress(&r.progress);
-    let (Some(target), Some(previous)) = (plan.target, plan.previous) else {
+    let (Some(target), Some(previous), Some(rollback_version)) =
+        (plan.target, plan.previous, plan.rollback_version)
+    else {
         return r.finish("aborted", Some("no artifact for this arch".into()));
     };
     let was_running = plan.was_running;
@@ -840,7 +897,7 @@ pub fn run(
         Ok(b) => b,
         Err(e) => return r.finish("aborted", Some(format!("download: {e} — nothing changed"))),
     };
-    let previous_bytes = match fetch_verified(&mut r, STALWART_PREVIOUS_VERSION, previous) {
+    let previous_bytes = match fetch_verified(&mut r, rollback_version, previous) {
         Ok(b) => b,
         Err(e) => return r.finish("aborted", Some(format!("download: {e} — nothing changed"))),
     };
@@ -966,14 +1023,17 @@ fn rollback(r: &mut Run, err: String, previous_bytes: &[u8]) -> serde_json::Valu
     if let Err(e) = back {
         // This run's snapshot completed (rollback only follows it), so the
         // restore steps point at the right copy.
-        let steps = manual_steps(r.plan.previous, r.plan.was_running);
+        let steps = manual_steps(
+            r.plan.rollback_version.zip(r.plan.previous),
+            r.plan.was_running,
+        );
         return rollback_failed(r, format!("{err}; ROLLBACK FAILED: {e}"), steps);
     }
     r.finish(
         "rolled_back",
         Some(format!(
-            "{err} — rolled back: snapshot restored, Stalwart {STALWART_PREVIOUS_VERSION} \
-             reinstalled{}",
+            "{err} — rolled back: snapshot restored, Stalwart {} reinstalled{}",
+            r.plan.rollback_label(),
             if r.plan.was_running {
                 " and serving again"
             } else {
@@ -1031,6 +1091,309 @@ pub fn acknowledge(upgrade_busy: bool) -> Result<serde_json::Value, Blocker> {
     p["acknowledgedAt"] = serde_json::json!(supervisor::now_secs());
     save_progress(&p);
     Ok(p)
+}
+
+// ── Boot recovery (0.45.4) ───────────────────────────────────────────────
+//
+// A daemon that dies mid-upgrade (restart, update, OOM) used to leave the
+// record `running` → `interrupted` and Stalwart possibly STOPPED until the
+// owner noticed (seen in the 0.16.10 → 0.16.20 rehearsal). At boot the
+// daemon now finishes or rolls back the run, and makes sure Stalwart is
+// serving again if it was before.
+
+/// What boot does with a `running` record that no thread owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recovery {
+    /// No record, or the last run ended.
+    Nothing,
+    /// Interrupted before the install (download / stop / snapshot) or
+    /// while restarting the untouched old binary: data and binary are
+    /// unchanged — start the old binary again. Never a restore.
+    RestartOld,
+    /// Interrupted at install / start / health, after this run's complete
+    /// snapshot: install the pin again, start, health-check; a failure
+    /// rolls back as the run itself would have.
+    Finish,
+    /// Interrupted mid-rollback, or the record was written for another
+    /// pin (an older daemon's run): restore this run's snapshot and
+    /// reinstall the version the box had.
+    Rollback,
+    /// Interrupted after success was recorded (`stop-again`).
+    Succeeded,
+    /// Nothing can be done safely (no complete snapshot recorded for this
+    /// run, an unknown step, a `from` this build can't reinstall). The
+    /// record stays interrupted for the owner; Stalwart is still started
+    /// if it was serving.
+    LeaveForOwner(String),
+}
+
+impl Recovery {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Nothing => "nothing",
+            Self::RestartOld => "restart_old",
+            Self::Finish => "finish",
+            Self::Rollback => "rollback",
+            Self::Succeeded => "succeeded",
+            Self::LeaveForOwner(_) => "left_for_owner",
+        }
+    }
+}
+
+fn step_done_ok(p: &serde_json::Value, step: &str) -> bool {
+    p["steps"].as_array().is_some_and(|list| {
+        list.iter()
+            .any(|e| e["step"].as_str() == Some(step) && e["ok"].as_bool() == Some(true))
+    })
+}
+
+/// Pure: classify an upgrade record found at boot. Recovery reuses the
+/// run's own step names, so a daemon that dies AGAIN mid-recovery is
+/// classified the same way at the next boot (`recovery: "finish"` keeps a
+/// half-finished finish a finish even while it is re-downloading).
+pub fn classify_interrupted(p: &serde_json::Value) -> Recovery {
+    if p["state"].as_str() != Some("running") {
+        return Recovery::Nothing;
+    }
+    let step = p["step"].as_str().unwrap_or("");
+    let snapshot_ok = step_done_ok(p, "snapshot");
+    let from = p["from"].as_str().unwrap_or("");
+    let can_rollback = supervisor::upgrade_from_release(from).is_some();
+    let to_is_pin = p["to"].as_str() == Some(STALWART_PINNED_VERSION);
+    let rollback_or_leave = |why: &str| {
+        if !snapshot_ok {
+            Recovery::LeaveForOwner(format!(
+                "{why}, but no completed snapshot is recorded for this run"
+            ))
+        } else if !can_rollback {
+            Recovery::LeaveForOwner(format!(
+                "{why}, but this daemon cannot reinstall Stalwart '{from}' (it knows {})",
+                supervisor::upgrade_from_versions().join(", ")
+            ))
+        } else {
+            Recovery::Rollback
+        }
+    };
+    if step.starts_with("rollback-") {
+        return rollback_or_leave(&format!("the run stopped mid-rollback at '{step}'"));
+    }
+    let finishing = p["recovery"].as_str() == Some(Recovery::Finish.kind());
+    let install_phase = matches!(step, "install" | "start" | "health");
+    if finishing || install_phase {
+        if !to_is_pin {
+            return rollback_or_leave(&format!(
+                "the run was for Stalwart {} and this daemon pins {STALWART_PINNED_VERSION}",
+                p["to"].as_str().unwrap_or("?")
+            ));
+        }
+        if !snapshot_ok {
+            return Recovery::LeaveForOwner(format!(
+                "the run stopped at '{step}' but no completed snapshot is recorded for it"
+            ));
+        }
+        return Recovery::Finish;
+    }
+    match step {
+        "" | "stop" | "snapshot" | "restart-old" | "restart-old-health" => Recovery::RestartOld,
+        s if s.starts_with("download") => Recovery::RestartOld,
+        "stop-again" => Recovery::Succeeded,
+        other => Recovery::LeaveForOwner(format!("the run stopped at an unknown step '{other}'")),
+    }
+}
+
+/// The plan a boot recovery acts on, rebuilt from the record (the
+/// original plan lived only in the dead process).
+pub fn recovery_plan(p: &serde_json::Value, arch: &str) -> Plan {
+    let from = p["from"].as_str().map(str::to_string);
+    let rollback = from
+        .as_deref()
+        .and_then(supervisor::upgrade_from_release)
+        .and_then(|rel| {
+            supervisor::upgrade_from_artifact(rel.version, arch)
+                .ok()
+                .map(|a| (rel.version, a))
+        });
+    Plan {
+        from,
+        to: STALWART_PINNED_VERSION,
+        prior_status: p["priorStatus"].as_str().map(str::to_string),
+        // Unknown → assume it was serving: the point is never to leave
+        // mail down.
+        was_running: p["wasRunning"].as_bool().unwrap_or(true),
+        target: artifact_for_arch(arch).ok(),
+        previous: rollback.map(|(_, a)| a),
+        rollback_version: rollback.map(|(v, _)| v),
+        helper: None,
+        usage: None,
+    }
+}
+
+/// Act on an interrupted record. `None` = nothing to do (no effects).
+/// The caller holds the enable latch and the upgrade flag.
+pub fn recover(
+    ops: &dyn SystemOps,
+    doors: &mut dyn RestartDoors,
+    probe: &dyn UpgradeProbe,
+    plan: &Plan,
+    record: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let decision = classify_interrupted(&record);
+    if decision == Recovery::Nothing {
+        return None;
+    }
+    let interrupted_at = record["step"].as_str().unwrap_or("").to_string();
+    let mut r = Run {
+        ops,
+        doors,
+        probe,
+        plan,
+        progress: record,
+    };
+    r.progress["recovery"] = serde_json::json!(decision.kind());
+    r.progress["recoveredAt"] = serde_json::json!(supervisor::now_secs());
+    if r.progress.get("interruptedAt").is_none() {
+        r.progress["interruptedAt"] = serde_json::json!(interrupted_at);
+    }
+    save_progress(&r.progress);
+    let why =
+        format!("the daemon stopped mid-upgrade at '{interrupted_at}'; recovered at the next boot");
+    Some(match decision {
+        Recovery::Nothing => unreachable!("returned above"),
+        Recovery::Succeeded => {
+            r.progress["warning"] = serde_json::json!(format!(
+                "{why} after the upgrade had succeeded; check `k2 hostmail status` (it was \
+                 '{}' before and should be stopped again)",
+                plan.prior_status.as_deref().unwrap_or("?")
+            ));
+            r.finish("succeeded", None)
+        }
+        Recovery::RestartOld => recover_restart_old(&mut r, &interrupted_at, &why),
+        Recovery::Finish => recover_finish(&mut r, &why),
+        Recovery::Rollback => recover_rollback(&mut r, why),
+        Recovery::LeaveForOwner(reason) => {
+            r.progress["bootRecovery"] = serde_json::json!(reason);
+            let started = ensure_serving(&mut r);
+            r.progress["manualSteps"] = serde_json::json!(interrupted_steps(&r.progress));
+            if let Some(note) = started {
+                r.progress["bootStart"] = serde_json::json!(note);
+            }
+            // Stays `running` (= interrupted): the owner looks, then
+            // `--acknowledge-failed`.
+            save_progress(&r.progress);
+            r.progress.clone()
+        }
+    })
+}
+
+/// Data and binary untouched: start the old binary if it was serving
+/// and is not serving now (a run that died while downloading never
+/// stopped it — no needless restart).
+fn recover_restart_old(r: &mut Run, step: &str, why: &str) -> serde_json::Value {
+    let active = r.ops.systemctl_query(&["is-active", STALWART_UNIT]).trim() == "active";
+    if r.plan.was_running && !active {
+        let back = r
+            .exec("restart-old", |r| r.start())
+            .and_then(|_| r.exec("restart-old-health", |r| r.health()));
+        if let Err(e) = back {
+            let steps = untouched_steps(if step.is_empty() { "start" } else { step }, true);
+            return rollback_failed(
+                r,
+                format!(
+                    "{why}: nothing was changed, but Stalwart {} could not be started again: {e}",
+                    r.plan.from.as_deref().unwrap_or("?")
+                ),
+                steps,
+            );
+        }
+    }
+    r.finish(
+        "aborted",
+        Some(format!(
+            "{why} — before the install, so nothing was changed (no data, no binary){}",
+            match (r.plan.was_running, active) {
+                (true, true) => "; Stalwart kept serving",
+                (true, false) => "; Stalwart was started again",
+                (false, _) => "; Stalwart stays as it was before the upgrade (not serving)",
+            }
+        )),
+    )
+}
+
+/// Install phase: install the pin again (re-downloaded and verified),
+/// start, health. Any failure rolls back exactly like the run.
+fn recover_finish(r: &mut Run, why: &str) -> serde_json::Value {
+    let Some(target) = r.plan.target else {
+        return recover_rollback(r, format!("{why}; no pinned artifact for this arch"));
+    };
+    let finished = fetch_verified(r, STALWART_PINNED_VERSION, target)
+        .and_then(|bytes| r.exec("install", |r| r.install(&bytes)))
+        .and_then(|_| r.exec("start", |r| r.start()))
+        .and_then(|_| r.exec("health", |r| r.health()));
+    if let Err(e) = finished {
+        return recover_rollback(r, format!("{why}; finishing it failed: {e}"));
+    }
+    supervisor::set_row_field("installed_version", STALWART_PINNED_VERSION);
+    supervisor::set_row_field("pinned_version", STALWART_PINNED_VERSION);
+    if !r.plan.was_running {
+        if let Err(e) = r.exec("stop-again", |r| r.stop()) {
+            r.progress["warning"] = serde_json::json!(format!(
+                "upgraded, but Stalwart could not be stopped again ({e}) — it was '{}' \
+                 before the upgrade and is running now; run `k2 hostmail disable` if it \
+                 should stay off",
+                r.plan.prior_status.as_deref().unwrap_or("?")
+            ));
+        }
+    }
+    r.progress["note"] = serde_json::json!(format!("{why}: finished"));
+    r.finish("succeeded", None)
+}
+
+/// Roll back to the version the box had: re-download it, then the run's
+/// own rollback (stop → restore → install → start + health).
+fn recover_rollback(r: &mut Run, why: String) -> serde_json::Value {
+    let (Some(version), Some(art)) = (r.plan.rollback_version, r.plan.previous) else {
+        let started = ensure_serving(r);
+        return rollback_failed(
+            r,
+            format!(
+                "{why}; ROLLBACK FAILED: this daemon cannot reinstall Stalwart {}{}",
+                r.plan.from.as_deref().unwrap_or("?"),
+                started.map(|s| format!(" ({s})")).unwrap_or_default()
+            ),
+            manual_steps(None, r.plan.was_running),
+        );
+    };
+    match fetch_verified(r, version, art) {
+        Ok(bytes) => rollback(r, why, &bytes),
+        Err(e) => {
+            // No old binary to put back: at least do not leave mail down.
+            let started = ensure_serving(r);
+            rollback_failed(
+                r,
+                format!(
+                    "{why}; ROLLBACK FAILED: download {e}{}",
+                    started.map(|s| format!(" ({s})")).unwrap_or_default()
+                ),
+                manual_steps(Some((version, art)), r.plan.was_running),
+            )
+        }
+    }
+}
+
+/// If it was serving and the unit is not active, start it (whatever
+/// binary is installed). Returns a note when it tried.
+fn ensure_serving(r: &mut Run) -> Option<String> {
+    if !r.plan.was_running {
+        return None;
+    }
+    let state = r.ops.systemctl_query(&["is-active", STALWART_UNIT]);
+    if state.trim() == "active" {
+        return None;
+    }
+    Some(match r.exec("ensure-started", |r| r.start()) {
+        Ok(_) => "Stalwart was started again with the binary on disk".to_string(),
+        Err(e) => format!("Stalwart could not be started again: {e}"),
+    })
 }
 
 // ── Live wiring ──────────────────────────────────────────────────────────
@@ -1173,6 +1536,75 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
         return refused(&b, std::slice::from_ref(&b), None);
     }
     UpgradeStart::Started(body)
+}
+
+/// Boot: finish or roll back an upgrade the last daemon process never
+/// finished, and make sure Stalwart serves again (0.45.4). Claims the
+/// upgrade flag and the enable latch SYNCHRONOUSLY, before the boot
+/// threads that follow it in `daemon_main` (health loop, IMAP / DAV /
+/// cert / defaults reconciles) look at them, then works on a thread.
+/// Linux only; never under `cargo test`.
+pub fn spawn_boot_recovery() {
+    if !supervisor::mail_supported() || cfg!(test) {
+        return;
+    }
+    let Some(record) = load_progress() else {
+        return;
+    };
+    let decision = classify_interrupted(&record);
+    if decision == Recovery::Nothing {
+        return;
+    }
+    if supervisor::upgrade_running()
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    if !supervisor::try_begin_enable() {
+        supervisor::upgrade_running().store(false, Ordering::SeqCst);
+        k2_core::log_debug!(
+            "[mail/upgrade] boot recovery skipped: the enable latch is held (retried next boot)"
+        );
+        return;
+    }
+    k2_core::log_debug!(
+        "[mail/upgrade] boot: the last upgrade was interrupted at '{}' — recovery: {}",
+        record["step"].as_str().unwrap_or(""),
+        decision.kind()
+    );
+    let spawned = std::thread::Builder::new()
+        .name("mail-upgrade-recover".into())
+        .spawn(move || {
+            let _latch = LatchGuard;
+            let ops = super::sysops::RealSystemOps;
+            let mut doors = imap_listeners::LiveDoors {
+                why: "upgrade-recovery",
+            };
+            let probe = LiveProbe;
+            let plan = recovery_plan(&record, std::env::consts::ARCH);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                recover(&ops, &mut doors, &probe, &plan, record)
+            }));
+            match outcome {
+                Ok(Some(v)) => {
+                    k2_core::log_debug!(
+                        "[mail/upgrade] boot recovery finished: {}",
+                        v["state"].as_str().unwrap_or("?")
+                    );
+                    if v["state"] == "succeeded" {
+                        super::defaults::spawn_after("upgrade");
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => k2_core::log_debug!("[mail/upgrade] boot recovery PANICKED"),
+            }
+        });
+    if let Err(e) = spawned {
+        supervisor::end_enable();
+        supervisor::upgrade_running().store(false, Ordering::SeqCst);
+        k2_core::log_debug!("[mail/upgrade] boot recovery: thread spawn failed: {e}");
+    }
 }
 
 /// Production probe: the loopback management API + the stored IMAP
@@ -1346,6 +1778,7 @@ fn loopback_tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, String>
 mod tests {
     use super::*;
     use crate::mail::helper::HelperState;
+    use crate::mail::supervisor::{STALWART_OLDER_VERSION, STALWART_PREVIOUS_VERSION};
     use crate::mail::sysops::fake::FakeSystemOps;
     use sha2::{Digest, Sha256};
     use std::collections::VecDeque;
@@ -1695,11 +2128,20 @@ mod tests {
         v["protocol"] = serde_json::json!(1);
         variants.push(("protocol 1", v));
         let mut v = helper::version_json_for(ARCH);
-        v["stalwartPin"] = serde_json::json!("0.16.25");
+        v["protocol"] = serde_json::json!(2);
+        variants.push(("protocol 2 (0.45.3's helper: one rollback version)", v));
+        let mut v = helper::version_json_for(ARCH);
+        v["stalwartPin"] = serde_json::json!("0.16.20");
         variants.push(("other pin", v));
         let mut v = helper::version_json_for(ARCH);
-        v["stalwartPreviousSha256"] = serde_json::json!("00".repeat(32));
-        variants.push(("other sha", v));
+        v["stalwartPinSha256"] = serde_json::json!("00".repeat(32));
+        variants.push(("other pin sha", v));
+        let mut v = helper::version_json_for(ARCH);
+        v["stalwartUpgradeFrom"][0]["sha256"] = serde_json::json!("00".repeat(32));
+        variants.push(("other rollback sha", v));
+        let mut v = helper::version_json_for(ARCH);
+        v["stalwartUpgradeFrom"] = serde_json::json!([]);
+        variants.push(("no rollback versions", v));
         variants.push(("not json", serde_json::json!("protocol 2")));
         for (what, v) in variants {
             let mut ops = ready_ops();
@@ -1824,7 +2266,10 @@ mod tests {
             late.contains(&format!("{STALWART_SNAPSHOT_DIR}/data")),
             "{late}"
         );
-        assert!(late.contains("sudo systemctl start stalwart"), "{late}");
+        assert!(
+            late.contains("sudo /usr/bin/systemctl start stalwart"),
+            "{late}"
+        );
 
         save_progress(&serde_json::json!({"state": "rollback_failed"}));
         assert_eq!(
@@ -2225,7 +2670,10 @@ mod tests {
         let steps = out["manualSteps"].to_string();
         assert!(steps.contains("do NOT restore"), "{steps}");
         assert!(!steps.contains("cp -a"), "{steps}");
-        assert!(steps.contains("sudo systemctl start stalwart"), "{steps}");
+        assert!(
+            steps.contains("sudo /usr/bin/systemctl start stalwart"),
+            "{steps}"
+        );
         assert!(!effects(&ops)
             .iter()
             .any(|l| l == "restore-data" || l == EXTRACT));
@@ -2280,5 +2728,631 @@ mod tests {
         let big = outage_estimate(100 * GIB);
         assert_eq!(big["copySecs"], 1024);
         assert!(big["worstCaseSecs"].as_u64() > big["typicalSecs"].as_u64());
+    }
+
+    // ── 0.45.4: pin 0.16.25, two upgrade sources ─────────────────────
+
+    const OLDER_TGZ: &[u8] = b"fake stalwart 0.16.10 tarball (older source)";
+
+    fn older_url() -> String {
+        tarball_url_for(STALWART_OLDER_VERSION, "x86_64-unknown-linux-gnu")
+    }
+
+    /// A box that never left 0.16.10 upgrades straight to the pin, and a
+    /// failed upgrade reinstalls 0.16.10 — not 0.16.20.
+    #[test]
+    fn upgrade_from_0_16_10_downloads_and_rolls_back_to_0_16_10() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_OLDER_VERSION));
+        let mut ops = ready_ops();
+        ops.download_bodies.insert(older_url(), OLDER_TGZ.to_vec());
+        let plan = match preflight(&ops, &idle(), ARCH) {
+            Preflight::Ready(p) => p,
+            other => panic!("0.16.10 must be an upgrade source, got {other:?}"),
+        };
+        only_reads(&ops);
+        assert_eq!(plan.from.as_deref(), Some("0.16.10"));
+        assert_eq!(plan.to, "0.16.25");
+        assert_eq!(plan.rollback_version, Some("0.16.10"));
+        assert_eq!(
+            plan.previous.map(|a| a.sha256),
+            Some("3ec4ab7eff49f61280f2fe2e4f9645ce5308d1840286ef0c0437524f92ac6a33")
+        );
+        let dry = dry_run_json(&plan, &[]);
+        assert!(
+            dry["plan"][0]
+                .as_str()
+                .unwrap()
+                .contains("0.16.25 and 0.16.10"),
+            "{dry}"
+        );
+        assert!(
+            dry["rollback"]
+                .to_string()
+                .contains("reinstall Stalwart 0.16.10"),
+            "{dry}"
+        );
+
+        let plan = Plan {
+            target: Some(fake_art(TARGET_TGZ)),
+            previous: Some(fake_art(OLDER_TGZ)),
+            ..plan
+        };
+        ops.fail(EXTRACT); // the new binary fails to install → rollback
+        let out = run_with(&ops, &FakeProbe::new(&ops), &plan);
+        assert_eq!(out["state"], "rolled_back", "{out}");
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("Stalwart 0.16.10 reinstalled"),
+            "{out}"
+        );
+        assert_eq!(
+            effects(&ops)[..2],
+            [
+                format!("download {}", target_url()),
+                format!("download {}", older_url())
+            ]
+        );
+        assert_eq!(
+            *ops.extracted.lock().unwrap(),
+            vec![TARGET_TGZ.to_vec(), OLDER_TGZ.to_vec()],
+            "the 0.16.10 tarball is what goes back"
+        );
+        assert_eq!(
+            supervisor::row_field("installed_version").as_deref(),
+            Some("0.16.10")
+        );
+        clean_row();
+    }
+
+    /// The helper must be able to reinstall the INSTALLED version: a
+    /// helper whose table lacks 0.16.10 blocks a 0.16.10 box but not a
+    /// 0.16.20 one.
+    #[test]
+    fn preflight_needs_a_helper_that_can_reinstall_the_installed_version() {
+        let _g = crate::mail::mail_server_test_lock();
+        let mut v = helper::version_json_for(ARCH);
+        v["stalwartUpgradeFrom"] = serde_json::json!([v["stalwartUpgradeFrom"][0].clone()]);
+        for (installed, ok) in [
+            (STALWART_PREVIOUS_VERSION, true),
+            (STALWART_OLDER_VERSION, false),
+        ] {
+            seed_row("running", Some(installed));
+            let mut ops = ready_ops();
+            ops.helper_answers.insert("version".into(), v.to_string());
+            match preflight(&ops, &idle(), ARCH) {
+                Preflight::Ready(_) => assert!(ok, "{installed}: must block"),
+                Preflight::Blocked(_, b) => {
+                    assert!(!ok, "{installed}: {b:?}");
+                    assert_eq!(b[0].code, "mail_helper_outdated");
+                    assert!(
+                        b[0].hint.contains("cannot reinstall Stalwart 0.16.10"),
+                        "{}",
+                        b[0].hint
+                    );
+                }
+                other => panic!("{installed}: {other:?}"),
+            }
+        }
+        clean_row();
+    }
+
+    /// Manual steps spell systemctl as `/usr/bin/systemctl` (akzm's
+    /// sudoers line), never a bare `sudo systemctl`.
+    #[test]
+    fn manual_steps_use_the_absolute_systemctl_path() {
+        let art = fake_art(PREV_TGZ);
+        let mut all = manual_steps(Some((STALWART_OLDER_VERSION, art)), true);
+        all.extend(untouched_steps("stop", true));
+        all.extend(interrupted_steps(&serde_json::json!({
+            "state": "running", "step": "health", "from": STALWART_OLDER_VERSION,
+            "wasRunning": true, "startedAt": 1,
+        })));
+        let joined = all.join("\n");
+        assert!(
+            joined.contains("sudo /usr/bin/systemctl stop stalwart"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("sudo /usr/bin/systemctl start stalwart"),
+            "{joined}"
+        );
+        assert!(!joined.contains("sudo systemctl"), "{joined}");
+        // The interrupted run's rollback tarball is the run's `from` (for
+        // the arch this test runs on).
+        assert!(joined.contains("/tmp/stalwart-0.16.10.tar.gz"), "{joined}");
+        let real = supervisor::upgrade_from_artifact("0.16.10", std::env::consts::ARCH)
+            .expect("test hosts are x86_64 or aarch64");
+        assert!(joined.contains(real.sha256), "{joined}");
+        assert!(joined.contains("/releases/download/v0.16.10/"), "{joined}");
+    }
+
+    // ── 0.45.4: boot recovery of an interrupted upgrade ───────────────
+
+    /// A `running` record as a dead daemon left it: stopped at `step`,
+    /// with `done` steps recorded ok.
+    fn interrupted(
+        from: &str,
+        to: &str,
+        step: &str,
+        done: &[&str],
+        was_running: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "state": "running",
+            "from": from,
+            "to": to,
+            "priorStatus": if was_running { "running" } else { "disabled" },
+            "wasRunning": was_running,
+            "startedAt": 1000,
+            "step": step,
+            "steps": done.iter().map(|s| serde_json::json!({"step": s, "at": 1001, "ok": true, "detail": "ok"})).collect::<Vec<_>>(),
+            "snapshotDir": serde_json::Value::Null,
+        })
+    }
+
+    const PRE_INSTALL: &[&str] = &["download-0.16.25", "download-0.16.20", "stop", "snapshot"];
+
+    fn recover_with(
+        ops: &FakeSystemOps,
+        probe: &FakeProbe,
+        record: serde_json::Value,
+        previous: &[u8],
+    ) -> Option<serde_json::Value> {
+        save_progress(&record);
+        let plan = Plan {
+            target: Some(fake_art(TARGET_TGZ)),
+            previous: recovery_plan(&record, ARCH)
+                .previous
+                .map(|_| fake_art(previous)),
+            ..recovery_plan(&record, ARCH)
+        };
+        ops.ops.lock().unwrap().clear();
+        let mut doors = OpsDoors(ops);
+        recover(ops, &mut doors, probe, &plan, record)
+    }
+
+    #[test]
+    fn classify_interrupted_maps_every_step() {
+        let pin = STALWART_PINNED_VERSION;
+        let prev = STALWART_PREVIOUS_VERSION;
+        let cases: Vec<(serde_json::Value, Recovery)> = vec![
+            (
+                interrupted(prev, pin, "download-0.16.25", &[], true),
+                Recovery::RestartOld,
+            ),
+            (
+                interrupted(prev, pin, "stop", &["download-0.16.25"], true),
+                Recovery::RestartOld,
+            ),
+            (
+                interrupted(prev, pin, "snapshot", &["stop"], true),
+                Recovery::RestartOld,
+            ),
+            (interrupted(prev, pin, "", &[], true), Recovery::RestartOld),
+            (
+                interrupted(prev, pin, "restart-old", &["stop"], true),
+                Recovery::RestartOld,
+            ),
+            (
+                interrupted(prev, pin, "install", PRE_INSTALL, true),
+                Recovery::Finish,
+            ),
+            (
+                interrupted(prev, pin, "start", PRE_INSTALL, true),
+                Recovery::Finish,
+            ),
+            (
+                interrupted(prev, pin, "health", PRE_INSTALL, true),
+                Recovery::Finish,
+            ),
+            (
+                interrupted(prev, pin, "rollback-restore", PRE_INSTALL, true),
+                Recovery::Rollback,
+            ),
+            (
+                interrupted(prev, pin, "rollback-health", PRE_INSTALL, true),
+                Recovery::Rollback,
+            ),
+            // An older daemon's run (to 0.16.20) is rolled back, not finished.
+            (
+                interrupted("0.16.10", "0.16.20", "start", PRE_INSTALL, true),
+                Recovery::Rollback,
+            ),
+            (
+                interrupted(prev, pin, "stop-again", PRE_INSTALL, false),
+                Recovery::Succeeded,
+            ),
+        ];
+        for (rec, want) in cases {
+            assert_eq!(classify_interrupted(&rec), want, "{rec}");
+        }
+        // A half-finished finish stays a finish while re-downloading.
+        let mut again = interrupted(prev, pin, "download-0.16.25", PRE_INSTALL, true);
+        again["recovery"] = serde_json::json!("finish");
+        assert_eq!(classify_interrupted(&again), Recovery::Finish);
+        // No completed snapshot recorded / an unknown from / unknown step.
+        for rec in [
+            interrupted(prev, pin, "install", &["stop"], true),
+            interrupted("0.15.9", "0.16.20", "start", PRE_INSTALL, true),
+            interrupted("0.15.9", pin, "rollback-install", PRE_INSTALL, true),
+            interrupted(prev, pin, "warp-drive", PRE_INSTALL, true),
+        ] {
+            assert!(
+                matches!(classify_interrupted(&rec), Recovery::LeaveForOwner(_)),
+                "{rec}"
+            );
+        }
+        for state in [
+            "succeeded",
+            "rolled_back",
+            "rollback_failed",
+            "aborted",
+            "acknowledged",
+        ] {
+            let mut rec = interrupted(prev, pin, "health", PRE_INSTALL, true);
+            rec["state"] = serde_json::json!(state);
+            assert_eq!(classify_interrupted(&rec), Recovery::Nothing, "{state}");
+        }
+    }
+
+    #[test]
+    fn boot_recovery_with_no_interrupted_run_does_nothing() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_PINNED_VERSION));
+        let ops = ready_ops();
+        let mut rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "",
+            &[],
+            true,
+        );
+        rec["state"] = serde_json::json!("succeeded");
+        assert!(recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).is_none());
+        assert!(effects(&ops).is_empty(), "{:?}", effects(&ops));
+        clean_row();
+    }
+
+    /// Died after the stop, before the install: Stalwart is DOWN with
+    /// the untouched old binary → boot starts it, health-checks, and the
+    /// record ends `aborted` (the next upgrade is not blocked).
+    #[test]
+    fn boot_recovery_restarts_stalwart_stopped_before_the_install() {
+        let _g = crate::mail::mail_server_test_lock();
+        for step in ["stop", "snapshot"] {
+            seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+            let ops = ready_ops();
+            ops.set_unit_active(Some(false));
+            let rec = interrupted(
+                STALWART_PREVIOUS_VERSION,
+                STALWART_PINNED_VERSION,
+                step,
+                &["download-0.16.25"],
+                true,
+            );
+            let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+            assert_eq!(out["state"], "aborted", "{step}: {out}");
+            assert_eq!(out["recovery"], "restart_old", "{step}");
+            assert_eq!(out["interruptedAt"], step);
+            assert!(
+                out["error"].as_str().unwrap().contains("started again"),
+                "{step}: {out}"
+            );
+            assert_eq!(
+                effects(&ops),
+                s(&["systemctl restart stalwart", "ping", "imap-greet"]),
+                "{step}: start + health, never restore or install"
+            );
+            assert_eq!(ops.unit_is_active(), Some(true), "{step}");
+            assert_eq!(
+                supervisor::row_field("installed_version").as_deref(),
+                Some(STALWART_PREVIOUS_VERSION)
+            );
+            assert!(
+                matches!(preflight(&ops, &idle(), ARCH), Preflight::Ready(_)),
+                "{step}: the next upgrade is not blocked"
+            );
+        }
+        clean_row();
+    }
+
+    /// Died while downloading: Stalwart never stopped — no restart.
+    #[test]
+    fn boot_recovery_leaves_a_serving_stalwart_alone() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+        let ops = ready_ops();
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "download-0.16.20",
+            &["download-0.16.25"],
+            true,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "aborted", "{out}");
+        assert!(
+            out["error"].as_str().unwrap().contains("kept serving"),
+            "{out}"
+        );
+        assert!(effects(&ops).is_empty(), "{:?}", effects(&ops));
+        clean_row();
+    }
+
+    /// Died at install / start / health after this run's snapshot:
+    /// boot installs the pin again, starts it, health-checks → succeeded.
+    #[test]
+    fn boot_recovery_finishes_an_upgrade_interrupted_after_the_snapshot() {
+        let _g = crate::mail::mail_server_test_lock();
+        for step in ["install", "start", "health"] {
+            seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+            let ops = ready_ops();
+            ops.set_unit_active(Some(false));
+            let rec = interrupted(
+                STALWART_PREVIOUS_VERSION,
+                STALWART_PINNED_VERSION,
+                step,
+                PRE_INSTALL,
+                true,
+            );
+            let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+            assert_eq!(out["state"], "succeeded", "{step}: {out}");
+            assert_eq!(out["recovery"], "finish");
+            assert!(out["note"].as_str().unwrap().contains("finished"), "{out}");
+            assert_eq!(
+                effects(&ops),
+                s(&[
+                    format!("download {}", target_url()).as_str(),
+                    EXTRACT,
+                    "systemctl restart stalwart",
+                    "ping",
+                    "imap-greet",
+                ]),
+                "{step}"
+            );
+            assert_eq!(*ops.extracted.lock().unwrap(), vec![TARGET_TGZ.to_vec()]);
+            assert_eq!(
+                supervisor::row_field("installed_version").as_deref(),
+                Some(STALWART_PINNED_VERSION),
+                "{step}"
+            );
+            assert_eq!(ops.unit_is_active(), Some(true));
+            assert!(matches!(preflight(&ops, &idle(), ARCH), Preflight::Noop(_)));
+        }
+        clean_row();
+    }
+
+    /// Finishing fails its health check → the same rollback as the run:
+    /// stop → restore → reinstall the box's old version → start + health.
+    #[test]
+    fn boot_recovery_rolls_back_when_finishing_fails() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+        let ops = ready_ops();
+        let probe = FakeProbe::new(&ops);
+        probe.fail_pings(PING_ATTEMPTS);
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "health",
+            PRE_INSTALL,
+            true,
+        );
+        let out = recover_with(&ops, &probe, rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "rolled_back", "{out}");
+        let err = out["error"].as_str().unwrap();
+        assert!(
+            err.contains("finishing it failed") && err.contains("rolled back"),
+            "{err}"
+        );
+        let mut want = vec![
+            format!("download {}", target_url()),
+            EXTRACT.to_string(),
+            "systemctl restart stalwart".into(),
+        ];
+        want.extend(std::iter::repeat_n(
+            "ping".to_string(),
+            PING_ATTEMPTS as usize,
+        ));
+        want.extend(s(&[
+            format!("download {}", prev_url()).as_str(),
+            "systemctl stop stalwart",
+            "restore-data",
+            EXTRACT,
+            "systemctl restart stalwart",
+            "ping",
+            "imap-greet",
+        ]));
+        assert_eq!(effects(&ops), want);
+        assert_eq!(
+            *ops.extracted.lock().unwrap(),
+            vec![TARGET_TGZ.to_vec(), PREV_TGZ.to_vec()]
+        );
+        assert_eq!(
+            supervisor::row_field("installed_version").as_deref(),
+            Some(STALWART_PREVIOUS_VERSION)
+        );
+        assert_eq!(ops.unit_is_active(), Some(true));
+        clean_row();
+    }
+
+    /// Died mid-rollback, or an older daemon's run (to 0.16.20, from
+    /// 0.16.10): boot completes the rollback to the run's `from`.
+    #[test]
+    fn boot_recovery_completes_a_rollback_to_the_runs_from_version() {
+        let _g = crate::mail::mail_server_test_lock();
+        let rollback = |url: String| {
+            vec![
+                format!("download {url}"),
+                "systemctl stop stalwart".into(),
+                "restore-data".into(),
+                EXTRACT.into(),
+                "systemctl restart stalwart".into(),
+                "ping".into(),
+                "imap-greet".into(),
+            ]
+        };
+        // 1. This daemon's run, stopped during the restore.
+        seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+        let ops = ready_ops();
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "rollback-restore",
+            PRE_INSTALL,
+            true,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "rolled_back", "{out}");
+        assert_eq!(effects(&ops), rollback(prev_url()));
+        assert_eq!(*ops.extracted.lock().unwrap(), vec![PREV_TGZ.to_vec()]);
+
+        // 2. 0.45.3's 0.16.10 → 0.16.20 run, then the daemon was updated.
+        seed_row("running", Some(STALWART_OLDER_VERSION));
+        let mut ops = ready_ops();
+        ops.download_bodies.insert(older_url(), OLDER_TGZ.to_vec());
+        let rec = interrupted(
+            STALWART_OLDER_VERSION,
+            "0.16.20",
+            "start",
+            &["download-0.16.20", "download-0.16.10", "stop", "snapshot"],
+            true,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, OLDER_TGZ).expect("acted");
+        assert_eq!(out["state"], "rolled_back", "{out}");
+        assert!(
+            out["error"]
+                .as_str()
+                .unwrap()
+                .contains("Stalwart 0.16.10 reinstalled"),
+            "{out}"
+        );
+        assert_eq!(effects(&ops), rollback(older_url()));
+        assert_eq!(*ops.extracted.lock().unwrap(), vec![OLDER_TGZ.to_vec()]);
+        assert_eq!(
+            supervisor::row_field("installed_version").as_deref(),
+            Some(STALWART_OLDER_VERSION)
+        );
+        assert_eq!(ops.unit_is_active(), Some(true));
+        clean_row();
+    }
+
+    /// Offline at boot: neither the pin nor the old tarball downloads.
+    /// Mail must not stay down — Stalwart is started with the binary on
+    /// disk — and it is loud (rollback_failed, status error, steps).
+    #[test]
+    fn boot_recovery_offline_still_starts_stalwart_and_is_loud() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+        let ops = FakeSystemOps {
+            download_error: Some("network unreachable".into()),
+            ..ready_ops()
+        };
+        ops.set_unit_active(Some(false));
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "start",
+            PRE_INSTALL,
+            true,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "rollback_failed", "{out}");
+        let err = out["error"].as_str().unwrap();
+        assert!(
+            err.contains("ROLLBACK FAILED") && err.contains("started again"),
+            "{err}"
+        );
+        assert_eq!(
+            effects(&ops),
+            s(&[
+                format!("download {}", target_url()).as_str(),
+                format!("download {}", prev_url()).as_str(),
+                "systemctl restart stalwart",
+            ])
+        );
+        assert_eq!(ops.unit_is_active(), Some(true), "mail is not left down");
+        let steps = out["manualSteps"].to_string();
+        assert!(
+            steps.contains("sudo /usr/bin/systemctl stop stalwart"),
+            "{steps}"
+        );
+        assert_eq!(supervisor::row_field("status").as_deref(), Some("error"));
+        assert_eq!(
+            blocked_codes(preflight(&ops, &idle(), ARCH))[0],
+            "rollback_failed"
+        );
+        clean_row();
+    }
+
+    /// No completed snapshot recorded for a run past the stop: nothing is
+    /// restored or installed, Stalwart is started, the record stays
+    /// interrupted (blocks the next upgrade) with the reason.
+    #[test]
+    fn boot_recovery_without_a_snapshot_only_starts_stalwart() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("running", Some(STALWART_PREVIOUS_VERSION));
+        let ops = ready_ops();
+        ops.set_unit_active(Some(false));
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "install",
+            &["stop"],
+            true,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "running", "{out}");
+        assert_eq!(out["recovery"], "left_for_owner");
+        assert!(
+            out["bootRecovery"]
+                .as_str()
+                .unwrap()
+                .contains("no completed snapshot"),
+            "{out}"
+        );
+        assert!(
+            out["bootStart"].as_str().unwrap().contains("started again"),
+            "{out}"
+        );
+        assert_eq!(effects(&ops), s(&["systemctl restart stalwart"]));
+        assert!(ops.extracted.lock().unwrap().is_empty());
+        assert_eq!(ops.unit_is_active(), Some(true));
+        assert_eq!(status_upgrade_json(false)["state"], "interrupted");
+        assert_eq!(
+            blocked_codes(preflight(&ops, &idle(), ARCH))[0],
+            "upgrade_interrupted"
+        );
+        clean_row();
+    }
+
+    /// Died after success was recorded (stopping a disabled box again):
+    /// the record is closed as succeeded with a warning, no effects.
+    #[test]
+    fn boot_recovery_closes_a_run_that_had_already_succeeded() {
+        let _g = crate::mail::mail_server_test_lock();
+        seed_row("disabled", Some(STALWART_PINNED_VERSION));
+        let ops = ready_ops();
+        let rec = interrupted(
+            STALWART_PREVIOUS_VERSION,
+            STALWART_PINNED_VERSION,
+            "stop-again",
+            PRE_INSTALL,
+            false,
+        );
+        let out = recover_with(&ops, &FakeProbe::new(&ops), rec, PREV_TGZ).expect("acted");
+        assert_eq!(out["state"], "succeeded", "{out}");
+        assert!(
+            out["warning"]
+                .as_str()
+                .unwrap()
+                .contains("check `k2 hostmail status`"),
+            "{out}"
+        );
+        assert!(effects(&ops).is_empty(), "{:?}", effects(&ops));
+        clean_row();
     }
 }

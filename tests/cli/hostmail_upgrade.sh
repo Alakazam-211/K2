@@ -111,7 +111,7 @@ def status_reply(scen):
         if final != "succeeded":
             up["error"] = "health check failed: JMAP ping failed"
         if final == "rollback_failed":
-            up["manualSteps"] = ["sudo systemctl stop stalwart",
+            up["manualSteps"] = ["sudo /usr/bin/systemctl stop stalwart",
                                  "k2 hostmail upgrade --acknowledge-failed"]
     return {"ok": True, "consistent": True, "state": "running", "upgrade": up}
 class H(http.server.BaseHTTPRequestHandler):
@@ -207,7 +207,7 @@ printf '%s' "$OUT" | grep -q 'health check failed' || fail "rolled_back must pri
 run_rc run_rbf hostmail upgrade
 [ "$RC" -eq 1 ] || fail "rollback_failed must exit 1, got $RC"
 printf '%s' "$ERR" | grep -q 'ROLLBACK FAILED' || fail "rollback_failed must be loud on stderr: $ERR"
-printf '%s' "$ERR" | grep -q 'sudo systemctl stop stalwart' || fail "manual steps on stderr: $ERR"
+printf '%s' "$ERR" | grep -q 'sudo /usr/bin/systemctl stop stalwart' || fail "manual steps on stderr: $ERR"
 
 run_rc run_ok hostmail upgrade --json
 [ "$RC" -eq 0 ] || fail "--json run rc $RC"
@@ -241,6 +241,7 @@ ERR="$(cat "$WORK/stderr")"
 printf '%s' "$ERR" | grep -q 'daemon_lost' || fail "lost daemon must print daemon_lost: $ERR"
 printf '%s' "$ERR" | grep -q 'manualSteps' || fail "lost daemon must point at manualSteps: $ERR"
 printf '%s' "$ERR" | grep -q 'acknowledge-failed' || fail "lost daemon must name --acknowledge-failed: $ERR"
+printf '%s' "$ERR" | grep -q 'finishes or rolls back' || fail "lost daemon must say the restarted daemon recovers: $ERR"
 
 run_rc ack hostmail upgrade --acknowledge-failed
 [ "$RC" -eq 0 ] || fail "ack rc $RC"

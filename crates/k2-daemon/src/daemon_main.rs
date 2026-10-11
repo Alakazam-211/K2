@@ -1022,6 +1022,11 @@ async fn async_main() {
     // 60 s (skipping while an enable runs / nothing is installed),
     // persists transitions onto `mail_server.status`, and raises the
     // standard `mail:server-state-changed` event on failures.
+    // 0.45.4: FIRST finish or roll back a `k2 hostmail upgrade` the last
+    // daemon process died in (Stalwart must never be left stopped). It
+    // claims the upgrade flag + enable latch before returning, so the
+    // health loop and the reconciles below stay out until it is done.
+    mail::upgrade::spawn_boot_recovery();
     mail::supervisor::spawn_health_loop();
     // Boxes enabled before the IMAP listener template (0.40.147) have
     // no imap :143 / imaps :993. Linux-only detached thread: waits for
@@ -1039,8 +1044,11 @@ async fn async_main() {
     // registry write, no restart; never flips back. Linux-only thread.
     mail::cert_owner::spawn_startup_reconcile();
     // 0.45.1 field fixes: lock the mail cert names (+ one guarded ACME
-    // retry), repair the 3 spam rules Stalwart 0.16.x can't parse, mx
-    // route → v4Only once, DANE off below 0.16.20; one ReloadSettings.
+    // retry), repair the 3 spam rules a Stalwart without `bit_and` (before
+    // 0.16.23) can't parse and move the rules pin with the installed
+    // version, mx route → v4Only once (PTR + SPF are IPv4-only, so it
+    // stays on 0.16.25), DANE off below 0.16.20 and put back from 0.16.20
+    // (0.16.23+ also fixes the DNSSEC race); one ReloadSettings.
     // Registry only (restart only if the reload is refused). Linux thread.
     mail::defaults::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();

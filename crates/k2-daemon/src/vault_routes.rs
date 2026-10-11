@@ -292,12 +292,15 @@ fn status_json(st: &VaultStatus) -> Value {
         if st.recovery != "confirmed" {
             o.insert(
                 "recoveryHint".into(),
-                json!("Only you should do this, from your own SSH login or a terminal outside K2: k2 vault recovery show-once. Agents: don't run it; tell your owner."),
+                json!(RECOVERY_HINT),
             );
         }
     }
     v
 }
+
+/// Who sets up the recovery key, and where (VS2). People only.
+pub const RECOVERY_HINT: &str = "Only you should do this: in the K2 app, Settings → Vault → Set up recovery key, or from your own SSH login or a terminal outside K2: k2 vault recovery show-once. Agents: don't run it; tell your owner.";
 
 /// §18 / VS21 per-mode copy.
 pub fn honest_line(key_home: &str) -> &'static str {
@@ -492,7 +495,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
         findings.push(json!({
             "level": level,
             "code": "recovery_unconfirmed",
-            "message": "The vault has no confirmed recovery key. Only the owner should do this, from their own SSH login or a terminal outside K2: k2 vault recovery show-once. Agents: don't run it; tell your owner.",
+            "message": format!("The vault has no confirmed recovery key. {RECOVERY_HINT}"),
         }));
     }
     if st.tamper != "ok" {
@@ -998,7 +1001,17 @@ struct ConfirmBody {
     label: Option<String>,
 }
 
-const CONFIRM_ACTIONS: &[&str] = &["reveal", "kek-rotate", "rekey", "rollback", "restore", "recovery-rotate", "confirm-password-change", "legacy-export"];
+const CONFIRM_ACTIONS: &[&str] = &[
+    "reveal",
+    "kek-rotate",
+    "rekey",
+    "rollback",
+    "restore",
+    "recovery-setup",
+    "recovery-rotate",
+    "confirm-password-change",
+    "legacy-export",
+];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     human_admin(c)?;
@@ -1176,16 +1189,57 @@ struct RecoveryBody {
     confirm_token: Option<String>,
 }
 
+/// The K2 app: the owner token on its own, no person channel (VS1 is
+/// deferred, so the app has no attested socket yet). Not the vault socket:
+/// a peer there that failed the person check stays refused.
+fn is_app_owner(c: &VaultCaller, not_person: Option<&'static str>) -> bool {
+    not_person.is_none() && !c.is_passport() && matches!(c.actor, Actor::Owner) && c.channel == Channel::Plain
+}
+
 fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
     let stamp = c.actor.stamp();
-    if let Err(e) = require_person(c, not_person) {
-        crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
-        return Err(e);
-    }
-    human_admin(c)?;
     let b: RecoveryBody = parse(body)?;
     let (state, _, _) = vault.recovery_state();
-    if state == "confirmed" {
+    let confirmed = state == "confirmed";
+    let app_confirmed = match require_person(c, not_person) {
+        Ok(()) => {
+            human_admin(c)?;
+            false
+        }
+        // Settings → Vault (0.45.4): the owner token alone isn't a person,
+        // but a person's confirm is: the Mac's Touch ID / login password
+        // sheet (LocalAuthentication) or the vault password, which only a
+        // person can set. The single-use token for this exact action stands
+        // in for the person channel. Agents (passports) never get here.
+        Err(e) if is_app_owner(c, not_person) => {
+            let action = if confirmed { "recovery-rotate" } else { "recovery-setup" };
+            let Some(token) = b.confirm_token.as_deref() else {
+                crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
+                return Err(err(
+                    "person_required",
+                    403,
+                    "only a person can do this. In the K2 app use Settings → Vault → Set up recovery key (it asks you to confirm), or run k2 vault recovery show-once from your own SSH login or a terminal outside K2. Agents: don't run it; tell your owner.",
+                ));
+            };
+            if confirmed && path != RECOVERY_ROTATE {
+                return Err(err(
+                    "recovery_exists",
+                    409,
+                    "a recovery key is already confirmed; to replace it run k2 vault recovery rotate (needs a confirm)",
+                ));
+            }
+            if let Err(e) = take_proof(vault, c, action, None, Some(token)) {
+                crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
+                return Err(e);
+            }
+            true
+        }
+        Err(e) => {
+            crate::vault::auth_audit("vault-recovery", &stamp, &format!("deny show: {}", e.code), ingress);
+            return Err(e);
+        }
+    };
+    if confirmed && !app_confirmed {
         // A new key replaces the old one: confirm first (§12, VS2).
         if path != RECOVERY_ROTATE {
             return Err(err(
@@ -1209,7 +1263,14 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
 
 fn recovery_confirm(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
     let stamp = c.actor.stamp();
-    require_person(c, not_person)?;
+    // The app (owner token) may finish what it started: the show-once id
+    // is random, held 15 minutes, bound to the same actor, and only handed
+    // out after a person check or a confirm; the words were only on screen.
+    if let Err(e) = require_person(c, not_person) {
+        if !is_app_owner(c, not_person) {
+            return Err(e);
+        }
+    }
     human_admin(c)?;
     let b: RecoveryBody = parse(body)?;
     let id = b.id.as_deref().ok_or_else(|| err("id_required", 400, "which show-once?"))?;

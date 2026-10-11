@@ -13,7 +13,11 @@
 //
 // VS1 is deferred for 0.45.2 (Rosson): this page talks to the daemon with
 // the app's owner token like every other Settings page; no attested channel.
-// Recovery-key setup stays in a terminal for now; the page says so.
+// Recovery-key setup (0.45.4): the owner token alone isn't a person (VS2),
+// so the page first asks for a confirm (the Mac's sheet, or a password),
+// then shows the 24 words once and has the person type back three. The
+// words live in that panel's state only, are never copied to the
+// clipboard, and are gone once the check step starts.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
@@ -26,6 +30,7 @@ import {
   toBase64,
   vaultApi,
   type VaultAuditRow,
+  type VaultRecoveryChallenge,
   type VaultPreset,
   type VaultRequest,
   type VaultSecret,
@@ -198,7 +203,205 @@ function ValueField({
 
 // ── Status ───────────────────────────────────────────────────────────
 
-export function VaultStatusCard({ status }: { status: VaultStatus }): React.JSX.Element {
+// ── Recovery key setup ──────────────────────────────────────────────
+
+type RecoveryState =
+  | { step: 'idle' }
+  | { step: 'starting' }
+  | { step: 'mac' }
+  | { step: 'password'; method: string }
+  | { step: 'shown'; challenge: VaultRecoveryChallenge }
+  | { step: 'check'; id: string; checkWords: number[] }
+  | { step: 'saving' }
+
+/** Set up the vault's recovery key from the app (§7.4, VS2). */
+export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): React.JSX.Element {
+  const [state, setState] = useState<RecoveryState>({ step: 'idle' })
+  const [error, setError] = useState<string | null>(null)
+  const pwRef = useRef<HTMLInputElement>(null)
+  const [hasPw, setHasPw] = useState(false)
+  const [typed, setTyped] = useState<string[]>(['', '', ''])
+
+  const show = async (method: string, password?: string): Promise<void> => {
+    const { token } = await vaultApi.confirmFinish({
+      action: 'recovery-setup',
+      method,
+      label: 'recovery key',
+      ...(password !== undefined ? { password } : {}),
+    })
+    const challenge = await vaultApi.recoveryShowOnce(token)
+    setState({ step: 'shown', challenge })
+  }
+
+  const start = async (): Promise<void> => {
+    setError(null)
+    setState({ step: 'starting' })
+    try {
+      const { methods } = await vaultApi.confirmStart('recovery-setup')
+      if (methods.includes('local-auth')) {
+        setState({ step: 'mac' })
+        await show('local-auth')
+        return
+      }
+      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
+      if (pw) {
+        setState({ step: 'password', method: pw })
+        return
+      }
+      setState({ step: 'idle' })
+      setError('No way to confirm here yet. From your own SSH login or a terminal outside K2: k2 vault recovery show-once.')
+    } catch (e) {
+      setState({ step: 'idle' })
+      setError(daemonErrorText(e))
+    }
+  }
+
+  const submitPassword = async (method: string): Promise<void> => {
+    const el = pwRef.current
+    if (!el) return
+    const pw = el.value
+    el.value = ''
+    setHasPw(false)
+    setError(null)
+    try {
+      await show(method, pw)
+    } catch (e) {
+      setState({ step: 'idle' })
+      setError(daemonErrorText(e))
+    }
+  }
+
+  const submitWords = async (id: string): Promise<void> => {
+    setError(null)
+    setState({ step: 'saving' })
+    try {
+      await vaultApi.recoveryConfirm(
+        id,
+        typed.map((w) => w.trim().toLowerCase()),
+      )
+      setTyped(['', '', ''])
+      setState({ step: 'idle' })
+      onConfirmed()
+    } catch (e) {
+      // The daemon drops the phrase on a wrong answer: start again.
+      setTyped(['', '', ''])
+      setState({ step: 'idle' })
+      setError(`${daemonErrorText(e)} Start again to get a new recovery key.`)
+    }
+  }
+
+  return (
+    <div className="space-y-1.5" data-testid="vault-recovery-setup">
+      {state.step === 'idle' && (
+        <button type="button" className={btnPrimary} onClick={() => void start()} data-testid="vault-recovery-start">
+          Set up recovery key
+        </button>
+      )}
+      {state.step === 'starting' && <p className={`text-[11px] ${muted}`}>Asking the vault…</p>}
+      {state.step === 'mac' && <p className={`text-[11px] ${muted}`}>Confirm on your Mac.</p>}
+      {state.step === 'password' && (
+        <form
+          className="flex flex-col gap-1.5 max-w-sm"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void submitPassword(state.method)
+          }}
+        >
+          <label className={`text-[11px] ${muted}`}>
+            {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+            <input
+              ref={pwRef}
+              type="password"
+              autoComplete="current-password"
+              data-testid="vault-recovery-password"
+              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
+              className={`${input} mt-1`}
+            />
+          </label>
+          <div className="flex gap-1.5">
+            <button type="submit" className={btn} disabled={!hasPw}>
+              Confirm
+            </button>
+            <button type="button" className={btn} onClick={() => setState({ step: 'idle' })}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {state.step === 'shown' && (
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 space-y-2" data-testid="vault-recovery-phrase">
+          <p className="text-[11px] text-[var(--color-text-primary)]">
+            Write these 24 words down, in order, and keep them offline. K2 shows them once and keeps only the public
+            half. Anyone with these words and a copy of the vault can read every secret.
+          </p>
+          <ol className="grid grid-cols-3 sm:grid-cols-4 gap-x-3 gap-y-0.5 font-mono text-[11px] text-[var(--color-text-primary)] select-none">
+            {state.challenge.phrase.split(/\s+/).map((w, i) => (
+              <li key={i} data-testid="vault-recovery-word">
+                <span className={muted}>{i + 1}.</span> {w}
+              </li>
+            ))}
+          </ol>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              className={btnPrimary}
+              data-testid="vault-recovery-saved"
+              onClick={() => setState({ step: 'check', id: state.challenge.id, checkWords: state.challenge.checkWords })}
+            >
+              I&rsquo;ve written it down
+            </button>
+          </div>
+        </div>
+      )}
+      {(state.step === 'check' || state.step === 'saving') && (
+        <form
+          className="flex flex-col gap-1.5 max-w-sm"
+          data-testid="vault-recovery-check"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (state.step === 'check') void submitWords(state.id)
+          }}
+        >
+          <p className={`text-[11px] ${muted}`}>Type back these words from your copy.</p>
+          {state.step === 'check' &&
+            state.checkWords.map((n, i) => (
+              <label key={n} className={`text-[11px] ${muted}`}>
+                Word {n}
+                <input
+                  value={typed[i] ?? ''}
+                  autoComplete="off"
+                  spellCheck={false}
+                  data-testid={`vault-recovery-word-${n}`}
+                  onChange={(e) => {
+                    const v = e.currentTarget.value
+                    setTyped((t) => t.map((x, j) => (j === i ? v : x)))
+                  }}
+                  className={`${input} mt-1`}
+                />
+              </label>
+            ))}
+          {state.step === 'saving' && <p className={`text-[11px] ${muted}`}>Checking…</p>}
+          {state.step === 'check' && (
+            <div className="flex gap-1.5">
+              <button type="submit" className={btnPrimary} disabled={typed.some((w) => w.trim() === '')}>
+                Confirm recovery key
+              </button>
+            </div>
+          )}
+        </form>
+      )}
+      <ErrorLine text={error} />
+    </div>
+  )
+}
+
+export function VaultStatusCard({
+  status,
+  onRecoveryConfirmed,
+}: {
+  status: VaultStatus
+  onRecoveryConfirmed?: () => void
+}): React.JSX.Element {
   if (!status.open) {
     return (
       <div className="border border-[var(--color-border)] p-3 space-y-1" data-testid="vault-status">
@@ -222,7 +425,7 @@ export function VaultStatusCard({ status }: { status: VaultStatus }): React.JSX.
             {status.recoveryHint ||
               'Only you should do this, from your own SSH login or a terminal outside K2: k2 vault recovery show-once.'}
           </p>
-          <p className={`text-[10px] ${muted}`}>Setting up the recovery key from the app is coming later.</p>
+          <RecoverySetup onConfirmed={() => onRecoveryConfirmed?.()} />
         </div>
       )}
       <div className="border border-[var(--color-border)] p-3 space-y-1.5">
@@ -1047,7 +1250,7 @@ export function VaultSection(): React.JSX.Element {
         </p>
       </div>
 
-      {status && <VaultStatusCard status={status} />}
+      {status && <VaultStatusCard status={status} onRecoveryConfirmed={() => void refresh()} />}
 
       <div className="flex gap-1 border-b border-[var(--color-border)]" role="tablist">
         {(['secrets', 'requests'] as const).map((t) => (

@@ -37,6 +37,15 @@ export interface VaultStatus {
   recoveryHint?: string
 }
 
+/** `recovery/show-once`: the phrase, shown once; `checkWords` are 1-based. */
+export interface VaultRecoveryChallenge {
+  id: string
+  phrase: string
+  checkWords: number[]
+  recipient: string
+  note?: string
+}
+
 export interface VaultHostDisplay {
   origin: string
   unicode: string
@@ -174,10 +183,20 @@ export const vaultApi = {
   disable: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/disable', { id }),
   enable: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/enable', { id }),
   destroy: (id: string) => daemonCliPost<{ ok: boolean }>(scope(), 'vault/destroy', { id, yes: true }),
-  confirmStart: (action: string, secretId: string) =>
-    daemonCliPost<{ methods: string[]; expiresIn: number }>(scope(), 'vault/confirm/start', { action, secretId }),
-  confirmFinish: (body: { action: string; secretId: string; method: string; password?: string; label?: string }) =>
+  confirmStart: (action: string, secretId?: string) =>
+    daemonCliPost<{ methods: string[]; expiresIn: number }>(
+      scope(),
+      'vault/confirm/start',
+      secretId !== undefined ? { action, secretId } : { action },
+    ),
+  confirmFinish: (body: { action: string; secretId?: string; method: string; password?: string; label?: string }) =>
     daemonCliPost<{ token: string; expiresIn: number }>(scope(), 'vault/confirm/finish', body),
+  /** Make a recovery key and show it once (needs a `recovery-setup` confirm from the app). */
+  recoveryShowOnce: (confirmToken: string) =>
+    daemonCliPost<VaultRecoveryChallenge>(scope(), 'vault/recovery/show-once', { confirmToken }),
+  /** Type back the check words; on success the key is the vault's recovery key. */
+  recoveryConfirm: (id: string, words: string[]) =>
+    daemonCliPost<{ ok: boolean; recovery: string; recipient: string }>(scope(), 'vault/recovery/confirm', { id, words }),
   reveal: (id: string, confirmToken: string) =>
     daemonCliPost<{ valueB64: string; version: number }>(scope(), 'vault/reveal', { id, confirmToken }),
 }

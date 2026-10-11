@@ -124,8 +124,78 @@ describe('VaultSection', () => {
     expect(screen.getByTestId('vault-honest').textContent).toBe(STATUS.honest)
     const banner = screen.getByTestId('vault-recovery-banner')
     expect(banner.textContent).toContain('k2 vault recovery show-once')
-    expect(banner.textContent).toContain('coming later')
+    expect(banner.textContent).not.toContain('coming later')
+    expect(within(banner).getByTestId('vault-recovery-start').textContent).toBe('Set up recovery key')
     expect(document.body.textContent).not.toMatch(/agents can.t read/i)
+  })
+
+  it('sets up the recovery key from the app: Mac confirm, words shown once, three typed back', async () => {
+    const words = Array.from({ length: 24 }, (_, i) => `w${i + 1}`)
+    let confirmed = false
+    daemonCliGet.mockImplementation(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {
+      if (route === 'vault/status')
+        return confirmed ? { ...STATUS, recovery: 'confirmed', recoveryConfirmedAt: '2026-10-11T00:00:00Z', recoveryHint: undefined } : STATUS
+      if (route === 'vault/list') return params?.system ? systemCall() : { secrets: userRows }
+      if (route === 'vault/presets') return { presets: [] }
+      if (route === 'vault/requests') return { requests: [] }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    postHandler = (route, body) => {
+      if (route === 'vault/confirm/start') return { methods: ['local-auth'], expiresIn: 60 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-r', expiresIn: 60 }
+      if (route === 'vault/recovery/show-once')
+        return { id: 'rc-1', phrase: words.join(' '), checkWords: [3, 11, 20], recipient: 'age1x' }
+      if (route === 'vault/recovery/confirm') {
+        expect(body).toEqual({ id: 'rc-1', words: ['w3', 'w11', 'w20'] })
+        confirmed = true
+        return { ok: true, recovery: 'confirmed', recipient: 'age1x' }
+      }
+      throw new Error(`unexpected POST ${route}`)
+    }
+    const { container } = await renderPage()
+    fireEvent.click(screen.getByTestId('vault-recovery-start'))
+    const shown = await screen.findByTestId('vault-recovery-phrase')
+    expect(within(shown).getAllByTestId('vault-recovery-word')).toHaveLength(24)
+    expect(shown.textContent).toContain('w24')
+    // No copy button: the clipboard is readable by agents.
+    expect(within(shown).queryByRole('button', { name: /copy/i })).toBeNull()
+    expect(posts.slice(0, 3)).toEqual([
+      { route: 'vault/confirm/start', body: { action: 'recovery-setup' } },
+      { route: 'vault/confirm/finish', body: { action: 'recovery-setup', method: 'local-auth', label: 'recovery key' } },
+      { route: 'vault/recovery/show-once', body: { confirmToken: 'tok-r' } },
+    ])
+    fireEvent.click(screen.getByTestId('vault-recovery-saved'))
+    // The words are gone once the check starts.
+    expect(container.textContent).not.toContain('w24')
+    fireEvent.change(screen.getByTestId('vault-recovery-word-3'), { target: { value: 'w3' } })
+    fireEvent.change(screen.getByTestId('vault-recovery-word-11'), { target: { value: ' W11 ' } })
+    fireEvent.change(screen.getByTestId('vault-recovery-word-20'), { target: { value: 'w20' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm recovery key' }))
+    await waitFor(() => expect(screen.queryByTestId('vault-recovery-banner')).toBeNull())
+    expect(posts.map((p) => p.route)).toContain('vault/recovery/confirm')
+  })
+
+  it('recovery setup asks for the vault password when the Mac sheet is not offered, and restarts on wrong words', async () => {
+    postHandler = (route) => {
+      if (route === 'vault/confirm/start') return { methods: ['vault-password'], expiresIn: 60 }
+      if (route === 'vault/confirm/finish') return { token: 'tok-p', expiresIn: 60 }
+      if (route === 'vault/recovery/show-once') return { id: 'rc-2', phrase: 'a b c d e f g h i j k l m n o p q r s t u v w x', checkWords: [3, 11, 20], recipient: 'age1y' }
+      if (route === 'vault/recovery/confirm') throw new Error("those words don't match; start again with show-once")
+      throw new Error(`unexpected POST ${route}`)
+    }
+    await renderPage()
+    fireEvent.click(screen.getByTestId('vault-recovery-start'))
+    const pw = (await screen.findByTestId('vault-recovery-password')) as HTMLInputElement
+    fireEvent.change(pw, { target: { value: 'correct horse battery' } })
+    fireEvent.click(within(screen.getByTestId('vault-recovery-setup')).getByRole('button', { name: 'Confirm' }))
+    await screen.findByTestId('vault-recovery-phrase')
+    expect(posts[1].body).toEqual({ action: 'recovery-setup', method: 'vault-password', label: 'recovery key', password: 'correct horse battery' })
+    fireEvent.click(screen.getByTestId('vault-recovery-saved'))
+    for (const n of [3, 11, 20]) fireEvent.change(screen.getByTestId(`vault-recovery-word-${n}`), { target: { value: 'nope' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm recovery key' }))
+    await screen.findByTestId('vault-recovery-start')
+    expect(screen.getByTestId('vault-recovery-setup').textContent).toContain('Start again')
+    expect(screen.getByTestId('vault-recovery-banner')).toBeTruthy()
   })
 
   it('groups Server / each workspace / chats; badges readable delivery; warns on mixed scripts', async () => {

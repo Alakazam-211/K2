@@ -211,6 +211,89 @@ fn recovery_is_for_people_even_on_a_fresh_vault() {
     assert_eq!(s, 403, "rotate needs a confirm: {v}");
 }
 
+/// 0.45.4 blocker: Settings → Vault (the K2 app, owner token over TCP)
+/// couldn't set up the recovery key at all. A person's confirm (the Mac's
+/// sheet or the vault password) now stands in for the person channel.
+#[test]
+fn the_app_sets_up_the_recovery_key_after_a_confirm() {
+    let t = vault();
+    // Without a confirm the app is still refused (VS2), and says where to go.
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({}));
+    assert_eq!(s, 403, "{v}");
+    assert_eq!(code(&v), "person_required");
+    assert!(v["error"]["hint"].as_str().expect("hint").contains("Settings → Vault"), "{v}");
+    // A vault password set by a person (no global LA fake: tests run in parallel).
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    // A confirm for another action doesn't count.
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "rekey", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let wrong = v["token"].as_str().expect("token").to_string();
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": wrong }));
+    assert_eq!(s, 403, "{v}");
+    assert_eq!(code(&v), "vault_confirm_required");
+    // The app's confirm for recovery setup.
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "recovery-setup is a confirm action: {v}");
+    let tok = v["token"].as_str().expect("token").to_string();
+    // Agents never get here, token or not.
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &agent("ws1", true), json!({ "confirmToken": tok }));
+    assert_eq!(s, 403, "{v}");
+    assert_eq!(code(&v), "owner_only");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    let phrase = v["phrase"].as_str().expect("phrase").to_string();
+    let words: Vec<&str> = phrase.split(' ').collect();
+    assert_eq!(words.len(), 24);
+    assert_eq!(v["checkWords"], json!([3, 11, 20]));
+    // Single use: the same token can't show a second phrase.
+    let (s, _) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": tok }));
+    assert_eq!(s, 403, "single use");
+    // Wrong words: refused, still unconfirmed.
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner(), json!({ "id": v["id"], "words": ["a", "b", "c"] }));
+    assert_eq!(s, 400, "{v2}");
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    // Start again and type the right words back, from the app.
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    let phrase = v["phrase"].as_str().expect("phrase").to_string();
+    let words: Vec<&str> = phrase.split(' ').collect();
+    let (s, v) = call(&t, RECOVERY_CONFIRM, &owner(), json!({ "id": v["id"], "words": [words[2], words[10], words[19]] }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["recovery"], "confirmed");
+    assert_eq!(t.v.status().recovery, "confirmed");
+    // Once confirmed, show-once doesn't replace it; rotate needs its own confirm.
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-setup", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner(), json!({ "confirmToken": v["token"] }));
+    assert_eq!(s, 409, "{v}");
+    assert_eq!(code(&v), "recovery_exists");
+    let (s, v) = call(&t, CONFIRM_FINISH, &owner(), json!({ "action": "recovery-rotate", "method": "vault-password", "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, RECOVERY_ROTATE, &owner(), json!({ "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "rotate from the app after a confirm: {v}");
+}
+
+#[test]
+fn an_agent_with_the_owner_token_cannot_finish_someone_elses_recovery_without_the_words() {
+    let t = vault();
+    // A person starts on the vault socket; the raw owner token can't
+    // confirm without the words only that person saw.
+    let (s, v) = call(&t, RECOVERY_SHOW_ONCE, &owner_tty(), json!({}));
+    assert_eq!(s, 200, "{v}");
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner(), json!({ "id": v["id"], "words": ["abandon", "abandon", "abandon"] }));
+    assert_eq!(s, 400, "{v2}");
+    assert_eq!(t.v.status().recovery, "unconfirmed");
+    // An unknown id is refused.
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &owner(), json!({ "id": "nope", "words": ["a", "b", "c"] }));
+    assert_eq!(s, 409, "{v2}");
+    // Passports never reach confirm.
+    let (s, v2) = call(&t, RECOVERY_CONFIRM, &agent("ws1", true), json!({ "id": v["id"], "words": ["a", "b", "c"] }));
+    assert_eq!(s, 403, "{v2}");
+}
+
 #[test]
 fn it_agents_share_server_secrets_with_others_only() {
     let t = vault();

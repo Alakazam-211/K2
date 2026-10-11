@@ -879,9 +879,8 @@ fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
     if s.errors == 0 {
         return Vec::new();
     }
-    // This base's `Diagnostic` has no suggestion line; `k2 zen widget errors`
-    // carries each error's suggestion.
     let mut out = vec![Diagnostic {
+        suggestion: Some(format!("read them with k2 zen widget errors {name}; fix, save and validate again")),
         file: widget_label(name),
         line: 1,
         col: 1,
@@ -889,6 +888,7 @@ fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
     }];
     for r in &s.last {
         out.push(Diagnostic {
+            suggestion: r["suggestion"].as_str().map(str::to_string),
             file: widget_label(name),
             line: 1,
             col: 1,

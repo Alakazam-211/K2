@@ -22490,7 +22490,7 @@ cmd_schema() {
     {
       "name": "zen validate",
       "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
-      "description": "Validate what is on disk now; prints file:line:col: message per finding. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
+      "description": "Validate what is on disk now: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime}."}

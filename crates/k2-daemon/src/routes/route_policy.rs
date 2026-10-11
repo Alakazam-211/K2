@@ -180,11 +180,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/deploy", Member),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
+    get("/cli/app/errors", Member),
+    get("/cli/app/history", Member),
+    get("/cli/app/inspect", Member),
     post("/cli/app/install", Member),
+    get("/cli/app/list", Member),
+    get("/cli/app/logs", Member),
     post("/cli/app/restart", Member),
     post("/cli/app/rollback", Member),
     post("/cli/app/start", Member),
     post("/cli/app/stop", Member),
+    // purge (deletes the App's data) is owner-only in the handler.
+    post("/cli/app/uninstall", Member),
     post("/cli/app/validate", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),

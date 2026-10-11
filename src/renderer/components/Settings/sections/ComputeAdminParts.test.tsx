@@ -190,6 +190,13 @@ describe('NodeAdminPanel', () => {
     await waitFor(() => expect(m.setNodeOfflineAlert).toHaveBeenCalledWith('mini-1', 600))
   })
 
+  it('shows the one-time pin a node needs before admin works', async () => {
+    m.fetchNodeHealth.mockResolvedValue(health({ needsPin: true, pinCommand: 'sudo k2-node admin pin' }))
+    render(<NodeAdminPanel node="mini-1" />)
+    fireEvent.click(screen.getByTestId('compute-node-admin-open-mini-1'))
+    expect((await screen.findByTestId('compute-node-needs-pin')).textContent).toContain('sudo k2-node admin pin')
+  })
+
   it('says so when the node cannot self-update and turns an alert off', async () => {
     m.fetchNodeHealth.mockResolvedValue(health({ features: ['admin'], alertAfterSecs: 600, facts: null, update: null }))
     m.setNodeOfflineAlert.mockResolvedValue({ ok: true, alertAfterSecs: null })

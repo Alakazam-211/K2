@@ -62,7 +62,8 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/compute/nodes/health":
             return self.reply(200, {"node": "mini-1", "online": True, "nodeVersion": "0.45.5", "remoteAdmin": "full", "pendingApprovals": 1,
                                     "facts": {"uptime_secs": 90000, "disk_encryption": "on", "sleep": {"autorestart": 1}, "disks": [{"name": "root", "path": "/", "total_bytes": 500 << 30, "free_bytes": 9 << 30}]},
-                                    "update": {"state": "healthy", "version": "0.45.5"}, "alertAfterSecs": 600, "alertsTo": "it"})
+                                    "update": {"state": "healthy", "version": "0.45.5"}, "alertAfterSecs": 600, "alertsTo": "it",
+                                    "needsPin": True, "pinCommand": "sudo k2-node admin pin"})
         if u.path == "/cli/compute/nodes/policy":
             return self.reply(200, {"node": "mini-1", "online": True, "policy": {"mem_cap_gb": 8}, "remoteAdmin": "full"})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
@@ -146,6 +147,8 @@ out="$("$K2" compute node health mini-1)"
 expect_has "health shows FileVault" "$out" "FileVault     on"
 expect_has "health shows autorestart" "$out" "autorestart   on"
 expect_has "health shows alerts" "$out" "offline after 10m, to it"
+expect_has "health shows the one-time pin" "$out" "NEEDS ONE-TIME PIN"
+expect_has "health shows the pin command" "$out" "sudo k2-node admin pin"
 out="$("$K2" compute node admin deny car_0123456789abcdef --why "not now")"
 expect_has "deny" "$out" "denied car_0123456789abcdef"
 expect_eq "deny body" "$(last_body)" '{"request": "car_0123456789abcdef", "why": "not now"}'

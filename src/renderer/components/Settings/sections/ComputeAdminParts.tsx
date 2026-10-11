@@ -356,6 +356,14 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
             k2-node {view.nodeVersion ?? '?'} · remote admin {view.remoteAdmin ?? 'unknown'}
             {view.at ? ` · reported ${formatRelativeTime(view.at, nowSec())}` : ''}
           </div>
+          {view.needsPin ? (
+            <Callout tone="warn">
+              <span data-testid="compute-node-needs-pin">
+                Needs a one-time pin: this node refuses admin commands until someone runs{' '}
+                <code className="font-mono">{view.pinCommand ?? 'sudo k2-node admin pin'}</code> at that machine.
+              </span>
+            </Callout>
+          ) : null}
           {lines.length > 0 ? (
             <ul className={`text-[11px] ${secondary} list-none space-y-0.5`} data-testid="compute-node-health">
               {lines.map((l) => (

@@ -25,11 +25,12 @@
 //! a `suggestion` line (lakebed-style agent errors): what to do next.
 //! Callers turn offsets into `file:line:col` (`line_col`).
 //!
-//! The type stage (tsc-rs as a subprocess, never linked) comes with `--types`.
+//! The type stage (tsc-rs as a subprocess, never linked) is [`types`].
 
 pub mod app;
 pub mod inspect;
 pub mod inventory;
+pub mod types;
 mod lint;
 
 use oxc_allocator::Allocator;

@@ -19516,8 +19516,6 @@ HOW YOU GET A SECRET (delivery)
           Only to the secret's sites. Where the key goes in the request
           (header and format) was fixed by whoever created the secret —
           you just name it. Echoes of the key come back as [k2v:NAME].
-  proxy   LLM CLIs get a local base URL + a placeholder key; K2 swaps in
-          the real key on the way out (the tool never sees it).
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
           You CAN read it — so can anything you run. Opt-in.
   env     $NAME in new sessions. You can read it. Needs a respawn.

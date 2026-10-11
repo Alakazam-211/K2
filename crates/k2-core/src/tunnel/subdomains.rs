@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::config::SUBDOMAIN_HOST;
 
@@ -114,7 +114,7 @@ struct SubdomainsResponse {
 /// The cached routing table: the user's primary subdomain label plus the
 /// `nested-label → internal target_endpoint` map. Cheap to clone (it's held
 /// behind an `Arc`), looked up O(1) per connection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubdomainMap {
     /// The user's primary subdomain label (e.g. `rosson`). Hosts of the
     /// form `<sub>.k2.dev` route to the daemon. Empty when unknown (then we
@@ -503,8 +503,91 @@ pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String>
         }
     }
     let n = map.targets.len();
+    persist(&map);
     let changed = store(map);
     Ok((n, changed))
+}
+
+// ── On-disk copy (runtime stage H) ────────────────────────────────────────
+//
+// The routing map used to live only in memory, so a daemon that restarted
+// (crash, upgrade, hand-off) routed every nested App host to `UnknownNested`
+// until its first control-plane refresh — a 404 window on every restart,
+// and forever when the control plane was unreachable. Every map a refresh
+// lands is now also written to `~/.k2/tunnel-routes.json` (0600), and boot
+// loads it back when it belongs to the subdomain the tunnel serves.
+
+/// `~/.k2/tunnel-routes.json`.
+pub fn persisted_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".k2")
+        .join("tunnel-routes.json")
+}
+
+/// Write `map` to [`persisted_path`] (tmp+rename, 0600). Best-effort: a
+/// failed write only costs the warm start, so it is logged, never raised.
+pub fn persist(map: &SubdomainMap) {
+    let path = persisted_path();
+    let res = (|| -> Result<(), String> {
+        let dir = path.parent().ok_or("no parent")?;
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let body = serde_json::to_vec_pretty(map).map_err(|e| e.to_string())?;
+        let tmp = dir.join(format!("tunnel-routes.json.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
+    })();
+    if let Err(e) = res {
+        crate::log_debug!("[tunnel/subdomains] WARN: persist {}: {e}", path.display());
+    }
+}
+
+/// Boot: load [`persisted_path`] into the cache when it belongs to
+/// `primary` (the subdomain in `tunnel.json`). A map for any other primary
+/// (the tunnel moved to another name since it was written) is ignored, as
+/// is a missing or unreadable file. Returns the number of nested targets
+/// loaded (`None` = nothing loaded).
+pub fn load_persisted(primary: &str) -> Option<usize> {
+    let primary = primary.trim().to_ascii_lowercase();
+    if primary.is_empty() {
+        return None;
+    }
+    let raw = std::fs::read(persisted_path()).ok()?;
+    let map: SubdomainMap = match serde_json::from_slice(&raw) {
+        Ok(m) => m,
+        Err(e) => {
+            crate::log_debug!("[tunnel/subdomains] ignoring unreadable tunnel-routes.json: {e}");
+            return None;
+        }
+    };
+    if map.primary != primary {
+        crate::log_debug!(
+            "[tunnel/subdomains] ignoring tunnel-routes.json for {:?} (tunnel serves {primary:?})",
+            map.primary
+        );
+        return None;
+    }
+    let _g = refresh_lock().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(expected) = expected_primary_slot()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_deref()
+    {
+        if expected != primary {
+            return None;
+        }
+    }
+    let n = map.targets.len();
+    store(map);
+    Some(n)
 }
 
 /// The primary label the routing cache must belong to, set by
@@ -527,10 +610,12 @@ pub fn reset_for_primary(primary: &str) -> bool {
     *expected_primary_slot()
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(primary.clone());
-    store(SubdomainMap {
+    let map = SubdomainMap {
         primary,
         targets: HashMap::new(),
-    })
+    };
+    persist(&map);
+    store(map)
 }
 
 /// Test-only: forget the expected primary so later tests in this binary
@@ -845,6 +930,9 @@ mod tests {
         // HOME_LOCK serializes both the env-var override and the global
         // cache against the other cache-touching test.
         let _g = crate::themes::HOME_LOCK.lock();
+        // refresh_once persists the landed map under ~/.k2 (stage H): a
+        // temp HOME keeps the test off the real one.
+        let home = crate::test_env::TempHome::new();
         let cp = crate::test_env::EnvVar::set(CONTROL_PLANE_BASE_ENV, format!("http://127.0.0.1:{port}"));
 
         // Known baseline: empty cache (result intentionally ignored — the
@@ -854,6 +942,16 @@ mod tests {
 
         let first = refresh_once("rosson", "tok_refresh");
         let second = refresh_once("rosson", "tok_refresh");
+        let persisted: SubdomainMap = serde_json::from_slice(
+            &std::fs::read(home.path().join(".k2/tunnel-routes.json"))
+                .expect("refresh must persist the landed map"),
+        )
+        .expect("persisted map parses");
+        assert_eq!(persisted.primary, "rosson");
+        assert_eq!(
+            persisted.targets.get("refr").map(String::as_str),
+            Some("localhost:4100")
+        );
 
         drop(cp);
 
@@ -1013,5 +1111,39 @@ mod tests {
         drop(cp);
         assert!(err.contains("pro_required"), "got: {err}");
         assert!(err.contains("k2.dev/dashboard"), "got: {err}");
+    }
+
+    /// Stage H: boot loads the persisted map only for the subdomain the
+    /// tunnel serves now, so a restarted daemon routes nested Apps at once.
+    #[test]
+    fn load_persisted_only_for_the_current_primary() {
+        let _g = crate::themes::HOME_LOCK.lock();
+        let _home = crate::test_env::TempHome::new();
+        clear_expected_primary_for_test();
+        let _ = swap_and_changed(SubdomainMap::default());
+        assert_eq!(load_persisted("rosson"), None, "no file → nothing loaded");
+
+        let mut targets = HashMap::new();
+        targets.insert("app".to_string(), "localhost:4321".to_string());
+        persist(&SubdomainMap {
+            primary: "rosson".into(),
+            targets,
+        });
+        assert_eq!(load_persisted("other"), None, "another primary is ignored");
+        assert_eq!(
+            current().route_for_host("app.rosson.k2.dev"),
+            Route::Daemon,
+            "nothing loaded yet: no primary known → daemon"
+        );
+        assert_eq!(load_persisted("Rosson"), Some(1));
+        assert_eq!(
+            current().route_for_host("app.rosson.k2.dev"),
+            Route::Internal("localhost:4321".to_string())
+        );
+
+        std::fs::write(persisted_path(), b"{not json").expect("corrupt");
+        let _ = swap_and_changed(SubdomainMap::default());
+        assert_eq!(load_persisted("rosson"), None, "unreadable file is ignored");
+        let _ = swap_and_changed(SubdomainMap::default());
     }
 }

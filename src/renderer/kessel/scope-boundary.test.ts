@@ -149,6 +149,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/tickets-settings-api.ts',
   // 0.45.4 Settings → Compute: the window's server's nodes and grants.
   'components/Settings/sections/compute-api.ts',
+  // 0.45.5 Settings → Compute approvals (node admin S10): the window's
+  // server's held admin requests.
+  'components/Settings/sections/compute-admin-api.ts',
   // 0.45.4 federation: peer-list change events for the window's server.
   'components/Settings/sections/ConnectionsSection.tsx',
   // 0.45.5 Settings → Notifications (Thread push): the window's server's

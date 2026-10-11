@@ -1,0 +1,70 @@
+// Thread push (prd-thread-push-notifications-v1 S5): the caller's own push
+// prefs on the window's server, kept live. Shared by Settings →
+// Notifications and the workspace Agent tab's phone switch, so both show
+// the daemon's one truth and refetch on `notify_prefs_changed`.
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { primaryScope } from '@/kessel/server-scope'
+import { onNotifyPrefsChanged } from '@/stores/session-events'
+import { fetchNotifyPrefs, type NotifyPrefs } from './notify-api'
+
+/** Does the window's server have Thread push (`thread-push-v1` in its
+ *  `/boot-status` features)? Without it, every Thread push surface hides. */
+export function threadPushAvailable(): boolean {
+  return primaryScope().serverSupports('thread-push-v1')
+}
+
+export interface NotifyPrefsState {
+  prefs: NotifyPrefs | null
+  error: string | null
+  /** Re-read now. */
+  reload: () => void
+  /** Adopt a write's answer (the POST returns the same shape as the GET). */
+  adopt: (next: NotifyPrefs) => void
+}
+
+/** `enabled` false: nothing is fetched or subscribed (an older server). */
+export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
+  const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  /** Only the newest read lands (a refetch can overtake an older one). */
+  const generation = useRef(0)
+
+  const reload = useCallback(() => {
+    if (!enabled) return
+    const gen = ++generation.current
+    fetchNotifyPrefs().then(
+      (p) => {
+        if (gen !== generation.current) return
+        setPrefs(p)
+        setError(null)
+      },
+      (e: unknown) => {
+        if (gen !== generation.current) return
+        setError(e instanceof Error ? e.message : String(e))
+      },
+    )
+  }, [enabled])
+
+  useEffect(() => {
+    if (!enabled) {
+      setPrefs(null)
+      setError(null)
+      return
+    }
+    reload()
+    const off = onNotifyPrefsChanged(primaryScope(), reload)
+    return () => {
+      off()
+      generation.current += 1
+    }
+  }, [enabled, reload])
+
+  const adopt = useCallback((next: NotifyPrefs) => {
+    generation.current += 1
+    setPrefs(next)
+    setError(null)
+  }, [])
+
+  return { prefs, error, reload, adopt }
+}

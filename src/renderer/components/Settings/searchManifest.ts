@@ -95,6 +95,7 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 /** Section label lookup — duplicated from Settings.tsx SECTIONS so manifests don't import the router. */
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
+  notifications: 'Notifications',
   'token-usage': 'Token Usage',
   styles: 'Styles',
   projects: 'Workspaces / Agents',

@@ -43,6 +43,8 @@ import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTe
 import ProjectGroupSettings from '../Projects/ProjectSettings'
 import { ContextCatalogSection, CONTEXT_CATALOG_MANIFEST } from './sections/ContextCatalogSection'
 import { TicketsSection, TICKETS_MANIFEST } from './sections/TicketsSection'
+import { NotificationsSection, NOTIFICATIONS_MANIFEST } from './sections/NotificationsSection'
+import { threadPushAvailable } from './sections/useNotifyPrefs'
 import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSection'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
@@ -75,11 +77,22 @@ type NavBlock =
 /** The sidebar. `zenGardens`: show Settings → Gardens, which is
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Placed between Tickets and Context Catalog. Tickets sits
- *  directly beneath Projects (0.45.4, Rosson). */
-export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[] {
+ *  directly beneath Projects (0.45.4, Rosson). `notifications`: the window's
+ *  server reports `thread-push-v1`; Notifications sits directly after General
+ *  (prd-thread-push-notifications-v1 §9). */
+export function settingsNav({
+  zenGardens,
+  notifications = false,
+}: {
+  zenGardens: boolean
+  notifications?: boolean
+}): NavBlock[] {
   const hideTunnel = isAirgap()
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
+    ...(notifications
+      ? ([{ kind: 'item', id: 'notifications' as const, label: 'Notifications' }] satisfies NavBlock[])
+      : []),
     { kind: 'item', id: 'styles', label: 'Styles' },
     { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
@@ -161,6 +174,8 @@ export default function Settings(): React.JSX.Element {
   // Settings → Gardens shows where the Zen toggle shows. Read this
   // computer's Gardens once per open so a daemon without them hides it.
   const zenGardensShown = useZenGardensSettingsShown()
+  // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
+  const notificationsShown = threadPushAvailable()
   useEffect(() => {
     if (zenAvailable()) void loadZenSettings()
   }, [])
@@ -173,6 +188,7 @@ export default function Settings(): React.JSX.Element {
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
       ...TICKETS_MANIFEST,
+      ...(threadPushAvailable() ? NOTIFICATIONS_MANIFEST : []),
       ...CONTEXT_CATALOG_MANIFEST,
       ...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),
       ...AGENT_SKILLS_MANIFEST,
@@ -218,7 +234,11 @@ export default function Settings(): React.JSX.Element {
     if (!zenAvailable() && activeSection === 'zen-gardens') {
       setSection('general')
     }
-  }, [activeSection, setSection])
+    // A server without Thread push has no Notifications page.
+    if (!notificationsShown && activeSection === 'notifications') {
+      setSection('general')
+    }
+  }, [activeSection, setSection, notificationsShown])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -320,7 +340,7 @@ export default function Settings(): React.JSX.Element {
           </button>
         </div>
         <nav className="flex-1 py-1 overflow-y-auto">
-          {settingsNav({ zenGardens: zenGardensShown }).map((block) => {
+          {settingsNav({ zenGardens: zenGardensShown, notifications: notificationsShown }).map((block) => {
             if (block.kind === 'item') {
               return (
                 <SettingsNavButton
@@ -507,6 +527,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'tickets' && (
           <SectionErrorBoundary>
             <TicketsSection />
+          </SectionErrorBoundary>
+        )}
+        {notificationsShown && activeSection === 'notifications' && (
+          <SectionErrorBoundary>
+            <NotificationsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'context-catalog' && (

@@ -52,6 +52,7 @@ import { RoleSkillButton, CanonicalAgentButton } from './CanonicalAgentButtons'
 import { WorkspaceApiKeysPanel } from './ApiTokensSection'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
+import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
 import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
 import { normalizeHexColor } from '@/components/Projects/projects-api'
@@ -1566,6 +1567,7 @@ function ProjectDetail({
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
               <DefaultModelControls project={project} />
               <WorkspaceCompletionSoundToggle project={project} />
+              <WorkspacePhonePushToggle project={project} />
             </SettingsGroup>
 
             <SettingsGroup title="LLM tokens">

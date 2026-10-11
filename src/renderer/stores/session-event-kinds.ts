@@ -123,6 +123,11 @@ export const SESSION_EVENT_ROUTES = {
   // prd-daemon-activity-and-thread-working-v1 RL2/A27: the daemon's activity
   // rows (+ seq). Carried: a room renders its own server's rows.
   activity_changed: { class: 'app', app: true, carried: true },
+  // prd-thread-push-notifications-v1 §5.5: someone's push prefs changed on
+  // this server (no payload). Settings → Notifications and the Agent tab's
+  // phone switch refetch (`onNotifyPrefsChanged`). Not carried: Settings
+  // reads the window's own server.
+  notify_prefs_changed: { class: 'app', app: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

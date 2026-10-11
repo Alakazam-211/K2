@@ -220,6 +220,15 @@ pub fn apply(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path
     cmd.envs(base_env());
     cmd.env("PORT", port.to_string());
     cmd.envs(identity);
+    apply_granted(cmd, service_id, workspace_id, cwd)
+}
+
+/// The vault half of a clean start: `.env.k2` references (in `cwd`) and the
+/// secrets granted to the service. The App runtime's process engine builds
+/// its own clean base and calls this (prd-k2-app-runtime-v1 §4.2 item 9).
+/// Returns the secrets dir to remove when the instance stops.
+pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path) -> Option<PathBuf> {
+    let se = get(service_id);
     let Ok(vault) = super::get() else { return None };
     // `.env.k2`: references resolved, literals passed through.
     let env_file = se.env_file.clone().unwrap_or_else(|| ".env.k2".into());

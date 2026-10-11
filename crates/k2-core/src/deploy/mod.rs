@@ -36,6 +36,7 @@ pub mod manifest;
 pub mod seed;
 pub mod store;
 pub mod validate;
+pub mod widget_events;
 
 static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
 

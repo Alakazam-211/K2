@@ -1823,6 +1823,8 @@ mod tests {
     /// and a second answer is 409 with the first value kept.
     #[test]
     fn secret_card_answer_is_human_only_and_final() {
+        use k2_vault::SecretStore as _;
+        let vault = crate::vault::ensure_test_vault();
         let handle = format!("ovlkv8{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -1830,7 +1832,7 @@ mod tests {
         let posted = post_json(
             "/cli/thread/secret",
             &HashMap::new(),
-            serde_json::json!({ "addr": handle, "name": name, "from": "k2" }),
+            serde_json::json!({ "addr": handle, "name": name, "for": "api.example.com", "from": "k2" }),
         );
         assert_eq!(posted.status, "200 OK", "{}", posted.body);
         let id = json_body(&posted)["id"].as_str().expect("id").to_string();
@@ -1890,11 +1892,15 @@ mod tests {
             serde_json::json!({ "addr": handle, "id": id }),
         );
         assert_error_code(&void_after, "409 Conflict", "card_not_pending");
-        assert_eq!(
-            k2_core::overlay::vault::debug_read(&project_id, name).expect("vault"),
-            b"human-typed",
-            "the first human answer is final"
-        );
+        let got = vault
+            .resolve(
+                &k2_vault::Selector::user(k2_vault::Scope::workspace(project_id.clone()), name),
+                k2_vault::Use::System,
+                &k2_vault::Requester::System("test".into()),
+            )
+            .expect("the vault holds the first human answer");
+        assert_eq!(got.value.expose(), b"human-typed", "the first human answer is final");
+        assert!(!k2_core::overlay::vault::exists(&project_id, name), "nothing in the old folder");
     }
 
     /// KV8 is scoped to secret cards: an agent may still tap its own

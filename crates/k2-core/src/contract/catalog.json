@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 8,
+  "catalogVersion": 9,
   "caps": [
     {
       "name": "agents:read",
@@ -545,7 +545,7 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number"},
+                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {
@@ -640,7 +640,7 @@
                     "kind": {"type": "string"},
                     "from": {"type": "string"},
                     "to": {"type": ["string", "null"]},
-                    "created_at": {"type": "number"},
+                    "created_at": {"type": "number", "description": "Seconds since the epoch (not milliseconds: multiply by 1000 for new Date)."},
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
                     "choice": {
@@ -2907,7 +2907,8 @@
           "properties": {
             "since": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "description": "A store revision (0, or head / next.since from an earlier answer); not a time."
             },
             "after": {
               "type": "string"
@@ -2976,7 +2977,8 @@
             ],
             "properties": {
               "since": {
-                "type": "integer"
+                "type": "integer",
+                "description": "The store revision to pass back as since; not a time."
               },
               "after": {
                 "type": "string"

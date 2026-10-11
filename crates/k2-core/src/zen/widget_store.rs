@@ -790,6 +790,7 @@ impl ZenFiles {
                             line,
                             col,
                             message: format!("'{a}' isn't a source address (name or name::host): {}", e.hint),
+                            suggestion: Some("set config.source to a source name or name::host (k2 sources list names them)".into()),
                         });
                     }
                 }

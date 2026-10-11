@@ -327,6 +327,21 @@ bunx vitest run --reporter=dot
 bun run vite:build:web
 echo "  Pre-flight gates passed."
 
+# ── Step 0.55: Root-helper signing preflight (prd-k2-root-helper-v1 §9.1) ──
+# The helper is signed after CI builds it (Step 10.5) with the SEPARATE
+# root-helper key that lives only on this Mac. Fail now, not after a
+# 30-minute build, if the key / keychain password / RELEASE_KEYS are not
+# ready. Escape (no root-helper signature this release; boxes keep their
+# current helper): K2_SKIP_ROOT_HELPER_SIGN=1 (loud).
+echo ""
+if [ "${K2_SKIP_ROOT_HELPER_SIGN:-0}" = "1" ]; then
+    echo "  WARNING: K2_SKIP_ROOT_HELPER_SIGN=1 — this release's k2-root-helper will NOT be signed;" >&2
+    echo "  WARNING: auto-heal and install-root-helper.sh --version refuse unsigned assets." >&2
+else
+    echo "Step 0.55: Root-helper signing preflight..."
+    bash "$PROJECT_DIR/scripts/sign-root-helper.sh" --preflight
+fi
+
 # ── Step 0.6: Linux build gate (k2-ci@40.160.54.133) ──
 # Shared with scripts/build-app.sh — full rationale + designated-box details
 # live in scripts/linux-build-gate.sh. Escape: K2_SKIP_LINUX_GATE=1 (loud).
@@ -981,9 +996,27 @@ verify_manifest() {
 verify_manifest "app latest.json"    "${VERIFY_BASE}/latest.json"
 verify_manifest "daemon-latest.json" "${VERIFY_BASE}/daemon-latest.json"
 
+# ── Step 10.5: Sign the root helper (prd-k2-root-helper-v1 §9.1) ──
+# daemon-binaries.yml uploads k2-root-helper-linux-<arch> + .sha256
+# UNSIGNED; this Mac signs them with the root-helper key (never in CI,
+# never the updater key) and uploads the .sig. Until it does, daemons'
+# auto-heal sees a 404 and backs off — harmless, but the release is not
+# complete without it. Re-run by hand: bash scripts/sign-root-helper.sh ${VERSION}
+ROOT_HELPER_SIGN_FAILED=""
+if [ "${K2_SKIP_ROOT_HELPER_SIGN:-0}" != "1" ]; then
+    echo ""
+    echo "Step 10.5: Signing k2-root-helper assets (waits for daemon-binaries.yml)..."
+    if ! bash "$PROJECT_DIR/scripts/sign-root-helper.sh" "${VERSION}"; then
+        ROOT_HELPER_SIGN_FAILED=1
+        echo "  ✗ root helper NOT signed — re-run: bash scripts/sign-root-helper.sh ${VERSION}" >&2
+    fi
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
+[ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 echo "═══════════════════════════════════════════════════"
+[ -z "$ROOT_HELPER_SIGN_FAILED" ] || exit 1

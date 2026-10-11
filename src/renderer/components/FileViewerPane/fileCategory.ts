@@ -18,6 +18,8 @@ export type FileCategory =
   | 'zip'
   | 'mermaid'
   | 'diagram'
+  | 'cad2d'
+  | 'model3d'
   | 'binary'
   | 'text'
 
@@ -48,6 +50,15 @@ export const ZIP_EXTS = ['.zip']
 export const MERMAID_EXTS = ['.mermaid', '.mmd']
 /** Diagram sources without a full client renderer in Phase A. */
 export const DIAGRAM_EXTS = ['.drawio', '.dio', '.puml', '.plantuml', '.dot', '.gv']
+/** 2D CAD drawings: parsed and drawn as SVG (ASCII DXF only). Read as text. */
+export const CAD2D_EXTS = ['.dxf']
+/**
+ * 3D meshes: three.js in a WebGL canvas, bytes via `fs/read-binary`.
+ * `.gltf` previews only when its buffers are embedded (data: URIs);
+ * `.glb` is self-contained. `.obj` is a Wavefront mesh here: a compiler
+ * object file opens the 3D viewer and fails to parse with a clear error.
+ */
+export const MODEL3D_EXTS = ['.stl', '.obj', '.3mf', '.ply', '.glb', '.gltf']
 export const BINARY_EXTS = [
   '.wasm',
   '.bin',
@@ -59,7 +70,6 @@ export const BINARY_EXTS = [
   '.o',
   '.a',
   '.lib',
-  '.obj',
   '.woff',
   '.woff2',
   '.ttf',
@@ -90,6 +100,8 @@ export function getFileCategory(filePath: string): FileCategory {
   if (ZIP_EXTS.includes(ext)) return 'zip'
   if (MERMAID_EXTS.includes(ext)) return 'mermaid'
   if (DIAGRAM_EXTS.includes(ext)) return 'diagram'
+  if (CAD2D_EXTS.includes(ext)) return 'cad2d'
+  if (MODEL3D_EXTS.includes(ext)) return 'model3d'
   if (BINARY_EXTS.includes(ext)) return 'binary'
   return 'text'
 }
@@ -105,6 +117,8 @@ export function getDefaultViewMode(category: FileCategory): ViewMode {
     category === 'zip' ||
     category === 'mermaid' ||
     category === 'diagram' ||
+    category === 'cad2d' ||
+    category === 'model3d' ||
     category === 'binary'
   ) {
     return 'rendered'
@@ -121,11 +135,12 @@ export function isBinaryPreviewCategory(category: FileCategory): boolean {
     category === 'audio' ||
     category === 'video' ||
     category === 'zip' ||
+    category === 'model3d' ||
     category === 'binary'
   )
 }
 
-/** Categories that show the Preview | Edit toggle. */
+/** Categories that show the Preview | Edit toggle (Preview | Source for DXF). */
 export function supportsViewToggle(category: FileCategory): boolean {
   return (
     category === 'markdown' ||
@@ -133,7 +148,8 @@ export function supportsViewToggle(category: FileCategory): boolean {
     category === 'image' ||
     category === 'csv' ||
     category === 'mermaid' ||
-    category === 'diagram'
+    category === 'diagram' ||
+    category === 'cad2d'
   )
 }
 

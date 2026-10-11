@@ -98,6 +98,24 @@ The file viewer draws Mermaid diagrams with a vendored build of **Mermaid**.
 | **License** | **MIT** (Copyright (c) 2014 - 2022 Knut Sveidqvist) — full text in `src/renderer/public/vendor/mermaid.LICENSE.txt`. The prebuilt file also carries Mermaid's own dependencies (among them d3, dagre-d3-es, cytoscape, khroma, DOMPurify, KaTeX, marked), each under its own permissive licence. |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. Mermaid does **not** relicense the product. |
 
+## Third-party: CAD file previews (MIT)
+
+The file viewer previews DXF drawings and 3D models (STL, OBJ, 3MF, PLY,
+glTF/GLB) with these npm packages, bundled into lazy chunks that load only
+when such a file opens.
+
+| | |
+|--|--|
+| **What** | `three` 0.186.0 (core, OrbitControls, STL/OBJ/3MF/PLY/GLTF loaders, and the **fflate** 0.8.2 copy three ships for 3MF) · `dxf-parser` 1.1.2 (with its dependency `loglevel` 1.9.2). Used by `src/renderer/components/FileViewerPane/` (`DxfViewer.tsx`, `dxfModel.ts`, `ModelViewer.tsx`, `modelParse.ts`, `modelScene.ts`) |
+| **Upstream** | [three.js](https://github.com/mrdoob/three.js) · [fflate](https://github.com/101arrowz/fflate) · [dxf-parser](https://github.com/gdsestimating/dxf-parser) · [loglevel](https://github.com/pimterry/loglevel) |
+| **License** | **MIT** (Copyright © 2010-2026 three.js authors; Copyright (c) 2023 Arjun Barrett; Copyright (c) 2015 GDS Storefront Estimating; Copyright (c) 2013 Tim Perry) — full texts in `src/renderer/components/FileViewerPane/THIRD_PARTY_NOTICES.txt` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
+
+The same three.js version is also vendored for Garden widgets (the Zen
+widget library below). That copy is a pre-bundled classic script for sealed
+widget frames, ships with the desktop app only, and lacks the 3MF and PLY
+loaders, so the file viewer bundles its own ES-module copy.
+
 ## Third-party: Zen widget library
 
 <!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->

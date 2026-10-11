@@ -20,6 +20,12 @@ const MediaViewer = lazy(() => import('./MediaViewer').then((m) => ({ default: m
 const DiagramViewer = lazy(() =>
   import('./DiagramViewer').then((m) => ({ default: m.DiagramViewer })),
 )
+// CAD previews (ported from the K2 Companion). Each viewer dynamic-imports
+// its heavy half again: dxf-parser (`./dxfModel`) and three.js
+// (`./modelScene`, then one loader chunk per format).
+const DxfViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfViewer })))
+const DxfHostBytesViewer = lazy(() => import('./DxfViewer').then((m) => ({ default: m.DxfHostBytesViewer })))
+const ModelViewer = lazy(() => import('./ModelViewer').then((m) => ({ default: m.ModelViewer })))
 // `getLanguageName` is a synchronous helper used in the status bar —
 // importing it eagerly is fine (it's a small string table, not the
 // CodeMirror bundle). Bundlers tree-shake the rest of the module.
@@ -28,6 +34,8 @@ import { HighlightedCodeBlock } from './CodeHighlighter'
 import { DiffViewer } from '@/components/DiffViewer/DiffViewer'
 import { ImageViewer } from './ImageViewer'
 import { BinaryEmptyState } from './BinaryEmptyState'
+import { ViewerNote } from './ViewerNote'
+import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
@@ -220,6 +228,9 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const [editedContent, setEditedContent] = useState<string | null>(null) // null = not edited
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Last `fs/read-file` refusal. Most text views treat a failed read as an
+  // empty (new) file; the DXF preview names it (binary DXF, too large).
+  const [readError, setReadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [cursorInfo, setCursorInfo] = useState({ line: 1, col: 1, selections: 1 })
 
@@ -310,11 +321,13 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       if (gen !== loadGenRef.current) return
       if (room.scope.connectionKey !== startedKey) return
       setContent(result.content)
+      setReadError(null)
     } catch (err) {
       if (gen !== loadGenRef.current) return
       if (isHostSwitchedError(err)) return
       // File doesn't exist yet (e.g., untitled document) — start with empty content
       setContent('')
+      setReadError(err instanceof Error ? err.message : String(err))
     } finally {
       if (gen === loadGenRef.current) setLoading(false)
     }
@@ -656,7 +669,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </svg>
         </button>
 
-        {/* View mode toggle (markdown and images only) */}
+        {/* View mode toggle (Preview | Edit; Preview | Source for DXF) */}
         {showViewToggle && (
           <div className="flex border border-[var(--color-border)]">
             <button
@@ -677,7 +690,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
               }`}
               onClick={() => setViewMode('raw')}
             >
-              Edit
+              {category === 'cad2d' ? 'Source' : 'Edit'}
             </button>
           </div>
         )}
@@ -688,7 +701,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           category === 'html' ||
           category === 'csv' ||
           category === 'mermaid' ||
-          category === 'diagram') &&
+          category === 'diagram' ||
+          category === 'cad2d') &&
           viewMode === 'raw') ? (
           <button
             className={`p-1 transition-colors ${
@@ -831,6 +845,25 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         <div className="flex-1 overflow-hidden" ref={contentRef}>
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading diagram…</div>}>
             <DiagramViewer content={editedContent ?? content} filePath={filePath} mode="source" />
+          </Suspense>
+        </div>
+      ) : category === 'cad2d' && viewMode === 'rendered' ? (
+        <div className="flex-1 overflow-hidden" ref={contentRef}>
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading drawing…</div>}>
+            {readError && !content && dxfReadsAsBytes(readError) ? (
+              // Over read-file's 10 MB cap, or not UTF-8: read the bytes.
+              <DxfHostBytesViewer filePath={filePath} />
+            ) : readError && !content ? (
+              <ViewerNote tone="error" testId="dxf-read-error" {...dxfReadErrorNote(readError)} />
+            ) : (
+              <DxfViewer text={editedContent ?? content} />
+            )}
+          </Suspense>
+        </div>
+      ) : category === 'model3d' ? (
+        <div className="flex-1 overflow-hidden">
+          <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading 3D viewer…</div>}>
+            <ModelViewer filePath={filePath} />
           </Suspense>
         </div>
       ) : category === 'image' && viewMode === 'rendered' ? (

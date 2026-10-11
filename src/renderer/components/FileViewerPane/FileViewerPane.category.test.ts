@@ -28,6 +28,20 @@ describe('getFileCategory — Phase A', () => {
     expect(getFileCategory('/t/a.puml')).toBe('diagram')
     expect(getFileCategory('/t/a.dot')).toBe('diagram')
   })
+  it('classifies CAD: .dxf is a 2D drawing, meshes are 3D (.obj is Wavefront, not binary)', () => {
+    expect(getFileCategory('/t/plan.dxf')).toBe('cad2d')
+    expect(getFileCategory('/t/PLAN.DXF')).toBe('cad2d')
+    for (const ext of ['.stl', '.obj', '.3mf', '.ply', '.glb', '.gltf', '.STL']) {
+      expect(getFileCategory(`/t/part${ext}`)).toBe('model3d')
+    }
+    expect(getDefaultViewMode('cad2d')).toBe('rendered')
+    expect(getDefaultViewMode('model3d')).toBe('rendered')
+    // DXF is text (Preview | Source); meshes load bytes and have no toggle.
+    expect(isBinaryPreviewCategory('cad2d')).toBe(false)
+    expect(supportsViewToggle('cad2d')).toBe(true)
+    expect(isBinaryPreviewCategory('model3d')).toBe(true)
+    expect(supportsViewToggle('model3d')).toBe(false)
+  })
   it('classifies binary and text defaults', () => {
     expect(getFileCategory('/t/a.wasm')).toBe('binary')
     expect(getFileCategory('/t/a.rs')).toBe('text')

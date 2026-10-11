@@ -156,7 +156,21 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     opts.dev = a.has("--dev");
     let node = Node::open(opts).await?;
     k2_node::nlog!("k2-node {NODE_VERSION} fp {} home {}", &node.key.fingerprint()[..16], node.layout().home.display());
+    #[cfg(k2_node_test_broken)]
+    {
+        return Err("K2_NODE_TEST_BROKEN build: exiting at once (test-keys only)".into());
+    }
+    #[allow(unreachable_code)]
     node.spawn_background();
+    {
+        // No controller to shake hands with: starting is healthy enough
+        // for a self-update's health gate (enrolled nodes mark it after
+        // the attach, in the session).
+        let pin = node.pin.lock().unwrap().clone();
+        if pin.map(|p| p.revoked).unwrap_or(true) {
+            k2_node::admin::update::mark_healthy(&node.layout().home, true);
+        }
+    }
     let runner = tokio::spawn(k2_node::session::run_forever(node.clone()));
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| e.to_string())?;
     tokio::select! {

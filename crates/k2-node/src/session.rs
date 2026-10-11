@@ -277,6 +277,8 @@ where
         }
     }
     node.mark_confirmed();
+    // Self-update health gate: this build reached its controller.
+    crate::admin::update::mark_healthy(&node.layout().home, true);
     if let Some(n) = start.welcome.narrow.clone() {
         node.narrow(n);
     }
@@ -351,6 +353,11 @@ where
     }
     let first = node.offer();
     let _ = tx.send(Frame::Offer(first.clone())).await;
+    // Tell the controller how the last self-update ended (it dedups).
+    {
+        let (n, t) = (node.clone(), tx.clone());
+        tokio::spawn(async move { crate::admin::courier::report_last_update(n, t).await });
+    }
 
     // Shipper.
     let ship_node = node.clone();

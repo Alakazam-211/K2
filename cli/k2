@@ -9569,6 +9569,27 @@ Owner / admin (refused for agents and inside K2 terminals):
                    <agent> → Agent): on = a grant on every machine switched on,
                    default limits (and ones added later); off removes them all
   k2 compute usage [--days N]    k2 compute events [--limit N]
+Node admin (agents need "Allow this agent to operate compute nodes"):
+  k2 compute node health <node> [--json]       uptime, disk, RAM, FileVault, update state
+  k2 compute node policy <node> show
+  k2 compute node policy <node> set key=value... [--reason "…"]
+                   narrowing applies at once; widening waits for the owner (exit 2)
+  k2 compute node update <node> [--canary]     offer the signed k2-node build
+  k2 compute node rollback <node>              back to the node's own previous build
+  k2 compute node admin propose <node> <verb> [key=value…] --reason "…"
+                   verbs today: unit.restart unit=k2-node, policy.set key=value,
+                   control.pause|drain|resume, gc, jobs.kill job_id=…
+  k2 compute node admin propose <node> --plan plan.json --reason "…"
+                   held for the owner: exit 2 with the request id
+  k2 compute node admin list [--node N] [--state open|pending|all] [--json]
+  k2 compute node admin withdraw <id>
+Node admin, owner only (refused for agents and inside K2 terminals):
+  k2 compute node admin approve <id>           Touch ID / your password, then signed + sent
+  k2 compute node admin deny <id> [--why "…"]
+  k2 compute node alerts <node> [--after 10m|off]   offline alert after N minutes
+  k2 compute node alerts --to <workspace>|none      where alerts go (an IT agent)
+  k2 compute operate on|off --workspace WS
+                   the Agent switch "Allow this agent to operate compute nodes"
 This computer (its owner):
   k2 compute local status|pause [--now]|drain|resume
   k2 compute local policy key=value...    (cpu_cap_percent, mem_cap_gb, availability, …)
@@ -10145,9 +10166,306 @@ cmd_compute_node() {
             _compute_call POST /cli/compute/nodes/routes "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("routes for %s: %s" % (v["node"], " ".join(v["routes"]) or "(none)"))'
             ;;
+        admin) cmd_compute_node_admin "$@" ;;
+        policy)
+            local node="${1:-}" act="${2:-show}"
+            [ -n "$node" ] || { echo "usage: k2 compute node policy <node> show|set key=value..." >&2; exit 2; }
+            shift 2 2>/dev/null || shift $#
+            case "$act" in
+                show)
+                    _compute_call GET /cli/compute/nodes/policy "node=$(urlencode "$node")"
+                    for a in "$@"; do [ "$a" = "--json" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }; done
+                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("%s (%s, remote admin %s)" % (v["node"], "online" if v["online"] else "offline", v.get("remoteAdmin") or "unknown"))
+p=v.get("policy")
+if not p: print("  " + v.get("hint",""))
+else:
+    for k in sorted(p): print("  %-18s %s" % (k, json.dumps(p[k])))'
+                    ;;
+                set)
+                    local reason="" pairs=()
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --reason) reason="${2:-}"; shift 2 ;;
+                            *=*) pairs+=("$1"); shift ;;
+                            *) echo "usage: k2 compute node policy <node> set key=value... [--reason …]" >&2; exit 2 ;;
+                        esac
+                    done
+                    [ ${#pairs[@]} -gt 0 ] || { echo "usage: k2 compute node policy <node> set key=value..." >&2; exit 2; }
+                    local set_json
+                    set_json="$(_compute_kv_json "${pairs[@]}")" || exit 2
+                    _compute_call POST /cli/compute/nodes/policy/set "$(_compute_json K2_CJ_node="$node" K2_CJ_set_j="$set_json" K2_CJ_reason="$reason")"
+                    if printf '%s' "$_CP_BODY" | grep -q '"held": *true'; then
+                        _compute_admin_held_or_approve
+                    fi
+                    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s" % (v["node"], v.get("note","ok")))'
+                    ;;
+                *) echo "usage: k2 compute node policy <node> show|set key=value..." >&2; exit 2 ;;
+            esac
+            ;;
+        health)
+            [ -n "${1:-}" ] || { echo "usage: k2 compute node health <node> [--json]" >&2; exit 2; }
+            _compute_call GET /cli/compute/nodes/health "node=$(urlencode "$1")"
+            for a in "$@"; do [ "$a" = "--json" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }; done
+            _compute_render_health
+            ;;
+        update|rollback)
+            local node="" canary=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --canary) canary=1; shift ;;
+                    *) node="$1"; shift ;;
+                esac
+            done
+            [ -n "$node" ] || { echo "usage: k2 compute node $sub <node>" >&2; exit 2; }
+            _compute_call POST "/cli/compute/nodes/$sub" "$(_compute_json K2_CJ_node="$node" K2_CJ_canary_b="$canary")"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin); u=v.get("update") or {}
+print("%s: %s%s. %s" % (v["node"], u.get("state"), (" " + u["version"]) if u.get("version") else "", v.get("note","")))'
+            ;;
+        alerts)
+            local node="" after="" to="" have_to=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --after) after="${2:-}"; shift 2 ;;
+                    --to) to="${2:-}"; have_to=1; shift 2 ;;
+                    *) node="$1"; shift ;;
+                esac
+            done
+            [ -n "$node" ] || [ "$have_to" = "1" ] || { echo "usage: k2 compute node alerts <node> [--after 10m|off] | --to <workspace>|none" >&2; exit 2; }
+            local after_j=""
+            if [ -n "$node" ]; then
+                case "$after" in
+                    "") after_j="" ;;
+                    off|none) after_j='"off"' ;;
+                    *) after_j="$(_compute_secs "$after")" ;;
+                esac
+            fi
+            local to_val=""
+            [ "$have_to" = "1" ] && to_val="${to:-none}"
+            _compute_call POST /cli/compute/nodes/alerts "$(_compute_json K2_CJ_node="$node" K2_CJ_after_j="$after_j" K2_CJ_to="$to_val")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+if "alertsTo" in v: print("alerts go to: %s" % (v["alertsTo"] or "nobody (unset)"))
+if "node" in v:
+    a=v.get("alertAfterSecs")
+    print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
+            ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollback|alerts|admin …" >&2
             exit 2
+            ;;
+    esac
+}
+
+# key=value… → a JSON object. Values parse as JSON when they can (numbers,
+# true/false, [lists]); a,b,c for names/labels becomes a list; else string.
+_compute_kv_json() {
+    python3 -c '
+import json, sys
+out = {}
+for a in sys.argv[1:]:
+    k, _, v = a.partition("=")
+    k = k.strip()
+    if not k:
+        print("usage: key=value", file=sys.stderr); sys.exit(2)
+    try:
+        val = json.loads(v)
+    except Exception:
+        val = v
+    if k in ("names", "labels") and isinstance(val, str):
+        val = [x for x in val.split(",") if x]
+    out[k] = val
+print(json.dumps(out))' "$@"
+}
+
+_compute_render_health() {
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+f = v.get("facts") or {}
+def gb(b): return "%d GB" % (b // (1 << 30)) if isinstance(b, int) else "?"
+seen = v.get("lastSeen")
+print("%s  %s%s" % (v["node"], "online" if v["online"] else "OFFLINE", "" if v["online"] or not seen else " since " + time.strftime("%H:%M", time.localtime(seen))))
+print("  k2-node %s, remote admin %s, pending approvals %s" % (v.get("nodeVersion") or "?", v.get("remoteAdmin") or "unknown", v.get("pendingApprovals", 0)))
+if not f:
+    print("  no health report yet (needs a k2-node with health)")
+else:
+    if f.get("uptime_secs") is not None: print("  uptime        %dd %dh" % (f["uptime_secs"] // 86400, f["uptime_secs"] % 86400 // 3600))
+    for d in f.get("disks") or []: print("  disk %-8s %s free of %s" % (d.get("path") or d.get("name"), gb(d["free_bytes"]), gb(d["total_bytes"])))
+    if f.get("mem_total_bytes"): print("  memory        %s available of %s, pressure %s" % (gb(f.get("mem_available_bytes")), gb(f["mem_total_bytes"]), f.get("memory_pressure") or "?"))
+    if f.get("disk_encryption"): print("  FileVault     %s%s" % (f["disk_encryption"], " (a power cut needs someone at the machine)" if f["disk_encryption"] == "on" else ""))
+    ar = (f.get("sleep") or {}).get("autorestart")
+    if ar is not None: print("  autorestart   %s" % ("on" if ar == 1 else "off"))
+    up = f.get("updates") or {}
+    if up.get("pending") is not None: print("  updates       %s pending (%s security)" % (up["pending"], up.get("security") or 0))
+    if up.get("reboot_required"): print("  reboot        required")
+    ex = f.get("executor") or {}
+    if ex and not ex.get("reachable"): print("  executor      not answering")
+    for s in f.get("stuck_jobs") or []: print("  stuck job     %s (quiet %dm)" % (s["job_id"][:8], s.get("quiet_secs", 0) // 60))
+u = v.get("update")
+if u: print("  update        %s %s%s" % (u.get("state"), u.get("version") or "", (" (" + u["reason"] + ")") if u.get("reason") else ""))
+a = v.get("alertAfterSecs")
+print("  alerts        %s, to %s" % (("offline after %dm" % (a // 60)) if a else "no offline alert", v.get("alertsTo") or "nobody (k2 compute node alerts --to <ws>)"))'
+}
+
+# A held request: the owner (outside K2) confirms right away; anyone else
+# gets the request id and exit 2.
+_compute_admin_held_or_approve() {
+    local id
+    id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin); r=v["request"]
+print("held for the owner: %s\n  %s" % (r["id"], r["summary"]))' >&2
+    if ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+        _compute_admin_approve "$id"
+        exit 0
+    fi
+    echo "  the owner approves it in Settings → Compute → Approvals (or: k2 compute node admin approve $id, outside K2)" >&2
+    exit 2
+}
+
+# Owner confirm (Touch ID / login or vault password) bound to the request,
+# then approve. Never works for an agent: the daemon refuses passports, and
+# the confirm needs a person.
+_compute_admin_approve() {
+    local id="$1"
+    if _compute_in_session; then
+        echo '{"error":"owner_only","hint":"approve in Settings → Compute → Approvals, or from a terminal outside K2. An agent can never approve."}' >&2
+        exit 3
+    fi
+    _compute_call GET /cli/compute/admin/requests "state=all&limit=500" tcp
+    local found full label
+    found="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+want = sys.argv[1]
+rows = [r for r in json.load(sys.stdin)["requests"] if r["id"] == want or r["id"].startswith(want)]
+if len(rows) != 1:
+    sys.exit(1)
+r = rows[0]
+print(r["id"]); print(r["state"]); print(r["summary"][:64])
+print("---"); print(r["summary"])
+if r.get("reason"): print("reason: " + r["reason"])
+for s in (r.get("body") or {}).get("steps") or [r.get("body") or {}]:
+    if s.get("verb") == "script":
+        print("--- script (%s) ---" % (s.get("args") or {}).get("interpreter", "/bin/sh"))
+        print((s.get("args") or {}).get("text", ""))
+'  "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single request matches '$id' (k2 compute node admin list)\"}" >&2; exit 3; }
+    local state
+    full="$(printf '%s\n' "$found" | sed -n 1p)"
+    state="$(printf '%s\n' "$found" | sed -n 2p)"
+    label="$(printf '%s\n' "$found" | sed -n 3p)"
+    if [ "$state" != "pending" ]; then
+        echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
+        exit 3
+    fi
+    printf '%s\n' "$found" | sed -n '5,$p' >&2
+    local tok
+    tok="$(_vault_confirm_token node-admin "$full" "$label")" || exit 3
+    _compute_call POST /cli/compute/admin/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
+    tok=""
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin); r=v["request"]
+print("approved %s: %s\n  %s" % (r["id"], r["summary"], v.get("note","")))'
+}
+
+cmd_compute_node_admin() {
+    local sub="${1:-}"
+    case "$sub" in
+        propose|list|ls|approve|deny|withdraw) shift ;;
+        ""|help|--help|-h) _compute_usage; return 0 ;;
+        *) sub="propose" ;;  # PRD shape: k2 compute node admin <node> <verb> …
+    esac
+    case "$sub" in
+        propose)
+            local node="" verb="" reason="" file="" interp="" timeout="" plan="" pairs=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --reason) reason="${2:-}"; shift 2 ;;
+                    --file) file="${2:-}"; shift 2 ;;
+                    --interpreter) interp="${2:-}"; shift 2 ;;
+                    --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
+                    --plan) plan="${2:-}"; shift 2 ;;
+                    *=*) pairs+=("$1"); shift ;;
+                    *)
+                        if [ -z "$node" ]; then node="$1"
+                        elif [ -z "$verb" ]; then verb="$1"
+                        else echo "usage: k2 compute node admin propose <node> <verb> [key=value…]" >&2; exit 2
+                        fi
+                        shift ;;
+                esac
+            done
+            [ -n "$node" ] && { [ -n "$verb" ] || [ -n "$plan" ]; } || { echo "usage: k2 compute node admin propose <node> <verb> [key=value…] --reason \"…\" (or --plan plan.json)" >&2; exit 2; }
+            local body
+            if [ -n "$plan" ]; then
+                [ -f "$plan" ] || { echo "usage: --plan needs a JSON file: {\"steps\": [{\"verb\": …, \"args\": {…}}]}" >&2; exit 2; }
+                body="$(python3 -c '
+import json, sys
+p = json.load(open(sys.argv[1]))
+steps = p["steps"] if isinstance(p, dict) else p
+print(json.dumps({"node": sys.argv[2], "kind": "plan", "steps": steps, "reason": sys.argv[3] or None}))' "$plan" "$node" "$reason")" || exit 2
+            else
+                local args_json
+                args_json="$(_compute_kv_json ${pairs[@]+"${pairs[@]}"})" || exit 2
+                if [ "$verb" = "script" ]; then
+                    [ -n "$file" ] && [ -f "$file" ] || { echo "usage: k2 compute node admin propose <node> script --file fix.sh --reason …" >&2; exit 2; }
+                    args_json="$(python3 -c '
+import json, sys
+a = json.loads(sys.argv[1]); a["text"] = open(sys.argv[2]).read()
+if sys.argv[3]: a["interpreter"] = sys.argv[3]
+if sys.argv[4]: a["timeout_secs"] = int(sys.argv[4])
+print(json.dumps(a))' "$args_json" "$file" "$interp" "$timeout")" || exit 2
+                fi
+                local kind=command
+                case "$verb" in svc.*) kind=service ;; esac
+                body="$(_compute_json K2_CJ_node="$node" K2_CJ_kind="$kind" K2_CJ_verb="$verb" K2_CJ_args_j="$args_json" K2_CJ_reason="$reason")"
+            fi
+            _compute_call POST /cli/compute/admin/propose "$body"
+            _compute_admin_held_or_approve
+            ;;
+        list|ls)
+            local q="" as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --node) q="$q&node=$(urlencode "${2:-}")"; shift 2 ;;
+                    --state) q="$q&state=$(urlencode "${2:-}")"; shift 2 ;;
+                    --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "usage: k2 compute node admin list [--node N] [--state open|pending|all]" >&2; exit 2 ;;
+                esac
+            done
+            _compute_call GET /cli/compute/admin/requests "${q#&}"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys,time
+v=json.load(sys.stdin)
+rows=v["requests"]
+if not rows: print("no admin requests")
+for r in rows:
+    print("%-36s %-9s %-10s %s" % (r["id"], r["state"], r.get("node") or "?", r["summary"]))
+    if r.get("reason"): print("%36s reason: %s" % ("", r["reason"]))
+    if r.get("denyReason"): print("%36s denied: %s" % ("", r["denyReason"]))'
+            ;;
+        approve)
+            [ -n "${1:-}" ] || { echo "usage: k2 compute node admin approve <id>" >&2; exit 2; }
+            _compute_admin_approve "$1"
+            ;;
+        deny)
+            local id="" why=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --why) why="${2:-}"; shift 2 ;;
+                    *) id="$1"; shift ;;
+                esac
+            done
+            [ -n "$id" ] || { echo "usage: k2 compute node admin deny <id> [--why …]" >&2; exit 2; }
+            _compute_call POST /cli/compute/admin/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_why="$why")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; r=json.load(sys.stdin)["request"]; print("denied %s: %s" % (r["id"], r["summary"]))'
+            ;;
+        withdraw)
+            [ -n "${1:-}" ] || { echo "usage: k2 compute node admin withdraw <id>" >&2; exit 2; }
+            _compute_call POST /cli/compute/admin/withdraw "$(_compute_json K2_CJ_request="$1")"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; r=json.load(sys.stdin)["request"]; print("withdrew %s" % r["id"])'
             ;;
     esac
 }
@@ -10429,6 +10747,26 @@ print("Allow compute nodes: %s for %s%s" % ("on" if on else "off", v["workspace"
                     ;;
                 *) echo "usage: k2 compute access on|off --workspace WS" >&2; exit 2 ;;
             esac
+            ;;
+        operate)
+            # Node admin (Q14): "Allow this agent to operate compute nodes".
+            local action="${1:-}" workspace=""
+            shift 2>/dev/null || true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    *) echo "usage: k2 compute operate on|off --workspace WS" >&2; exit 2 ;;
+                esac
+            done
+            [ -z "$workspace" ] && workspace="$(_compute_ws "")"
+            case "$action" in
+                on|off) ;;
+                *) echo "usage: k2 compute operate on|off --workspace WS" >&2; exit 2 ;;
+            esac
+            _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_toggle=compute_operate K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("Allow this agent to operate compute nodes: %s for %s%s" % ("on" if v["agentsCanOperateCompute"] else "off", v["workspace"], " (narrow, pause, update, restart; root actions still wait for you)" if v["agentsCanOperateCompute"] else ""))'
             ;;
         usage)
             local days=7
@@ -21714,8 +22052,45 @@ ADDING A MACHINE (owner, never an agent)
   blocked by design and falls back to the code. Smoke one-click from a
   built app.
 
+ADMIN (looking after the machines; Agent switch "Allow this agent to
+operate compute nodes", which your owner turns on — separate from
+"Allow compute nodes")
+  Rule: agents propose, the owner approves, the node checks.
+  Read:     k2 compute node health <node>   k2 compute node policy <node> show
+  Operate (runs at once, no approval): lowering limits
+            (k2 compute node policy <node> set mem_cap_gb=6), node update /
+            rollback to a newer signed build or the node's own previous one.
+  Privileged (held for the owner EVERY time): raising limits, restarting
+            k2-node as root (and, when nodes learn them: power settings,
+            reboot, OS updates, packages, root scripts):
+              k2 compute node admin propose <node> policy.set mem_cap_gb=12 --reason "…"
+              k2 compute node admin propose <node> unit.restart unit=k2-node --reason "…"
+              k2 compute node admin propose <node> --plan plan.json --reason "…"
+            A verb the node doesn't know yet answers verb_not_allowed.
+            Exit 2 = held, with the request id. Tell your human in a Thread
+            line; they approve with Touch ID or a password. You get a
+            message when it's approved, denied, done or expired (24 h).
+            You can never approve, and the owner token can't either
+            without a person.
+  Plain words matter: the owner reads the summary. One request per fix;
+  a plan when the steps belong together (it stops at the first failure).
+  Alerts (offline, disk, thermal, updates) go to the workspace your owner
+  picked; they carry facts, never log text.
+  Needs a person at the machine: the first install, raising a node's
+  remote-admin level, macOS OS updates, FileVault unlock after a power cut.
+
+SERVICES
+  Long-running workloads a node supervises (Lima VMs, runners) are
+  privileged to create or change: k2 compute node admin propose <node>
+  svc.apply spec='{…}'. Start/stop/restart of an existing one is operate.
+
 COMMON ERRORS
   node_offline           the node isn't connected (machine asleep, k2-node stopped)
+  operate_off            ask your owner for "Allow this agent to operate compute nodes"
+  node_lacks_admin       that k2-node predates node admin: someone re-runs setup there
+  too_many_pending       10 requests already wait for the owner; withdraw some
+  approval_expired       the owner didn't decide in 24 h, or the node stayed offline
+  verb_not_allowed       not an admin verb; a root script is the escape hatch
   node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup)
   tool_install_failed    a --needs tool didn't install (name/version wrong, no network)
   need_invalid           a --needs token isn't tool@version or sys:<name>

@@ -101,8 +101,22 @@ pub fn ingress_sticky_port_path() -> PathBuf {
 pub fn claim_sticky_loopback(
     sticky: &Path,
 ) -> Result<(std::net::TcpListener, u16, bool), String> {
-    let claimed = crate::port_claim::claim_port(sticky)
+    // A listener being retired (re-bind, subdomain switch) closes its
+    // socket when its aborted accept task finishes, a moment after the
+    // abort: retry the sticky port briefly before giving it up.
+    let mut claimed = crate::port_claim::claim_port(sticky)
         .ok_or_else(|| "bind a loopback port: no port available".to_string())?;
+    if !claimed.reused && crate::port_claim::read_port_file(sticky).is_some() {
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            if let Some(again) = crate::port_claim::claim_port(sticky) {
+                if again.reused {
+                    claimed = again;
+                    break;
+                }
+            }
+        }
+    }
     write_port_file(sticky, claimed.port)?;
     Ok((claimed.listener, claimed.port, claimed.reused))
 }

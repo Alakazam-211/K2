@@ -349,6 +349,8 @@ fn spawn_prepared(
     project_id: &str,
     name: &str,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
+    // A daemon that handed off starts no service: the successor owns them.
+    k2_core::handoff_state::guard()?;
     let _ = open_log(project_id, name)?;
     let log_p = log_path(project_id, name);
     let (out, err) = log_stdio(&log_p)?;

@@ -268,6 +268,11 @@ RestartSec=2
 # Linux update swaps the binary in-process before exit (0.40.43+).
 # KillMode=control-group ensures orphan frpc dies with the unit so a
 # restarted daemon cannot leave stale localPort dialers registered at frps.
+# Runtime stage H overrides this at boot: the daemon installs the drop-in
+# <unit>.d/k2-handoff.conf (root helper `daemon handoff-dropin`, or itself
+# for a user unit) = KillMode=process + NotifyAccess=main + ExecReload=
+# SIGUSR2. frpc keeps a stable localPort and is re-adopted, Apps survive a
+# restart, and `systemctl reload` is a no-downtime hand-off.
 KillMode=control-group
 
 [Install]

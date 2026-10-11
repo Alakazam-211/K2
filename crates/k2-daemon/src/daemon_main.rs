@@ -103,6 +103,11 @@ pub fn run() {
         // return type prevents fall-through.
     }
 
+    // Runtime stage H: before any thread or child exists, keep systemd's
+    // NOTIFY_SOCKET for a hand-off (and drop it from the environment every
+    // child inherits) and record the executable path.
+    crate::handoff::capture_process_context();
+
     // Real daemon path — boot the multi-thread tokio runtime and
     // run the async main body.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -110,6 +115,13 @@ pub fn run() {
         .build()
         .expect("failed to build tokio runtime");
     rt.block_on(async_main());
+    // Handed off to a successor: stop every task of the main runtime (all
+    // loops, every daemon-served connection) without waiting on them, then
+    // pump the App splices the splice runtime still owns until they close.
+    if crate::handoff::handed_off() {
+        rt.shutdown_background();
+        crate::handoff::drain_then_exit();
+    }
 }
 
 /// Pure early-arg dispatch. Returns `Some(exit_code)` when the process
@@ -167,7 +179,35 @@ static DAEMON_SINGLETON_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::On
 ///
 /// On non-unix we skip the flock (no portable equivalent without an
 /// extra crate) — macOS/Linux are the production targets.
-fn acquire_daemon_singleton(k2_dir: &std::path::Path) -> Result<(), String> {
+fn acquire_daemon_singleton(
+    k2_dir: &std::path::Path,
+    inherited: Option<std::fs::File>,
+) -> Result<(), String> {
+    // Runtime stage H: the predecessor handed its lock over (the same open
+    // file description, so the flock is already ours). Re-assert it and
+    // record our pid.
+    if let Some(file) = inherited {
+        #[cfg(unix)]
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            use std::os::unix::io::AsRawFd;
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc != 0 {
+                return Err(format!(
+                    "the handed-over daemon.lock is not lockable: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let mut f = &file;
+            let _ = f.seek(SeekFrom::Start(0));
+            let _ = f.set_len(0);
+            let _ = writeln!(f, "{}", std::process::id());
+            let _ = f.flush();
+        }
+        let _ = DAEMON_SINGLETON_LOCK.set(file);
+        let _ = k2_dir;
+        return Ok(());
+    }
     if std::env::var_os("K2_ALLOW_MULTI_DAEMON").is_some() {
         eprintln!(
             "[daemon] WARN: K2_ALLOW_MULTI_DAEMON set — singleton lock skipped \
@@ -242,6 +282,14 @@ fn acquire_daemon_singleton(k2_dir: &std::path::Path) -> Result<(), String> {
     // Keep the File (and thus the flock) alive for process lifetime.
     let _ = DAEMON_SINGLETON_LOCK.set(file);
     Ok(())
+}
+
+/// The singleton lock's fd, for a hand-off (`None` under
+/// `K2_ALLOW_MULTI_DAEMON`, or on Windows).
+#[cfg(unix)]
+pub(crate) fn singleton_lock_fd() -> Option<std::os::unix::io::RawFd> {
+    use std::os::unix::io::AsRawFd;
+    DAEMON_SINGLETON_LOCK.get().map(|f| f.as_raw_fd())
 }
 
 async fn async_main() {
@@ -369,7 +417,18 @@ async fn async_main() {
     // `--version`-boots-daemon class of accident). Must run BEFORE
     // port claim / token write / session spawn so a rogue never
     // overwrites daemon.port or double-resumes agent PTYs.
-    if let Err(e) = acquire_daemon_singleton(&k2so_dir) {
+    // Runtime stage H: a successor started by a hand-off receives the
+    // predecessor's singleton lock and listening sockets HERE, just before
+    // it would take the lock itself (so the two daemons never both own the
+    // tree, and the sockets never close).
+    let inherited_lock = match crate::handoff::successor_receive() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[daemon] FATAL: hand-off from the previous daemon failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = acquire_daemon_singleton(&k2so_dir, inherited_lock) {
         eprintln!("[daemon] FATAL: {e}");
         std::process::exit(1);
     }
@@ -565,7 +624,17 @@ async fn async_main() {
     let daemon_port_path = k2so_dir.join("daemon.port");
     let bind_ip = k2_core::listen::bind_ip();
     let lan = k2_core::listen::lan_requested();
-    let claimed = match k2_core::port_claim::claim_port_on(&daemon_port_path, bind_ip) {
+    let inherited_main = crate::handoff::take_inherited(crate::handoff::Role::Main).and_then(|l| {
+        let port = l.local_addr().ok()?.port();
+        Some(k2_core::port_claim::ClaimedPort {
+            listener: l,
+            port,
+            reused: true,
+        })
+    });
+    let claimed = match inherited_main
+        .or_else(|| k2_core::port_claim::claim_port_on(&daemon_port_path, bind_ip))
+    {
         Some(c) => c,
         None => {
             log_debug!("[daemon] FATAL: failed to bind any HTTP port on {bind_ip}");
@@ -595,12 +664,13 @@ async fn async_main() {
         std::process::exit(2);
     }
     let listener = match TcpListener::from_std(claimed.listener) {
-        Ok(l) => l,
+        Ok(l) => Arc::new(l),
         Err(e) => {
             log_debug!("[daemon] FATAL: tokio adopt claimed listener: {e}");
             std::process::exit(2);
         }
     };
+    crate::handoff::register(crate::handoff::Role::Main, &listener);
 
     let token = generate_token();
 
@@ -757,6 +827,30 @@ async fn async_main() {
         });
     }
 
+    // Runtime stage H: SIGUSR2 = hand off to a fresh copy of the binary at
+    // the boot path (the drop-in's `ExecReload=` sends it, so
+    // `systemctl reload k2-daemon` is a no-downtime restart).
+    #[cfg(unix)]
+    {
+        let shutdown_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let Ok(mut usr2) = signal(SignalKind::user_defined2()) else {
+                return;
+            };
+            while usr2.recv().await.is_some() {
+                let Some(exe) = crate::handoff::boot_exe() else {
+                    log_debug!("[daemon/handoff] SIGUSR2 ignored: executable path unknown");
+                    continue;
+                };
+                match crate::handoff::start(exe, Some(shutdown_tx.clone())) {
+                    Ok(()) => log_debug!("[daemon/handoff] SIGUSR2: hand-off started"),
+                    Err(e) => log_debug!("[daemon/handoff] SIGUSR2: hand-off refused: {e}"),
+                }
+            }
+        });
+    }
+
     // 0.39.5: spawn the accept loop NOW, while phase = migrating. The
     // dispatcher serves /ping, /health and /boot-status (so the renderer
     // can see us booting, read our version, and render migration
@@ -798,9 +892,24 @@ async fn async_main() {
                         log_debug!("[daemon] accept loop exiting");
                         break;
                     }
+                    _ = crate::handoff::quiesced() => {
+                        log_debug!("[daemon] accept loop stopped for the hand-off");
+                        break;
+                    }
                 }
             }
         });
+    }
+
+    // Runtime stage H: a successor serves the handed-over tunnel sockets
+    // right away (the predecessor stopped accepting on them; the kernel
+    // queues connections meanwhile). App splices don't touch the DB, and
+    // daemon routes answer 503 until boot is ready.
+    let mut tunnel_listeners_up = false;
+    if crate::handoff::booted_from_handoff() {
+        bring_up_tunnel_listeners(&state, port).await;
+        crate::handoff::drop_untaken();
+        tunnel_listeners_up = true;
     }
 
     // ── First-boot migrations (now AFTER bind; gated by the 503 above) ──
@@ -1135,6 +1244,12 @@ async fn async_main() {
     // hosted-mail busy latch. Never blocks boot.
     crate::root_helper::heal::spawn_auto_heal();
 
+    // Runtime stage H: converge the unit's hand-off drop-in (KillMode=
+    // process, NotifyAccess=main, ExecReload=SIGUSR2) — through the root
+    // helper on a system unit, directly on a user unit. Background, never
+    // blocks boot; K2_HANDOFF_DROPIN=off opts out.
+    crate::handoff_setup::ensure_on_boot();
+
     // prd-dns-pending-and-cutover-safety-v1 P1: re-check `pending_ns`
     // custom domains with k2.dev by itself (one read-only GET per tick,
     // 1 min → daily by age), so a zone k2.dev flipped active opens record
@@ -1278,30 +1393,8 @@ async fn async_main() {
     // eagerly too (fault-isolated: a bind failure is logged; the TLS
     // splice and the connector re-try on demand and fail loud, never
     // falling back to the main listener).
-    tunnel_ingress_listener::install_state(state.clone());
-    tunnel_ingress_listener::register_ensure_hook();
-    match tunnel_ingress_listener::ensure_port().await {
-        Ok(p) => log_debug!("[daemon/tunnel-ingress] tunnel-ingress listener active on port {p}"),
-        Err(e) => log_debug!(
-            "[daemon/tunnel-ingress] listener did not start (tunnel traffic will be refused \
-             until it can bind): {e}"
-        ),
-    }
-    tunnel_tls_listener::register_ensure_hook();
-    if k2_core::airgap::enabled() {
-        log_debug!(
-            "[daemon/e2e] air-gap is on (K2_AIRGAP=1) — skipping E2E TLS listener (no cert.k2.dev)"
-        );
-    } else {
-        match tunnel_tls_listener::maybe_spawn(port).await {
-            Ok(Some(https_port)) => {
-                log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
-            }
-            Ok(None) => { /* E2E off or no subdomain — the common case, no log noise */ }
-            Err(e) => log_debug!(
-                "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
-            ),
-        }
+    if !tunnel_listeners_up {
+        bring_up_tunnel_listeners(&state, port).await;
     }
 
     // K2 Connect — re-launch the frpc tunnel on boot when the user opted
@@ -1338,6 +1431,15 @@ async fn async_main() {
     // is a normal outcome, logged and ignored.
     // Published-service pids are NOT in the frpc `pkill -f` pattern and
     // must not be reaped here (boot respawn honors desired=running).
+    //
+    // Runtime stage H: after a hand-off (or a failed one past quiesce) frpc
+    // and Caddy belong to the successor / the next daemon, which adopts
+    // them — never stop them here.
+    if k2_core::handoff_state::draining() {
+        log_debug!("[daemon] handed off: leaving frpc and Caddy to the successor");
+        log_debug!("[daemon] async_main exiting");
+        return;
+    }
     match tokio::task::spawn_blocking(k2_core::tunnel::stop_tunnel).await {
         Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
         Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
@@ -1349,6 +1451,43 @@ async fn async_main() {
     }
 
     log_debug!("[daemon] async_main exiting");
+}
+
+/// The tunnel-ingress listener and the E2E TLS listener (with the routing
+/// map persisted by the last refresh, so nested Apps route at once).
+async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
+    // Before the TLS listener accepts: nested App hosts route from the
+    // first connection (runtime stage H).
+    if let Ok(cfg) = k2_core::tunnel::config::load() {
+        if let Some(n) = k2_core::tunnel::subdomains::load_persisted(&cfg.subdomain) {
+            log_debug!("[daemon/e2e] restored the persisted routing map ({n} nested target(s))");
+        }
+    }
+    tunnel_ingress_listener::install_state(state.clone());
+    tunnel_ingress_listener::register_ensure_hook();
+    match tunnel_ingress_listener::ensure_port().await {
+        Ok(p) => log_debug!("[daemon/tunnel-ingress] tunnel-ingress listener active on port {p}"),
+        Err(e) => log_debug!(
+            "[daemon/tunnel-ingress] listener did not start (tunnel traffic will be refused \
+             until it can bind): {e}"
+        ),
+    }
+    tunnel_tls_listener::register_ensure_hook();
+    if k2_core::airgap::enabled() {
+        log_debug!(
+            "[daemon/e2e] air-gap is on (K2_AIRGAP=1) — skipping E2E TLS listener (no cert.k2.dev)"
+        );
+    } else {
+        match tunnel_tls_listener::maybe_spawn(port).await {
+            Ok(Some(https_port)) => {
+                log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+            }
+            Ok(None) => { /* E2E off or no subdomain — the common case, no log noise */ }
+            Err(e) => log_debug!(
+                "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
+            ),
+        }
+    }
 }
 
 /// K2 Connect tunnel first-boot autostart. Mirrors

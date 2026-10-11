@@ -76,6 +76,8 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'lib/app-update-driver.ts': 'local app-update driver',
   // Not daemon calls.
   'components/Settings/lib/k2-account.ts': 'Supabase account API, not a daemon',
+  // 0.45.4 compute: the K2 account's enroll-ticket endpoint (k2.dev), not a daemon.
+  'components/Settings/lib/compute-account.ts': 'K2 account enroll-ticket API, not a daemon',
   'components/Settings/CustomThemeCreator.tsx': 'example code inside a prompt string',
   'components/Settings/sections/CodeEditorSettingsSection.tsx': 'example code inside a prompt string',
   'hooks/useGit.ts': 'a local function named fetch (git refresh)',
@@ -145,6 +147,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/vault-api.ts',
   // 0.45.4 Settings → Tickets: the window's server's ticket rules.
   'components/Settings/sections/tickets-settings-api.ts',
+  // 0.45.4 Settings → Compute: the window's server's nodes and grants.
+  'components/Settings/sections/compute-api.ts',
+  // 0.45.4 federation: peer-list change events for the window's server.
+  'components/Settings/sections/ConnectionsSection.tsx',
   'components/Sidebar/ActiveBar.tsx',
   'components/Sidebar/IconRail.tsx',
   'components/Sidebar/ProjectAvatar.tsx',

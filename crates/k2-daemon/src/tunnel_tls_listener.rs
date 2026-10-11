@@ -286,11 +286,14 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
     let shared_config: Arc<ArcSwap<ServerConfig>> =
         Arc::new(ArcSwap::from_pointee(server_config));
 
-    // Bind an ephemeral loopback port for the HTTPS listener (mirrors the
-    // HTTP listener pattern). 127.0.0.1 only — frpc dials it locally.
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("bind E2E HTTPS listener: {e}"))?;
+    // The loopback listener (127.0.0.1 only — frpc dials it locally).
+    // Runtime stage H (AR3/K37): the port is STABLE. A successor daemon
+    // takes the predecessor's listening socket over (hand-off); otherwise
+    // the port recorded in `tunnel-https.sticky-port` is re-bound when
+    // free, so frpc's `localPort` (and an adopted frpc) stays valid across
+    // re-binds and restarts. Only a port held by something else moves.
+    let listener = Arc::new(take_or_claim_listener()?);
+    crate::handoff::register(crate::handoff::Role::TunnelTls, &listener);
     let https_port = listener
         .local_addr()
         .map_err(|e| format!("read HTTPS listener addr: {e}"))?
@@ -368,6 +371,34 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
     Ok(https_port)
 }
 
+/// The E2E listener socket: the one a hand-off passed in (once), else a
+/// fresh bind on the sticky port.
+fn take_or_claim_listener() -> Result<TcpListener, String> {
+    let std_listener = match crate::handoff::take_inherited(crate::handoff::Role::TunnelTls) {
+        Some(l) => {
+            log_debug!("[daemon/e2e] using the E2E listener handed over by the previous daemon");
+            l
+        }
+        None => {
+            let (l, port, reused) = k2_core::tunnel::tls::claim_sticky_loopback(
+                &k2_core::tunnel::tls::https_sticky_port_path(),
+            )
+            .map_err(|e| format!("bind E2E HTTPS listener: {e}"))?;
+            if !reused {
+                log_debug!(
+                    "[daemon/e2e] E2E listener bound a NEW port {port} (sticky port missing or \
+                     taken) — frpc localPort follows it"
+                );
+            }
+            l
+        }
+    };
+    std_listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("E2E listener set_nonblocking: {e}"))?;
+    TcpListener::from_std(std_listener).map_err(|e| format!("adopt E2E listener: {e}"))
+}
+
 /// On-demand bring-up of the E2E HTTPS listener, callable from a BLOCKING
 /// context (the tunnel connector's `spawn_blocking` worker). This is the
 /// robust first-connect path now that E2E is the default: a tunnel start
@@ -389,6 +420,8 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
 /// Errors loud — issuance/bind failure or a still-empty subdomain returns an
 /// `Err` the connector propagates; it never silently forwards cleartext.
 fn ensure_spawned_blocking(handle: tokio::runtime::Handle, http_port: u16) -> Result<u16, String> {
+    // Runtime stage H: a daemon that handed off never binds again.
+    k2_core::handoff_state::guard()?;
     if k2_core::airgap::enabled() {
         return Err(k2_core::airgap::TEACHING.to_string());
     }
@@ -473,12 +506,21 @@ pub fn register_ensure_hook() {
 /// so a renewal swap is picked up by the next connection with no listener
 /// restart.
 async fn accept_loop(
-    listener: TcpListener,
+    listener: Arc<TcpListener>,
     shared_config: Arc<ArcSwap<ServerConfig>>,
     http_port: u16,
 ) {
     loop {
-        match listener.accept().await {
+        let accepted = tokio::select! {
+            r = listener.accept() => r,
+            // Runtime stage H: the successor takes the socket over. Stop
+            // accepting without closing it (the hand-off holds a ref).
+            _ = crate::handoff::quiesced() => {
+                log_debug!("[daemon/e2e] accept loop stopped for the hand-off");
+                return;
+            }
+        };
+        match accepted {
             Ok((tcp, peer)) => {
                 // H2: take a global connection permit BEFORE spawning the
                 // per-connection task so the listener can't be driven to FD
@@ -502,10 +544,30 @@ async fn accept_loop(
                 // Snapshot the live config for THIS connection (cheap Arc
                 // clone). A concurrent hot-swap only affects later accepts.
                 let acceptor = TlsAcceptor::from(shared_config.load_full());
-                tokio::spawn(async move {
+                // Runtime stage H: the connection lives on the SPLICE
+                // runtime, not the main one, so it outlives a hand-off (the
+                // old daemon shuts its main runtime down and drains these).
+                // Moved across runtimes through a std socket (a tokio
+                // socket is bound to the reactor that registered it).
+                let std_tcp = match tcp.into_std() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log_debug!("[daemon/e2e] detach accepted socket from {peer}: {e}");
+                        continue;
+                    }
+                };
+                crate::handoff::splice_handle().spawn(async move {
                     // Hold the permit for the life of the connection; it is
                     // released when this task (and thus `_permit`) drops.
                     let _permit = permit;
+                    let _splice = crate::handoff::splice_guard();
+                    let tcp = match TcpStream::from_std(std_tcp) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            log_debug!("[daemon/e2e] adopt socket from {peer}: {e}");
+                            return;
+                        }
+                    };
                     if let Err(e) = serve_one(tcp, acceptor, http_port).await {
                         // 0.40.68 / GH#57: include peer so client-side flaps
                         // (repeated handshake eof from one source) are
@@ -957,7 +1019,7 @@ mod tests {
         {
             let shared = shared.clone();
             tokio::spawn(async move {
-                accept_loop(tls_listener, shared, http_port).await;
+                accept_loop(Arc::new(tls_listener), shared, http_port).await;
             });
         }
 
@@ -1127,7 +1189,7 @@ mod tests {
         {
             let shared = shared.clone();
             tokio::spawn(async move {
-                accept_loop(tls_listener, shared, daemon_port).await;
+                accept_loop(Arc::new(tls_listener), shared, daemon_port).await;
             });
         }
 
@@ -1193,7 +1255,7 @@ mod tests {
         let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
         let https_port = tls_listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            accept_loop(tls_listener, shared, daemon_port).await;
+            accept_loop(Arc::new(tls_listener), shared, daemon_port).await;
         });
 
         let ok = tls_client_get(&cert_pem, https_port, "web.example.k2.dev", "/").await;
@@ -1400,7 +1462,7 @@ mod tests {
         {
             let shared = shared.clone();
             tokio::spawn(async move {
-                accept_loop(tls_listener, shared, backend_port).await;
+                accept_loop(Arc::new(tls_listener), shared, backend_port).await;
             });
         }
 

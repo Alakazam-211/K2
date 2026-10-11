@@ -986,7 +986,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                 proposed_delivery: proposal
                     .delivery
                     .as_deref()
-                    .map(k2_vault::Delivery::parse)
+                    .map(crate::vault_routes::request_delivery)
                     .and_then(Result::ok)
                     .unwrap_or(k2_vault::Delivery::Fetch),
                 prompt: prompt.clone().unwrap_or_default(),
@@ -1147,7 +1147,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         },
         Some(h) => Some(h.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()),
     };
-    let delivery = match opt_param(params, "delivery").map(|d| k2_vault::Delivery::parse(&d)) {
+    let delivery = match opt_param(params, "delivery").map(|d| crate::vault_routes::request_delivery(&d)) {
         Some(Ok(d)) => Some(d),
         Some(Err(e)) => return vault_error(&e),
         None => None,

@@ -333,7 +333,7 @@ fn import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value
     let p = jailed_path(&root, &rel)?;
     let text = std::fs::read_to_string(&p).map_err(|_| VaultError::not_found("that .env isn't readable"))?;
     let scope = crate::vault_routes::scope_for(c, b.scope.as_deref().or(Some("workspace")), Some(&ws_id), None)?;
-    let delivery = b.delivery.as_deref().map(k2_vault::Delivery::parse).transpose()?;
+    let delivery = b.delivery.as_deref().map(crate::vault_routes::request_delivery).transpose()?;
     let mut out_lines = vec!["# Made by k2 vault import: references only, safe to commit.".to_string()];
     let mut moved = vec![];
     let mut kept = vec![];

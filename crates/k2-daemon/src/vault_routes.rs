@@ -627,7 +627,21 @@ struct SetBody {
 }
 
 fn delivery_opt(s: Option<&str>) -> Result<Option<Delivery>, VaultError> {
-    s.map(Delivery::parse).transpose()
+    s.map(request_delivery).transpose()
+}
+
+/// A delivery named in a request. `proxy` (the loopback LLM proxy,
+/// prd-k2-vault-v1 §9.3 / V5) is held back from this release: nothing
+/// would deliver it, so it is refused rather than silently doing nothing.
+pub fn request_delivery(s: &str) -> Result<Delivery, VaultError> {
+    match Delivery::parse(s)? {
+        Delivery::Proxy => Err(err(
+            "delivery_not_available",
+            400,
+            "proxy delivery isn't in this release; use fetch (K2 makes the call) or file/env",
+        )),
+        d => Ok(d),
+    }
 }
 
 /// Preset hosts + inject for a named provider (VS3: people confirm).
@@ -807,7 +821,7 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     let to = b.to.as_deref().ok_or_else(|| err("consumer_required", 400, "who gets it? --to ws:<name>"))?;
     let consumer = consumer_for(c, to)?;
     let delivery = match b.delivery.as_deref() {
-        Some(d) => Delivery::parse(d)?,
+        Some(d) => request_delivery(d)?,
         None => vault.meta(&sel, &c.actor)?.default_delivery,
     };
     let g = vault.grant(

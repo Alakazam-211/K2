@@ -399,3 +399,17 @@ fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
     assert_eq!(s, 409, "{v}");
     assert_eq!(code(&v), "vault_not_empty");
 }
+
+/// The loopback proxy (V5) is held back from this release: a request that
+/// names `proxy` as a delivery is refused instead of silently delivering
+/// nothing; every other delivery still parses.
+#[test]
+fn proxy_delivery_is_refused_while_the_proxy_is_held() {
+    let e = request_delivery("proxy").expect_err("proxy must be refused");
+    assert_eq!(e.code, "delivery_not_available");
+    assert_eq!(e.status, 400);
+    for d in ["fetch", "file", "env", "api"] {
+        assert_eq!(request_delivery(d).expect(d).as_str(), d);
+    }
+    assert!(request_delivery("nonsense").is_err());
+}

@@ -1,0 +1,315 @@
+//! `/usr/local/libexec/k2-root-helper` — K2's one root door on Linux
+//! (`prd-k2-root-helper-v1`).
+//!
+//! `sudo -n /usr/local/libexec/k2-root-helper <namespace> <verb> [<token>…]`
+//!
+//! One call, in order (§5.3):
+//! 1. argv must parse exactly against the verb catalog (`k2-root-proto`);
+//! 2. euid 0 (except `helper version`);
+//! 3. stdin only for verbs that declare it, up to the verb's cap;
+//! 4. `daemon`-class verbs: the caller must be the daemon's main process
+//!    (exit 77 otherwise, §6);
+//! 5. mutating verbs take `flock(/run/k2-root-helper.lock)` (30 s);
+//! 6. the verb runs; stdout is one JSON object (or the 32-byte KEK);
+//! 7. one audit line (never stdin, never a key, never a password).
+//!
+//! A bug in any namespace is a root bug: changes here need two
+//! independent reviewers, one of them a security pass (Q10).
+
+pub mod caller;
+pub mod core;
+pub mod ctx;
+pub mod fsx;
+pub mod keep;
+pub mod mail;
+pub mod mail_data;
+pub mod pg;
+pub mod sys;
+
+#[cfg(test)]
+mod tests;
+
+use std::io::Read;
+
+use k2_root_proto::verbs::{exit, Class, Verb};
+
+use ctx::{Ctx, Fail, HResult};
+
+/// The marker a signed build must carry exactly once (§9.1, §9.2 rule 4).
+#[cfg(target_arch = "x86_64")]
+#[used]
+pub static BUILD_MARKER: &str = concat!(
+    "K2_ROOT_HELPER_BUILD v=",
+    env!("K2_PRODUCT_VERSION"),
+    " proto=4 arch=x86_64;"
+);
+#[cfg(target_arch = "aarch64")]
+#[used]
+pub static BUILD_MARKER: &str = concat!(
+    "K2_ROOT_HELPER_BUILD v=",
+    env!("K2_PRODUCT_VERSION"),
+    " proto=4 arch=aarch64;"
+);
+
+/// Present only in a `test-keys` build; release signing refuses it.
+#[cfg(feature = "test-keys")]
+#[used]
+pub static TEST_KEYS_FLAG: &str = "K2_ROOT_HELPER_TEST_KEYS_ENABLED";
+
+/// Referenced from `helper version` so the linker keeps the flag string.
+pub fn test_keys_flag() -> Option<&'static str> {
+    #[cfg(feature = "test-keys")]
+    {
+        Some(TEST_KEYS_FLAG)
+    }
+    #[cfg(not(feature = "test-keys"))]
+    {
+        None
+    }
+}
+
+/// What one call produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    pub code: i32,
+    pub stdout: Vec<u8>,
+    /// One short line (empty on success).
+    pub stderr: String,
+}
+
+/// Read stdin for a verb: nothing unless it declares a cap; refuse more
+/// than the cap.
+pub fn read_stdin(verb: &Verb, mut r: impl Read) -> HResult<Vec<u8>> {
+    let Some(cap) = verb.stdin_cap() else {
+        return Ok(Vec::new());
+    };
+    let mut buf = Vec::new();
+    (&mut r)
+        .take(cap as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|_| Fail::io("read stdin failed"))?;
+    if buf.len() > cap {
+        return Err(Fail::argv("stdin too large"));
+    }
+    Ok(buf)
+}
+
+/// The exclusive helper lock (held until drop).
+pub struct Lock {
+    _file: std::fs::File,
+}
+
+pub fn take_lock(ctx: &Ctx) -> HResult<Lock> {
+    use std::os::fd::AsRawFd;
+    let (parent, name) = mail::split(k2_root_proto::paths::LOCK_PATH);
+    let d = ctx.dir(parent).map_err(|e| Fail::io_err("open /run", e))?;
+    let name = std::ffi::OsStr::new(name);
+    let f = match d.kind(name).map_err(|e| Fail::io_err("stat lock", e))? {
+        fsx::Kind::Missing => match d.create_excl(name) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => open_lock(&d, name)?,
+            Err(e) => return Err(Fail::io_err("create lock", e)),
+        },
+        fsx::Kind::File => open_lock(&d, name)?,
+        _ => return Err(Fail::state("lock path is not a regular file")),
+    };
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_millis(ctx.lock_timeout_ms);
+    loop {
+        // SAFETY: fd owned by f.
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Lock { _file: f });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(Fail::state("busy: another helper call holds the lock"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn open_lock(d: &fsx::Dir, name: &std::ffi::OsStr) -> HResult<std::fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let c = CString::new(name.as_bytes()).map_err(|_| Fail::io("lock name"))?;
+    // SAFETY: valid dirfd and name; O_NOFOLLOW refuses a planted link.
+    let fd = unsafe {
+        libc::openat(
+            d.raw(),
+            c.as_ptr(),
+            libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(Fail::io_err("open lock", std::io::Error::last_os_error()));
+    }
+    // SAFETY: fresh fd.
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+fn dispatch(
+    ctx: &Ctx,
+    verb: &Verb,
+    stdin: &[u8],
+    who: &caller::Caller,
+) -> HResult<Option<serde_json::Value>> {
+    let user = || caller::require_daemon(who);
+    Ok(match verb {
+        Verb::HelperVersion => Some(core::version_json(ctx)),
+        Verb::HelperSelfUpdate => Some(core::self_update(ctx, stdin)?),
+        Verb::HelperSelfRollback => Some(core::self_rollback(ctx)?),
+        Verb::HelperLegacyRetire(which) => Some(core::legacy_retire(ctx, *which)?),
+        Verb::HelperAuditTail => Some(core::audit_tail(ctx)?),
+
+        Verb::MailEnsureUser => mail::ensure_user(ctx).map(|_| None)?,
+        Verb::MailMkdir(t) => mail::mkdir(ctx, *t).map(|_| None)?,
+        Verb::MailChown(t) => mail::chown(ctx, *t).map(|_| None)?,
+        Verb::MailRenderUnit => mail::render_unit(ctx, stdin).map(|_| None)?,
+        Verb::MailRenderDropin => mail::render_dropin(ctx).map(|_| None)?,
+        Verb::MailInstallBin => Some(mail::install_bin(ctx, stdin)?),
+        Verb::MailSystemctl(w) => mail::systemctl(ctx, *w).map(|_| None)?,
+        Verb::MailRemove(t) => mail::remove(ctx, *t).map(|_| None)?,
+        Verb::MailUsage => Some(mail::usage(ctx)?),
+        Verb::MailSnapshotData => Some(mail::snapshot(ctx)?),
+        Verb::MailRestoreData => Some(mail::restore(ctx)?),
+
+        Verb::PgSystemctl { op, now, unit } => pg::systemctl(ctx, *op, *now, unit).map(|_| None)?,
+        Verb::PgDaemonReload => pg::daemon_reload(ctx).map(|_| None)?,
+        Verb::PgInstallRamFence => Some(pg::install_ram_fence(ctx)?),
+        Verb::PgPsql { db, flags } => pg::psql(ctx, db, *flags, stdin).map(|_| None)?,
+
+        Verb::KeepStatus => Some(keep::status(ctx, who.user.as_deref())?),
+        Verb::KeepKekInit => keep::kek_init(ctx, &user()?).map(|_| None)?,
+        Verb::KeepKekGet => keep::kek_get(ctx, &user()?).map(|_| None)?,
+        Verb::KeepKekStage => keep::kek_stage(ctx, &user()?).map(|_| None)?,
+        Verb::KeepKekCommit => keep::kek_commit(ctx, &user()?).map(|_| None)?,
+        Verb::KeepKekAbort => keep::kek_abort(ctx, &user()?).map(|_| None)?,
+        Verb::KeepGenGet => Some(keep::gen_get(ctx, who.user.as_deref())?),
+        Verb::KeepGenBump => Some(keep::gen_bump(ctx, &user()?)?),
+    })
+}
+
+fn audit(
+    ctx: &Ctx,
+    verb: Option<&Verb>,
+    who: Option<&caller::Caller>,
+    code: i32,
+    extra: Option<&serde_json::Value>,
+) {
+    let (ns, name, class) = match verb {
+        Some(v) => (v.namespace(), v.audit_name(), v.class().as_str()),
+        None => ("?", "refused-argv".to_string(), "-"),
+    };
+    let caller = who.map(|c| {
+        serde_json::json!({"pid": c.pid, "uid": c.uid, "isDaemon": c.is_daemon, "whyNot": c.why_not})
+    });
+    let mut line = serde_json::json!({
+        "ns": ns,
+        "verb": name,
+        "class": class,
+        "caller": caller,
+        "result": if code == exit::OK { "ok" } else if code == exit::NOT_DAEMON { "caller_not_daemon" } else { "refused_or_failed" },
+        "code": code,
+    });
+    // Self-update / rollback: from → to, sha, key id. Never stdin.
+    if let (Some(Verb::HelperSelfUpdate | Verb::HelperSelfRollback), Some(x)) = (verb, extra) {
+        for k in ["from", "to", "sha256", "keyId", "result"] {
+            if let Some(v) = x.get(k) {
+                line[if k == "result" { "update" } else { k }] = v.clone();
+            }
+        }
+    }
+    if let Some(Verb::PgPsql { db, .. }) = verb {
+        line["db"] = serde_json::json!(db.as_str());
+    }
+    ctx.audit.line(&line.to_string());
+}
+
+/// One full call. `stdin` is read only when the verb takes it.
+pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
+    let fail = |f: Fail| Outcome {
+        code: f.code,
+        stdout: Vec::new(),
+        stderr: f.msg,
+    };
+    let verb = match Verb::parse(args) {
+        Ok(v) => v,
+        Err(e) => {
+            audit(ctx, None, None, exit::ARGV, None);
+            return fail(Fail::argv(e));
+        }
+    };
+    if verb.needs_root() && ctx.euid != 0 {
+        return fail(Fail::state("not running as root (use sudo -n)"));
+    }
+    let input = match read_stdin(&verb, stdin) {
+        Ok(b) => b,
+        Err(f) => {
+            audit(ctx, Some(&verb), None, f.code, None);
+            return fail(f);
+        }
+    };
+    // Open verbs record pid/uid (and the daemon user, for keep status);
+    // daemon verbs run the full MainPID check.
+    let needs_daemon = verb.class() == Class::Daemon;
+    let who = if verb == Verb::HelperVersion {
+        caller::Caller {
+            pid: 0,
+            uid: None,
+            user: None,
+            is_daemon: false,
+            why_not: None,
+        }
+    } else {
+        caller::identify(ctx, needs_daemon)
+    };
+    if needs_daemon && !who.is_daemon {
+        audit(ctx, Some(&verb), Some(&who), exit::NOT_DAEMON, None);
+        return fail(Fail::not_daemon());
+    }
+    let _lock = if verb.takes_lock() {
+        match take_lock(ctx) {
+            Ok(l) => Some(l),
+            Err(f) => {
+                audit(ctx, Some(&verb), Some(&who), f.code, None);
+                return fail(f);
+            }
+        }
+    } else {
+        None
+    };
+    let res = dispatch(ctx, &verb, &input, &who);
+    let (code, json, err) = match res {
+        Ok(j) => (exit::OK, j, String::new()),
+        Err(f) => (f.code, None, f.msg),
+    };
+    if verb != Verb::HelperVersion && verb != Verb::HelperAuditTail {
+        audit(ctx, Some(&verb), Some(&who), code, json.as_ref());
+    }
+    if let Some(j) = &json {
+        ctx.print_json(j);
+    }
+    let stdout = std::mem::take(&mut *ctx.out.borrow_mut());
+    Outcome {
+        code,
+        stdout,
+        stderr: err,
+    }
+}
+
+/// The binary's entry point.
+pub fn main_entry() -> i32 {
+    // SAFETY: umask has no preconditions.
+    unsafe { libc::umask(0o022) };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let ctx = Ctx::production();
+    let out = run(&ctx, &refs, std::io::stdin().lock());
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(&out.stdout);
+    let _ = std::io::stdout().flush();
+    if !out.stderr.is_empty() {
+        eprintln!("k2-root-helper: {}", out.stderr);
+    }
+    out.code
+}

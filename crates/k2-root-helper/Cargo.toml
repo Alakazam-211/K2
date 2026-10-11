@@ -1,0 +1,39 @@
+[package]
+name = "k2-root-helper"
+# Not the product version: the helper reports the daemon's version, read
+# from crates/k2-daemon/Cargo.toml by build.rs (release.sh bumps that one).
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "/usr/local/libexec/k2-root-helper: K2's one root door on Linux. Exact-argv verbs (helper, mail, pg, keep), caller-is-daemon for destructive verbs, signed self-update. Links nothing from k2-daemon or k2-core."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-root-helper"
+path = "src/main.rs"
+
+# TEST ONLY: also trust keys::TEST_KEY for self-update. Release builds
+# never enable it; sign-root-helper.sh refuses a binary built with it.
+[[example]]
+name = "k2-root-helper-testsign"
+path = "examples/testsign.rs"
+required-features = ["test-keys"]
+
+[features]
+test-keys = ["k2-root-proto/test-signer"]
+
+[dependencies]
+k2-root-proto = { path = "../k2-root-proto" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+sha2 = "0.10"
+flate2 = "1.1.9"
+tar = "0.4.45"
+
+[dev-dependencies]
+k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
+tempfile = "3"

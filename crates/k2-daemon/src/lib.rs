@@ -219,6 +219,9 @@ pub mod themes_routes;
 pub mod triage;
 pub mod tunnel_tls_listener;
 pub mod tunnel_ingress_listener;
+// Runtime stage H: front-door hand-off (no-downtime upgrades).
+pub mod handoff;
+pub mod handoff_setup;
 pub mod tunnel_identity_routes;
 pub mod upstream_dial;
 pub mod update_routes;

@@ -38,6 +38,13 @@ import {
   type K2User,
 } from './connect-user-roles'
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
+import {
+  OWNER_LINK_EXPLAINER,
+  OwnerAccountToggle,
+  ownerLinkAccess,
+  useOwnerAccounts,
+} from './OwnerAccountToggle'
+import { threadPushAvailable } from './useNotifyPrefs'
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
@@ -507,6 +514,9 @@ export function K2ConnectSection({
   // selector below.
   const [myRole, setMyRole] = useState<K2Role | null>(null)
   const [whoamiLoaded, setWhoamiLoaded] = useState(false)
+  // The daemon's owner token (whoami `owner:true`), not a Connect login —
+  // even an Owner-role one. Only it may mark "This is me (owner)".
+  const [ownerToken, setOwnerToken] = useState(false)
   const [users, setUsers] = useState<K2User[]>([])
   const [usersLoaded, setUsersLoaded] = useState(false)
   const [newUsername, setNewUsername] = useState('')
@@ -683,12 +693,15 @@ export function K2ConnectSection({
         const data = (await res.json()) as { role?: string; owner?: boolean }
         const role: K2Role | null = parseK2Role(data.role) ?? (data.owner ? 'owner' : null)
         setMyRole(role)
+        setOwnerToken(data.owner === true)
         return role
       }
       setMyRole(null)
+      setOwnerToken(false)
       return null
     } catch {
       setMyRole(null)
+      setOwnerToken(false)
       return null
     } finally {
       setWhoamiLoaded(true)
@@ -1181,6 +1194,12 @@ export function K2ConnectSection({
       return u.username.toLowerCase().includes(q) || role.includes(q)
     })
   }, [users, userQuery])
+
+  // Owner-linked accounts ("This is me (owner)"): identity only, never
+  // privilege. Edit = owner token; read-only = other Admin+; Members never
+  // reach this panel. Needs a server with Thread push (`thread-push-v1`).
+  const ownerLink = threadPushAvailable() ? ownerLinkAccess(ownerToken, myRole) : 'hidden'
+  const ownerAccounts = useOwnerAccounts(panel === 'people' && whoamiLoaded && ownerLink !== 'hidden')
 
   const running = status?.running ?? false
   // PRD tunnel-disable-unpair tri-state. Optional-safe: a pre-PRD daemon
@@ -1870,6 +1889,15 @@ export function K2ConnectSection({
               aria-label="Search users"
               className={inputCls}
             />
+            {ownerLink !== 'hidden' && (
+              <p data-testid="owner-link-explainer" className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                <span className="text-[var(--color-text-secondary)]">This is me (owner):</span> {OWNER_LINK_EXPLAINER}
+                {ownerLink === 'read' ? ' Only the owner can change it.' : ''}
+              </p>
+            )}
+            {ownerAccounts.error && (
+              <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{ownerAccounts.error}</div>
+            )}
             {usersLoaded && users.length === 0 ? (
               <div className="text-[10px] text-[var(--color-text-muted)] py-1">
                 No users yet — add one above.
@@ -1968,6 +1996,15 @@ export function K2ConnectSection({
                         )}
                       </div>
                     </div>
+                    {ownerLink !== 'hidden' && ownerAccounts.loaded && (
+                      <OwnerAccountToggle
+                        username={u.username}
+                        access={ownerLink}
+                        linked={ownerAccounts.isLinked(u.username)}
+                        busy={ownerAccounts.busy === u.username}
+                        onChange={(linked) => void ownerAccounts.setLinked(u.username, linked)}
+                      />
+                    )}
                     {needsEnableAsMember(u) && (
                       <WasViewerNotice
                         username={u.username}

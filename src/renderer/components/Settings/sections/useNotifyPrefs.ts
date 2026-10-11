@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { primaryScope } from '@/kessel/server-scope'
 import { onNotifyPrefsChanged } from '@/stores/session-events'
-import { fetchNotifyPrefs, type NotifyPrefs } from './notify-api'
+import { fetchNotifyPrefs, isYouAuthor, type NotifyPrefs } from './notify-api'
 
 /** Does the window's server have Thread push (`thread-push-v1` in its
  *  `/boot-status` features)? Without it, every Thread push surface hides. */
@@ -67,4 +67,12 @@ export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
   }, [])
 
   return { prefs, error, reload, adopt }
+}
+
+/** "You" for a chat/ticket author stamp on the window's server: `owner`,
+ *  plus — when this viewer is the owner person (the owner token or a login
+ *  marked "This is me (owner)") — every login linked to the owner. */
+export function useIsYouAuthor(): (author: string) => boolean {
+  const { prefs } = useNotifyPrefs(threadPushAvailable())
+  return useCallback((author: string) => isYouAuthor(author, prefs), [prefs])
 }

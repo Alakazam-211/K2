@@ -151,15 +151,19 @@ function WorkspaceAvatar({ projectId, name }: { projectId: string; name: string 
   )
 }
 
-/** The person-key hint (§3, Q6): the owner token and the owner's phone
- *  login are one person only when exactly one login has the Owner role. */
+/** The person-key hint (§3, Q6). Viewing as the owner person (the owner
+ *  token or a login linked to it), `aliases` are the Connect logins that
+ *  count as you: the ones marked "This is me (owner)" plus a sole
+ *  Owner-role login. With none and two or more Owner-role logins, the
+ *  owner token is its own person. */
 export function ownerHint(
   caller: NotifyCaller | null,
   prefs: NotifyPrefs | null,
   admin: NotifyAdmin | null,
-): { kind: 'mapped'; login: string } | { kind: 'separate'; owners: number } | null {
-  if (!caller?.ownerToken || !prefs) return null
-  if (prefs.aliases.length === 1) return { kind: 'mapped', login: prefs.aliases[0] }
+): { kind: 'aliases'; logins: string[] } | { kind: 'separate'; owners: number } | null {
+  if (!prefs) return null
+  if (prefs.principal === 'owner' && prefs.aliases.length > 0) return { kind: 'aliases', logins: prefs.aliases }
+  if (!caller?.ownerToken) return null
   const ownerLogins = admin
     ? admin.people.filter((p) => p.principal !== 'owner' && p.role === 'owner').length
     : 0
@@ -301,9 +305,9 @@ export function NotificationsSection(): React.JSX.Element {
                   onChange={(next) => void mine(() => setMyServerBell(next))}
                 />
               </Row>
-              {hint?.kind === 'mapped' && (
+              {hint?.kind === 'aliases' && (
                 <p data-testid="notifications-owner-hint" className="text-[10px] text-[var(--color-text-muted)] py-1">
-                  Your phone signs in as <strong>{hint.login}</strong>; these switches cover it.
+                  Also you: <strong>{hint.logins.join(', ')}</strong>
                 </p>
               )}
               {hint?.kind === 'separate' && (

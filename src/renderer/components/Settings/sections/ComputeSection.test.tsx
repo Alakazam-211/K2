@@ -42,6 +42,12 @@ vi.mock('./compute-api', async (importOriginal) => {
 })
 
 vi.mock('./K2ConnectSection', () => ({ getAccountAccessToken: vi.fn(async () => null) }))
+// Node admin parts read their own routes; this page's tests don't cover them
+// (ComputeAdminParts.test.tsx does).
+vi.mock('./compute-admin-api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./compute-admin-api')>()
+  return { ...orig, fetchAdminRequests: vi.fn(async () => ({ requests: [], canApprove: true })), fetchNodeHealth: vi.fn() }
+})
 vi.mock('../lib/compute-account', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/compute-account')>()
   return {

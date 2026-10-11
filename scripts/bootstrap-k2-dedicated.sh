@@ -97,7 +97,9 @@ run_standard_provision() {
 	fi
 	log "running Standard provision ($prov)"
 	# Inherits the K2_* provisioning env (tunnel/owner/callback/version/user).
-	bash "$prov"
+	# K2_UNIT_NAME explicitly: the provisioner writes it into the root
+	# helper's daemon.toml (the caller check names this unit; RH15).
+	K2_UNIT_NAME="$K2_UNIT_NAME" bash "$prov"
 }
 
 # ── CONSENT GATE — the very first decision ────────────────────────────

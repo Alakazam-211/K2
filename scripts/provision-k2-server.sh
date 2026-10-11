@@ -36,18 +36,19 @@
 #   K2_CALLBACK_TOKEN  bearer for the callback (optional)
 #   K2_VERSION         pin a daemon release (default: latest)
 #   K2_RUN_USER        service account (default: k2)
-#   K2_MAIL_HELPER_BIN absolute path to a built k2-mail-helper binary.
-#                      Else beside this script (scripts/k2-mail-helper), else
-#                      ../target/release/k2-mail-helper from a
-#                      `cargo build -p k2-daemon --release --bin k2-mail-helper`,
-#                      else the signed GitHub release asset for the SAME
-#                      version as the installed daemon (install-mail-helper.sh;
-#                      v0.44.1+). Every box (bake and full provision) gets the
-#                      helper so its agents can enable hosted mail without ops.
-#                      A failure is a hard failure that stops provisioning;
-#                      after install the helper must be root:root 0755, its
-#                      sudoers file 0440, and `visudo -c` must pass. The step
-#                      never enables mail, touches DNS, or edits other sudoers.
+#   K2_ROOT_HELPER_BIN absolute path to a built k2-root-helper binary.
+#                      Else beside this script (scripts/k2-root-helper), else
+#                      ../target/release/k2-root-helper from a
+#                      `cargo build -p k2-root-helper --release`, else the
+#                      signed GitHub release asset for the SAME version as the
+#                      installed daemon (install-root-helper.sh; v0.45.5+).
+#                      Every box (bake and full provision) gets K2's one root
+#                      door so its agents can enable hosted mail and the db
+#                      sidecar without ops. A failure is a hard failure that
+#                      stops provisioning; after install the helper must be
+#                      root:root 0755, its sudoers file 0440, daemon.toml
+#                      0644, and `visudo -c` must pass. The step never
+#                      enables mail, touches DNS, or edits other sudoers.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -247,106 +248,117 @@ EOF
 systemctl daemon-reload
 systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
 
-# ── 7a. mail root helper (always, not only --with-db) ───────────────
-# Every provisioned box comes up with the hosted-mail root helper already
-# installed, so the customer's agents can set up mail themselves: `k2
-# hostmail enable` as user k2 calls `sudo -n /usr/local/libexec/k2-mail-helper`.
-# install-mail-helper.sh installs it root:root 0755 plus
-# /etc/sudoers.d/k2-mail-helper (visudo-checked, 0440). A local binary wins
-# (K2_MAIL_HELPER_BIN, beside this script, ../target/release); otherwise the
-# installer fetches the minisign-signed release asset for the SAME version
-# as the daemon step 4 just installed (assets ship from v0.44.1).
+# ── 7a. root helper (always, not only --with-db) ────────────────────
+# Every provisioned box comes up with K2's one root door already installed
+# (prd-k2-root-helper-v1 §11.2), so the customer's agents can set up hosted
+# mail and the Postgres sidecar without ops, and the daemon keeps the
+# helper current by itself (signed self-update). install-root-helper.sh
+# installs /usr/local/libexec/k2-root-helper root:root 0755, the one
+# sudoers line /etc/sudoers.d/k2-root-helper (visudo-checked, 0440) and
+# /etc/k2-root-helper/daemon.toml (who the daemon is: this user, this
+# unit, system scope). A local binary wins (K2_ROOT_HELPER_BIN, beside
+# this script, ../target/release); otherwise the installer fetches the
+# signed release asset for the SAME version as the daemon step 4 just
+# installed (assets ship from v0.45.5).
 # FAIL LOUD: any failure here stops provisioning (never skipped, never
 # warned past). This step installs the helper only: it does not enable
-# hosted mail, touch DNS, or write any other sudoers file (never widens
-# /etc/sudoers.d/k2-pg-helper).
-# K2_INSTALL_ROOT is install-mail-helper.sh's DESTDIR-style prefix for the
+# hosted mail, touch DNS, or write any other sudoers file.
+# K2_INSTALL_ROOT is install-root-helper.sh's DESTDIR-style prefix for the
 # hermetic tests (tests/cli/provision_mail_helper.sh); it is passed through
 # to the installer. Production leaves it empty.
-MAIL_HELPER_PATH="${K2_INSTALL_ROOT:-}/usr/local/libexec/k2-mail-helper"
-MAIL_HELPER_SUDOERS="${K2_INSTALL_ROOT:-}/etc/sudoers.d/k2-mail-helper"
+ROOT_HELPER_PATH="${K2_INSTALL_ROOT:-}/usr/local/libexec/k2-root-helper"
+ROOT_HELPER_SUDOERS="${K2_INSTALL_ROOT:-}/etc/sudoers.d/k2-root-helper"
+ROOT_HELPER_TOML="${K2_INSTALL_ROOT:-}/etc/k2-root-helper/daemon.toml"
 MAIL_HELPER_LINE=""
-mail_helper_die() {
-	die "mail helper: $* — provisioning stopped. Fix it and re-run this script (idempotent), or run install-mail-helper.sh --version <daemon version> by hand."
+root_helper_die() {
+	die "root helper: $* — provisioning stopped. Fix it and re-run this script (idempotent), or run install-root-helper.sh --version <daemon version> by hand."
 }
 # Post-install check: the exact modes the daemon's `sudo -n` path relies on.
-verify_mail_helper() {
+verify_root_helper() {
 	local got
-	{ [ -f "$MAIL_HELPER_PATH" ] && [ ! -L "$MAIL_HELPER_PATH" ]; } \
-		|| mail_helper_die "$MAIL_HELPER_PATH is missing after install"
-	got="$(stat -c '%U:%G %a' "$MAIL_HELPER_PATH")"
+	{ [ -f "$ROOT_HELPER_PATH" ] && [ ! -L "$ROOT_HELPER_PATH" ]; } \
+		|| root_helper_die "$ROOT_HELPER_PATH is missing after install"
+	got="$(stat -c '%U:%G %a' "$ROOT_HELPER_PATH")"
 	[ "$got" = "root:root 755" ] \
-		|| mail_helper_die "$MAIL_HELPER_PATH is '$got', expected 'root:root 755'"
-	{ [ -f "$MAIL_HELPER_SUDOERS" ] && [ ! -L "$MAIL_HELPER_SUDOERS" ]; } \
-		|| mail_helper_die "$MAIL_HELPER_SUDOERS is missing after install"
-	got="$(stat -c '%U:%G %a' "$MAIL_HELPER_SUDOERS")"
+		|| root_helper_die "$ROOT_HELPER_PATH is '$got', expected 'root:root 755'"
+	{ [ -f "$ROOT_HELPER_SUDOERS" ] && [ ! -L "$ROOT_HELPER_SUDOERS" ]; } \
+		|| root_helper_die "$ROOT_HELPER_SUDOERS is missing after install"
+	got="$(stat -c '%U:%G %a' "$ROOT_HELPER_SUDOERS")"
 	[ "$got" = "root:root 440" ] \
-		|| mail_helper_die "$MAIL_HELPER_SUDOERS is '$got', expected 'root:root 440'"
+		|| root_helper_die "$ROOT_HELPER_SUDOERS is '$got', expected 'root:root 440'"
+	{ [ -f "$ROOT_HELPER_TOML" ] && [ ! -L "$ROOT_HELPER_TOML" ]; } \
+		|| root_helper_die "$ROOT_HELPER_TOML is missing after install"
+	got="$(stat -c '%U:%G %a' "$ROOT_HELPER_TOML")"
+	[ "$got" = "root:root 644" ] \
+		|| root_helper_die "$ROOT_HELPER_TOML is '$got', expected 'root:root 644'"
 	visudo -c >/dev/null 2>&1 \
-		|| mail_helper_die "visudo -c fails after the helper install (check /etc/sudoers and /etc/sudoers.d)"
+		|| root_helper_die "visudo -c fails after the helper install (check /etc/sudoers and /etc/sudoers.d)"
 }
 if [ "$(uname -s)" != "Linux" ]; then
-	# Hosted mail is Linux-only (the installer refuses anything else).
-	log "mail helper: skipped — hosted mail is Linux-only (this is $(uname -s))"
+	# The root helper is Linux-only (the installer refuses anything else).
+	log "root helper: skipped — Linux-only (this is $(uname -s))"
 	MAIL_HELPER_LINE="skipped (not Linux)"
 else
-	log "installing ${MAIL_HELPER_PATH}"
+	log "installing ${ROOT_HELPER_PATH}"
 	# The version is the one root resolved before step 4 (K2_VERSION),
 	# never read by running the daemon binary as root: it sits in the
 	# daemon user's writable home. Plain x.y.z only.
 	DAEMON_VERSION="${K2_VERSION#v}"
 	[[ "$DAEMON_VERSION" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] \
-		|| mail_helper_die "K2_VERSION must be a plain x.y.z release (got '${K2_VERSION}')"
+		|| root_helper_die "K2_VERSION must be a plain x.y.z release (got '${K2_VERSION}')"
 	# Cross-check that step 4 installed that version. The binary runs as
 	# the daemon user (never root); 0.40.82+ prints and exits without
 	# booting. Its answer is only compared, never used.
 	INSTALLED_VERSION="$(runuser -u "$K2_RUN_USER" -- timeout 10 "$K2_HOME/.local/bin/k2-daemon" --version 2>/dev/null \
 		| sed -n 's/^k2-daemon[[:space:]]\{1,\}\([0-9][^[:space:]]*\).*/\1/p' | head -n1 || true)"
 	[ -n "$INSTALLED_VERSION" ] \
-		|| mail_helper_die "could not read the installed daemon version from $K2_HOME/.local/bin/k2-daemon --version (run as ${K2_RUN_USER})"
+		|| root_helper_die "could not read the installed daemon version from $K2_HOME/.local/bin/k2-daemon --version (run as ${K2_RUN_USER})"
 	if [ "$INSTALLED_VERSION" != "$DAEMON_VERSION" ]; then
-		mail_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${INSTALLED_VERSION}; the helper must match the daemon"
+		root_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${INSTALLED_VERSION}; the helper must match the daemon"
 	fi
-	MAIL_HELPER_SRC=""
-	if [ -n "${K2_MAIL_HELPER_BIN:-}" ]; then
-		[ -f "$K2_MAIL_HELPER_BIN" ] || mail_helper_die "K2_MAIL_HELPER_BIN is set but missing: $K2_MAIL_HELPER_BIN"
-		MAIL_HELPER_SRC="$K2_MAIL_HELPER_BIN"
-	elif [ -f "$SCRIPT_DIR/k2-mail-helper" ]; then
-		MAIL_HELPER_SRC="$SCRIPT_DIR/k2-mail-helper"
-	elif [ -f "$SCRIPT_DIR/../target/release/k2-mail-helper" ]; then
-		MAIL_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-mail-helper"
+	ROOT_HELPER_SRC=""
+	if [ -n "${K2_ROOT_HELPER_BIN:-}" ]; then
+		[ -f "$K2_ROOT_HELPER_BIN" ] || root_helper_die "K2_ROOT_HELPER_BIN is set but missing: $K2_ROOT_HELPER_BIN"
+		ROOT_HELPER_SRC="$K2_ROOT_HELPER_BIN"
+	elif [ -f "$SCRIPT_DIR/k2-root-helper" ]; then
+		ROOT_HELPER_SRC="$SCRIPT_DIR/k2-root-helper"
+	elif [ -f "$SCRIPT_DIR/../target/release/k2-root-helper" ]; then
+		ROOT_HELPER_SRC="$SCRIPT_DIR/../target/release/k2-root-helper"
 	fi
 	# The installer: the copy beside this script, else the signed release's
 	# own copy for the same version. Downloaded into a fresh root-only
 	# directory, never a fixed /tmp name another user could pre-create.
-	MAIL_HELPER_INSTALLER="$SCRIPT_DIR/install-mail-helper.sh"
-	if [ ! -f "$MAIL_HELPER_INSTALLER" ]; then
-		MAIL_HELPER_TMP="$(mktemp -d)" || mail_helper_die "mktemp failed"
-		MAIL_HELPER_INSTALLER="$MAIL_HELPER_TMP/install-mail-helper.sh"
-		MAIL_HELPER_INSTALLER_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-mail-helper.sh"
-		log "fetching install-mail-helper.sh (${MAIL_HELPER_INSTALLER_URL})"
-		curl -fsSL --retry 3 --retry-delay 2 "$MAIL_HELPER_INSTALLER_URL" -o "$MAIL_HELPER_INSTALLER" \
-			|| mail_helper_die "could not download $MAIL_HELPER_INSTALLER_URL"
+	ROOT_HELPER_INSTALLER="$SCRIPT_DIR/install-root-helper.sh"
+	if [ ! -f "$ROOT_HELPER_INSTALLER" ]; then
+		ROOT_HELPER_TMP="$(mktemp -d)" || root_helper_die "mktemp failed"
+		ROOT_HELPER_INSTALLER="$ROOT_HELPER_TMP/install-root-helper.sh"
+		ROOT_HELPER_INSTALLER_URL="https://github.com/Alakazam-211/K2/releases/download/v${DAEMON_VERSION}/install-root-helper.sh"
+		log "fetching install-root-helper.sh (${ROOT_HELPER_INSTALLER_URL})"
+		curl -fsSL --retry 3 --retry-delay 2 "$ROOT_HELPER_INSTALLER_URL" -o "$ROOT_HELPER_INSTALLER" \
+			|| root_helper_die "could not download $ROOT_HELPER_INSTALLER_URL"
 	fi
-	if [ -n "$MAIL_HELPER_SRC" ]; then
-		bash "$MAIL_HELPER_INSTALLER" --file "$MAIL_HELPER_SRC" --user "$K2_RUN_USER" \
-			|| mail_helper_die "install-mail-helper.sh --file $MAIL_HELPER_SRC failed (output above)"
+	ROOT_HELPER_ARGS=(--user "$K2_RUN_USER" --unit "${K2_UNIT_NAME}.service" --scope system)
+	if [ -n "$ROOT_HELPER_SRC" ]; then
+		bash "$ROOT_HELPER_INSTALLER" --file "$ROOT_HELPER_SRC" "${ROOT_HELPER_ARGS[@]}" \
+			|| root_helper_die "install-root-helper.sh --file $ROOT_HELPER_SRC failed (output above)"
 		MAIL_HELPER_LINE="installed (local build, daemon v${DAEMON_VERSION})"
 	else
-		log "no local k2-mail-helper — installing the signed v${DAEMON_VERSION} release asset"
-		bash "$MAIL_HELPER_INSTALLER" --version "$DAEMON_VERSION" --user "$K2_RUN_USER" \
-			|| mail_helper_die "install-mail-helper.sh --version $DAEMON_VERSION failed (output above)"
+		log "no local k2-root-helper — installing the signed v${DAEMON_VERSION} release asset"
+		bash "$ROOT_HELPER_INSTALLER" --version "$DAEMON_VERSION" "${ROOT_HELPER_ARGS[@]}" \
+			|| root_helper_die "install-root-helper.sh --version $DAEMON_VERSION failed (output above)"
 		MAIL_HELPER_LINE="installed (v${DAEMON_VERSION})"
 	fi
-	verify_mail_helper
-	log "mail helper: ${MAIL_HELPER_LINE}"
+	verify_root_helper
+	log "root helper: ${MAIL_HELPER_LINE}"
 fi
 
 # ── 7b. optional Postgres sidecar bake (`--with-db` / K2_BAKE_DB=1) ──
 # Distro packages (postgresql + postgresql-client), NOT postgresql-16
 # (jammy/bookworm ship 14/15). Empty cluster. listen_addresses=localhost.
-# Root helper + sudoers stub so User=k2 never apt-gets and never holds
-# a superuser password. Mail stays GitHub-tarball at enable; db is bake-apt.
+# The daemon reaches Postgres as root ONLY through the root helper's `pg`
+# namespace (7a): no k2-pg-helper copy and no second sudoers line any more
+# (RH11). User=k2 never apt-gets and never holds a superuser password.
+# Mail stays GitHub-tarball at enable; db is bake-apt.
 if [ "$WITH_DB" = 1 ]; then
 	log "baking Postgres sidecar (postgresql + postgresql-client)"
 	apt-get install -y -qq postgresql postgresql-client >/dev/null
@@ -362,29 +374,14 @@ if [ "$WITH_DB" = 1 ]; then
 		done
 	fi
 	systemctl enable postgresql >/dev/null 2>&1 || true
-	HELPER_SRC="$SCRIPT_DIR/k2-pg-helper"
-	if [ ! -f "$HELPER_SRC" ]; then
-		HELPER_SRC="/usr/local/libexec/k2-pg-helper"
-	fi
-	if [ -f "$SCRIPT_DIR/k2-pg-helper" ]; then
-		install -d -m 0755 /usr/local/libexec
-		install -m 0755 "$SCRIPT_DIR/k2-pg-helper" /usr/local/libexec/k2-pg-helper
-	fi
-	# Sudoers stub: daemon User=k2 may run ONLY the helper (argv allowlist
-	# inside the helper). Do not grant k2 full systemctl/psql.
-	cat > /etc/sudoers.d/k2-pg-helper <<SUDO
-# K2 Postgres sidecar helper (prd-workspace-data-sidecar-v1 D11).
-# Daemon (User=${K2_RUN_USER}) may run ONLY this argv-allowlisted helper as root.
-${K2_RUN_USER} ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper
-SUDO
-	chmod 0440 /etc/sudoers.d/k2-pg-helper
-	# D29: MemoryHigh/Max drop-in + GUC caps. Helper body is canned
-	# (daemon User=k2 cannot write systemd itself).
-	if [ -x /usr/local/libexec/k2-pg-helper ]; then
-		/usr/local/libexec/k2-pg-helper install-ram-fence
-		systemctl daemon-reload
-	fi
-	log "Postgres sidecar baked (unit enabled, empty cluster, helper + sudoers, RAM fence)"
+	# D29: MemoryHigh/Max drop-ins + GUC caps, canned inside the root
+	# helper (never follows a link under /etc/postgresql, RH9).
+	[ -x /usr/local/libexec/k2-root-helper ] \
+		|| die "--with-db needs the root helper from step 7a"
+	/usr/local/libexec/k2-root-helper pg install-ram-fence >/dev/null \
+		|| die "root helper: pg install-ram-fence failed"
+	systemctl daemon-reload
+	log "Postgres sidecar baked (unit enabled, empty cluster, RAM fence via k2-root-helper)"
 fi
 
 if [ "$BAKE_ONLY" = 1 ]; then

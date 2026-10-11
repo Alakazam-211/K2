@@ -17,6 +17,9 @@
 //   C. This computer — desktop only, this machine's own daemon
 //      (`scopeForHost('local')`): make it a node, the owner's word over it.
 //   D. One-click pairing on the same Connect account (inside C's sheet).
+//   E. Node admin (prd-k2-node-admin-v1 S10, `ComputeAdminParts`): the
+//      owner's Approvals above the nodes, and per node its health, pending
+//      approvals, k2-node update state and offline alert.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
@@ -71,6 +74,7 @@ import {
 import { getAccountAccessToken } from './K2ConnectSection'
 import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
 import { MachinesPart } from './ComputeAccessParts'
+import { ApprovalsPanel, NodeAdminPanel } from './ComputeAdminParts'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Compute nodes (preview)', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
@@ -381,6 +385,7 @@ function ControllerPart({
             <p className="text-[11px] text-[var(--color-text-muted)]">Loading…</p>
           ) : null}
           {state === 'error' && error ? <Callout tone="error">{error}</Callout> : null}
+          {list && nodes.length > 0 ? <ApprovalsPanel onChanged={() => void onChanged()} /> : null}
           {list && nodes.length === 0 ? (
             <p className="text-[11px] text-[var(--color-text-muted)]">
               No nodes yet. Add one below, or make another computer a node from its own K2.
@@ -637,6 +642,7 @@ function NodeCard({
             </p>
           ) : null}
           <GrantsBlock node={node} grants={grants} onChanged={onChanged} />
+          <NodeAdminPanel node={node.name} />
         </div>
       )}
       {error ? <Callout tone="error">{error}</Callout> : null}

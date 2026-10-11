@@ -284,10 +284,7 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         (uptime_secs(), load_milli(), swap, pressure, os_fact(), sleep_fact(), thermal_fact(), encryption_fact(), updates)
     })
     .await;
-    let (uptime, load, swap, pressure, os, sleep, thermal, enc, updates) = match blocking {
-        Ok(t) => t,
-        Err(_) => Default::default(),
-    };
+    let (uptime, load, swap, pressure, os, sleep, thermal, enc, updates) = blocking.unwrap_or_default();
     let mut disks = Vec::new();
     for (name, p) in [("root", Path::new("/").to_path_buf()), ("node_home", node.layout().home.clone())] {
         let (free, total) = crate::sysinfo::disk(&p);

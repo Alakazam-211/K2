@@ -243,7 +243,7 @@ assert_contains "status help systemd" "$help_out" "systemctl is-active stalwart"
 assert_contains "status help disable" "$help_out" "until \`k2 hostmail enable\`"
 assert_contains "status help helper" "$help_out" "installed | missing | not allowed by sudoers"
 enable_help="$(sed -n '/^cmd_help_hostmail_enable() {$/,/^}$/p' "$K2_CLI")"
-assert_contains "enable help helper" "$enable_help" "install-mail-helper.sh"
+assert_contains "enable help helper" "$enable_help" "install-root-helper.sh"
 assert_contains "enable help code" "$enable_help" "mail_helper_missing"
 # Through the stub env: the CLI connection gate needs a port + token even
 # for help, and must never fall back to the real ~/.k2.

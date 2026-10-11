@@ -494,12 +494,13 @@ impl HelperState {
     }
 }
 
-/// The one-line root fix for `version`. The installer and the helper
-/// binary are release assets of the same tag, so the helper argv always
-/// matches the daemon that asks for it.
+/// The one-line root fix for `version` (RH23): the ROOT helper installer
+/// (`install-mail-helper.sh` is a one-train wrapper around it). The
+/// installer and the helper binary are release assets of the same tag, so
+/// the helper always matches the daemon that asks for it.
 pub fn install_command_for(version: &str) -> String {
     format!(
-        "curl -fsSL {RELEASE_DOWNLOAD_BASE}/v{version}/install-mail-helper.sh | sudo bash -s -- --version {version}"
+        "curl -fsSL {RELEASE_DOWNLOAD_BASE}/v{version}/install-root-helper.sh | sudo bash -s -- --version {version}"
     )
 }
 
@@ -513,7 +514,10 @@ pub fn install_command() -> String {
 pub fn unavailable_message(state: HelperState) -> Option<String> {
     let what = match state {
         HelperState::Installed => return None,
-        HelperState::Missing => format!("mail helper not installed ({HELPER_PATH} is missing)"),
+        HelperState::Missing => format!(
+            "mail helper not installed ({} is missing)",
+            k2_root_proto::paths::HELPER_PATH
+        ),
         HelperState::NotAllowed => format!(
             "mail helper not allowed by sudoers (this daemon user may not `sudo -n {HELPER_PATH}`)"
         ),
@@ -2133,36 +2137,43 @@ mod tests {
         assert!(marked);
     }
 
-    /// The installer the hint points at must agree with the daemon: same
-    /// updater pubkey as the self-updater, same helper path, the exact
-    /// two sudoers lines (visudo-checked), and the per-arch asset name
-    /// daemon-binaries.yml uploads.
+    /// The installer the hint points at must agree with the daemon: the
+    /// helper signing keys (never the app updater key), the helper path,
+    /// the exact two sudoers lines (visudo-checked), the per-arch asset
+    /// name daemon-binaries.yml uploads; and the old name is a wrapper.
     #[test]
     fn installer_script_matches_daemon_constants() {
-        let script = include_str!("../../../../scripts/install-mail-helper.sh");
+        let script = include_str!("../../../../scripts/install-root-helper.sh");
+        let keys: Vec<&str> = k2_root_proto::keys::RELEASE_KEYS
+            .iter()
+            .map(|k| k.public_key_b64)
+            .collect();
         assert!(
-            script.contains(&format!(
-                "K2_HELPER_PUBKEY=\"{}\"",
-                crate::update_routes::UPDATER_PUBKEY_B64
-            )),
-            "installer pubkey must equal update_routes::UPDATER_PUBKEY_B64"
+            script.contains(&format!("K2_ROOT_HELPER_PUBKEYS=({})", keys.join(" "))),
+            "installer keys must equal k2_root_proto::keys::RELEASE_KEYS"
         );
-        assert!(script.contains(&format!("HELPER_PATH=\"{HELPER_PATH}\"")));
+        assert!(!script.contains(crate::update_routes::UPDATER_PUBKEY_B64), "never the app updater key");
+        assert!(script.contains(&format!("HELPER_PATH=\"{}\"", k2_root_proto::paths::HELPER_PATH)));
         assert!(
             script.contains(r#"printf '%s ALL=(root) NOPASSWD: %s\nDefaults:%s !requiretty\n'"#)
         );
         assert!(script.contains("RUN_USER=\"${K2_RUN_USER:-k2}\""));
         assert!(script.contains("visudo -cf \"$CANDIDATE\""));
-        assert!(script.contains("ASSET=\"k2-mail-helper-linux-${ARCH}\""));
+        assert!(script.contains("ASSET=\"k2-root-helper-linux-${ARCH}\""));
         assert!(script.contains(&format!(
             "RELEASE_BASE=\"${{K2_RELEASE_BASE:-{RELEASE_DOWNLOAD_BASE}}}\""
         )));
+        let wrapper = include_str!("../../../../scripts/install-mail-helper.sh");
+        assert!(wrapper.contains("install-root-helper.sh"), "old name execs the root installer");
         let workflow = include_str!("../../../../.github/workflows/daemon-binaries.yml");
         for asset in [
             "helper_asset: k2-mail-helper-linux-x86_64",
             "helper_asset: k2-mail-helper-linux-aarch64",
+            "root_asset: k2-root-helper-linux-x86_64",
+            "root_asset: k2-root-helper-linux-aarch64",
             "--bin k2-mail-helper",
-            "gh release upload \"$TAG\" scripts/install-mail-helper.sh --clobber",
+            "-p k2-root-helper",
+            "gh release upload \"$TAG\" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber",
         ] {
             assert!(
                 workflow.contains(asset),
@@ -2177,7 +2188,7 @@ mod tests {
         assert_eq!(
             install_command(),
             format!(
-                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-mail-helper.sh | sudo bash -s -- --version {v}"
+                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-root-helper.sh | sudo bash -s -- --version {v}"
             )
         );
         assert_eq!(unavailable_message(HelperState::Installed), None);
@@ -2185,7 +2196,7 @@ mod tests {
         assert_eq!(
             missing,
             format!(
-                "mail helper not installed (/usr/local/libexec/k2-mail-helper is missing) — run as root: {}",
+                "mail helper not installed (/usr/local/libexec/k2-root-helper is missing) — run as root: {}",
                 install_command()
             )
         );

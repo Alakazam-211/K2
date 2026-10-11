@@ -590,6 +590,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",
+        // Root helper status (read-only): agents see whether the helper is
+        // there and what to ask their human for. update/rollback are NOT
+        // here (owner/admin steps).
+        "/cli/root-helper/status",
         // `k2 workspace swap-canonical`: the handler classifies the
         // passport like the sidecar routes. An agent may swap only its
         // own workspace's pinned chat, stamped as itself (not the owner);

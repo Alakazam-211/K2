@@ -80,8 +80,21 @@ impl RealSystemOps {
             .map_err(|e| format!("{cmd} {}: {e}", args.join(" ")))
     }
 
-    /// `sudo -n` the mail helper. Stdin is not copied into the error.
+    /// `sudo -n` the root door. The root helper (`k2-root-helper`) when it
+    /// is installed: the protocol-2 argv is mapped onto its named-target /
+    /// render verbs and checked against the catalog first. Otherwise the
+    /// legacy `k2-mail-helper` (one release train). Stdin is not copied
+    /// into any error.
     fn run_mail_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
+        if crate::root_helper::state().usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {
+            let (argv, input) = crate::root_helper::mail_argv(args, stdin)?;
+            return crate::root_helper::call_text(&argv, input.as_deref());
+        }
+        Self::run_legacy_mail_helper(args, stdin)
+    }
+
+    /// The protocol-2 `/usr/local/libexec/k2-mail-helper`.
+    fn run_legacy_mail_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
         use std::io::Write;
         use std::process::{Command, Stdio};
         let mut cmd = Command::new(helper::SUDO_PATH);
@@ -223,7 +236,12 @@ impl SystemOps for RealSystemOps {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
+    /// The root helper first (any protocol ≥ 2 serves mail), then the
+    /// legacy mail helper.
     fn mail_helper_state(&self) -> helper::HelperState {
+        if crate::root_helper::state().usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {
+            return helper::HelperState::Installed;
+        }
         helper::probe_state()
     }
 

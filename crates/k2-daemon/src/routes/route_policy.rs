@@ -696,6 +696,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/review/feedback", Member),
     post("/cli/review/reject", Member),
     get("/cli/reviews", Member),
+    // Root helper (prd-k2-root-helper-v1 §8.3). Status is a plain read
+    // (agents too); update/rollback refuse passports in the handler.
+    post("/cli/root-helper/rollback", Admin),
+    get("/cli/root-helper/status", Member),
+    post("/cli/root-helper/update", Admin),
     get("/cli/sandbox/list", Member),
     post("/cli/sandbox/open", NoLogin),
     post("/cli/sandbox/reopen", Member),

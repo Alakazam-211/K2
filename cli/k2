@@ -9290,6 +9290,122 @@ cmd_sidecar() {
     esac
 }
 
+# ── k2 root-helper — K2's one root door on Linux ───────────────────────
+# (prd-k2-root-helper-v1 §8.3). `status` is a read anyone (agents too) may
+# do; `update` / `rollback` are owner/admin steps the daemon refuses for
+# any passport — run them outside a K2 terminal. The one root install is
+# `k2 root-helper install-command`, pasted by an admin in an SSH session.
+_root_helper_usage() {
+    cat <<'EOF'
+k2 root-helper — K2's one root door on Linux (/usr/local/libexec/k2-root-helper)
+
+  k2 root-helper status [--events] [--json]   state, version, protocol, auto-heal, legacy helpers
+  k2 root-helper update [--from <dir>]        install the signed helper for this daemon's version now
+                                              (--from: a dir holding k2-root-helper-linux-<arch> + .sig; air-gap)
+  k2 root-helper rollback                     one step back to the previous helper
+  k2 root-helper install-command              the one root command for a box without it
+
+Agents: if hosted mail, the db sidecar or the vault says `helper_needed`,
+ask your human (k2 tickets ask). Never install Stalwart or Postgres by hand.
+EOF
+}
+
+_root_helper_render() {
+    # _root_helper_render <as_json> <raw "body\ncode">
+    local as_json="$1" raw="$2" code body
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ]; then
+        echo "k2 root-helper: daemon unreachable" >&2
+        exit 1
+    fi
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$body"
+    else
+        K2_RH_BODY="$body" python3 -c '
+import json, os
+try:
+    d = json.loads(os.environ["K2_RH_BODY"])
+except Exception:
+    print(os.environ["K2_RH_BODY"]); raise SystemExit(0)
+if "error" in d:
+    e = d["error"]
+    print("error:", e.get("code"), "—", e.get("hint")); raise SystemExit(0)
+h = d.get("heal")
+if h is not None:
+    print("heal       :", h.get("result"), {k: v for k, v in h.items() if k != "result"} or "")
+    d = d.get("status") or {}
+if "state" in d:
+    print("state      :", d.get("state"), "(" + str(d.get("path")) + ")")
+    print("version    :", d.get("version"), " protocol", d.get("protocol"), " daemon", d.get("daemonVersion"))
+    lg = d.get("legacy") or {}
+    print("legacy     : mail", lg.get("mail"), "· pg", "present" if lg.get("pg") else "absent")
+    print("setup      :", d.get("rootSetup"))
+    ah = d.get("autoHeal") or {}
+    if ah.get("lastResult"):
+        print("auto-heal  :", ah["lastResult"].get("result"), ah["lastResult"].get("reason", ""))
+    if d.get("plainSudoRestartUsed"):
+        print("note       : a Stalwart restart used plain sudo systemctl (no helper)")
+    if d.get("rootSetup") == "copy-command":
+        print("one root step (an admin SSH session, never a K2 terminal):")
+        print("  " + str(d.get("installCommand")))
+    ev = (d.get("lastEvents") or {}).get("events") or []
+    for e in ev[-20:]:
+        x = e.get("event") or {}
+        print("  event", e.get("at"), x.get("verb"), x.get("result"), (x.get("caller") or {}).get("pid"))
+'
+    fi
+    [ "$code" = "200" ] || exit 1
+}
+
+cmd_root_helper() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift
+    local as_json=0 events=0 from="" raw
+    case "$sub" in
+        help|--help|-h) _root_helper_usage; return 0 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --events) events=1; shift ;;
+            --from) from="${2:-}"; shift 2 ;;
+            -h|--help) _root_helper_usage; return 0 ;;
+            *) echo "usage: unknown argument '$1' (k2 root-helper --help)" >&2; exit 2 ;;
+        esac
+    done
+    case "$sub" in
+        status)
+            local q="refresh=1"
+            [ "$events" = 1 ] && q="$q&events=1"
+            raw="$(_sidecar_send GET /cli/root-helper/status "$q")" || true
+            _root_helper_render "$as_json" "$raw"
+            ;;
+        update)
+            local body="{}"
+            if [ -n "$from" ]; then
+                case "$from" in /*) ;; *) from="$(cd "$from" 2>/dev/null && pwd)" || { echo "--from: no such directory" >&2; exit 2; } ;; esac
+                body="$(K2_RH_FROM="$from" python3 -c 'import json, os; print(json.dumps({"fromDir": os.environ["K2_RH_FROM"]}))')"
+            fi
+            raw="$(_sidecar_send POST /cli/root-helper/update "$body")" || true
+            _root_helper_render "$as_json" "$raw"
+            ;;
+        rollback)
+            raw="$(_sidecar_send POST /cli/root-helper/rollback "{}")" || true
+            _root_helper_render "$as_json" "$raw"
+            ;;
+        install-command)
+            raw="$(_sidecar_send GET /cli/root-helper/status "")" || true
+            local body="${raw%$'\n'*}"
+            K2_RH_BODY="$body" python3 -c 'import json, os; print(json.loads(os.environ["K2_RH_BODY"]).get("installCommand", ""))'
+            ;;
+        *)
+            echo "usage: unknown root-helper verb '$sub' (status|update|rollback|install-command)" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # ── k2 compute — run commands on your compute nodes ───────────────────
 # (prd-k2-compute-nodes-v1 §15.2). `compute` is an `id` tool and locked:
 # inside a K2 terminal the request carries this session's passport, so an
@@ -16668,7 +16784,7 @@ cmd_schema() {
     {
       "name": "hostmail enable",
       "usage": "k2 hostmail enable --hostname <name> [--json]",
-      "description": "Provision / start the hosted mail server. POSTs {\"hostname\":...} to /cli/mail/server/enable. Empty body is 400. Not k2 db enable (that POSTs {}). Healthy second enable is a no-op — it does not rotate leftover recovery admin (use k2 hostmail rotate-admin). Needs the root helper /usr/local/libexec/k2-mail-helper: without it enable stops with 409 mail_helper_missing whose hint is the one root command (curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>). k2 hostmail status prints helper: installed | missing | not allowed by sudoers.",
+      "description": "Provision / start the hosted mail server. POSTs {\"hostname\":...} to /cli/mail/server/enable. Empty body is 400. Not k2 db enable (that POSTs {}). Healthy second enable is a no-op — it does not rotate leftover recovery admin (use k2 hostmail rotate-admin). Needs the root helper /usr/local/libexec/k2-root-helper: without it enable stops with 409 mail_helper_missing whose hint is the one root command (curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh | sudo bash -s -- --version <version>). k2 hostmail status prints helper: installed | missing | not allowed by sudoers.",
       "args": [],
       "flags": [
         {"name": "--hostname", "arg": "name", "description": "Mail hostname (e.g. mail.acme.dev). Required."},
@@ -35614,8 +35730,9 @@ domain) until `k2 hostmail enable` actually restarts the unit.
 
 Linux: `helper:` is the root door enable and cert restarts use —
 installed | missing | not allowed by sudoers. When it is not installed,
-`fix:` prints the one command for root to run on the box:
-  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>
+`fix:` prints the one command for root to run on the box (an admin SSH
+session, never a K2 terminal; `k2 root-helper install-command`):
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh | sudo bash -s -- --version <version>
 
 USAGE
   k2 hostmail status [flags]
@@ -36118,11 +36235,11 @@ SIGTERM, no config wipe, no data-store move, and not rotate-admin
 disable, enable actually restarts the unit. Hostname retarget is
 disable then enable.
 
-Needs the root helper /usr/local/libexec/k2-mail-helper (user k2 runs it
-with `sudo -n`; the agent never gets a root shell). Without it enable
-stops before any download with error mail_helper_missing, whose hint is
-the command root runs once per box:
-  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-mail-helper.sh | sudo bash -s -- --version <version>
+Needs the root helper /usr/local/libexec/k2-root-helper (user k2 runs it
+with `sudo -n`; the agent never gets a root shell; `k2 root-helper status`).
+Without it enable stops before any download with error mail_helper_missing,
+whose hint is the command an admin runs once per box:
+  curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh | sudo bash -s -- --version <version>
 Never create /usr/local/bin/stalwart by hand.
 
 Enable never changes an installed Stalwart version. When the installed
@@ -42627,6 +42744,10 @@ EOF
     sidecar)
         # k2 sidecar v1 (prd-k2-sidecar-cli-v1).
         shift; cmd_sidecar "$@"
+        ;;
+    root-helper)
+        # K2's one root door on Linux (prd-k2-root-helper-v1 §8.3).
+        shift; cmd_root_helper "$@"
         ;;
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).

@@ -199,8 +199,15 @@ impl SystemOps for RealSystemOps {
             .unwrap_or_default()
     }
 
+    /// The root helper's `pg` namespace when it speaks protocol ≥ 3, else
+    /// the legacy `k2-pg-helper` (one train). Both through the absolute
+    /// `/usr/bin/sudo` (RH12: never a PATH lookup).
     fn run_helper(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
-        let mut cmd = std::process::Command::new("sudo");
+        if crate::root_helper::state().usable(crate::root_helper::PG_MIN_PROTOCOL) {
+            let argv = crate::root_helper::pg_argv(args)?;
+            return crate::root_helper::call_text(&argv, stdin);
+        }
+        let mut cmd = std::process::Command::new(k2_root_proto::paths::SUDO_PATH);
         cmd.args(["-n", HELPER_PATH]).args(args);
         let out = if let Some(bytes) = stdin {
             cmd.stdin(std::process::Stdio::piped())

@@ -5473,6 +5473,51 @@ async fn handle_one_request(
         // go through the capped reader (over the cap → 413, socket closes).
         // Auth in the handler: owner token / Connect login = full; a
         // passport (agent OR K2 shell tab) = read-only.
+        // Root helper (prd-k2-root-helper-v1 §8.3): status is a Member read
+        // (agents too, is_agent_verb); update/rollback are POST-only Admin
+        // steps the handler refuses for any passport. Capped bodies.
+        p if crate::root_helper_routes::is_route(p) => {
+            let post_row = crate::root_helper_routes::is_post_route(p);
+            if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::root_helper_routes::MAX_BODY,
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::root_helper_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::root_helper_routes::handle(&p_owned, caller, &body_bytes, &params)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::llm_accounts_routes::is_route(p) => {
             let post_row = crate::llm_accounts_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

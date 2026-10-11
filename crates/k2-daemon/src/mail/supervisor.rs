@@ -42,7 +42,19 @@ use super::jmap::StalwartClient;
 use super::secrets::{generate_secret, FileSecretStore, SecretStore};
 use super::sysops::{RealSystemOps, SystemOps};
 
-// ── The pin ─────────────────────────────────────────────────────────────
+// ── The pin, the on-box layout, the unit + drop-in ──────────────────────
+//
+// One table and one set of templates for the daemon AND the root helper:
+// they live in `k2-root-proto` (prd-k2-root-helper-v1 §5.1), so a daemon
+// and a helper of one release can never disagree. Re-exported here so the
+// supervisor, upgrade and the legacy `k2-mail-helper` keep their paths.
+
+pub use k2_root_proto::paths::{
+    STALWART_BIN, STALWART_BIN_STAGING, STALWART_CONFIG, STALWART_CONFIG_DIR, STALWART_DATA_DIR,
+    STALWART_DROPIN_DIR, STALWART_DROPIN_PATH, STALWART_LOG_DIR, STALWART_SNAPSHOT_DIR,
+    STALWART_SNAPSHOT_MARKER, STALWART_UNIT, STALWART_UNIT_PATH, STALWART_USER,
+};
+pub use k2_root_proto::templates::{hardening_dropin, systemd_unit};
 
 /// The PINNED Stalwart version the supervisor installs and manages.
 ///
@@ -246,30 +258,7 @@ pub fn tarball_url_for(version: &str, triple: &str) -> String {
     )
 }
 
-// ── On-disk / on-box layout ─────────────────────────────────────────────
-
-pub const STALWART_BIN: &str = "/usr/local/bin/stalwart";
-pub const STALWART_CONFIG_DIR: &str = "/etc/stalwart";
-pub const STALWART_CONFIG: &str = "/etc/stalwart/config.json";
-pub const STALWART_DATA_DIR: &str = "/var/lib/stalwart";
-pub const STALWART_LOG_DIR: &str = "/var/log/stalwart";
-pub const STALWART_USER: &str = "stalwart";
-pub const STALWART_UNIT: &str = "stalwart";
-pub const STALWART_UNIT_PATH: &str = "/etc/systemd/system/stalwart.service";
-pub const STALWART_DROPIN_DIR: &str = "/etc/systemd/system/stalwart.service.d";
-pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k2-hardening.conf";
-/// `k2 hostmail upgrade`'s pre-upgrade snapshot (helper `snapshot-data`):
-/// `data/` = a copy of [`STALWART_DATA_DIR`], `config/` = a copy of
-/// [`STALWART_CONFIG_DIR`], plus [`STALWART_SNAPSHOT_MARKER`] written
-/// last. Fixed path, root 0700; kept after a successful upgrade until the
-/// next upgrade replaces it.
-pub const STALWART_SNAPSHOT_DIR: &str = "/var/lib/stalwart.k2-snap";
-/// Written LAST inside the snapshot; no marker = incomplete, and restore
-/// refuses it.
-pub const STALWART_SNAPSHOT_MARKER: &str = "K2-SNAPSHOT.json";
-/// Where `install-bin` stages the binary before the atomic rename onto
-/// [`STALWART_BIN`] (never a truncate-in-place of a live binary).
-pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
+// ── On-disk / on-box layout (paths re-exported above) ───────────────────
 
 /// Stalwart's bootstrap-mode listener (plain HTTP `http-recovery` on
 /// :8080 — ✔ live-verified). After Bootstrap/set + restart the
@@ -314,59 +303,6 @@ pub const STALWART_MGMT_URL: &str = "http://127.0.0.1:8180";
 /// a remote Linux daemon must see the REAL page).
 pub fn mail_supported() -> bool {
     cfg!(target_os = "linux")
-}
-
-// ── Systemd unit + §10 hardening drop-in ────────────────────────────────
-
-/// The service unit K2 writes (upstream ships none for our layout).
-/// `recovery_admin_password`: present during install (deterministic
-/// bootstrap credential, ✔ live-verified `STALWART_RECOVERY_ADMIN`
-/// env form); the `recovery-off` step rewrites the unit WITHOUT it
-/// once the provisioned admin + ApiKey are vaulted, and rotates the
-/// bootstrap principal `admin` (the env credential AND that principal
-/// stay valid even in normal mode — verified — so leaving either would
-/// be a standing backdoor). The unit is written 0600 for exactly this
-/// reason. Hardening lives in the drop-in so the split mirrors PRD §10
-/// verbatim and a future unit rewrite can't silently drop it.
-pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
-    let env_line = match recovery_admin_password {
-        Some(pw) => format!("Environment=STALWART_RECOVERY_ADMIN=admin:{pw}\n"),
-        None => String::new(),
-    };
-    format!(
-        "[Unit]\n\
-         Description=Stalwart mail server (managed by the K2 Mail supervisor)\n\
-         After=network-online.target\n\
-         Wants=network-online.target\n\
-         \n\
-         [Service]\n\
-         Type=simple\n\
-         ExecStart={STALWART_BIN} --config {STALWART_CONFIG}\n\
-         User={STALWART_USER}\n\
-         Group={STALWART_USER}\n\
-         {env_line}\
-         StandardOutput=journal\n\
-         StandardError=journal\n\
-         \n\
-         [Install]\n\
-         WantedBy=multi-user.target\n"
-    )
-}
-
-/// PRD §10, verbatim — plus `/etc/stalwart` in ReadWritePaths:
-/// ✔ LIVE-VERIFIED the Bootstrap/set persists the DataStore config to
-/// that path AS THE stalwart USER (the first live attempt failed with
-/// `Permission denied (os error 13)` until the dir was writable).
-pub fn hardening_dropin() -> &'static str {
-    "[Service]\n\
-     ProtectSystem=strict\n\
-     ProtectHome=yes\n\
-     ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart\n\
-     NoNewPrivileges=yes\n\
-     PrivateTmp=yes\n\
-     CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n\
-     AmbientCapabilities=CAP_NET_BIND_SERVICE\n\
-     Restart=on-failure\n"
 }
 
 /// The default domain the mail hostname implies — Stalwart's guided
@@ -766,6 +702,15 @@ pub fn mail_helper_state() -> HelperState {
     {
         RealSystemOps.mail_helper_state()
     }
+}
+
+/// The legacy `k2-mail-helper` alone (root-helper status shows it next to
+/// the root helper). Never probes in tests.
+pub fn mail_helper_legacy_state() -> HelperState {
+    if cfg!(test) || !mail_supported() {
+        return HelperState::Missing;
+    }
+    helper::probe_state()
 }
 
 /// [`mail_helper_state`] cached for 30 s — for `GET /cli/mail/status`,

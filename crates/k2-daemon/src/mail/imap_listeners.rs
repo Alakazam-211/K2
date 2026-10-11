@@ -580,6 +580,9 @@ impl RestartDoors for LiveDoors {
         match path {
             RestartPath::MailHelper => supervisor::restart_stalwart_and_wait(self.why),
             RestartPath::PlainSudo => {
+                // RH14: kept one train, but reported (root-helper status).
+                crate::root_helper::plain_sudo_restart_used()
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
                 let out = std::process::Command::new(super::helper::SUDO_PATH)
                     .args(["-n", SYSTEMCTL_PATH, "restart", supervisor::STALWART_UNIT])
                     .stdin(std::process::Stdio::null())

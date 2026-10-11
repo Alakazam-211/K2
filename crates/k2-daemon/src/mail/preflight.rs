@@ -138,7 +138,7 @@ pub fn https_listener_bind(port_plan: &str) -> &'static str {
 }
 
 const MIN_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB (soft)
-const HELPER_LABEL: &str = "Mail root helper (k2-mail-helper) installed and allowed";
+const HELPER_LABEL: &str = "Root helper (k2-root-helper) installed and allowed";
 const MIN_RAM_BYTES: u64 = 1024 * 1024 * 1024; // 1 GB (soft)
 
 /// Run the §5.1 checklist against `env`. Pure decision logic — every

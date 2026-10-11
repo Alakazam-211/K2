@@ -59,6 +59,10 @@ airgap = ["k2-core/airgap"]
 # into k2so-core (the `session_stream` feature flag was retired in
 # 0.39.0e).
 k2-core = { path = "../k2-core" }
+# The root-helper contract (paths, verb catalog, Stalwart pin table,
+# templates, signed-build check). The helper binary itself is its own
+# crate (k2-root-helper) and is never linked here.
+k2-root-proto = { path = "../k2-root-proto" }
 
 # Cryptographic randomness for the per-boot hook auth token.
 getrandom = "0.2"
@@ -275,3 +279,5 @@ vte = { version = "0.15", features = ["std", "ansi"] }
 # (a separate crate that never links k2-core) against the in-process daemon.
 k2-node = { path = "../k2-node" }
 k2-node-proto = { path = "../k2-node-proto" }
+# Root-helper heal tests sign fixture builds with the TEST key.
+k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }

@@ -194,31 +194,40 @@ fn open_log(project_id: &str, name: &str) -> Result<std::fs::File, String> {
         .map_err(|e| format!("open {}: {e}", path.display()))
 }
 
-fn pump_stdio(mut stdout: impl Read + Send + 'static, mut stderr: impl Read + Send + 'static, path: PathBuf) {
-    let path_err = path.clone();
-    thread::Builder::new()
-        .name("publish-log-out".into())
-        .spawn(move || copy_rotating(&mut stdout, &path))
-        .ok();
-    thread::Builder::new()
-        .name("publish-log-err".into())
-        .spawn(move || copy_rotating(&mut stderr, &path_err))
-        .ok();
-}
-
-fn copy_rotating(src: &mut impl Read, path: &Path) {
-    let mut buf = [0u8; 4096];
-    loop {
-        let n = match src.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        rotate_if_needed(path);
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = f.write_all(&buf[..n]);
+/// Rotate a log a LIVE service writes into directly (runtime stage H):
+/// copy it to `<name>.log.1`, then truncate it in place. The service keeps
+/// its `O_APPEND` descriptor, so its next write lands at the new end — a
+/// rename (as [`rotate_if_needed`] does before a spawn) would leave it
+/// writing into the backup forever. Lines written between the copy and
+/// the truncate are lost; that is the price of not owning a pipe.
+fn rotate_in_place_if_needed(path: &Path) {
+    let Ok(meta) = fs::metadata(path) else { return };
+    if meta.len() <= LOG_CAP {
+        return;
+    }
+    let bak = path.with_extension("log.1");
+    if fs::copy(path, &bak).is_ok() {
+        if let Ok(f) = OpenOptions::new().write(true).open(path) {
+            let _ = f.set_len(0);
         }
     }
+}
+
+/// The service's stdout and stderr: the log file itself, opened
+/// `O_APPEND`. Before stage H these were pipes pumped by daemon threads,
+/// so a daemon exit (restart, hand-off) closed them and the service's next
+/// write hit `EPIPE`/`SIGPIPE` — published services and skin gateway
+/// helpers died with the daemon even when nothing killed them.
+fn log_stdio(path: &Path) -> Result<(Stdio, Stdio), String> {
+    let f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let f2 = f
+        .try_clone()
+        .map_err(|e| format!("clone log handle: {e}"))?;
+    Ok((Stdio::from(f), Stdio::from(f2)))
 }
 
 pub fn read_log_tail(project_id: &str, name: &str, lines: usize) -> String {
@@ -342,9 +351,8 @@ fn spawn_prepared(
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     let _ = open_log(project_id, name)?;
     let log_p = log_path(project_id, name);
-    c.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let (out, err) = log_stdio(&log_p)?;
+    c.stdin(Stdio::null()).stdout(out).stderr(err);
     enrich_path(&mut c);
 
     #[cfg(unix)]
@@ -358,20 +366,14 @@ fn spawn_prepared(
                 Ok(())
             });
         }
-        let mut child = c.spawn().map_err(|e| format!("spawn: {e}"))?;
+        let child = c.spawn().map_err(|e| format!("spawn: {e}"))?;
         let pid = child.id() as i32;
-        if let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) {
-            pump_stdio(out, err, log_p);
-        }
         Ok((child, pid, None))
     }
     #[cfg(windows)]
     {
-        let (mut child, job) = win_job::spawn_in_job(&mut c)?;
+        let (child, job) = win_job::spawn_in_job(&mut c)?;
         let pid = child.id() as i32;
-        if let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) {
-            pump_stdio(out, err, log_p);
-        }
         Ok((child, pid, Some(job)))
     }
     #[cfg(not(any(unix, windows)))]
@@ -761,7 +763,13 @@ fn adopt_reattach(project_id: &str, name: &str, port: u16, pid: i32) -> Arc<Live
 }
 
 fn wait_child(entry: Arc<LiveChild>) {
+    let log = log_path(&entry.project_id, &entry.name);
+    let mut ticks = 0u32;
     loop {
+        ticks = ticks.wrapping_add(1);
+        if ticks % 25 == 0 {
+            rotate_in_place_if_needed(&log);
+        }
         let status = {
             let mut g = entry.child.lock().unwrap_or_else(|e| e.into_inner());
             match g.as_mut() {
@@ -792,7 +800,13 @@ fn entry_exit_fallback() -> i64 {
 }
 
 fn poll_foreign(entry: Arc<LiveChild>) {
+    let log = log_path(&entry.project_id, &entry.name);
+    let mut ticks = 0u32;
     loop {
+        ticks = ticks.wrapping_add(1);
+        if ticks % 10 == 0 {
+            rotate_in_place_if_needed(&log);
+        }
         if entry.stop_requested.load(Ordering::SeqCst) {
             return;
         }
@@ -1681,7 +1695,12 @@ mod win_job {
 /// `k2-daemon --skin-gateway` orphans listening forever (two from the
 /// 2026-09-12 run were killed by hand). Production never calls this —
 /// helpers are meant to outlive a daemon restart (`boot_desired_running`
-/// reattaches by pid + port).
+/// reattaches by pid + port). That holds on macOS (launchd kills only the
+/// daemon) and, since runtime stage H, on Linux where the unit carries the
+/// root helper's `k2-handoff.conf` drop-in (`KillMode=process`; before it,
+/// `KillMode=control-group` killed every helper with the daemon — AR3) and
+/// the helpers log straight into their file (a pumped pipe died with the
+/// daemon and took the helper with it on its next write).
 #[allow(dead_code)] // lib-only caller (integration harness teardown); the bin target never calls it
 pub fn kill_all_live_children() {
     let entries: Vec<Arc<LiveChild>> = {

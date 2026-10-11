@@ -187,6 +187,8 @@ pub mod compute_admin;
 pub mod compute_advertise;
 pub mod compute_local;
 pub mod compute_routes;
+/// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
+pub mod apps;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.
 pub mod vault;

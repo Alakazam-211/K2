@@ -172,6 +172,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/api-keys/hire-ceiling-options", Owner),
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
+    // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
+    // (own workspace + "Allow this agent to manage Apps") in the handler.
+    post("/cli/app/build", Member),
+    post("/cli/app/validate", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),
     post("/cli/auth/logout", Member),

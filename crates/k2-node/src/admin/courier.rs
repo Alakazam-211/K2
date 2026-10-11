@@ -100,10 +100,11 @@ pub async fn handle(node: Arc<Node>, cmd: SignedCommand) -> AdminResult {
 /// Verbs the node answers itself (read + job housekeeping).
 async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, AdminRefusal> {
     match verb {
-        _ => {
-            let _ = (node, args);
-            Err(AdminRefusal::new(code::VERB_NOT_ALLOWED, "verb is not built on this node yet"))
+        "policy.show" => {
+            super::exec::no_args(args)?;
+            Ok(super::policy::show(node.layout(), &node.facts, &node.session_narrow()))
         }
+        _ => Err(AdminRefusal::new(code::VERB_NOT_ALLOWED, "verb is not built on this node yet")),
     }
 }
 

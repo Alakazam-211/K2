@@ -3355,4 +3355,54 @@ mod tests {
         assert!(effects(&ops).is_empty(), "{:?}", effects(&ops));
         clean_row();
     }
+
+    /// The root helper is a provider of the upgrade verbs: its `version`
+    /// answer (protocol 4, the proto table's `stalwartUpgradeFrom`) passes
+    /// the same check the legacy mail helper's protocol 3 does, for every
+    /// version the box may be moving from.
+    #[test]
+    fn root_helper_version_answer_satisfies_the_upgrade_check() {
+        use k2_root_proto::stalwart as proto;
+        assert!(k2_root_proto::version::PROTOCOL >= UPGRADE_MIN_PROTOCOL);
+        assert!(k2_root_proto::version::UPGRADE_MIN_PROTOCOL >= UPGRADE_MIN_PROTOCOL);
+        let v = serde_json::json!({
+            "helper": "k2-root-helper",
+            "protocol": k2_root_proto::version::PROTOCOL,
+            "stalwartPin": proto::STALWART_PINNED_VERSION,
+            "stalwartPinSha256": proto::artifact_for_arch(ARCH).unwrap().sha256,
+            "stalwartPrevious": proto::STALWART_PREVIOUS_VERSION,
+            "stalwartUpgradeFrom": proto::STALWART_UPGRADE_FROM
+                .iter()
+                .map(|r| serde_json::json!({
+                    "version": r.version,
+                    "sha256": proto::upgrade_from_artifact(r.version, ARCH).unwrap().sha256,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        for from in [STALWART_PREVIOUS_VERSION, STALWART_OLDER_VERSION] {
+            let prev = supervisor::upgrade_from_artifact(from, ARCH).unwrap();
+            assert_eq!(
+                helper_mismatch(
+                    &v,
+                    Some(artifact_for_arch(ARCH).unwrap()),
+                    Some(from),
+                    Some(prev)
+                ),
+                None,
+                "root helper answer refused for an upgrade from {from}"
+            );
+        }
+        // A root helper below the upgrade floor is refused like a
+        // protocol-2 mail helper would be.
+        let mut low = v.clone();
+        low["protocol"] = serde_json::json!(2);
+        let prev = supervisor::upgrade_from_artifact(STALWART_OLDER_VERSION, ARCH).unwrap();
+        assert!(helper_mismatch(
+            &low,
+            Some(artifact_for_arch(ARCH).unwrap()),
+            Some(STALWART_OLDER_VERSION),
+            Some(prev)
+        )
+        .is_some());
+    }
 }

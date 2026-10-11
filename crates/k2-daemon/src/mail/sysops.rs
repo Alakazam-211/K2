@@ -236,7 +236,8 @@ impl SystemOps for RealSystemOps {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
-    /// The root helper first (any protocol ≥ 2 serves mail), then the
+    /// The root helper first (protocol ≥ [`crate::root_helper::UPGRADE_MIN_PROTOCOL`]:
+    /// it accepts every upgrade source, like mail helper protocol 3), then the
     /// legacy mail helper.
     fn mail_helper_state(&self) -> helper::HelperState {
         if crate::root_helper::state().usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {

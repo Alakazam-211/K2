@@ -777,14 +777,38 @@ fn install_bin_accepts_only_pinned_tarballs() {
         sha256: "0".repeat(64).leak(),
     };
     assert_eq!(
-        crate::mail::match_archive(tarball, &pin, &other).unwrap(),
+        crate::mail::match_archive(tarball, &pin, &[("0.0.1", &other)]).unwrap(),
         k2_root_proto::stalwart::STALWART_PINNED_VERSION
     );
+    // Every upgrade source is accepted, not only the first (0.16.25 moves
+    // from 0.16.20 OR 0.16.10; the rollback reinstalls whichever it was).
     assert_eq!(
-        crate::mail::match_archive(tarball, &other, &pin).unwrap(),
-        k2_root_proto::stalwart::STALWART_PREVIOUS_VERSION
+        crate::mail::match_archive(tarball, &other, &[("0.0.2", &other), ("0.0.1", &pin)]).unwrap(),
+        "0.0.1"
     );
-    assert!(crate::mail::match_archive(tarball, &other, &other).is_err());
+    assert!(crate::mail::match_archive(tarball, &other, &[("0.0.1", &other)]).is_err());
+    assert!(crate::mail::match_archive(tarball, &other, &[]).is_err());
+}
+
+#[test]
+fn install_bin_sources_are_the_proto_upgrade_table() {
+    use k2_root_proto::stalwart::{
+        upgrade_from_artifact, STALWART_OLDER_VERSION, STALWART_PREVIOUS_VERSION,
+        STALWART_UPGRADE_FROM,
+    };
+    for arch in ["x86_64", "aarch64"] {
+        let got = crate::mail::upgrade_sources_for_arch(arch).unwrap();
+        assert_eq!(got.len(), STALWART_UPGRADE_FROM.len());
+        let versions: Vec<&str> = got.iter().map(|(v, _)| *v).collect();
+        assert_eq!(
+            versions,
+            vec![STALWART_PREVIOUS_VERSION, STALWART_OLDER_VERSION]
+        );
+        for (v, a) in &got {
+            assert_eq!(a.sha256, upgrade_from_artifact(v, arch).unwrap().sha256);
+        }
+    }
+    assert!(crate::mail::upgrade_sources_for_arch("riscv64").is_err());
 }
 
 #[test]

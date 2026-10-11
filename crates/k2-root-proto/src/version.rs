@@ -15,8 +15,13 @@ use std::fmt;
 /// What this build of the helper speaks.
 pub const PROTOCOL: u32 = 4;
 
-/// `k2 hostmail upgrade` (protocol-2 mail verbs).
-pub const UPGRADE_MIN_PROTOCOL: u32 = 2;
+/// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
+/// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
+/// must accept every upgrade source and `version` must list them
+/// (`stalwartUpgradeFrom`) — the legacy mail helper's protocol 3. Every
+/// root helper that does so answers 4 (the first root-helper build ships
+/// with this table).
+pub const UPGRADE_MIN_PROTOCOL: u32 = 4;
 /// `helper self-update` / `self-rollback`.
 pub const SELF_UPDATE_MIN_PROTOCOL: u32 = 3;
 /// Backup B2 verbs (`backup …`).

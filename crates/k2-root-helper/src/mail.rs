@@ -9,8 +9,8 @@ use std::path::{Component, Path};
 
 use k2_root_proto::paths::*;
 use k2_root_proto::stalwart::{
-    artifact_for_arch, previous_artifact_for_arch, StalwartArtifact, STALWART_PINNED_VERSION,
-    STALWART_PREVIOUS_VERSION,
+    artifact_for_arch, upgrade_from_artifact, StalwartArtifact, STALWART_PINNED_VERSION,
+    STALWART_UPGRADE_FROM,
 };
 use k2_root_proto::templates::{hardening_dropin, recovery_pw_ok, systemd_unit};
 use k2_root_proto::verbs::{ChownTarget, MailSystemctl, MkdirTarget, RemoveTarget};
@@ -206,16 +206,34 @@ fn sha256_hex(bytes: &[u8]) -> String {
 pub fn match_archive(
     bytes: &[u8],
     pin: &StalwartArtifact,
-    previous: &StalwartArtifact,
+    sources: &[(&'static str, &StalwartArtifact)],
 ) -> HResult<&'static str> {
     let got = sha256_hex(bytes);
     if got.eq_ignore_ascii_case(pin.sha256) {
         return Ok(STALWART_PINNED_VERSION);
     }
-    if got.eq_ignore_ascii_case(previous.sha256) {
-        return Ok(STALWART_PREVIOUS_VERSION);
+    for (version, art) in sources {
+        if got.eq_ignore_ascii_case(art.sha256) {
+            return Ok(version);
+        }
     }
     Err(Fail::argv("install-bin: tarball sha256 mismatch"))
+}
+
+/// The pin's upgrade sources for `arch` ([`STALWART_UPGRADE_FROM`], newest
+/// first): what `install-bin` accepts besides the pin, so a failed
+/// `k2 hostmail upgrade` can reinstall exactly the version the box had.
+pub fn upgrade_sources_for_arch(
+    arch: &str,
+) -> HResult<Vec<(&'static str, &'static StalwartArtifact)>> {
+    let mut sources = Vec::with_capacity(STALWART_UPGRADE_FROM.len());
+    for rel in STALWART_UPGRADE_FROM {
+        sources.push((
+            rel.version,
+            upgrade_from_artifact(rel.version, arch).map_err(Fail::argv)?,
+        ));
+    }
+    Ok(sources)
 }
 
 fn exact_stalwart_name(path: &Path) -> bool {
@@ -262,12 +280,13 @@ pub fn extract_stalwart_member(archive: &[u8]) -> HResult<Vec<u8>> {
     Err(Fail::argv("install-bin: stalwart member missing"))
 }
 
-/// Stdin tarball; sha must equal this build's pin or previous; extracts
+/// Stdin tarball; sha must equal this build's pin or one of its upgrade
+/// sources ([`STALWART_UPGRADE_FROM`]); extracts
 /// member `stalwart` only; stage + rename (never truncate in place).
 pub fn install_bin(ctx: &Ctx, stdin: &[u8]) -> HResult<serde_json::Value> {
     let pin = artifact_for_arch(ctx.arch).map_err(Fail::argv)?;
-    let prev = previous_artifact_for_arch(ctx.arch).map_err(Fail::argv)?;
-    let version = match_archive(stdin, pin, prev)?;
+    let sources = upgrade_sources_for_arch(ctx.arch)?;
+    let version = match_archive(stdin, pin, &sources)?;
     let member = extract_stalwart_member(stdin)?;
     let (d, name) = parent_dir(ctx, STALWART_BIN)?;
     match d.kind(name).map_err(|e| Fail::io_err("stat", e))? {

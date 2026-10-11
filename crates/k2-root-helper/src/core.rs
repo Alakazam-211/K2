@@ -9,8 +9,8 @@ use k2_root_proto::keys::trusted_keys;
 use k2_root_proto::paths::*;
 use k2_root_proto::sig::{decode_payload, verify_signed_build};
 use k2_root_proto::stalwart::{
-    artifact_for_arch, previous_artifact_for_arch, STALWART_PINNED_VERSION,
-    STALWART_PREVIOUS_VERSION,
+    artifact_for_arch, previous_artifact_for_arch, upgrade_from_artifact, STALWART_PINNED_VERSION,
+    STALWART_PREVIOUS_VERSION, STALWART_UPGRADE_FROM,
 };
 use k2_root_proto::verbs::Legacy;
 use k2_root_proto::version::{Semver, HELPER_NAME, PROTOCOL};
@@ -84,9 +84,9 @@ fn save_state(ctx: &Ctx, s: &State) -> HResult<()> {
         .map_err(|e| Fail::io_err("write state", e))
 }
 
-/// `helper version` JSON (§7.1). Also carries the protocol-2 field names
-/// (`protocol`, `stalwartPin*`) so `k2 hostmail upgrade`'s check reads it
-/// unchanged.
+/// `helper version` JSON (§7.1). Also carries the legacy mail helper's
+/// field names (`protocol`, `stalwartPin*`, `stalwartUpgradeFrom`) so
+/// `k2 hostmail upgrade`'s check reads it unchanged.
 pub fn version_json(ctx: &Ctx) -> serde_json::Value {
     let keys: Vec<String> = trusted_keys(ctx.test_keys)
         .iter()
@@ -116,6 +116,16 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "stalwartPinSha256": artifact_for_arch(ctx.arch).map(|a| a.sha256).ok(),
         "stalwartPrevious": STALWART_PREVIOUS_VERSION,
         "stalwartPreviousSha256": previous_artifact_for_arch(ctx.arch).map(|a| a.sha256).ok(),
+        // Every version `install-bin` accepts besides the pin (the
+        // upgrade sources; a rollback reinstalls whichever the box had).
+        // Same shape as the legacy mail helper's protocol-3 field.
+        "stalwartUpgradeFrom": STALWART_UPGRADE_FROM
+            .iter()
+            .map(|rel| serde_json::json!({
+                "version": rel.version,
+                "sha256": upgrade_from_artifact(rel.version, ctx.arch).map(|a| a.sha256).ok(),
+            }))
+            .collect::<Vec<_>>(),
         "refused": refused,
         "daemons": daemons,
         "build": crate::BUILD_MARKER,

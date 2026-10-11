@@ -172,8 +172,29 @@ req daemon keep kek get
 ok "two-phase KEK rotation; store root 0700 / 0600"
 
 echo "== mail verbs at parity =="
-STALWART_TGZ=/tmp/stalwart.tgz
-curl -fsSL "https://github.com/Alakazam-211/stalwart/releases/download/v0.16.20/stalwart-x86_64-unknown-linux-gnu.tar.gz" -o "$STALWART_TGZ"
+# The real tarballs from the fork mirror: the pin (0.16.25) and both
+# upgrade sources (0.16.20, 0.16.10). The helper checks each by sha256.
+STALWART_URL=https://github.com/Alakazam-211/stalwart/releases/download
+STALWART_TGZ=/tmp/stalwart-0.16.25.tgz
+curl -fsSL "$STALWART_URL/v0.16.25/stalwart-x86_64-unknown-linux-gnu.tar.gz" -o "$STALWART_TGZ"
+curl -fsSL "$STALWART_URL/v0.16.20/stalwart-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/stalwart-0.16.20.tgz
+curl -fsSL "$STALWART_URL/v0.16.10/stalwart-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/stalwart-0.16.10.tgz
+req agent helper version
+expect_rc 0 "helper version"
+python3 - "$OUT" <<'PY' || fail "version json: pin 0.16.25, upgrade sources 0.16.20 + 0.16.10"
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v["protocol"] >= 4, v["protocol"]
+assert v["stalwartPin"] == "0.16.25", v["stalwartPin"]
+assert v["stalwartPinSha256"] == "8ba9cc0ea2795121df5c1264af41e82353c5a3d6860161c4ab70817906d912d3"
+assert v["stalwartPrevious"] == "0.16.20", v["stalwartPrevious"]
+src = [(e["version"], e["sha256"]) for e in v["stalwartUpgradeFrom"]]
+assert src == [
+    ("0.16.20", "55184f166f89a0918c6523bb70be300370b63934357731b199dc26a12ca15abf"),
+    ("0.16.10", "3ec4ab7eff49f61280f2fe2e4f9645ce5308d1840286ef0c0437524f92ac6a33"),
+], src
+PY
+ok "version: pin 0.16.25, stalwartUpgradeFrom 0.16.20 + 0.16.10"
 for v in "mail ensure-user" "mail mkdir config" "mail mkdir data" "mail mkdir log" "mail mkdir dropin-dir" \
 	"mail chown config" "mail chown data" "mail chown log" "mail render-dropin" "mail systemctl daemon-reload"; do
 	# shellcheck disable=SC2086
@@ -198,6 +219,35 @@ grep -q '^ProtectSystem=strict$' /etc/systemd/system/stalwart.service.d/k2-harde
 id -u stalwart >/dev/null || fail "stalwart user"
 [ "$(stat -c '%U' /var/lib/stalwart)" = stalwart ] || fail "chown data"
 ok "ensure-user/mkdir/chown/render/install-bin; render-unit is daemon-only"
+
+echo "== Stalwart upgrade path through the root helper (real tarballs) =="
+stalwart_v() { /usr/local/bin/stalwart --version 2>/dev/null | grep -o '0\.16\.[0-9]*' | head -n1; }
+for from in 0.16.20 0.16.10; do
+	# The box runs an upgrade source …
+	req agent @/tmp/stalwart-$from.tgz mail install-bin
+	expect_rc 0 "install-bin upgrade source $from"
+	grep -q "\"installed\": *\"$from\"" "$OUT" || fail "install-bin $from reported $(cat "$OUT")"
+	[ "$(stalwart_v)" = "$from" ] || fail "binary is not $from ($(stalwart_v))"
+	# … the upgrade snapshots (daemon-only), installs the pin …
+	req daemon mail systemctl stop
+	expect_rc 0 "stop before snapshot ($from)"
+	req daemon mail snapshot-data
+	expect_rc 0 "snapshot before upgrade from $from"
+	req agent @"$STALWART_TGZ" mail install-bin
+	expect_rc 0 "install-bin pin over $from"
+	grep -q '"installed": *"0.16.25"' "$OUT" || fail "pin install reported $(cat "$OUT")"
+	[ "$(stalwart_v)" = 0.16.25 ] || fail "binary is not 0.16.25 ($(stalwart_v))"
+	# … and a failed health check rolls back to exactly what it had.
+	req agent @/tmp/stalwart-$from.tgz mail install-bin
+	expect_rc 0 "rollback install-bin $from"
+	[ "$(stalwart_v)" = "$from" ] || fail "rollback binary is not $from ($(stalwart_v))"
+	req daemon mail restore-data
+	expect_rc 0 "restore after rollback to $from"
+done
+req agent @"$STALWART_TGZ" mail install-bin
+expect_rc 0 "install-bin pin (final)"
+[ "$(stalwart_v)" = 0.16.25 ] || fail "final binary is not 0.16.25"
+ok "upgrade 0.16.20 → 0.16.25 and 0.16.10 → 0.16.25 with rollback to each, real tarballs"
 req agent mail usage
 expect_rc 0 "usage"
 grep -q '"freeBytes"' "$OUT" || fail "usage json"

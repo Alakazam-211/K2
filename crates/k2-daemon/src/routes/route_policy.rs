@@ -999,6 +999,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/gardens", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),
+    // Static review of a received Garden bundle or folder (Rosson
+    // 2026-10-11: importing a Garden is an agent workflow). Reads only.
+    get("/cli/zen/inspect", Member),
     post("/cli/zen/lib/fetch", Member),
     get("/cli/zen/lib/file", Member),
     get("/cli/zen/news", Member),

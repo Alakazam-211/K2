@@ -5341,8 +5341,6 @@ dependencies = [
 [[package]]
 name = "pg_query"
 version = "5.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f20d9277657a4701b777babcd0ac0428dd38e1fdee17c8410ee6328897a3cd6a"
 dependencies = [
  "bindgen 0.66.1",
  "cc",

@@ -446,6 +446,11 @@ impl ZenFiles {
                 let kept = self.last_good(name).map(|(_, kb, _)| kb.hash);
                 if kept.as_deref() != Some(b.hash.as_str()) {
                     self.write_last_good(name, m, b)?;
+                    // S9 (AR23): the new last-good version joins the deploy audit.
+                    crate::deploy::widget_events::emit(crate::deploy::widget_events::WidgetEvent::LastGood {
+                        widget: name.to_string(),
+                        hash: b.hash.clone(),
+                    });
                 }
                 let read = widgets::read_folder(&self.widget_dir(name), &widget_label(name));
                 let code = widgets::code_files(&read.files);
@@ -609,6 +614,11 @@ impl ZenFiles {
             let p = dir.join(f);
             crate::fs_atomic::atomic_write(&p, b).map_err(|e| io(e, &p))?;
         }
+        crate::deploy::widget_events::emit(crate::deploy::widget_events::WidgetEvent::Reset {
+            widget: name.clone(),
+            restored: pick.name.clone(),
+            kept: kept.clone(),
+        });
         Ok(json!({ "ok": true, "file": widget_label(&name), "restored": pick.name, "snapshot": kept }))
     }
 
@@ -656,6 +666,10 @@ impl ZenFiles {
             written.push(f);
         }
         written.sort();
+        crate::deploy::widget_events::emit(crate::deploy::widget_events::WidgetEvent::Created {
+            widget: name.to_string(),
+            from: from.to_string(),
+        });
         Ok(json!({
             "ok": true,
             "name": name,

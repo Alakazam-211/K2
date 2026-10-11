@@ -1,0 +1,18 @@
+# K2 node admin: the root executor. It runs only commands signed by the
+# pinned controller (and, for privileged ones, the owner's approval key),
+# checked here, as root. prd-k2-node-admin-v1.
+[Unit]
+Description=K2 node admin executor (checks signed commands itself)
+Requires=k2-node-admin.socket
+After=k2-node-admin.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/k2-node admin serve --config-dir /etc/k2-node --state-dir /var/lib/k2-node-admin --home /var/lib/k2node --binary /usr/local/libexec/k2-node
+Restart=on-failure
+RestartSec=2
+UMask=0077
+WorkingDirectory=/
+
+[Install]
+Also=k2-node-admin.socket

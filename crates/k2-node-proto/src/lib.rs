@@ -13,11 +13,16 @@
 //! - [`canonical`]: canonical JSON for digests and signatures.
 //! - [`needs`]: toolchains and system packages a job declares.
 //! - [`ticket`]: one-click enroll tickets from the control plane.
+//! - [`admin`]: node admin — the signed command, classes, levels, the
+//!   verb catalog and refusal codes (prd-k2-node-admin-v1 §7). SSOT.
+//! - [`health`]: node health facts (§10.1).
 
+pub mod admin;
 pub mod canonical;
 pub mod crypto;
 pub mod env;
 pub mod frames;
+pub mod health;
 pub mod needs;
 pub mod pairing;
 pub mod refusal;

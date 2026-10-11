@@ -424,6 +424,22 @@ where
             Frame::TransferFailed(t) => node.hub.route_transfer((t.job_id.clone(), t.generation, crate::node::kind_name(t.kind)), crate::node::TransferEvent::Failed(t)),
             Frame::Cancel(c) => node.cancel(&c.job_id, c.generation, &c.reason),
             Frame::PolicyNarrow(p) => node.narrow(p.limits),
+            Frame::Admin(a) => {
+                let (n, t) = (node.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let r = crate::admin::courier::handle(n, a.cmd).await;
+                    let _ = t.send(Frame::AdminResult(r)).await;
+                });
+            }
+            Frame::AdminKeys(k) => {
+                let (n, t) = (node.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let r = crate::admin::courier::keys(n, k).await;
+                    let _ = t.send(Frame::AdminResult(r)).await;
+                });
+            }
+            Frame::UpdateOffer(o) => crate::admin::courier::update_offer(&node, &tx, o),
+            Frame::UpdateChunk(c) => crate::admin::courier::update_chunk(&node, &tx, c),
             Frame::Revoked(r) => {
                 node.revoke(&r.reason);
                 break SessionEnd::Revoked(r.reason);

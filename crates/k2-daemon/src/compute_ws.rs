@@ -227,7 +227,7 @@ pub async fn serve_enroll(stream: &mut TcpStream, ingress: Ingress) {
     let Some(HandshakeFrame::EnrollRequest(req)) = recv_hs(&mut ws, deadline).await else {
         return refuse(&mut ws, "protocol_error", "expected enroll_request").await;
     };
-    if req.protocol < frames::PROTOCOL {
+    if req.protocol < frames::MIN_PROTOCOL {
         return refuse(&mut ws, "node_upgrade_required", "this node is too old for this server; update k2-node").await;
     }
     let node_fp = match crypto::fingerprint_of_spki_pem(&req.node_public_key_pem) {
@@ -384,7 +384,7 @@ pub async fn serve_attach(stream: &mut TcpStream, ingress: Ingress) {
     let Some(HandshakeFrame::Hello(hello)) = recv_hs(&mut ws, deadline).await else {
         return refuse(&mut ws, "protocol_error", "expected hello").await;
     };
-    if hello.protocol < frames::PROTOCOL {
+    if hello.protocol < frames::MIN_PROTOCOL {
         return refuse(&mut ws, "node_upgrade_required", "update K2 on this computer (k2-node is too old)").await;
     }
     let row = {

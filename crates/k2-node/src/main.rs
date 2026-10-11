@@ -39,6 +39,14 @@ Install (root, once; the installers are inside this binary):
   k2-node check-home <dir>        (installer: refuse a home that runs K2)
   k2-node version
 
+Remote admin (prd-k2-node-admin-v1; root, at this machine):
+  sudo k2-node admin level off|policy|full      raise or lower remote admin (raising only here)
+  sudo k2-node admin pin                         pin the enrolled controller's key for the executor
+  sudo k2-node admin init [--level L] [--auto-update follow|off]   (installer)
+  sudo k2-node admin audit [--tail N] [--json]   check + print the root audit chain
+  k2-node admin status                           what the root executor says
+  k2-node admin serve --config-dir D --state-dir S --home H --binary B   (the root executor; started by systemd/launchd)
+
 Agents never run this: they use `k2 compute` on their K2 server."#;
 
 struct Args {
@@ -414,6 +422,63 @@ fn cmd_install_files(a: &Args) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_admin(a: &Args) -> Result<(), String> {
+    use k2_node::admin::{cli, config as acfg, exec::ExecPaths, units::AdminUnitParams};
+    use k2_node_proto::admin::Level;
+    let config_dir = a.get("config-dir").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_DIR));
+    let home = a.get("home").map(PathBuf::from).unwrap_or_else(default_home);
+    let state = a.get("state-dir").map(PathBuf::from).unwrap_or_else(acfg::default_state_dir);
+    let socket = a.get("socket").map(PathBuf::from).unwrap_or_else(acfg::default_socket);
+    let level_arg = |s: Option<&String>| -> Result<Level, String> {
+        let s = s.ok_or("give a level: off, policy or full")?;
+        Level::parse(s).ok_or_else(|| format!("{s:?}: use off, policy or full"))
+    };
+    match a.positional.get(1).map(String::as_str) {
+        Some("serve") => {
+            let binary = PathBuf::from(a.need("binary")?);
+            cli::serve(ExecPaths { config_dir, state_dir: state, home, binary }, &socket)
+        }
+        Some("init") => {
+            let level = match a.get("level") {
+                Some(l) => Some(Level::parse(l).ok_or_else(|| format!("--level {l:?}: use off, policy or full"))?),
+                None => None,
+            };
+            println!("{}", cli::init(&config_dir, &home, level, a.get("auto-update"))?);
+            Ok(())
+        }
+        Some("pin") => {
+            println!("{}", cli::pin(&config_dir, &home)?);
+            Ok(())
+        }
+        Some("level") => {
+            println!("{}", cli::level(&config_dir, level_arg(a.positional.get(2))?)?);
+            Ok(())
+        }
+        Some("audit") => {
+            let tail = a.get("tail").map(|t| t.parse::<usize>().map_err(|_| "--tail N")).transpose()?.unwrap_or(50);
+            cli::audit(&state, tail, a.has("--json"))
+        }
+        Some("status") => cli::status(&socket),
+        Some("install-files") => {
+            let gid = a.get("group").unwrap_or("k2node").to_string();
+            let p = AdminUnitParams {
+                binary: a.need("binary")?,
+                home: a.need("home")?,
+                config: a.need("config-dir")?,
+                state: a.need("state-dir")?,
+                socket: a.need("socket")?,
+                group: &gid,
+            };
+            for f in cli::install_files(a.need("os")?, &p, std::path::Path::new(a.need("out")?))? {
+                println!("{}", f.display());
+            }
+            Ok(())
+        }
+        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve")),
+        None => Err("admin: use level, pin, audit, status, serve".into()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
@@ -451,8 +516,10 @@ async fn main() -> ExitCode {
             }
         }
         Some("check-home") => cmd_check_home(&a),
+        Some("admin") => cmd_admin(&a),
         Some("version") => {
             println!("k2-node {NODE_VERSION} (protocol {})", k2_node_proto::PROTOCOL);
+            let _ = k2_node::build_marker();
             Ok(())
         }
         _ => {

@@ -19,8 +19,11 @@
 //! - [`sig`]: the trusted-comment format and the one signed-build check
 //!   both sides run (the helper before installing, the daemon before
 //!   spending a root call).
+//! - [`node_build`]: the same key and check for signed `k2-node` builds
+//!   (prd-k2-node-admin-v1 §8.1: node updates are root-class code).
 
 pub mod keys;
+pub mod node_build;
 pub mod paths;
 pub mod sig;
 pub mod stalwart;

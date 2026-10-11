@@ -86,7 +86,10 @@ struct Args {
 /// Test-harness opt-in: when this env is `1` the helper exits as soon as
 /// the process that spawned it is gone. Production never sets it — helpers
 /// are `setsid` session leaders MEANT to survive a daemon restart
-/// (`publish_runtime::boot_desired_running` reattaches by pid + port). Set
+/// (`publish_runtime::boot_desired_running` reattaches by pid + port). On
+/// Linux that needs the unit's stage-H drop-in (`KillMode=process`, root
+/// helper `daemon handoff-dropin`); under the old `KillMode=control-group`
+/// systemd killed the helper with the daemon (vs-live AR3). Set
 /// by the integration harnesses so a killed / timed-out test binary can
 /// not leave `k2-daemon --skin-gateway` orphans (2026-09-12: two survived
 /// a `cargo test` run and were killed by hand).

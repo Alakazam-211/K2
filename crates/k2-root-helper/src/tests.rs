@@ -27,6 +27,8 @@ struct ExecLog {
     main_pids: HashMap<String, i32>,
     /// prog → (status, stdout, stderr)
     answers: HashMap<String, ExecOut>,
+    /// `systemctl --user -M` fails (no user D-Bus), like a server image.
+    no_user_bus: bool,
 }
 
 #[derive(Clone, Default)]
@@ -37,7 +39,15 @@ impl Exec for FakeExec {
         let mut log = self.0.borrow_mut();
         log.calls
             .push((prog.to_string(), args.to_vec(), stdin.map(|b| b.to_vec())));
-        if prog == SYSTEMCTL && args.iter().any(|a| a == "MainPID") {
+        let via_runuser = prog == RUNUSER && args.iter().any(|a| a == SYSTEMCTL);
+        if (prog == SYSTEMCTL || via_runuser) && args.iter().any(|a| a == "MainPID") {
+            if prog == SYSTEMCTL && log.no_user_bus && args.iter().any(|a| a == "-M") {
+                return Ok(ExecOut {
+                    status: 1,
+                    stdout: vec![],
+                    stderr: b"Transport endpoint is not connected".to_vec(),
+                });
+            }
             let unit = args.last().cloned().unwrap_or_default();
             return Ok(match log.main_pids.get(&unit) {
                 Some(p) => ExecOut {
@@ -550,6 +560,40 @@ fn user_scope_units_are_asked_through_the_user_manager() {
             "k2-daemon.service"
         ]
     );
+}
+
+#[test]
+fn user_scope_falls_back_to_the_private_socket_without_a_user_bus() {
+    let t = box_root();
+    let toml = "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"user\"\n";
+    std::fs::write(t.p(DAEMON_TOML), toml).unwrap();
+    t.exec.0.borrow_mut().no_user_bus = true;
+    assert_eq!(snapshot_call(&t), exit::OK);
+    let calls = t.calls();
+    let fallback = calls
+        .iter()
+        .find(|(p, a, _)| p == RUNUSER && a.iter().any(|x| x == "MainPID"))
+        .expect("runuser fallback ran");
+    assert_eq!(
+        fallback.1,
+        vec![
+            "-u",
+            "k2",
+            "--",
+            "/usr/bin/env",
+            "XDG_RUNTIME_DIR=/run/user/1001",
+            "/usr/bin/systemctl",
+            "--user",
+            "show",
+            "-p",
+            "MainPID",
+            "--value",
+            "k2-daemon.service"
+        ]
+    );
+    // An agent is still refused through the fallback.
+    t.as_agent();
+    assert_eq!(snapshot_call(&t), exit::NOT_DAEMON);
 }
 
 // ── mail ────────────────────────────────────────────────────────────────

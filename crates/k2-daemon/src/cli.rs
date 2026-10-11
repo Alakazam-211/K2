@@ -158,6 +158,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     }
     // Companion C4 — `/cli/push/*` 405 guards for its POST-only
     // mutations reached via the GET chain (no push GET reads in V1).
+    if let Some(resp) = crate::notify_routes::dispatch(path, params) {
+        return resp;
+    }
     if let Some(resp) = crate::push_routes::dispatch(path, params) {
         return resp;
     }

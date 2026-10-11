@@ -1253,6 +1253,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0149_vault_manage",
             include_str!("../../drizzle_sql/0149_vault_manage.sql"),
         ),
+        // 0157 — Thread push prefs (prd-thread-push-notifications-v1 §4):
+        // notify_workspace_prefs + notify_server_prefs. A PLACEHOLDER
+        // number (TP18): 0150–0155 are reserved for later releases and
+        // 0156 is claimed twice, so the integrator renumbers this to the
+        // next number in release order when it lands.
+        (
+            "0157_notify_prefs",
+            include_str!("../../drizzle_sql/0157_notify_prefs.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1913,7 +1922,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0149_vault_manage",
+            last_name, "0157_notify_prefs",
             "unexpected last migration name: {last_name}"
         );
     }

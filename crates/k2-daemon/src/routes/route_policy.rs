@@ -583,6 +583,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/mail/status", Member),
     get("/cli/mail/wait", Member),
     both("/cli/mode", Member),
+    // prd-thread-push-notifications-v1 §5 (TP19): own row = any login;
+    // everyone + defaults = Admin. Other people's rows are Owner-only in
+    // the handler (Admins are read-only on people).
+    get("/cli/notify/admin", Admin),
+    post("/cli/notify/admin/set", Admin),
+    both("/cli/notify/prefs", Member),
     post("/cli/onboarding/adopt", Member),
     post("/cli/onboarding/agents-md-generate-enabled", Member),
     post("/cli/onboarding/harness-fanout-enabled", Member),
@@ -595,6 +601,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
     get("/cli/overlay/events", Member),
+    // Owner-linked accounts: Admins see the links; only the owner daemon
+    // token may change them (identity, never privilege).
+    split("/cli/owner/accounts", Admin, NoLogin),
     // Power-helper S1: Set up shows the admin dialog on the host, so
     // Admin (and the handler refuses anything but loopback).
     post("/cli/power/helper", Admin),

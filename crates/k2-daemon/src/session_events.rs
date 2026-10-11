@@ -477,6 +477,14 @@ pub enum SessionEvent {
     /// patching from a diff.
     ProjectsChanged {},
 
+    /// prd-thread-push-notifications-v1 §5.5 (TP21): someone's Thread push
+    /// prefs (or a workspace default, or the owner-linked accounts)
+    /// changed. APP-LEVEL refetch signal, deliberately payload-free so it
+    /// never reveals who changed what; clients refetch their own
+    /// `GET /cli/notify/prefs` (the admin page `GET /cli/notify/admin`).
+    /// Wire: `{ "kind": "notify_prefs_changed" }`.
+    NotifyPrefsChanged {},
+
     /// 0.40.38 — chat-history list mutated (session rename/pin/refresh).
     /// APP-LEVEL refetch signal (no payload — ProjectsChanged convention).
     /// Mirrored from HookEvent::SyncChatHistory / ChatRefreshed in
@@ -748,6 +756,7 @@ impl SessionEvent {
             SessionEvent::HeartbeatStateChanged { .. } => "heartbeat_state_changed",
             SessionEvent::HeartbeatRosterChanged { .. } => "heartbeat_roster_changed",
             SessionEvent::ProjectsChanged {} => "projects_changed",
+            SessionEvent::NotifyPrefsChanged {} => "notify_prefs_changed",
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",

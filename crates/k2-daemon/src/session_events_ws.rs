@@ -368,6 +368,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // no single workspace to scope to (the new project isn't in
         // any subscriber's `?path=` yet, by definition).
         SessionEvent::ProjectsChanged {} => None,
+        // Thread push prefs: app-level, payload-free refetch (TP21).
+        SessionEvent::NotifyPrefsChanged {} => None,
         // 0.40.38 — chat-history refetch signal: app-level, all subscribers.
         SessionEvent::ChatHistoryChanged {} => None,
         // 0.40.150 — token-usage ledger grew: app-level refetch signal
@@ -766,6 +768,7 @@ mod tests {
                 project_id: "p".into(),
             },
             SessionEvent::ProjectsChanged {},
+            SessionEvent::NotifyPrefsChanged {},
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },

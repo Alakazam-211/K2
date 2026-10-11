@@ -102,6 +102,8 @@ pub mod publish_runtime;
 // registration + the mobile-push dispatch triggers (dormant until a
 // gateway URL + token is configured).
 pub mod push_routes;
+// Thread push prefs routes (prd-thread-push-notifications-v1 S2).
+pub mod notify_routes;
 pub mod review_checklist_routes;
 pub mod routes;
 // K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json. Exposed

@@ -6828,6 +6828,63 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // prd-thread-push-notifications-v1 §5 — `/cli/notify/*` and the
+        // owner-linked accounts (`/cli/owner/accounts`). GET + POST. The
+        // acting PERSON comes from the token here (owner token → "owner",
+        // a live Connect session → its username), never the body (TP20);
+        // agent passports and app passes fail `token_ok` → 403. The
+        // route_policy floors (Member / Admin / owner-token) already ran in
+        // `role_gate`; the handler re-checks. A GET to the POST-only
+        // `admin/set` was answered 405 before auth (`get_refused`).
+        p if p.starts_with("/cli/notify/") || p == crate::notify_routes::OWNER_ACCOUNTS_PATH => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some(crate::notify_routes::Actor::owner_token())
+            } else {
+                super::http::extract_token(&query)
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| crate::notify_routes::Actor::login(&u))
+            };
+            let Some(actor) = actor else {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::notify_routes::handle(is_post, &p_owned, &body_bytes, &actor)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // C2: dual-auth (owner OR scoped) so agent-initiated compose into
         // another workspace is principal-bound and peer-gated. Compose
         // TARGET is `project=` — preserve it across stamp_principal

@@ -262,10 +262,17 @@ fn skin_overlay_gate(
 /// WS handler. Dispatcher already token-authed. Requires `conversation=`.
 /// Skin: pass `Some(SkinPass)` so rooms + pinned-Chat are checked **before**
 /// `accept_async`. Owner/Connect: `None`.
+///
+/// `viewer_login` (Thread push S4, TP16): the socket's login as the
+/// dispatcher resolved it (owner token → `owner`, a Connect session → its
+/// username; `None` for app guests). Its `{"t":"viewing","visible":bool}`
+/// text frames feed `thread_viewers` (state with a 90 s TTL, no ack); the
+/// socket closing clears them.
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
     skin_pass: Option<SkinPass>,
+    viewer_login: Option<String>,
 ) {
     let skin = skin_pass.is_some();
     let conversation = params
@@ -307,6 +314,8 @@ pub async fn serve_overlay_events_connection(
         }
     };
     let (mut write, mut read) = ws.split();
+    let socket_id = crate::thread_viewers::next_socket_id();
+    let viewer_login = if skin { None } else { viewer_login };
     let mut rx = subscribe();
     let mut activity_rx = subscribe_activity();
     let mut keepalive = tokio::time::interval(ping_interval());
@@ -330,7 +339,19 @@ pub async fn serve_overlay_events_connection(
                         }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    Some(Ok(Message::Pong(_))) | Some(Ok(Message::Text(_)))
+                    Some(Ok(Message::Text(text))) => {
+                        // Thread push S4: `viewing` frames (fire-and-forget).
+                        if let (Some(login), Some(visible)) =
+                            (viewer_login.clone(), crate::thread_viewers::parse_viewing(&text))
+                        {
+                            let conv = conversation.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                crate::thread_viewers::on_frame(socket_id, &login, &conv, visible)
+                            })
+                            .await;
+                        }
+                    }
+                    Some(Ok(Message::Pong(_)))
                     | Some(Ok(Message::Binary(_))) | Some(Ok(Message::Frame(_))) => {}
                 }
             }
@@ -387,6 +408,7 @@ pub async fn serve_overlay_events_connection(
             }
         }
     }
+    crate::thread_viewers::global().close_socket(socket_id);
 }
 
 pub fn emit_links(links: &[k2_core::overlay::OverlayLink], doc: &OverlayDoc) {

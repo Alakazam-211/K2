@@ -634,6 +634,10 @@ pub struct Diagnostic {
     pub line: usize,
     pub col: usize,
     pub message: String,
+    /// What to do about it, in one line (decision-k2-runtime-v1 stage 0 (e):
+    /// lakebed-style agent errors). Absent on findings from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 impl Diagnostic {
@@ -726,6 +730,7 @@ impl<'a> Ctx<'a> {
 
     fn error(&mut self, pos: (usize, usize), message: impl Into<String>) {
         self.out.errors.push(Diagnostic {
+            suggestion: None,
             file: self.file.to_string(),
             line: pos.0,
             col: pos.1,
@@ -735,6 +740,7 @@ impl<'a> Ctx<'a> {
 
     fn warn(&mut self, pos: (usize, usize), message: impl Into<String>) {
         self.out.warnings.push(Diagnostic {
+            suggestion: None,
             file: self.file.to_string(),
             line: pos.0,
             col: pos.1,

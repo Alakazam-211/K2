@@ -152,6 +152,28 @@ capture app validate --dir ../
 assert_eq "an escaping dir is refused (1)" "$rc" "1"
 assert_contains "it says why" "$out" "dir must not contain .."
 
+echo "== k2 publish status <name>: loopable exit codes =="
+capture publish status nope
+assert_eq "an unknown App exits 1" "$rc" "1"
+assert_contains "with a suggestion" "$out" "suggestion: no published App named nope"
+APORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+capture publish run rt-web --cmd "python3 -m http.server $APORT --bind 127.0.0.1" --port "$APORT" --no-tunnel --cwd "$WS"
+assert_eq "publish run --no-tunnel exits 0" "$rc" "0"
+final=""
+for _ in $(seq 1 100); do
+    capture publish status rt-web
+    final="$rc"
+    [ "$rc" = "2" ] || break
+    sleep 0.2
+done
+assert_eq "the loop ends on running (0)" "$final" "0"
+assert_contains "running says so" "$out" "rt-web: running"
+capture publish stop rt-web
+capture publish status rt-web
+assert_eq "a stopped App exits 1" "$rc" "1"
+assert_contains "stopped suggests start" "$out" "k2 publish start rt-web"
+capture publish rm rt-web
+
 echo "== k2 zen inspect =="
 python3 - "$SANDBOX/spy.k2garden" <<'PY'
 import sys, zipfile

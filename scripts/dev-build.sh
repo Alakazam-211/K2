@@ -49,10 +49,12 @@ require_mail_oauth_build_env
 
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements.plist"
+DAEMON_ENTITLEMENTS="${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
 APP="target/release/bundle/macos/K2.app"
 LAUNCH_LABEL="dev.k2.daemon"
 
 [ -f "$ENTITLEMENTS" ] || { echo "FATAL: entitlements not found at $ENTITLEMENTS" >&2; exit 1; }
+[ -f "$DAEMON_ENTITLEMENTS" ] || { echo "FATAL: daemon entitlements not found at $DAEMON_ENTITLEMENTS" >&2; exit 1; }
 VER="$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed 's/.*: *"\([^"]*\)".*/\1/')"
 echo "Dev-building K2.app v${VER} — GUI + k2-daemon (no Linux gate / notarize / publish)."
 
@@ -84,7 +86,7 @@ echo "  k2-menubar copied into the bundle."
 
 echo ""; echo "Step 3: signing with hardened runtime + entitlements..."
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2"
-k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$ENTITLEMENTS" || exit 1
+k2_daemon_helper_sign "$APP" "$SIGNING_IDENTITY" "$DAEMON_ENTITLEMENTS" || exit 1
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-menubar"
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/k2-power-helper"
 FRPC_BIN="$APP/Contents/MacOS/frpc"

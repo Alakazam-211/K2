@@ -205,7 +205,7 @@ codesign --force --options runtime --timestamp \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app/Contents/MacOS/k2"
 # Nested K2 Daemon.app (signs its k2-daemon with the same entitlements).
-k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "$ENTITLEMENTS"
+k2_daemon_helper_sign "target/release/bundle/macos/K2.app" "$SIGNING_IDENTITY" "${PROJECT_DIR}/src-tauri/entitlements-daemon.plist"
 codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \

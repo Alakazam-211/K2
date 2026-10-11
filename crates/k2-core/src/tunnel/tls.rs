@@ -73,6 +73,60 @@ pub fn publish_https_port(port: u16) -> Result<(), String> {
     })
 }
 
+/// The STICKY record of the E2E listener's port (`~/.k2/tunnel-https.sticky-port`).
+///
+/// Unlike [`https_port_path`] (cleared whenever the accept loop dies so a
+/// reader never trusts a dead port), this file is never cleared: it is what
+/// the NEXT bind tries first, so the tunnel TLS port stays the same across
+/// a listener re-bind, a subdomain switch and a daemon restart (runtime
+/// stage H, vs-live AR3/K37). frpc's `localPort` therefore stays valid when
+/// the daemon comes back, and an adopted frpc keeps working.
+pub fn https_sticky_port_path() -> PathBuf {
+    k2_dir().join("tunnel-https.sticky-port")
+}
+
+/// The sticky record of the tunnel-ingress listener's port (E2E off: frpc's
+/// cleartext `localPort`; E2E on: the decrypted splice target).
+pub fn ingress_sticky_port_path() -> PathBuf {
+    k2_dir().join("tunnel-ingress.sticky-port")
+}
+
+/// Bind a loopback listener, preferring the port recorded in `sticky`, and
+/// record the port actually bound. Returns `(listener, port, reused)`.
+///
+/// The port is taken only when it is free (`bind` succeeds); a port held by
+/// something else falls back to a kernel-assigned one, which then becomes
+/// the new sticky port. The listener is returned blocking (callers set
+/// non-blocking before handing it to tokio).
+pub fn claim_sticky_loopback(
+    sticky: &Path,
+) -> Result<(std::net::TcpListener, u16, bool), String> {
+    let claimed = crate::port_claim::claim_port(sticky)
+        .ok_or_else(|| "bind a loopback port: no port available".to_string())?;
+    write_port_file(sticky, claimed.port)?;
+    Ok((claimed.listener, claimed.port, claimed.reused))
+}
+
+/// Write `port` to `path` via tmp+rename (0600 on unix).
+pub fn write_port_file(path: &Path, port: u16) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent", path.display()))?;
+    fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "port".into());
+    let tmp = dir.join(format!("{name}.tmp.{}", std::process::id()));
+    fs::write(&tmp, port.to_string().as_bytes())
+        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    let _ = restrict_mode(&tmp);
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("rename into place {}: {e}", path.display())
+    })
+}
+
 /// Read the daemon's published HTTPS-listener port, if any. `None` when the
 /// file is absent (E2E listener never started) or unparsable.
 pub fn read_https_port() -> Option<u16> {
@@ -592,6 +646,36 @@ mod tests {
             // Idempotent.
             clear_https_port();
             assert_eq!(read_https_port(), None);
+        });
+    }
+
+    /// Stage H (AR3): the tunnel TLS port is sticky — a second claim after
+    /// the first listener is gone gets the SAME port, and a held port falls
+    /// back to a fresh one that becomes the new sticky port.
+    #[test]
+    fn sticky_loopback_port_is_reused_after_release() {
+        with_temp_home(|| {
+            let sticky = https_sticky_port_path();
+            let (l1, p1, reused1) = claim_sticky_loopback(&sticky).expect("first claim");
+            assert!(!reused1, "nothing recorded yet → fresh port");
+            assert_eq!(
+                std::fs::read_to_string(&sticky).expect("sticky written").trim(),
+                p1.to_string()
+            );
+            drop(l1);
+            let (l2, p2, reused2) = claim_sticky_loopback(&sticky).expect("second claim");
+            assert!(reused2, "the recorded port is free again → reused");
+            assert_eq!(p2, p1, "tunnel TLS port must survive a re-bind");
+
+            // Held port → fall back, and the new port becomes sticky.
+            let (l3, p3, reused3) = claim_sticky_loopback(&sticky).expect("third claim");
+            assert!(!reused3, "p1 is held by l2");
+            assert_ne!(p3, p1);
+            assert_eq!(
+                std::fs::read_to_string(&sticky).expect("sticky").trim(),
+                p3.to_string()
+            );
+            drop((l2, l3));
         });
     }
 

@@ -2792,12 +2792,15 @@ async fn handle_one_request(
                 params.insert(k, v);
             }
             let unclaim = p.ends_with("/unclaim");
+            let label_caller = label_caller_for(false, &query, state.token.as_str());
             let result = tokio::task::spawn_blocking(move || {
-                if unclaim {
-                    crate::misc_routes::handle_subdomain_unclaim(&params)
-                } else {
-                    crate::misc_routes::handle_subdomain_claim(&params)
-                }
+                crate::label_owner::with_caller(label_caller, || {
+                    if unclaim {
+                        crate::misc_routes::handle_subdomain_unclaim(&params)
+                    } else {
+                        crate::misc_routes::handle_subdomain_claim(&params)
+                    }
+                })
             })
             .await
             .unwrap_or_else(|e| crate::cli::CliResponse::bad_request(format!("worker join: {e}")));
@@ -6894,10 +6897,14 @@ async fn handle_one_request(
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
+            let label_caller =
+                label_caller_for(scoped_principal.is_some(), &query, state.token.as_str());
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::caller_workspace::with_request_principal(scoped_principal, || {
-                    crate::publish_routes::dispatch_post(&p_owned, &params)
+                crate::label_owner::with_caller(label_caller, || {
+                    crate::caller_workspace::with_request_principal(scoped_principal, || {
+                        crate::publish_routes::dispatch_post(&p_owned, &params)
+                    })
                 })
             })
             .await
@@ -10544,6 +10551,27 @@ fn dispatch_connect_gap_post(
 /// Wave 0 / DNS K1 — dual auth for mail + dns families: owner/connect-user
 /// via `token_ok`, OR a scoped hook principal via `require_hook` (path must
 /// be on the agent-verb allowlist).
+/// Label-ownership caller tier (AR6): an agent passport is always
+/// `Agent`; the owner token or an Owner/Admin login is `Manager` (may
+/// see who holds a label and transfer it, audited); anything else —
+/// a Member login — is `Member`.
+fn label_caller_for(
+    scoped: bool,
+    query: &str,
+    owner_token: &str,
+) -> crate::label_owner::Caller {
+    use crate::label_owner::Caller;
+    if scoped {
+        return Caller::Agent;
+    }
+    if super::http::token_is_owner_or_admin(query, owner_token) {
+        let actor = super::http::actor_label(query, owner_token, None)
+            .unwrap_or_else(|| "owner-or-admin".to_string());
+        return Caller::Manager { actor };
+    }
+    Caller::Member
+}
+
 fn token_or_scoped_hook_auth(
     path: &str,
     query: &str,

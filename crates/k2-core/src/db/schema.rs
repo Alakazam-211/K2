@@ -3608,9 +3608,10 @@ impl SchedulerMeta {
 /// in-memory tunnel cache when present.
 pub struct SubdomainWorkspace;
 
-/// Outcome of a self-only stamp (new `/cli/publish/subdomain/claim`
-/// arm). Distinct from [`SubdomainWorkspace::claim`] which is still
-/// INSERT OR REPLACE (transfer/`run` steal — do not change this cut).
+/// Outcome of a self-only stamp (`/cli/publish/subdomain/claim`,
+/// [`SubdomainWorkspace::claim`]). A label another workspace holds is
+/// `Foreign` and is never rewritten; moving it is an explicit
+/// [`SubdomainWorkspace::transfer`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelfStamp {
     Written,
@@ -3651,23 +3652,59 @@ impl SubdomainWorkspace {
         rows.collect()
     }
 
-    /// Attribute `label` to `project_id` (upsert — re-claiming an
-    /// already-attributed label repoints it, the PK guarantees one
-    /// owner per label). Errors on a blank label/project_id: an empty
-    /// attribution row is always a caller bug, never valid state.
-    pub fn claim(conn: &Connection, label: &str, project_id: &str) -> Result<()> {
+    /// Attribute `label` to `project_id` if it is unattributed or
+    /// already this workspace's. A label another workspace holds is
+    /// refused (`Foreign`, no write): one owner per label, and only
+    /// [`Self::transfer`] moves it. Errors on a blank label/project_id:
+    /// an empty attribution row is always a caller bug, never valid state.
+    pub fn claim(conn: &Connection, label: &str, project_id: &str) -> Result<SelfStamp> {
+        Self::self_stamp(conn, label, project_id, None)
+    }
+
+    /// The workspace (`projects.id`) that holds `label`, if any.
+    pub fn owner_of(conn: &Connection, label: &str) -> Result<Option<String>> {
         let label = label.trim().to_ascii_lowercase();
-        let project_id = project_id.trim();
-        if label.is_empty() || project_id.is_empty() {
+        conn.query_row(
+            "SELECT project_id FROM subdomain_workspaces WHERE label = ?1",
+            params![label],
+            |r| r.get(0),
+        )
+        .optional()
+    }
+
+    /// Explicit move of `label` from workspace `from` to workspace `to`
+    /// (owner/admin transfer; the caller decides who may do this and
+    /// audits it). Compare-and-swap on the current owner: returns
+    /// `false` (no write) when `label` is no longer held by `from`, so a
+    /// transfer decided against a stale read never lands. Keeps the
+    /// stored last-target unless a non-empty `target` is given.
+    pub fn transfer(
+        conn: &Connection,
+        label: &str,
+        from: &str,
+        to: &str,
+        target: Option<&str>,
+    ) -> Result<bool> {
+        let label = label.trim().to_ascii_lowercase();
+        let (from, to) = (from.trim(), to.trim());
+        if label.is_empty() || from.is_empty() || to.is_empty() {
             return Err(rusqlite::Error::InvalidParameterName(
-                "subdomain claim needs a non-empty label and project_id".to_string(),
+                "subdomain transfer needs a non-empty label, from and to".to_string(),
             ));
         }
-        conn.execute(
-            "INSERT OR REPLACE INTO subdomain_workspaces (label, project_id) VALUES (?1, ?2)",
-            params![label, project_id],
-        )?;
-        Ok(())
+        let n = match target.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) => conn.execute(
+                "UPDATE subdomain_workspaces SET project_id = ?1, target = ?2 \
+                 WHERE label = ?3 AND project_id = ?4",
+                params![to, t, label, from],
+            )?,
+            None => conn.execute(
+                "UPDATE subdomain_workspaces SET project_id = ?1 \
+                 WHERE label = ?2 AND project_id = ?3",
+                params![to, label, from],
+            )?,
+        };
+        Ok(n == 1)
     }
 
     /// Self-only stamp: INSERT if unattributed, UPDATE last-target if
@@ -5795,19 +5832,48 @@ mod unit_tests {
 
     // ── SubdomainWorkspace (0074) ─────────────────────────────────
     #[test]
-    fn subdomain_workspace_claim_repoint_unclaim_roundtrip() {
+    fn subdomain_workspace_claim_refuses_foreign_then_unclaim_roundtrip() {
         let conn = fresh();
         assert!(SubdomainWorkspace::map(&conn).unwrap().is_empty());
 
         // Claim normalizes the label lowercase (matching SubdomainMap).
-        SubdomainWorkspace::claim(&conn, " Staging ", "proj-1").unwrap();
+        assert_eq!(
+            SubdomainWorkspace::claim(&conn, " Staging ", "proj-1").unwrap(),
+            SelfStamp::Written
+        );
         let map = SubdomainWorkspace::map(&conn).unwrap();
         assert_eq!(map.get("staging").map(String::as_str), Some("proj-1"));
 
-        // Re-claim by another workspace REPOINTS (PK upsert, one owner).
-        SubdomainWorkspace::claim(&conn, "staging", "proj-2").unwrap();
+        // Re-claim by the SAME workspace is fine.
+        assert_eq!(
+            SubdomainWorkspace::claim(&conn, "staging", "proj-1").unwrap(),
+            SelfStamp::Written
+        );
+
+        // Re-claim by another workspace is REFUSED, no rewrite.
+        assert_eq!(
+            SubdomainWorkspace::claim(&conn, "staging", "proj-2").unwrap(),
+            SelfStamp::Foreign {
+                owner: "proj-1".to_string()
+            }
+        );
         let map = SubdomainWorkspace::map(&conn).unwrap();
         assert_eq!(map.len(), 1, "re-claim must not duplicate the label row");
+        assert_eq!(map.get("staging").map(String::as_str), Some("proj-1"));
+        assert_eq!(
+            SubdomainWorkspace::owner_of(&conn, "STAGING").unwrap().as_deref(),
+            Some("proj-1")
+        );
+
+        // Only an explicit transfer moves it, and only from the current owner.
+        assert!(!SubdomainWorkspace::transfer(&conn, "staging", "proj-9", "proj-2", None).unwrap());
+        assert_eq!(
+            SubdomainWorkspace::owner_of(&conn, "staging").unwrap().as_deref(),
+            Some("proj-1"),
+            "a transfer from a stale owner must not land"
+        );
+        assert!(SubdomainWorkspace::transfer(&conn, "staging", "proj-1", "proj-2", None).unwrap());
+        let map = SubdomainWorkspace::map(&conn).unwrap();
         assert_eq!(map.get("staging").map(String::as_str), Some("proj-2"));
 
         // Unclaim reports whether a row actually existed.
@@ -5858,14 +5924,30 @@ mod unit_tests {
         assert!(SubdomainWorkspace::list_for_project(&conn, "sales")
             .unwrap()
             .is_empty());
-        SubdomainWorkspace::claim(&conn, "portal", "sales").unwrap();
+        assert_eq!(
+            SubdomainWorkspace::claim(&conn, "portal", "sales").unwrap(),
+            SelfStamp::Foreign {
+                owner: "docs".to_string()
+            },
+            "claim must never steal a foreign label"
+        );
         assert_eq!(
             SubdomainWorkspace::map(&conn)
                 .unwrap()
                 .get("portal")
                 .map(String::as_str),
-            Some("sales")
+            Some("docs")
         );
+        // Transfer with a target rewrites both owner and last-target.
+        assert!(
+            SubdomainWorkspace::transfer(&conn, "portal", "docs", "sales", Some("localhost:9"))
+                .unwrap()
+        );
+        assert_eq!(
+            SubdomainWorkspace::list_for_project(&conn, "sales").unwrap(),
+            vec![("portal".to_string(), "localhost:9".to_string())]
+        );
+        assert!(SubdomainWorkspace::transfer(&conn, "portal", "", "sales", None).is_err());
     }
 
     #[test]

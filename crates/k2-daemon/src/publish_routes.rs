@@ -7,14 +7,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use k2_core::db::schema::{SelfStamp, SelfUnclaim, SubdomainWorkspace};
+use k2_core::db::schema::{SelfUnclaim, SubdomainWorkspace};
 use k2_core::tunnel::config::SUBDOMAIN_HOST;
 
 use crate::cli::{need_project, opt_param, str_param};
 use crate::cli_response::CliResponse;
+use crate::label_owner;
 use crate::publish_runtime::{self, PublishError, RunSpec};
 
-const FOREIGN_STICKER: &str = "not yours; the current agent must `k2 publish transfer`";
+const FOREIGN_STICKER: &str =
+    "label_owned_by_other_workspace: not yours; ask the server owner to transfer it";
 
 fn resolve_project_id(project: &str) -> Result<String, String> {
     let db = k2_core::db::shared();
@@ -39,10 +41,14 @@ fn resolve_project_path(project_id: &str) -> Option<String> {
 }
 
 fn err_to_resp(e: PublishError) -> CliResponse {
+    let body = match e.body {
+        Some(b) => b.to_string(),
+        None => serde_json::json!({ "error": e.message }).to_string(),
+    };
     CliResponse {
         status: e.status,
         content_type: "application/json",
-        body: serde_json::json!({ "error": e.message }).to_string(),
+        body,
     }
 }
 
@@ -178,8 +184,13 @@ fn handle_leftovers(params: &HashMap<String, String>) -> CliResponse {
 }
 
 /// POST /cli/publish/subdomain/claim — self-only 0074 stamp. INSERT if
-/// unattributed or already this workspace; foreign → 403, no rewrite.
-/// Does not call `SubdomainWorkspace::claim` (REPLACE / steal).
+/// unattributed or already this workspace; a label another workspace
+/// holds → 409 `label_owned_by_other_workspace`, no rewrite.
+///
+/// - `check=1`: decide only, write nothing. The CLI asks this BEFORE any
+///   control-plane create/point/rm so a foreign label is never touched.
+/// - `transfer=1`: owner/admin only — move the label to this workspace
+///   (audited). Agents and members get 403 `transfer_owner_only`.
 fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let label = str_param(params, "label");
     if label.trim().is_empty() {
@@ -197,27 +208,37 @@ fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return CliResponse::bad_request(e),
     };
     let target = opt_param(params, "target");
-    let outcome = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        match SubdomainWorkspace::self_stamp(&conn, &label, &project_id, target.as_deref()) {
-            Ok(o) => o,
-            Err(e) => return CliResponse::bad_request(e.to_string()),
-        }
-    };
-    match outcome {
-        SelfStamp::Foreign { .. } => forbidden_sticker(),
-        SelfStamp::Written => {
+    let transfer = boolish(params, &["transfer"]);
+    let label_lc = label.trim().to_ascii_lowercase();
+    if boolish(params, &["check"]) {
+        return match label_owner::check(&label, &project_id, transfer) {
+            Ok(decision) => CliResponse::ok_json(
+                serde_json::json!({
+                    "success": true,
+                    "check": true,
+                    "label": label_lc,
+                    "projectId": project_id,
+                    "transfer": matches!(decision, label_owner::Decision::Transfer { .. }),
+                })
+                .to_string(),
+            ),
+            Err(r) => r.into_response(),
+        };
+    }
+    match label_owner::claim_checked(&label, &project_id, target.as_deref(), transfer) {
+        Ok(decision) => {
             crate::session_events::emit_tunnel_subdomains_changed();
             CliResponse::ok_json(
                 serde_json::json!({
                     "success": true,
-                    "label": label.trim().to_ascii_lowercase(),
+                    "label": label_lc,
                     "projectId": project_id,
+                    "transferred": matches!(decision, label_owner::Decision::Transfer { .. }),
                 })
                 .to_string(),
             )
         }
+        Err(r) => r.into_response(),
     }
 }
 
@@ -364,6 +385,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         skin,
         skin_root,
         cwd_explicit,
+        transfer: boolish(params, &["transfer"]),
     }) {
         Ok(svc) => {
             CliResponse::ok_json(serde_json::to_string(&svc).unwrap_or_else(|_| "{}".into()))
@@ -752,12 +774,21 @@ mod tests {
             "/cli/publish/subdomain/claim",
             &claim_params(&sales, &label, Some("localhost:9")),
         );
-        assert_eq!(steal.status, "403 Forbidden", "body={}", steal.body);
-        assert!(
-            steal.body.contains("k2 publish transfer"),
-            "body={}",
-            steal.body
-        );
+        assert_eq!(steal.status, "409 Conflict", "body={}", steal.body);
+        let sv: serde_json::Value = serde_json::from_str(&steal.body).unwrap();
+        assert_eq!(sv["code"], "label_owned_by_other_workspace");
+        assert!(sv.get("owner").is_none(), "non-owner gets the neutral message");
+        assert!(!steal.body.contains("Documents"), "no owner name leak: {}", steal.body);
+
+        // check=1 (CLI preflight) refuses the same way and writes nothing.
+        let mut check = claim_params(&sales, &label, None);
+        check.insert("check".into(), "1".into());
+        let pre = dispatch_post("/cli/publish/subdomain/claim", &check);
+        assert_eq!(pre.status, "409 Conflict", "body={}", pre.body);
+        let mut own_check = claim_params(&docs, &label, None);
+        own_check.insert("check".into(), "1".into());
+        let pre = dispatch_post("/cli/publish/subdomain/claim", &own_check);
+        assert_eq!(pre.status, "200 OK", "owner re-check; body={}", pre.body);
 
         {
             let db = k2_core::db::shared();
@@ -773,6 +804,65 @@ mod tests {
             );
             let _ = SubdomainWorkspace::unclaim(&conn, &label);
         }
+    }
+
+    /// AR6: the owner/admin sees who holds a label and can move it with
+    /// an explicit transfer; the move is audited. The same workspace
+    /// re-pointing its own label keeps working.
+    #[test]
+    fn subdomain_claim_owner_transfer_is_explicit_and_audited() {
+        let _home = crate::test_support::TempHome::new();
+        let pid = std::process::id();
+        let docs = format!("docs-xfer-{pid}");
+        let sales = format!("sales-xfer-{pid}");
+        let label = format!("xfer-{pid}");
+        seed_ws(&docs, "/tmp/docs-xfer", "Documents");
+        seed_ws(&sales, "/tmp/sales-xfer", "Sales");
+        let resp = dispatch_post(
+            "/cli/publish/subdomain/claim",
+            &claim_params(&docs, &label, Some("localhost:1")),
+        );
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let resp = dispatch_post(
+            "/cli/publish/subdomain/claim",
+            &claim_params(&docs, &label, Some("localhost:2")),
+        );
+        assert_eq!(resp.status, "200 OK", "self re-point; body={}", resp.body);
+
+        let mgr = || label_owner::Caller::Manager { actor: "owner-token".into() };
+        let resp = label_owner::with_caller(mgr(), || {
+            dispatch_post("/cli/publish/subdomain/claim", &claim_params(&sales, &label, None))
+        });
+        assert_eq!(resp.status, "409 Conflict", "no flag, no move; body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["owner"]["projectId"], docs.as_str(), "owner sees the holder");
+        assert_eq!(v["owner"]["name"], "Documents");
+
+        let mut xfer = claim_params(&sales, &label, Some("localhost:3"));
+        xfer.insert("transfer".into(), "1".into());
+        let resp = label_owner::with_caller(mgr(), || {
+            dispatch_post("/cli/publish/subdomain/claim", &xfer)
+        });
+        assert_eq!(resp.status, "200 OK", "owner transfer; body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["transferred"], true);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            assert_eq!(
+                SubdomainWorkspace::owner_of(&conn, &label).unwrap().as_deref(),
+                Some(sales.as_str())
+            );
+            let _ = SubdomainWorkspace::unclaim(&conn, &label);
+        }
+        let events = k2_core::auth_audit::tail(50).expect("audit tail");
+        assert!(
+            events.iter().any(|e| e["event"] == "label-transfer"
+                && e["outcome"].as_str().is_some_and(|o| o.contains(&label)
+                    && o.contains(&format!("from={docs}"))
+                    && o.contains(&format!("to={sales}")))),
+            "transfer must be audited: {events:?}"
+        );
     }
 
     #[test]

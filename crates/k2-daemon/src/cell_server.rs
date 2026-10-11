@@ -1242,8 +1242,29 @@ mod unix_impl {
                 &p,
                 "sid-1",
             );
-            assert_eq!(sstatus, "403 Forbidden", "must not steal Sales; body={sout}");
-            assert!(sout.contains("k2 publish transfer"), "body={sout}");
+            assert_eq!(sstatus, "409 Conflict", "must not steal Sales; body={sout}");
+            let sv: serde_json::Value = serde_json::from_str(&sout).expect("json refusal");
+            assert_eq!(sv["code"], "label_owned_by_other_workspace", "body={sout}");
+            assert!(sv.get("owner").is_none(), "agent must get the neutral message; body={sout}");
+            assert!(!sout.contains("Sales") && !sout.contains(sales), "no owner leak; body={sout}");
+
+            // An agent cannot transfer, even when it asks to.
+            let xfer = serde_json::json!({
+                "label": "sales-portal",
+                "target": "localhost:9",
+                "transfer": true,
+            })
+            .to_string();
+            let (xstatus, _, xout) = dispatch_cell_verb(
+                "POST",
+                "/cli/publish/subdomain/claim",
+                &params,
+                xfer.as_bytes(),
+                &p,
+                "sid-1",
+            );
+            assert_eq!(xstatus, "403 Forbidden", "agent transfer; body={xout}");
+            assert!(xout.contains("transfer_owner_only"), "body={xout}");
             {
                 let db = k2_core::db::shared();
                 let conn = db.lock();

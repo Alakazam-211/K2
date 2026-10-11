@@ -1,0 +1,404 @@
+//! One rule for nested URL labels (`<label>.<host>.k2.dev`): a label
+//! belongs to ONE workspace on this server (the 0074 attribution row).
+//!
+//! Every path that claims, points or runs a label asks [`decide`] first:
+//!
+//! - unattributed, or already this workspace's → go ahead;
+//! - held by ANOTHER workspace → `409 label_owned_by_other_workspace`.
+//!   Only an owner/admin caller is told which workspace holds it; agents
+//!   and members get a neutral message;
+//! - an owner/admin may move it deliberately with an explicit transfer
+//!   (`transfer=1`, CLI `--transfer`). Every transfer is audited
+//!   (`~/.k2/auth-audit.jsonl`, event `label-transfer`).
+//!
+//! The caller tier is request-scoped: the HTTP dispatcher installs it
+//! with [`with_caller`]. An agent passport (the request principal) always
+//! wins and is [`Caller::Agent`]. Nothing installed = [`Caller::Member`]
+//! (fail closed: no owner hint, no transfer) — boot respawns and direct
+//! handler calls land here.
+
+use std::cell::RefCell;
+
+use k2_core::db::schema::{SelfStamp, SubdomainWorkspace};
+use rusqlite::Connection;
+
+use crate::cli_response::CliResponse;
+
+pub const CODE: &str = "label_owned_by_other_workspace";
+pub const TRANSFER_CODE: &str = "transfer_owner_only";
+const STATUS_CONFLICT: &str = "409 Conflict";
+const STATUS_FORBIDDEN: &str = "403 Forbidden";
+
+/// Who is asking, for label-ownership purposes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Caller {
+    /// An agent passport (scoped hook / cell UDS).
+    Agent,
+    /// A Connect Member login, or no tier installed (fail closed).
+    Member,
+    /// The owner token or an Owner/Admin Connect login. `actor` is a
+    /// non-secret label for the audit line.
+    Manager { actor: String },
+}
+
+impl Caller {
+    pub fn is_manager(&self) -> bool {
+        matches!(self, Caller::Manager { .. })
+    }
+
+    fn actor(&self) -> String {
+        match self {
+            Caller::Agent => "agent".to_string(),
+            Caller::Member => "member".to_string(),
+            Caller::Manager { actor } => actor.clone(),
+        }
+    }
+}
+
+thread_local! {
+    static CALLER: RefCell<Option<Caller>> = const { RefCell::new(None) };
+}
+
+/// Run `f` with `caller` as the request-scoped label caller. Always
+/// clears the slot afterward (including on panic).
+pub fn with_caller<R>(caller: Caller, f: impl FnOnce() -> R) -> R {
+    struct ClearOnDrop;
+    impl Drop for ClearOnDrop {
+        fn drop(&mut self) {
+            CALLER.with(|c| *c.borrow_mut() = None);
+        }
+    }
+    let _guard = ClearOnDrop;
+    CALLER.with(|c| *c.borrow_mut() = Some(caller));
+    f()
+}
+
+/// The current caller. An installed agent passport always means
+/// [`Caller::Agent`], whatever tier was installed; nothing installed
+/// means [`Caller::Member`].
+pub fn current() -> Caller {
+    if crate::caller_workspace::request_principal().is_some() {
+        return Caller::Agent;
+    }
+    CALLER.with(|c| c.borrow().clone()).unwrap_or(Caller::Member)
+}
+
+/// What a claim of `label` for `project_id` will do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// Unattributed or already this workspace's.
+    Claim,
+    /// Owner/admin moving it from another workspace (audited on apply).
+    Transfer { from: String },
+}
+
+/// A refusal: structured JSON body + HTTP status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub status: &'static str,
+    pub body: serde_json::Value,
+}
+
+impl Refusal {
+    pub fn message(&self) -> String {
+        self.body["error"].as_str().unwrap_or(CODE).to_string()
+    }
+
+    pub fn into_response(self) -> CliResponse {
+        CliResponse {
+            status: self.status,
+            content_type: "application/json",
+            body: self.body.to_string(),
+        }
+    }
+}
+
+fn workspace_label(conn: &Connection, project_id: &str) -> (Option<String>, Option<String>) {
+    conn.query_row(
+        "SELECT name, path FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+    )
+    .unwrap_or((None, None))
+}
+
+/// The 409 for a label held by another workspace. Names the owner only
+/// to an owner/admin caller.
+pub fn owned_by_other(conn: &Connection, label: &str, owner: &str, caller: &Caller) -> Refusal {
+    let label = label.trim().to_ascii_lowercase();
+    let body = if caller.is_manager() {
+        let (name, path) = workspace_label(conn, owner);
+        let who = match (&name, &path) {
+            (Some(n), Some(p)) => format!("workspace '{n}' ({p})"),
+            (Some(n), None) => format!("workspace '{n}'"),
+            _ => format!("workspace {owner}"),
+        };
+        serde_json::json!({
+            "error": format!("{CODE}: '{label}' belongs to {who}."),
+            "code": CODE,
+            "label": label,
+            "hint": "To move it to this workspace on purpose, rerun with --transfer \
+                     (owner/admin only; recorded in the access audit log).",
+            "owner": {
+                "projectId": owner,
+                "name": name,
+                "path": path,
+            },
+        })
+    } else {
+        serde_json::json!({
+            "error": format!("{CODE}: '{label}' belongs to another workspace on this server."),
+            "code": CODE,
+            "label": label,
+            "hint": "Pick another name, or ask the server owner to transfer this one.",
+        })
+    };
+    Refusal {
+        status: STATUS_CONFLICT,
+        body,
+    }
+}
+
+fn transfer_owner_only(label: &str) -> Refusal {
+    let label = label.trim().to_ascii_lowercase();
+    Refusal {
+        status: STATUS_FORBIDDEN,
+        body: serde_json::json!({
+            "error": format!(
+                "{TRANSFER_CODE}: only the server owner or an admin can transfer '{label}'."
+            ),
+            "code": TRANSFER_CODE,
+            "label": label,
+            "hint": "Pick another name, or ask the server owner to transfer this one.",
+        }),
+    }
+}
+
+/// Decide (read only) whether `project_id` may claim/point/run `label`.
+pub fn decide(
+    conn: &Connection,
+    label: &str,
+    project_id: &str,
+    want_transfer: bool,
+    caller: &Caller,
+) -> Result<Decision, Refusal> {
+    let owner = SubdomainWorkspace::owner_of(conn, label).map_err(|e| Refusal {
+        status: "500 Internal Server Error",
+        body: serde_json::json!({ "error": e.to_string() }),
+    })?;
+    match owner {
+        None => Ok(Decision::Claim),
+        Some(o) if o == project_id.trim() => Ok(Decision::Claim),
+        Some(o) if want_transfer && caller.is_manager() => Ok(Decision::Transfer { from: o }),
+        Some(_) if want_transfer => Err(transfer_owner_only(label)),
+        Some(o) => Err(owned_by_other(conn, label, &o, caller)),
+    }
+}
+
+/// Write a [`decide`] outcome. `Claim` is the fail-on-conflict insert
+/// (a race that lost to another workspace still refuses); `Transfer` is a
+/// compare-and-swap on the owner, audited.
+pub fn apply(
+    conn: &Connection,
+    label: &str,
+    project_id: &str,
+    target: Option<&str>,
+    decision: &Decision,
+    caller: &Caller,
+) -> Result<(), Refusal> {
+    let internal = |e: rusqlite::Error| Refusal {
+        status: "400 Bad Request",
+        body: serde_json::json!({ "error": e.to_string() }),
+    };
+    match decision {
+        Decision::Claim => {
+            match SubdomainWorkspace::self_stamp(conn, label, project_id, target)
+                .map_err(internal)?
+            {
+                SelfStamp::Written => Ok(()),
+                SelfStamp::Foreign { owner } => Err(owned_by_other(conn, label, &owner, caller)),
+            }
+        }
+        Decision::Transfer { from } => {
+            let moved = SubdomainWorkspace::transfer(conn, label, from, project_id, target)
+                .map_err(internal)?;
+            if !moved {
+                // Owner changed since the decision: re-decide without transfer.
+                return match SubdomainWorkspace::owner_of(conn, label).map_err(internal)? {
+                    Some(o) if o == project_id => Ok(()),
+                    Some(o) => Err(owned_by_other(conn, label, &o, caller)),
+                    None => match SubdomainWorkspace::self_stamp(conn, label, project_id, target)
+                        .map_err(internal)?
+                    {
+                        SelfStamp::Written => Ok(()),
+                        SelfStamp::Foreign { owner } => {
+                            Err(owned_by_other(conn, label, &owner, caller))
+                        }
+                    },
+                };
+            }
+            audit_transfer(label, from, project_id, caller);
+            Ok(())
+        }
+    }
+}
+
+/// [`decide`] + [`apply`] in one step on the shared DB.
+pub fn claim_checked(
+    label: &str,
+    project_id: &str,
+    target: Option<&str>,
+    want_transfer: bool,
+) -> Result<Decision, Refusal> {
+    let caller = current();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let decision = decide(&conn, label, project_id, want_transfer, &caller)?;
+    apply(&conn, label, project_id, target, &decision, &caller)?;
+    Ok(decision)
+}
+
+/// [`decide`] on the shared DB with the current caller (read only).
+pub fn check(label: &str, project_id: &str, want_transfer: bool) -> Result<Decision, Refusal> {
+    let caller = current();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    decide(&conn, label, project_id, want_transfer, &caller)
+}
+
+fn audit_transfer(label: &str, from: &str, to: &str, caller: &Caller) {
+    let label = label.trim().to_ascii_lowercase();
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "label-transfer",
+        &caller.actor(),
+        format!("ok label={label} from={from} to={to}"),
+        "-",
+        "-",
+        "cli",
+    ));
+    k2_core::log_debug!("[publish] label transfer label={label} from={from} to={to} by={}", caller.actor());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_project(tag: &str) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/label-owner-{tag}-{id}");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, format!("ws-{tag}"), path],
+        )
+        .expect("insert project");
+        id
+    }
+
+    fn owner(label: &str) -> Option<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        SubdomainWorkspace::owner_of(&conn, label).expect("owner_of")
+    }
+
+    fn drop_label(label: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        SubdomainWorkspace::unclaim(&conn, label).expect("unclaim");
+    }
+
+    fn label(tag: &str) -> String {
+        format!("lo-{tag}-{}", uuid::Uuid::new_v4().simple())[..24].to_string()
+    }
+
+    #[test]
+    fn current_defaults_to_member_and_scopes_manager() {
+        assert_eq!(current(), Caller::Member);
+        let inside = with_caller(Caller::Manager { actor: "owner-token".into() }, current);
+        assert!(inside.is_manager());
+        assert_eq!(current(), Caller::Member, "slot must clear after the request");
+    }
+
+    #[test]
+    fn other_workspace_is_refused_with_neutral_message_for_agents_and_members() {
+        let a = make_project("a");
+        let b = make_project("b");
+        let l = label("n");
+        claim_checked(&l, &a, None, false).expect("A claims a free label");
+        for caller in [Caller::Agent, Caller::Member] {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let r = decide(&conn, &l, &b, false, &caller).expect_err("B must be refused");
+            assert_eq!(r.status, "409 Conflict");
+            assert_eq!(r.body["code"], CODE);
+            assert!(r.body.get("owner").is_none(), "no owner for {caller:?}: {}", r.body);
+            let text = r.body.to_string();
+            assert!(!text.contains(&a), "neutral message must not leak the owner id: {text}");
+            assert!(!text.contains("ws-a"), "neutral message must not name the owner: {text}");
+        }
+        assert_eq!(owner(&l).as_deref(), Some(a.as_str()));
+        drop_label(&l);
+    }
+
+    #[test]
+    fn manager_sees_owner_and_non_manager_cannot_transfer() {
+        let a = make_project("a");
+        let b = make_project("b");
+        let l = label("m");
+        claim_checked(&l, &a, None, false).expect("A claims");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mgr = Caller::Manager { actor: "owner-token".into() };
+        let r = decide(&conn, &l, &b, false, &mgr).expect_err("no transfer flag → 409");
+        assert_eq!(r.status, "409 Conflict");
+        assert_eq!(r.body["owner"]["projectId"].as_str(), Some(a.as_str()));
+        assert_eq!(r.body["owner"]["name"].as_str(), Some("ws-a"));
+
+        let r = decide(&conn, &l, &b, true, &Caller::Agent).expect_err("agent transfer");
+        assert_eq!(r.status, "403 Forbidden");
+        assert_eq!(r.body["code"], TRANSFER_CODE);
+        drop(conn);
+        assert_eq!(owner(&l).as_deref(), Some(a.as_str()));
+        drop_label(&l);
+    }
+
+    #[test]
+    fn same_workspace_reclaim_is_fine() {
+        let a = make_project("a");
+        let l = label("s");
+        assert_eq!(claim_checked(&l, &a, Some("localhost:1"), false), Ok(Decision::Claim));
+        assert_eq!(claim_checked(&l, &a, Some("localhost:2"), false), Ok(Decision::Claim));
+        assert_eq!(owner(&l).as_deref(), Some(a.as_str()));
+        drop_label(&l);
+    }
+
+    #[test]
+    fn manager_transfer_moves_and_is_audited() {
+        let _home = crate::test_support::TempHome::new();
+        let a = make_project("a");
+        let b = make_project("b");
+        let l = label("t");
+        claim_checked(&l, &a, None, false).expect("A claims");
+        let d = with_caller(Caller::Manager { actor: "owner-token".into() }, || {
+            claim_checked(&l, &b, Some("localhost:7"), true)
+        })
+        .expect("owner transfer");
+        assert_eq!(d, Decision::Transfer { from: a.clone() });
+        assert_eq!(owner(&l).as_deref(), Some(b.as_str()));
+
+        let events = k2_core::auth_audit::tail(50).expect("audit tail");
+        let hit = events
+            .iter()
+            .find(|e| {
+                e["event"] == "label-transfer"
+                    && e["outcome"].as_str().is_some_and(|o| o.contains(&l))
+            })
+            .unwrap_or_else(|| panic!("no label-transfer audit line for {l}: {events:?}"));
+        let outcome = hit["outcome"].as_str().expect("outcome");
+        assert!(outcome.contains(&format!("from={a}")), "{outcome}");
+        assert!(outcome.contains(&format!("to={b}")), "{outcome}");
+        assert_eq!(hit["user"], "owner-token");
+        drop_label(&l);
+    }
+}

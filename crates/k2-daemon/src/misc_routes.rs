@@ -1984,17 +1984,20 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let project_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let project_id = match resolve_project_id(&conn, &project) {
+        match resolve_project_id(&conn, &project) {
             Ok(id) => id,
             Err(e) => return CliResponse::bad_request(e),
-        };
-        if let Err(e) =
-            k2_core::db::schema::SubdomainWorkspace::claim(&conn, &label, &project_id)
-        {
-            return CliResponse::bad_request(e.to_string());
         }
-        project_id
     };
+    // One owner per label: a label another workspace holds is refused
+    // (409), unless an owner/admin asks for an explicit, audited transfer.
+    let transfer = matches!(
+        params.get("transfer").map(String::as_str),
+        Some("1" | "true" | "on" | "yes")
+    );
+    if let Err(r) = crate::label_owner::claim_checked(&label, &project_id, None, transfer) {
+        return r.into_response();
+    }
     // Attribution changed while the routing map didn't — store() won't
     // fire, so emit the broadcast from THIS seam.
     crate::session_events::emit_tunnel_subdomains_changed();
@@ -2025,12 +2028,55 @@ pub fn handle_subdomain_unclaim(params: &HashMap<String, String>) -> CliResponse
     if label.trim().is_empty() {
         return CliResponse::bad_request("Missing label parameter".to_string());
     }
+    // With `project`: release only that workspace's own label. Without
+    // it: owner/admin only (dropping another workspace's attribution
+    // would free its label for anyone to take).
+    let project = params
+        .get("project")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let removed = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        match k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &label) {
-            Ok(removed) => removed,
-            Err(e) => return CliResponse::bad_request(e.to_string()),
+        match project {
+            Some(project) => {
+                let project_id = match resolve_project_id(&conn, &project) {
+                    Ok(id) => id,
+                    Err(e) => return CliResponse::bad_request(e),
+                };
+                use k2_core::db::schema::SelfUnclaim;
+                match k2_core::db::schema::SubdomainWorkspace::self_unclaim(
+                    &conn,
+                    &label,
+                    &project_id,
+                ) {
+                    Ok(SelfUnclaim::Removed) => true,
+                    Ok(SelfUnclaim::Absent) => false,
+                    Ok(SelfUnclaim::Foreign { owner }) => {
+                        let caller = crate::label_owner::current();
+                        return crate::label_owner::owned_by_other(&conn, &label, &owner, &caller)
+                            .into_response();
+                    }
+                    Err(e) => return CliResponse::bad_request(e.to_string()),
+                }
+            }
+            None => {
+                if !crate::label_owner::current().is_manager() {
+                    return CliResponse {
+                        status: "403 Forbidden",
+                        content_type: "application/json",
+                        body: serde_json::json!({
+                            "error": "owner_only: unclaim without a workspace is owner/admin only; \
+                                      pass project= to release your own label",
+                        })
+                        .to_string(),
+                    };
+                }
+                match k2_core::db::schema::SubdomainWorkspace::unclaim(&conn, &label) {
+                    Ok(removed) => removed,
+                    Err(e) => return CliResponse::bad_request(e.to_string()),
+                }
+            }
         }
     };
     if removed {
@@ -2700,14 +2746,14 @@ mod subdomain_attribution_route_tests {
         assert_eq!(v["projectId"].as_str(), Some(id.as_str()));
         assert_eq!(attribution_of(&label).as_deref(), Some(id.as_str()));
 
-        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label), ("project", &path)]));
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["removed"], serde_json::json!(true));
         assert_eq!(attribution_of(&label), None);
 
         // Second unclaim: still 200, but honestly removed:false.
-        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label), ("project", &path)]));
         assert_eq!(resp.status, "200 OK");
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["removed"], serde_json::json!(false));
@@ -2716,11 +2762,15 @@ mod subdomain_attribution_route_tests {
     }
 
     /// Claim also accepts the project ID directly (the renderer's
-    /// context), and a re-claim by another workspace repoints the label.
+    /// context). A re-claim by ANOTHER workspace is refused (409, no
+    /// rewrite) for members and agents, even with `transfer=1`; only an
+    /// owner/admin transfer moves it. A foreign unclaim is refused too,
+    /// and a workspace-less unclaim is owner/admin only.
     #[test]
-    fn claim_by_id_and_reclaim_repoints() {
+    fn claim_by_id_and_foreign_reclaim_is_refused_until_owner_transfer() {
+        let _home = crate::test_support::TempHome::new();
         let (id_a, _) = make_project("repoint-a");
-        let (id_b, _) = make_project("repoint-b");
+        let (id_b, path_b) = make_project("repoint-b");
         let label = format!("rp-{}", std::process::id());
 
         let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &id_a)]));
@@ -2728,12 +2778,41 @@ mod subdomain_attribution_route_tests {
         assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
 
         let resp = handle_subdomain_claim(&params(&[("label", &label), ("project", &id_b)]));
-        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
-        assert_eq!(
-            attribution_of(&label).as_deref(),
-            Some(id_b.as_str()),
-            "re-claim must repoint to the new workspace"
-        );
+        assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["code"], "label_owned_by_other_workspace");
+        assert!(v.get("owner").is_none(), "member must not see the owner: {v}");
+        assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
+
+        let resp = handle_subdomain_claim(&params(&[
+            ("label", &label),
+            ("project", &id_b),
+            ("transfer", "1"),
+        ]));
+        assert_eq!(resp.status, "403 Forbidden", "member transfer; body={}", resp.body);
+        assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
+
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label), ("project", &path_b)]));
+        assert_eq!(resp.status, "409 Conflict", "foreign unclaim; body={}", resp.body);
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        assert_eq!(resp.status, "403 Forbidden", "workspace-less unclaim; body={}", resp.body);
+        assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
+
+        let mgr = crate::label_owner::Caller::Manager { actor: "owner-token".into() };
+        let resp = crate::label_owner::with_caller(mgr, || {
+            handle_subdomain_claim(&params(&[
+                ("label", &label),
+                ("project", &path_b),
+                ("transfer", "1"),
+            ]))
+        });
+        assert_eq!(resp.status, "200 OK", "owner transfer; body={}", resp.body);
+        assert_eq!(attribution_of(&label).as_deref(), Some(id_b.as_str()));
+        let audited = k2_core::auth_audit::tail(50)
+            .expect("audit tail")
+            .into_iter()
+            .any(|e| e["event"] == "label-transfer");
+        assert!(audited, "owner transfer must write a label-transfer audit line");
 
         cleanup(&label, &id_a);
         cleanup(&label, &id_b);
@@ -2822,7 +2901,7 @@ mod subdomain_attribution_route_tests {
         let after_claim = test_refresh_nudges::count();
         assert!(after_claim > before, "claim must nudge a refresh");
 
-        let resp = handle_subdomain_unclaim(&params(&[("label", &label)]));
+        let resp = handle_subdomain_unclaim(&params(&[("label", &label), ("project", &path)]));
         assert_eq!(resp.status, "200 OK", "body={}", resp.body);
         assert!(
             test_refresh_nudges::count() > after_claim,

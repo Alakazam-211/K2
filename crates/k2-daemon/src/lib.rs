@@ -94,6 +94,8 @@ pub mod presence;
 pub mod project_config_routes;
 pub mod project_group_routes;
 pub mod providers;
+// AR6: one owner per nested URL label (claim/point/run/transfer rule).
+pub mod label_owner;
 pub mod publish_routes;
 pub mod publish_runtime;
 // Companion C4 (prd-companion-v2 §4) — `/cli/push/*` device

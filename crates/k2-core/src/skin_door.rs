@@ -727,6 +727,25 @@ fn skip_cp_register() -> bool {
     crate::airgap::enabled()
 }
 
+/// The front-door label is box-level and reserved, so no workspace may
+/// hold it. If a workspace attribution row exists anyway, refuse to
+/// repoint it rather than silently taking the URL over.
+fn refuse_if_workspace_owned(label: &str) -> Result<(), String> {
+    let owner = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        crate::db::schema::SubdomainWorkspace::owner_of(&conn, label).map_err(|e| e.to_string())?
+    };
+    match owner {
+        None => Ok(()),
+        Some(_) => Err(format!(
+            "label_owned_by_other_workspace: '{label}' is attributed to a workspace on this \
+             server, so the front door will not take it over. The server owner can release it \
+             with `k2 publish subdomain unclaim {label}` from that workspace."
+        )),
+    }
+}
+
 fn register_nested(loopback_port: u16) -> Result<NestedStatus, String> {
     let target = nested_target(loopback_port);
     let cfg = crate::tunnel::config::load().unwrap_or_default();
@@ -739,6 +758,7 @@ fn register_nested(loopback_port: u16) -> Result<NestedStatus, String> {
             registered: false,
         });
     }
+    refuse_if_workspace_owned(NESTED_LABEL)?;
     match crate::tunnel::subdomains::create_subdomain(&cfg.token, NESTED_LABEL, &target) {
         Ok(()) => {}
         Err(e) if e.contains("label_taken") => {

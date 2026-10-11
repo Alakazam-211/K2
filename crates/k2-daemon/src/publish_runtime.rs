@@ -57,6 +57,9 @@ pub fn loopback_port() -> u16 {
 pub struct PublishError {
     pub status: &'static str,
     pub message: String,
+    /// Structured JSON body (e.g. a label-ownership refusal); when set it
+    /// is sent as-is instead of `{"error": message}`.
+    pub body: Option<serde_json::Value>,
 }
 
 impl PublishError {
@@ -64,12 +67,24 @@ impl PublishError {
         Self {
             status: "400 Bad Request",
             message: msg.into(),
+            body: None,
         }
     }
     fn fail(msg: impl Into<String>) -> Self {
         Self {
             status: "400 Bad Request",
             message: msg.into(),
+            body: None,
+        }
+    }
+}
+
+impl From<crate::label_owner::Refusal> for PublishError {
+    fn from(r: crate::label_owner::Refusal) -> Self {
+        Self {
+            status: r.status,
+            message: r.message(),
+            body: Some(r.body),
         }
     }
 }
@@ -641,10 +656,24 @@ fn gate_hint(kind: &str) -> String {
     )
 }
 
-fn attach_hostname(project_id: &str, name: &str, port: u16, token: &str, primary: &str) -> Result<(), String> {
+fn attach_hostname(
+    project_id: &str,
+    name: &str,
+    port: u16,
+    token: &str,
+    primary: &str,
+    transfer: bool,
+) -> Result<(), String> {
     let target = format!("127.0.0.1:{port}");
+    // One owner per label: decide BEFORE any control-plane write, so a
+    // label another workspace on this server holds is never repointed.
+    let caller = crate::label_owner::current();
+    let decision = crate::label_owner::check(name, project_id, transfer).map_err(|r| r.message())?;
     match subdomains::create_subdomain(token, name, &target) {
         Ok(()) => {}
+        // Already on the account: repoint only because `decision` says
+        // this workspace holds it (or it is unattributed, or an audited
+        // owner/admin transfer).
         Err(e) if e.contains("label_taken") => {
             subdomains::point_subdomain(token, name, &target)?;
         }
@@ -653,7 +682,8 @@ fn attach_hostname(project_id: &str, name: &str, port: u16, token: &str, primary
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        SubdomainWorkspace::claim(&conn, name, project_id).map_err(|e| e.to_string())?;
+        crate::label_owner::apply(&conn, name, project_id, None, &decision, &caller)
+            .map_err(|r| r.message())?;
     }
     crate::session_events::emit_tunnel_subdomains_changed();
     let tries = claim_tries();
@@ -831,6 +861,9 @@ pub struct RunSpec {
     pub skin_root: String,
     /// True when the caller passed `--cwd` / `cwd=` (forbidden with `--skin`).
     pub cwd_explicit: bool,
+    /// Explicit owner/admin transfer of a label another workspace holds
+    /// (`--transfer`). Refused for agents and members; audited.
+    pub transfer: bool,
 }
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
@@ -874,6 +907,10 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
         EXPOSE_TUNNEL
     };
     if expose == EXPOSE_TUNNEL {
+        // Refuse a label another workspace holds before any row, process
+        // or control-plane call (structured 409). Local and cheap, so it
+        // runs ahead of the Connect plan preflight.
+        crate::label_owner::check(&name, &spec.project_id, spec.transfer)?;
         nested_preflight()?;
     }
 
@@ -926,7 +963,7 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
         }
     }
 
-    match start_inner(&spec.project_id, &name, expose == EXPOSE_TUNNEL) {
+    match start_inner(&spec.project_id, &name, expose == EXPOSE_TUNNEL, spec.transfer) {
         Ok(json) => Ok(json),
         Err(e) => {
             if expose == EXPOSE_TUNNEL {
@@ -952,12 +989,18 @@ pub fn start(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> 
         return Ok(to_json(&row));
     }
     if row.expose == EXPOSE_TUNNEL {
+        crate::label_owner::check(&name, project_id, false)?;
         nested_preflight()?;
     }
-    start_inner(project_id, &name, row.expose == EXPOSE_TUNNEL)
+    start_inner(project_id, &name, row.expose == EXPOSE_TUNNEL, false)
 }
 
-fn start_inner(project_id: &str, name: &str, want_tunnel: bool) -> Result<ServiceJson, PublishError> {
+fn start_inner(
+    project_id: &str,
+    name: &str,
+    want_tunnel: bool,
+    transfer: bool,
+) -> Result<ServiceJson, PublishError> {
     let row = load_row(project_id, name).ok_or_else(|| PublishError::bad("no such published service"))?;
     if port_accepts(row.port as u16) {
         if let Some(pid) = row.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -1019,8 +1062,14 @@ fn start_inner(project_id: &str, name: &str, want_tunnel: bool) -> Result<Servic
             rollback_hostname_fail(project_id, name, &entry, &e);
             PublishError::fail(e)
         })?;
-        if let Err(e) = attach_hostname(project_id, name, row.port as u16, &cfg.token, &cfg.subdomain)
-        {
+        if let Err(e) = attach_hostname(
+            project_id,
+            name,
+            row.port as u16,
+            &cfg.token,
+            &cfg.subdomain,
+            transfer,
+        ) {
             rollback_hostname_fail(project_id, name, &entry, &e);
             return Err(PublishError::fail(e));
         }
@@ -1104,13 +1153,19 @@ pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), Publi
     let name = ps::normalize_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name);
     let _ = stop(project_id, &name);
-    {
+    // Only ever release THIS workspace's label: a label another workspace
+    // holds keeps its attribution and its control-plane hostname.
+    let label_is_ours = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let _ = SubdomainWorkspace::unclaim(&conn, &name);
+        let ours = !matches!(
+            SubdomainWorkspace::self_unclaim(&conn, &name, project_id),
+            Ok(k2_core::db::schema::SelfUnclaim::Foreign { .. })
+        );
         let _ = ps::delete(&conn, project_id, &name);
-    }
-    if !keep_hostname {
+        ours
+    };
+    if !keep_hostname && label_is_ours {
         if row.as_ref().is_some_and(|r| r.expose == EXPOSE_TUNNEL) {
             if let Ok(cfg) = tunnel_config::load() {
                 if !cfg.token.trim().is_empty() {
@@ -1293,7 +1348,7 @@ pub fn restart_skin_helper(project_id: &str, name: &str) -> Result<ServiceJson, 
             row.port
         )));
     }
-    start_inner(project_id, name, false)
+    start_inner(project_id, name, false, false)
 }
 
 /// Boot reattach of a `--skin` helper: if it does not answer with the
@@ -1435,7 +1490,7 @@ pub fn boot_desired_running() {
             row.project_id,
             row.name
         );
-        if let Err(e) = start_inner(&row.project_id, &row.name, row.expose == EXPOSE_TUNNEL) {
+        if let Err(e) = start_inner(&row.project_id, &row.name, row.expose == EXPOSE_TUNNEL, false) {
             log_debug!(
                 "[publish] boot respawn {}/{} failed: {}",
                 row.project_id,
@@ -1793,6 +1848,7 @@ mod tests {
             skin: false,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         };
         let json = run(spec).expect("run");
         assert_eq!(
@@ -1844,6 +1900,7 @@ mod tests {
             skin: false,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         })
         .expect("run --no-tunnel");
         assert_eq!(json.expose, EXPOSE_LOCAL);
@@ -1854,6 +1911,131 @@ mod tests {
             "--no-tunnel must never dial connect.k2.dev (GET or POST)"
         );
         cleanup(&project_id, &name);
+    }
+
+    /// AR6: a publish run (plain or `--skin`) on a label another
+    /// workspace holds is refused with a structured 409 before any row,
+    /// process or control-plane call; the owner keeps the label.
+    #[test]
+    fn run_refuses_label_owned_by_other_workspace_before_any_write() {
+        let _home = crate::test_support::TempHome::new();
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let mock = start_mock_cp(
+            200,
+            r#"{"subdomains":[{"label":"rosson","primary":true,"connected":true,"tier":"pro"}]}"#,
+            "*",
+        );
+        let dir_a = _home.path().join("ws-own-a");
+        let dir_b = _home.path().join("ws-own-b");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::create_dir_all(&dir_b).unwrap();
+        let a = make_project(&dir_a.to_string_lossy());
+        let b = make_project(&dir_b.to_string_lossy());
+        let name = unique("owned");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            SubdomainWorkspace::claim(&conn, &name, &a).expect("A claims");
+        }
+        let marker = dir_b.join("spawned");
+        for skin in [false, true] {
+            let err = run(RunSpec {
+                project_id: b.clone(),
+                name: name.clone(),
+                cmd: if skin { String::new() } else { format!("echo hi > {}", marker.display()) },
+                cwd: dir_b.clone(),
+                port: 9,
+                no_tunnel: false,
+                replace_spec: false,
+                skin,
+                skin_root: String::new(),
+                cwd_explicit: false,
+                transfer: false,
+            })
+            .expect_err("B must not take A's label");
+            assert_eq!(err.status, "409 Conflict", "skin={skin} msg={}", err.message);
+            let body = err.body.as_ref().expect("structured body");
+            assert_eq!(body["code"], crate::label_owner::CODE, "skin={skin}");
+            assert!(body.get("owner").is_none(), "default caller gets the neutral message");
+            assert!(!marker.exists(), "must not spawn (skin={skin})");
+            assert!(load_row(&b, &name).is_none(), "no service row for B (skin={skin})");
+        }
+        // An agent/member asking for a transfer is refused too.
+        let err = run(RunSpec {
+            project_id: b.clone(),
+            name: name.clone(),
+            cmd: "true".into(),
+            cwd: dir_b.clone(),
+            port: 9,
+            no_tunnel: false,
+            replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
+            transfer: true,
+        })
+        .expect_err("non-owner transfer must fail");
+        assert_eq!(err.status, "403 Forbidden", "msg={}", err.message);
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 0, "no control-plane call on refusal");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            assert_eq!(
+                SubdomainWorkspace::owner_of(&conn, &name).unwrap().as_deref(),
+                Some(a.as_str()),
+                "A keeps its label"
+            );
+            let _ = SubdomainWorkspace::unclaim(&conn, &name);
+        }
+    }
+
+    /// AR6: `rm` of a same-named service never drops another workspace's
+    /// label attribution nor deletes its control-plane hostname.
+    #[test]
+    fn rm_never_releases_another_workspaces_label() {
+        let _home = crate::test_support::TempHome::new();
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let mock = start_mock_cp(200, r#"{"removed":"x"}"#, "*");
+        let dir_a = _home.path().join("ws-rm-a");
+        let dir_b = _home.path().join("ws-rm-b");
+        fs::create_dir_all(&dir_a).unwrap();
+        fs::create_dir_all(&dir_b).unwrap();
+        let a = make_project(&dir_a.to_string_lossy());
+        let b = make_project(&dir_b.to_string_lossy());
+        let name = unique("rmown");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            SubdomainWorkspace::claim(&conn, &name, &a).expect("A claims");
+            ps::insert(
+                &conn,
+                &b,
+                &name,
+                "true",
+                &dir_b.to_string_lossy(),
+                9,
+                EXPOSE_TUNNEL,
+                DESIRED_STOPPED,
+                KIND_CMD,
+                "",
+            )
+            .expect("B row");
+        }
+        rm(&b, &name, false).expect("rm B's own row");
+        assert!(load_row(&b, &name).is_none(), "B's row is gone");
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 0, "A's hostname must not be deleted");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            assert_eq!(
+                SubdomainWorkspace::owner_of(&conn, &name).unwrap().as_deref(),
+                Some(a.as_str()),
+                "A keeps its label"
+            );
+            let _ = SubdomainWorkspace::unclaim(&conn, &name);
+        }
     }
 
     #[test]
@@ -1889,6 +2071,7 @@ mod tests {
             skin: false,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         })
         .expect_err("not Pro must fail");
         assert!(
@@ -1976,6 +2159,7 @@ mod tests {
             skin: false,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         })
         .expect_err("hostname fail");
         drop(cp_base);
@@ -2023,6 +2207,7 @@ mod tests {
             skin: false,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         };
         run(spec()).expect("first run");
         let err = run(spec()).expect_err("second must fail");
@@ -2047,6 +2232,7 @@ mod tests {
             skin: true,
             skin_root: String::new(),
             cwd_explicit: false,
+            transfer: false,
         })
         .expect_err("cmd+skin");
         assert!(
@@ -2065,6 +2251,7 @@ mod tests {
             skin: true,
             skin_root: String::new(),
             cwd_explicit: true,
+            transfer: false,
         })
         .expect_err("cwd+skin");
         assert!(

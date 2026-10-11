@@ -12777,8 +12777,8 @@ k2 tunnel is the device pipe to your primary *.k2.dev. Nested names ride that
 same pipe. This command does not start k2 tunnel.
 
 USAGE
-  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>]
-  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]
+  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--transfer]
+  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel] [--transfer]
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
   k2 publish ps|status [--json]
@@ -12793,6 +12793,9 @@ run
     https://k2.dev/dashboard
   --no-tunnel: process only, no public URL, no Pro required.
   Same <name> already running: error — stop first. Does not overwrite.
+  A name another workspace on this server owns is refused
+  (label_owned_by_other_workspace). --transfer: owner/admin only, moves it
+  here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
 
   --skin [<dir>]   Static HTML host (an app). Prefer Next in cwd for new apps.
@@ -12819,6 +12822,8 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   rm     <label>                             delete the name (not the process)
   claim / unclaim <label>                    show or hide that name on THIS
                                              workspace's Published list
+  A name another workspace owns is refused before anything changes.
+  create/point/claim --transfer: owner/admin only, audited.
 
   Apps: official static host is `k2 publish run <label> --skin --port N`.
     k2 publish run agents --skin --port 8788
@@ -12917,6 +12922,13 @@ if err is not None and err != "" and err is not False:
     if isinstance(err, dict):
         code = err.get("code") or "error"
         hint = err.get("hint") or err.get("message") or err.get("detail") or code
+    elif d.get("code"):
+        # Structured refusal (e.g. label_owned_by_other_workspace): keep
+        # both the message and the hint.
+        code = str(d.get("code"))
+        hint = str(err)
+        if d.get("hint"):
+            hint = "%s\n  %s" % (hint, d.get("hint"))
     else:
         code = str(err) if str(err).replace("_", "").isalnum() and len(str(err)) < 48 else "error"
         hint = str(err)
@@ -13121,7 +13133,7 @@ cmd_publish() {
 # `k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]`
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
-    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root=""
+    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --cmd)
@@ -13155,11 +13167,12 @@ cmd_publish_run() {
                 skin_root="${1#--skin=}"
                 shift ;;
             --no-tunnel) no_tunnel=1; shift ;;
+            --transfer) transfer=1; shift ;;
             --json) as_json=true; shift ;;
             --help|-h) _publish_usage; exit 0 ;;
             -*)
                 as_json="$as_json" _publish_err "usage" \
-                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>]"
+                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--transfer]"
                 exit 2 ;;
             *)
                 if [ -z "$name" ]; then
@@ -13211,7 +13224,7 @@ cmd_publish_run() {
     [ -z "$cwd" ] && [ "$skin" != 1 ] && cwd="$PROJECT"
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
-           P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" \
+           P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
            P_SKIN="$skin" P_SKIN_ROOT="$skin_root" python3 -c '
 import json, os
 b = {
@@ -13227,6 +13240,8 @@ if cwd:
     b["cwd"] = cwd
 if os.environ.get("P_NO_TUNNEL") == "1":
     b["noTunnel"] = True
+if os.environ.get("P_TRANSFER") == "1":
+    b["transfer"] = True
 if os.environ.get("P_SKIN") == "1":
     b["skin"] = True
     root = os.environ.get("P_SKIN_ROOT") or ""
@@ -13605,26 +13620,63 @@ if tier in ("single", "free"):
 # non-zero when the daemon connection is missing/unreachable.
 _subdomain_attrib_post() {
     local verb="$1" label="$2" target="${3:-}"
+    if [ $# -ge 3 ]; then shift 3; else shift $#; fi
     if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then return 1; fi
+    local fields=("label=$(urlencode "$label")")
     if [ -n "$target" ]; then
-        cli_send cli_post "/cli/publish/subdomain/${verb}" \
-            "label=$(urlencode "$label")" "target=$(urlencode "$target")"
-    else
-        cli_send cli_post "/cli/publish/subdomain/${verb}" \
-            "label=$(urlencode "$label")"
+        fields+=("target=$(urlencode "$target")")
     fi
+    # Extra form fields (check=1 / transfer=1) ride after the target.
+    cli_send cli_post "/cli/publish/subdomain/${verb}" "${fields[@]}" "$@"
+}
+
+# One owner per label: ask the LOCAL daemon (read only, check=1) whether
+# this workspace may take <label> BEFORE any control-plane create/point/rm,
+# so a name another workspace on this server owns is never touched.
+# Returns non-zero (message on stderr) on refusal or when the daemon is
+# unreachable. Usage: _subdomain_label_preflight <label> [transfer 0|1]
+_subdomain_label_preflight() {
+    local label="$1" transfer="${2:-0}" resp
+    if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+        echo "Error: the local K2 daemon isn't reachable, so ownership of '$label' can't be checked." >&2
+        return 1
+    fi
+    if [ "$transfer" = 1 ]; then
+        resp=$(_subdomain_attrib_post claim "$label" "" "check=1" "transfer=1") || resp=""
+    else
+        resp=$(_subdomain_attrib_post claim "$label" "" "check=1") || resp=""
+    fi
+    printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d = {}
+if isinstance(d, dict) and d.get("success"):
+    sys.exit(0)
+err = (d.get("error") if isinstance(d, dict) else None) or "no response from the daemon"
+print("Error: %s" % err, file=sys.stderr)
+if isinstance(d, dict) and d.get("hint"):
+    print("  %s" % d.get("hint"), file=sys.stderr)
+sys.exit(1)
+'
 }
 
 # Load-bearing attribution stamp AFTER a successful control-plane
 # create/point/rm. Stamp fail → non-zero even if the hostname exists
 # on the account. Thin wrapper — does not swallow.
+# Usage: _stamp_subdomain_attrib <claim|unclaim> <label> [target] [transfer 0|1]
 _stamp_subdomain_attrib() {
-    local verb="$1" label="$2" target="${3:-}" resp err
+    local verb="$1" label="$2" target="${3:-}" transfer="${4:-0}" resp err
     if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
         echo "Error: workspace attribution was not recorded on the daemon (unreachable)." >&2
         return 1
     fi
-    resp=$(_subdomain_attrib_post "$verb" "$label" "$target") || resp=""
+    if [ "$transfer" = 1 ]; then
+        resp=$(_subdomain_attrib_post "$verb" "$label" "$target" "transfer=1") || resp=""
+    else
+        resp=$(_subdomain_attrib_post "$verb" "$label" "$target") || resp=""
+    fi
     if printf '%s' "$resp" | python3 -c 'import json,sys; sys.exit(0 if (json.loads(sys.stdin.read() or "{}") or {}).get("success") else 1)' 2>/dev/null; then
         return 0
     fi
@@ -13729,10 +13781,24 @@ cmd_publish_subdomain() {
     # is the daemon write.
     case "$action" in
         claim|unclaim)
-            local label="${1:-}"
+            local label="" transfer=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --transfer) transfer=1; shift ;;
+                    --*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+                    *) [ -z "$label" ] && label="$1"; shift ;;
+                esac
+            done
             if [ -z "$label" ]; then
                 echo "Usage: k2 publish subdomain $action <label>" >&2
+                if [ "$action" = claim ]; then
+                    echo "       k2 publish subdomain claim <label> --transfer   (owner/admin; audited)" >&2
+                fi
                 exit 1
+            fi
+            if [ "$transfer" = 1 ] && [ "$action" != claim ]; then
+                echo "Error: --transfer only applies to claim/create/point/run" >&2
+                exit 2
             fi
             if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
                 echo "Error: '$action' records attribution on the local K2 daemon, which isn't reachable." >&2
@@ -13740,7 +13806,11 @@ cmd_publish_subdomain() {
                 exit 1
             fi
             local resp
-            resp=$(_subdomain_attrib_post "$action" "$label") || resp=""
+            if [ "$transfer" = 1 ]; then
+                resp=$(_subdomain_attrib_post "$action" "$label" "" "transfer=1") || resp=""
+            else
+                resp=$(_subdomain_attrib_post "$action" "$label") || resp=""
+            fi
             printf '%s' "$resp" | ACTION="$action" LABEL="$label" python3 -c '
 import json, os, sys
 action, label = os.environ["ACTION"], os.environ["LABEL"]
@@ -13750,8 +13820,13 @@ except Exception:
     d = {}
 if not isinstance(d, dict) or not d.get("success"):
     err = (d.get("error") if isinstance(d, dict) else None) or "no response from the daemon"
-    print(f"Error: {err}", file=sys.stderr); sys.exit(1)
-if action == "claim":
+    print(f"Error: {err}", file=sys.stderr)
+    if isinstance(d, dict) and d.get("hint"):
+        print("  %s" % d.get("hint"), file=sys.stderr)
+    sys.exit(1)
+if action == "claim" and d.get("transferred"):
+    print("Transferred %s to this workspace (project %s). Recorded in the access audit log." % (label, d.get("projectId") or "?"))
+elif action == "claim":
     # %-format, not a nested-quote f-string — this program lives inside a
     # single-quoted bash string, so a bare apostrophe would cut it.
     print("Claimed %s for this workspace (project %s)." % (label, d.get("projectId") or "?"))
@@ -13772,20 +13847,22 @@ else:
     fi
     case "$action" in
         create)
-            local label="" target=""
+            local label="" target="" transfer=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --target) target="${2:-}"; shift 2 ;;
+                    --transfer) transfer=1; shift ;;
                     --*) shift ;;
                     *) [ -z "$label" ] && label="$1"; shift ;;
                 esac
             done
             if [ -z "$label" ] || [ -z "$target" ]; then
-                echo "Usage: k2 publish subdomain create <label> --target <endpoint>" >&2
+                echo "Usage: k2 publish subdomain create <label> --target <endpoint> [--transfer]" >&2
                 echo "  e.g. k2 publish subdomain create staging --target localhost:3000" >&2
                 exit 1
             fi
             _refuse_reserved_nested_label "$label"
+            _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
             _connect_curl POST "/subdomains" "$body" | _connect_subdomain_render '
@@ -13800,7 +13877,7 @@ print("  effective: %s" % d.get("effective","?"))
             # otherwise): attribute the label to the acting workspace,
             # then nudge the daemon's map refresh so the URL is live in
             # the UIs immediately.
-            _stamp_subdomain_attrib claim "$label" "$target"
+            _stamp_subdomain_attrib claim "$label" "$target" "$transfer"
             _nudge_subdomain_refresh
             _warn_if_local_target_down "$target"
             ;;
@@ -13927,19 +14004,21 @@ else:
 '
             ;;
         point)
-            local label="" target=""
+            local label="" target="" transfer=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --target) target="${2:-}"; shift 2 ;;
+                    --transfer) transfer=1; shift ;;
                     --*) shift ;;
                     *) [ -z "$label" ] && label="$1"; shift ;;
                 esac
             done
             if [ -z "$label" ] || [ -z "$target" ]; then
-                echo "Usage: k2 publish subdomain point <label> --target <endpoint>" >&2
+                echo "Usage: k2 publish subdomain point <label> --target <endpoint> [--transfer]" >&2
                 exit 1
             fi
             _refuse_reserved_nested_label "$label"
+            _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
             _connect_curl PUT "/subdomains/$(urlencode "$label")" "$body" | _connect_subdomain_render '
@@ -13949,9 +14028,10 @@ print("  status:    %s" % d.get("status","?"))
 print("  effective: %s" % d.get("effective","?"))
 '
             # 0074 — a repoint through the K2 surface records the acting
-            # workspace (self-only; foreign 0074 403s). Then nudge the
-            # map refresh so the new target shows immediately.
-            _stamp_subdomain_attrib claim "$label" "$target"
+            # workspace (self-only; a foreign label was refused by the
+            # preflight). Then nudge the map refresh so the new target
+            # shows immediately.
+            _stamp_subdomain_attrib claim "$label" "$target" "$transfer"
             _nudge_subdomain_refresh
             _warn_if_local_target_down "$target"
             ;;
@@ -13961,6 +14041,11 @@ print("  effective: %s" % d.get("effective","?"))
             if [ -z "$label" ]; then
                 echo "Usage: k2 publish subdomain rm <label>" >&2
                 exit 1
+            fi
+            # Never delete a name another workspace on this server owns.
+            # (The reserved front-door label is box-level, not a workspace's.)
+            if [ "$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')" != "skin" ]; then
+                _subdomain_label_preflight "$label" 0 || exit 1
             fi
             _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
 print("Removed %s" % (d.get("removed") or "(subdomain)"))
@@ -15777,7 +15862,10 @@ print("")
 
     # 2) Try automated subdomain create when Connect token is present.
     local created=0
-    if [ -n "$(_connect_bearer_token 2>/dev/null || true)" ]; then
+    # One owner per label: never create/point a name another workspace
+    # on this server owns (falls through to the manual instructions).
+    if [ -n "$(_connect_bearer_token 2>/dev/null || true)" ] \
+        && _subdomain_label_preflight "$label" 0; then
         local cp_body cp_raw
         cp_body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
         # Prefer create; on "already exists" style errors, try point.

@@ -28,8 +28,6 @@ mkdir -p "${TEST_HOME}/.k2"
 cat > "${TEST_HOME}/.k2/tunnel.json" <<'JSON'
 { "token": "tok_test_123", "subdomain": "rosson" }
 JSON
-trap 'rm -rf "$TEST_HOME" "$REQ_FILE" 2>/dev/null; [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null' EXIT
-
 REQ_FILE="$(mktemp)"
 
 # Mock control plane: a tiny python HTTP server that records the request line +
@@ -38,17 +36,49 @@ REQ_FILE="$(mktemp)"
 # test writes ($RESP_FILE: "<status>\n<json body>").
 RESP_FILE="$(mktemp)"
 echo $'200\n{}' > "$RESP_FILE"
+# The same mock also stands in for the LOCAL daemon's /cli/* routes:
+# DAEMON_FILE = "ok" (label ownership check passes) | "foreign" (another
+# workspace owns the label → 409). Every other /cli/* call (the stamp)
+# answers 500, so "CP success + stamp fail" stays testable. Daemon
+# requests are appended to DREQ_FILE, never to REQ_FILE.
+DAEMON_FILE="$(mktemp)"
+echo ok > "$DAEMON_FILE"
+DREQ_FILE="$(mktemp)"
+trap 'rm -rf "$TEST_HOME" "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" 2>/dev/null; [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null' EXIT
 
 PORT=0
 start_mock() {
-    REQ_FILE="$REQ_FILE" RESP_FILE="$RESP_FILE" python3 - "$REQ_FILE" "$RESP_FILE" <<'PY' &
-import sys, http.server, socketserver, threading
-req_file, resp_file = sys.argv[1], sys.argv[2]
+    python3 - "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" <<'PY' &
+import sys, http.server, socketserver, threading, json
+req_file, resp_file, daemon_file, dreq_file = sys.argv[1:5]
 
 class H(http.server.BaseHTTPRequestHandler):
+    def _daemon(self):
+        with open(dreq_file, "a") as f:
+            f.write("%s %s\n" % (self.command, self.path))
+        mode = open(daemon_file).read().strip()
+        if self.path.startswith("/cli/publish/subdomain/claim") and "check=1" in self.path:
+            if mode == "foreign":
+                code, body = 409, json.dumps({
+                    "error": "label_owned_by_other_workspace: 'staging' belongs to another workspace on this server.",
+                    "code": "label_owned_by_other_workspace",
+                    "hint": "Pick another name, or ask the server owner to transfer this one.",
+                })
+            else:
+                code, body = 200, json.dumps({"success": True, "check": True})
+        else:
+            code, body = 500, json.dumps({"error": "mock daemon: not accepted"})
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body.encode())))
+        self.end_headers()
+        self.wfile.write(body.encode())
+
     def _record_and_reply(self):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        if self.path.startswith("/cli/") or self.path.startswith("/boot-status"):
+            return self._daemon()
         with open(req_file, "w") as f:
             f.write("%s %s\n" % (self.command, self.path))
             f.write("AUTH:%s\n" % self.headers.get("Authorization", ""))
@@ -86,10 +116,11 @@ export K2_CONNECT_BASE="http://127.0.0.1:${PORT}"
 
 # Daemon env is EXPLICITLY cleared for list/status (still skip the conn
 # gate). create/point/rm/claim/unclaim NEED the daemon (stamp is
-# load-bearing) — run_d uses a fake PORT/TOKEN so CP mapping tests can
-# pass the gate; stamp then fails loud (nothing listens on :9).
+# load-bearing) — run_d points the CLI at the mock daemon (DAEMON_FILE)
+# so CP mapping tests pass the gate and the ownership preflight; the
+# stamp then fails loud (mock daemon answers 500).
 run() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish subdomain "$@" 2>&1; }
-run_d() { HOME="$TEST_HOME" K2_PORT=9 K2_HOOK_TOKEN=fake K2SO_PORT= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish subdomain "$@" 2>&1; }
+run_d() { HOME="$TEST_HOME" K2_PORT="$PORT" K2_HOOK_TOKEN=fake K2SO_PORT= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish subdomain "$@" 2>&1; }
 set_resp() { printf '%s\n%s' "$1" "$2" > "$RESP_FILE"; }
 req_line() { head -1 "$REQ_FILE"; }
 req_body() { tail -n +3 "$REQ_FILE"; }
@@ -176,6 +207,33 @@ echo "$out" | grep -q "Removed staging" || bad "rm output missing removed: $out"
 echo "$out" | grep -qi "workspace attribution was not removed" && [ $rc -ne 0 ] \
     && ok "rm CP success + unclaim fail is non-zero" \
     || bad "rm stamp fail-loud: $out (rc=$rc)"
+
+# ── label owned by another workspace (AR6) ───────────────────────────────
+# The daemon's read-only ownership check refuses → create/point/rm never
+# reach the control plane, exit non-zero, and print the code + hint.
+echo foreign > "$DAEMON_FILE"
+set_resp 200 '{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000"}'
+for verb in "create staging --target localhost:3000" "point staging --target localhost:3000" "rm staging"; do
+    echo "SENTINEL" > "$REQ_FILE"
+    # shellcheck disable=SC2086
+    out="$(run_d $verb)"; rc=$?
+    echo "$out" | grep -q "label_owned_by_other_workspace" && [ $rc -ne 0 ] \
+        && ok "${verb%% *}: foreign label refused (rc!=0)" \
+        || bad "${verb%% *} foreign refusal: $out (rc=$rc)"
+    echo "$out" | grep -q "ask the server owner to transfer" \
+        && ok "${verb%% *}: refusal carries the hint" || bad "${verb%% *} hint: $out"
+    [ "$(req_line)" = "SENTINEL" ] && ok "${verb%% *}: foreign label never touches the control plane" \
+        || bad "${verb%% *} hit CP despite refusal: $(req_line)"
+done
+echo ok > "$DAEMON_FILE"
+# --transfer rides the ownership check and the stamp.
+: > "$DREQ_FILE"
+set_resp 200 '{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000"}'
+out="$(run_d point staging --target localhost:3000 --transfer)"; rc=$?
+grep -q "check=1.*transfer=1\|transfer=1.*check=1" "$DREQ_FILE" \
+    && ok "point --transfer sends transfer=1 on the check" || bad "point --transfer check: $(cat "$DREQ_FILE")"
+grep -v "check=1" "$DREQ_FILE" | grep "/cli/publish/subdomain/claim" | grep -q "transfer=1" \
+    && ok "point --transfer sends transfer=1 on the stamp" || bad "point --transfer stamp: $(cat "$DREQ_FILE")"
 
 # ── claim / unclaim (0074, daemon-local — no control plane) ──────────────
 # With no daemon connection these MUST fail loud (their whole job is the

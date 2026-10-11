@@ -205,7 +205,7 @@ describe('writes (T1.2)', () => {
     expect(readRemoteRoomsPreview(localStorage, 'mac')).toBe(false)
   })
 
-  it('nothing else in src/renderer writes the key, and no "(preview)" copy is left (T1.2, T1.4)', () => {
+  it('nothing else in src/renderer writes the key, and no "Remote rooms (preview)" copy is left (T1.2, T1.4)', () => {
     const root = join(__dirname, '..')
     const files: string[] = []
     const walk = (dir: string): void => {
@@ -223,7 +223,10 @@ describe('writes (T1.2)', () => {
       const text = readFileSync(f, 'utf8')
       const rel = relative(root, f)
       if (/setItem\(\s*(LS_REMOTE_ROOMS_PREVIEW|['"]k2\.homeRemoteRooms\.v1['"])/.test(text)) writers.push(rel)
-      if (text.includes('(preview)')) preview.push(rel)
+      // T1.4 is about Remote rooms' old "(preview)" label. Compute nodes are
+      // still a preview by design (0.45.3+, Settings → Compute), so match
+      // the rooms label, not every "(preview)".
+      if (/rooms \(preview\)/i.test(text)) preview.push(rel)
     }
     expect(writers).toEqual(['lib/remote-rooms-preview.ts'])
     expect(preview).toEqual([])

@@ -28,6 +28,7 @@
 import {
   glyphMetrics,
   resolveGlyphRects,
+  symbolGeometry,
   syntheticGlyphSpec,
   type DeviceRect,
   type GlyphMetrics,
@@ -183,6 +184,31 @@ export function drawSyntheticGlyph(
     ctx.arcTo(x + a.cornerX, y + a.cornerY, x + a.endX, y + a.endY, a.radius)
     ctx.lineTo(x + a.endX, y + a.endY)
     ctx.stroke()
+    ctx.globalAlpha = 1
+    return
+  }
+  if (spec.kind === 'symbol') {
+    // ⏺⏹⏸⏴⏵⏶⏷: one filled mark in the ink colour — never a font
+    // glyph, so never the colour-emoji fallback (syntheticGlyphs.ts
+    // header, "TUI status symbols").
+    if (alpha !== 1) ctx.globalAlpha = alpha
+    const g = symbolGeometry(spec.shape, m)
+    if (g.kind === 'rects') {
+      for (const r of g.rects) {
+        ctx.fillRect(x + r.x0, y + r.y0, r.x1 - r.x0, r.y1 - r.y0)
+      }
+    } else {
+      ctx.beginPath()
+      if (g.kind === 'circle') {
+        ctx.arc(x + g.cx, y + g.cy, g.r, 0, Math.PI * 2)
+      } else {
+        g.points.forEach(([px, py], i) =>
+          i === 0 ? ctx.moveTo(x + px, y + py) : ctx.lineTo(x + px, y + py),
+        )
+        ctx.closePath()
+      }
+      ctx.fill()
+    }
     ctx.globalAlpha = 1
     return
   }

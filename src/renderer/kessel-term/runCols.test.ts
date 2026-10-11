@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   colToTextIndex,
   isEmojiCp,
+  isTextDefaultEmojiCp,
   isWideCp,
   rowColSpan,
   runCells,
@@ -270,5 +271,47 @@ describe('BMP emoji width (the squished-✅ fix)', () => {
     expect(isEmojiCp(0x2713)).toBe(false) // ✓ text check mark
     expect(isEmojiCp(0x2500)).toBe(false) // ─ box drawing
     expect(isEmojiCp(0x2800)).toBe(false) // braille
+  })
+})
+
+describe('text-presentation emoji (the clipped ⏺ fix)', () => {
+  it('flags one-column symbols that have an emoji form', () => {
+    for (const ch of ['⏺', '⏸', '⏹', '⏯', '✔', '✳', '☀', '↔', '™', '©', '▶', '⚠']) {
+      expect(isTextDefaultEmojiCp(ch.codePointAt(0)!), ch).toBe(true)
+    }
+  })
+
+  it('leaves real emoji, plain symbols and ASCII alone', () => {
+    // emoji-presentation (✅ ⚡) and the ones the renderer treats as
+    // emoji on purpose (❤, plane-1) take the emoji path instead
+    for (const ch of ['✅', '⚡', '❤', '🎉', '😀']) {
+      expect(isTextDefaultEmojiCp(ch.codePointAt(0)!), ch).toBe(false)
+    }
+    // not Emoji at all: ● ○ ✓ ✗ → ⏵ (⏵ is painted, not VS15'd)
+    for (const ch of ['●', '○', '✓', '✗', '→', '⏵', '#', '1', 'a']) {
+      expect(isTextDefaultEmojiCp(ch.codePointAt(0)!), ch).toBe(false)
+    }
+  })
+
+  it('matches the engine\'s \\p{Emoji} && !\\p{Emoji_Presentation} table', () => {
+    const em = /\p{Emoji}/u
+    const ep = /\p{Emoji_Presentation}/u
+    for (let cp = 0x80; cp < 0x20000; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue
+      const ch = String.fromCodePoint(cp)
+      const want =
+        em.test(ch) && !ep.test(ch) && !isEmojiCp(cp) &&
+        !(cp >= 0x1f000 && cp <= 0x1faff)
+      if (isTextDefaultEmojiCp(cp) !== want) {
+        throw new Error(`U+${cp.toString(16)}: table ${!want}, engine ${want}`)
+      }
+    }
+  })
+
+  it('routes runs holding ⏺ / ⏵ / ✔ to per-char cells (synthetic + VS15 need them)', () => {
+    expect(runNeedsPerCharCells('⏺ Agent')).toBe(true)
+    expect(runNeedsPerCharCells('⏵⏵ accept edits on')).toBe(true)
+    expect(runNeedsPerCharCells('✔ done')).toBe(true)
+    expect(runNeedsPerCharCells('plain ascii')).toBe(false)
   })
 })

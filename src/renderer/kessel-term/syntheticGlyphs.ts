@@ -45,6 +45,20 @@
 //   Powerline PUA (U+E0B0–E0B3) — EXCLUDED: the solid triangles
 //     would clip-path cleanly but the chevron outlines wouldn't, and
 //     patched Nerd Fonts already ship correct glyphs there.
+//   TUI status symbols ⏴⏵⏶⏷⏸⏹⏺ (U+23F4–23FA) — painted as one
+//     filled shape (kind 'symbol'). Not cell-spanning geometry like
+//     the ranges above: these are the record/play/pause marks Claude
+//     Code prints as status bullets (⏺ before every tool call). The
+//     bundled MesloLGM Nerd Font has NONE of them (cmap-checked), and
+//     neither do SF Mono / Menlo / Apple Symbols; ⏸⏹⏺ are Emoji=Yes,
+//     so iOS font fallback (and colour-emoji fallback on Linux /
+//     Windows) lands on the COLOUR EMOJI face — a grey rounded-square
+//     button — which a one-column cell then clips on both sides.
+//     Painting them in the cell's foreground removes the font
+//     fallback from the question entirely: the same plain dot macOS
+//     shows (there a text face — STIX Two Math is the only installed
+//     non-emoji font with U+23FA — wins the fallback), on every
+//     device.
 
 // ── Stage 1: descriptors ────────────────────────────────────────────
 
@@ -79,6 +93,19 @@ export type SyntheticGlyph =
   /** Rounded arcs ╭╮╰╯ — named by which corner of the cell the
    *  curve turns through ('tl' = rounded ┌, i.e. ╭). */
   | { kind: 'arc'; corner: 'tl' | 'tr' | 'br' | 'bl' }
+  /** One filled TUI status mark (⏺⏹⏸⏴⏵⏶⏷) centred in the cell on
+   *  the text's math axis — see symbolGeometry. */
+  | { kind: 'symbol'; shape: SymbolShape }
+
+/** Filled marks for the media-control symbols U+23F4–23FA. */
+export type SymbolShape =
+  | 'circle' // ⏺ U+23FA BLACK CIRCLE FOR RECORD
+  | 'square' // ⏹ U+23F9 BLACK SQUARE FOR STOP
+  | 'pause' // ⏸ U+23F8 DOUBLE VERTICAL BAR
+  | 'tri-l' // ⏴ U+23F4
+  | 'tri-r' // ⏵ U+23F5 (Claude Code's "⏵⏵ accept edits")
+  | 'tri-u' // ⏶ U+23F6
+  | 'tri-d' // ⏷ U+23F7
 
 // U+2500–254B + 2574–257F: [left, up, right, down] arm weights.
 const LINE_ARMS: Record<number, readonly [Arm, Arm, Arm, Arm]> = {
@@ -224,6 +251,19 @@ const SHADES: Record<number, number> = {
 
 const FULL: readonly FracRect[] = [[0, 0, 1, 1]]
 
+// U+23F4–23FA: the media-control marks TUIs use as status bullets.
+// (⏩⏪⏫⏬⏰⏳ nearby are Emoji_Presentation=Yes, two columns wide —
+// real emoji, left to the emoji path.)
+const SYMBOLS: Record<number, SymbolShape> = {
+  0x23f4: 'tri-l',
+  0x23f5: 'tri-r',
+  0x23f6: 'tri-u',
+  0x23f7: 'tri-d',
+  0x23f8: 'pause',
+  0x23f9: 'square',
+  0x23fa: 'circle',
+}
+
 /** Sextant rects for U+1FB00–1FB3B. The block encodes the 60 2×3
  *  patterns not already representable elsewhere: pattern indices
  *  1..62 minus 21 (= ▌) and 42 (= ▐). Bit k of the pattern: cell
@@ -265,6 +305,9 @@ export function syntheticGlyphSpec(cp: number): SyntheticGlyph | null {
   }
   if (cp >= 0x1fb00 && cp <= 0x1fb3b) {
     return { kind: 'rects', rects: sextantRects(cp) }
+  }
+  if (cp >= 0x23f4 && cp <= 0x23fa) {
+    return { kind: 'symbol', shape: SYMBOLS[cp] }
   }
   return null
 }
@@ -436,7 +479,115 @@ export function resolveGlyphRects(
       }
       return out
     case 'arc':
-      return out
+    case 'symbol':
+      return out // painted from their own geometry, not rects
+  }
+}
+
+// ── Symbol geometry (⏺⏹⏸⏴⏵⏶⏷) ──────────────────────────────────────
+
+/** A symbol's filled outline in device px, relative to the cell
+ *  origin. Circles/triangles are float (anti-aliased fills); the
+ *  rect marks snap to whole device px so their edges stay crisp. */
+export type SymbolPath =
+  | { kind: 'circle'; cx: number; cy: number; r: number }
+  | { kind: 'rects'; rects: DeviceRect[] }
+  | { kind: 'poly'; points: readonly (readonly [number, number])[] }
+
+/** Size unit for the symbol marks: the cell width (the font's
+ *  advance), clamped by height on unusually squat cells so a mark
+ *  can never outgrow its line. */
+function symbolUnit(m: GlyphMetrics): number {
+  return Math.min(m.Wd, m.Hd / 1.5)
+}
+
+/** Geometry for one symbol. Sizing matches a text bullet, not the
+ *  cell box: ⏺ is 0.72 of the advance across (a touch smaller than
+ *  Meslo's full-width ●, like the STIX glyph macOS falls back to).
+ *  Vertical centre sits on the font's math axis — MesloLGM centres
+ *  ●/■ 532/2048 em above the baseline, and the line box centres
+ *  ascent+descent (2101+683), so the axis lands 0.0864 em ≈ 0.14 ×
+ *  advance BELOW the cell midline. Clamped so the mark stays inside
+ *  the cell. */
+export function symbolGeometry(shape: SymbolShape, m: GlyphMetrics): SymbolPath {
+  const k = symbolUnit(m)
+  const cx = m.Wd / 2
+  const axis = (ext: number) =>
+    Math.min(Math.max(m.Hd / 2 + 0.14 * k, ext / 2), m.Hd - ext / 2)
+  const snapRect = (x: number, y: number, w: number, h: number): DeviceRect => {
+    const x0 = Math.round(x)
+    const y0 = Math.round(y)
+    return {
+      x0,
+      y0,
+      x1: x0 + Math.max(1, Math.round(w)),
+      y1: y0 + Math.max(1, Math.round(h)),
+    }
+  }
+  switch (shape) {
+    case 'circle': {
+      const d = 0.72 * k
+      return { kind: 'circle', cx, cy: axis(d), r: d / 2 }
+    }
+    case 'square': {
+      const s = 0.6 * k
+      const cy = axis(s)
+      return { kind: 'rects', rects: [snapRect(cx - s / 2, cy - s / 2, s, s)] }
+    }
+    case 'pause': {
+      const bw = 0.2 * k
+      const gap = 0.18 * k
+      const h = 0.62 * k
+      const cy = axis(h)
+      const left = cx - gap / 2 - bw
+      return {
+        kind: 'rects',
+        rects: [
+          snapRect(left, cy - h / 2, bw, h),
+          snapRect(cx + gap / 2, cy - h / 2, bw, h),
+        ],
+      }
+    }
+    case 'tri-l':
+    case 'tri-r': {
+      const h = 0.66 * k // vertical extent (the base)
+      const w = 0.56 * k // tip-to-base
+      const cy = axis(h)
+      const xl = cx - w / 2
+      const xr = cx + w / 2
+      return shape === 'tri-r'
+        ? { kind: 'poly', points: [[xl, cy - h / 2], [xr, cy], [xl, cy + h / 2]] }
+        : { kind: 'poly', points: [[xr, cy - h / 2], [xl, cy], [xr, cy + h / 2]] }
+    }
+    case 'tri-u':
+    case 'tri-d': {
+      const w = 0.66 * k // horizontal extent (the base)
+      const h = 0.56 * k
+      const cy = axis(h)
+      const yt = cy - h / 2
+      const yb = cy + h / 2
+      return shape === 'tri-d'
+        ? { kind: 'poly', points: [[cx - w / 2, yt], [cx + w / 2, yt], [cx, yb]] }
+        : { kind: 'poly', points: [[cx - w / 2, yb], [cx + w / 2, yb], [cx, yt]] }
+    }
+  }
+}
+
+/** The symbol as an SVG fragment in device-px user space (the CSS
+ *  painter's single background layer). */
+function symbolSvg(path: SymbolPath, color: string): string {
+  switch (path.kind) {
+    case 'circle':
+      return `<circle cx="${path.cx}" cy="${path.cy}" r="${path.r}" fill="${color}"/>`
+    case 'rects':
+      return path.rects
+        .map(
+          (r) =>
+            `<rect x="${r.x0}" y="${r.y0}" width="${r.x1 - r.x0}" height="${r.y1 - r.y0}" fill="${color}"/>`,
+        )
+        .join('')
+    case 'poly':
+      return `<polygon points="${path.points.map((p) => p.join(',')).join(' ')}" fill="${color}"/>`
   }
 }
 
@@ -587,6 +738,19 @@ export function paintSyntheticGlyph(
   const m = glyphMetrics(cellWidth, cellHeight, dpr)
   if (spec.kind === 'arc') {
     return { arc: resolveArcChild(spec.corner, m), color }
+  }
+  if (spec.kind === 'symbol') {
+    // One SVG layer in device-px user space, scaled back to the
+    // cell's css box.
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${m.Wd} ${m.Hd}">${symbolSvg(symbolGeometry(spec.shape, m), color)}</svg>`
+    return {
+      background: {
+        backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(svg)}")`,
+        backgroundPosition: '0px 0px',
+        backgroundSize: `${m.Wd / m.dpr}px ${m.Hd / m.dpr}px`,
+        backgroundRepeat: 'no-repeat',
+      },
+    }
   }
   const ink =
     spec.kind === 'rects' && spec.alpha !== undefined

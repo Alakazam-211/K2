@@ -21,6 +21,12 @@
 // continuous — DOM-renderer parity. Diagonals ╱╲╳ and powerline PUA
 // stay font glyphs (same exclusions as the DOM). Synthetic entries
 // ignore bold/italic (weight is intrinsic to the code point).
+//
+// PRESENTATION (2026-10): the synthetic/emoji/text decision is
+// glyphRoute.ts, shared with the DOM painter. The TUI status marks
+// ⏺⏹⏸⏴⏵⏶⏷ are synthetic (they used to fillText into Apple Color
+// Emoji on iOS — a clipped grey button), and other one-column
+// symbols with an emoji form rasterize as text + VS15.
 
 import {
   allocSlot,
@@ -29,8 +35,9 @@ import {
   growLayout,
   type AtlasLayout,
 } from './atlasLayout'
-import { drawSyntheticGlyph, syntheticSpecForCluster } from './syntheticRaster'
-import { EMOJI_FONT_SCALE, isEmojiCp } from '../runCols'
+import { drawSyntheticGlyph } from './syntheticRaster'
+import { EMOJI_FONT_SCALE } from '../runCols'
+import { glyphRoute } from '../glyphRoute'
 
 /** 1px transparent border around every slot so LINEAR sampling (or a
  *  half-texel rounding slip) can never bleed a neighbor glyph. */
@@ -181,7 +188,11 @@ export class GlyphAtlas implements GlyphSource {
   ): GlyphSlot | null {
     // Synthetic glyphs share one slot across bold/italic — the DOM
     // painter likewise drops text styles on painted cells.
-    const spec = syntheticSpecForCluster(text)
+    const route = glyphRoute(text)
+    const spec = route.kind === 'synthetic' ? route.spec : null
+    // What fillText draws: the cluster, + VS15 for text-forced
+    // symbols. The cache key stays the cluster itself.
+    const draw = route.kind === 'text' ? route.draw : text
     const key = spec
       ? `s${widthCells}|${text}`
       : `${bold ? 'b' : ''}${italic ? 'i' : ''}${widthCells}|${text}`
@@ -200,13 +211,13 @@ export class GlyphAtlas implements GlyphSource {
       // The overflow hangs symmetrically via offsetX → a_geom.x.
       // Emoji measure AND draw at EMOJI_FONT_SCALE (they render
       // visibly smaller than text at equal point size).
-      emoji = isEmojiCp(text.codePointAt(0) ?? 0)
+      emoji = route.kind === 'emoji'
       this.ctx.font = this.fontString(
         bold,
         italic,
         emoji ? EMOJI_FONT_SCALE : 1,
       )
-      advance = this.ctx.measureText(text).width
+      advance = this.ctx.measureText(draw).width
       if (emoji && advance > w) {
         w = Math.ceil(advance)
         offsetX = -Math.round((w - cellBoxW) / 2)
@@ -277,7 +288,7 @@ export class GlyphAtlas implements GlyphSource {
     // (Emoji slots were widened above, so their dx centering never
     // clips — the slot fits the full advance.)
     const dx = Math.round((w - advance) / 2)
-    ctx.fillText(text, x + dx, y + this.baseline)
+    ctx.fillText(draw, x + dx, y + this.baseline)
     ctx.restore()
 
     // Monochrome test: white fill ⇒ every covered pixel has r=g=b.

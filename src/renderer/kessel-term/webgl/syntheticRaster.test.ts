@@ -178,6 +178,8 @@ describe('drawSyntheticGlyph — ink/alpha contract (recording stub ctx)', () =>
   function stubCtx() {
     const fills: Fill[] = []
     const strokes: { alpha: number; style: unknown; lineWidth: number }[] = []
+    const arcs: { cx: number; cy: number; r: number }[] = []
+    const pathFills: { alpha: number; style: unknown }[] = []
     const ctx = {
       fillStyle: '' as string,
       strokeStyle: '' as string,
@@ -190,6 +192,13 @@ describe('drawSyntheticGlyph — ink/alpha contract (recording stub ctx)', () =>
       moveTo() {},
       arcTo() {},
       lineTo() {},
+      closePath() {},
+      arc(cx: number, cy: number, r: number) {
+        arcs.push({ cx, cy, r })
+      },
+      fill() {
+        pathFills.push({ alpha: this.globalAlpha, style: this.fillStyle })
+      },
       stroke() {
         strokes.push({
           alpha: this.globalAlpha,
@@ -198,7 +207,13 @@ describe('drawSyntheticGlyph — ink/alpha contract (recording stub ctx)', () =>
         })
       },
     }
-    return { ctx: ctx as unknown as CanvasRenderingContext2D, fills, strokes }
+    return {
+      ctx: ctx as unknown as CanvasRenderingContext2D,
+      fills,
+      strokes,
+      arcs,
+      pathFills,
+    }
   }
 
   function spec(ch: string) {
@@ -241,5 +256,31 @@ describe('drawSyntheticGlyph — ink/alpha contract (recording stub ctx)', () =>
       expect(f.style).toBe('#ffffff')
       expect(f.alpha).toBe(1)
     }
+  })
+
+  it('⏺ fills ONE circle in the ink colour inside the cell (no font, no emoji)', () => {
+    const { ctx, arcs, pathFills, fills } = stubCtx()
+    drawSyntheticGlyph(ctx, spec('⏺'), 10, 0, 9, 20, 'rgb(224,224,224)', 0.6)
+    expect(arcs).toHaveLength(1)
+    expect(pathFills).toEqual([{ alpha: 0.6, style: 'rgb(224,224,224)' }])
+    expect(fills).toHaveLength(0)
+    const a = arcs[0]
+    expect(a.cx).toBe(10 + 4.5) // centred in its single cell
+    expect(a.cx - a.r).toBeGreaterThanOrEqual(10)
+    expect(a.cx + a.r).toBeLessThanOrEqual(19)
+    expect(ctx.globalAlpha).toBe(1)
+  })
+
+  it('⏸ / ⏹ fill crisp rects; ⏵ fills a path', () => {
+    const pause = stubCtx()
+    drawSyntheticGlyph(pause.ctx, spec('⏸'), 0, 0, 9, 20)
+    expect(pause.fills).toHaveLength(2)
+    const stop = stubCtx()
+    drawSyntheticGlyph(stop.ctx, spec('⏹'), 0, 0, 9, 20)
+    expect(stop.fills).toHaveLength(1)
+    const play = stubCtx()
+    drawSyntheticGlyph(play.ctx, spec('⏵'), 0, 0, 9, 20)
+    expect(play.pathFills).toHaveLength(1)
+    expect(play.pathFills[0].style).toBe('#ffffff') // atlas default
   })
 })

@@ -69,7 +69,7 @@ type NavLeaf = {
   beta?: boolean
 }
 type NavBlock =
-  | { kind: 'item'; id: SettingsSection; label: string }
+  | { kind: 'item'; id: SettingsSection; label: string; beta?: boolean }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
 /** The sidebar. `zenGardens`: show Settings → Gardens, which is
@@ -88,7 +88,7 @@ export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[]
     ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'token-usage', label: 'Token Usage' },
-    { kind: 'item', id: 'compute', label: 'Compute' },
+    { kind: 'item', id: 'compute', label: 'Compute', beta: true },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
     ...(webFeatures.permissions
@@ -327,6 +327,7 @@ export default function Settings(): React.JSX.Element {
                   key={block.id}
                   id={block.id}
                   label={block.label}
+                  beta={block.beta}
                   active={activeSection === block.id}
                   onClick={() => setSection(block.id)}
                 />

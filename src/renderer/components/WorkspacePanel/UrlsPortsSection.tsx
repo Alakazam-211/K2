@@ -465,6 +465,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
         <PublishedServiceDetailsModal
           service={detailsSvc}
           hostLabel={hostLabel}
+          scope={scope}
           onClose={() => setDetailsName(null)}
         />
       ) : null}

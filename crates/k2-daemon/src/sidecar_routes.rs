@@ -1268,11 +1268,11 @@ fn handle_access(
     }
     let v = json_body(body)?;
     let toggle = str_field(&v, "toggle").unwrap_or("");
-    if toggle != "agents_manage" && toggle != "compute" && toggle != "vault_manage" {
+    if toggle != "agents_manage" && toggle != "compute" && toggle != "vault_manage" && toggle != "compute_operate" {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'compute' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'compute', 'compute_operate' or 'vault_manage'",
         ));
     }
     let value = match v.get("value") {
@@ -1297,6 +1297,32 @@ fn handle_access(
         )
         .map_err(|e| err("workspace_not_found", 404, e))?;
         return Ok((out, format!("ok {} compute={value}", ws.handle)));
+    }
+    if toggle == "compute_operate" {
+        // Node admin (prd-k2-node-admin-v1 Q14, 0156): "Allow this agent
+        // to operate compute nodes" — the owner's standing approval for
+        // the operate class only (narrow, pause, update, restart). Root
+        // actions still wait for the owner every time.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::compute::admin::set_agents_can_operate_compute(&conn, &ws.id, value)
+                .map_err(|e| err("workspace_not_found", 404, e))?;
+            k2_core::compute::store::record_event(
+                &conn,
+                &caller.audit_user(),
+                if value { "agent_operate_on" } else { "agent_operate_off" },
+                None,
+                Some(&ws.id),
+                None,
+                serde_json::json!({}),
+            );
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "agent_access"}));
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute_operate", "agentsCanOperateCompute": value }),
+            format!("ok {} compute_operate={value}", ws.handle),
+        ));
     }
     if toggle == "vault_manage" {
         // K2 vault (prd-k2-vault-v1 §8.2, 0149): "Allow managing

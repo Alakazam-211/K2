@@ -626,6 +626,19 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/compute/jobs/retry",
         "/cli/compute/grants",
         "/cli/compute/local/status",
+        // Node admin (prd-k2-node-admin-v1 §13.1): propose / list own /
+        // withdraw own, policy show/set (widening becomes a held request),
+        // health, update/rollback. The handler needs the Agent switch
+        // "Allow this agent to operate compute nodes". approve, deny,
+        // alerts and approval-key are NOT here: owner/admin humans only.
+        "/cli/compute/admin/propose",
+        "/cli/compute/admin/requests",
+        "/cli/compute/admin/withdraw",
+        "/cli/compute/nodes/health",
+        "/cli/compute/nodes/policy",
+        "/cli/compute/nodes/policy/set",
+        "/cli/compute/nodes/update",
+        "/cli/compute/nodes/rollback",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

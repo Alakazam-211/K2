@@ -31,6 +31,12 @@ pub const MAX_BODY: usize = 1 << 20;
 
 /// Every compute route (the two sockets included).
 pub const ROUTES: &[&str] = &[
+    "/cli/compute/admin/approval-key",
+    "/cli/compute/admin/approve",
+    "/cli/compute/admin/deny",
+    "/cli/compute/admin/propose",
+    "/cli/compute/admin/requests",
+    "/cli/compute/admin/withdraw",
     "/cli/compute/agents",
     "/cli/compute/agents/set",
     compute_ws::ATTACH_PATH,
@@ -53,20 +59,30 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/local/resume",
     "/cli/compute/local/status",
     "/cli/compute/nodes",
+    "/cli/compute/nodes/alerts",
     "/cli/compute/nodes/confirm",
     "/cli/compute/nodes/enroll-code",
+    "/cli/compute/nodes/health",
     "/cli/compute/nodes/info",
     "/cli/compute/nodes/pause",
+    "/cli/compute/nodes/policy",
+    "/cli/compute/nodes/policy/set",
     "/cli/compute/nodes/remove",
     "/cli/compute/nodes/rename",
     "/cli/compute/nodes/retire",
+    "/cli/compute/nodes/rollback",
     "/cli/compute/nodes/routes",
+    "/cli/compute/nodes/update",
     "/cli/compute/run",
     "/cli/compute/usage",
 ];
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/compute/admin/approve",
+    "/cli/compute/admin/deny",
+    "/cli/compute/admin/propose",
+    "/cli/compute/admin/withdraw",
     "/cli/compute/agents/set",
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
@@ -78,13 +94,17 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/local/pause",
     "/cli/compute/local/policy",
     "/cli/compute/local/resume",
+    "/cli/compute/nodes/alerts",
     "/cli/compute/nodes/confirm",
     "/cli/compute/nodes/enroll-code",
     "/cli/compute/nodes/pause",
+    "/cli/compute/nodes/policy/set",
     "/cli/compute/nodes/remove",
     "/cli/compute/nodes/rename",
     "/cli/compute/nodes/retire",
+    "/cli/compute/nodes/rollback",
     "/cli/compute/nodes/routes",
+    "/cli/compute/nodes/update",
     "/cli/compute/run",
 ];
 
@@ -118,7 +138,7 @@ pub enum Who {
 }
 
 impl Who {
-    fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         match self {
             Who::Owner => "owner".into(),
             Who::Login { username, .. } => format!("login:{username}"),
@@ -128,7 +148,7 @@ impl Who {
             Who::Invalid => "-".into(),
         }
     }
-    fn passport(&self) -> Option<(&str, &str)> {
+    pub(crate) fn passport(&self) -> Option<(&str, &str)> {
         match self {
             Who::Agent { project_id, session_id } | Who::Shell { project_id, session_id } => {
                 Some((project_id.as_str(), session_id.as_str()))
@@ -136,10 +156,10 @@ impl Who {
             _ => None,
         }
     }
-    fn is_owner(&self) -> bool {
+    pub(crate) fn is_owner(&self) -> bool {
         matches!(self, Who::Owner | Who::Login { role: Role::Owner, .. })
     }
-    fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         matches!(self, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
     }
 }
@@ -193,25 +213,28 @@ fn status_line(code: u16) -> &'static str {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         409 => "409 Conflict",
+        410 => "410 Gone",
         413 => "413 Payload Too Large",
+        502 => "502 Bad Gateway",
         503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     }
 }
 
-struct Refusal {
-    code: &'static str,
-    status: u16,
-    hint: String,
+#[derive(Debug)]
+pub(crate) struct Refusal {
+    pub(crate) code: &'static str,
+    pub(crate) status: u16,
+    pub(crate) hint: String,
 }
 
-type R<T> = Result<T, Refusal>;
+pub(crate) type R<T> = Result<T, Refusal>;
 
-fn no(code: &'static str, status: u16, hint: impl Into<String>) -> Refusal {
+pub(crate) fn no(code: &'static str, status: u16, hint: impl Into<String>) -> Refusal {
     Refusal { code, status, hint: hint.into() }
 }
 
-fn refusal_response(r: &Refusal) -> CliResponse {
+pub(crate) fn refusal_response(r: &Refusal) -> CliResponse {
     CliResponse {
         status: status_line(r.status),
         content_type: "application/json",
@@ -233,7 +256,7 @@ pub fn dark() -> CliResponse {
     }
 }
 
-fn owner_only() -> Refusal {
+pub(crate) fn owner_only() -> Refusal {
     no(
         codes::OWNER_ONLY,
         403,
@@ -242,7 +265,7 @@ fn owner_only() -> Refusal {
     )
 }
 
-fn need_admin(who: &Who) -> R<()> {
+pub(crate) fn need_admin(who: &Who) -> R<()> {
     if who.is_admin() {
         Ok(())
     } else if matches!(who, Who::Invalid) {
@@ -252,7 +275,7 @@ fn need_admin(who: &Who) -> R<()> {
     }
 }
 
-fn need_owner(who: &Who) -> R<()> {
+pub(crate) fn need_owner(who: &Who) -> R<()> {
     if who.is_owner() {
         Ok(())
     } else if matches!(who, Who::Invalid) {
@@ -262,7 +285,7 @@ fn need_owner(who: &Who) -> R<()> {
     }
 }
 
-fn need_credential(who: &Who) -> R<()> {
+pub(crate) fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
         Who::Wrong => Err(no("wrong_credential", 403, "app passes, API keys and API sessions can't use compute nodes")),
@@ -272,18 +295,18 @@ fn need_credential(who: &Who) -> R<()> {
 
 // ── small helpers ────────────────────────────────────────────────────
 
-fn ws_handle(project_id: &str) -> String {
+pub(crate) fn ws_handle(project_id: &str) -> String {
     k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| project_id.to_string())
 }
 
 #[derive(Debug, Clone)]
-struct Ws {
-    id: String,
-    path: String,
-    handle: String,
+pub(crate) struct Ws {
+    pub(crate) id: String,
+    pub(crate) path: String,
+    pub(crate) handle: String,
 }
 
-fn ws_by_id(id: &str) -> Option<Ws> {
+pub(crate) fn ws_by_id(id: &str) -> Option<Ws> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let p = k2_core::db::schema::Project::get(&conn, id).ok()?;
@@ -291,7 +314,7 @@ fn ws_by_id(id: &str) -> Option<Ws> {
     Some(Ws { id: p.id, path: p.path, handle })
 }
 
-fn ws_by_token(token: &str) -> Option<Ws> {
+pub(crate) fn ws_by_token(token: &str) -> Option<Ws> {
     let t = token.trim();
     if t.is_empty() {
         return None;
@@ -348,7 +371,7 @@ fn passport_gate(who: &Who) -> R<Option<String>> {
     Ok(Some(own.to_string()))
 }
 
-fn json_body(body: &[u8]) -> R<serde_json::Value> {
+pub(crate) fn json_body(body: &[u8]) -> R<serde_json::Value> {
     if body.is_empty() {
         return Ok(serde_json::json!({}));
     }
@@ -359,19 +382,19 @@ fn json_body(body: &[u8]) -> R<serde_json::Value> {
     Ok(v)
 }
 
-fn s<'a>(v: &'a serde_json::Value, k: &str) -> Option<&'a str> {
+pub(crate) fn s<'a>(v: &'a serde_json::Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty())
 }
 
-fn b(v: &serde_json::Value, k: &str) -> Option<bool> {
+pub(crate) fn b(v: &serde_json::Value, k: &str) -> Option<bool> {
     v.get(k).and_then(|x| x.as_bool())
 }
 
-fn n(v: &serde_json::Value, k: &str) -> Option<i64> {
+pub(crate) fn n(v: &serde_json::Value, k: &str) -> Option<i64> {
     v.get(k).and_then(|x| x.as_i64())
 }
 
-fn node_or_404(token: Option<&str>) -> R<store::NodeRow> {
+pub(crate) fn node_or_404(token: Option<&str>) -> R<store::NodeRow> {
     let t = token.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name a node"))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -380,7 +403,7 @@ fn node_or_404(token: Option<&str>) -> R<store::NodeRow> {
         .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' (k2 compute nodes)")))
 }
 
-fn audit(who: &Who, kind: &str, node: Option<&str>, ws: Option<&str>, job: Option<&str>, detail: serde_json::Value) {
+pub(crate) fn audit(who: &Who, kind: &str, node: Option<&str>, ws: Option<&str>, job: Option<&str>, detail: serde_json::Value) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     store::record_event(&conn, &who.label(), kind, node, ws, job, detail);
@@ -424,6 +447,9 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/compute/local/policy" => local_policy(&who, body),
         "/cli/compute/local/enable" => local_enable(&who, body),
         "/cli/compute/local/disable" => local_disable(&who, body),
+        // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
+        // health, alerts.
+        p if crate::compute_admin::is_route(p) => crate::compute_admin::handle(p, &who, body, params),
         _ => Err(no("not_found", 404, "no such compute route")),
     };
     match r {
@@ -945,6 +971,8 @@ fn agents_list(who: &Who) -> R<serde_json::Value> {
                 "workspace": k2_core::workspace_session_handles::workspace_address_name(&conn, &a.workspace_id).unwrap_or_else(|_| a.workspace_id.clone()),
                 "name": a.name,
                 "agentsCanUseCompute": a.agents_can_use_compute,
+                // Node admin (Q14): "Allow this agent to operate compute nodes".
+                "agentsCanOperateCompute": compute::admin::agents_can_operate_compute(&conn, &a.workspace_id),
                 "grants": grants,
             })
         })
@@ -1624,6 +1652,14 @@ mod tests {
     fn route_lists_agree() {
         for p in POST_ROUTES {
             assert!(ROUTES.contains(p), "{p} not in ROUTES");
+        }
+        for p in crate::compute_admin::ROUTES {
+            assert!(ROUTES.contains(p), "admin route {p} not in ROUTES");
+            assert_eq!(
+                POST_ROUTES.contains(p),
+                crate::compute_admin::POST_ROUTES.contains(p),
+                "{p}: POST-only in one list but not the other"
+            );
         }
         let mut sorted = ROUTES.to_vec();
         sorted.sort_unstable();

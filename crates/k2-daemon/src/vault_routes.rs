@@ -1011,6 +1011,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "recovery-rotate",
     "confirm-password-change",
     "legacy-export",
+    // Node admin (prd-k2-node-admin-v1 §7.4): approving a held request;
+    // the token is bound to the request id (`secretId`).
+    "node-admin",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

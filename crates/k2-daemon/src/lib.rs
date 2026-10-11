@@ -176,6 +176,7 @@ pub mod settings_routes;
 pub mod sidecar_routes;
 pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
+pub mod compute_admin;
 pub mod compute_advertise;
 pub mod compute_local;
 pub mod compute_routes;

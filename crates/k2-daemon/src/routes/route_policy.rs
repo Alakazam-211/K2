@@ -209,6 +209,15 @@ pub const ROUTES: &[Route] = &[
     // enroll are the node's sockets: no HTTP credential, handlers fail
     // closed (CN11). Agent verbs are also `is_agent_verb` rows; owner/admin
     // verbs refuse passports in the handler (`owner_only`).
+    // Node admin (prd-k2-node-admin-v1 §13.1). approve is Owner (Q2) and
+    // needs a fresh vault confirm on top; passports are checked in the
+    // handler (operate switch), never approve/deny.
+    get("/cli/compute/admin/approval-key", Admin),
+    post("/cli/compute/admin/approve", Owner),
+    post("/cli/compute/admin/deny", Admin),
+    post("/cli/compute/admin/propose", Admin),
+    get("/cli/compute/admin/requests", Admin),
+    post("/cli/compute/admin/withdraw", Admin),
     get("/cli/compute/agents", Admin),
     post("/cli/compute/agents/set", Admin),
     get("/cli/compute/attach", Public),
@@ -231,14 +240,20 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/local/resume", Owner),
     get("/cli/compute/local/status", Member),
     get("/cli/compute/nodes", Member),
+    post("/cli/compute/nodes/alerts", Admin),
     post("/cli/compute/nodes/confirm", Owner),
     post("/cli/compute/nodes/enroll-code", Owner),
+    get("/cli/compute/nodes/health", Member),
     get("/cli/compute/nodes/info", Member),
     post("/cli/compute/nodes/pause", Admin),
+    get("/cli/compute/nodes/policy", Admin),
+    post("/cli/compute/nodes/policy/set", Admin),
     post("/cli/compute/nodes/remove", Owner),
     post("/cli/compute/nodes/rename", Admin),
     post("/cli/compute/nodes/retire", Owner),
+    post("/cli/compute/nodes/rollback", Admin),
     post("/cli/compute/nodes/routes", Admin),
+    post("/cli/compute/nodes/update", Admin),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),
     both("/cli/connections", Member),

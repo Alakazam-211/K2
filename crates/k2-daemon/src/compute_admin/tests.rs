@@ -1,0 +1,597 @@
+//! Node admin controller tests (prd-k2-node-admin-v1 §16 "Controller").
+//! Fakes only: a scoped in-memory DB, a temp vault with a fake key store
+//! (never the keychain, never a real Touch ID sheet), a generated
+//! controller key (never `~/.k2/tunnel-key.pem`), and a fake node session.
+//! Every emitted command is checked with the node side's own verifier
+//! (`k2_node_proto::admin::{open, check_target_and_time, verify_owner}`).
+
+use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
+
+use k2_core::compute::admin as cadmin;
+use k2_core::compute::proto::admin as wire;
+use k2_core::compute::proto::frames::{self, Frame};
+use k2_core::compute::proto::health::{DiskFact, ExecutorFact, Health};
+use k2_core::connect_users::Role;
+use serde_json::{json, Value};
+
+use super::test_seams;
+use super::*;
+
+struct Fx {
+    _db: k2_core::db::TestDbGuard,
+    node: String,
+    node_name: String,
+    ws: String,
+}
+
+fn fx(tag: &str, operate: bool) -> Fx {
+    let db = k2_core::db::scoped_for_test();
+    let node = format!("node-{tag}-{}", crypto::random_id().unwrap());
+    let node_name = format!("mini-{tag}");
+    let ws = format!("ws-{tag}-{}", crypto::random_id().unwrap());
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let labels = BTreeMap::from([("os".to_string(), "macos".to_string()), ("arch".to_string(), "aarch64".to_string())]);
+        store::insert_pending_node(&conn, &node, &node_name, &fp_of(&node), "pem", &labels, "owner", "123456", 5).unwrap();
+        store::confirm_node(&conn, &node, "owner", 6).unwrap();
+        store::touch_seen(&conn, &node, "lan", 2, "0.45.5", compute::now());
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![ws, format!("it-{tag}"), format!("/tmp/k2-admin-test/{ws}")],
+        )
+        .unwrap();
+        if operate {
+            cadmin::set_agents_can_operate_compute(&conn, &ws, true).unwrap();
+        }
+    }
+    test_seams::register(&node, true, &[wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, wire::FEATURE_SELF_UPDATE]);
+    Fx { _db: db, node, node_name, ws }
+}
+
+/// A 64-hex node fingerprint per node (the wire checks the shape only on
+/// the node; keep it realistic).
+fn fp_of(node: &str) -> String {
+    crypto::sha256_hex(node.as_bytes())
+}
+
+/// Another workspace in the SAME scoped DB (a second `fx` would swap the
+/// thread's DB out from under the first).
+fn other_ws(tag: &str, operate: bool) -> String {
+    let ws = format!("ws-{tag}-{}", crypto::random_id().unwrap());
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    conn.execute(
+        "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+        rusqlite::params![ws, format!("it-{tag}"), format!("/tmp/k2-admin-test/{ws}")],
+    )
+    .unwrap();
+    if operate {
+        cadmin::set_agents_can_operate_compute(&conn, &ws, true).unwrap();
+    }
+    ws
+}
+
+fn agent(f: &Fx) -> Who {
+    agent_of(&f.ws)
+}
+
+fn agent_of(ws: &str) -> Who {
+    Who::Agent { project_id: ws.to_string(), session_id: "sess-1".into() }
+}
+
+fn call(path: &str, who: &Who, body: Value) -> Result<Value, (u16, String)> {
+    handle(path, who, body.to_string().as_bytes(), &HashMap::new()).map_err(|e| (e.status, e.code.to_string()))
+}
+
+fn get(path: &str, who: &Who, params: &[(&str, &str)]) -> Result<Value, (u16, String)> {
+    let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    handle(path, who, b"", &p).map_err(|e| (e.status, e.code.to_string()))
+}
+
+fn token_for(req: &str) -> String {
+    test_seams::vault_handle().confirm.mint(cadmin::CONFIRM_ACTION, Some(req), "owner", "local-auth")
+}
+
+fn propose_restart(f: &Fx) -> String {
+    let r = call(PROPOSE, &agent(f), json!({"node": f.node_name, "verb": "unit.restart", "args": {"unit": "k2-node"}, "reason": "wedged"})).unwrap();
+    assert_eq!(r["held"], true);
+    assert_eq!(r["request"]["state"], "pending");
+    assert_eq!(r["request"]["class"], "privileged");
+    r["request"]["id"].as_str().unwrap().to_string()
+}
+
+fn controller() -> crypto::SigningKey {
+    crypto::SigningKey::from_pkcs8_pem(&test_seams::key_pem()).unwrap()
+}
+
+fn admin_cmds(frames: Vec<Frame>) -> Vec<wire::SignedCommand> {
+    frames
+        .into_iter()
+        .filter_map(|f| match f {
+            Frame::Admin(a) => Some(a.cmd),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The node side's checks, as the root executor runs them.
+fn node_open(f: &Fx, c: &wire::SignedCommand) -> Result<wire::Opened, wire::AdminRefusal> {
+    let k = controller();
+    let o = wire::open(c.to_json().unwrap().as_bytes(), k.spki_der())?;
+    wire::check_target_and_time(&o.cmd, &fp_of(&f.node), &k.fingerprint(), compute::now())?;
+    if o.cmd.class == wire::Class::Privileged {
+        let pk = wire::ApprovalKey(approval_public_key().unwrap());
+        wire::verify_owner(&o, &[pk], compute::now())?;
+    }
+    Ok(o)
+}
+
+fn result(cmd_id: &str, state: &str, code: Option<&str>, exit: Option<i32>, out: Value) -> wire::AdminResult {
+    wire::AdminResult {
+        cmd_id: cmd_id.into(),
+        state: state.into(),
+        code: code.map(str::to_string),
+        message: None,
+        exit,
+        stdout_tail: String::new(),
+        stderr_tail: String::new(),
+        audit_seq: Some(7),
+        digest: "sha256:x".into(),
+        result: out,
+    }
+}
+
+/// A fake node that answers `policy.show` / `policy.set` from another
+/// thread (the route blocks waiting for it). Returns the verbs it saw.
+fn answer_policy(node: String, policy: Value, refuse_set: bool) -> std::thread::JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            for c in admin_cmds(test_seams::take_sent(&node)) {
+                let body = crypto::unb64(&c.body_b64).unwrap();
+                let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
+                seen.push(cmd.verb.clone());
+                let r = match (cmd.verb.as_str(), refuse_set) {
+                    ("policy.set", true) => result(&cmd.cmd_id, "refused", Some(wire::code::APPROVAL_REQUIRED), None, Value::Null),
+                    ("policy.set", false) => result(&cmd.cmd_id, "done", None, Some(0), json!({"policy": cmd.args, "widened": []})),
+                    _ => result(&cmd.cmd_id, "done", None, Some(0), json!({"policy": policy})),
+                };
+                // Waiters are matched by cmd_id before any DB access.
+                assert!(super::wait_deliver(&r), "a route waits for {}", cmd.verb);
+                return seen;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        seen
+    })
+}
+
+#[test]
+fn agent_proposes_owner_approves_and_a_signed_command_goes_out() {
+    let f = fx("happy", true);
+    let id = propose_restart(&f);
+    assert!(test_seams::take_sent(&f.node).is_empty(), "nothing is sent while held");
+
+    // No passport, no Admin login, no K2 shell tab can approve.
+    let shell = Who::Shell { project_id: f.ws.clone(), session_id: "tab".into() };
+    let admin_login = Who::Login { username: "lee".into(), role: Role::Admin };
+    for who in [agent(&f), shell, admin_login] {
+        let e = call(APPROVE, &who, json!({"request": id, "confirmToken": token_for(&id)})).unwrap_err();
+        assert_eq!(e, (403, "owner_only".to_string()), "{who:?}");
+    }
+
+    // The owner token alone isn't enough (AR14).
+    let e = call(APPROVE, &Who::Owner, json!({"request": id})).unwrap_err();
+    assert_eq!(e, (403, cadmin::codes::OWNER_CONFIRM_REQUIRED.to_string()));
+    // A confirm minted for another request is refused (and burned).
+    let other = token_for("car_someone_else");
+    let e = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": other})).unwrap_err();
+    assert_eq!(e.1, cadmin::codes::OWNER_CONFIRM_REQUIRED);
+    // A confirm for another action is refused.
+    let wrong_action = test_seams::vault_handle().confirm.mint("reveal", Some(&id), "owner", "local-auth");
+    assert_eq!(call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": wrong_action})).unwrap_err().1, cadmin::codes::OWNER_CONFIRM_REQUIRED);
+
+    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+    assert_eq!(r["sent"], true, "{r}");
+    assert_eq!(r["request"]["state"], "sent");
+    assert_eq!(r["request"]["decidedVia"], "local-auth");
+
+    let cmds = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(cmds.len(), 1);
+    assert!(cmds[0].sig_o.is_some(), "privileged commands carry the owner signature");
+    let o = node_open(&f, &cmds[0]).expect("the node accepts it");
+    assert_eq!(o.cmd.verb, "unit.restart");
+    assert_eq!(o.cmd.class, wire::Class::Privileged);
+    assert_eq!(o.cmd.request_id.as_deref(), Some(id.as_str()));
+    assert_eq!(o.cmd.approved_by.as_deref(), Some("owner"));
+    assert_eq!(o.cmd.proposed_by, format!("agent:{}", crate::compute_routes::ws_handle(&f.ws)));
+    // Stripped of the owner signature, the node refuses it.
+    let mut stripped = cmds[0].clone();
+    stripped.sig_o = None;
+    assert_eq!(node_open(&f, &stripped).unwrap_err().code, wire::code::APPROVAL_REQUIRED);
+
+    // A replayed approval finds nothing to approve; nothing more is sent.
+    let e = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap_err();
+    assert_eq!(e, (409, cadmin::codes::NOT_PENDING.to_string()));
+    assert!(test_seams::take_sent(&f.node).is_empty());
+
+    // The node reports; the request finishes and the proposer hears both.
+    on_admin_result(&f.node, result(&o.cmd.cmd_id, "done", None, Some(0), json!({})));
+    let list = get(REQUESTS, &Who::Owner, &[("state", "all")]).unwrap();
+    let row = list["requests"].as_array().unwrap().iter().find(|x| x["id"] == id.as_str()).cloned().unwrap();
+    assert_eq!(row["state"], "done");
+    assert_eq!(row["result"]["auditSeq"], 7);
+    let msgs = test_seams::take_messages(&f.ws);
+    assert!(msgs.iter().any(|m| m.contains("approved by the owner")), "{msgs:?}");
+    assert!(msgs.iter().any(|m| m.contains("done (exit 0)")), "{msgs:?}");
+
+    // Audited: proposed, approved, sent, result.
+    let kinds: Vec<String> = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::events(&conn, 50).into_iter().filter(|e| e.node_id.as_deref() == Some(&f.node)).map(|e| e.kind).collect()
+    };
+    for k in ["admin_proposed", "admin_approved", "admin_sent", "admin_result"] {
+        assert!(kinds.iter().any(|x| x == k), "missing audit {k}: {kinds:?}");
+    }
+}
+
+#[test]
+fn expired_requests_are_refused() {
+    let f = fx("expired", true);
+    let id = propose_restart(&f);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE compute_admin_requests SET expires_at = ?2 WHERE id = ?1", rusqlite::params![id, compute::now() - 1]).unwrap();
+    }
+    let e = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap_err();
+    assert_eq!(e, (410, cadmin::codes::APPROVAL_EXPIRED.to_string()));
+    assert!(test_seams::take_sent(&f.node).is_empty());
+    let list = get(REQUESTS, &Who::Owner, &[("state", "all")]).unwrap();
+    assert_eq!(list["requests"][0]["state"], "expired");
+
+    // Approved while offline, and the approval ran out before the node came back.
+    let id2 = propose_restart(&f);
+    test_seams::set_online(&f.node, false);
+    let r = call(APPROVE, &Who::Owner, json!({"request": id2, "confirmToken": token_for(&id2)})).unwrap();
+    assert_eq!(r["sent"], false);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        assert_eq!(cadmin::expire_unsent(&conn, compute::now() + wire::MAX_LIFETIME_SECS + wire::CLOCK_SKEW_SECS + 5).len(), 1);
+    }
+    test_seams::set_online(&f.node, true);
+    pump(&f.node);
+    assert!(test_seams::take_sent(&f.node).is_empty(), "an expired approval is never sent");
+}
+
+#[test]
+fn approval_waits_for_an_offline_node_then_goes_out() {
+    let f = fx("offline", true);
+    let id = propose_restart(&f);
+    test_seams::set_online(&f.node, false);
+    let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+    assert_eq!(r["sent"], false);
+    assert_eq!(r["request"]["state"], "approved");
+    test_seams::set_online(&f.node, true);
+    pump(&f.node);
+    let cmds = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(node_open(&f, &cmds[0]).unwrap().cmd.request_id.as_deref(), Some(id.as_str()));
+    pump(&f.node);
+    assert!(test_seams::take_sent(&f.node).is_empty(), "sent once");
+}
+
+#[test]
+fn passports_need_the_operate_switch_and_see_only_their_own() {
+    let f = fx("switch", true);
+    let off = other_ws("switchoff", false);
+    let e = call(PROPOSE, &agent_of(&off), json!({"node": f.node_name, "verb": "unit.restart", "args": {"unit": "k2-node"}})).unwrap_err();
+    assert_eq!(e, (403, cadmin::codes::OPERATE_OFF.to_string()));
+    let e = call(NODE_POLICY_SET, &agent_of(&off), json!({"node": f.node_name, "set": {"mem_cap_gb": 1}})).unwrap_err();
+    assert_eq!(e.1, cadmin::codes::OPERATE_OFF);
+
+    let mine = propose_restart(&f);
+    // The owner proposes too (no workspace).
+    let owners = call(PROPOSE, &Who::Owner, json!({"node": f.node_name, "verb": "control.pause", "args": {}})).unwrap();
+    assert_eq!(owners["request"]["class"], "operate");
+    let owners = owners["request"]["id"].as_str().unwrap().to_string();
+    let list = get(REQUESTS, &agent(&f), &[]).unwrap();
+    let ids: Vec<&str> = list["requests"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec![mine.as_str()], "an agent sees only its workspace's requests");
+    assert_eq!(list["canApprove"], false);
+    let all = get(REQUESTS, &Who::Owner, &[]).unwrap();
+    assert_eq!(all["requests"].as_array().unwrap().len(), 2);
+    assert_eq!(all["canApprove"], true);
+
+    // Withdraw: only the proposer. Deny: humans only, never a passport.
+    assert_eq!(call(WITHDRAW, &agent(&f), json!({"request": owners})).unwrap_err().0, 403);
+    assert_eq!(call(DENY, &agent(&f), json!({"request": mine})).unwrap_err(), (403, "owner_only".to_string()));
+    let d = call(DENY, &Who::Login { username: "lee".into(), role: Role::Admin }, json!({"request": owners, "why": "not now"})).unwrap();
+    assert_eq!(d["request"]["state"], "denied");
+    call(WITHDRAW, &agent(&f), json!({"request": mine})).unwrap();
+    assert_eq!(call(WITHDRAW, &agent(&f), json!({"request": mine})).unwrap_err().1, cadmin::codes::NOT_PENDING);
+
+    // Verbs the node doesn't know and bad args never become requests.
+    for v in ["sudo", "script", "power.set"] {
+        assert_eq!(call(PROPOSE, &agent(&f), json!({"node": f.node_name, "verb": v, "args": {}})).unwrap_err().1, cadmin::codes::VERB_NOT_ALLOWED, "{v}");
+    }
+    assert_eq!(
+        call(PROPOSE, &agent(&f), json!({"node": f.node_name, "verb": "unit.restart", "args": {"unit": "sshd"}})).unwrap_err().1,
+        cadmin::codes::BAD_ARGS
+    );
+    // Approval-key and alerts are humans only.
+    assert_eq!(get(APPROVAL_KEY, &agent(&f), &[]).unwrap_err().0, 403);
+    assert_eq!(call(NODE_ALERTS, &agent(&f), json!({"to": f.ws})).unwrap_err().0, 403);
+    let k = get(APPROVAL_KEY, &Who::Owner, &[]).unwrap();
+    assert!(k["keyId"].as_str().unwrap().starts_with("ed25519:"));
+}
+
+#[test]
+fn a_plan_is_approved_once_and_runs_one_step_at_a_time() {
+    let f = fx("plan", true);
+    let r = call(
+        PROPOSE,
+        &agent(&f),
+        json!({"node": f.node_name, "kind": "plan", "steps": [
+            {"verb": "policy.set", "args": {"mem_cap_gb": 12}},
+            {"verb": "unit.restart", "args": {"unit": "k2-node"}},
+            {"verb": "control.resume", "args": {}}
+        ]}),
+    )
+    .unwrap();
+    let id = r["request"]["id"].as_str().unwrap().to_string();
+    assert!(r["request"]["summary"].as_str().unwrap().starts_with("plan of 3 steps"));
+    call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+    let first = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(first.len(), 1, "only step 1 is in flight");
+    assert!(first[0].plan_b64.is_some(), "plan steps carry the approved plan");
+    let c1 = node_open(&f, &first[0]).expect("the node accepts the plan step").cmd;
+    assert_eq!(c1.plan.as_ref().map(|p| (p.step, p.of)), Some((0, 3)));
+    on_admin_result(&f.node, result(&c1.cmd_id, "done", None, Some(0), json!({})));
+    let second = admin_cmds(test_seams::take_sent(&f.node));
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].sig_o, first[0].sig_o, "one owner signature covers the plan");
+    let c2 = node_open(&f, &second[0]).unwrap().cmd;
+    assert_eq!((c2.verb.as_str(), c2.plan.as_ref().unwrap().step), ("unit.restart", 1));
+    // A step changed after approval fails the node's plan check.
+    let mut tampered: wire::Command = c2.clone();
+    tampered.args = json!({"unit": "k2-node-packages"});
+    let forged = wire::sign_controller(&controller(), &tampered).unwrap().with_owner_sig(
+        &crypto::unb64(second[0].sig_o.as_deref().unwrap()).unwrap().try_into().unwrap(),
+    );
+    let forged = wire::SignedCommand { plan_b64: second[0].plan_b64.clone(), ..forged };
+    assert_eq!(node_open(&f, &forged).unwrap_err().code, wire::code::PLAN_MISMATCH);
+
+    on_admin_result(&f.node, result(&c2.cmd_id, "failed", Some("failed"), Some(1), Value::Null));
+    assert!(test_seams::take_sent(&f.node).is_empty(), "a failed step stops the plan");
+    let list = get(REQUESTS, &Who::Owner, &[("state", "all")]).unwrap();
+    assert_eq!(list["requests"][0]["state"], "failed");
+    assert_eq!(list["requests"][0]["result"]["step"], 2);
+    // A result for a command that isn't in flight changes nothing.
+    on_admin_result(&f.node, result(&c1.cmd_id, "done", None, Some(0), json!({})));
+    assert!(test_seams::take_sent(&f.node).is_empty());
+}
+
+#[test]
+fn policy_narrowing_goes_at_once_and_widening_is_held() {
+    let f = fx("policy", true);
+    // Show asks the node (policy.show, read) and caches the answer.
+    let node = f.node.clone();
+    let responder = answer_policy(node, json!({"mem_cap_gb": 8, "max_parallel": 2}), false);
+    let shown = get(NODE_POLICY, &agent(&f), &[("node", &f.node_name)]).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["policy.show"]);
+    assert_eq!(shown["policy"]["mem_cap_gb"], 8);
+    assert_eq!(shown["live"], true);
+
+    // Lower: sent at once as an operate policy.set, applied, cache updated.
+    let responder = answer_policy(f.node.clone(), Value::Null, false);
+    let r = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"mem_cap_gb": 6}})).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["policy.set"]);
+    assert_eq!((r["class"].as_str(), r["note"].as_str()), (Some("operate"), Some("narrowing applied on the node")), "{r}");
+
+    // Higher: held for the owner, nothing sent.
+    let r = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"mem_cap_gb": 10}, "reason": "bigger builds"})).unwrap();
+    assert_eq!(r["held"], true);
+    assert_eq!(r["request"]["summary"], format!("change job limits on {}: mem_cap_gb=10", f.node_name));
+    assert!(test_seams::take_sent(&f.node).is_empty(), "widening waits for the owner");
+
+    // The node counts a change as widening that we didn't: held too.
+    let responder = answer_policy(f.node.clone(), Value::Null, true);
+    let r = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"mem_cap_gb": 4}})).unwrap();
+    assert_eq!(responder.join().unwrap(), vec!["policy.set"]);
+    assert_eq!(r["held"], true, "{r}");
+
+    let e = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"rm": 1}})).unwrap_err();
+    assert_eq!(e.1, cadmin::codes::BAD_ARGS);
+
+    // A node without the admin feature: a narrowing is refused with a
+    // teaching code, not silently skipped.
+    test_seams::register(&f.node, true, &[]);
+    let e = call(NODE_POLICY_SET, &agent(&f), json!({"node": f.node_name, "set": {"mem_cap_gb": 2}})).unwrap_err();
+    assert_eq!(e, (409, cadmin::codes::NODE_LACKS_ADMIN.to_string()));
+}
+
+#[test]
+fn the_approval_key_is_pinned_once_per_node() {
+    let f = fx("keys", true);
+    maybe_send_keys(&f.node);
+    let sent = test_seams::take_sent(&f.node);
+    let Some(Frame::AdminKeys(k)) = sent.into_iter().next() else { panic!("no admin_keys frame") };
+    let ours = wire::ApprovalKey(approval_public_key().unwrap());
+    assert_eq!(k.keys, vec![ours.encode()]);
+    assert_eq!(k.node_fp, fp_of(&f.node));
+    assert!(crypto::verify_domain(controller().spki_der(), wire::DOMAIN_KEYS_CONTROLLER, &[&k.signed_part().unwrap()], &k.sig_c));
+    maybe_send_keys(&f.node);
+    assert!(test_seams::take_sent(&f.node).is_empty(), "at most every 10 minutes");
+}
+
+#[test]
+fn offline_alert_once_then_back_online() {
+    let f = fx("alerts", true);
+    call(NODE_ALERTS, &Who::Owner, json!({"to": f.ws})).unwrap();
+    call(NODE_ALERTS, &Who::Owner, json!({"node": f.node_name, "after": 600})).unwrap();
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let facts = Health { boot_id: "boot-1".into(), disk_encryption: Some("on".into()), ..Default::default() };
+        cadmin::store_health(&conn, &f.node, compute::now(), &facts).unwrap();
+        conn.execute("UPDATE compute_nodes SET last_seen = ?2 WHERE id = ?1", rusqlite::params![f.node, compute::now() - 1000]).unwrap();
+    }
+    // Online: no alert however old last_seen is.
+    watch_pass();
+    assert!(test_seams::take_messages(&f.ws).is_empty());
+
+    test_seams::set_online(&f.node, false);
+    watch_pass();
+    let m = test_seams::take_messages(&f.ws);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(m[0].contains(&format!("{} offline since", f.node_name)), "{m:?}");
+    assert!(m[0].contains("FileVault screen"), "{m:?}");
+    watch_pass();
+    assert!(test_seams::take_messages(&f.ws).is_empty(), "one offline alert per outage");
+
+    test_seams::set_online(&f.node, true);
+    on_attach(&f.node, "boot-2");
+    let m = test_seams::take_messages(&f.ws);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(m[0].contains("back after") && m[0].contains("it rebooted"), "{m:?}");
+    on_attach(&f.node, "boot-2");
+    assert!(test_seams::take_messages(&f.ws).is_empty(), "back-online only after an offline alert");
+
+    let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
+    assert_eq!(h["alertAfterSecs"], 600);
+    assert_eq!(h["alertsTo"], crate::compute_routes::ws_handle(&f.ws));
+    assert_eq!(call(NODE_ALERTS, &Who::Owner, json!({"node": f.node_name, "after": 30})).unwrap_err().1, cadmin::codes::BAD_ARGS);
+}
+
+#[test]
+fn health_thresholds_alert_once_per_window() {
+    let f = fx("health", true);
+    call(NODE_ALERTS, &Who::Owner, json!({"to": f.ws})).unwrap();
+    let gib = 1u64 << 30;
+    let h = Health {
+        at: compute::now(),
+        boot_id: "b".into(),
+        disks: vec![DiskFact { name: "root".into(), path: "/".into(), total_bytes: 500 * gib, free_bytes: 9 * gib }],
+        executor: ExecutorFact { reachable: true, remote_admin: Some("full".into()), approval_key_fps: vec!["abc".into()], ..Default::default() },
+        ..Default::default()
+    };
+    on_health(&f.node, h.clone());
+    let m = test_seams::take_messages(&f.ws);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(m[0].contains("9 GB free on / (floor 30 GB)"), "{m:?}");
+    on_health(&f.node, h);
+    assert!(test_seams::take_messages(&f.ws).is_empty(), "same kind, same node, within 6 h: quiet");
+    let shown = get(NODE_HEALTH, &agent(&f), &[("node", &f.node_name)]).unwrap();
+    assert_eq!(shown["remoteAdmin"], "full");
+    assert_eq!(shown["approvalKeyFp"], "abc");
+    assert_eq!(shown["facts"]["disks"][0]["free_bytes"], 9 * gib);
+    // A Member login may read health; a passport without switch or grant may not.
+    get(NODE_HEALTH, &Who::Login { username: "m".into(), role: Role::Member }, &[("node", &f.node_name)]).unwrap();
+    let off = other_ws("healthoff", false);
+    assert_eq!(get(NODE_HEALTH, &agent_of(&off), &[("node", &f.node_name)]).unwrap_err().0, 404);
+}
+
+fn stage_build(dir: &std::path::Path, comment_asset_os: &str, version: &str) -> Vec<u8> {
+    use k2_root_proto::node_build::{fake_macho, format_marker, trusted_comment};
+    std::fs::create_dir_all(dir).unwrap();
+    let mut bytes = fake_macho("aarch64", &format_marker(version, 2, "macos", "aarch64"));
+    bytes.resize(frames::TRANSFER_CHUNK + 1000, 0);
+    let sig = k2_root_proto::testsign::sign_with_test_key(&bytes, &trusted_comment(comment_asset_os, "aarch64", version, 2));
+    std::fs::write(dir.join("k2-node-macos-aarch64"), &bytes).unwrap();
+    std::fs::write(dir.join("k2-node-macos-aarch64.sig"), sig).unwrap();
+    bytes
+}
+
+#[test]
+fn update_offers_a_signed_build_and_records_rollback() {
+    let f = fx("update", true);
+    call(NODE_ALERTS, &Who::Owner, json!({"to": f.ws})).unwrap();
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+
+    // A build whose signature names another file is refused.
+    stage_build(&dir, "linux", "0.46.0");
+    assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
+    // Not newer than what runs (0.45.5): refused (anti-downgrade).
+    stage_build(&dir, "macos", "0.45.5");
+    assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
+    // Tampered bytes: refused.
+    stage_build(&dir, "macos", "0.46.0");
+    let mut evil = std::fs::read(dir.join("k2-node-macos-aarch64")).unwrap();
+    let last = evil.len() - 1;
+    evil[last] ^= 1;
+    std::fs::write(dir.join("k2-node-macos-aarch64"), &evil).unwrap();
+    assert_eq!(call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name})).unwrap_err().1, cadmin::codes::NO_UPDATE);
+
+    let bytes = stage_build(&dir, "macos", "0.46.0");
+    let r = call(NODE_UPDATE, &agent(&f), json!({"node": f.node_name, "canary": true})).unwrap();
+    assert_eq!(r["update"]["state"], "offered");
+    let sent = test_seams::take_sent(&f.node);
+    let (offer, chunks): (Vec<_>, Vec<_>) = sent.into_iter().partition(|x| matches!(x, Frame::UpdateOffer(_)));
+    let Some(Frame::UpdateOffer(offer)) = offer.into_iter().next() else { panic!("no update_offer") };
+    assert_eq!((offer.version.as_str(), offer.os.as_str(), offer.arch.as_str()), ("0.46.0", "macos", "aarch64"));
+    assert_eq!(offer.sha256, crypto::sha256_hex(&bytes));
+    assert_eq!(offer.size, bytes.len() as u64);
+    // The node side re-checks the build with the same checker.
+    k2_root_proto::node_build::verify_node_build(&bytes, &offer.sig, &k2_root_proto::keys::trusted_keys(true), "macos", "aarch64").unwrap();
+    let cmd = node_open(&f, &offer.cmd).unwrap().cmd;
+    assert_eq!((cmd.verb.as_str(), cmd.args["sha256"].as_str(), cmd.args["trigger"].as_str()), ("node.update", Some(offer.sha256.as_str()), Some("explicit")));
+    let mut got = Vec::new();
+    for c in &chunks {
+        let Frame::UpdateChunk(c) = c else { panic!("unexpected frame") };
+        assert_eq!(c.transfer_id, offer.transfer_id);
+        got.extend(crypto::unb64(&c.data).unwrap());
+    }
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(got, bytes, "the chunks reassemble to the signed build");
+
+    let rolled = frames::UpdateState {
+        transfer_id: Some(offer.transfer_id.clone()),
+        cmd_id: Some(cmd.cmd_id.clone()),
+        phase: wire::UpdatePhase::RolledBack,
+        version: "0.46.0".into(),
+        from: Some("0.45.5".into()),
+        code: None,
+        message: Some("no hello in 120 s".into()),
+        at: compute::now(),
+    };
+    on_update_state(&f.node, rolled.clone());
+    let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
+    assert_eq!(h["update"]["state"], "rolled_back");
+    assert_eq!(h["updateRing"], "canary");
+    let m = test_seams::take_messages(&f.ws);
+    assert!(m.iter().any(|x| x.contains("rolled back")), "{m:?}");
+    on_update_state(&f.node, rolled);
+    assert!(test_seams::take_messages(&f.ws).is_empty(), "a repeated phase (re-attach) doesn't alert twice");
+
+    // Rollback is operate class: controller signature only.
+    let r = call(NODE_ROLLBACK, &agent(&f), json!({"node": f.node_name, "reason": "bad build"})).unwrap();
+    assert_eq!(r["update"]["state"], "rollback_requested");
+    let cmds = admin_cmds(test_seams::take_sent(&f.node));
+    let c = node_open(&f, &cmds[0]).unwrap().cmd;
+    assert_eq!((c.verb.as_str(), c.class), ("node.rollback", wire::Class::Operate));
+    // Offline: refused, not queued.
+    test_seams::set_online(&f.node, false);
+    assert_eq!(call(NODE_ROLLBACK, &agent(&f), json!({"node": f.node_name})).unwrap_err(), (409, codes::NODE_OFFLINE.to_string()));
+    test_seams::set_assets_dir(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn route_tables_guard_every_admin_route() {
+    for p in ROUTES {
+        let r = crate::routes::route_policy::lookup(p).unwrap_or_else(|| panic!("{p} has no route_policy row"));
+        assert_eq!(POST_ROUTES.contains(p), r.post.is_some(), "{p}: POST floor vs POST-only list");
+        assert_eq!(POST_ROUTES.contains(p), r.get.is_none(), "{p}: a mutating route must not admit GET");
+        assert_eq!(crate::compute_routes::is_post_route(p), POST_ROUTES.contains(p), "{p}: dispatcher 405 guard");
+        assert_eq!(crate::session_token::is_agent_verb(p), AGENT_VERBS.contains(p), "{p}: agent verb table");
+    }
+    assert!(!crate::session_token::is_agent_verb(APPROVE));
+    assert!(!crate::session_token::is_agent_verb(DENY));
+}

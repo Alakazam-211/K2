@@ -1253,6 +1253,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0149_vault_manage",
             include_str!("../../drizzle_sql/0149_vault_manage.sql"),
         ),
+        // 0156 — K2 node admin (prd-k2-node-admin-v1 §14): held admin
+        // requests, node services, latest health, node admin columns and
+        // projects.agents_can_operate_compute. 0156 is node admin's number
+        // (0.45.5); it sits before the 0157 placeholder so names keep
+        // applying in order. The integrator renumbers on slips.
+        (
+            "0156_compute_node_admin",
+            include_str!("../../drizzle_sql/0156_compute_node_admin.sql"),
+        ),
         // 0157 — Thread push prefs (prd-thread-push-notifications-v1 §4):
         // notify_workspace_prefs + notify_server_prefs. A PLACEHOLDER
         // number (TP18): 0150–0155 are reserved for later releases and

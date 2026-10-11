@@ -104,6 +104,8 @@ pub mod publish_runtime;
 pub mod push_routes;
 // Thread push prefs routes (prd-thread-push-notifications-v1 S2).
 pub mod notify_routes;
+// Thread push trigger + per-(Thread, person) coalescer (S3).
+pub mod thread_push;
 pub mod review_checklist_routes;
 pub mod routes;
 // K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json. Exposed

@@ -783,6 +783,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 // TW4 (a): the agent answered in Thread (not the compose
                 // bar, not an app guest): the strip ends with the reply.
                 crate::thread_activity::note_reply(&resolved.conversation_id);
+                // Thread push (§6.1): an agent reply may push; a human
+                // `from` (an owner-token shell post) never does (TP14).
+                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text);
             }
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
@@ -803,6 +806,22 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         }
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
+}
+
+/// Thread push trigger (prd-thread-push-notifications-v1 §6.1) for the
+/// three agent-reply sites. App guests are never a push source (TP13).
+fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_core::push::ThreadMsgKind) {
+    if request_skin().is_some() {
+        return;
+    }
+    crate::thread_push::on_agent_post(
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &resolved.addr,
+        from,
+        seq,
+        kind,
+    );
 }
 
 fn reject_wait(params: &HashMap<String, String>) -> Result<(), CliResponse> {
@@ -876,6 +895,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             // TW4 (a): an agent's card is its Thread reply.
             crate::thread_activity::note_reply(&resolved.conversation_id);
+            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice);
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -1003,6 +1023,8 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
             }
             crate::overlay_ws::emit_links(&links, &item.doc);
             crate::thread_activity::note_reply(&resolved.conversation_id);
+            // A secret card pushes name-only, never its name or prompt (§7).
+            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
             let secret = item.doc.secret.as_ref();
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
@@ -4022,5 +4044,114 @@ mod tests {
         );
         assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
         assert!(resp.body.contains(&format!("{handle}/reviewer")), "{}", resp.body);
+    }
+
+    // ── Thread push trigger (prd-thread-push-notifications-v1 §6.1) ──
+
+    /// A workspace with a pinned conversation and an owner phone, in this
+    /// test's own DB. Returns (handle, conversation id).
+    fn push_ws(tag: &str) -> (String, String) {
+        let handle = format!("ovlpush{tag}{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        (handle, conv)
+    }
+
+    fn thread_pushes(mark: usize, conv: &str) -> Vec<k2_core::push::ThreadPush> {
+        crate::push_routes::test_push_capture::since(mark)
+            .into_iter()
+            .filter_map(|e| match e {
+                k2_core::push::PushEvent::ThreadPost(t) if t.conversation_id == conv => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn agent_posts_at_all_three_sites_push_name_only() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::push_devices::upsert_device("ovlpush-dev", "apns", "ovlpush-tok", "owner").expect("phone");
+        let (text_ws, text_conv) = push_ws("t");
+        let (ask_ws, ask_conv) = push_ws("c");
+        let (sec_ws, sec_conv) = push_ws("s");
+        let mark = crate::push_routes::test_push_capture::mark();
+
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": text_ws, "text": "secret plans", "from": "k2" }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let seq = json_body(&r)["seq"].as_i64().expect("seq");
+        let r = post_json(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({ "addr": ask_ws, "prompt": "Ship it?", "options": "Go,Stop", "from": "k2" }),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = post_json(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({ "addr": sec_ws, "name": "STRIPE_KEY", "for": "api.stripe.com", "from": "k2" }),
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+
+        let t = thread_pushes(mark, &text_conv);
+        assert_eq!(t.len(), 1, "text reply pushes once");
+        assert_eq!((t[0].msg_kind, t[0].seq, t[0].count), (k2_core::push::ThreadMsgKind::Text, seq, 1));
+        assert_eq!(t[0].principal, "owner");
+        assert_eq!(t[0].device_usernames, vec!["owner".to_string()]);
+        assert_eq!(t[0].addr, text_ws);
+        assert_eq!(thread_pushes(mark, &ask_conv)[0].msg_kind, k2_core::push::ThreadMsgKind::Choice);
+        let s = thread_pushes(mark, &sec_conv);
+        assert_eq!(s[0].msg_kind, k2_core::push::ThreadMsgKind::Secret);
+        let ev = k2_core::push::PushEvent::ThreadPost(s[0].clone());
+        let wire = k2_core::push::K2Cloud::payload(&ev, &k2_core::push::PushStamp::default(), "owner").to_string();
+        assert!(!wire.contains("STRIPE") && !wire.contains("stripe"), "a secret card never names the secret: {wire}");
+        let wire = k2_core::push::K2Cloud::payload(&k2_core::push::PushEvent::ThreadPost(t[0].clone()), &Default::default(), "owner").to_string();
+        assert!(!wire.contains("secret plans"), "name-only: {wire}");
+    }
+
+    #[test]
+    fn human_compose_guest_and_human_from_posts_never_push() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::connect_users::add_user("ovlpushgina", "password123").expect("gina");
+        k2_core::push_devices::upsert_device("ovlpush-dev2", "apns", "ovlpush-tok2", "owner").expect("phone");
+        let (compose_ws, compose_conv) = push_ws("compose");
+        let (human_ws, human_conv) = push_ws("human");
+        let (guest_ws, guest_conv) = push_ws("guest");
+        let mark = crate::push_routes::test_push_capture::mark();
+
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": compose_ws, "text": "hi", "via": "compose" }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        // An owner-token shell post signed as a Connect user is a human.
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": human_ws, "text": "hi", "from": "ovlpushgina" }));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let guest_project = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT id FROM projects WHERE handle = ?1", params![guest_ws], |r| r.get::<_, String>(0))
+                .expect("guest project")
+        };
+        let r = with_request_skin(Some(skin_pass(&[guest_project])), || {
+            post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": guest_ws, "text": "hello" }))
+        });
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        for conv in [&compose_conv, &human_conv, &guest_conv] {
+            assert!(thread_pushes(mark, conv).is_empty(), "no push for {conv}");
+        }
+    }
+
+    #[test]
+    fn airgap_on_means_no_thread_push() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::push_devices::upsert_device("ovlpush-dev3", "apns", "ovlpush-tok3", "owner").expect("phone");
+        let (ws, conv) = push_ws("air");
+        crate::push_routes::set_test_airgap(true);
+        let mark = crate::push_routes::test_push_capture::mark();
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": ws, "text": "x", "from": "k2" }));
+        crate::push_routes::set_test_airgap(false);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert!(thread_pushes(mark, &conv).is_empty(), "air-gap: zero sends");
     }
 }

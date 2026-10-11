@@ -867,6 +867,7 @@ fn health(who: &Who, params: &HashMap<String, String>) -> R<Value> {
     let cols = admin::admin_cols(&conn, &node.id);
     let alerts_to = admin::setting(&conn, admin::ALERTS_TO);
     let pending = admin::list_requests(&conn, &admin::ReqFilter { node_id: Some(&node.id), state: Some("pending"), limit: 500, ..Default::default() }).len();
+    let needs_pin = admin::needs_pin(&conn, &node.id);
     drop(conn);
     Ok(json!({
         "node": node.name,
@@ -884,6 +885,8 @@ fn health(who: &Who, params: &HashMap<String, String>) -> R<Value> {
         "alertsTo": alerts_to.as_deref().map(crate::compute_routes::ws_handle),
         "pendingApprovals": pending,
         "features": features(&node.id),
+        "needsPin": needs_pin,
+        "pinCommand": needs_pin.then_some(admin::PIN_COMMAND),
     }))
 }
 
@@ -1060,11 +1063,32 @@ fn maybe_send_keys(node_id: &str) {
     }
 }
 
+/// "Needs one-time pin" (wire §6): a node enrolled after its setup has no
+/// controller key pinned for root until someone runs `sudo k2-node admin
+/// pin` at it. Any answer that names that sets the state; any executor
+/// success clears it.
+fn track_pin(node_id: &str, r: &wire::AdminResult) {
+    let needs = admin::result_needs_pin(r.code.as_deref(), r.message.as_deref());
+    if !needs && r.state != "done" {
+        return;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let was = admin::needs_pin(&conn, node_id);
+    if needs != was {
+        admin::set_needs_pin(&conn, node_id, needs, compute::now());
+        store::record_event(&conn, "node", if needs { "needs_pin" } else { "pinned" }, Some(node_id), None, None, json!({"code": r.code}));
+        drop(conn);
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "needs_pin"}));
+    }
+}
+
 /// An `admin_result` frame: a waiting route's answer, the approval-key
 /// pin's outcome, or a request step. Finish (or advance) the request and
 /// tell the proposer. Facts only (exit code, the node's refusal code);
 /// output tails stay in the request for humans to read.
 pub fn on_admin_result(node_id: &str, r: wire::AdminResult) {
+    track_pin(node_id, &r);
     if wait_deliver(&r) {
         crate::compute_ws::notify_change();
         return;

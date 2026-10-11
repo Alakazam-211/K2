@@ -10289,6 +10289,9 @@ def gb(b): return "%d GB" % (b // (1 << 30)) if isinstance(b, int) else "?"
 seen = v.get("lastSeen")
 print("%s  %s%s" % (v["node"], "online" if v["online"] else "OFFLINE", "" if v["online"] or not seen else " since " + time.strftime("%H:%M", time.localtime(seen))))
 print("  k2-node %s, remote admin %s, pending approvals %s" % (v.get("nodeVersion") or "?", v.get("remoteAdmin") or "unknown", v.get("pendingApprovals", 0)))
+if v.get("needsPin"):
+    print("  NEEDS ONE-TIME PIN: admin commands are refused until someone runs, at that machine:")
+    print("      %s" % (v.get("pinCommand") or "sudo k2-node admin pin"))
 if not f:
     print("  no health report yet (needs a k2-node with health)")
 else:

@@ -812,6 +812,34 @@ pub fn set_setting(conn: &Connection, key: &str, value: Option<&str>, by: &str, 
 /// The setting key for "alerts go to" (a workspace id).
 pub const ALERTS_TO: &str = "alerts_to";
 
+/// What a person at the node runs once when its executor has no (or
+/// another) controller key pinned (wire §6: nodes enrolled after setup).
+pub const PIN_COMMAND: &str = "sudo k2-node admin pin";
+
+fn needs_pin_key(node_id: &str) -> String {
+    format!("needs_pin:{node_id}")
+}
+
+/// Does this result say the node's executor hasn't pinned this
+/// controller (`not_configured` naming the controller key, or
+/// `wrong_controller`)?
+pub fn result_needs_pin(code: Option<&str>, message: Option<&str>) -> bool {
+    match code {
+        Some(c) if c == wire::code::WRONG_CONTROLLER => true,
+        Some(c) if c == wire::code::NOT_CONFIGURED => message.is_some_and(|m| m.contains("controller")),
+        _ => false,
+    }
+}
+
+/// Record (or clear) "needs one-time pin" for a node.
+pub fn set_needs_pin(conn: &Connection, node_id: &str, on: bool, at: i64) {
+    let _ = set_setting(conn, &needs_pin_key(node_id), on.then_some("1"), "node", at);
+}
+
+pub fn needs_pin(conn: &Connection, node_id: &str) -> bool {
+    setting(conn, &needs_pin_key(node_id)).is_some()
+}
+
 // ── the operate switch (Q14) ─────────────────────────────────────────
 
 /// `projects.agents_can_operate_compute` (fail closed).
@@ -1160,6 +1188,20 @@ mod tests {
         set_policy_cache(&c, "n1", &p, 77);
         let cols = admin_cols(&c, "n1");
         assert_eq!((cols.policy, cols.policy_at), (Some(p), Some(77)));
+    }
+
+    #[test]
+    fn needs_pin_state() {
+        let c = conn_with_node();
+        assert!(result_needs_pin(Some("not_configured"), Some("no controller key pinned (sudo k2-node admin pin)")));
+        assert!(result_needs_pin(Some("wrong_controller"), None));
+        assert!(!result_needs_pin(Some("not_configured"), Some("node key unreadable")));
+        assert!(!result_needs_pin(None, None));
+        assert!(!needs_pin(&c, "n1"));
+        set_needs_pin(&c, "n1", true, 1);
+        assert!(needs_pin(&c, "n1"));
+        set_needs_pin(&c, "n1", false, 2);
+        assert!(!needs_pin(&c, "n1"));
     }
 
     #[test]

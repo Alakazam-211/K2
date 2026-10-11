@@ -417,6 +417,21 @@ fn policy_narrowing_goes_at_once_and_widening_is_held() {
 }
 
 #[test]
+fn a_node_without_the_controller_pinned_shows_needs_pin_until_it_answers() {
+    let f = fx("pin", true);
+    let mut r = result("admin_keys", "refused", Some(wire::code::NOT_CONFIGURED), None, Value::Null);
+    r.message = Some("no controller key pinned".into());
+    on_admin_result(&f.node, r);
+    let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
+    assert_eq!((h["needsPin"].as_bool(), h["pinCommand"].as_str()), (Some(true), Some("sudo k2-node admin pin")));
+    // Any executor success clears it.
+    on_admin_result(&f.node, result("admin_keys", "done", None, Some(0), Value::Null));
+    let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
+    assert_eq!(h["needsPin"], false);
+    assert!(h["pinCommand"].is_null());
+}
+
+#[test]
 fn the_approval_key_is_pinned_once_per_node() {
     let f = fx("keys", true);
     maybe_send_keys(&f.node);

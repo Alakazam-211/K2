@@ -98,6 +98,10 @@ export interface NodeHealthView {
   alertsTo: string | null
   pendingApprovals: number
   features: string[]
+  /** The node's executor hasn't pinned this server's key (wire §6). */
+  needsPin?: boolean
+  /** What to run once at that machine, when `needsPin`. */
+  pinCommand?: string | null
 }
 
 export async function fetchAdminRequests(state: 'open' | 'pending' | 'all' = 'open'): Promise<AdminRequestsList> {

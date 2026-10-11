@@ -1,0 +1,27 @@
+[package]
+name = "k2-root-proto"
+# Versioned by `PROTOCOL` (src/version.rs), not the product version:
+# release.sh does not bump this crate. The helper's own product version
+# comes from crates/k2-daemon/Cargo.toml at build time (k2-root-helper's
+# build.rs), so there is one version string to bump.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 root helper protocol: fixed paths, canned templates, the Stalwart pin table, the verb catalog (argv codec + classes + stdin caps), version/marker/trusted-comment formats and the helper signing keys. Shared by k2-daemon and k2-root-helper; nothing from k2-core."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Test-only minisign signer (ring + blake2) so daemon and helper tests can
+# make signed fixture builds with the TEST key. Never a release feature.
+test-signer = ["dep:ring", "dep:blake2", "dep:base64"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Verify-only, pure Rust, no transitive deps beyond its own ed25519/blake2b.
+minisign-verify = "0.2"
+ring = { version = "0.17", optional = true }
+blake2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }

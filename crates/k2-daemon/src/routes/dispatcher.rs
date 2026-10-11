@@ -4086,6 +4086,19 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
+        // GET /cli/settings/get with the OWNER daemon token: the full
+        // settings, credentials included. Every other caller (a Connect
+        // login of any role, an agent on its socket) falls through to
+        // `crate::cli::dispatch`, which serves the redacted copy (TP4:
+        // the fleet push gateway token is never shown to a Member).
+        "/cli/settings/get"
+            if !is_post && super::http::token_is_owner(&query, state.token.as_str()) =>
+        {
+            let _ = stream.read(&mut buf).await;
+            let result = crate::settings_routes::handle_settings_get_unredacted();
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                .await;
+        }
         // POST /cli/settings/update — Phase 2 Unit 7a.
         // Body: arbitrary JSON object deep-merged into settings.json.
         // F3 closure runs inside `app_settings::update()` — companion-
@@ -4118,7 +4131,12 @@ async fn handle_one_request(
                 state.token.as_str(),
             );
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::settings_routes::handle_settings_update(&body_bytes, actor);
+            // TP4: the merged settings echo hides credentials from every
+            // caller but the owner daemon token.
+            let result = crate::settings_routes::redact_settings_response(
+                crate::settings_routes::handle_settings_update(&body_bytes, actor),
+                super::http::token_is_owner(&query, state.token.as_str()),
+            );
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
@@ -4146,7 +4164,10 @@ async fn handle_one_request(
                 &query,
                 state.token.as_str(),
             );
-            let result = crate::settings_routes::handle_settings_reset(actor);
+            let result = crate::settings_routes::redact_settings_response(
+                crate::settings_routes::handle_settings_reset(actor),
+                super::http::token_is_owner(&query, state.token.as_str()),
+            );
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }

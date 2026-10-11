@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // "Open agents from other servers here" (MS55; prd-home-seamless-0432 Z1,
-// Z2, Z4, Z28, T1.1, T1.2, T1.4; Rosson 2026-10-03 Q1, Q2): on by default on
-// macOS and Linux, off by default on Windows, an explicit off (or on) is
-// kept on every OS, junk is migrated to "never touched", per computer in
-// localStorage, shared across windows, and the Settings row flips it.
+// Z2, Z4, Z28, T1.1, T1.2, T1.4; Rosson 2026-10-03 Q1, Q2; Rosson
+// 2026-10-11): on by default on every OS from 0.45.5 (Windows included), an
+// explicit off (or on) is kept on every OS, junk is migrated to "never
+// touched", per computer in localStorage, shared across windows, and the
+// Settings row flips it.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createElement } from 'react'
@@ -69,16 +70,13 @@ beforeEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('the platform default (Q2)', () => {
-  it('is on for macOS and Linux, off for Windows (until G-Win) and an unknown OS', () => {
-    expect(REMOTE_ROOMS_DEFAULT_ON).toEqual({ mac: true, linux: true, windows: false, other: false })
+describe('the default (Q2; 0.45.5 on everywhere)', () => {
+  it('is on for every OS, Windows and an unknown OS included', () => {
+    expect(REMOTE_ROOMS_DEFAULT_ON).toEqual({ mac: true, linux: true, windows: true, other: true })
   })
 
-  it('a missing key reads the default for each OS', () => {
-    expect(readRemoteRoomsPreview(memStorage(null), 'mac')).toBe(true)
-    expect(readRemoteRoomsPreview(memStorage(null), 'linux')).toBe(true)
-    expect(readRemoteRoomsPreview(memStorage(null), 'windows')).toBe(false)
-    expect(readRemoteRoomsPreview(memStorage(null), 'other')).toBe(false)
+  it('a missing key reads on, on every OS', () => {
+    for (const os of OSES) expect([os, readRemoteRoomsPreview(memStorage(null), os)]).toEqual([os, true])
   })
 })
 
@@ -91,20 +89,17 @@ describe('what the key means (Z2, T1.1)', () => {
     for (const os of OSES) expect([os, parseRemoteRoomsPreview('1', os)]).toEqual([os, true])
   })
 
-  it("missing, blank or anything else reads the platform default", () => {
+  it("missing, blank or anything else reads the default (on) on every OS", () => {
     for (const raw of [null, '', 'x', 'true', 'false', ' 1']) {
-      expect([raw, parseRemoteRoomsPreview(raw, 'mac')]).toEqual([raw, true])
-      expect([raw, parseRemoteRoomsPreview(raw, 'linux')]).toEqual([raw, true])
-      expect([raw, parseRemoteRoomsPreview(raw, 'windows')]).toEqual([raw, false])
+      for (const os of OSES) expect([raw, os, parseRemoteRoomsPreview(raw, os)]).toEqual([raw, os, true])
     }
   })
 
-  it('blocked storage reads the platform default', () => {
-    expect(readRemoteRoomsPreview(blocked, 'mac')).toBe(true)
-    expect(readRemoteRoomsPreview(blocked, 'linux')).toBe(true)
-    expect(readRemoteRoomsPreview(blocked, 'windows')).toBe(false)
-    expect(readRemoteRoomsPreview(null, 'mac')).toBe(true)
-    expect(readRemoteRoomsPreview(null, 'windows')).toBe(false)
+  it('blocked storage reads the default (on) on every OS', () => {
+    for (const os of OSES) {
+      expect([os, readRemoteRoomsPreview(blocked, os)]).toEqual([os, true])
+      expect([os, readRemoteRoomsPreview(null, os)]).toEqual([os, true])
+    }
   })
 
   it('the hosted web client always reads off, even with "1" stored (MS56)', () => {
@@ -126,9 +121,9 @@ describe('what the key means (Z2, T1.1)', () => {
     expect(readRemoteRoomsPreview()).toBe(true)
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
-    expect(readRemoteRoomsPreview()).toBe(false)
-    localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '1')
     expect(readRemoteRoomsPreview()).toBe(true)
+    localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
+    expect(readRemoteRoomsPreview()).toBe(false)
   })
 })
 
@@ -152,7 +147,8 @@ describe('the 0.43.2 migration (Q1)', () => {
     expect(s.writes).toEqual([])
     expect(s.value).toBe(null)
     expect(readRemoteRoomsPreview(s, 'mac')).toBe(true)
-    expect(readRemoteRoomsPreview(s, 'windows')).toBe(false)
+    // The 0.45.5 Windows flip reaches them with no migration.
+    expect(readRemoteRoomsPreview(s, 'windows')).toBe(true)
   })
 
   it('removes any other value (never written by the toggle): it then reads the default', () => {
@@ -186,10 +182,47 @@ describe('the 0.43.2 migration (Q1)', () => {
 
     localStorage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
     vi.resetModules()
     const windows = await import('./remote-rooms-preview')
-    expect(windows.useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
+    expect(windows.useRemoteRoomsPreviewStore.getState().enabled).toBe(true)
+    // The default is never written: nothing stored after the load.
     expect(localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)).toBe(null)
+  })
+})
+
+describe('the 0.45.5 default flip (Rosson 2026-10-11)', () => {
+  // Only the toggle has ever written the key ('1' / '0', since bd76de15d),
+  // so a stored '0' is always an explicit off and a missing key is "never
+  // touched". No migration is needed to tell them apart.
+  async function loadOn(platform: string, ua: string): Promise<boolean> {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua)
+    vi.resetModules()
+    const fresh = await import('./remote-rooms-preview')
+    return fresh.useRemoteRoomsPreviewStore.getState().enabled
+  }
+  const PLATFORMS: ReadonlyArray<readonly [string, string, string]> = [
+    ['mac', 'MacIntel', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'],
+    ['linux', 'Linux x86_64', 'Mozilla/5.0 (X11; Linux x86_64)'],
+    ['windows', 'Win32', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'],
+    ['other', 'FreeBSD amd64', 'Mozilla/5.0 (X11; FreeBSD amd64)'],
+  ]
+
+  it('someone who never touched it loads on, on every OS (Windows included)', async () => {
+    for (const [name, platform, ua] of PLATFORMS) {
+      localStorage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
+      expect([name, await loadOn(platform, ua)]).toEqual([name, true])
+      expect([name, localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)]).toEqual([name, null])
+    }
+  })
+
+  it('an explicit off (a stored "0") loads off on every OS and is left as is', async () => {
+    for (const [name, platform, ua] of PLATFORMS) {
+      localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
+      expect([name, await loadOn(platform, ua)]).toEqual([name, false])
+      expect([name, localStorage.getItem(LS_REMOTE_ROOMS_PREVIEW)]).toEqual([name, '0'])
+    }
   })
 })
 

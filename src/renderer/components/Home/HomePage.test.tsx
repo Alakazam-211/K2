@@ -460,10 +460,13 @@ describe('Home — the Agents page shell', () => {
     }
   })
 
-  it('the default on Windows (nothing stored) still switches the window (Q2, until G-Win)', async () => {
+  it('an explicit off on Windows still switches the window (the 0.45.5 default is on)', async () => {
     localStorage.removeItem(LS_REMOTE_ROOMS_PREVIEW)
     const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
     try {
+      // Nothing stored: on, Windows included (0.45.5).
+      expect(readRemoteRoomsPreview()).toBe(true)
+      localStorage.setItem(LS_REMOTE_ROOMS_PREVIEW, '0')
       useRemoteRoomsPreviewStore.setState({ enabled: readRemoteRoomsPreview() })
       expect(useRemoteRoomsPreviewStore.getState().enabled).toBe(false)
       const pickHost = vi.fn()

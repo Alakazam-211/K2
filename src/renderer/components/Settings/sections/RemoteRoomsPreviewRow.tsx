@@ -4,7 +4,7 @@ import { useRemoteRoomsPreviewStore } from '@/lib/remote-rooms-preview'
 
 // ── Open agents from other servers here ────────────────────────────────
 // Home (prd-home-multi-server-client MS55; prd-home-seamless-0432 Z1–Z4).
-// On (the default on macOS and Linux): a Home row on another server opens
+// On (the default on every OS from 0.45.5): a Home row on another server opens
 // that server's room in Home without switching. Off: it switches this
 // window's server. Per computer, never the daemon: localStorage
 // `k2.homeRemoteRooms.v1` (what each value means: lib/remote-rooms-preview).

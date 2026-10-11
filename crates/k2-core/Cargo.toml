@@ -193,6 +193,20 @@ getrandom = "0.2"
 ammonia = "=4.2.1"
 html5ever = "0.40"
 tungstenite = "0.24"
+# The VALIDATE stage's JS/TS parser (decision-k2-runtime-v1 §5, stage 0):
+# oxc parses Garden widget and App code in-process and its semantic pass
+# reports the early errors a browser throws as SyntaxError. MIT. Pinned
+# exactly, all in lockstep, behind `crate::jscheck` only, because its API
+# churns. 0.139 is the newest line whose MSRV (1.94) builds on every
+# release machine (z3mbpZ is on 1.94; 0.140+ need 1.95–1.97).
+oxc_allocator = "=0.139.0"
+oxc_ast = "=0.139.0"
+oxc_ast_visit = "=0.139.0"
+oxc_parser = "=0.139.0"
+oxc_semantic = "=0.139.0"
+oxc_span = "=0.139.0"
+oxc_diagnostics = "=0.139.0"
+oxc_syntax = "=0.139.0"
 
 # Companion tunnel (ngrok) + its supporting async stack. Moved over
 # from src-tauri along with the orchestrator.

@@ -225,7 +225,7 @@ const ROOT_KEYS: &[(&str, &str)] = &[
 pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>, Vec<Diagnostic>, Vec<Diagnostic>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    let d = |line: usize, col: usize, message: String| Diagnostic { file: file.to_string(), line, col, message };
+    let d = |line: usize, col: usize, message: String| Diagnostic { suggestion: None, file: file.to_string(), line, col, message };
     let src = src.trim_start_matches('\u{feff}');
     let v: J = match serde_json::from_str(src) {
         Ok(v) => v,
@@ -496,7 +496,7 @@ fn file_role(name: &str) -> Option<bool> {
 /// errors; dotfiles and README/LICENSE are ignored quietly.
 pub fn read_folder(dir: &Path, prefix: &str) -> WidgetFiles {
     let mut out = WidgetFiles::default();
-    let at = |file: &str, message: String| Diagnostic { file: format!("{prefix}/{file}"), line: 1, col: 1, message };
+    let at = |file: &str, message: String| Diagnostic { suggestion: None, file: format!("{prefix}/{file}"), line: 1, col: 1, message };
     let rd = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -574,6 +574,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".svg") {
             c.errors.push(Diagnostic {
+                suggestion: None,
                 file: label(name),
                 line: 1,
                 col: 1,
@@ -585,6 +586,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
         total += bytes.len() as u64;
         if bytes.len() as u64 > MAX_ASSET_BYTES {
             c.errors.push(Diagnostic {
+                suggestion: None,
                 file: label(name),
                 line: 1,
                 col: 1,
@@ -594,12 +596,14 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
         match sniff_asset(bytes) {
             Some(m) if m == want => {}
             Some(m) => c.errors.push(Diagnostic {
+                suggestion: None,
                 file: label(name),
                 line: 1,
                 col: 1,
                 message: format!("'{name}' is really {m}, not {want}; fix its extension"),
             }),
             None => c.errors.push(Diagnostic {
+                suggestion: None,
                 file: label(name),
                 line: 1,
                 col: 1,
@@ -609,6 +613,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
     }
     if total > MAX_ASSETS_BYTES {
         c.errors.push(Diagnostic {
+            suggestion: None,
             file: label(""),
             line: 1,
             col: 1,
@@ -617,6 +622,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
     }
     let Some(raw) = files.get(MANIFEST_FILE) else {
         c.errors.push(Diagnostic {
+            suggestion: None,
             file: label(MANIFEST_FILE),
             line: 1,
             col: 1,
@@ -625,7 +631,7 @@ pub fn check_files(prefix: &str, folder: &str, files: &BTreeMap<String, Vec<u8>>
         return c;
     };
     let Ok(src) = std::str::from_utf8(raw) else {
-        c.errors.push(Diagnostic { file: label(MANIFEST_FILE), line: 1, col: 1, message: "manifest.json is not UTF-8 text".into() });
+        c.errors.push(Diagnostic { suggestion: None, file: label(MANIFEST_FILE), line: 1, col: 1, message: "manifest.json is not UTF-8 text".into() });
         return c;
     };
     let (manifest, errs, warns) = parse_manifest(&label(MANIFEST_FILE), src, folder);

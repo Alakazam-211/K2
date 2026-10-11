@@ -121,6 +121,9 @@ pub mod workspace_dir;
 pub use workspace_dir::workspace_dot_dir;
 pub mod db_ops;
 pub mod inject_flow;
+// The VALIDATE stage: oxc parse + lints for Garden widgets and Apps
+// (decision-k2-runtime-v1 stage 0).
+pub mod jscheck;
 // Phase 2.5c: retired-but-preserved surface; modules here are
 // `#[deprecated]` and exist only for the deprecation window.
 pub mod deprecated;

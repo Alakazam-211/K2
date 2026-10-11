@@ -16,6 +16,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Switch your Connect name without a restart.** Changing a server's K2 Connect subdomain moves its listener, certificate and routes in one step, and rolls back if anything fails.
 - **Turning off access takes effect right away.** Switching off or removing an App user's access now ends their open sessions immediately instead of when the session expires, and taking a room away from a user removes it from their open sessions too.
 - **URL labels belong to one workspace.** A workspace can no longer take over a published label another workspace owns. Owners can still move one on purpose with `--transfer`, and every move is logged.
+- **Clean status dots in the terminal.** Claude's ⏺ marks (and similar symbols) no longer show as clipped grey emoji buttons on Linux, Windows and the web client; K2 now draws them itself. Thanks to the K2 Companion team for the fix.
 - **Readable tables in Thread.** Markdown tables keep short columns readable instead of squeezing them to one letter per line; wide tables scroll sideways.
 
 ## 0.45.3 — Quiet keychain, your own compute

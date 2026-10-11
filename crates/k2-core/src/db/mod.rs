@@ -1234,7 +1234,9 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // (they would apply out of release order). Next numbers, assigned in
         // release order (2026-10-10): 0148–0149 vault, 0150–0153 App runtime
         // stages, 0154 Gardens local services, 0155 compute receipts/usage.
-        // The integrator still orders the list and renumbers on slips.
+        // Superseded 2026-10-14 (0159 shipped first): the runtime is 0165+,
+        // see the 0165 entry below. The integrator still orders the list
+        // and renumbers on slips.
         (
             "0147_compute_nodes",
             include_str!("../../drizzle_sql/0147_compute_nodes.sql"),
@@ -1280,6 +1282,21 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         (
             "0159_workspace_handle_tombstones",
             include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
+        ),
+        // 0165 — App runtime core (prd-k2-app-runtime-v1 §9.1, stage 1):
+        // seeds, apps, deployments and the hash-chained deploy_audit. New
+        // tables only. Renumbered from 0150 at integration (vs-live 2 AR36):
+        // 0159 shipped in 0.45.5, so 0150–0155 and 0158 are below the shipped
+        // max and retired (never used; they would apply out of release order).
+        // Assigned in release order (2026-10-14): 0160–0161 v1 hire API and
+        // 0162 App-scoped key (0.45.6); 0163–0164 Garden v3; 0165 this file
+        // (0.46.0); 0166+ the later runtime stages (walls, resources,
+        // platform), then Gardens local services and compute receipts.
+        // Never reuse a number below the current maximum. The integrator
+        // renumbers on slips so names keep applying in release order.
+        (
+            "0165_app_runtime_core",
+            include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
     ];
 
@@ -1941,7 +1958,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0159_workspace_handle_tombstones",
+            last_name, "0165_app_runtime_core",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1969,6 +1986,7 @@ mod tests {
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
                 "0159_workspace_handle_tombstones",
+                "0165_app_runtime_core",
             ],
             "tail migrations out of order: {names:?}"
         );

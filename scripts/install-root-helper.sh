@@ -47,9 +47,9 @@
 set -euo pipefail
 
 # Root-helper signing public keys (minisign key lines). Identical to
-# crates/k2-root-proto/src/keys.rs RELEASE_KEYS (a daemon test checks).
-# Empty until the key ceremony: then every download is refused.
-K2_ROOT_HELPER_PUBKEYS=()
+# crates/k2-root-proto/src/keys.rs RELEASE_KEYS (a daemon test checks):
+# primary 18DB69584200F795, then backup E9C2D2CAD052297A (2026-10-10).
+K2_ROOT_HELPER_PUBKEYS=(RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1 RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W)
 
 RELEASE_BASE="${K2_RELEASE_BASE:-https://github.com/Alakazam-211/K2/releases/download}"
 RUN_USER="${K2_RUN_USER:-k2}"

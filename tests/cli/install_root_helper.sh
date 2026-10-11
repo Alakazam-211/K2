@@ -204,9 +204,19 @@ run "$D1" --version 0.45.5 --allow-downgrade
 [ "$rc" -eq 0 ] || fail "allow-downgrade: $out"
 ok "anti-downgrade (RH8) with an explicit override"
 
-echo "== no keys (ceremony pending): every download refused =="
+echo "== the shipped installer carries the release keys, not the test key =="
+grep -qx 'K2_ROOT_HELPER_PUBKEYS=(RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1 RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W)' "$INSTALLER" \
+	|| fail "installer must carry the 2026-10-10 primary + backup keys"
 D2="$WORK/box2"
 NOKEYS=1 run "$D2" --version 0.45.5
+expect_fail_with "release keys only" "MINISIGN VERIFICATION FAILED"
+nothing_installed "$D2" "release keys only"
+ok "with only the release keys a test-signed download is refused"
+
+echo "== no keys: every download refused (fail closed) =="
+sed 's/^K2_ROOT_HELPER_PUBKEYS=(.*)$/K2_ROOT_HELPER_PUBKEYS=()/' "$INSTALLER" >"$WORK/install-nokeys.sh"
+grep -qx 'K2_ROOT_HELPER_PUBKEYS=()' "$WORK/install-nokeys.sh" || fail "could not strip the keys"
+NOKEYS=1 SCRIPT="$WORK/install-nokeys.sh" run "$D2" --version 0.45.5
 expect_fail_with "no keys" "key ceremony pending"
 nothing_installed "$D2" "no keys"
 ok "an installer without keys refuses downloads"

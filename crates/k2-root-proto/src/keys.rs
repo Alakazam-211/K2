@@ -8,10 +8,10 @@
 //!
 //! **Key ceremony** (Rosson, on z3mbpZ; steps in `scripts/sign-root-helper.sh`):
 //! a primary key whose encrypted secret lives only on z3mbpZ (password in
-//! the login keychain) and a backup key kept offline. Both public keys go
-//! in [`RELEASE_KEYS`]. Until then the list is empty, which refuses every
-//! signed self-update and every downloaded install (fail closed), and
-//! `release.sh` refuses to tag.
+//! the login keychain) and a backup key kept offline. Both public keys are
+//! in [`RELEASE_KEYS`] (ceremony done 2026-10-10). An empty list would
+//! refuse every signed self-update and every downloaded install (fail
+//! closed), and `release.sh` would refuse to tag.
 
 /// One trusted minisign public key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,10 +24,21 @@ pub struct TrustedKey {
     pub public_key_b64: &'static str,
 }
 
-/// Release keys: primary first, backup second. Empty until the key
+/// Release keys: primary first, backup second, from the 2026-10-10 key
 /// ceremony (see the module doc). Rotation (§9.4): release N is signed by
 /// A and carries [A, B]; release N+1 is signed by B and carries [B, C].
-pub const RELEASE_KEYS: &[TrustedKey] = &[];
+pub const RELEASE_KEYS: &[TrustedKey] = &[
+    TrustedKey {
+        role: "primary",
+        key_id: "18DB69584200F795",
+        public_key_b64: "RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1",
+    },
+    TrustedKey {
+        role: "backup",
+        key_id: "E9C2D2CAD052297A",
+        public_key_b64: "RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W",
+    },
+];
 
 /// TEST ONLY. Trusted only by a helper built with `--features test-keys`
 /// (never a release build; `sign-root-helper.sh` refuses such a binary).
@@ -117,6 +128,17 @@ mod tests {
             );
             assert!(matches!(k.role, "primary" | "backup"), "{k:?}");
         }
+    }
+
+    /// The 2026-10-10 ceremony: exactly a primary then a backup, distinct.
+    #[test]
+    fn release_keys_are_the_ceremony_primary_then_backup() {
+        let roles: Vec<&str> = RELEASE_KEYS.iter().map(|k| k.role).collect();
+        assert_eq!(roles, vec!["primary", "backup"]);
+        assert_eq!(RELEASE_KEYS[0].key_id, "18DB69584200F795");
+        assert_eq!(RELEASE_KEYS[1].key_id, "E9C2D2CAD052297A");
+        assert_ne!(RELEASE_KEYS[0].public_key_b64, RELEASE_KEYS[1].public_key_b64);
+        assert_eq!(trusted_keys(false), RELEASE_KEYS.to_vec());
     }
 
     #[test]

@@ -351,6 +351,12 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// App runtime preview switch (Settings `appsPreview`,
+    /// prd-k2-app-runtime-v1 AR28). Persisted mirror of `K2_APPS`;
+    /// `deploy::enabled()` is true when EITHER is set. Owner-only to
+    /// change. Default MUST stay OFF (our own boxes only in stage 1).
+    #[serde(default)]
+    pub apps_preview: bool,
     /// 0.40.43 (1c) — public `/v1` API master switch (K2 Connect → Enable
     /// public API). Persisted app-level mirror of the `K2_API` env flag so
     /// the owner can flip the external `/v1` surface per-server from Settings
@@ -911,6 +917,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            apps_preview: false,
             api_enabled: false,
             airgap: false,
             listen_lan: false,

@@ -112,6 +112,8 @@ pub mod wiki_public_chat;
 // label + plist shape.
 pub mod daemon_lifecycle;
 pub mod db;
+/// App runtime stage 1: Seeds, deployments, deploy audit (prd-k2-app-runtime-v1).
+pub mod deploy;
 pub mod migration_home;
 pub mod paths;
 pub mod private_home;

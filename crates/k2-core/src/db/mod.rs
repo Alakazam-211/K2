@@ -1253,6 +1253,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0149_vault_manage",
             include_str!("../../drizzle_sql/0149_vault_manage.sql"),
         ),
+        // 0150 — App runtime core (prd-k2-app-runtime-v1 §9.1, stage 1):
+        // seeds, apps, deployments and the hash-chained deploy_audit. New
+        // tables only. 0151–0153 stay reserved for the later runtime stages.
+        (
+            "0150_app_runtime_core",
+            include_str!("../../drizzle_sql/0150_app_runtime_core.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1913,7 +1920,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0149_vault_manage",
+            last_name, "0150_app_runtime_core",
             "unexpected last migration name: {last_name}"
         );
     }

@@ -3,8 +3,9 @@
 //! negotiation, the legacy-argv translation, and auto-heal.
 //!
 //! - **Probe order** (§8.1): the root helper first; the legacy
-//!   `k2-mail-helper` for mail verbs and the legacy `k2-pg-helper` for pg
-//!   verbs only when the root helper is absent (one release train).
+//!   `k2-pg-helper` for pg verbs only when the root helper is absent (one
+//!   release train). Mail verbs use the root helper alone: the legacy
+//!   `k2-mail-helper` is retired at install (Rosson 2026-10-10).
 //! - **Translation**: `mail::sysops` and `sql::sysops` keep speaking their
 //!   protocol-2 / script argv. When the root helper is the door, that argv
 //!   is mapped onto the root verb (named targets, render verbs) and checked
@@ -492,7 +493,10 @@ pub fn status_json(
     let kind = match st.kind {
         Kind::Root => "root",
         Kind::NotAllowed => "not_allowed",
-        Kind::Missing if legacy_mail == "installed" || legacy_pg => "legacy",
+        // Only the pg script still serves when the root helper is absent;
+        // a leftover k2-mail-helper is reported (`legacy.mail`) but never
+        // used (retired at install, Rosson 2026-10-10).
+        Kind::Missing if legacy_pg => "legacy",
         Kind::Missing => "missing",
     };
     json!({

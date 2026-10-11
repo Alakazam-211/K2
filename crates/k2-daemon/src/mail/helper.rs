@@ -523,7 +523,8 @@ pub fn unavailable_message(state: HelperState) -> Option<String> {
             k2_root_proto::paths::HELPER_PATH
         ),
         HelperState::NotAllowed => format!(
-            "mail helper not allowed by sudoers (this daemon user may not `sudo -n {HELPER_PATH}`)"
+            "mail helper not allowed by sudoers (this daemon user may not `sudo -n {}`)",
+            k2_root_proto::paths::HELPER_PATH
         ),
     };
     Some(format!("{what} — run as root: {}", install_command()))
@@ -2170,12 +2171,13 @@ mod tests {
         let wrapper = include_str!("../../../../scripts/install-mail-helper.sh");
         assert!(wrapper.contains("install-root-helper.sh"), "old name execs the root installer");
         let workflow = include_str!("../../../../.github/workflows/daemon-binaries.yml");
+        // The legacy mail helper is retired (0.45.4): never built or shipped.
+        for gone in ["helper_asset:", "--bin k2-mail-helper"] {
+            assert!(!workflow.contains(gone), "daemon-binaries.yml still ships {gone}");
+        }
         for asset in [
-            "helper_asset: k2-mail-helper-linux-x86_64",
-            "helper_asset: k2-mail-helper-linux-aarch64",
             "root_asset: k2-root-helper-linux-x86_64",
             "root_asset: k2-root-helper-linux-aarch64",
-            "--bin k2-mail-helper",
             "-p k2-root-helper",
             "gh release upload \"$TAG\" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber",
         ] {

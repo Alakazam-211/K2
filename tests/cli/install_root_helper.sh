@@ -156,7 +156,7 @@ legacy() {
 release 0.45.5 4
 release 0.45.6 4
 
-echo "== fresh install from a verified release asset; pg legacy retired =="
+echo "== fresh install from a verified release asset; legacy helpers retired =="
 D1="$WORK/box1"
 legacy "$D1"
 run "$D1" --version 0.45.5
@@ -179,8 +179,18 @@ ok "daemon.toml names the daemon (0644)"
 [ ! -e "$D1/usr/local/libexec/k2-pg-helper" ] && [ ! -e "$D1/etc/sudoers.d/k2-pg-helper" ] || fail "pg legacy not retired"
 grep -q -- "visudo -c" "$WORK/visudo.log" || fail "visudo -c after retire"
 ok "legacy pg helper retired, visudo -c ran"
-[ -e "$D1/usr/local/libexec/k2-mail-helper" ] && [ -e "$D1/etc/sudoers.d/k2-mail-helper" ] || fail "mail legacy must stay one train"
-ok "legacy mail helper kept one train"
+[ ! -e "$D1/usr/local/libexec/k2-mail-helper" ] && [ ! -e "$D1/etc/sudoers.d/k2-mail-helper" ] || fail "mail legacy not retired"
+ok "legacy mail helper retired at install (Rosson 2026-10-10)"
+BK="$(ls -d "$D1"/var/backups/k2-root-helper/*/ | head -n1)"
+[ -n "$BK" ] || fail "no backup dir"
+for f in k2-pg-helper k2-mail-helper; do
+	[ -f "$BK/$f" ] || fail "backup lacks $f (sudoers or binary)"
+done
+[ "$(cat "$BK/k2-mail-helper" | head -c 4 | od -An -c | tr -d ' \n')" = '177ELF' ] || [ -n "$(cat "$BK/k2-mail-helper")" ] || fail "backup content"
+[ "$(mode_of "$BK")" = "700" ] || fail "backup dir mode $(mode_of "$BK")"
+printf '%s' "$out" | grep -q "backups     : /var/backups/k2-root-helper/" || fail "summary names the backups: $out"
+printf '%s' "$out" | grep -q "mail-sidecar: none" || fail "sidecar none: $out"
+ok "every removed file backed up first (0700 dir), summary names it"
 printf '%s' "$out" | grep -q "minisign + sha256 verified" || fail "provenance: $out"
 [ ! -e "$D1/usr/local/bin/stalwart" ] || fail "must never touch stalwart"
 ok "summary + no stalwart"
@@ -259,8 +269,8 @@ release 0.45.7 4
 echo "0000000000000000000000000000000000000000000000000000000000000000  $A" >"$WORK/rel/v0.45.7/$A.sha256"
 run "$D2" --version 0.45.7
 expect_fail_with "sha" "SHA256 MISMATCH"
-run "$D2" --version 0.44.0
-expect_fail_with "missing release" "ships from v0.45.5"
+run "$D2" --version 0.45.9
+expect_fail_with "missing release" "ships from v0.45.4"
 VISUDO_FAIL=1 run "$D2" --version 0.45.5
 expect_fail_with "visudo" "visudo rejected"
 nothing_installed "$D2" "sha/missing/visudo"
@@ -302,11 +312,70 @@ rm "$D5/usr/local/libexec/k2-root-helper"
 K2_TEST_DOOR_OK=0 run "$D5" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "door-not-ok install: $out"
 [ -e "$D5/usr/local/libexec/k2-pg-helper" ] || fail "pg legacy must stay when the door check fails"
+[ -e "$D5/usr/local/libexec/k2-mail-helper" ] || fail "mail legacy must stay when the door check fails"
 ok "a planted symlink is refused; legacy stays until the new door answers"
 run "$D5" --version 0.45.5 --retire-legacy-mail
-[ ! -e "$D5/usr/local/libexec/k2-mail-helper" ] && [ ! -e "$D5/etc/sudoers.d/k2-mail-helper" ] || fail "--retire-legacy-mail"
+[ "$rc" -eq 0 ] || fail "--retire-legacy-mail must still be accepted: $out"
+[ ! -e "$D5/usr/local/libexec/k2-mail-helper" ] && [ ! -e "$D5/etc/sudoers.d/k2-mail-helper" ] || fail "mail retired"
 [ ! -e "$D5/usr/local/libexec/k2-pg-helper" ] || fail "pg retired with the door ok"
-ok "--retire-legacy-mail removes the old mail helper"
+ok "the old --retire-legacy-mail flag is accepted (retirement is the default)"
+
+echo "== k2-mail-sidecar sudoers (akzm, lztek): retired only when K2 wrote it =="
+D8="$WORK/box8"
+mkdir -p "$D8/etc/sudoers.d"
+printf '# K2 hosted mail\nk2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/systemctl start stalwart.service, /usr/local/libexec/k2-mail-sidecar\nDefaults:k2 !requiretty\n' \
+	>"$D8/etc/sudoers.d/k2-mail-sidecar"
+cp "$D8/etc/sudoers.d/k2-mail-sidecar" "$WORK/sidecar.orig"
+run "$D8" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "sidecar install: $out"
+[ ! -e "$D8/etc/sudoers.d/k2-mail-sidecar" ] || fail "a K2-shaped k2-mail-sidecar must be retired"
+cmp -s "$WORK/sidecar.orig" "$(ls -d "$D8"/var/backups/k2-root-helper/*/ | head -n1)/k2-mail-sidecar" || fail "sidecar backup bytes"
+printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "sidecar summary: $out"
+ok "a K2-written k2-mail-sidecar is backed up and retired"
+for body in 'k2 ALL=(ALL) NOPASSWD: ALL' 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/bash' 'admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart' '%sudo ALL=(ALL) ALL'; do
+	printf '%s\n' "$body" >"$D8/etc/sudoers.d/k2-mail-sidecar"
+	run "$D8" --version 0.45.5
+	[ "$rc" -eq 0 ] || fail "foreign sidecar must not fail the install: $out"
+	[ "$(cat "$D8/etc/sudoers.d/k2-mail-sidecar")" = "$body" ] || fail "foreign sidecar changed: $body"
+	printf '%s' "$out" | grep -q "LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar is not one K2 wrote" || fail "foreign sidecar report ($body): $out"
+done
+ok "any other k2-mail-sidecar content is reported and left alone"
+
+echo "== daemon older than 0.45.4: refuse, change nothing (iascm 0.41.3) =="
+D9="$WORK/box9"
+legacy "$D9"
+run "$D9" --version 0.41.3
+expect_fail_with "old --version" "older than v0.45.4"
+K2_TEST_RUNNING_DAEMON_VERSION=0.41.3 run "$D9" --version 0.45.5
+expect_fail_with "old running daemon" "is v0.41.3, older than v0.45.4"
+nothing_installed "$D9" "old daemon"
+[ -e "$D9/usr/local/libexec/k2-mail-helper" ] && [ -e "$D9/usr/local/libexec/k2-pg-helper" ] || fail "old daemon: legacy must stay"
+K2_TEST_RUNNING_DAEMON_VERSION=0.45.4 run "$D9" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "0.45.4 running daemon: $out"
+printf '%s' "$out" | grep -q "daemon      : v0.45.4 (running)" || fail "daemon line: $out"
+ok "a daemon below 0.45.4 (asked for or running) is refused before any change"
+
+echo "== a box with no prior helpers at all (iascm shape) =="
+D10="$WORK/box10"
+run "$D10" --version 0.45.5
+[ "$rc" -eq 0 ] || fail "bare box: $out"
+printf '%s' "$out" | grep -q "legacy pg   : retired: (none)" || fail "bare pg line: $out"
+printf '%s' "$out" | grep -q "legacy mail : retired: (none)" || fail "bare mail line: $out"
+[ ! -e "$D10/var/backups/k2-root-helper" ] || fail "no backup dir when nothing was removed"
+ok "no prior helpers: installs, retires nothing, makes no backup dir"
+
+echo "== a non-k2 daemon user (nsi: alakazamlabs) =="
+D11="$WORK/box11"
+mkdir -p "$D11/usr/local/libexec" "$D11/etc/sudoers.d"
+printf 'old pg helper' >"$D11/usr/local/libexec/k2-pg-helper"
+printf 'alakazamlabs ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper\n' >"$D11/etc/sudoers.d/k2-pg-helper"
+run "$D11" --version 0.45.5 --user alakazamlabs --unit k2-daemon.service
+[ "$rc" -eq 0 ] || fail "alakazamlabs: $out"
+expected="$(printf 'alakazamlabs ALL=(root) NOPASSWD: /usr/local/libexec/k2-root-helper\nDefaults:alakazamlabs !requiretty')"
+[ "$(cat "$D11/etc/sudoers.d/k2-root-helper")" = "$expected" ] || fail "sudoers for alakazamlabs: $(cat "$D11/etc/sudoers.d/k2-root-helper")"
+grep -q '^user = "alakazamlabs"$' "$D11/etc/k2-root-helper/daemon.toml" || fail "daemon.toml user alakazamlabs"
+[ ! -e "$D11/usr/local/libexec/k2-pg-helper" ] || fail "pg legacy retired for alakazamlabs"
+ok "--user alakazamlabs: sudoers, daemon.toml and retirement follow the user"
 
 echo "== argument and environment guards =="
 D6="$WORK/box6"
@@ -325,8 +394,16 @@ for bad in 0.45 0.45.5.1 00.45.5 0.45.5-rc1 '0.45.5;id' ' 0.45.5' 1234567.0.0; d
 done
 run "$D6"
 expect_fail_with "no version" "pass --version"
-if grep -Ev '^[[:space:]]*#' "$INSTALLER" | grep -Eq 'detect_version|\.local/bin/k2-daemon|daemon\.port|/boot-status'; then
-	fail "installer derives the version from daemon-user files"
+# The running daemon's /boot-status may only REFUSE an install (too old);
+# it never picks the version installed, and its binary never runs.
+if grep -Ev '^[[:space:]]*#' "$INSTALLER" | grep -Eq 'detect_version|\.local/bin/k2-daemon'; then
+	fail "installer runs or reads the daemon user's binary"
+fi
+if grep -Ev '^[[:space:]]*#' "$INSTALLER" | grep -Eq '(VERSION|SRC|FILE)="?\$\{?RUNNING_DAEMON'; then
+	fail "installer derives the version from the running daemon"
+fi
+if grep -Ev '^[[:space:]]*#' "$INSTALLER" | grep -F 'daemon.port' | grep -vq -- '! -L'; then
+	fail "the port file read must refuse a symlink"
 fi
 SHIM_UID=1000 run "$D6" --version 0.45.5
 expect_fail_with "non-root" "run as root"

@@ -7,7 +7,7 @@
 #   curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/install-root-helper.sh \
 #     | sudo bash -s -- --version <version> [--user k2] [--unit k2-daemon.service] [--scope system]
 #
-#   sudo bash install-root-helper.sh --version 0.45.5          # the daemon's version
+#   sudo bash install-root-helper.sh --version 0.45.4          # the daemon's version
 #   sudo bash install-root-helper.sh --file ./k2-root-helper   # a local build
 #
 # What it does (and nothing else):
@@ -31,11 +31,18 @@
 #        Defaults:<user> !requiretty
 #      validated with `visudo -cf` BEFORE it moves into place.
 #   6. Once the daemon user can run it (`sudo -n -l` + a real `helper
-#      version` as that user): retires the legacy pg helper right away
-#      (/usr/local/libexec/k2-pg-helper + its sudoers file; closes the old
-#      `su -c` hole) and runs `visudo -c`. The legacy k2-mail-helper stays
-#      one release train (a daemon rolled back to 0.45.x still works);
-#      --retire-legacy-mail removes it now.
+#      version` as that user): retires the legacy helpers right away
+#      (Rosson 2026-10-10): /usr/local/libexec/k2-pg-helper and
+#      /usr/local/libexec/k2-mail-helper with their sudoers files (closes
+#      the old `su -c` and direct store-wipe holes), plus an older
+#      /etc/sudoers.d/k2-mail-sidecar when its content is one K2 wrote
+#      (anything else is reported and left alone). Every removed file is
+#      copied first to /var/backups/k2-root-helper/<stamp>/. Then
+#      `visudo -c`. A daemon rolled back below 0.45.4 loses mail restarts
+#      and `k2 db` until it updates again.
+#   0. Before any of that: a daemon older than 0.45.4 (asked for with
+#      --version, or the running one's /boot-status) does not know the
+#      root helper — the install refuses and changes nothing.
 #
 # It never touches Stalwart or Postgres, never restarts anything, never
 # edits any other sudoers file. Idempotent.
@@ -68,6 +75,12 @@ LEGACY_PG_HELPER="/usr/local/libexec/k2-pg-helper"
 LEGACY_PG_SUDOERS="/etc/sudoers.d/k2-pg-helper"
 LEGACY_MAIL_HELPER="/usr/local/libexec/k2-mail-helper"
 LEGACY_MAIL_SUDOERS="/etc/sudoers.d/k2-mail-helper"
+# An older hand-installed mechanism (akzm, lztek): retired only when its
+# content is exactly what K2 wrote (sidecar_is_ours), else reported.
+LEGACY_MAIL_SIDECAR_SUDOERS="/etc/sudoers.d/k2-mail-sidecar"
+BACKUP_BASE="/var/backups/k2-root-helper"
+# The first daemon release that knows the root helper.
+ROOT_HELPER_FROM="0.45.4"
 HELPER_DEST="${DEST_ROOT}${HELPER_PATH}"
 SUDOERS_DEST="${DEST_ROOT}${SUDOERS_PATH}"
 CONFIG_DEST="${DEST_ROOT}${CONFIG_DIR}"
@@ -79,13 +92,12 @@ FILE=""
 UNIT="k2-daemon.service"
 SCOPE="system"
 ALLOW_DOWNGRADE=0
-RETIRE_LEGACY_MAIL=0
 
 usage() {
 	cat <<'EOF'
 Usage: install-root-helper.sh (--version <x.y.z> | --file <path>)
                               [--user <name>] [--unit <unit>] [--scope system|user]
-                              [--allow-downgrade] [--retire-legacy-mail]
+                              [--allow-downgrade]
 
 Run as root (an admin SSH session, not a K2 terminal). Installs
 /usr/local/libexec/k2-root-helper (root:root 0755), /etc/k2-root-helper/
@@ -98,7 +110,8 @@ daemon.toml (0644) and /etc/sudoers.d/k2-root-helper (0440, visudo-checked).
   --scope system|user  system unit (provisioned boxes) or systemd --user
                        (self-hosted install-daemon.sh). Default: system
   --allow-downgrade    install a version older than the installed helper
-  --retire-legacy-mail also remove the legacy k2-mail-helper now
+  --retire-legacy-mail accepted for old scripts; the legacy helpers are
+                       always retired now (0.45.4)
 EOF
 }
 
@@ -119,7 +132,7 @@ while [ $# -gt 0 ]; do
 		--scope) need_arg $# "$1"; SCOPE="$2"; shift 2 ;;
 		--scope=*) SCOPE="${1#--scope=}"; shift ;;
 		--allow-downgrade) ALLOW_DOWNGRADE=1; shift ;;
-		--retire-legacy-mail) RETIRE_LEGACY_MAIL=1; shift ;;
+		--retire-legacy-mail) shift ;;
 		-h|--help) usage; exit 0 ;;
 		*) usage >&2; die "unknown argument: $1" ;;
 	esac
@@ -130,7 +143,7 @@ SEMVER_RE='^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
 [ -n "$VERSION" ] || [ -n "$FILE" ] || die "pass --version <x.y.z> (the daemon's version: 'k2 root-helper status' or the release you installed) or --file <path>. This script never runs the daemon's own binary to find it."
 VERSION="${VERSION#v}"
 if [ -n "$VERSION" ] && ! [[ "$VERSION" =~ $SEMVER_RE ]]; then
-	die "--version must look like 0.45.5 (got '$VERSION')"
+	die "--version must look like 0.45.4 (got '$VERSION')"
 fi
 # These land in sudoers and daemon.toml: plain names only.
 [[ "$RUN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "--user must be a plain user name (got '$RUN_USER')"
@@ -196,6 +209,39 @@ verify_sig() {
 	return 1
 }
 
+# ── 0. the daemon must know the root helper (0.45.4+) ───────────────
+# Retiring the legacy helpers under a daemon that predates the root helper
+# would cut its mail restarts and `k2 db`: refuse, change nothing.
+too_old() {
+	die "the daemon on this box is v$1, older than v$ROOT_HELPER_FROM — it does not know the root helper. Update the daemon first (k2 update, or the fleet daemon hop), then run this again. Nothing was changed."
+}
+if [ -n "$VERSION" ] && ver_lt "$VERSION" "$ROOT_HELPER_FROM"; then
+	too_old "$VERSION"
+fi
+RUNNING_DAEMON=""
+if [ -n "$DEST_ROOT" ]; then
+	# Hermetic tests only: stand in for the running daemon's answer.
+	RUNNING_DAEMON="${K2_TEST_RUNNING_DAEMON_VERSION:-}"
+else
+	# Ask the running daemon (its own port file; never execute its binary).
+	_home="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6 || true)"
+	_port=""
+	# A regular file only (no link, no FIFO); at most 16 bytes read.
+	if [ -n "$_home" ] && [ -f "$_home/.k2/daemon.port" ] && [ ! -L "$_home/.k2/daemon.port" ]; then _port="$(head -c 16 "$_home/.k2/daemon.port" | tr -dc '0-9' | head -c 5)"; fi
+	if [ -n "$_port" ] && command -v curl >/dev/null 2>&1; then
+		RUNNING_DAEMON="$(curl -fsS --max-time 3 "http://127.0.0.1:$_port/boot-status" 2>/dev/null \
+			| grep -o '"version":"[0-9.]*"' | head -n1 | sed 's/.*:"\(.*\)"/\1/' || true)"
+	fi
+fi
+if [[ "$RUNNING_DAEMON" =~ $SEMVER_RE ]]; then
+	ver_lt "$RUNNING_DAEMON" "$ROOT_HELPER_FROM" && too_old "$RUNNING_DAEMON"
+	DAEMON_SEEN="v$RUNNING_DAEMON (running)"
+else
+	RUNNING_DAEMON=""
+	DAEMON_SEEN="unknown (no running daemon answered /boot-status as $RUN_USER) — it must be v$ROOT_HELPER_FROM+ before it starts"
+	log "WARNING: could not read the running daemon's version; a daemon older than v$ROOT_HELPER_FROM loses mail restarts and k2 db once the legacy helpers are retired"
+fi
+
 # ── 1. the binary ────────────────────────────────────────────────────
 SRC=""
 PROVENANCE=""
@@ -221,7 +267,7 @@ else
 	ASSET="k2-root-helper-linux-${ARCH}"
 	URL="${RELEASE_BASE}/v${VERSION}/${ASSET}"
 	log "downloading ${ASSET} (v${VERSION})"
-	fetch "$URL" "$TMP/$ASSET" || die "download failed: $URL — the root helper ships from v0.45.5. Update the daemon (k2 update) or pass --version / --file."
+	fetch "$URL" "$TMP/$ASSET" || die "download failed: $URL — the root helper ships from v$ROOT_HELPER_FROM. Update the daemon (k2 update) or pass --version / --file."
 	fetch "$URL.sig" "$TMP/$ASSET.sig" || die "download failed: $URL.sig"
 	fetch "$URL.sha256" "$TMP/$ASSET.sha256" || die "download failed: $URL.sha256"
 	COMMENT="$(verify_sig "$TMP/$ASSET" "$TMP/$ASSET.sig")" || die "MINISIGN VERIFICATION FAILED for $URL — refusing to install"
@@ -348,28 +394,75 @@ else
 	CHECK="WARNING: '$RUN_USER' cannot run 'sudo -n $HELPER_PATH helper version' — check /etc/sudoers (includedir?) — legacy helpers left in place"
 fi
 
+# One backup dir per run, named here (retire runs in a subshell), created
+# only when something is removed.
+BACKUP_DIR="${DEST_ROOT}${BACKUP_BASE}/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+backup_dir() {
+	install -d -m 0700 "$BACKUP_DIR" || die "could not create $BACKUP_DIR"
+	printf '%s' "$BACKUP_DIR"
+}
 retire() {
-	# retire <bin> <sudoers>: remove the fixed legacy files (regular files only).
-	local removed=""
-	for p in "$2" "$1"; do
-		local d="${DEST_ROOT}$p"
+	# retire <file>...: back up, then remove the fixed legacy files
+	# (regular files only; a symlink is reported and left alone).
+	local removed="" p d b
+	for p in "$@"; do
+		d="${DEST_ROOT}$p"
 		if [ -L "$d" ]; then
 			log "WARNING: $p is a symlink — left alone"
 		elif [ -f "$d" ]; then
+			b="$(backup_dir)"
+			cp -p -- "$d" "$b/$(basename "$p")" || die "could not back up $p — nothing more removed"
 			rm -f "$d" && removed="$removed $p"
 		fi
 	done
 	printf '%s' "${removed:- (none)}"
 }
-PG_RESULT="kept"
-MAIL_RESULT="kept one release train (daemon retires it from 0.46.0; --retire-legacy-mail to remove now)"
+# sidecar_is_ours <file>: every non-blank, non-comment line is one K2's old
+# mail installers wrote for THIS daemon user — `Defaults:<user> !requiretty`
+# or `<user> ALL=(root) NOPASSWD: <cmd>[, <cmd>…]` where each command is
+# systemctl on the stalwart unit or a /usr/local K2-mail/stalwart binary.
+sidecar_is_ours() {
+	local line cmds cmd u="$RUN_USER" any=0
+	local sysctl_re='^(/usr)?/bin/systemctl( [a-z-]+)+ stalwart(\.service)?$'
+	local bin_re='^/usr/local/(libexec|bin)/(k2-mail-[a-z-]+|stalwart)( .*)?$'
+	while IFS= read -r line || [ -n "$line" ]; do
+		line="${line%%#*}"
+		line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		[ -z "$line" ] && continue
+		any=1
+		[ "$line" = "Defaults:$u !requiretty" ] && continue
+		case "$line" in
+			"$u ALL=(root) NOPASSWD: "*) cmds="${line#"$u ALL=(root) NOPASSWD: "}" ;;
+			*) return 1 ;;
+		esac
+		while [ -n "$cmds" ]; do
+			cmd="${cmds%%,*}"
+			[ "$cmd" = "$cmds" ] && cmds="" || cmds="${cmds#*,}"
+			cmd="$(printf '%s' "$cmd" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+			[[ "$cmd" =~ $sysctl_re ]] || [[ "$cmd" =~ $bin_re ]] || return 1
+		done
+	done <"$1"
+	[ "$any" = 1 ]
+}
+PG_RESULT="kept (the root helper did not answer as $RUN_USER)"
+MAIL_RESULT="kept (the root helper did not answer as $RUN_USER)"
+SIDECAR_RESULT="kept (the root helper did not answer as $RUN_USER)"
 if [ "$DOOR_OK" = 1 ]; then
-	PG_RESULT="retired:$(retire "$LEGACY_PG_HELPER" "$LEGACY_PG_SUDOERS")"
-	if [ "$RETIRE_LEGACY_MAIL" = 1 ]; then
-		MAIL_RESULT="retired:$(retire "$LEGACY_MAIL_HELPER" "$LEGACY_MAIL_SUDOERS")"
+	PG_RESULT="retired:$(retire "$LEGACY_PG_SUDOERS" "$LEGACY_PG_HELPER")"
+	MAIL_RESULT="retired:$(retire "$LEGACY_MAIL_SUDOERS" "$LEGACY_MAIL_HELPER")"
+	_sc="${DEST_ROOT}${LEGACY_MAIL_SIDECAR_SUDOERS}"
+	if [ -L "$_sc" ]; then
+		SIDECAR_RESULT="LEFT IN PLACE: $LEGACY_MAIL_SIDECAR_SUDOERS is a symlink — review it by hand"
+	elif [ ! -e "$_sc" ]; then
+		SIDECAR_RESULT="none"
+	elif sidecar_is_ours "$_sc"; then
+		SIDECAR_RESULT="retired:$(retire "$LEGACY_MAIL_SIDECAR_SUDOERS")"
+	else
+		SIDECAR_RESULT="LEFT IN PLACE: $LEGACY_MAIL_SIDECAR_SUDOERS is not one K2 wrote (unexpected lines) — review it by hand"
+		log "WARNING: $SIDECAR_RESULT"
 	fi
 	if [ -z "$DEST_ROOT" ]; then
-		visudo -c >/dev/null 2>&1 || die "visudo -c fails after retiring the legacy helpers — check /etc/sudoers.d"
+		visudo -c >/dev/null 2>&1 || die "visudo -c fails after retiring the legacy helpers — check /etc/sudoers.d (backups in $BACKUP_DIR)"
 	else
 		visudo -c >/dev/null
 	fi
@@ -390,5 +483,8 @@ echo "  sudoers     : $SUDOERS_PATH  $SUDOERS_RESULT  (0440, visudo ok)"
 echo "  check       : $CHECK"
 echo "  legacy pg   : $PG_RESULT"
 echo "  legacy mail : $MAIL_RESULT"
+echo "  mail-sidecar: $SIDECAR_RESULT"
+[ ! -d "$BACKUP_DIR" ] || echo "  backups     : ${BACKUP_DIR#"$DEST_ROOT"}"
+echo "  daemon      : $DAEMON_SEEN"
 [ -z "$INCLUDE_NOTE" ] || echo "  $INCLUDE_NOTE"
 echo "  next        : as $RUN_USER: k2 root-helper status  →  state: root"

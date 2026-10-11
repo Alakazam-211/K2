@@ -41,7 +41,7 @@
 #                      ../target/release/k2-root-helper from a
 #                      `cargo build -p k2-root-helper --release`, else the
 #                      signed GitHub release asset for the SAME version as the
-#                      installed daemon (install-root-helper.sh; v0.45.5+).
+#                      installed daemon (install-root-helper.sh; v0.45.4+).
 #                      Every box (bake and full provision) gets K2's one root
 #                      door so its agents can enable hosted mail and the db
 #                      sidecar without ops. A failure is a hard failure that
@@ -287,7 +287,7 @@ systemctl enable "$K2_UNIT_NAME" >/dev/null 2>&1
 # unit, system scope). A local binary wins (K2_ROOT_HELPER_BIN, beside
 # this script, ../target/release); otherwise the installer fetches the
 # signed release asset for the SAME version as the daemon step 4 just
-# installed (assets ship from v0.45.5).
+# installed (assets ship from v0.45.4).
 # FAIL LOUD: any failure here stops provisioning (never skipped, never
 # warned past). This step installs the helper only: it does not enable
 # hosted mail, touch DNS, or write any other sudoers file.
@@ -344,11 +344,11 @@ else
 	if [ "$INSTALLED_VERSION" != "$DAEMON_VERSION" ]; then
 		root_helper_die "K2_VERSION=${K2_VERSION} but the installed daemon reports ${INSTALLED_VERSION}; the helper must match the daemon"
 	fi
-	# Daemons older than the root helper (it ships from 0.45.5) have no
+	# Daemons older than the root helper (it ships from 0.45.4) have no
 	# install-root-helper.sh in their release: they get that release's
 	# protocol-2 k2-mail-helper exactly as it shipped (this provisioner is
 	# fetched from raw main while K2_VERSION may still be older).
-	ROOT_HELPER_FROM="0.45.5"
+	ROOT_HELPER_FROM="0.45.4"
 	ROOT_HELPER_MODE="root"
 	IFS=. read -r _dv1 _dv2 _dv3 <<<"$DAEMON_VERSION"
 	IFS=. read -r _rf1 _rf2 _rf3 <<<"$ROOT_HELPER_FROM"
@@ -421,7 +421,23 @@ fi
 # namespace (7a): no k2-pg-helper copy and no second sudoers line any more
 # (RH11). User=k2 never apt-gets and never holds a superuser password.
 # Mail stays GitHub-tarball at enable; db is bake-apt.
+# A box that ALREADY has a Postgres cluster (dtl, edf: postgresql@16 set
+# up another way, no k2-pg-helper) is ADOPTED as is: no apt, no initdb, no
+# listen_addresses rewrite, no RAM fence (those change a running database
+# someone else sized). The daemon's db verbs reach it through the root
+# helper's `pg` namespace (7a). Fence it later, after review, with
+# `k2-root-helper pg install-ram-fence`. Never re-initialized.
+PG_EXISTING=""
 if [ "$WITH_DB" = 1 ]; then
+	for _conf in /etc/postgresql/*/*/postgresql.conf; do
+		[ -f "$_conf" ] && PG_EXISTING="$PG_EXISTING ${_conf#/etc/postgresql/}"
+	done
+fi
+if [ "$WITH_DB" = 1 ] && [ -n "$PG_EXISTING" ]; then
+	PG_EXISTING="$(printf '%s' "$PG_EXISTING" | sed 's#/postgresql\.conf##g; s/^ //')"
+	log "Postgres: existing cluster(s) adopted, not re-initialized and not reconfigured: ${PG_EXISTING}"
+	log "Postgres: review, then fence RAM with: sudo /usr/local/libexec/k2-root-helper pg install-ram-fence"
+elif [ "$WITH_DB" = 1 ]; then
 	log "baking Postgres sidecar (postgresql + postgresql-client)"
 	apt-get install -y -qq postgresql postgresql-client >/dev/null
 	# Distro default PGDATA (never the workspace). Empty cluster.

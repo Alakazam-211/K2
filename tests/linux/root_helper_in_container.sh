@@ -110,7 +110,15 @@ printf 'k2 ALL=(root) NOPASSWD: /usr/local/libexec/k2-pg-helper\n' >/etc/sudoers
 chmod 0440 /etc/sudoers.d/k2-pg-helper
 OLD="$(runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper version)"
 echo "$OLD" | grep -q '"protocol":2' || fail "legacy mail helper protocol 2: $OLD"
-ok "legacy protocol-2 mail helper + pg helper installed the old way"
+# The older hand-installed mechanism on akzm/lztek, in a shape K2 wrote.
+printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /usr/local/libexec/k2-mail-helper\n' >/etc/sudoers.d/k2-mail-sidecar
+chmod 0440 /etc/sudoers.d/k2-mail-sidecar
+visudo -c >/dev/null || fail "k2-mail-sidecar fixture"
+# The direct-wipe hole the legacy helper leaves open: any process of the
+# daemon user (an agent) can stop Stalwart and wipe/restore the store.
+runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper usage >/dev/null 2>&1 \
+	|| fail "legacy mail helper should answer before the root helper is installed"
+ok "legacy protocol-2 mail helper + pg helper + k2-mail-sidecar installed the old way"
 
 echo "== phase B: install the root helper over them =="
 K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" >/tmp/irh.log 2>&1 \
@@ -121,9 +129,23 @@ sed 's/^/    | /' /tmp/irh.log
 [ "$(stat -c '%U:%G %a' /etc/k2-root-helper/daemon.toml)" = "root:root 644" ] || fail "toml mode"
 visudo -c >/dev/null || fail "visudo -c"
 [ ! -e /usr/local/libexec/k2-pg-helper ] && [ ! -e /etc/sudoers.d/k2-pg-helper ] || fail "pg legacy not retired"
-runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper version | grep -q '"protocol":2' \
-	|| fail "legacy mail helper must keep working one train"
-ok "installed; pg legacy retired; mail legacy still answers (a rolled-back daemon keeps working)"
+[ ! -e /usr/local/libexec/k2-mail-helper ] && [ ! -e /etc/sudoers.d/k2-mail-helper ] || fail "mail legacy not retired at install"
+[ ! -e /etc/sudoers.d/k2-mail-sidecar ] || fail "a K2-shaped k2-mail-sidecar must be retired"
+BK="$(ls -d /var/backups/k2-root-helper/*/ | head -n1)"
+for f in k2-pg-helper k2-mail-helper k2-mail-sidecar; do [ -f "$BK/$f" ] || fail "backup lacks $f"; done
+[ "$(stat -c '%U %a' "$BK")" = "root 700" ] || fail "backup dir mode"
+grep -q "legacy mail : retired:" /tmp/irh.log || fail "summary: legacy mail"
+grep -q "mail-sidecar: retired:" /tmp/irh.log || fail "summary: mail-sidecar"
+# The hole is closed: the daemon user (and so any agent) can no longer
+# reach the old helper's direct verbs.
+if runuser -u k2 -- sudo -n /usr/local/libexec/k2-mail-helper restore-data </dev/null >/dev/null 2>&1; then
+	fail "the old helper's restore-data still runs as root"
+fi
+if runuser -u k2 -- sudo -n -l /usr/local/libexec/k2-mail-helper >/dev/null 2>&1; then
+	fail "sudoers still lets k2 run the old mail helper"
+fi
+visudo -c >/dev/null || fail "visudo -c after retirement"
+ok "installed; pg + mail legacy and k2-mail-sidecar retired (backed up 0700); the direct-wipe hole is closed"
 runuser -u k2 -- sudo -n -l "$H" >/dev/null || fail "sudo -n -l as k2"
 V="$(runuser -u k2 -- sudo -n "$H" helper version)"
 echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -q '"protocol":4' || fail "helper version: $V"
@@ -400,6 +422,34 @@ expect_rc 0 "user-scope daemon verb"
 req agent keep gen bump
 expect_rc 77 "user-scope agent verb"
 ok "user-scope MainPID (private-socket fallback, no user bus): the user-scope daemon passes, its child is refused"
+
+echo "== a non-k2 daemon user (nsi: alakazamlabs) =="
+usys stop k2-daemon.service || true
+useradd -m -s /bin/bash alakazamlabs
+chown -R alakazamlabs:alakazamlabs /run/k2fd
+sed 's/^User=k2$/User=alakazamlabs/' /etc/systemd/system/k2-daemon.service >/etc/systemd/system/k2-daemon-nsi.service
+grep -q '^User=alakazamlabs$' /etc/systemd/system/k2-daemon-nsi.service || fail "nsi unit"
+systemctl daemon-reload
+systemctl start k2-daemon-nsi.service
+sleep 1
+systemctl is-active --quiet k2-daemon-nsi.service || fail "alakazamlabs fake daemon did not start"
+K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" --user alakazamlabs --unit k2-daemon-nsi.service >/tmp/irh3.log 2>&1 \
+	|| { cat /tmp/irh3.log; fail "install with --user alakazamlabs"; }
+grep -q '^user = "alakazamlabs"$' /etc/k2-root-helper/daemon.toml || fail "daemon.toml user"
+grep -q '^unit = "k2-daemon-nsi.service"$' /etc/k2-root-helper/daemon.toml || fail "daemon.toml unit"
+grep -q '^alakazamlabs ALL=(root) NOPASSWD: /usr/local/libexec/k2-root-helper$' /etc/sudoers.d/k2-root-helper || fail "sudoers user"
+grep -q "check       : alakazamlabs may run it" /tmp/irh3.log || fail "door check as alakazamlabs: $(cat /tmp/irh3.log)"
+if runuser -u k2 -- sudo -n -l "$H" >/dev/null 2>&1; then fail "k2 must no longer reach the helper"; fi
+req daemon keep kek init
+expect_rc 0 "alakazamlabs daemon kek init"
+[ "$(stat -c '%U %a' /var/lib/k2-root-helper/keep/alakazamlabs/kek)" = "root 600" ] || fail "keeper path for alakazamlabs"
+req daemon keep kek get
+expect_rc 0 "alakazamlabs daemon kek get"
+req agent keep kek get
+expect_rc 77 "alakazamlabs agent kek get"
+req agent helper version
+expect_rc 0 "alakazamlabs helper version"
+ok "--user alakazamlabs: caller check, unit, sudoers and keeper path follow the daemon user"
 
 echo ""
 echo "PASS: root helper integration ($pass checks)"

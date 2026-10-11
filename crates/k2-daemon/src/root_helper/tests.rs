@@ -589,7 +589,13 @@ fn status_shape() {
         .as_str()
         .unwrap()
         .contains("install-root-helper.sh"));
+    // A leftover k2-mail-helper is reported but never used (retired at
+    // install, 0.45.4): without the root helper the state is "missing".
     let v = status_json(&RootHelperState::missing(), "installed", false, None);
+    assert_eq!(v["state"], "missing");
+    assert_eq!(v["legacy"]["mail"], "installed");
+    // Only the pg script still serves without the root helper.
+    let v = status_json(&RootHelperState::missing(), "missing", true, None);
     assert_eq!(v["state"], "legacy");
     let v = status_json(&RootHelperState::missing(), "missing", false, None);
     assert_eq!(v["state"], "missing");

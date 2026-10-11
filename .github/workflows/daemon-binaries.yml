@@ -17,16 +17,11 @@
 #   k2-daemon-linux-x86_64{,.sig}
 #   k2-daemon-linux-aarch64{,.sig}
 #
-# Hosted-mail root helper (0.44.1+). SEPARATE assets, same minisign key,
-# plus a .sha256, and NOT in daemon-latest.json — the daemon self-update
-# runs as user k2 and must never try to replace a root-owned file. Ops
-# install it once per box, as root, with install-mail-helper.sh (also a
-# release asset of the same tag):
-#   k2-mail-helper-linux-x86_64{,.sig,.sha256}
-#   k2-mail-helper-linux-aarch64{,.sig,.sha256}
-#   install-mail-helper.sh
+# The legacy k2-mail-helper (0.44.1–0.45.3) is no longer built or shipped
+# (0.45.4, Rosson 2026-10-10): install-root-helper.sh retires it. The
+# install-mail-helper.sh name stays as a wrapper for the root installer.
 #
-# K2 root helper (0.45.5+, prd-k2-root-helper-v1). Built here UNSIGNED:
+# K2 root helper (0.45.4+, prd-k2-root-helper-v1). Built here UNSIGNED:
 #   k2-root-helper-linux-x86_64{,.sha256}
 #   k2-root-helper-linux-aarch64{,.sha256}
 #   install-root-helper.sh
@@ -89,12 +84,10 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             asset: k2-daemon-linux-x86_64
-            helper_asset: k2-mail-helper-linux-x86_64
             root_asset: k2-root-helper-linux-x86_64
             cross: false
           - target: aarch64-unknown-linux-gnu
             asset: k2-daemon-linux-aarch64
-            helper_asset: k2-mail-helper-linux-aarch64
             root_asset: k2-root-helper-linux-aarch64
             cross: true
 
@@ -161,7 +154,7 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Build k2-daemon + k2-mail-helper (release, standalone bins)
+      - name: Build k2-daemon + k2-root-helper (release, standalone bins)
         env:
           # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
@@ -174,14 +167,11 @@ jobs:
           require_mail_oauth_build_env
           cargo build --release \
             --target ${{ matrix.target }} \
-            --bin k2-daemon \
-            --bin k2-mail-helper
+            --bin k2-daemon
           # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
           TARGET_DIR="${CARGO_TARGET_DIR:-target}"
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
-          cp "$TARGET_DIR/${{ matrix.target }}/release/k2-mail-helper" \
-             "${{ matrix.helper_asset }}"
           # The root helper (prd-k2-root-helper-v1): its own crate, no
           # features (never test-keys). Signed LATER on z3mbpZ with the
           # separate root-helper key (scripts/sign-root-helper.sh); CI
@@ -193,7 +183,7 @@ jobs:
             echo "root helper was built with test-keys — refusing" >&2; exit 1
           fi
           test "$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.root_asset }}" | wc -l)" = 1
-          file "${{ matrix.asset }}" "${{ matrix.helper_asset }}" "${{ matrix.root_asset }}"
+          file "${{ matrix.asset }}" "${{ matrix.root_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Sign with the Tauri updater key via the tauri CLI signer (produces a
@@ -209,7 +199,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          for f in "${{ matrix.asset }}" "${{ matrix.helper_asset }}"; do
+          for f in "${{ matrix.asset }}"; do
             cargo tauri signer sign \
               --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
               --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
@@ -226,13 +216,12 @@ jobs:
             fi
           done
 
-      # Daemon: logs / manual manifest merge only. Helper: published —
-      # install-mail-helper.sh checks it after the minisign verify.
+      # Daemon: logs / manual manifest merge only. Root helper: published —
+      # sign-root-helper.sh checks it.
       - name: Compute sha256
         run: |
           set -euo pipefail
           sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
-          sha256sum "${{ matrix.helper_asset }}" | tee "${{ matrix.helper_asset }}.sha256"
           # sign-root-helper.sh checks the downloaded asset against this.
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
 
@@ -249,9 +238,6 @@ jobs:
           gh release upload "$TAG" \
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sig" \
-            "${{ matrix.helper_asset }}" \
-            "${{ matrix.helper_asset }}.sig" \
-            "${{ matrix.helper_asset }}.sha256" \
             "${{ matrix.root_asset }}" \
             "${{ matrix.root_asset }}.sha256" \
             --clobber

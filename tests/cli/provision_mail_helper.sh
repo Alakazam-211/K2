@@ -39,7 +39,7 @@ printf '%s' "$BLOCK" | grep -q -- '--unit "${K2_UNIT_NAME}.service" --scope syst
 	|| fail "7a must name this unit + system scope for daemon.toml (RH15)"
 ok "uses install-root-helper.sh at the daemon's version, with this unit"
 if printf '%s' "$BLOCK" | grep -q 'NOPASSWD'; then fail "7a must not write sudo policy itself"; fi
-[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "1" ] || fail "only the legacy (pre-0.45.5) pg branch writes a sudoers line"
+[ "$(grep -c 'NOPASSWD' "$PROVISION")" = "1" ] || fail "only the legacy (pre-0.45.4) pg branch writes a sudoers line"
 grep -q 'visudo -cf "$PG_SUDO_TMP"' "$PROVISION" || fail "the legacy pg sudoers line must be visudo-checked"
 if grep -Eq 'cat > /etc/sudoers' "$PROVISION"; then fail "an unchecked sudoers write is back (RH11)"; fi
 ok "no sudo policy in 7a; the legacy pg line is visudo-checked"
@@ -51,6 +51,18 @@ if printf '%s\n' "$ROOT_DB" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper
 fi
 printf '%s' "$DB_BLOCK" | grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
 ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
+# dtl / edf: an existing cluster is adopted — the check runs before apt and
+# the adopt branch never installs, inits, rewrites config or fences.
+L_PGEXIST="$(line_of 'PG_EXISTING=""')"
+L_APT="$(line_of 'apt-get install -y -qq postgresql')"
+[ -n "$L_PGEXIST" ] && [ -n "$L_APT" ] && [ "$L_PGEXIST" -lt "$L_APT" ] || fail "7b must look for an existing cluster before apt"
+ADOPT="$(sed -n '/^if \[ "\$WITH_DB" = 1 \] && \[ -n "\$PG_EXISTING" \]; then$/,/^elif \[ "\$WITH_DB" = 1 \]; then$/p' "$PROVISION")"
+[ -n "$ADOPT" ] || fail "7b adopt branch not found"
+if printf '%s\n' "$ADOPT" | grep -Ev '^[[:space:]]*(#|log )' | grep -Eq 'apt-get|initdb|pg_createcluster|listen_addresses|sed -i|install-ram-fence|systemctl'; then
+	fail "the adopt branch must not install, init, reconfigure or fence an existing cluster"
+fi
+grep -q 'ROOT_HELPER_FROM="0.45.4"' "$PROVISION" || fail "the root helper ships from 0.45.4"
+ok "7b adopts an existing Postgres cluster read-only (no re-init, no config change)"
 if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'hostmail|k2 dns|/cli/mail|/cli/dns'; then fail "7a must not enable mail or touch DNS"; fi
 ok "does not enable mail or touch DNS"
 # Root never executes the daemon user's binary: every line that runs the

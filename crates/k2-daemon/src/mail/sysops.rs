@@ -80,69 +80,36 @@ impl RealSystemOps {
             .map_err(|e| format!("{cmd} {}: {e}", args.join(" ")))
     }
 
-    /// `sudo -n` the root door. The root helper (`k2-root-helper`) when it
-    /// is installed: the protocol-2 argv is mapped onto its named-target /
-    /// render verbs and checked against the catalog first. Otherwise the
-    /// legacy `k2-mail-helper` (one release train). Stdin is not copied
-    /// into any error.
+    /// `sudo -n` the root door: the root helper (`k2-root-helper`) only.
+    /// The protocol-2 argv is mapped onto its named-target / render verbs
+    /// and checked against the catalog first. The legacy `k2-mail-helper`
+    /// is retired at root-helper install (Rosson 2026-10-10) and this
+    /// daemon never calls it: without a usable root helper every mail verb
+    /// fails with the one-line root fix. Stdin is not copied into any error.
     fn run_mail_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
-        if crate::root_helper::state().usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {
+        let st = crate::root_helper::state();
+        if st.usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {
             let (argv, input) = crate::root_helper::mail_argv(args, stdin)?;
             return crate::root_helper::call_text(&argv, input.as_deref());
         }
-        Self::run_legacy_mail_helper(args, stdin)
-    }
-
-    /// The protocol-2 `/usr/local/libexec/k2-mail-helper`.
-    fn run_legacy_mail_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String, String> {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-        let mut cmd = Command::new(helper::SUDO_PATH);
-        cmd.arg("-n").arg(helper::HELPER_PATH).args(args);
-        let out = if let Some(bytes) = stdin {
-            cmd.stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            let mut child = cmd.spawn().map_err(|e| helper_spawn_error(&e))?;
-            {
-                let mut sin = child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| "mail helper: stdin".to_string())?;
-                sin.write_all(bytes)
-                    .map_err(|_| "mail helper: stdin write failed".to_string())?;
-            }
-            child
-                .wait_with_output()
-                .map_err(|e| helper_spawn_error(&e))?
-        } else {
-            cmd.stdin(Stdio::null())
-                .output()
-                .map_err(|e| helper_spawn_error(&e))?
-        };
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            if let Some(mapped) = helper::map_helper_failure(None, &err) {
-                return Err(mapped);
-            }
-            let trimmed = err.trim();
-            let mut end = trimmed.len().min(400);
-            while end > 0 && !trimmed.is_char_boundary(end) {
-                end -= 1;
-            }
-            return Err(format!(
-                "mail helper {}: exit {:?}: {}",
-                args.join(" "),
-                out.status.code(),
-                &trimmed[..end]
-            ));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Err(helper::unavailable_message(root_door_state(&st))
+            .unwrap_or_else(|| "mail helper: the root helper is not usable".to_string()))
     }
 }
 
-fn helper_spawn_error(err: &std::io::Error) -> String {
-    helper::map_helper_failure(Some(err), "").unwrap_or_else(|| format!("mail helper: {err}"))
+/// The mail door as the root helper alone: usable (protocol ≥
+/// [`crate::root_helper::UPGRADE_MIN_PROTOCOL`]) → installed; present but
+/// refused by sudoers → not allowed; absent or too old → missing (the fix
+/// is the same root install command).
+pub fn root_door_state(st: &crate::root_helper::RootHelperState) -> helper::HelperState {
+    use crate::root_helper::Kind;
+    match st.kind {
+        Kind::Root if st.usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) => {
+            helper::HelperState::Installed
+        }
+        Kind::NotAllowed => helper::HelperState::NotAllowed,
+        Kind::Root | Kind::Missing => helper::HelperState::Missing,
+    }
 }
 
 fn helper_argv(args: &[&str]) -> Result<Vec<&'static str>, String> {
@@ -236,14 +203,9 @@ impl SystemOps for RealSystemOps {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
-    /// The root helper first (protocol ≥ [`crate::root_helper::UPGRADE_MIN_PROTOCOL`]:
-    /// it accepts every upgrade source, like mail helper protocol 3), then the
-    /// legacy mail helper.
+    /// The root helper alone (the legacy mail helper is retired).
     fn mail_helper_state(&self) -> helper::HelperState {
-        if crate::root_helper::state().usable(crate::root_helper::UPGRADE_MIN_PROTOCOL) {
-            return helper::HelperState::Installed;
-        }
-        helper::probe_state()
+        root_door_state(&crate::root_helper::state())
     }
 
     fn helper_query(&self, verb: &str) -> Result<String, String> {
@@ -459,5 +421,36 @@ pub(crate) mod fake {
             self.effect("restore-data".into())?;
             Ok("{}".into())
         }
+    }
+}
+
+#[cfg(test)]
+mod root_door_tests {
+    use super::*;
+    use crate::root_helper::{Kind, RootHelperState};
+
+    /// The mail door is the root helper alone (0.45.4): a leftover
+    /// k2-mail-helper never makes it "installed".
+    #[test]
+    fn mail_door_is_the_root_helper_alone() {
+        let root = |protocol| RootHelperState {
+            kind: Kind::Root,
+            protocol,
+            ..RootHelperState::missing()
+        };
+        assert_eq!(root_door_state(&root(4)), helper::HelperState::Installed);
+        assert_eq!(root_door_state(&root(3)), helper::HelperState::Missing);
+        assert_eq!(
+            root_door_state(&RootHelperState::missing()),
+            helper::HelperState::Missing
+        );
+        let na = RootHelperState {
+            kind: Kind::NotAllowed,
+            ..RootHelperState::missing()
+        };
+        assert_eq!(root_door_state(&na), helper::HelperState::NotAllowed);
+        let msg = helper::unavailable_message(helper::HelperState::NotAllowed).unwrap();
+        assert!(msg.contains(k2_root_proto::paths::HELPER_PATH), "{msg}");
+        assert!(!msg.contains("k2-mail-helper"), "{msg}");
     }
 }

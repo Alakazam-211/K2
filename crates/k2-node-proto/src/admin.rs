@@ -815,6 +815,37 @@ mod tests {
         assert_eq!(m, want);
     }
 
+    /// Fuzz smoke (no cargo-fuzz in the workspace): random bytes and
+    /// single-byte mutations of a valid envelope never panic and never
+    /// open with a broken signature.
+    #[test]
+    fn open_survives_random_and_mutated_input() {
+        let k = SigningKey::generate().unwrap();
+        let c = cmd("n", &k.fingerprint(), "policy.set", serde_json::json!({"mem_cap_gb": 6, "x": [1, {"y": "z"}]}), 1);
+        let good = sign_controller(&k, &c).unwrap().to_json().unwrap().into_bytes();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for i in 0..20_000 {
+            let input: Vec<u8> = if i % 2 == 0 {
+                let n = (rnd() % 600) as usize;
+                (0..n).map(|_| rnd() as u8).collect()
+            } else {
+                let mut m = good.clone();
+                let at = (rnd() as usize) % m.len();
+                m[at] = rnd() as u8;
+                m
+            };
+            if let Ok(o) = open(&input, k.spki_der()) {
+                assert_eq!(o.body, c.canonical().unwrap(), "only the signed body ever opens");
+            }
+        }
+    }
+
     #[test]
     fn catalog_is_consistent() {
         let mut names: Vec<&str> = VERBS.iter().map(|v| v.name).collect();

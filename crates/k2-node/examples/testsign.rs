@@ -56,6 +56,24 @@ fn main() {
             std::fs::write(&a[1], k.to_pkcs8_pem().unwrap()).unwrap();
             println!("{} {}", k.fingerprint(), crypto::b64(k.spki_der()));
         }
+        Some("pin-json") => {
+            // A controller pin for <key.pem> (what enroll would write).
+            let key = SigningKey::from_pkcs8_pem(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();
+            let pin = k2_node::identity::Pin {
+                controller_fp: key.fingerprint(),
+                controller_public_key_pem: key.spki_pem(),
+                routes: vec!["https://127.0.0.1:9".into()],
+                node_id: "node-e2e".into(),
+                name: "e2e".into(),
+                enrolled_at: k2_node::util::now(),
+                sas: "000 000".into(),
+                revoked: false,
+                revoked_reason: None,
+                labels: BTreeMap::new(),
+                confirmed: true,
+            };
+            println!("{}", serde_json::to_string_pretty(&pin).unwrap());
+        }
         Some("owner-pub") => println!("{}", ApprovalSigner::from_seed(&seed(&a[1])).unwrap().public().encode()),
         Some("build-sig") => {
             let bytes = std::fs::read(&a[1]).unwrap();

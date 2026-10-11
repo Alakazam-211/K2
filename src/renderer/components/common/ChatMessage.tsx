@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react'
 import remarkGfm from 'remark-gfm'
+import type { Components } from 'react-markdown'
 import Markdown from '@/components/Markdown/Markdown'
 import {
   SELECTABLE_TEXT_STYLE,
@@ -19,6 +20,17 @@ import {
 } from './SelectableText'
 
 const CHAT_REMARK = [remarkGfm]
+
+/** GFM tables scroll sideways in their own box instead of crushing a
+ *  short column to one letter per line (`.chat-md-table-wrap` in
+ *  globals.css). */
+const CHAT_COMPONENTS: Components = {
+  table: ({ node: _node, ...props }) => (
+    <div className="chat-md-table-wrap">
+      <table {...props} />
+    </div>
+  ),
+}
 
 /** GFM treats a single \n as a space. Chat Shift+Enter is a hard break
  *  (`  \\n`). No extra remark plugin — Vite on tauri-dev failed to
@@ -58,7 +70,7 @@ export const ChatMessageBody = memo(function ChatMessageBody({
       onPointerDown={onBodyPointerDown}
       onMouseDown={onBodyPointerDown}
     >
-      <Markdown remarkPlugins={CHAT_REMARK}>{chatHardBreaks(text)}</Markdown>
+      <Markdown remarkPlugins={CHAT_REMARK} components={CHAT_COMPONENTS}>{chatHardBreaks(text)}</Markdown>
     </div>
   )
 })

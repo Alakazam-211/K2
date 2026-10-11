@@ -722,6 +722,40 @@ a,
   padding: 4px 10px;
 }
 
+/* Tables in chat markdown. The body's `overflow-wrap: anywhere` counts
+   toward min-content, so an auto-layout table at 100% width shrank a
+   short column ("Release", "0.45.4") to one letter per line while the
+   long column took the room. Cells break only at words (break-word does
+   not lower min-content); a table wider than the bubble scrolls inside
+   its wrapper instead of crushing columns. */
+.chat-markdown .chat-md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 6px 0;
+}
+
+.chat-markdown .chat-md-table-wrap:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown .chat-md-table-wrap > table {
+  margin: 0;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  min-width: 4ch;
+  overflow-wrap: break-word;
+  word-break: normal;
+  vertical-align: top;
+}
+
+.chat-markdown th code,
+.chat-markdown td code {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 /* Markdown pane scrollbar */
 .markdown-content::-webkit-scrollbar {
   width: 6px;

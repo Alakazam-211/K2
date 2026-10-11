@@ -193,6 +193,30 @@ req daemon keep kek get
 [ "$(stat -c '%U %a' /var/lib/k2-root-helper/keep/k2)" = "root 700" ] || fail "keep dir mode"
 ok "two-phase KEK rotation; store root 0700 / 0600"
 
+echo "== vault keeper contract (k2-vault keystore::keeper parses these replies) =="
+req daemon keep status
+expect_rc 0 "keep status"
+python3 - "$OUT" <<'PY' || fail "keep status shape: $(cat "$OUT")"
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert isinstance(v["protocol"], int) and v["protocol"] >= 4, v
+assert v["kek"] == "present", v            # KeepStatus.kek_present()
+assert isinstance(v["gen"], int), v        # KeepStatus.gen: u64
+for k in ("next", "sealed"):
+    assert k not in v or v[k] is None or isinstance(v[k], str), v
+PY
+req daemon keep kek get
+expect_rc 0 "kek get"
+[ "$(stat -c %s "$OUT")" = 32 ] || fail "kek get must be exactly 32 raw bytes (keeper key_from), got $(stat -c %s "$OUT")"
+req daemon keep gen get
+expect_rc 0 "gen get"
+G0="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gen"])' "$OUT")" || fail "gen get reply is not {\"gen\":N}: $(cat "$OUT")"
+req daemon keep gen bump
+expect_rc 0 "gen bump"
+G1="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gen"])' "$OUT")" || fail "gen bump reply is not {\"gen\":N}: $(cat "$OUT")"
+[ "$G1" -gt "$G0" ] || fail "gen bump must advance ($G0 -> $G1)"
+ok "keep status JSON, 32-byte KEK, {\"gen\":N} get/bump that advances — the shapes the vault keeper reads"
+
 echo "== mail verbs at parity =="
 # The real tarballs from the fork mirror: the pin (0.16.25) and both
 # upgrade sources (0.16.20, 0.16.10). The helper checks each by sha256.

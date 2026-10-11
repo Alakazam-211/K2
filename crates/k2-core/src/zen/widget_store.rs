@@ -297,7 +297,7 @@ impl ZenFiles {
             } else {
                 missing_folder_message(widget)
             };
-            st.errors.push(Diagnostic { file: widget_label(widget), line: 1, col: 1, message });
+            st.errors.push(Diagnostic { suggestion: None, file: widget_label(widget), line: 1, col: 1, message });
             return st;
         };
         st.exists = true;
@@ -765,7 +765,7 @@ impl ZenFiles {
                 } else {
                     missing_folder_message(widget)
                 };
-                out.push(Diagnostic { file: file.to_string(), line, col, message });
+                out.push(Diagnostic { suggestion: None, file: file.to_string(), line, col, message });
             }
             // Garden v3 (contract-sources-v1 §6): every source address in
             // the config must parse (whether it's reachable is the card's
@@ -813,6 +813,7 @@ impl ZenFiles {
             if st.manifest.is_some() && !st.requested().iter().any(|c| c == "agents:read") {
                 let (line, col) = at(format!("page.widget.{i}.props.agents"));
                 out.push(Diagnostic {
+                    suggestion: None,
                     file: file.to_string(),
                     line,
                     col,

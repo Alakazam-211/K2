@@ -15,6 +15,7 @@ OUT="${1:?scratch output dir}"
 IMAGE="${K2_E2E_IMAGE:-docker.io/library/ubuntu:24.04}"
 mkdir -p "$OUT/builds"
 export CARGO_TARGET_DIR="$OUT/target"
+export PATH="$HOME/.cargo/bin:$PATH"   # non-login ssh shells miss rustup's PATH
 cd "$ROOT"
 build() { # <version> [broken]
     K2_NODE_TEST_VERSION="$1" K2_NODE_TEST_BROKEN="${2:-0}" \

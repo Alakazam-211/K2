@@ -6576,8 +6576,10 @@ _teach_skin_token_now_app_token() {
 
 _skin_usage() {
     cat >&2 <<'EOF'
-Usage: k2 app <user|role|grant|token|hydra|front-door> ...
+Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
        k2 app token <create|list|revoke|rooms> ...
+       k2 app validate [<name>] [--dir <path>] [--json]
+                                        Parse an App's JS/TS and run the leak lints (exit 1 on errors)
 
   Guests, roles, and tokens for apps on this box. Desktop binary updates
   are k2 update --app. Hosting a UI is k2 publish, not this command.
@@ -6670,6 +6672,119 @@ LEFTOVER (not how you host an app)
 EOF
 }
 
+# Shared printer for validate answers ({ok, status, errors, warnings, ...}):
+# file:line:col lines, each followed by its suggestion. Loopable exit codes
+# (decision-k2-runtime-v1 stage 0 (e)): 0 ok, 1 failed, 2 pending.
+_validate_print() {
+    V_JSON="$1" V_RAW="$2" V_WHAT="$3" python3 -c '
+import json, os, sys
+raw = os.environ.get("V_RAW") or ""
+as_json = os.environ.get("V_JSON") == "true"
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print("Error: unexpected answer: %s" % raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    msg = d.get("message") or (err.get("message") if isinstance(err, dict) else err)
+    print("Error: %s" % msg, file=sys.stderr)
+    if d.get("suggestion"):
+        print("  suggestion: %s" % d["suggestion"], file=sys.stderr)
+    sys.exit(1)
+status = d.get("status") or ("ok" if d.get("ok") else "failed")
+code = {"ok": 0, "pending": 2}.get(status, 1)
+if as_json:
+    print(json.dumps(d, indent=2))
+    sys.exit(code)
+def line(e, warn):
+    s = "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
+    if e.get("suggestion"):
+        s += "\n  suggestion: %s" % e["suggestion"]
+    return s
+for e in d.get("errors") or []:
+    print(line(e, False))
+for w in d.get("warnings") or []:
+    print(line(w, True))
+for s in d.get("skipped") or []:
+    print("skipped: %s" % s)
+errs = len(d.get("errors") or [])
+warns = len(d.get("warnings") or [])
+what = os.environ.get("V_WHAT") or "files"
+if errs:
+    print("%d error(s), %d warning(s) in %s file(s) of %s" % (errs, warns, d.get("files"), d.get("target") or what), file=sys.stderr)
+else:
+    print("ok: %s file(s) of %s parse%s" % (d.get("files"), d.get("target") or what, "; %d warning(s)" % warns if warns else ""))
+sys.exit(code)
+'
+}
+
+# `k2 app validate [<name>] [--dir <path>] [--json]` — decision-k2-runtime-v1
+# stage 0: parse an App's JS/TS (and inline scripts) and run the leak lints.
+cmd_app_validate() {
+    local name="" dir="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dir) dir="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
+            --dir=*) dir="${1#--dir=}"; shift ;;
+            --json) as_json=true; shift ;;
+            --help|-h)
+                cat <<'EOF'
+k2 app validate — check an App's code before you publish or after you change it
+
+USAGE
+  k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
+  k2 app validate --dir <path>    a folder in this workspace (default: the workspace)
+  k2 app validate ... --json      {ok, status, target, dir, files, errors, warnings, skipped}
+
+WHAT IT CHECKS (it never runs your code)
+  - every .js .mjs .cjs .jsx .ts .tsx .mts .cts file and every inline <script>
+    in .html pages parses (oxc): errors, file:line:col, each with a suggestion
+  - leak lints, as warnings: module-level Map/Set/array/object growth inside
+    request/event handlers, setInterval started in a handler with no clear,
+    listeners added per request to long-lived targets, session stores with
+    no expiry (express-session with no store, MemoryStore)
+  Skipped: node_modules, dist, build, .next and other build/hidden folders,
+  symlinks, files over 2 MB; anything skipped is listed.
+
+EXIT CODES
+  0 no errors (warnings may be listed)
+  1 errors, or the check could not run
+EOF
+                exit 0 ;;
+            -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<name>] [--dir <path>] [--json]" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; shift
+                else echo "Error: unexpected argument '$1'" >&2; exit 2; fi ;;
+        esac
+    done
+    if [ -n "$name" ] && [ -n "$dir" ]; then
+        echo "Error: give an App name or --dir, not both" >&2
+        exit 2
+    fi
+    # An absolute path inside this workspace becomes workspace-relative.
+    if [ -n "$dir" ] && [ "${dir#/}" != "$dir" ]; then
+        local ws="${PROJECT%/}"
+        if [ "$dir" = "$ws" ]; then dir="."
+        elif [ "${dir#"$ws"/}" != "$dir" ]; then dir="${dir#"$ws"/}"
+        fi
+    fi
+    local -a q=()
+    [ -n "$name" ] && q+=("name=$(urlencode "$name")")
+    [ -n "$dir" ] && q+=("dir=$(urlencode "$dir")")
+    local raw
+    raw=$(cli_request "/cli/publish/validate" ${q[@]+"${q[@]}"}) || raw=""
+    _validate_print "$as_json" "$raw" "${name:-${dir:-this workspace}}"
+}
+
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 cmd_app() {
@@ -6677,6 +6792,10 @@ cmd_app() {
         token|tokens)
             shift || true
             cmd_skin_token "$@"
+            ;;
+        validate)
+            shift || true
+            cmd_app_validate "$@"
             ;;
         *)
             cmd_skin "$@"
@@ -21673,6 +21792,16 @@ cmd_schema() {
       "description": "Guests, roles, grants, and tokens for apps on this box (caps + rooms). Not a host — use k2 publish. Not desktop updates (k2 update --app). Separate from Connect users. Leftover: k2 skin.",
       "args": [],
       "flags": []
+    },
+    {
+      "name": "app validate",
+      "usage": "k2 app validate [<name>] [--dir <path>] [--json]",
+      "description": "Parse every JS/TS file and inline script of a published App's folder (or a workspace folder) with oxc and run the leak lints. Never runs the code. file:line:col per finding, each with a suggestion. Exit 0 no errors, 1 errors.",
+      "args": [{"name": "name", "required": false}],
+      "flags": [
+        {"name": "--dir", "arg": "path", "description": "A folder in this workspace instead of a published App."},
+        {"name": "--json", "arg": null, "description": "{ok, status, target, dir, files, errors, warnings, skipped}."}
+      ]
     },
     {
       "name": "app user add",
@@ -47374,7 +47503,10 @@ if as_json:
     sys.exit(0)
 
 def diag(e, warn=False):
-    return "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
+    s = "%s:%s:%s: %s%s" % (e.get("file"), e.get("line"), e.get("col"), "warning: " if warn else "", e.get("message"))
+    if e.get("suggestion"):
+        s += "\n  suggestion: %s" % e["suggestion"]
+    return s
 
 SYNC = {}
 try:

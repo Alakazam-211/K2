@@ -27,6 +27,7 @@
 //!
 //! The type stage (tsc-rs as a subprocess, never linked) comes with `--types`.
 
+pub mod app;
 mod lint;
 
 use oxc_allocator::Allocator;

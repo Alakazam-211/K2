@@ -107,6 +107,13 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
             let refresh = args.get("refresh_updates").and_then(|v| v.as_bool()).unwrap_or(false);
             serde_json::to_value(super::health::collect(node, refresh).await).map_err(|e| AdminRefusal::new(code::FAILED, e.to_string()))
         }
+        "ps" => {
+            super::exec::no_args(args)?;
+            let n = node.clone();
+            tokio::task::spawn_blocking(move || super::housekeeping::ps(&n)).await.map_err(|e| AdminRefusal::new(code::FAILED, e.to_string()))
+        }
+        "jobs.kill" => super::housekeeping::kill(node, args),
+        "gc" => super::housekeeping::gc(node, args).await,
         "policy.show" => {
             super::exec::no_args(args)?;
             Ok(super::policy::show(node.layout(), &node.facts, &node.session_narrow()))

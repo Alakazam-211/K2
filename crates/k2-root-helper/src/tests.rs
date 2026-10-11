@@ -1234,7 +1234,10 @@ fn self_update_refusals_change_nothing() {
                 let nv = next_version();
                 let elf = build(&nv, PROTOCOL);
                 let sig = sign_with_test_key(&elf, &trusted_comment("x86_64", &nv, PROTOCOL));
-                let forged = sig.replace("protocol:4", "protocol:5");
+                let forged = sig.replace(
+                    &format!("protocol:{PROTOCOL}"),
+                    &format!("protocol:{}", PROTOCOL + 1),
+                );
                 encode_payload(&forged, &elf)
             }),
         ),
@@ -1245,7 +1248,7 @@ fn self_update_refusals_change_nothing() {
                 let elf = build(&nv, PROTOCOL);
                 let sig = sign_with_test_key(
                     &elf,
-                    &format!("file:k2-daemon-linux-x86_64 version:{nv} protocol:4"),
+                    &format!("file:k2-daemon-linux-x86_64 version:{nv} protocol:{PROTOCOL}"),
                 );
                 encode_payload(&sig, &elf)
             }),
@@ -1502,4 +1505,108 @@ fn audit_lines_are_json_with_class_and_caller() {
     assert_eq!(v["class"], "open");
     assert_eq!(v["caller"]["pid"], DAEMON_PID);
     assert_eq!(v["result"], "ok");
+}
+
+// ── daemon (protocol 5, runtime stage H) ────────────────────────────────
+
+const HANDOFF_DROPIN: &str = "/etc/systemd/system/k2-daemon.service.d/k2-handoff.conf";
+
+fn reloads(t: &T) -> usize {
+    t.non_query_calls()
+        .iter()
+        .filter(|c| c.as_str() == format!("{SYSTEMCTL} daemon-reload"))
+        .count()
+}
+
+#[test]
+fn handoff_dropin_install_is_canned_idempotent_and_reloads_once() {
+    let t = box_root();
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["unit"], "k2-daemon.service");
+    assert_eq!(v["changed"], true);
+    let body = std::fs::read_to_string(t.p(HANDOFF_DROPIN)).unwrap();
+    assert_eq!(body, k2_root_proto::templates::handoff_dropin());
+    assert!(body.contains("\nKillMode=process\n"));
+    assert!(body.contains("\nNotifyAccess=main\n"));
+    assert!(!body.contains("NotifyAccess=all"));
+    let mode = std::fs::metadata(t.p(HANDOFF_DROPIN)).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o644);
+    assert_eq!(reloads(&t), 1);
+
+    // Same bytes again: nothing rewritten, no second reload.
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["changed"], false);
+    assert_eq!(reloads(&t), 1);
+
+    // A doctored file is put back.
+    std::fs::write(t.p(HANDOFF_DROPIN), "[Service]\nNotifyAccess=all\n").unwrap();
+    ok(&t.call(&["daemon", "handoff-dropin", "install"]));
+    assert_eq!(
+        std::fs::read_to_string(t.p(HANDOFF_DROPIN)).unwrap(),
+        k2_root_proto::templates::handoff_dropin()
+    );
+    assert_eq!(reloads(&t), 2);
+
+    ok(&t.call(&["daemon", "handoff-dropin", "remove"]));
+    assert!(!t.p(HANDOFF_DROPIN).exists());
+    assert_eq!(reloads(&t), 3);
+    // Removing nothing is fine and reloads nothing.
+    ok(&t.call(&["daemon", "handoff-dropin", "remove"]));
+    assert_eq!(reloads(&t), 3);
+}
+
+#[test]
+fn handoff_dropin_is_daemon_only() {
+    let t = box_root();
+    t.as_agent();
+    for verb in ["install", "remove"] {
+        let o = t.call(&["daemon", "handoff-dropin", verb]);
+        assert_eq!(o.code, exit::NOT_DAEMON, "{verb}: {}", o.stderr);
+    }
+    assert!(!t.p(HANDOFF_DROPIN).exists());
+    assert_eq!(reloads(&t), 0);
+}
+
+#[test]
+fn handoff_dropin_refuses_a_linked_or_odd_dropin_dir() {
+    let t = box_root();
+    let elsewhere = t.p("/var/lib/elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&elsewhere, t.p("/etc/systemd/system/k2-daemon.service.d")).unwrap();
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "nothing written through the link"
+    );
+    assert_eq!(reloads(&t), 0);
+
+    // The drop-in file itself as a symlink is refused on install.
+    std::fs::remove_file(t.p("/etc/systemd/system/k2-daemon.service.d")).unwrap();
+    std::fs::create_dir_all(t.p("/etc/systemd/system/k2-daemon.service.d")).unwrap();
+    symlink(t.p("/etc/shadow"), t.p(HANDOFF_DROPIN)).unwrap();
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(!t.p("/etc/shadow").exists(), "never written through the link");
+}
+
+#[test]
+fn handoff_dropin_refuses_a_user_scope_daemon() {
+    let t = box_root();
+    let toml = "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"user\"\n";
+    std::fs::write(t.p(DAEMON_TOML), toml).unwrap();
+    // The user-scope MainPID lookup runs through `systemctl --user -M`.
+    t.exec
+        .0
+        .borrow_mut()
+        .main_pids
+        .insert("k2-daemon.service".into(), DAEMON_PID);
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("user-scope"), "{}", o.stderr);
+    assert!(!t.p(HANDOFF_DROPIN).exists());
 }

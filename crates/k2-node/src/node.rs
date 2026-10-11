@@ -204,6 +204,9 @@ pub struct Node {
     pub local: Mutex<Local>,
     pub facts: MachineFacts,
     narrow: Mutex<NodeLimits>,
+    /// The controller's persisted narrowing (`narrow.toml`, root-owned;
+    /// node admin `policy.narrow`). Applied on top of `narrow`.
+    persisted_narrow: Mutex<NodeLimits>,
     jobs: Mutex<HashMap<String, RunningJob>>,
     slots: Mutex<Slots>,
     smoke: Mutex<SmokeLock>,
@@ -275,6 +278,7 @@ impl Node {
             }),
             facts,
             narrow: Mutex::new(NodeLimits::default()),
+            persisted_narrow: Mutex::new(NodeLimits::default()),
             jobs: Mutex::new(HashMap::new()),
             slots: Mutex::new(Slots::default()),
             smoke: Mutex::new(SmokeLock::default()),
@@ -348,6 +352,7 @@ impl Node {
             Err(e) => (None, Some(e)),
         };
         let control = config::read_control(&layout.control());
+        let persisted = crate::admin::policy::read_narrow(&layout.config);
         let now = self.now();
         let mut l = self.local.lock().unwrap();
         let before = (l.control.control, l.unavailable.clone(), l.policy_error.clone(), l.locks.clone());
@@ -355,6 +360,17 @@ impl Node {
             l.policy = p;
         }
         l.policy_error = policy_error.clone();
+        match persisted {
+            Ok(n) => {
+                let changed = *self.persisted_narrow.lock().unwrap() != n;
+                *self.persisted_narrow.lock().unwrap() = n;
+                if changed {
+                    self.offer_changed.notify_one();
+                }
+            }
+            // An unreadable narrow file is fail-closed like the policy.
+            Err(e) => l.policy_error = Some(e),
+        }
         match control {
             Ok(c) => l.control = c,
             Err(e) => {
@@ -404,18 +420,21 @@ impl Node {
     }
 
     fn caps(&self, l: &Local) -> (u64, u64, u32) {
-        let n = self.narrow.lock().unwrap().clone();
+        let session = self.narrow.lock().unwrap().clone();
+        let persisted = self.persisted_narrow.lock().unwrap().clone();
         let mut cpu = l.policy.cpu_cap_millis(self.facts.cores);
         let mut mem = l.policy.mem_cap_bytes;
         let mut par = l.policy.max_parallel;
-        if let Some(c) = n.cpu_millis {
-            cpu = cpu.min(c);
-        }
-        if let Some(m) = n.mem_bytes {
-            mem = mem.min(m);
-        }
-        if let Some(p) = n.max_parallel {
-            par = par.min(p.max(1));
+        for n in [session, persisted] {
+            if let Some(c) = n.cpu_millis {
+                cpu = cpu.min(c);
+            }
+            if let Some(m) = n.mem_bytes {
+                mem = mem.min(m);
+            }
+            if let Some(p) = n.max_parallel {
+                par = par.min(p.max(1));
+            }
         }
         (cpu, mem, par)
     }
@@ -426,6 +445,11 @@ impl Node {
         let cpu: u64 = jobs.values().map(|j| j.cpu_millis.unwrap_or_else(|| share(cap_cpu))).sum();
         let mem: u64 = jobs.values().map(|j| j.mem_bytes.unwrap_or_else(|| share(cap_mem))).sum();
         (cpu, mem, jobs.len() as u32, jobs.values().any(|j| j.exclusive))
+    }
+
+    /// The session (in-memory) narrowing, for `policy.show`.
+    pub fn session_narrow(&self) -> NodeLimits {
+        self.narrow.lock().unwrap().clone()
     }
 
     /// Controller narrowing: only tightens.

@@ -233,6 +233,34 @@ fn unknown_and_node_verbs_and_bad_args_refuse() {
 }
 
 #[test]
+fn policy_set_narrowing_runs_widening_needs_the_owner() {
+    let r = Rig::new("policy");
+    let res = r.run(&r.sign(&r.cmd("policy.set", json!({"cpu_cap_percent": 40}))));
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(crate::config::read_policy_file(&r.exec.paths.layout().policy()).unwrap().cpu_cap_percent, Some(40));
+    // Widening by the controller alone: held for the owner.
+    let res = r.run(&r.sign(&r.cmd("policy.set", json!({"cpu_cap_percent": 90}))));
+    assert_eq!(code_of(&res), code::APPROVAL_REQUIRED);
+    assert_eq!(crate::config::read_policy_file(&r.exec.paths.layout().policy()).unwrap().cpu_cap_percent, Some(40));
+    // A widening disguised as operate by the controller label still needs approval.
+    let mut c = r.cmd("policy.set", json!({"cpu_cap_percent": 90}));
+    c.class = Class::Read;
+    assert_eq!(code_of(&r.run(&r.sign(&c))), code::APPROVAL_REQUIRED);
+    // Owner-approved widening at `policy` level: runs.
+    let res = r.run(&r.approve(r.cmd("policy.set", json!({"cpu_cap_percent": 90}))));
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(res.result["widened"], json!(["cpu_cap_percent"]));
+    // Bad field.
+    assert_eq!(code_of(&r.run(&r.sign(&r.cmd("policy.set", json!({"cpu": 1}))))), code::BAD_ARGS);
+    // policy.narrow is allowed even at `off` and persists.
+    let off = Rig::new("off");
+    let res = off.run(&off.sign(&off.cmd("policy.narrow", json!({"max_parallel": 1}))));
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(super::policy::read_narrow(&off.exec.paths.config_dir).unwrap().max_parallel, Some(1));
+    assert_eq!(code_of(&off.run(&off.sign(&off.cmd("policy.set", json!({"cpu_cap_percent": 10}))))), code::REMOTE_ADMIN_OFF);
+}
+
+#[test]
 fn node_key_change_after_pin_is_wrong_node() {
     let r = Rig::new("policy");
     assert_eq!(r.run(&r.sign(&r.cmd("control.pause", json!({})))).state, "done");

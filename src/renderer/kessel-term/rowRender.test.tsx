@@ -399,3 +399,42 @@ describe('TerminalRow emoji size bump', () => {
     expect(spans[0].style.fontSize).toBe('')
   })
 })
+
+describe('TerminalRow TUI status marks (the clipped emoji-dot fix)', () => {
+  // Claude Code's ⏺ bullet used to render as text and fall back to
+  // Apple Color Emoji on iOS (a grey button clipped to one cell).
+  it('⏺ routes to the row canvas, one cell wide — no text span', () => {
+    const { spans, canvas } = renderRow([run('⏺', { fg: 0xffffff }), run(' Agent')])
+    expect(spans.map((s) => s.textContent)).toEqual([' Agent'])
+    expect(canvas).not.toBeNull()
+    expect(canvas!.width).toBe(CELL_W) // single column
+    expect(spans[0].style.left).toBe(`${CELL_W}px`) // next run unmoved
+  })
+
+  it('⏺ inside a mixed run still gets its own painted cell', () => {
+    const { spans, canvas } = renderRow([run('⏺ main')])
+    expect(canvas!.width).toBe(CELL_W)
+    expect(spans.map((s) => s.textContent).join('')).toBe(' main')
+  })
+
+  it('a one-column symbol with an emoji form draws as text + VS15, clipped to its cell', () => {
+    const { spans, canvas } = renderRow([run('✔')])
+    expect(canvas).toBeNull()
+    expect(spans[0].textContent).toBe('✔\uFE0E')
+    expect(spans[0].style.width).toBe(`${CELL_W}px`)
+    expect(spans[0].style.overflow).toBe('hidden')
+    expect(spans[0].style.fontSize).toBe('')
+  })
+
+  it('real emoji are untouched: ✅ / 🎉 keep the 2-column emoji cell', () => {
+    for (const ch of ['✅', '🎉']) {
+      const { spans, canvas } = renderRow([run(ch, { cols: 2 })])
+      expect(canvas).toBeNull()
+      expect(spans[0].textContent).toBe(ch)
+      expect(spans[0].style.width).toBe(`${2 * CELL_W}px`)
+      expect(spans[0].style.overflow).toBe('')
+      expect(spans[0].style.fontSize).toBe('1.15em')
+    }
+  })
+})
+

@@ -16,8 +16,10 @@ import {
   paintSyntheticGlyph,
   resolveArcChild,
   resolveGlyphRects,
+  symbolGeometry,
   syntheticGlyphSpec,
   type DeviceRect,
+  type SymbolShape,
   type SyntheticGlyph,
 } from './syntheticGlyphs'
 
@@ -420,5 +422,86 @@ describe('colorWithAlpha', () => {
     expect(colorWithAlpha('rebeccapurple', 0.25)).toBe(
       'color-mix(in srgb, rebeccapurple 25%, transparent)',
     )
+  })
+})
+
+describe('TUI status symbols ⏺⏹⏸⏴⏵⏶⏷ (the clipped-emoji-dot fix)', () => {
+  // Claude Code's ⏺ bullet (U+23FA) is missing from MesloLGM / SF
+  // Mono / Menlo and is Emoji=Yes, so iOS font fallback drew Apple
+  // Color Emoji's grey button, clipped to one cell. These marks are
+  // painted instead — one filled shape inside the cell box.
+  const SYMS: [number, string][] = [
+    [0x23f4, 'tri-l'],
+    [0x23f5, 'tri-r'],
+    [0x23f6, 'tri-u'],
+    [0x23f7, 'tri-d'],
+    [0x23f8, 'pause'],
+    [0x23f9, 'square'],
+    [0x23fa, 'circle'],
+  ]
+
+  it('maps U+23F4–23FA to symbol specs; neighbours stay null (emoji/text)', () => {
+    for (const [cp, shape] of SYMS) {
+      expect(syntheticGlyphSpec(cp)).toEqual({ kind: 'symbol', shape })
+    }
+    // ⏩⏰⏳ are Emoji_Presentation=Yes (real, wide emoji); ⏯ text
+    for (const cp of [0x23e9, 0x23ef, 0x23f0, 0x23f3, 0x23fb, 0x25cf]) {
+      expect(syntheticGlyphSpec(cp), `U+${cp.toString(16)}`).toBeNull()
+    }
+  })
+
+  it('symbols resolve no background rects (painted from symbolGeometry)', () => {
+    expect(resolveGlyphRects({ kind: 'symbol', shape: 'circle' }, M)).toEqual([])
+  })
+
+  it('every symbol stays inside the cell box at several cell shapes', () => {
+    for (const m of [M, glyphMetrics(9, 20, 1), glyphMetrics(8.6, 19, 3), glyphMetrics(12, 12, 1)]) {
+      for (const [, shape] of SYMS) {
+        const g = symbolGeometry(shape as SymbolShape, m)
+        const pts: [number, number][] =
+          g.kind === 'circle'
+            ? [[g.cx - g.r, g.cy - g.r], [g.cx + g.r, g.cy + g.r]]
+            : g.kind === 'rects'
+              ? g.rects.flatMap((r) => [[r.x0, r.y0], [r.x1, r.y1]] as [number, number][])
+              : g.points.map((p) => [p[0], p[1]] as [number, number])
+        for (const [x, y] of pts) {
+          expect(x, shape).toBeGreaterThanOrEqual(0)
+          expect(x, shape).toBeLessThanOrEqual(m.Wd)
+          expect(y, shape).toBeGreaterThanOrEqual(0)
+          expect(y, shape).toBeLessThanOrEqual(m.Hd)
+        }
+      }
+    }
+  })
+
+  it('⏺ is a single-cell dot: centred, 0.72 × advance across, on the math axis', () => {
+    const m = glyphMetrics(9, 20, 2) // Wd 18, Hd 40
+    const g = symbolGeometry('circle', m)
+    expect(g.kind).toBe('circle')
+    if (g.kind !== 'circle') return
+    expect(g.cx).toBe(m.Wd / 2)
+    expect(2 * g.r).toBeCloseTo(0.72 * m.Wd)
+    expect(2 * g.r).toBeLessThan(m.Wd) // never wider than one column
+    // Below the midline by ~0.14 advance (MesloLGM's ● sits there)
+    expect(g.cy).toBeCloseTo(m.Hd / 2 + 0.14 * m.Wd)
+  })
+
+  it('⏸ is two equal bars mirrored about the cell centre', () => {
+    const g = symbolGeometry('pause', glyphMetrics(9, 20, 2))
+    if (g.kind !== 'rects') throw new Error('pause must be rects')
+    expect(g.rects).toHaveLength(2)
+    const [a, b] = g.rects
+    expect(a.x1 - a.x0).toBe(b.x1 - b.x0)
+    expect(a.y0).toBe(b.y0)
+    expect(a.x1).toBeLessThan(b.x0) // a real gap
+  })
+
+  it('CSS painter: one SVG layer in the run colour, sized to the cell', () => {
+    const p = paintSyntheticGlyph({ kind: 'symbol', shape: 'circle' }, 9, 20, 2, 'rgb(1,2,3)')
+    if (!('background' in p)) throw new Error('expected background paint')
+    expect(p.background.backgroundImage).toMatch(/^url\("data:image\/svg\+xml,/)
+    expect(decodeURIComponent(p.background.backgroundImage)).toContain('<circle')
+    expect(decodeURIComponent(p.background.backgroundImage)).toContain('fill="rgb(1,2,3)"')
+    expect(p.background.backgroundSize).toBe('9px 20px')
   })
 })

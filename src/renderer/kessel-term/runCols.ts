@@ -136,6 +136,56 @@ export function isEmojiCp(cp: number): boolean {
   )
 }
 
+// ── Text-presentation emoji (Emoji=Yes, Emoji_Presentation=No) ──────
+//
+// Code points like ⏺ ⏸ ✔ ✳ ☀ ↔ ™ are ordinary one-column TEXT
+// symbols by default, but also have an emoji form. When the terminal
+// font lacks one, browser font fallback may pick the colour-emoji
+// face (always on iOS; Linux/Windows with Noto/Segoe emoji) — a wide
+// colour glyph the one-column cell then clips. Both painters force
+// TEXT presentation for these (U+FE0E VS15 on the drawn cluster —
+// glyphRoute.ts); the TUI status marks among them are painted
+// outright (syntheticGlyphs.ts, kind 'symbol').
+//
+// Inclusive [lo, hi] pairs, generated from the engine's
+// \p{Emoji} && !\p{Emoji_Presentation} (Unicode 16) over U+0080–
+// U+1FFFF, minus the plane-1 emoji blocks isEmojiCp already owns
+// (ASCII digits/#/* are Emoji=Yes too but never need it).
+const TEXT_DEFAULT_EMOJI: readonly number[] = [
+  0xa9, 0xa9, 0xae, 0xae, 0x203c, 0x203c, 0x2049, 0x2049,
+  0x2122, 0x2122, 0x2139, 0x2139, 0x2194, 0x2199, 0x21a9, 0x21aa,
+  0x2328, 0x2328, 0x23cf, 0x23cf, 0x23ed, 0x23ef, 0x23f1, 0x23f2,
+  0x23f8, 0x23fa, 0x24c2, 0x24c2, 0x25aa, 0x25ab, 0x25b6, 0x25b6,
+  0x25c0, 0x25c0, 0x25fb, 0x25fc, 0x2600, 0x2604, 0x260e, 0x260e,
+  0x2611, 0x2611, 0x2618, 0x2618, 0x261d, 0x261d, 0x2620, 0x2620,
+  0x2622, 0x2623, 0x2626, 0x2626, 0x262a, 0x262a, 0x262e, 0x262f,
+  0x2638, 0x263a, 0x2640, 0x2640, 0x2642, 0x2642, 0x265f, 0x2660,
+  0x2663, 0x2663, 0x2665, 0x2666, 0x2668, 0x2668, 0x267b, 0x267b,
+  0x267e, 0x267e, 0x2692, 0x2692, 0x2694, 0x2697, 0x2699, 0x2699,
+  0x269b, 0x269c, 0x26a0, 0x26a0, 0x26a7, 0x26a7, 0x26b0, 0x26b1,
+  0x26c8, 0x26c8, 0x26cf, 0x26cf, 0x26d1, 0x26d1, 0x26d3, 0x26d3,
+  0x26e9, 0x26e9, 0x26f0, 0x26f1, 0x26f4, 0x26f4, 0x26f7, 0x26f9,
+  0x2702, 0x2702, 0x2708, 0x2709, 0x270c, 0x270d, 0x270f, 0x270f,
+  0x2712, 0x2712, 0x2714, 0x2714, 0x2716, 0x2716, 0x271d, 0x271d,
+  0x2721, 0x2721, 0x2733, 0x2734, 0x2744, 0x2744, 0x2747, 0x2747,
+  0x2763, 0x2764, 0x27a1, 0x27a1, 0x2934, 0x2935, 0x2b05, 0x2b07,
+  0x3030, 0x3030, 0x303d, 0x303d, 0x3297, 0x3297, 0x3299, 0x3299,
+]
+
+/** One-column text symbol that ALSO has an emoji form — must be
+ *  drawn with text presentation (see table above). Excludes the
+ *  code points this renderer deliberately treats as emoji
+ *  (isEmojiCp: ❤, plane-1). */
+export function isTextDefaultEmojiCp(cp: number): boolean {
+  if (cp < 0xa9 || cp > 0x3299 || isEmojiCp(cp)) return false
+  const t = TEXT_DEFAULT_EMOJI
+  for (let i = 0; i < t.length; i += 2) {
+    if (cp < t[i]) return false
+    if (cp <= t[i + 1]) return true
+  }
+  return false
+}
+
 export function isWideCp(cp: number): boolean {
   return (
     isBmpEmojiWideCp(cp) || // ✅⚡⭐… — 2 columns per the daemon
@@ -204,7 +254,15 @@ export function isUntrustedAdvanceCp(cp: number): boolean {
     // Anything the column math already treats as wide (CJK, emoji):
     // those cells span 2 columns and the glyph advance is whatever
     // the CJK/emoji font says, so pin each to its own 2-col rect.
-    isWideCp(cp)
+    isWideCp(cp) ||
+    // Text symbols with an emoji form (⏺ ✔ ☀ …): a fallback glyph at
+    // best, and the cell must carry the VS15 text-presentation
+    // request — only a per-char cell can (glyphRoute.ts).
+    isTextDefaultEmojiCp(cp) ||
+    // Painted TUI marks ⏴⏵⏶⏷⏸⏹⏺ (syntheticGlyphs 'symbol'; ⏴–⏷
+    // aren't Emoji but are fallback glyphs all the same): only
+    // per-char cells reach the synthetic canvas.
+    (cp >= 0x23f4 && cp <= 0x23fa)
   )
 }
 

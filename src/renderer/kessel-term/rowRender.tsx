@@ -55,15 +55,15 @@
 // spans; run background underlays are unchanged.
 
 import React from 'react'
+import { glyphRoute } from './glyphRoute'
 import {
   EMOJI_FONT_SCALE,
-  isEmojiCp,
   runCells,
   runColOffsets,
   runColSpan,
   runNeedsPerCharCells,
 } from './runCols'
-import { syntheticGlyphSpec, type SyntheticGlyph } from './syntheticGlyphs'
+import type { SyntheticGlyph } from './syntheticGlyphs'
 import { drawSyntheticGlyph } from './webgl/syntheticRaster'
 
 /** The visual subset of the wire CellRun this renderer needs
@@ -277,18 +277,18 @@ function renderRowRuns(
       const cells = runCells(run)
       for (let c = 0; c < cells.length; c++) {
         const cell = cells[c]
-        const spec =
-          cellHeight > 0
-            ? syntheticGlyphSpec(cell.text.codePointAt(0) ?? 0)
-            : null
-        if (spec) {
+        // Shared with the WebGL atlas (glyphRoute.ts): synthetic
+        // geometry, colour emoji, or text (VS15-forced for one-column
+        // symbols that also have an emoji form, e.g. ✔ ☀).
+        const route = glyphRoute(cell.text)
+        if (route.kind === 'synthetic' && cellHeight > 0) {
           // SYNTHETIC GEOMETRY: no DOM node at all — the glyph is
           // queued for the row's canvas (solid fills, not CSS
           // gradients). Text styles (decoration/weight) don't apply;
           // heavy/light weight is intrinsic to the code point. Dim
           // dims via the draw alpha, like the font path's opacity.
           synth.push({
-            spec,
+            spec: route.spec,
             leftCss: (startCol + cell.col) * cellWidth,
             widthCss: cell.width * cellWidth,
             ink,
@@ -305,7 +305,11 @@ function renderRowRuns(
         // at EMOJI_FONT_SCALE (they draw visibly smaller than text
         // at equal point size); px line-height inherits unchanged,
         // so the baseline stays put and the glyph grows in place.
-        const isEmoji = isEmojiCp(cell.text.codePointAt(0) ?? 0)
+        const isEmoji = route.kind === 'emoji'
+        // VS15-forced text cell: also ask CSS for text presentation
+        // (font-variant-emoji; ignored where unsupported — the VS15
+        // in the text is the primary request).
+        const forceText = route.kind === 'text' && route.draw !== cell.text
         spans.push(
           <span
             key={`a${absRow}s${i}c${c}`}
@@ -318,11 +322,12 @@ function renderRowRuns(
               height: '100%',
               overflow: isEmoji ? undefined : 'hidden',
               fontSize: isEmoji ? `${EMOJI_FONT_SCALE}em` : undefined,
+              fontVariantEmoji: forceText ? 'text' : undefined,
               whiteSpace: 'pre',
               textAlign: 'center',
             }}
           >
-            {cell.text}
+            {route.kind === 'text' ? route.draw : cell.text}
           </span>,
         )
       }

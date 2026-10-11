@@ -20579,7 +20579,8 @@ cmd_schema() {
       "description": "Validate what is on disk now: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
       "args": [],
       "flags": [
-        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime}."}
+        {"name": "--types", "arg": null, "description": "--widget only: also type-check its scripts against k2.d.ts with tsc-rs (K2_TSC_RS or tsc-rs on PATH; K2_TS_CHECKER=tsc7 uses tsgo). Warnings only; lines without k2. are counted, --types=all lists them."},
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime, types}."}
       ]
     },
     {
@@ -42905,7 +42906,7 @@ USAGE
   k2 zen theme new <name> [--from <theme>] [--json]
   k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
-  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
+  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> [--types[=all]] | --file <file>] [--json]
   k2 zen inspect <file.k2garden | folder> [--json]   review a Garden you received (static; never runs it)
   k2 zen widget errors <name> [--since <seq>] [--follow] [--json]
   k2 zen reload [--json]
@@ -44200,6 +44201,9 @@ if verb in ("validate", "reload"):
         print(diag(e))
     for w in d.get("warnings") or []:
         print(diag(w, True))
+    ty = d.get("types") if isinstance(d.get("types"), dict) else None
+    if ty is not None:
+        print("types: %s%s" % ("checked with %s" % ty["checker"] if ty.get("checker") else "not checked", "; %s" % ty["note"] if ty.get("note") else ""))
     if verb == "reload":
         print("reloaded: %s" % ("changed" if d.get("changed") else "no change"))
     if errs:
@@ -44525,13 +44529,15 @@ _zen_no_home() {
 
 # Parse --garden/--file/--theme/--to/--json into ZEN_* globals.
 _zen_args() {
-    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""
+    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""; ZEN_TYPES=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --widget)
                 [ -n "${2:-}" ] || { echo "Error: --widget needs a widget folder name (see k2 zen widget list)" >&2; exit 2; }
                 ZEN_WIDGET_SEL="$2"; shift 2 ;;
             --widget=*) ZEN_WIDGET_SEL="${1#*=}"; shift ;;
+            --types) ZEN_TYPES=1; shift ;;
+            --types=all) ZEN_TYPES=all; shift ;;
             --json) ZEN_AS_JSON=true; shift ;;
             --garden)
                 [ -n "${2:-}" ] || { echo "Error: --garden needs a Garden name or id (see k2 zen garden list)" >&2; exit 2; }
@@ -45015,11 +45021,16 @@ cmd_zen() {
         validate|history)
             _zen_args "$@"
             [ -z "$ZEN_TO" ] || { echo "Error: --to is for k2 zen reset" >&2; exit 2; }
+            if [ -n "$ZEN_TYPES" ] && { [ "$sub" != "validate" ] || [ -z "$ZEN_WIDGET_SEL" ]; }; then
+                echo "Error: --types is for k2 zen validate --widget <name>" >&2
+                exit 2
+            fi
             local -a q=()
             [ -n "$ZEN_GARDEN_SEL" ] && q+=("garden=$(urlencode "$ZEN_GARDEN_SEL")")
             [ -n "$ZEN_FILE_SEL" ] && q+=("file=$(urlencode "$ZEN_FILE_SEL")")
             [ -n "$ZEN_THEME_SEL" ] && q+=("theme=$(urlencode "$ZEN_THEME_SEL")")
             [ -n "$ZEN_WIDGET_SEL" ] && q+=("widget=$(urlencode "$ZEN_WIDGET_SEL")")
+            [ -n "$ZEN_TYPES" ] && q+=("types=$ZEN_TYPES")
             raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
             _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
             ;;

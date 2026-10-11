@@ -933,7 +933,17 @@ pub fn handle(
         "/cli/zen/validate" => {
             let f = files();
             match param(params, "widget") {
-                Some(w) => set_up(&f).and_then(|_| f.validate_widget(w)),
+                Some(w) => set_up(&f).and_then(|_| f.validate_widget(w)).and_then(|mut v| {
+                    // `--types[=all]`: the optional tsc-rs stage, warnings only.
+                    if let Some(t) = param(params, "types") {
+                        let types = f.widget_types(w, t == "all")?;
+                        if let (Some(ws), Some(tw)) = (v["warnings"].as_array_mut(), types["warnings"].as_array()) {
+                            ws.extend(tw.iter().cloned());
+                        }
+                        v["types"] = types;
+                    }
+                    Ok(v)
+                }),
                 None => set_up(&f)
                     .and_then(|_| refuse_home(params))
                     .and_then(|_| target(&f, param(params, "file"), param(params, "garden"), param(params, "theme"), false))

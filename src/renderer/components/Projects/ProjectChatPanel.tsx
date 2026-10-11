@@ -56,6 +56,7 @@ import {
   clearStuckBodyUserSelect,
 } from '@/components/common/SelectableText'
 import { ChatMessage } from '@/components/common/ChatMessage'
+import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
   clearProjectChatDraft,
@@ -77,6 +78,9 @@ interface LastPost {
 
 export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): React.JSX.Element {
   const revision = useProjectGroupsStore((s) => s.revision)
+  // "You": `owner`, plus the logins linked to the owner when this viewer
+  // is the owner person (the owner's phone and laptop are one person).
+  const isYou = useIsYouAuthor()
   // Connect role (whoami cache shared with presence kick) — not window-mode.
   // null while loading or unresolved → fail-closed (composer hidden).
   const [connectRole, setConnectRole] = useState<ConnectRole | null>(null)
@@ -365,7 +369,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               )}
               <div className="flex flex-col gap-2.5">
                 {messages.map((m) => {
-                  const isOwner = m.author === 'owner'
+                  const isOwner = isYou(m.author)
                   const delivery =
                     lastPost?.messageId === m.id
                       ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)

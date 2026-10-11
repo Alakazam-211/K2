@@ -41,6 +41,7 @@ import {
 } from '@/components/Projects/wake-member-session'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
 import { ChatMessage } from '@/components/common/ChatMessage'
+import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
@@ -293,6 +294,8 @@ export function ThreadTab({
   optionsLive: boolean
   onChanged: () => void
 }): React.JSX.Element {
+  // "You": `owner`, plus the owner-linked logins when this viewer is the owner.
+  const isYou = useIsYouAuthor()
   // Drafts survive unmount (leave ticket / switch tabs or pages).
   const [reply, setReply] = useState(() => getTicketDraft(ticketId))
   const [busy, setBusy] = useState(false)
@@ -420,7 +423,7 @@ export function ThreadTab({
         <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
           <div className="flex flex-col gap-2.5">
             {item.comments.map((c, i) => {
-              const isOwner = c.author === 'owner'
+              const isOwner = isYou(c.author)
               return (
                 <ChatMessage
                   key={`${c.at}-${i}`}

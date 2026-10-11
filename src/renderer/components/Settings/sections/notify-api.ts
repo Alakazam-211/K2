@@ -270,3 +270,59 @@ export async function fetchNotifyCaller(scope: ServerScope = primaryScope()): Pr
         : null
   return { role, ownerToken: data.owner === true }
 }
+
+// ── Owner-linked accounts (prd-thread-push-notifications-v1 §3) ──────────
+//
+//   GET  /cli/owner/accounts  (Admin+)            {accounts[], aliases[]}
+//   POST /cli/owner/accounts  (owner token only)  {accounts:[...]} → same
+//
+// A linked Connect login counts as the owner PERSON for notification prefs,
+// coalescing, the push `principal` and "you" labels. Identity only: it keeps
+// its own role and gains no owner power. Any login (even an Owner-role one)
+// and any agent passport gets 403 on the POST.
+
+export interface OwnerAccounts {
+  /** Connect usernames the owner marked "This is me (owner)". */
+  accounts: string[]
+  /** Every login that resolves to the owner person (linked + a sole
+   *  Owner-role login). */
+  aliases: string[]
+}
+
+function asNames(v: unknown): string[] {
+  return Array.isArray(v)
+    ? v.filter((a): a is string => typeof a === 'string' && a.trim() !== '').map((a) => a.trim().toLowerCase())
+    : []
+}
+
+export function parseOwnerAccounts(raw: unknown): OwnerAccounts {
+  const o = rec(raw)
+  return { accounts: asNames(o.accounts), aliases: asNames(o.aliases) }
+}
+
+export async function fetchOwnerAccounts(scope: ServerScope = primaryScope()): Promise<OwnerAccounts> {
+  return parseOwnerAccounts(await daemonCliGet<unknown>(scope, 'owner/accounts'))
+}
+
+/** Replace the linked list (owner token only). */
+export async function setOwnerAccounts(accounts: string[], scope: ServerScope = primaryScope()): Promise<OwnerAccounts> {
+  return parseOwnerAccounts(await daemonCliPost<unknown>(scope, 'owner/accounts', { accounts }))
+}
+
+/** The list after flipping `username` on or off (sorted, unique, lowercase). */
+export function toggledOwnerAccounts(current: string[], username: string, linked: boolean): string[] {
+  const name = username.trim().toLowerCase()
+  const rest = current.filter((a) => a !== name)
+  return (linked ? [...rest, name] : rest).sort()
+}
+
+/** Does a chat/ticket `author` stamp read as "You" for this viewer?
+ *  `owner` always does (today's rule). A login linked to the owner does
+ *  too when the viewer is the owner person (the owner token or a linked
+ *  login), so posts from the owner's phone and laptop both read "You". */
+export function isYouAuthor(author: string, viewer: Pick<NotifyPrefs, 'principal' | 'aliases'> | null): boolean {
+  if (author === 'owner') return true
+  if (!viewer || viewer.principal !== 'owner') return false
+  const a = author.trim().toLowerCase()
+  return a !== '' && viewer.aliases.some((x) => x.toLowerCase() === a)
+}

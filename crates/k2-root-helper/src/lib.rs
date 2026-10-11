@@ -99,11 +99,15 @@ pub struct Lock {
     _file: std::fs::File,
 }
 
-pub fn take_lock(ctx: &Ctx) -> HResult<Lock> {
+/// One lock per namespace (`/run/k2-root-helper.<ns>.lock`): a long mail
+/// snapshot never makes a Postgres restart or a keep call "busy" (review).
+pub fn take_lock(ctx: &Ctx, ns: &str) -> HResult<Lock> {
     use std::os::fd::AsRawFd;
-    let (parent, name) = mail::split(k2_root_proto::paths::LOCK_PATH);
-    let d = ctx.dir(parent).map_err(|e| Fail::io_err("open /run", e))?;
-    let name = std::ffi::OsStr::new(name);
+    let d = ctx
+        .dir(k2_root_proto::paths::LOCK_DIR)
+        .map_err(|e| Fail::io_err("open /run", e))?;
+    let name = format!("k2-root-helper.{ns}.lock");
+    let name = std::ffi::OsStr::new(&name);
     let f = match d.kind(name).map_err(|e| Fail::io_err("stat lock", e))? {
         fsx::Kind::Missing => match d.create_excl(name) {
             Ok(f) => f,
@@ -242,15 +246,10 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
     if verb.needs_root() && ctx.euid != 0 {
         return fail(Fail::state("not running as root (use sudo -n)"));
     }
-    let input = match read_stdin(&verb, stdin) {
-        Ok(b) => b,
-        Err(f) => {
-            audit(ctx, Some(&verb), None, f.code, None);
-            return fail(f);
-        }
-    };
     // Open verbs record pid/uid (and the daemon user, for keep status);
-    // daemon verbs run the full MainPID check.
+    // daemon verbs run the full MainPID check. Both happen BEFORE stdin is
+    // read, and the lock is taken before it too, so parallel callers can't
+    // make root buffer 256 MiB each (security review #8).
     let needs_daemon = verb.class() == Class::Daemon;
     let who = if verb == Verb::HelperVersion {
         caller::Caller {
@@ -268,7 +267,7 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
         return fail(Fail::not_daemon());
     }
     let _lock = if verb.takes_lock() {
-        match take_lock(ctx) {
+        match take_lock(ctx, verb.namespace()) {
             Ok(l) => Some(l),
             Err(f) => {
                 audit(ctx, Some(&verb), Some(&who), f.code, None);
@@ -277,6 +276,13 @@ pub fn run(ctx: &Ctx, args: &[&str], stdin: impl Read) -> Outcome {
         }
     } else {
         None
+    };
+    let input = match read_stdin(&verb, stdin) {
+        Ok(b) => b,
+        Err(f) => {
+            audit(ctx, Some(&verb), Some(&who), f.code, None);
+            return fail(f);
+        }
     };
     let res = dispatch(ctx, &verb, &input, &who);
     let (code, json, err) = match res {

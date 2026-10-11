@@ -491,8 +491,12 @@ pub fn install_command_for(version: &str) -> String {
 }
 
 /// [`install_command_for`] this build's version.
+/// Carries this daemon's own `--user/--unit/--scope` (from its cgroup), so
+/// the installer's daemon.toml names THIS daemon — a user-scope or
+/// `k2-daemon-std` box would otherwise get every daemon-only verb refused
+/// (correctness review #3).
 pub fn install_command() -> String {
-    install_command_for(env!("CARGO_PKG_VERSION"))
+    crate::root_helper::install_command_here()
 }
 
 /// The error every helper-dependent path returns when the door is shut.
@@ -2152,12 +2156,14 @@ mod tests {
     #[test]
     fn install_hint_names_the_release_installer_for_this_version() {
         let v = env!("CARGO_PKG_VERSION");
-        assert_eq!(
-            install_command(),
-            format!(
-                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-root-helper.sh | sudo bash -s -- --version {v}"
-            )
+        let cmd = install_command();
+        assert!(
+            cmd.starts_with(&format!(
+                "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v{v}/install-root-helper.sh | sudo bash -s -- --version {v} --user "
+            )),
+            "{cmd}"
         );
+        assert!(cmd.contains(" --unit ") && cmd.contains(" --scope "), "{cmd}");
         assert_eq!(unavailable_message(HelperState::Installed), None);
         let missing = unavailable_message(HelperState::Missing).unwrap();
         assert_eq!(

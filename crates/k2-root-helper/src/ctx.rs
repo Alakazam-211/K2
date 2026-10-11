@@ -117,16 +117,28 @@ impl Exec for RealExec {
             Stdio::null()
         });
         let mut child = cmd.spawn()?;
-        if let Some(bytes) = stdin {
-            let mut sin = child
-                .stdin
-                .take()
-                .ok_or_else(|| io::Error::other("stdin"))?;
-            // A child that exits early (psql on a syntax error) closes the
-            // pipe; that is its answer, not ours.
-            let _ = sin.write_all(bytes);
-        }
+        // Feed stdin from a thread while wait_with_output drains stdout and
+        // stderr: a child (psql) that prints more than a pipe buffer while
+        // we are still writing would otherwise deadlock (security review #9).
+        let writer = match stdin {
+            Some(bytes) => {
+                let mut sin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| io::Error::other("stdin"))?;
+                let bytes = bytes.to_vec();
+                // A child that exits early (psql on a syntax error) closes
+                // the pipe; that is its answer, not ours.
+                Some(std::thread::spawn(move || {
+                    let _ = sin.write_all(&bytes);
+                }))
+            }
+            None => None,
+        };
         let out = child.wait_with_output()?;
+        if let Some(w) = writer {
+            let _ = w.join();
+        }
         Ok(ExecOut {
             status: out.status.code().unwrap_or(-1),
             stdout: out.stdout,
@@ -146,6 +158,10 @@ pub trait Procs {
     fn ppid_of(&self, pid: i32) -> Option<i32>;
     /// Real uid.
     fn ruid_of(&self, pid: i32) -> Option<u32>;
+    /// Session id (`/proc/<pid>/stat` field 6; no ptrace needed).
+    fn sid_of(&self, pid: i32) -> Option<i32>;
+    /// This process's own session id (`getsid(0)`).
+    fn own_sid(&self) -> Option<i32>;
     fn uid_of_user(&self, user: &str) -> Option<u32>;
 }
 

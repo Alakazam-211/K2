@@ -41,6 +41,11 @@ pub trait HealOps {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, FetchError>;
     fn self_update(&self, payload: &[u8]) -> Result<Value, String>;
     fn self_rollback(&self) -> Result<Value, String>;
+    /// Claim the hosted-mail busy latch for the install window only (the
+    /// probe, the up-to-date check and the download run without it, so a
+    /// user's `hostmail enable` is never refused by a routine heal).
+    fn begin_busy(&self) -> bool;
+    fn end_busy(&self);
 }
 
 /// What one heal did.
@@ -161,8 +166,24 @@ pub fn heal_with(ops: &dyn HealOps, plan: &Plan) -> Outcome {
             ),
         };
     }
+    if !ops.begin_busy() {
+        return Outcome::Deferred;
+    }
+    let out = install_window(ops, &st, want, &sig, &elf);
+    ops.end_busy();
+    out
+}
+
+/// self-update → re-check → rollback, inside the busy latch.
+fn install_window(
+    ops: &dyn HealOps,
+    st: &RootHelperState,
+    want: Semver,
+    sig: &str,
+    elf: &[u8],
+) -> Outcome {
     let from = st.version.clone().unwrap_or_default();
-    if let Err(e) = ops.self_update(&encode_payload(&sig, &elf)) {
+    if let Err(e) = ops.self_update(&encode_payload(sig, elf)) {
         return Outcome::Retry {
             reason: format!("self-update refused: {e}"),
         };
@@ -235,14 +256,10 @@ fn audit(event: &str, user: &str, outcome: &str) {
 
 /// One heal under the hosted-mail busy latch; records status + audit rows.
 pub fn run_once(ops: &dyn HealOps, plan: &Plan, who: &str) -> Outcome {
-    if !crate::mail::supervisor::try_begin_enable() {
-        return Outcome::Deferred;
-    }
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| heal_with(ops, plan)))
         .unwrap_or(Outcome::Retry {
             reason: "heal panicked".into(),
         });
-    crate::mail::supervisor::end_enable();
     super::invalidate();
     match &out {
         Outcome::Updated { from, to } => audit(
@@ -305,6 +322,12 @@ impl HealOps for LiveOps {
         let out = super::call_text(&["helper".into(), "self-rollback".into()], None)?;
         serde_json::from_str(&out).map_err(|_| "self-rollback answer is not JSON".into())
     }
+    fn begin_busy(&self) -> bool {
+        crate::mail::supervisor::try_begin_enable()
+    }
+    fn end_busy(&self) {
+        crate::mail::supervisor::end_enable();
+    }
 }
 
 /// `k2 root-helper update --from <dir>`: the owner copied
@@ -333,6 +356,12 @@ impl HealOps for DirOps {
     }
     fn self_rollback(&self) -> Result<Value, String> {
         LiveOps.self_rollback()
+    }
+    fn begin_busy(&self) -> bool {
+        LiveOps.begin_busy()
+    }
+    fn end_busy(&self) {
+        LiveOps.end_busy()
     }
 }
 

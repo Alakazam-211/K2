@@ -85,6 +85,16 @@ mod linux {
                 .parse()
                 .ok()
         }
+        fn sid_of(&self, pid: i32) -> Option<i32> {
+            // `pid (comm) state ppid pgrp session …` — comm may hold
+            // spaces/parens, so split after the LAST ')'.
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let rest = &stat[stat.rfind(')')? + 1..];
+            rest.split_whitespace().nth(3)?.parse().ok()
+        }
+        fn own_sid(&self) -> Option<i32> {
+            super::own_sid()
+        }
         fn uid_of_user(&self, user: &str) -> Option<u32> {
             super::uid_of_user(user)
         }
@@ -109,9 +119,21 @@ impl Procs for RealProcs {
     fn ruid_of(&self, _pid: i32) -> Option<u32> {
         None
     }
+    fn sid_of(&self, _pid: i32) -> Option<i32> {
+        None
+    }
+    fn own_sid(&self) -> Option<i32> {
+        own_sid()
+    }
     fn uid_of_user(&self, user: &str) -> Option<u32> {
         uid_of_user(user)
     }
+}
+
+fn own_sid() -> Option<i32> {
+    // SAFETY: getsid(0) has no preconditions.
+    let s = unsafe { libc::getsid(0) };
+    (s > 0).then_some(s)
 }
 
 /// `getpwnam` uid, copied out before any other NSS call.

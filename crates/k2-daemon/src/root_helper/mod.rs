@@ -250,11 +250,14 @@ pub fn map_call(argv: &[String], out: CallOut) -> Result<Vec<u8>, String> {
              with this daemon's --user/--unit/--scope as root: {}",
             install_command_here()
         )),
-        exit::ARGV => Err(format!(
-            "root helper refused `{verb}` (refused arguments: {}) — the helper is older than this \
-             daemon; `k2 root-helper update`",
-            out.stderr
+        // Exit 2 is "refused argv OR refused input" (a tarball sha, a bad
+        // password, stdin over the cap). Only an unknown verb means the
+        // helper is older than this daemon.
+        exit::ARGV if out.stderr.contains("refused arguments") => Err(format!(
+            "root helper refused `{verb}` (unknown to it) — the helper is older than this \
+             daemon; `k2 root-helper update`"
         )),
+        exit::ARGV => Err(format!("root helper refused `{verb}`: {}", out.stderr)),
         _ => {
             if let Some(mapped) =
                 crate::mail::helper::map_helper_failure_with(None, &out.stderr, true)
@@ -484,11 +487,13 @@ pub fn status_json(
     legacy_pg: bool,
     events: Option<Value>,
 ) -> Value {
-    let kind = match (st.kind, st.protocol) {
-        (Kind::Root, _) => "root",
-        _ if legacy_mail == "installed" || legacy_pg => "legacy",
-        (Kind::NotAllowed, _) => "not_allowed",
-        _ => "missing",
+    // An installed-but-not-allowed root helper says so even when a legacy
+    // helper still answers (correctness review #8).
+    let kind = match st.kind {
+        Kind::Root => "root",
+        Kind::NotAllowed => "not_allowed",
+        Kind::Missing if legacy_mail == "installed" || legacy_pg => "legacy",
+        Kind::Missing => "missing",
     };
     json!({
         "state": kind,

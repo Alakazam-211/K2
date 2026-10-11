@@ -33,8 +33,10 @@ pub const STATE_JSON: &str = "/var/lib/k2-root-helper/state.json";
 /// `keep/<daemon user>/` (dirs 0700, files 0600). The user comes from the
 /// caller check, never from argv.
 pub const KEEP_DIR: &str = "/var/lib/k2-root-helper/keep";
-/// Mutating verbs take an exclusive `flock` here (30 s timeout).
-pub const LOCK_PATH: &str = "/run/k2-root-helper.lock";
+/// Mutating verbs take an exclusive `flock` on
+/// `/run/k2-root-helper.<namespace>.lock` (30 s timeout): one lock per
+/// namespace, so a long mail snapshot never blocks a Postgres restart.
+pub const LOCK_DIR: &str = "/run";
 
 /// The daemon reaches the helper only through this sudo.
 pub const SUDO_PATH: &str = "/usr/bin/sudo";

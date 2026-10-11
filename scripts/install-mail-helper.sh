@@ -5,9 +5,15 @@
 # §11.1, RH23). From the script's own directory when it is there, else the
 # copy attached to the same release as --version.
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-if [ -n "$HERE" ] && [ -f "$HERE/install-root-helper.sh" ]; then
-	exec bash "$HERE/install-root-helper.sh" "$@"
+# Only when this script is a real file on disk (not `curl … | bash`, where
+# BASH_SOURCE is empty and a stray install-root-helper.sh in the current
+# directory must never be picked up).
+SELF="${BASH_SOURCE[0]:-}"
+if [ -n "$SELF" ] && [ -f "$SELF" ]; then
+	HERE="$(cd "$(dirname "$SELF")" && pwd)"
+	if [ -f "$HERE/install-root-helper.sh" ]; then
+		exec bash "$HERE/install-root-helper.sh" "$@"
+	fi
 fi
 VERSION=""
 prev=""

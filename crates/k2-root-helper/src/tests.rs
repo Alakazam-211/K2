@@ -72,6 +72,7 @@ struct P {
     exe_owner: u32,
     ppid: i32,
     ruid: u32,
+    sid: i32,
 }
 
 #[derive(Default)]
@@ -80,6 +81,8 @@ struct ProcTable {
     procs: HashMap<i32, P>,
     dead: HashSet<i32>,
     users: HashMap<String, u32>,
+    /// The helper's own session (getsid(0)).
+    own_sid: i32,
 }
 
 #[derive(Clone, Default)]
@@ -115,6 +118,12 @@ impl Procs for FakeProcs {
     }
     fn ruid_of(&self, pid: i32) -> Option<u32> {
         self.0.borrow().procs.get(&pid).map(|p| p.ruid)
+    }
+    fn sid_of(&self, pid: i32) -> Option<i32> {
+        self.0.borrow().procs.get(&pid).map(|p| p.sid)
+    }
+    fn own_sid(&self) -> Option<i32> {
+        Some(self.0.borrow().own_sid)
     }
     fn uid_of_user(&self, user: &str) -> Option<u32> {
         self.0.borrow().users.get(user).copied()
@@ -218,6 +227,8 @@ fn box_root() -> T {
                 exe_owner: K2_UID,
                 ppid: 1,
                 ruid: K2_UID,
+                // systemd makes a service's main process a session leader.
+                sid: DAEMON_PID,
             },
         );
         t.procs.insert(
@@ -227,6 +238,8 @@ fn box_root() -> T {
                 exe_owner: 0,
                 ppid: DAEMON_PID,
                 ruid: K2_UID,
+                // A terminal: the daemon's PTY spawn setsid()s it.
+                sid: AGENT_PID,
             },
         );
         t.procs.insert(
@@ -236,9 +249,12 @@ fn box_root() -> T {
                 exe_owner: 0,
                 ppid: DAEMON_PID,
                 ruid: K2_UID,
+                // The daemon's own sudo inherits the daemon's session.
+                sid: DAEMON_PID,
             },
         );
         t.parent = SUDO_PID;
+        t.own_sid = DAEMON_PID;
     }
     let audit = MemAudit::default();
     let ctx = Ctx {
@@ -436,6 +452,8 @@ fn caller_walk_shapes() {
                 exe_owner: 0,
                 ppid: SUDO_PID,
                 ruid: 0,
+                // sudo's use_pty monitor setsid()s.
+                sid: 6001,
             },
         );
         p.parent = 6001;
@@ -469,6 +487,8 @@ fn caller_walk_shapes() {
                 exe_owner: 0,
                 ppid: SUDO_PID,
                 ruid: 0,
+                // sudo's use_pty monitor setsid()s.
+                sid: 6001,
             },
         );
         p.procs.insert(
@@ -478,6 +498,7 @@ fn caller_walk_shapes() {
                 exe_owner: 0,
                 ppid: 6001,
                 ruid: 0,
+                sid: 6002,
             },
         );
         p.procs.insert(
@@ -487,9 +508,30 @@ fn caller_walk_shapes() {
                 exe_owner: 0,
                 ppid: 6002,
                 ruid: 0,
+                sid: 6003,
             },
         );
         p.parent = 6003;
+    }
+    assert_eq!(snapshot_call(&t), exit::NOT_DAEMON);
+
+    // Security review #1: a K2 shell tab (a direct, setsid'd child of the
+    // daemon) that `exec sudo …`: sudo's parent IS the daemon, but sudo is
+    // in the tab's session, not the daemon's.
+    let t = box_root();
+    {
+        let mut p = t.procs.0.borrow_mut();
+        let sudo = p.procs.get_mut(&SUDO_PID).unwrap();
+        sudo.sid = SUDO_PID;
+    }
+    assert_eq!(snapshot_call(&t), exit::NOT_DAEMON);
+    // Same tab exec'ing the helper through sudo's exec shape (no sudo
+    // left in the chain): the helper itself is in the tab's session.
+    let t = box_root();
+    {
+        let mut p = t.procs.0.borrow_mut();
+        p.parent = DAEMON_PID;
+        p.own_sid = 7777;
     }
     assert_eq!(snapshot_call(&t), exit::NOT_DAEMON);
 
@@ -1058,9 +1100,12 @@ fn keep_store_is_keyed_by_the_caller_walk_user() {
                 exe_owner: 1002,
                 ppid: 1,
                 ruid: 1002,
+                sid: 7000,
             },
         );
-        p.procs.get_mut(&SUDO_PID).unwrap().ppid = 7000;
+        let sudo = p.procs.get_mut(&SUDO_PID).unwrap();
+        sudo.ppid = 7000;
+        sudo.sid = 7000;
     }
     t.exec
         .0
@@ -1406,12 +1451,18 @@ fn legacy_retire_removes_only_the_fixed_files_then_checks_sudoers() {
 #[test]
 fn lock_serializes_mutating_verbs() {
     let t = box_root();
-    let held = crate::take_lock(&t.ctx).expect("first lock");
+    let held = crate::take_lock(&t.ctx, "mail").expect("first lock");
     let o = t.call(&["mail", "systemctl", "restart"]);
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.contains("busy"));
-    // Read verbs take no lock.
+    // Read verbs take no lock; other namespaces have their own lock.
     ok(&t.call(&["mail", "usage"]));
+    ok(&t.call(&["pg", "systemctl", "daemon-reload"]));
+    ok(&t.call(&["keep", "gen", "bump"]));
+    // A held lock is taken BEFORE stdin is read: an install-bin waiting
+    // on the lock never buffers its tarball.
+    let o = crate::run(&t.ctx, &["mail", "install-bin"], NoRead);
+    assert_eq!(o.code, exit::STATE);
     drop(held);
     ok(&t.call(&["mail", "systemctl", "restart"]));
 }

@@ -83,6 +83,8 @@ export type SettingsSection =
   | 'data'
   /** Settings → Sidecars → Apps (route id skin-access; per-app roles and users). */
   | 'skin-access'
+  /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
+  | 'compute'
 
 export interface TerminalSettings {
   fontFamily: string
@@ -160,6 +162,11 @@ interface SettingsState {
   // Persisted per-server; the daemon's /cli/federation/* gate honors it via
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
   federationEnabled: boolean
+
+  // K2 compute nodes (preview) on the focused server (Settings → Compute).
+  // Owner-only server-side. DEFAULTS OFF: every /cli/compute/* route 404s
+  // `compute_disabled` until it is on (or K2_COMPUTE=1).
+  computePreview: boolean
 
   // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
   // public API). Persisted per-server; the daemon's misc_routes::
@@ -245,6 +252,7 @@ interface SettingsState {
   setAgentsCanCreateConnections: (enabled: boolean) => void
   setConnectLoginIngress: (mode: ConnectLoginIngress) => void
   setFederationEnabled: (enabled: boolean) => void
+  setComputePreview: (enabled: boolean) => void
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
@@ -392,6 +400,7 @@ async function persistAndApply(
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
+      computePreview: result.computePreview ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
@@ -436,6 +445,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   agentsCanCreateConnections: false,
   connectLoginIngress: 'edge',
   federationEnabled: false,
+  computePreview: false,
   apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
@@ -669,6 +679,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setComputePreview: async (enabled: boolean) => {
+    const prev = get().computePreview
+    set({ computePreview: enabled }) // optimistic
+    try {
+      // Partial update — the daemon deep-merges `computePreview` and syncs it
+      // into compute::set_enabled() so /cli/compute/* lights up (or goes dark)
+      // immediately on THIS host. Owner-only server-side. persistAndApply is
+      // host-aware: toggling while on a remote server writes THAT daemon.
+      await persistAndApply(set, { computePreview: enabled })
+    } catch (err) {
+      console.error('[settings] Failed to persist compute-preview:', err)
+      set({ computePreview: prev })
+    }
+  },
+
   setApiEnabled: async (enabled: boolean) => {
     const prev = get().apiEnabled
     set({ apiEnabled: enabled }) // optimistic
@@ -771,6 +796,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
+      computePreview: result.computePreview ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
@@ -835,6 +861,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
       federationEnabled: result.federationEnabled ?? false,
+      computePreview: result.computePreview ?? false,
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,

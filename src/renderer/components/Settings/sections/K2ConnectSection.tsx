@@ -62,6 +62,7 @@ import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { primaryScope } from '@/kessel/server-scope'
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
+import { isAirgap } from '@/lib/airgap'
 
 const DEFAULT_SERVER_ADDR = '178.156.232.105'
 const DEFAULT_SERVER_PORT = 7000
@@ -377,6 +378,29 @@ async function readAccountSession(): Promise<AccountSession | null> {
   } catch {
     return null
   }
+}
+
+/**
+ * A fresh k2.dev access token from the stored account session, or null when
+ * no one is signed in (or the refresh fails, or air-gap is on). Used by
+ * Settings → Compute's one-click pairing. Persists a rotated refresh token
+ * exactly like the Tunnel panel's restore does. Never clears the stored
+ * session: signing out stays the Tunnel panel's job.
+ */
+export async function getAccountAccessToken(): Promise<string | null> {
+  if (isAirgap()) return null
+  const stored = await readAccountSession()
+  if (!stored) return null
+  let fresh: K2Session
+  try {
+    fresh = await refreshSession(stored.refreshToken)
+  } catch {
+    return null
+  }
+  if (fresh.refreshToken !== stored.refreshToken || fresh.email !== stored.email) {
+    await saveAccountSession(fresh.refreshToken, fresh.email)
+  }
+  return fresh.accessToken
 }
 
 async function clearAccountSession(): Promise<void> {

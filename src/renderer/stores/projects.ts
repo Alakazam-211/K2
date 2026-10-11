@@ -277,6 +277,11 @@ interface Project {
   // secrets" (0/1, default 0). Written via POST /cli/agent-access/set
   // `toggle: 'vault_manage'` (Admin; not workspace/set).
   agentsCanManageVault?: number
+  // K2 compute nodes — "Allow compute nodes" (0/1, default 0). Agents in
+  // this workspace may run jobs on granted nodes. Written via POST
+  // /cli/agent-access/set `toggle: 'compute'` (Admin). Absent on daemons
+  // that don't list it yet → Settings → Compute shows it as unknown.
+  agentsCanUseCompute?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

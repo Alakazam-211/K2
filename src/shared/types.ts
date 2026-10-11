@@ -136,6 +136,10 @@ export interface AppSettingsResponse {
   // this host. Optional: older snapshots omit it → readers treat absent
   // as false (the store reads it with `?? false`).
   federationEnabled?: boolean
+  // K2 compute nodes preview (prd-k2-compute-nodes-v1 CN30) — Owner-only.
+  // While off every /cli/compute/* route 404s `compute_disabled`. Optional:
+  // older snapshots omit it → readers treat absent as false.
+  computePreview?: boolean
   // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
   // public API). ORed with the K2_API env flag server-side and checked
   // per request, so flipping it needs NO daemon restart. Owner/Admin-only

@@ -39,6 +39,12 @@ export const webFeatures = {
    */
   zen: desktop,
   /**
+   * Settings → Compute → "This computer" (make this machine a compute node).
+   * Desktop only: the hosted web client has no local daemon to install a
+   * node on; it still shows the focused server's nodes.
+   */
+  computeLocal: desktop,
+  /**
    * macOS traffic-light (close/min/max) left inset. Owned by desktop-chrome:
    * only true on macOS desktop (0 on Win/Linux + hosted web).
    */

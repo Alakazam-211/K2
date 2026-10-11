@@ -33,6 +33,7 @@ import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
+import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { PeopleSection, PEOPLE_MANIFEST } from './sections/PeopleSection'
 import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTemplatesSection'
@@ -87,6 +88,7 @@ export function settingsNav({ zenGardens }: { zenGardens: boolean }): NavBlock[]
     ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'token-usage', label: 'Token Usage' },
+    { kind: 'item', id: 'compute', label: 'Compute' },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
     ...(webFeatures.permissions
@@ -191,6 +193,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
+      ...COMPUTE_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
       ...PEOPLE_MANIFEST,
       ...USER_TEMPLATES_MANIFEST,
@@ -531,6 +534,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'data' && (
           <SectionErrorBoundary>
             <DataSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'compute' && (
+          <SectionErrorBoundary>
+            <ComputeSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'skin-access' && (

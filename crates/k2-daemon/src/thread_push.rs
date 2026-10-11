@@ -240,9 +240,8 @@ impl PushEnv for DaemonEnv {
         k2_core::notify_prefs::recipients(&people, &prefs, &devices, project_id, &|_| false)
     }
 
-    fn viewing(&self, _person: &str, _conversation_id: &str, _now: Instant) -> bool {
-        // S4 wires the `viewing` frames registry here.
-        false
+    fn viewing(&self, person: &str, conversation_id: &str, now: Instant) -> bool {
+        crate::thread_viewers::global().is_viewing(person, conversation_id, now)
     }
 
     fn take_budget(&self, now: Instant) -> bool {

@@ -1868,7 +1868,16 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             };
             let params = super::http::parse_params(&path, &query);
-            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws).await;
+            // Thread push S4 (TP16): the login behind this socket, so its
+            // `viewing` frames quiet that person's pushes. App guests: none.
+            let viewer_login = if skin_ws.is_some() {
+                None
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some("owner".to_string())
+            } else {
+                super::http::extract_token(&query).and_then(k2_core::connect_users::validate_session)
+            };
+            crate::overlay_ws::serve_overlay_events_connection(stream, params, skin_ws, viewer_login).await;
             return DispatchOutcome::Done;
         }
         p if p == crate::fs_events_ws::FS_EVENTS_WS_PATH => {

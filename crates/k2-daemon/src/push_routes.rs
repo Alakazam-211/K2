@@ -56,7 +56,7 @@ pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResp
 pub fn dispatch_post(path: &str, body: &[u8], username: &str) -> CliResponse {
     match path {
         "/cli/push/register-device" => handle_register(body, username),
-        "/cli/push/unregister-device" => handle_unregister(body),
+        "/cli/push/unregister-device" => handle_unregister(body, username),
         _ => CliResponse::not_found(),
     }
 }
@@ -113,13 +113,35 @@ struct UnregisterBody {
 /// Handler for `POST /cli/push/unregister-device`. Removing an
 /// already-gone device is a fine no-op (`removed:false`) — the
 /// companion's Settings toggle fires blind.
-fn handle_unregister(body: &[u8]) -> CliResponse {
+///
+/// TP12: only the device's own person (its login, or a login that maps to
+/// the same person key) or an Admin+ may remove it. Anyone else gets the
+/// same `removed:false` as a miss — no oracle for device ids.
+fn handle_unregister(body: &[u8], username: &str) -> CliResponse {
     let b: UnregisterBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
     };
     if b.device_id.trim().is_empty() {
         return usage_error("missing 'deviceId'");
+    }
+    let row = match push_devices::list_devices() {
+        Ok(all) => all.into_iter().find(|d| d.device_id == b.device_id.trim()),
+        Err(e) => return usage_error(e),
+    };
+    let Some(row) = row else {
+        return CliResponse::ok_json(serde_json::json!({ "ok": true, "removed": false }).to_string());
+    };
+    let people = match k2_core::notify_prefs::People::load() {
+        Ok(p) => p,
+        Err(e) => return usage_error(e),
+    };
+    let is_admin = username == k2_core::notify_prefs::OWNER
+        || k2_core::connect_users::role_for_user(username)
+            .is_some_and(|r| r >= k2_core::connect_users::Role::Admin);
+    let own = people.person_key(&row.username) == people.person_key(username);
+    if !is_admin && !own {
+        return CliResponse::ok_json(serde_json::json!({ "ok": true, "removed": false }).to_string());
     }
     match push_devices::remove_device(&b.device_id) {
         Ok(removed) => CliResponse::ok_json(
@@ -188,6 +210,19 @@ pub(crate) fn current_cloud() -> Option<Arc<K2Cloud>> {
     let cloud = K2Cloud::from_config().map(Arc::new);
     *slot = Some((Instant::now(), cloud.clone()));
     cloud
+}
+
+/// The resolved gateway config for status reporting (§5.6 `push`). `None`
+/// under test (no gateway is ever configured there).
+pub(crate) fn current_config() -> Option<k2_core::push::GatewayConfig> {
+    #[cfg(test)]
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        current_cloud().map(|c| c.config().clone())
+    }
 }
 
 /// The production air-gap probe: [`k2_core::airgap::enabled`], read on
@@ -549,6 +584,55 @@ mod tests {
         assert_eq!(
             mine[1].data(),
             serde_json::json!({ "kind": "project", "groupId": gid })
+        );
+    }
+
+    /// TP12: a Member cannot unregister someone else's phone (and learns
+    /// nothing: the answer is the same as a miss); the owner of the device
+    /// and an Admin can.
+    #[test]
+    fn unregister_is_limited_to_the_devices_person_or_an_admin() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::add_user("tp12mo", "password123").expect("mo");
+        k2_core::connect_users::add_user("tp12gina", "password123").expect("gina");
+        k2_core::connect_users::set_role("tp12gina", k2_core::connect_users::Role::Admin).expect("admin");
+        let id = did("tp12");
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("tp12") }),
+            "owner",
+        ));
+        let v = ok_json(post_json("/cli/push/unregister-device", serde_json::json!({ "deviceId": id }), "tp12mo"));
+        assert_eq!(v["removed"], false, "a Member can't remove the owner's phone");
+        assert!(push_devices::list_devices().expect("list").iter().any(|d| d.device_id == id), "still there");
+        let v = ok_json(post_json("/cli/push/unregister-device", serde_json::json!({ "deviceId": id }), "tp12gina"));
+        assert_eq!(v["removed"], true, "an Admin can");
+        // The device's own login can.
+        let id2 = did("tp12-own");
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id2, "platform": "fcm", "token": tok("tp12-own") }),
+            "tp12mo",
+        ));
+        let v = ok_json(post_json("/cli/push/unregister-device", serde_json::json!({ "deviceId": id2 }), "tp12mo"));
+        assert_eq!(v["removed"], true);
+    }
+
+    /// TP11: removing a login drops its phones and its notification rows.
+    #[test]
+    fn removing_a_user_drops_their_devices() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::add_user("tp11gone", "password123").expect("add");
+        let id = did("tp11");
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("tp11") }),
+            "tp11gone",
+        ));
+        k2_core::connect_users::remove_user("tp11gone").expect("remove");
+        assert!(
+            !push_devices::list_devices().expect("list").iter().any(|d| d.device_id == id),
+            "a removed login's phone must not keep getting pushes"
         );
     }
 

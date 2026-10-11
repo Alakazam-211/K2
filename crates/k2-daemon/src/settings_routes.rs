@@ -226,6 +226,15 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
     // Owner decree: "Only Admin and Owner can enable federation." Gate on
     // key PRESENCE (not value) — a Member force-disabling the owner's
     // federation is the same class of unauthorized remote-access write.
+    // Owner-linked accounts decide who IS the owner for notifications, so
+    // they change only through `POST /cli/owner/accounts` (owner daemon
+    // token), never through a settings write of any role.
+    if partial.get("ownerAccounts").is_some() {
+        return forbidden(
+            "\"ownerAccounts\" changes only through POST /cli/owner/accounts with the owner token"
+                .to_string(),
+        );
+    }
     if actor != SettingsActor::Owner {
         if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {
             return forbidden(format!("updating \"{gated}\" requires the Owner role"));

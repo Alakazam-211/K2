@@ -613,6 +613,13 @@ pub fn remove_user(username: &str) -> Result<(), String> {
         Ok(())
     })?;
     revoke_user_sessions(&username);
+    // TP11 (prd-thread-push-notifications-v1): a removed login's phones
+    // stop getting pushes and its notification rows go with it.
+    if let Some(db) = crate::db::try_shared() {
+        if let Err(e) = crate::notify_prefs::cleanup_removed_user(&db.lock(), &username) {
+            crate::log_debug!("[connect_users] notify cleanup for '{username}' failed: {e}");
+        }
+    }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }

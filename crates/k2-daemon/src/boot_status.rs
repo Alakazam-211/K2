@@ -252,6 +252,19 @@ pub const FEATURE_DAEMON_ACTIVITY: &str = "daemon-activity";
 /// A client without it re-looks-up the address on a Thread 404.
 pub const FEATURE_THREAD_ADDRESS_STABLE: &str = "thread-address-stable";
 
+/// prd-thread-push-notifications-v1 §5.6: the `/cli/notify/*` routes, the
+/// Thread push trigger and the §7 payload are live on this server. On only
+/// when migration 0157's tables exist. It does NOT mean the relay is
+/// reachable (`GET /cli/notify/prefs` `push` says that).
+pub const FEATURE_THREAD_PUSH: &str = "thread-push-v1";
+
+/// True when the notify prefs tables exist in the daemon DB.
+fn thread_push_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| k2_core::notify_prefs::tables_exist(&db.lock()))
+        .unwrap_or(false)
+}
+
 /// Client-visible features this daemon has that its version string cannot
 /// tell apart (`/boot-status` `features`). A client treats a key that is
 /// absent — or a daemon with no `features` at all — as unsupported.
@@ -272,6 +285,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_HOME_AVATARS);
     out.push(FEATURE_DAEMON_ACTIVITY);
     out.push(FEATURE_THREAD_ADDRESS_STABLE);
+    if thread_push_ready() {
+        out.push(FEATURE_THREAD_PUSH);
+    }
     out
 }
 
@@ -292,6 +308,9 @@ mod tests {
     fn features_report_spawn_attach_only_and_tickets_list_all() {
         // The harness hook is never set in unit tests.
         assert!(attach_only_supported());
+        // `thread-push-v1` is on only once the DB (with migration 0157) is
+        // up: before init it is absent, after it present.
+        let _ = k2_core::db::shared();
         assert_eq!(
             features(),
             vec![
@@ -307,7 +326,8 @@ mod tests {
                 "thread-widget-origin",
                 "home-avatars-v1",
                 "daemon-activity",
-                "thread-address-stable"
+                "thread-address-stable",
+                "thread-push-v1"
             ]
         );
     }

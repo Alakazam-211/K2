@@ -466,6 +466,15 @@ pub struct AppSettings {
     /// push to leave dormancy.
     #[serde(default)]
     pub push_gateway_token: Option<String>,
+    /// Owner-linked accounts (prd-thread-push-notifications-v1, Rosson
+    /// 2026-10-11): Connect usernames that ARE the server owner, e.g. the
+    /// login the owner's phone uses. They resolve to the person key
+    /// `owner` for notification prefs, coalescing and the push
+    /// `principal` — IDENTITY only, never privilege (their role is
+    /// unchanged). Written only by `POST /cli/owner/accounts` with the
+    /// owner daemon token; `settings/update` refuses the key.
+    #[serde(default)]
+    pub owner_accounts: Vec<String>,
     /// K2 Mail (prd-email-server-v1 §12 / D4) — the GLOBAL default
     /// agent-send gating mode: `off` (default) | `approval` | `on`.
     /// Per-workspace `projects.mail_agent_send` (migration 0075)
@@ -922,6 +931,7 @@ impl Default for AppSettings {
             completion_sound_enabled: true,
             push_gateway_url: None,
             push_gateway_token: None,
+            owner_accounts: Vec::new(),
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
             mail_quota_bytes: default_mail_quota_bytes(),

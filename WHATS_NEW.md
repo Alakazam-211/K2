@@ -3,6 +3,19 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.4 — Vault, root door and mail that delivers
+
+- **K2 Vault.** One encrypted vault per server holds the secrets that matter at runtime. That covers secrets you hand an agent through a Thread secret card, secrets your published Apps need (saved once by name and handed to the App when it starts, never written into code), and K2's own keys that used to sit in plain files. On a Mac the vault's key lives in your Keychain; on Linux it lives with the root helper. Your everyday `.env` files keep working as before. See Settings → Vault and `k2 vault`.
+- **Published services start clean.** New `k2 publish` services no longer inherit K2's own environment. Services from before this update keep it for now and show that this ends in 0.46.0: switch each with `k2 publish env <name> clean` and grant only the secrets it needs (`k2 publish secret add`).
+- **One root helper on Linux servers.** A single signed, self-updating `k2-root-helper` replaces the separate mail and database helpers. It accepts only updates signed with its own key, and installing it removes the old helpers (backed up first). Your hosting provider rolls it out box by box.
+- **Hosted mail on Stalwart 0.16.25.** Fixes outgoing mail that stalled on a false DNSSEC "Bogus" result for mail servers without IPv6, and spam rules that failed to load. `k2 hostmail upgrade` moves a box up (after the root helper is installed), checks the result and rolls back on its own if Stalwart doesn't come back healthy. An upgrade interrupted by a restart now finishes or rolls back at the next start, so mail is never left stopped.
+- **Tickets your way.** Settings → Tickets, under Projects, lets the owner choose whether agent tickets need an HTML brief or an assignee (Off, Warn or Require; both start at Warn), and who gets agent tickets that name nobody. Agents can read the rules with `k2 tickets settings` but can't change them. The Tickets page now opens on Waiting on me (or All, or your last tab), and says "Nothing is waiting on you" when that's true (GitHub #75).
+- **Compute nodes get a home in Settings → Compute.** See your nodes, grant them to workspaces, and pause or remove them. "Make this computer a node" installs the node program for you. Jobs can declare the tools they need (Node, Python, Rust and more), and nodes install them on demand. System packages install only from a list the node's owner approves.
+- **Safer federation pairing.** Connected servers now pair with a commit-then-reveal code, so the 6-digit code can only be checked live during pairing. Federation also gets its own identity key: pairs survive a server rename, and peers get a signed "same server, new address" notice. Older pairs keep working and show "Re-pair recommended".
+- **Switch your Connect name without a restart.** Changing a server's K2 Connect subdomain moves its listener, certificate and routes in one step, and rolls back if anything fails.
+- **URL labels belong to one workspace.** A workspace can no longer take over a published label another workspace owns. Owners can still move one on purpose with `--transfer`, and every move is logged.
+- **Readable tables in Thread.** Markdown tables keep short columns readable instead of squeezing them to one letter per line; wide tables scroll sideways.
+
 ## 0.45.3 — Quiet keychain, your own compute
 
 - **No more password prompts after updating.** After 0.45.1 or 0.45.2, macOS could ask for your password over and over for "K2 Connect sign-in" or for Claude's login. K2 now writes every keychain item the way macOS expects, so reads stay silent. Items an earlier update broke repair themselves the first time K2 starts. If one can't be repaired, Settings → LLMs (and `k2 llm tokens`) shows the one command to run in Terminal. Thanks to Appa (Baden) for the report.

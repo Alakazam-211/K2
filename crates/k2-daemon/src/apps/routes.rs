@@ -34,11 +34,17 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/config",
     "/cli/app/deploy",
     "/cli/app/deployment",
+    "/cli/app/errors",
+    "/cli/app/history",
+    "/cli/app/inspect",
     "/cli/app/install",
+    "/cli/app/list",
+    "/cli/app/logs",
     "/cli/app/restart",
     "/cli/app/rollback",
     "/cli/app/start",
     "/cli/app/stop",
+    "/cli/app/uninstall",
     "/cli/app/validate",
 ];
 
@@ -52,6 +58,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/rollback",
     "/cli/app/start",
     "/cli/app/stop",
+    "/cli/app/uninstall",
     "/cli/app/validate",
 ];
 
@@ -315,6 +322,12 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/restart" => start(&who, body, store::KIND_RESTART),
         "/cli/app/deployment" => deployment(&who, params),
         "/cli/app/config" => config(&who, body),
+        "/cli/app/list" => list(&who, params),
+        "/cli/app/inspect" => inspect(&who, params),
+        "/cli/app/history" => history(&who, params),
+        "/cli/app/logs" => logs(&who, params),
+        "/cli/app/errors" => errors(&who, params),
+        "/cli/app/uninstall" => uninstall(&who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     match r {
@@ -679,4 +692,326 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         "app": app_for(who, Some(&app.app_id))?,
         "note": "The process engine in this preview doesn't enforce memory limits; the walled engines do (a later 0.46 release).",
     }))
+}
+
+// ── S8: list, inspect, history, logs, errors, uninstall ──────────────
+
+/// Largest framed log or error text returned (the tail is kept).
+const LOG_CAP: usize = 256 * 1024;
+
+/// What a stage-1 App's wall is (the §4.5 label function arrives with the
+/// walls in S13; preview Apps are always this).
+fn label(app: &AppRow) -> &'static str {
+    match app.isolation.as_str() {
+        "process" => "Preview, unwalled (process)",
+        "none" => "Dev (no wall)",
+        _ => "Preview",
+    }
+}
+
+fn url_for(app: &AppRow) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row = k2_core::published_services::get_by_id(&conn, &app.service_id).ok().flatten()?;
+    let svc = crate::publish_runtime::to_json(&row);
+    svc.url
+}
+
+fn app_summary(app: &AppRow) -> J {
+    json!({
+        "appId": app.app_id,
+        "serviceId": app.service_id,
+        "workspace": app.owner_workspace,
+        "workspaceHandle": ws_handle(&app.owner_workspace),
+        "state": app.state,
+        "stateReason": app.state_reason,
+        "liveSeed": app.live_seed,
+        "liveDeployment": app.live_deployment,
+        "frontPort": app.front_port,
+        "memoryLimitBytes": app.memory_limit_bytes,
+        "isolation": app.isolation,
+        "label": label(app),
+        "url": url_for(app),
+        "livePort": super::supervisor::live_port(&app.app_id),
+    })
+}
+
+/// Published labels an App id could collide with (§8.4, AR7): reserved
+/// words, and labels used by more than one workspace. Checked at daemon
+/// boot (logged) and shown by `k2 app list`.
+pub fn upgrade_notices() -> Vec<J> {
+    let rows: Vec<(String, String)> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let Ok(mut st) = conn.prepare("SELECT name, project_id FROM published_services WHERE cmd != '(app)' ORDER BY name") else {
+            return vec![];
+        };
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map(|it| it.flatten().collect()).unwrap_or_default()
+    };
+    let mut by_name: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (n, p) in rows {
+        by_name.entry(n).or_default().push(p);
+    }
+    let mut out = Vec::new();
+    for (name, owners) in by_name {
+        if let Some((code, _)) = deploy::app_id_problem(&name) {
+            if code == codes::APP_ID_RESERVED {
+                out.push(json!({
+                    "label": name,
+                    "issue": "reserved",
+                    "hint": format!("'{name}' is a k2 app subcommand or k2 noun, so it can't become an App id; rename it before adopting (k2 publish rm, then run it under another name)"),
+                }));
+            }
+        }
+        if owners.len() > 1 {
+            out.push(json!({
+                "label": name,
+                "issue": "duplicate",
+                "workspaces": owners.iter().map(|o| ws_handle(o)).collect::<Vec<_>>(),
+                "hint": format!("'{name}' is published by {} workspaces; App ids are unique on the box, so all but one must rename before adopting", owners.len()),
+            }));
+        }
+    }
+    out
+}
+
+/// Log the upgrade notices once (daemon boot).
+pub fn log_upgrade_notices() {
+    for n in upgrade_notices() {
+        k2_core::log_debug!("[apps] upgrade check: {}", n["hint"].as_str().unwrap_or(""));
+    }
+}
+
+/// GET `/cli/app/list[?workspace=]`: a passport sees its own workspace's
+/// Apps; others see every App (or one workspace's).
+fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let filter = match agent_ws(who) {
+        Some(ws) => Some(ws.to_string()),
+        None => match params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(w) => Some(ws_by_token(w).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{w}'")))?.id),
+            None => None,
+        },
+    };
+    let apps = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::list_apps(&conn, filter.as_deref()).map_err(db_err)?
+    };
+    Ok(json!({
+        "ok": true,
+        "apps": apps.iter().map(app_summary).collect::<Vec<_>>(),
+        "notices": if agent_ws(who).is_some() { vec![] } else { upgrade_notices() },
+    }))
+}
+
+/// GET `/cli/app/inspect?app=`: the row, the runtime, the live Seed
+/// (manifest, `createdWith`, report), the last deployment, and whether the
+/// deploy audit chain verifies.
+fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let seed = match app.live_seed.as_deref() {
+        Some(h) => store::get_seed(&conn, h).map_err(db_err)?,
+        None => None,
+    };
+    let last = store::list_deployments(&conn, &app.app_id, 1).map_err(db_err)?.into_iter().next();
+    let chain = deploy::audit::verify(&conn).map_err(db_err)?;
+    Ok(json!({
+        "ok": true,
+        "app": app_summary(&app),
+        "row": app,
+        "runtime": super::supervisor::runtime_json(&app.app_id),
+        "liveSeed": seed,
+        "lastDeployment": last,
+        "audit": match chain {
+            Ok(n) => json!({ "verified": true, "rows": n }),
+            Err(b) => json!({ "verified": false, "brokenAt": b.seq, "reason": b.reason }),
+        },
+    }))
+}
+
+/// GET `/cli/app/history?app=[&limit=]` (who / from / to / why / result),
+/// or `?widget=<name>` for a Garden widget's deploy-audit rows (S9).
+fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let limit = params.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(20).clamp(1, 200);
+    if let Some(w) = params.get("widget").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if agent_ws(who).is_some() {
+            return Err(no(codes::OWNER_ONLY, 403, "Garden widget history is the desktop owner's (k2 zen history --widget)"));
+        }
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let rows = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_GARDEN_WIDGET, w, limit).map_err(db_err)?;
+        return Ok(json!({ "ok": true, "widget": w, "audit": rows }));
+    }
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let deps = store::list_deployments(&conn, &app.app_id, limit).map_err(db_err)?;
+    let audit = deploy::audit::list_for(&conn, deploy::audit::SUBJECT_APP, &app.app_id, limit).map_err(db_err)?;
+    let chain = deploy::audit::verify(&conn).map_err(db_err)?;
+    Ok(json!({
+        "ok": true,
+        "app": app.app_id,
+        "liveSeed": app.live_seed,
+        "deployments": deps,
+        "audit": audit,
+        "auditVerified": chain.is_ok(),
+    }))
+}
+
+fn read_log(app_id: &str, deployment: &str) -> String {
+    let p = deploy::deployment_log_path(app_id, deployment);
+    let mut text = std::fs::read_to_string(p.with_extension("log.1")).unwrap_or_default();
+    text.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
+    text
+}
+
+/// GET `/cli/app/logs?app=[&deployment=][&tail=N]`: one deployment's log
+/// (default: the live one, else the newest), framed as untrusted (§5.9).
+fn logs(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let dep = match params.get("deployment").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(d) => d.to_string(),
+        None => match app.live_deployment.clone() {
+            Some(d) => d,
+            None => {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                store::list_deployments(&conn, &app.app_id, 1)
+                    .map_err(db_err)?
+                    .into_iter()
+                    .next()
+                    .map(|d| d.id)
+                    .ok_or_else(|| no("not_found", 404, format!("{} has no deployments yet", app.app_id)))?
+            }
+        },
+    };
+    if !dep.starts_with("d-") || !dep[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(no(codes::BAD_REQUEST, 400, "not a deployment id"));
+    }
+    let owned = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_deployment(&conn, &dep).map_err(db_err)?.is_some_and(|d| d.app_id == app.app_id)
+    };
+    if !owned {
+        return Err(no("not_found", 404, format!("no deployment {dep} of {}", app.app_id)));
+    }
+    let tail = params.get("tail").and_then(|t| t.parse::<usize>().ok()).unwrap_or(200).clamp(1, 5000);
+    let text = read_log(&app.app_id, &dep);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(tail);
+    let body = lines[start..].join("\n");
+    Ok(json!({
+        "ok": true,
+        "app": app.app_id,
+        "deployment": dep,
+        "framed": deploy::framing::frame(&app.app_id, "logs", &body, LOG_CAP),
+    }))
+}
+
+/// Lines that read like errors (a cheap first cut; stage 0's runtime error
+/// pipe, S4, gives structured errors).
+fn is_error_line(l: &str) -> bool {
+    let x = l.to_ascii_lowercase();
+    ["error", "exception", "traceback", "panic", "fatal", "unhandled", "uncaught", "segmentation fault", "killed"]
+        .iter()
+        .any(|k| x.contains(k))
+}
+
+/// GET `/cli/app/errors?app=[&since=<secs>]`: failed/rolled-back/stalled
+/// deployments with their reason, and error-looking lines from recent
+/// deployment logs, framed as untrusted (§5.9).
+fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    let since = params.get("since").and_then(|s| s.parse::<i64>().ok()).unwrap_or(3600).max(1);
+    let cutoff = deploy::now() - since;
+    let deps = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::list_deployments(&conn, &app.app_id, 50).map_err(db_err)?
+    };
+    let recent: Vec<_> = deps.into_iter().filter(|d| d.started_at >= cutoff || d.finished_at.is_some_and(|f| f >= cutoff)).collect();
+    let events: Vec<J> = recent
+        .iter()
+        .filter(|d| d.error.is_some())
+        .map(|d| {
+            json!({
+                "deployment": d.id, "kind": d.kind, "result": d.result, "at": d.finished_at.unwrap_or(d.started_at),
+                "error": d.error.as_deref().map(deploy::framing::strip_controls),
+            })
+        })
+        .collect();
+    let mut lines = String::new();
+    for d in recent.iter().take(5) {
+        for l in read_log(&app.app_id, &d.id).lines().filter(|l| is_error_line(l)) {
+            lines.push_str(&format!("[{}] {l}\n", d.id));
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "app": app.app_id,
+        "sinceSecs": since,
+        "events": events,
+        "framed": deploy::framing::frame(&app.app_id, "errors", &lines, LOG_CAP),
+    }))
+}
+
+/// POST `/cli/app/uninstall {app, purge?}`: stop, release the URL label,
+/// drop the App and its service row. Seeds stay (the sweep removes them);
+/// the deploy audit stays. `purge` also removes the App folder (its data):
+/// owner only, passports refused.
+fn uninstall(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let purge = b(&v, "purge");
+    if purge && !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            "--purge deletes the App's data: only the server's owner can, from Settings or a terminal outside K2",
+        ));
+    }
+    super::supervisor::stop_app(&app, &actor(who))?;
+    super::supervisor::forget(&app.app_id);
+    let svc = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_id(&conn, &app.service_id).map_err(db_err)?
+    };
+    let tunnel = svc.as_ref().is_some_and(|r| r.expose == k2_core::published_services::EXPOSE_TUNNEL);
+    let label_is_ours = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let ours = !matches!(
+            k2_core::db::schema::SubdomainWorkspace::self_unclaim(&conn, &app.app_id, &app.owner_workspace),
+            Ok(k2_core::db::schema::SelfUnclaim::Foreign { .. })
+        );
+        store::delete_app(&conn, &app.app_id).map_err(db_err)?;
+        let _ = k2_core::published_services::delete(&conn, &app.owner_workspace, &app.app_id);
+        ours
+    };
+    if tunnel && label_is_ours {
+        if let Ok(cfg) = k2_core::tunnel::config::load() {
+            if !cfg.token.trim().is_empty() {
+                let _ = k2_core::tunnel::subdomains::delete_subdomain(&cfg.token, &app.app_id);
+            }
+        }
+        crate::session_events::emit_tunnel_subdomains_changed();
+    }
+    audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge }));
+    if purge {
+        let _ = std::fs::remove_dir_all(deploy::app_dir(&app.app_id));
+    } else {
+        let _ = std::fs::remove_file(deploy::app_dir(&app.app_id).join("app.json"));
+    }
+    let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: app.owner_workspace.clone() });
+    Ok(json!({ "ok": true, "app": app.app_id, "purged": purge }))
 }

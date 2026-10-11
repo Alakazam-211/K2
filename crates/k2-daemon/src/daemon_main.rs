@@ -293,10 +293,6 @@ async fn async_main() {
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
     k2_core::deploy::set_enabled(k2_core::app_settings::load().apps_preview);
-    if k2_core::deploy::enabled() {
-        // App runtime preview: re-adopt running Apps, open front ports.
-        crate::apps::supervisor::ensure_started();
-    }
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API
@@ -1190,6 +1186,15 @@ async fn async_main() {
     // rows. Own process group / Job Object — stop_tunnel / Active
     // reaper must not reap them (they are not in v2_session_map).
     let _publish_runtime_handle = publish_runtime::spawn();
+
+    // App runtime stage 1 (prd-k2-app-runtime-v1), after the DB is open:
+    // in preview, re-adopt running Apps and open their front ports.
+    if k2_core::deploy::enabled() {
+        crate::apps::supervisor::ensure_started();
+    }
+    // App ids are box-wide (§8.4): name published labels that can't become
+    // App ids (reserved words, a label several workspaces use).
+    crate::apps::routes::log_upgrade_notices();
 
     // K2 Connect #4 — daemon-canonical connect-session reaper. A single
     // long-lived task that evicts EXPIRED persisted login sessions from

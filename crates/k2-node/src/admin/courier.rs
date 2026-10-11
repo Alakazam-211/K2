@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use k2_node_proto::admin::{self, code, AdminKeys, AdminRefusal, AdminResult, Level, Runs, SignedCommand};
+use k2_node_proto::admin::{self, code, AdminKeys, AdminRefusal, AdminResult, Level, Runs, SignedCommand, UpdatePhase};
+use k2_node_proto::frames::{Frame, UpdateChunk, UpdateOffer, UpdateState};
+use tokio::sync::mpsc;
 use serde_json::Value;
 
 use super::exec::{LocalRequest, LocalResponse};
@@ -108,23 +110,119 @@ async fn node_verb(node: &Arc<Node>, verb: &str, args: &Value) -> Result<Value, 
     }
 }
 
-/// `update_offer` (S5). Until built: refused.
-pub fn update_offer(node: &Arc<Node>, tx: &tokio::sync::mpsc::Sender<k2_node_proto::frames::Frame>, o: k2_node_proto::frames::UpdateOffer) {
-    let f = k2_node_proto::frames::Frame::UpdateState(k2_node_proto::frames::UpdateState {
-        transfer_id: Some(o.transfer_id),
-        cmd_id: None,
-        phase: k2_node_proto::admin::UpdatePhase::Refused,
-        version: o.version,
-        from: Some(crate::PRODUCT_VERSION.into()),
-        code: Some(code::VERB_NOT_ALLOWED.into()),
-        message: Some("self-update is not built on this node yet".into()),
-        at: node.now(),
-    });
-    let _ = tx.try_send(f);
+/// Offered builds being received, by transfer id. In memory only: the
+/// bytes go to the root executor over the local socket, never via a
+/// node-writable spool path (§12.2).
+#[derive(Default)]
+pub struct IncomingUpdates(Mutex<HashMap<String, Incoming>>);
+
+pub struct Incoming {
+    offer: UpdateOffer,
+    buf: Vec<u8>,
+    next_seq: u32,
 }
 
-/// `update_chunk` (S5).
-pub fn update_chunk(_node: &Arc<Node>, _tx: &tokio::sync::mpsc::Sender<k2_node_proto::frames::Frame>, _c: k2_node_proto::frames::UpdateChunk) {}
+fn update_state(node: &Node, o: &UpdateOffer, phase: UpdatePhase, code_s: Option<&str>, message: Option<String>) -> Frame {
+    Frame::UpdateState(UpdateState {
+        transfer_id: Some(o.transfer_id.clone()),
+        cmd_id: None,
+        phase,
+        version: o.version.clone(),
+        from: Some(crate::PRODUCT_VERSION.into()),
+        code: code_s.map(str::to_string),
+        message,
+        at: node.now(),
+    })
+}
+
+/// `update_offer`: start receiving a build for this machine.
+pub fn update_offer(node: &Arc<Node>, tx: &mpsc::Sender<Frame>, o: UpdateOffer) {
+    let refuse = |c: &str, m: &str| {
+        let _ = tx.try_send(update_state(node, &o, UpdatePhase::Refused, Some(c), Some(m.into())));
+    };
+    if o.size == 0 || o.size > super::server::MAX_UPDATE_BYTES {
+        return refuse(code::TOO_LARGE, "build size out of range");
+    }
+    if o.os != crate::sysinfo::os_label() || o.arch != std::env::consts::ARCH {
+        return refuse(code::BAD_BUILD, "build is for another os/arch");
+    }
+    let mut m = node.admin_updates.0.lock().unwrap();
+    m.clear(); // one transfer at a time; a new offer replaces a stalled one
+    m.insert(o.transfer_id.clone(), Incoming { buf: Vec::with_capacity(o.size as usize), next_seq: 0, offer: o });
+}
+
+/// `update_chunk`: append; on the last one hand the build to the executor.
+pub fn update_chunk(node: &Arc<Node>, tx: &mpsc::Sender<Frame>, c: UpdateChunk) {
+    let mut m = node.admin_updates.0.lock().unwrap();
+    let Some(inc) = m.get_mut(&c.transfer_id) else { return };
+    let fail = |inc: &Incoming, code_s: &str, msg: &str| update_state(node, &inc.offer, UpdatePhase::Failed, Some(code_s), Some(msg.into()));
+    let data = match k2_node_proto::crypto::unb64(&c.data) {
+        Ok(d) if c.seq == inc.next_seq && d.len() <= k2_node_proto::frames::TRANSFER_CHUNK => d,
+        _ => {
+            let f = fail(inc, code::MALFORMED, "chunk out of order or unreadable");
+            m.remove(&c.transfer_id);
+            let _ = tx.try_send(f);
+            return;
+        }
+    };
+    inc.buf.extend_from_slice(&data);
+    inc.next_seq += 1;
+    if inc.buf.len() as u64 > inc.offer.size {
+        let f = fail(inc, code::TOO_LARGE, "more bytes than offered");
+        m.remove(&c.transfer_id);
+        let _ = tx.try_send(f);
+        return;
+    }
+    if !c.last {
+        return;
+    }
+    let Some(inc) = m.remove(&c.transfer_id) else { return };
+    drop(m);
+    let sha = k2_node_proto::crypto::sha256_hex(&inc.buf);
+    if inc.buf.len() as u64 != inc.offer.size || !k2_node_proto::crypto::ct_eq(sha.as_bytes(), inc.offer.sha256.as_bytes()) {
+        let _ = tx.try_send(fail(&inc, code::BAD_BUILD, "received bytes don't match the offer"));
+        return;
+    }
+    let _ = tx.try_send(update_state(node, &inc.offer, UpdatePhase::Staged, None, None));
+    let (n, t) = (node.clone(), tx.clone());
+    tokio::spawn(async move {
+        let req = LocalRequest::Update { cmd: inc.offer.cmd.clone(), sig: inc.offer.sig.clone(), size: inc.buf.len() as u64 };
+        let r = as_result(ask(&n, req, Some(inc.buf), Duration::from_secs(180)).await, "", "");
+        let f = if r.state == "done" {
+            // The executor restarts this node next; this may not get out.
+            update_state(&n, &inc.offer, UpdatePhase::Swapped, None, None)
+        } else {
+            let phase = if r.state == "failed" { UpdatePhase::Failed } else { UpdatePhase::Refused };
+            update_state(&n, &inc.offer, phase, r.code.as_deref(), r.message.clone())
+        };
+        let _ = t.send(f).await;
+    });
+}
+
+/// After an attach: report how the last self-update ended (healthy or
+/// rolled back), from the executor's record. The controller dedups.
+pub async fn report_last_update(node: Arc<Node>, tx: mpsc::Sender<Frame>) {
+    let Ok(LocalResponse::Status(s)) = ask(&node, LocalRequest::Status, None, Duration::from_secs(5)).await else { return };
+    let Some(v) = s.last_update else { return };
+    let phase = match v.get("phase").and_then(|p| p.as_str()) {
+        Some("healthy") => UpdatePhase::Healthy,
+        Some("rolled_back") => UpdatePhase::RolledBack,
+        _ => return,
+    };
+    let s_of = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let _ = tx
+        .send(Frame::UpdateState(UpdateState {
+            transfer_id: None,
+            cmd_id: s_of("cmd_id"),
+            phase,
+            version: s_of("to").unwrap_or_default(),
+            from: s_of("from"),
+            code: None,
+            message: s_of("reason"),
+            at: v.get("at").and_then(|x| x.as_i64()).unwrap_or(0),
+        }))
+        .await;
+}
 
 /// `admin_keys` → the executor.
 pub async fn keys(node: Arc<Node>, k: AdminKeys) -> AdminResult {

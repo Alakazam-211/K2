@@ -227,11 +227,17 @@ pub struct Node {
     tool_lock: tokio::sync::Mutex<()>,
     /// Nonces of node-answered admin verbs.
     pub admin_nonces: crate::admin::courier::NodeNonces,
+    /// Offered self-update builds being received (in memory only).
+    pub admin_updates: crate::admin::courier::IncomingUpdates,
 }
 
 /// What this node understands beyond protocol 1 (the offer says it).
 pub fn node_features() -> Vec<String> {
-    let mut f = vec![k2_node_proto::needs::FEATURE_NEEDS.to_string(), k2_node_proto::admin::FEATURE_ADMIN.to_string()];
+    let mut f = vec![
+        k2_node_proto::needs::FEATURE_NEEDS.to_string(),
+        k2_node_proto::admin::FEATURE_ADMIN.to_string(),
+        k2_node_proto::admin::FEATURE_SELF_UPDATE.to_string(),
+    ];
     if crate::packages::installer_present() {
         f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
     }
@@ -294,6 +300,7 @@ impl Node {
             learned_routes: Mutex::new(Vec::new()),
             tool_lock: tokio::sync::Mutex::new(()),
             admin_nonces: Default::default(),
+            admin_updates: Default::default(),
             opts,
         });
         node.refresh_local(true);

@@ -382,7 +382,9 @@ impl Executor {
             Ok(r) => r,
             Err(e) => return AdminResult::refused("", "", &AdminRefusal::new(code::MALFORMED, e)),
         };
-        let _g = self.busy.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(_g) = self.lock_briefly() else {
+            return AdminResult::refused("", "", &AdminRefusal::new(code::BUSY, "an update health check is running; try again in a minute"));
+        };
         match self.check(raw.as_bytes()) {
             Ok(c) => {
                 if c.opened.cmd.verb == "node.update" {
@@ -394,6 +396,18 @@ impl Executor {
         }
     }
 
+    /// The busy lock, waiting up to 5 s.
+    fn lock_briefly(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
+        for _ in 0..50 {
+            match self.busy.try_lock() {
+                Ok(g) => return Some(g),
+                Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        None
+    }
+
     /// One `update` request: the signed `node.update` command plus the
     /// build bytes (already read into memory by the server).
     pub fn handle_update(&self, cmd: &SignedCommand, sig: &str, bytes: &[u8]) -> AdminResult {
@@ -401,9 +415,8 @@ impl Executor {
             Ok(r) => r,
             Err(e) => return AdminResult::refused("", "", &AdminRefusal::new(code::MALFORMED, e)),
         };
-        let guard = match self.busy.try_lock() {
-            Ok(g) => g,
-            Err(_) => return AdminResult::refused("", "", &AdminRefusal::new(code::BUSY, "another root action (or an update health check) is running")),
+        let Some(guard) = self.lock_briefly() else {
+            return AdminResult::refused("", "", &AdminRefusal::new(code::BUSY, "another root action (or an update health check) is running"));
         };
         let r = match self.check(raw.as_bytes()) {
             Ok(c) if c.opened.cmd.verb == "node.update" => self.run_checked(c, Some((sig, bytes))),
@@ -469,7 +482,9 @@ impl Executor {
     /// `admin_keys` (§7.4): first pin with the controller signature (trust
     /// on first use); rotation also needs a currently pinned key.
     pub fn handle_keys(&self, k: &AdminKeys) -> AdminResult {
-        let _g = self.busy.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(_g) = self.lock_briefly() else {
+            return AdminResult::refused("admin_keys", "", &AdminRefusal::new(code::BUSY, "busy; try again"));
+        };
         let r = (|| -> Result<Value, AdminRefusal> {
             let cfg = self.config()?;
             let ctl = cfg.controller.clone().ok_or_else(|| AdminRefusal::new(code::NOT_CONFIGURED, "no controller key pinned"))?;

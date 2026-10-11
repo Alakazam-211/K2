@@ -353,3 +353,167 @@ fn socket_round_trip_and_peer_check() {
     }
     srv.join().unwrap();
 }
+
+// ── S5: signed self-update + rollback ────────────────────────────────
+
+use k2_root_proto::node_build;
+use k2_root_proto::testsign;
+
+fn fake_build(version: &str) -> Vec<u8> {
+    let (os, arch) = (crate::sysinfo::os_label(), std::env::consts::ARCH);
+    let marker = node_build::format_marker(version, k2_node_proto::PROTOCOL, os, arch);
+    if os == "macos" {
+        node_build::fake_macho(arch, &marker)
+    } else {
+        testsign::fake_elf(arch, &marker)
+    }
+}
+
+fn build_sig(bytes: &[u8], version: &str) -> String {
+    let tc = node_build::trusted_comment(crate::sysinfo::os_label(), std::env::consts::ARCH, version, k2_node_proto::PROTOCOL);
+    testsign::sign_with_test_key(bytes, &tc)
+}
+
+fn update_rig() -> (Rig, Vec<u8>) {
+    let mut r = Rig::new("policy");
+    r.exec.test_keys = true;
+    let old = fake_build("0.0.1");
+    std::fs::create_dir_all(r.exec.paths.binary.parent().unwrap()).unwrap();
+    std::fs::write(&r.exec.paths.binary, &old).unwrap();
+    (r, old)
+}
+
+fn update_cmd(r: &Rig, bytes: &[u8], version: &str, trigger: &str) -> SignedCommand {
+    r.sign(&r.cmd("node.update", json!({"version": version, "sha256": crypto::sha256_hex(bytes), "trigger": trigger})))
+}
+
+fn wait_phase(r: &Rig, phase: &str) -> super::update::UpdateRecord {
+    for _ in 0..250 {
+        let rec = super::update::load(&r.exec);
+        if rec.phase == phase {
+            return rec;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("update never reached {phase}: {:?}", super::update::load(&r.exec));
+}
+
+fn wait_calls(r: &Rig, n: usize) {
+    for _ in 0..250 {
+        if r.plat.calls.lock().unwrap().len() >= n {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("expected {n} platform calls: {:?}", r.plat.calls.lock().unwrap());
+}
+
+fn write_mark(r: &Rig, version: &str, at: i64) {
+    let m = super::update::HealthyMark { version: version.into(), at, handshake: true };
+    crate::util::atomic_write(&super::update::healthy_path(&r.exec.paths.home), &serde_json::to_vec(&m).unwrap(), 0o644).unwrap();
+}
+
+#[test]
+fn good_update_swaps_restarts_and_passes_the_health_gate() {
+    let (r, old) = update_rig();
+    let new = fake_build("99.0.0");
+    let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new);
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(res.result["phase"], "swapped");
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), new);
+    assert_eq!(std::fs::read(format!("{}.prev", r.exec.paths.binary.display())).unwrap(), old);
+    assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()]);
+    write_mark(&r, "99.0.0", NOW + 1);
+    let rec = wait_phase(&r, "healthy");
+    assert_eq!((rec.from.as_str(), rec.to.as_str()), (crate::PRODUCT_VERSION, "99.0.0"));
+    // Manual rollback goes to the local .prev only.
+    let res = r.run(&r.sign(&r.cmd("node.rollback", json!({}))));
+    assert_eq!(res.state, "done", "{res:?}");
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old);
+    assert_eq!(code_of(&r.run(&r.sign(&r.cmd("node.rollback", json!({}))))), code::NO_PREVIOUS);
+}
+
+#[test]
+fn bad_builds_refuse_and_leave_the_binary() {
+    let (r, old) = update_rig();
+    let new = fake_build("99.0.0");
+    let sig = build_sig(&new, "99.0.0");
+    // Tampered bytes (the controller even signed the tampered sha).
+    let mut bad = new.clone();
+    bad[40] ^= 1;
+    let res = r.exec.handle_update(&update_cmd(&r, &bad, "99.0.0", "explicit"), &sig, &bad);
+    assert_eq!(code_of(&res), code::BAD_BUILD, "{res:?}");
+    // Another key.
+    let tc = node_build::trusted_comment(crate::sysinfo::os_label(), std::env::consts::ARCH, "99.0.0", k2_node_proto::PROTOCOL);
+    let other = testsign::sign(&[3u8; 32], [9, 9, 9, 9, 9, 9, 9, 9], &new, &tc);
+    assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &other, &new)), code::BAD_BUILD);
+    // Bytes differ from what the controller authorized.
+    assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &old, "99.0.0", "explicit"), &sig, &new)), code::BAD_BUILD);
+    // A root-helper-signed build (domain separation).
+    let helper_tc = k2_root_proto::sig::trusted_comment(std::env::consts::ARCH, "99.0.0", k2_node_proto::PROTOCOL);
+    let hs = testsign::sign_with_test_key(&new, &helper_tc);
+    assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &hs, &new)), code::BAD_BUILD);
+    // Older and same versions.
+    let older = fake_build("0.0.2");
+    assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &older, "0.0.2", "explicit"), &build_sig(&older, "0.0.2"), &older)), code::DOWNGRADE);
+    let same = fake_build(crate::PRODUCT_VERSION);
+    let res = r.exec.handle_update(&update_cmd(&r, &same, crate::PRODUCT_VERSION, "explicit"), &build_sig(&same, crate::PRODUCT_VERSION), &same);
+    assert_eq!(code_of(&res), code::SAME_VERSION);
+    // A release-keys-only executor refuses the TEST-key build.
+    let mut rk = Rig::new("policy");
+    rk.exec.test_keys = false;
+    std::fs::create_dir_all(rk.exec.paths.binary.parent().unwrap()).unwrap();
+    std::fs::write(&rk.exec.paths.binary, &old).unwrap();
+    assert_eq!(code_of(&rk.exec.handle_update(&update_cmd(&rk, &new, "99.0.0", "explicit"), &sig, &new)), code::BAD_BUILD);
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old, "nothing was installed");
+    assert!(r.plat.calls.lock().unwrap().is_empty());
+    // An unsigned (controller) update command never reaches the build check.
+    let mut s = update_cmd(&r, &new, "99.0.0", "explicit");
+    s.sig_c = crypto::b64(b"x");
+    assert_eq!(code_of(&r.exec.handle_update(&s, &sig, &new)), code::BAD_CONTROLLER_SIGNATURE);
+}
+
+#[test]
+fn unhealthy_update_rolls_back_and_the_version_is_refused_after() {
+    let (r, old) = update_rig();
+    let new = fake_build("99.0.0");
+    let sig = build_sig(&new, "99.0.0");
+    assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new).state, "done");
+    // No healthy mark; time passes the gate.
+    r.plat.now.store(NOW + super::update::HEALTH_GATE_SECS + 1, Ordering::SeqCst);
+    let rec = wait_phase(&r, "rolled_back");
+    wait_calls(&r, 2); // the record is written before the swap; the restart comes after it
+    assert_eq!(rec.reason.as_deref(), Some("health_gate"));
+    assert!(rec.refused.contains(&"99.0.0".to_string()));
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old);
+    assert_eq!(std::fs::read(format!("{}.bad", r.exec.paths.binary.display())).unwrap(), new);
+    assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string(), "restart-node".to_string()]);
+    let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new);
+    assert_eq!(code_of(&res), code::ROLLED_BACK_VERSION);
+    // A healthy mark from another version never passes a gate.
+    let newer = fake_build("99.0.1");
+    let mut c = r.cmd("node.update", json!({"version": "99.0.1", "sha256": crypto::sha256_hex(&newer), "trigger": "explicit"}));
+    c.iat = NOW + 1000;
+    c.exp = NOW + 1600;
+    r.plat.now.store(NOW + 1000, Ordering::SeqCst);
+    assert_eq!(r.exec.handle_update(&r.sign(&c), &build_sig(&newer, "99.0.1"), &newer).state, "done");
+    write_mark(&r, "0.0.1", NOW + 1500);
+    r.plat.now.store(NOW + 1000 + super::update::HEALTH_GATE_SECS + 1, Ordering::SeqCst);
+    let rec = wait_phase(&r, "rolled_back");
+    wait_calls(&r, 4);
+    assert!(rec.refused.contains(&"99.0.1".to_string()));
+    let lines = r.exec.audit().verify().unwrap();
+    assert!(lines.iter().filter(|l| l.event == "update").count() >= 2);
+}
+
+#[test]
+fn auto_update_off_refuses_auto_offers_only() {
+    let (r, _) = update_rig();
+    let mut f = config::read(&r.exec.paths.admin()).unwrap().unwrap().file;
+    f.auto_update = "off".into();
+    config::write(&r.exec.paths.admin(), &f).unwrap();
+    let new = fake_build("99.0.0");
+    let sig = build_sig(&new, "99.0.0");
+    assert_eq!(code_of(&r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "auto"), &sig, &new)), code::AUTO_UPDATE_OFF);
+    assert_eq!(r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &sig, &new).state, "done");
+}

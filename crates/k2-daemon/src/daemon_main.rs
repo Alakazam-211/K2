@@ -1192,6 +1192,8 @@ async fn async_main() {
     if k2_core::deploy::enabled() {
         crate::apps::supervisor::ensure_started();
     }
+    // S9 (AR23): Garden widget versions write deploy_audit rows.
+    k2_core::deploy::widget_events::install_db_sink();
     // App ids are box-wide (§8.4): name published labels that can't become
     // App ids (reserved words, a label several workspaces use).
     crate::apps::routes::log_upgrade_notices();

@@ -454,3 +454,31 @@ async fn s8_history_audit_logs_errors_and_uninstall() {
     assert!(notices.iter().any(|n| n["label"] == "deploy" && n["issue"] == "reserved"), "{notices:?}");
     assert!(notices.iter().any(|n| n["label"] == "shared-label" && n["issue"] == "duplicate"), "{notices:?}");
 }
+
+// ── S9: Garden widget versions in the deploy audit ───────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s9_widget_history_through_the_app_history_route() {
+    use k2_core::deploy::widget_events::{emit, install_db_sink, set_sink, WidgetEvent};
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    install_db_sink();
+    emit(WidgetEvent::Created { widget: "s9-arcade".into(), from: "hello".into() });
+    emit(WidgetEvent::LastGood { widget: "s9-arcade".into(), hash: "h-s9".into() });
+    set_sink(None);
+    let r = get(d.port, "/cli/app/history", OWNER, "widget=s9-arcade").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = r.json()["audit"].as_array().unwrap().clone();
+    let events: Vec<&str> = rows.iter().map(|a| a["event"].as_str().unwrap()).collect();
+    assert_eq!(events, vec!["last_good", "created"]);
+    assert_eq!(rows[0]["subjectKind"], "garden_widget");
+    assert_eq!(rows[0]["payload"]["hash"], "h-s9");
+    // Gardens are the desktop owner's: an agent can't read widget history.
+    let ws = seed_ws(&env, "s9ws");
+    let r = get(d.port, "/cli/app/history", &passport(&ws), "widget=s9-arcade").await;
+    assert_eq!(r.code(), "owner_only");
+    // The shared chain still verifies with widget rows in it.
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert!(k2_core::deploy::audit::verify(&conn).unwrap().is_ok());
+}

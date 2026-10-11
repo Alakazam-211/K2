@@ -331,3 +331,33 @@ fn the_diary_shows_the_creepier_study_and_the_first_one_still_ships() {
     let diary = gid(&f, "Diary");
     assert_eq!(served(&f.resolve(Some(&diary)).expect("resolve")), now.bytes, "a new Diary shows the new study");
 }
+
+/// App runtime S9 (AR23): widget versions write deploy-audit events
+/// (created, the new last-good, reset). The last-good behaviour above is
+/// unchanged; only these events are new.
+#[test]
+fn widget_versions_reach_the_deploy_audit() {
+    use crate::deploy::widget_events::{set_sink, WidgetEvent};
+    use std::sync::{Arc, Mutex};
+    let (_t, f) = set_up("s9audit");
+    let got: Arc<Mutex<Vec<WidgetEvent>>> = Arc::default();
+    let g2 = got.clone();
+    set_sink(Some(Box::new(move |e| {
+        if e.widget() == "s9-audit" {
+            g2.lock().unwrap().push(e.clone());
+        }
+    })));
+    f.new_widget("s9-audit", Some("arcade")).expect("new");
+    f.refresh().expect("refresh");
+    let hash = f.widget_status("s9-audit").hash().to_string();
+    f.refresh().expect("refresh again: same content, no new event");
+    fs::write(f.widget_dir("s9-audit").join("index.html"), "<script src=\"https://cdn.example.test/x.js\"></script>").expect("break");
+    f.refresh().expect("refresh");
+    f.reset_widget("s9-audit", None).expect("reset");
+    set_sink(None);
+    let events = got.lock().unwrap().clone();
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[0], WidgetEvent::Created { widget: "s9-audit".into(), from: "arcade".into() });
+    assert_eq!(events[1], WidgetEvent::LastGood { widget: "s9-audit".into(), hash });
+    assert!(matches!(&events[2], WidgetEvent::Reset { kept: Some(_), .. }), "{:?}", events[2]);
+}

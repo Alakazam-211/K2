@@ -388,7 +388,7 @@ elif ! id "$RUN_USER" >/dev/null 2>&1; then
 elif ANSWER="$(runuser -u "$RUN_USER" -- sudo -n "$HELPER_PATH" helper version 2>/dev/null)" \
 	&& P="$(printf '%s' "$ANSWER" | grep -o '"protocol":[0-9]*' | head -n1 | cut -d: -f2)" \
 	&& [ -n "$P" ] && [ "$P" -ge "$MIN_PROTOCOL" ]; then
-	CHECK="$RUN_USER may run it: $(printf '%s' "$ANSWER" | grep -o '"version":"[0-9.]*"' | head -n1)"
+	CHECK="$RUN_USER may run it: $(printf '%s' "$ANSWER" | grep -o '"k2Version":"[0-9.]*"' | head -n1)"
 	DOOR_OK=1
 else
 	CHECK="WARNING: '$RUN_USER' cannot run 'sudo -n $HELPER_PATH helper version' — check /etc/sudoers (includedir?) — legacy helpers left in place"

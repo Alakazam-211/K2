@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus libpam-systemd sudo minisign postgresql \
-      curl ca-certificates util-linux procps python3-minimal \
+      curl ca-certificates util-linux procps python3 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -s /bin/bash k2
 STOPSIGNAL SIGRTMIN+3

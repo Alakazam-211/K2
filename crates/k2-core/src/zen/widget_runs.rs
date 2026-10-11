@@ -196,6 +196,25 @@ impl ZenFiles {
         s
     }
 
+    /// `k2 zen validate --widget <name> --types[=all]`: the optional type
+    /// stage (`jscheck::types`, tsc-rs as a subprocess). Warnings only.
+    pub fn widget_types(&self, widget: &str, all: bool) -> Result<J, ZenError> {
+        self.require_set_up()?;
+        let name = self.run_widget(widget)?;
+        let dir = self.widget_dir(&name);
+        if !dir.is_dir() {
+            return Err(ZenError::NotFound(format!("{} has no folder", widget_label(&name))));
+        }
+        let read = crate::zen::widgets::read_folder(&dir, &widget_label(&name));
+        let r = crate::jscheck::types::check_widget(&widget_label(&name), &read.files, crate::jscheck::types::find_checker(), all);
+        Ok(json!({
+            "checker": r.checker,
+            "warnings": r.warnings,
+            "hidden": r.hidden,
+            "note": r.note,
+        }))
+    }
+
     /// Is this user widget placed in any Garden?
     pub fn widget_is_placed(&self, name: &str) -> bool {
         self.custom_placements().iter().any(|p| p.widget == name)

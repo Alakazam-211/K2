@@ -71,30 +71,51 @@ fn tick(st: &mut LoopState) -> Duration {
             return idle;
         }
     };
-    let answer = match advertise::post(&token, &body) {
+    let posted = advertise::post(&token, &body);
+    handle(st, posted, &status, apply)
+}
+
+/// Act on one advertise result. `apply_offer` enrolls from an offer (the
+/// real one is [`apply`]; tests pass a stub).
+fn handle(
+    st: &mut LoopState,
+    posted: Result<advertise::Posted, String>,
+    status: &serde_json::Value,
+    apply_offer: impl Fn(&advertise::Offer) -> advertise::Ack,
+) -> Duration {
+    let idle = Duration::from_secs(advertise::ENROLLED_POLL_SECS);
+    let answer = match posted {
         Ok(advertise::Posted::Unsupported) => {
             k2_core::log_debug!("[compute] K2 Connect has no /compute/advertise yet; checking again in a few hours");
             st.unsupported_until = Some(Instant::now() + Duration::from_secs(advertise::UNSUPPORTED_BACKOFF_SECS));
             return idle;
         }
+        Ok(advertise::Posted::Refused(e)) => {
+            // The control plane won't take this body. The acks are the
+            // only part carried between calls, so drop them; otherwise one
+            // refused ack would refuse every later advertise until restart.
+            st.acks.clear();
+            note_error(st, e);
+            return advertise::next_poll(None, status);
+        }
         Ok(advertise::Posted::Answered(a)) => a,
         Err(e) => {
             note_error(st, e);
-            return advertise::next_poll(None, &status);
+            return advertise::next_poll(None, status);
         }
     };
     st.advertised = true;
     st.acks.clear();
     st.last_error = None;
     for offer in &answer.offers {
-        let ack = apply(offer);
+        let ack = apply_offer(offer);
         st.acks.push(ack);
     }
     if !st.acks.is_empty() {
         // Report what happened (and the new state) right away.
         return Duration::from_secs(advertise::MIN_POLL_SECS.min(5));
     }
-    advertise::next_poll(Some(&answer), &status)
+    advertise::next_poll(Some(&answer), status)
 }
 
 fn note_error(st: &mut LoopState, e: String) {
@@ -132,5 +153,51 @@ fn apply(offer: &advertise::Offer) -> advertise::Ack {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn status() -> serde_json::Value {
+        json!({"installed": true, "node": {"state": "unenrolled"}})
+    }
+
+    fn ack(id: &str) -> advertise::Ack {
+        advertise::Ack { id: id.into(), ok: false, code: Some("busy".into()) }
+    }
+
+    fn no_offers(_: &advertise::Offer) -> advertise::Ack {
+        panic!("no offers in these answers")
+    }
+
+    #[test]
+    fn a_refused_advertise_drops_pending_acks() {
+        let mut st = LoopState { acks: vec![ack("o1"), ack("o2")], ..Default::default() };
+        handle(&mut st, Ok(advertise::Posted::Refused("HTTP 400: bad ack".into())), &status(), no_offers);
+        assert!(st.acks.is_empty(), "a 400 must not resend the same acks forever");
+        assert_eq!(st.last_error.as_deref(), Some("HTTP 400: bad ack"));
+        assert!(!st.advertised);
+    }
+
+    #[test]
+    fn a_transient_error_keeps_pending_acks() {
+        let mut st = LoopState { acks: vec![ack("o1")], ..Default::default() };
+        handle(&mut st, Err("HTTP 502: store unavailable".into()), &status(), no_offers);
+        assert_eq!(st.acks, vec![ack("o1")], "502/timeout: retry the same acks");
+    }
+
+    #[test]
+    fn an_answer_clears_acks_and_records_new_ones() {
+        let mut st = LoopState { acks: vec![ack("old")], ..Default::default() };
+        let answer = advertise::Answer {
+            next_poll_secs: None,
+            offers: vec![advertise::Offer { id: "new".into(), controller_sub: "rosson".into(), ticket: "t".into(), exp: 0 }],
+        };
+        handle(&mut st, Ok(advertise::Posted::Answered(answer)), &status(), |o| ack(&o.id));
+        assert_eq!(st.acks, vec![ack("new")]);
+        assert!(st.advertised);
     }
 }

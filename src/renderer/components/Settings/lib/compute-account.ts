@@ -7,14 +7,86 @@
 // (server, this node's key) and hands it to the local daemon.
 //
 // The Connect route may not exist yet on a given control plane. Any 404,
-// 405 or network failure means "not on this account yet": the sheet falls
-// back to an enroll code. Never under air-gap.
+// 405, 503 (route present but dormant: no signing key on that relay) or
+// network failure means "not on this account yet": the sheet falls back to
+// an enroll code. Never under air-gap.
+//
+// CORS: connect.k2.dev answers the built app's origins (`tauri://localhost`,
+// `http://tauri.localhost`) and `*.app.k2.dev` only. `tauri dev` serves the
+// UI from `http://localhost:5173`, which is blocked by design, so every
+// one-click call there looks like a network failure and falls back to the
+// enroll code. Smoke-test one-click from a built app (`dev-build.sh` /
+// `build-app.sh`), not `tauri dev`.
 
 import { AIRGAP_TEACHING, isAirgap } from '@/lib/airgap'
 import { listSubdomains, supabaseRestGet, type K2Subdomain } from './k2-account'
 
 /** Connect control plane route that mints compute enroll tickets. */
 export const COMPUTE_ENROLL_TICKET_URL = 'https://connect.k2.dev/compute/enroll-ticket'
+
+/** Shown while the account side isn't there yet (table or route missing,
+ *  or the route is dormant). */
+export const ONE_CLICK_NEEDS_UPDATE =
+  'One-click needs a K2 Connect update; meanwhile add a machine with an enroll code'
+
+/** Statuses that mean "this control plane can't do one-click yet": no
+ *  route (404/405) or the route is dormant (503). */
+function oneClickMissing(status: number): boolean {
+  return status === 404 || status === 405 || status === 503
+}
+
+/** Plain sentences for K2 Connect's compute error codes. Connect answers
+ *  `{"error":"<code>","detail":"…"}`; owners never see the bare code. */
+const CONNECT_ERROR_SENTENCES: Record<string, string> = {
+  not_owner: "That server isn't on your k2.dev account",
+  unknown: "Connect doesn't know that server",
+  machine_not_advertised:
+    "That machine hasn't checked in with K2 Connect in the last 10 minutes. Make sure it's on and \"Make this computer a node\" is on, then try again",
+  rate_limited: 'Too many one-click requests. Wait a minute and try again',
+  invalid_token: 'Your k2.dev sign-in has expired. Sign in again and retry',
+  unauthorized: 'Your k2.dev sign-in has expired. Sign in again and retry',
+  bad_request: "Connect couldn't read the request",
+  bad_version: 'K2 Connect expects a different request version. Update K2',
+  service_unavailable: 'K2 Connect is busy or being updated. Try again in a few minutes',
+  supabase_error: "K2 Connect couldn't reach its account store. Try again in a few minutes",
+  supabase_disabled: ONE_CLICK_NEEDS_UPDATE,
+  ticket_unavailable: ONE_CLICK_NEEDS_UPDATE,
+  internal: 'K2 Connect hit an internal error. Try again in a few minutes',
+}
+
+function sentenceFor(code: string): string | null {
+  if (Object.prototype.hasOwnProperty.call(CONNECT_ERROR_SENTENCES, code)) return CONNECT_ERROR_SENTENCES[code]
+  if (code.startsWith('invalid_')) {
+    const what = code.slice('invalid_'.length).replace(/_/g, ' ')
+    return what ? `Connect didn't accept the ${what}` : CONNECT_ERROR_SENTENCES.bad_request
+  }
+  return null
+}
+
+/** The owner-facing text for a refused Connect call. Known codes become a
+ *  plain sentence (with Connect's `detail` when it names the bad field);
+ *  otherwise `message`, `detail` or a nested `hint`; never a bare code. */
+export function connectErrorMessage(status: number, body: Record<string, unknown>, what = 'the request'): string {
+  const err = body.error
+  const code = typeof err === 'string' ? err.trim() : ''
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : '')
+  const detail = str(body.detail)
+  const message = str(body.message)
+  const hint = err && typeof err === 'object' ? str((err as { hint?: unknown }).hint) : ''
+  const sentence = code ? sentenceFor(code) : null
+  if (sentence) {
+    const why = detail || message
+    // Field-level refusals: Connect's detail names the bad field.
+    const fieldError = code === 'bad_request' || (code.startsWith('invalid_') && !(code in CONNECT_ERROR_SENTENCES))
+    const showWhy = fieldError && why && why !== code
+    return showWhy ? `${sentence}: ${why}` : sentence
+  }
+  const text = message || detail || hint
+  if (text && text !== code) return text
+  return code
+    ? `Connect refused ${what} (${status}, ${code})`
+    : `Connect refused ${what} (${status})`
+}
 
 export const ONE_CLICK_UNAVAILABLE =
   "One-click isn't available on this account yet; use an enroll code"
@@ -61,7 +133,7 @@ export async function requestEnrollTicket(
   } catch {
     return { ok: false, unavailable: true, message: ONE_CLICK_UNAVAILABLE }
   }
-  if (res.status === 404 || res.status === 405) {
+  if (oneClickMissing(res.status)) {
     return { ok: false, unavailable: true, message: ONE_CLICK_UNAVAILABLE }
   }
   const text = await res.text()
@@ -73,15 +145,7 @@ export async function requestEnrollTicket(
     /* non-JSON body: handled below */
   }
   if (!res.ok) {
-    const err = body.error
-    const message =
-      (typeof body.message === 'string' && body.message) ||
-      (typeof err === 'string' && err) ||
-      (err && typeof err === 'object' && typeof (err as { hint?: unknown }).hint === 'string'
-        ? ((err as { hint: string }).hint)
-        : '') ||
-      `Connect refused the enroll ticket (${res.status})`
-    return { ok: false, unavailable: false, message }
+    return { ok: false, unavailable: false, message: connectErrorMessage(res.status, body, 'the enroll ticket') }
   }
   if (typeof body.ticket !== 'string' || !body.ticket) {
     return { ok: false, unavailable: true, message: ONE_CLICK_UNAVAILABLE }
@@ -97,10 +161,6 @@ export async function requestEnrollTicket(
 // asks Connect to mint a one-click ticket for THIS controller and deliver
 // it to that machine (`deliver_to_sub`); the machine's daemon applies it
 // on its next check-in. Spec: compute-oneclick-k2-connect-spec-v2.md.
-
-/** Shown while the account side isn't there yet (table or route missing). */
-export const ONE_CLICK_NEEDS_UPDATE =
-  'One-click needs a K2 Connect update; meanwhile add a machine with an enroll code'
 
 /** A machine advertises at least every few minutes; older = offline. */
 export const MACHINE_ONLINE_SECS = 300
@@ -224,7 +284,7 @@ export async function requestEnrollOffer(accessToken: string, req: EnrollOfferRe
   } catch {
     return { ok: false, unavailable: true, message: ONE_CLICK_NEEDS_UPDATE }
   }
-  if (res.status === 404 || res.status === 405) {
+  if (oneClickMissing(res.status)) {
     return { ok: false, unavailable: true, message: ONE_CLICK_NEEDS_UPDATE }
   }
   const text = await res.text()
@@ -236,12 +296,7 @@ export async function requestEnrollOffer(accessToken: string, req: EnrollOfferRe
     /* non-JSON */
   }
   if (!res.ok) {
-    const err = body.error
-    const message =
-      (typeof body.message === 'string' && body.message) ||
-      (typeof err === 'string' && err) ||
-      `Connect refused the request (${res.status})`
-    return { ok: false, unavailable: false, message }
+    return { ok: false, unavailable: false, message: connectErrorMessage(res.status, body) }
   }
   if (body.delivered !== true || typeof body.ticket !== 'string') {
     // Minted but not delivered: the route predates delivery.

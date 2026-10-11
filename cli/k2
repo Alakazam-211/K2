@@ -21662,6 +21662,11 @@ ADDING A MACHINE (owner, never an agent)
   The home question (chmod 700) is always asked; without a terminal pass
   --private-home or --no-private-home. Then confirm the 6-digit code:
     k2 compute node confirm mini-1 <code>   and   k2 compute grant mini-1 --workspace <ws>
+  One-click (same k2.dev account, no code): the app asks connect.k2.dev
+  for a ticket. Connect's CORS only allows the built app's origin
+  (tauri://localhost), so `tauri dev` (http://localhost:5173) is
+  blocked by design and falls back to the code. Smoke one-click from a
+  built app.
 
 COMMON ERRORS
   node_offline           the node isn't connected (machine asleep, k2-node stopped)

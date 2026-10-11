@@ -94,6 +94,14 @@ pub fn host_of(url: &str) -> String {
     s.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h.to_string()).unwrap_or(s)
 }
 
+/// A controller host K2 Connect accepts: `^[a-z0-9.-]{1,253}$` (the
+/// control plane's `valid_controller_host`). Anything else (an IPv6
+/// literal like `[::1`, an underscore) would 400 every advertise, so the
+/// node leaves the field out instead.
+pub fn valid_controller_host(s: &str) -> bool {
+    (1..=253).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'.' || c == b'-')
+}
+
 /// A node name from a subdomain label: `[a-z0-9-]`, alphanumeric first,
 /// at most 32.
 pub fn name_from_label(label: &str) -> String {
@@ -160,7 +168,7 @@ pub fn payload(local_status: &serde_json::Value, sub: &str, hw: &Hardware, acks:
     let node = &local_status["node"];
     let fp = node["node_fp"].as_str().map(str::trim).filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))?;
     let state = node["state"].as_str().unwrap_or("unenrolled");
-    let controller = node["controller"].as_str().map(host_of).filter(|h| !h.is_empty() && enrolled_state(state));
+    let controller = node["controller"].as_str().map(host_of).filter(|h| valid_controller_host(h) && enrolled_state(state));
     let name = node["name"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| name_from_label(sub));
     let control = local_status["control"]["state"]
         .as_str()
@@ -256,6 +264,10 @@ pub enum Posted {
     Answered(Answer),
     /// 404/405: this control plane has no `/compute/advertise` yet.
     Unsupported,
+    /// 400: the control plane refused this body (e.g. an ack it won't
+    /// take). Resending the same body would fail forever, so the loop
+    /// drops its pending acks.
+    Refused(String),
 }
 
 /// `POST <control plane>/compute/advertise` with the tunnel bearer token.
@@ -280,6 +292,10 @@ pub fn post(token: &str, body: &serde_json::Value) -> Result<Posted, String> {
     let text = resp.text().unwrap_or_default();
     if status == 404 || status == 405 {
         return Ok(Posted::Unsupported);
+    }
+    if status == 400 {
+        let snippet: String = text.chars().take(200).collect();
+        return Ok(Posted::Refused(format!("POST {url}: HTTP 400: {snippet}")));
     }
     if !(200..300).contains(&status) {
         let snippet: String = text.chars().take(200).collect();
@@ -351,6 +367,24 @@ mod tests {
         assert_eq!(p["controller"], serde_json::Value::Null, "no controller unless enrolled");
         assert_eq!(p["node_name"], "z13-flow");
         assert_eq!(off_payload()["enabled"], false);
+    }
+
+    #[test]
+    fn controller_is_sent_only_when_connect_accepts_the_host() {
+        let hw = Hardware::default();
+        for (url, want) in [
+            ("https://rosson.k2.dev", json!("rosson.k2.dev")),
+            ("http://10.0.0.5:38471", json!("10.0.0.5")),
+            ("http://[::1]:38471", serde_json::Value::Null),
+            ("https://under_score.k2.dev", serde_json::Value::Null),
+        ] {
+            let p = payload(&status("online", Some(url)), "z13", &hw, &[], "1").unwrap();
+            assert_eq!(p["controller"], want, "{url}");
+        }
+        assert!(valid_controller_host("rosson.k2.dev"));
+        assert!(!valid_controller_host(""));
+        assert!(!valid_controller_host(&"a".repeat(254)));
+        assert!(!valid_controller_host("Rosson.k2.dev"));
     }
 
     #[test]

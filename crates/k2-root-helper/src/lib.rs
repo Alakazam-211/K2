@@ -19,6 +19,7 @@
 pub mod caller;
 pub mod core;
 pub mod ctx;
+pub mod daemon_unit;
 pub mod fsx;
 pub mod keep;
 pub mod mail;
@@ -41,14 +42,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=4 arch=x86_64;"
+    " proto=5 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=4 arch=aarch64;"
+    " proto=5 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -190,6 +191,9 @@ fn dispatch(
         Verb::KeepKekAbort => keep::kek_abort(ctx, &user()?).map(|_| None)?,
         Verb::KeepGenGet => Some(keep::gen_get(ctx, who.user.as_deref())?),
         Verb::KeepGenBump => Some(keep::gen_bump(ctx, &user()?)?),
+
+        Verb::DaemonHandoffDropinInstall => Some(daemon_unit::handoff_dropin_set(ctx, who, true)?),
+        Verb::DaemonHandoffDropinRemove => Some(daemon_unit::handoff_dropin_set(ctx, who, false)?),
     })
 }
 

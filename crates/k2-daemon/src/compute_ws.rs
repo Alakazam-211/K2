@@ -501,6 +501,11 @@ async fn run_session(
     for c in pending_cancels {
         let _ = tx.send(Out::Frame(Box::new(c)));
     }
+    // Node admin: a back-online alert if an offline one went out.
+    {
+        let (n, b) = (node_id.clone(), hello.boot_id.clone());
+        let _ = tokio::task::spawn_blocking(move || crate::compute_admin::on_attach(&n, &b)).await;
+    }
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_online"}));
     notify_change();
 
@@ -613,6 +618,10 @@ fn frame_worker(node_id: String, route: &'static str, rx: std::sync::mpsc::Recei
             Frame::Log(l) => on_log(&mut tallies, l),
             Frame::Receipt(r) => on_receipt(&node_id, r),
             Frame::Goodbye(g) => audit("node", "goodbye", Some(&node_id), serde_json::json!({"reason": g.reason})),
+            // Node admin (prd-k2-node-admin-v1).
+            Frame::AdminResult(r) => crate::compute_admin::on_admin_result(&node_id, r),
+            Frame::UpdateState(u) => crate::compute_admin::on_update_state(&node_id, u),
+            Frame::Health(h) => crate::compute_admin::on_health(&node_id, h),
             other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
         }
     }
@@ -633,11 +642,17 @@ fn on_offer(node_id: &str, o: Offer) {
         let conn = db.lock();
         store::store_offer(&conn, node_id, &o, compute::now());
     }
+    let admin = o.features.iter().any(|f| f == k2_core::compute::proto::admin::FEATURE_ADMIN);
+    let offer_copy = admin.then(|| o.clone());
     with_engine(|e| {
         if let Some(c) = e.conns.get_mut(node_id) {
             c.offer = Some(o);
         }
     });
+    // Node admin: pin the approval key, send approved commands.
+    if let Some(o) = offer_copy {
+        crate::compute_admin::on_offer(node_id, &o);
+    }
     kick(node_id);
     notify_change();
 }
@@ -970,6 +985,12 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
             );
         }
     });
+}
+
+/// Queue a frame on a node's live session (node admin). False when the
+/// node isn't connected.
+pub fn send_frame(node_id: &str, f: Frame) -> bool {
+    send_to(node_id, f)
 }
 
 fn send_to(node_id: &str, f: Frame) -> bool {

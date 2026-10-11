@@ -295,6 +295,8 @@ async fn async_main() {
     // Machines you can use (Settings → Compute): a node machine tells K2
     // Connect it offers compute and applies one-click enroll offers.
     crate::compute_advertise::spawn();
+    // Node admin: offline alerts and request expiry, headless (60 s).
+    crate::compute_admin::spawn_watch();
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API

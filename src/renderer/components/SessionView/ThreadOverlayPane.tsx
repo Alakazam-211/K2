@@ -45,17 +45,19 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   onStop,
 }: ThreadOverlayPaneProps): JSX.Element {
   const roomScope = useRoom().scope
+  const isTabVisible = useIsTabVisible()
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: roomScope,
     addr,
     conversationId,
     enabled: active,
+    // Thread push §6.4: shown here (and the window looked at) = quiet pushes.
+    viewing: active && isTabVisible,
   })
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
-  const isTabVisible = useIsTabVisible()
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
     if (!active) return

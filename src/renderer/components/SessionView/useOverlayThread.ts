@@ -40,6 +40,12 @@
 //      `GET /cli/thread/activity?addr=` (TW9). A server without the
 //      `daemon-activity` reported feature has no such route and sends no
 //      such frames: `turn` stays null and nothing is asked (Q5).
+//   7. Quiet while looking (prd-thread-push-notifications-v1 §6.4, S4): a
+//      surface that passes `viewing` (the Agents page Thread pane) sends
+//      `{"t":"viewing","visible":…}` on this socket while it is shown and
+//      the window is visible and focused, every 30 s, and `false` on blur,
+//      hide or unmount (`threadViewing.ts`). Only to servers reporting
+//      `thread-push-v1`.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -65,6 +71,7 @@ import {
 } from './overlayThread'
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
+import { createViewingSender, windowIsLookedAt, type ViewingSender } from './threadViewing'
 import {
   isThreadAddressMiss,
   publishThreadAddress,
@@ -126,6 +133,11 @@ export function useOverlayThread(opts: {
   addr: string
   conversationId: string | null
   enabled: boolean
+  /** The surface is shown to the person right now (pane mounted and not
+   *  hidden). With the window visible and focused, the daemon is told this
+   *  Thread is being read, so its pushes stay quiet (§6.4). Default false:
+   *  surfaces that only preview a Thread never claim it. */
+  viewing?: boolean
 }): {
   items: OverlayThreadItem[]
   conversationId: string
@@ -151,6 +163,7 @@ export function useOverlayThread(opts: {
   pastAddresses: string[]
 } {
   const { scope, addr, conversationId, enabled } = opts
+  const viewing = opts.viewing === true
   const [items, setItems] = useState<OverlayThreadItem[]>([])
   const [resolvedConv, setResolvedConv] = useState(conversationId ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -173,6 +186,10 @@ export function useOverlayThread(opts: {
   const bootedConvRef = useRef('')
   /** Re-read the loaded window + turn on the current `addrRef` (S4). */
   const resyncRef = useRef<(() => void) | null>(null)
+  /** §6.4: the running view's viewing sender (null while disabled). */
+  const viewingSenderRef = useRef<ViewingSender | null>(null)
+  const viewingRef = useRef(viewing)
+  viewingRef.current = viewing
   itemsRef.current = items
   hasMoreRef.current = hasMore
   loadingOlderRef.current = loadingOlder
@@ -224,6 +241,21 @@ export function useOverlayThread(opts: {
     let catchUpChain: Promise<void> = Promise.resolve()
     /** `activity` frames received; a catch-up answer older than one is dropped. */
     let activityFrames = 0
+    const viewingSender = createViewingSender({
+      send: (frame) => {
+        if (!ws || ws.readyState !== 1) return false
+        try {
+          ws.send(frame)
+          return true
+        } catch (e) {
+          console.warn('[thread] viewing frame failed:', e)
+          return false
+        }
+      },
+      isViewing: () =>
+        viewingRef.current && windowIsLookedAt() && scope.serverSupports('thread-push-v1'),
+    })
+    viewingSenderRef.current = viewingSender
 
     /** `GET thread?since_seq=` merged by id. Serialized; never throws. */
     function catchUp(since: number): Promise<void> {
@@ -377,6 +409,7 @@ export function useOverlayThread(opts: {
           lastResyncAt = Date.now()
           void catchUp(sinceOnOpen())
           void catchUpTurn()
+          viewingSender.socketOpened()
         }
         if (sock.readyState === 1) opened()
         else sock.onopen = opened
@@ -411,8 +444,14 @@ export function useOverlayThread(opts: {
       void catchUpTurn()
     }
     const onVisibility = (): void => {
+      viewingSender.update()
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') wake()
     }
+    const onFocus = (): void => {
+      viewingSender.update()
+      wake()
+    }
+    const onBlur = (): void => viewingSender.update()
 
     async function boot(): Promise<void> {
       const sent = addrRef.current
@@ -452,17 +491,22 @@ export function useOverlayThread(opts: {
 
     void boot()
     if (typeof window !== 'undefined') {
-      window.addEventListener('focus', wake)
+      window.addEventListener('focus', onFocus)
+      window.addEventListener('blur', onBlur)
       window.addEventListener('online', wake)
     }
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
     return () => {
+      // Before the socket goes: `visible:false` while it can still be sent.
+      viewingSender.dispose()
+      if (viewingSenderRef.current === viewingSender) viewingSenderRef.current = null
       cancelled = true
       bootedConvRef.current = ''
       resyncRef.current = null
       if (retryTimer !== null) clearTimeout(retryTimer)
       if (typeof window !== 'undefined') {
-        window.removeEventListener('focus', wake)
+        window.removeEventListener('focus', onFocus)
+        window.removeEventListener('blur', onBlur)
         window.removeEventListener('online', wake)
       }
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility)
@@ -475,6 +519,12 @@ export function useOverlayThread(opts: {
     // `addr` is read through addrRef: a rename keeps this view (S4).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, conversationId, enabled, epoch])
+
+  // §6.4: the pane shown or hidden (tab switch, overlay closed) re-reads
+  // the viewing rule at once.
+  useEffect(() => {
+    viewingSenderRef.current?.update()
+  }, [viewing])
 
   // This window's own sends (any surface: the Agents page compose bar, Zen,
   // Home) land at once, merged by id with the socket's echo.

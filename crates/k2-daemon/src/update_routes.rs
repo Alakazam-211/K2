@@ -313,6 +313,34 @@ pub fn verify_minisign(pubkey_wrapped_b64: &str, sig_str: &str, data: &[u8]) -> 
         .map_err(|e| format!("minisign verification failed: {e}"))
 }
 
+/// RH24: the (already verified) signature's trusted comment carries
+/// `file:<name>`, and `<name>` is a daemon asset (`k2-daemon-…`). The Tauri
+/// signer writes `timestamp:<n>\tfile:<name>`; the global signature over
+/// it was checked by [`verify_minisign`].
+pub fn signed_file_is_daemon(sig_str: &str) -> Result<(), String> {
+    use base64::Engine as _;
+    let mut sig_text = sig_str.trim().to_string();
+    if !sig_text.starts_with("untrusted comment") {
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&sig_text) {
+            if let Ok(inner) = String::from_utf8(decoded) {
+                sig_text = inner;
+            }
+        }
+    }
+    let sig = minisign_verify::Signature::decode(sig_text.trim())
+        .map_err(|e| format!("signature decode failed: {e}"))?;
+    let file = sig
+        .trusted_comment()
+        .split(['\t', ' '])
+        .find_map(|f| f.strip_prefix("file:"))
+        .ok_or("trusted comment has no file:")?;
+    if file.starts_with("k2-daemon-") {
+        Ok(())
+    } else {
+        Err(format!("trusted comment file is {file}"))
+    }
+}
+
 /// True iff the lowercase-hex SHA-256 of `data` equals `expected_hex`
 /// (case-insensitive comparison). A second integrity layer on top of the
 /// signature — catches a truncated download whose `.sig` somehow still
@@ -838,6 +866,12 @@ fn run_download_stage(job_id: &str, artifact: &Artifact) {
     k2_core::log_debug!("[daemon] P3 update/download — job {job_id} verifying minisign");
     if let Err(e) = verify_minisign(UPDATER_PUBKEY_B64, &sig_str, &bin) {
         return fail_job(job_id, format!("signature verify FAILED — aborting: {e}"));
+    }
+    // RH24: the signed trusted comment must name a daemon asset — the same
+    // key signs other release files, and one of those swapped in as the
+    // daemon would brick it.
+    if let Err(e) = signed_file_is_daemon(&sig_str) {
+        return fail_job(job_id, format!("signature names another file — aborting: {e}"));
     }
     // sha256 is the second integrity layer; only reached AFTER the
     // signature already validated.
@@ -1771,6 +1805,22 @@ mod tests {
     const TEST_PUBKEY_BARE: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
     /// A real prehashed minisign signature over the bytes b"test".
     const TEST_SIG_PREHASHED: &str = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1556193335\tfile:test\ny/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+
+    /// RH24: a validly signed helper (the real v0.45.0 mail-helper `.sig`)
+    /// is refused as a daemon; the real v0.45.3 macOS daemon `.sig` passes;
+    /// both raw and base64-wrapped forms are read.
+    #[test]
+    fn daemon_update_requires_a_daemon_file_in_the_trusted_comment() {
+        use base64::Engine as _;
+        let helper_sig = include_str!("../../k2-root-proto/tests/fixtures/k2-mail-helper-linux-x86_64-v0.45.0.sig");
+        let err = signed_file_is_daemon(helper_sig).unwrap_err();
+        assert!(err.contains("k2-mail-helper-linux-x86_64"), "{err}");
+        let daemon_sig = "untrusted comment: signature from tauri secret key\nRUQFu172RhQR6TT88xg2EoRK2LnRlmAHVbEtFVuL/V3BfMf8YqG3bcBCSnor3UD/MlVkh5mU/hnvUaluWSo3kl6KcCyMVsi1Pg4=\ntrusted comment: timestamp:1791585472\tfile:k2-daemon-macos-aarch64\nMUDfNvtyAAzZQC6DfZwY5l/gSY7+cgql2odDt5X/jPjVmiA6vNJGNt7qe579/2WrzUkyDiJU37njeFkpwtABCg==\n";
+        signed_file_is_daemon(daemon_sig).expect("real daemon sig");
+        let wrapped = base64::engine::general_purpose::STANDARD.encode(daemon_sig);
+        signed_file_is_daemon(&wrapped).expect("wrapped daemon sig");
+        assert!(signed_file_is_daemon(TEST_SIG_PREHASHED).is_err(), "file:test is not a daemon");
+    }
 
     /// Wrap a bare minisign key the way tauri.conf.json does: build the
     /// 2-line `.pub` file then base64 the whole thing.

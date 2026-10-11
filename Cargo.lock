@@ -3573,6 +3573,7 @@ dependencies = [
  "k2-core",
  "k2-node",
  "k2-node-proto",
+ "k2-root-proto",
  "lettre",
  "libc",
  "mail-parser",

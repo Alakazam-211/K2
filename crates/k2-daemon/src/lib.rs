@@ -66,6 +66,8 @@ pub mod llm_routes;
 // RUNTIME (supervisor::mail_supported); compiles + tests everywhere.
 pub mod mail;
 pub mod mail_routes;
+pub mod root_helper;
+pub mod root_helper_routes;
 // Workspace data sidecar (prd-workspace-data-sidecar-v1) — supervised
 // Postgres + JSONB store. Linux-only at RUNTIME (`sql_supported`).
 pub mod sql;

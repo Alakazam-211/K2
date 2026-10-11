@@ -1112,6 +1112,14 @@ async fn async_main() {
     // never copies data, never sudo.
     mail::backup::spawn_observer();
 
+    // Root helper auto-heal (prd-k2-root-helper-v1 §8.2): Linux only, one
+    // detached thread ~2 min after boot (= after every hop). Fetches the
+    // signed helper for THIS daemon version and installs it through
+    // `helper self-update`; rollback on a bad answer; backoff on 404 /
+    // offline; skips under air-gap and package-owned helpers. Shares the
+    // hosted-mail busy latch. Never blocks boot.
+    crate::root_helper::heal::spawn_auto_heal();
+
     // prd-dns-pending-and-cutover-safety-v1 P1: re-check `pending_ns`
     // custom domains with k2.dev by itself (one read-only GET per tick,
     // 1 min → daily by age), so a zone k2.dev flipped active opens record

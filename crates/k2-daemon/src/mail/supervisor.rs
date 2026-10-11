@@ -42,120 +42,23 @@ use super::jmap::StalwartClient;
 use super::secrets::{generate_secret, FileSecretStore, SecretStore};
 use super::sysops::{RealSystemOps, SystemOps};
 
-// ── The pin ─────────────────────────────────────────────────────────────
+// ── The pin, the on-box layout, the unit + drop-in ──────────────────────
+//
+// One table and one set of templates for the daemon AND the root helper:
+// they live in `k2-root-proto` (prd-k2-root-helper-v1 §5.1), so a daemon
+// and a helper of one release can never disagree. Re-exported here so the
+// supervisor, upgrade and the legacy `k2-mail-helper` keep their paths.
 
-/// The PINNED Stalwart version the supervisor installs and manages.
-///
-/// v0.16.20 (calendars S1, prd-hostmail-calendars-v1 CAL13): the 0.16.14
-/// shared-calendar MAIL FROM fix, 0.16.18 JMAP scheduling + recurrences
-/// and the 0.16.19 per-user Calendar/set fix. Previous pin: v0.16.10
-/// ([`STALWART_PREVIOUS_VERSION`]) — the only version `k2 hostmail
-/// upgrade` moves FROM, and the rollback target.
-/// Pinning is load-bearing: v0.16 removed the whole REST API relative
-/// to earlier lines, upstream has no mgmt-API stability policy, and
-/// the config format churns between minors (PRD §4, §16, pre-mortem
-/// #8). Upgrades are explicit, K2-shipped, tested operations — the
-/// supervisor REFUSES to manage an unrecognized on-disk version, and
-/// the daemon updating itself never touches the Stalwart version.
-pub const STALWART_PINNED_VERSION: &str = "0.16.20";
-
-/// The pin before [`STALWART_PINNED_VERSION`]: what a box enabled by an
-/// older daemon has installed, the ONLY version `k2 hostmail upgrade`
-/// moves from, and the binary a failed upgrade reinstalls. Compared with
-/// `!=` (CAL56: never semver ordering).
-pub const STALWART_PREVIOUS_VERSION: &str = "0.16.10";
-
-/// One pinned release artifact: Rust `std::env::consts::ARCH` name →
-/// upstream target triple + the sha256 of the release tarball.
-#[derive(Debug)]
-pub struct StalwartArtifact {
-    pub arch: &'static str,
-    pub triple: &'static str,
-    pub sha256: &'static str,
-}
-
-/// Baked-in checksums for the pinned release (PRD §4.1 — "checksums
-/// baked into the daemon at build time").
-///
-/// REAL values for v0.16.20. The fork release `Alakazam-211/stalwart`
-/// v0.16.20 MIRRORS the upstream `stalwartlabs/stalwart` v0.16.20
-/// tarballs byte for byte (not a fork build). Verified THREE ways on
-/// 2026-10-06: (1) sha256 of the downloaded fork assets, (2) sha256 of
-/// the downloaded upstream assets of the same names (identical bytes),
-/// (3) the upstream sigstore bundles (`…tar.gz.sigstore.json` →
-/// messageSignature.messageDigest; Fulcio identity
-/// `stalwartlabs/stalwart/.github/workflows/ci.yml@refs/tags/v0.16.20`,
-/// commit 6d5c6589). All matched the fork release body. glibc builds —
-/// K2 Linux deployments are Ubuntu/Debian-class boxes (musl/Alpine
-/// support would add the musl triples here).
-pub const STALWART_SHA256: &[StalwartArtifact] = &[
-    StalwartArtifact {
-        arch: "x86_64",
-        triple: "x86_64-unknown-linux-gnu",
-        sha256: "55184f166f89a0918c6523bb70be300370b63934357731b199dc26a12ca15abf",
-    },
-    StalwartArtifact {
-        arch: "aarch64",
-        triple: "aarch64-unknown-linux-gnu",
-        sha256: "82183ce973665d2b99822b4a1f9911a8ba14788fd73ee93ce9be92352ccdea64",
-    },
-];
-
-/// Checksums for [`STALWART_PREVIOUS_VERSION`] (v0.16.10), kept so a
-/// failed upgrade can reinstall the old binary (CAL14). Verified two
-/// ways at the original bake (2026-07-08): the release's signed sigstore
-/// bundles and the downloaded tarballs; re-verified 2026-07-10.
-pub const STALWART_PREVIOUS_SHA256: &[StalwartArtifact] = &[
-    StalwartArtifact {
-        arch: "x86_64",
-        triple: "x86_64-unknown-linux-gnu",
-        sha256: "3ec4ab7eff49f61280f2fe2e4f9645ce5308d1840286ef0c0437524f92ac6a33",
-    },
-    StalwartArtifact {
-        arch: "aarch64",
-        triple: "aarch64-unknown-linux-gnu",
-        sha256: "0c9a80174a8a187477ac0ae4fcca8b7e0f17c84f6cae7b9304d2539459ba44ac",
-    },
-];
-
-/// True when a checksum entry is a placeholder / malformed — install
-/// REFUSES to run in that state (the "never ship an unverifiable
-/// install path" guard; a const table edited to `…PLACEHOLDER…` or a
-/// truncated hex fails closed).
-pub fn checksum_is_placeholder(a: &StalwartArtifact) -> bool {
-    a.sha256.contains("PLACEHOLDER")
-        || a.sha256.len() != 64
-        || !a.sha256.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Resolve the pinned artifact for a `std::env::consts::ARCH` value.
-pub fn artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String> {
-    artifact_in(STALWART_SHA256, arch)
-}
-
-/// The [`STALWART_PREVIOUS_VERSION`] artifact for `arch` (rollback).
-pub fn previous_artifact_for_arch(arch: &str) -> Result<&'static StalwartArtifact, String> {
-    artifact_in(STALWART_PREVIOUS_SHA256, arch)
-}
-
-fn artifact_in(
-    table: &'static [StalwartArtifact],
-    arch: &str,
-) -> Result<&'static StalwartArtifact, String> {
-    let art = table
-        .iter()
-        .find(|a| a.arch == arch)
-        .ok_or_else(|| {
-            format!("unsupported CPU architecture '{arch}' — K2 Mail ships x86_64 and aarch64")
-        })?;
-    if checksum_is_placeholder(art) {
-        return Err(format!(
-            "refusing to install: the baked-in sha256 for {arch} is a placeholder — \
-             this build cannot verify the Stalwart download"
-        ));
-    }
-    Ok(art)
-}
+pub use k2_root_proto::paths::{
+    STALWART_BIN, STALWART_BIN_STAGING, STALWART_CONFIG, STALWART_CONFIG_DIR, STALWART_DATA_DIR,
+    STALWART_DROPIN_DIR, STALWART_DROPIN_PATH, STALWART_LOG_DIR, STALWART_SNAPSHOT_DIR,
+    STALWART_SNAPSHOT_MARKER, STALWART_UNIT, STALWART_UNIT_PATH, STALWART_USER,
+};
+pub use k2_root_proto::stalwart::{
+    artifact_for_arch, checksum_is_placeholder, previous_artifact_for_arch, StalwartArtifact,
+    STALWART_PINNED_VERSION, STALWART_PREVIOUS_SHA256, STALWART_PREVIOUS_VERSION, STALWART_SHA256,
+};
+pub use k2_root_proto::templates::{hardening_dropin, systemd_unit};
 
 /// Enable fetches the pin from the Alakazam fork release (a mirror of
 /// the upstream tarball); K2 does not rebuild Stalwart.
@@ -170,30 +73,7 @@ pub fn tarball_url_for(version: &str, triple: &str) -> String {
     )
 }
 
-// ── On-disk / on-box layout ─────────────────────────────────────────────
-
-pub const STALWART_BIN: &str = "/usr/local/bin/stalwart";
-pub const STALWART_CONFIG_DIR: &str = "/etc/stalwart";
-pub const STALWART_CONFIG: &str = "/etc/stalwart/config.json";
-pub const STALWART_DATA_DIR: &str = "/var/lib/stalwart";
-pub const STALWART_LOG_DIR: &str = "/var/log/stalwart";
-pub const STALWART_USER: &str = "stalwart";
-pub const STALWART_UNIT: &str = "stalwart";
-pub const STALWART_UNIT_PATH: &str = "/etc/systemd/system/stalwart.service";
-pub const STALWART_DROPIN_DIR: &str = "/etc/systemd/system/stalwart.service.d";
-pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k2-hardening.conf";
-/// `k2 hostmail upgrade`'s pre-upgrade snapshot (helper `snapshot-data`):
-/// `data/` = a copy of [`STALWART_DATA_DIR`], `config/` = a copy of
-/// [`STALWART_CONFIG_DIR`], plus [`STALWART_SNAPSHOT_MARKER`] written
-/// last. Fixed path, root 0700; kept after a successful upgrade until the
-/// next upgrade replaces it.
-pub const STALWART_SNAPSHOT_DIR: &str = "/var/lib/stalwart.k2-snap";
-/// Written LAST inside the snapshot; no marker = incomplete, and restore
-/// refuses it.
-pub const STALWART_SNAPSHOT_MARKER: &str = "K2-SNAPSHOT.json";
-/// Where `install-bin` stages the binary before the atomic rename onto
-/// [`STALWART_BIN`] (never a truncate-in-place of a live binary).
-pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
+// ── On-disk / on-box layout (paths re-exported above) ───────────────────
 
 /// Stalwart's bootstrap-mode listener (plain HTTP `http-recovery` on
 /// :8080 — ✔ live-verified). After Bootstrap/set + restart the
@@ -238,59 +118,6 @@ pub const STALWART_MGMT_URL: &str = "http://127.0.0.1:8180";
 /// a remote Linux daemon must see the REAL page).
 pub fn mail_supported() -> bool {
     cfg!(target_os = "linux")
-}
-
-// ── Systemd unit + §10 hardening drop-in ────────────────────────────────
-
-/// The service unit K2 writes (upstream ships none for our layout).
-/// `recovery_admin_password`: present during install (deterministic
-/// bootstrap credential, ✔ live-verified `STALWART_RECOVERY_ADMIN`
-/// env form); the `recovery-off` step rewrites the unit WITHOUT it
-/// once the provisioned admin + ApiKey are vaulted, and rotates the
-/// bootstrap principal `admin` (the env credential AND that principal
-/// stay valid even in normal mode — verified — so leaving either would
-/// be a standing backdoor). The unit is written 0600 for exactly this
-/// reason. Hardening lives in the drop-in so the split mirrors PRD §10
-/// verbatim and a future unit rewrite can't silently drop it.
-pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
-    let env_line = match recovery_admin_password {
-        Some(pw) => format!("Environment=STALWART_RECOVERY_ADMIN=admin:{pw}\n"),
-        None => String::new(),
-    };
-    format!(
-        "[Unit]\n\
-         Description=Stalwart mail server (managed by the K2 Mail supervisor)\n\
-         After=network-online.target\n\
-         Wants=network-online.target\n\
-         \n\
-         [Service]\n\
-         Type=simple\n\
-         ExecStart={STALWART_BIN} --config {STALWART_CONFIG}\n\
-         User={STALWART_USER}\n\
-         Group={STALWART_USER}\n\
-         {env_line}\
-         StandardOutput=journal\n\
-         StandardError=journal\n\
-         \n\
-         [Install]\n\
-         WantedBy=multi-user.target\n"
-    )
-}
-
-/// PRD §10, verbatim — plus `/etc/stalwart` in ReadWritePaths:
-/// ✔ LIVE-VERIFIED the Bootstrap/set persists the DataStore config to
-/// that path AS THE stalwart USER (the first live attempt failed with
-/// `Permission denied (os error 13)` until the dir was writable).
-pub fn hardening_dropin() -> &'static str {
-    "[Service]\n\
-     ProtectSystem=strict\n\
-     ProtectHome=yes\n\
-     ReadWritePaths=/var/lib/stalwart /var/log/stalwart /etc/stalwart\n\
-     NoNewPrivileges=yes\n\
-     PrivateTmp=yes\n\
-     CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n\
-     AmbientCapabilities=CAP_NET_BIND_SERVICE\n\
-     Restart=on-failure\n"
 }
 
 /// The default domain the mail hostname implies — Stalwart's guided
@@ -690,6 +517,15 @@ pub fn mail_helper_state() -> HelperState {
     {
         RealSystemOps.mail_helper_state()
     }
+}
+
+/// The legacy `k2-mail-helper` alone (root-helper status shows it next to
+/// the root helper). Never probes in tests.
+pub fn mail_helper_legacy_state() -> HelperState {
+    if cfg!(test) || !mail_supported() {
+        return HelperState::Missing;
+    }
+    helper::probe_state()
 }
 
 /// [`mail_helper_state`] cached for 30 s — for `GET /cli/mail/status`,

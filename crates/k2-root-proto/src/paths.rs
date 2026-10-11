@@ -1,0 +1,111 @@
+//! Every fixed path the root helper touches or the daemon probes.
+//!
+//! Production paths are compiled in. The helper resolves each of them
+//! beneath a root directory that is `/` in the binary and a temp dir in
+//! tests (`k2_root_helper::Ctx`); nothing on argv, stdin or in the
+//! environment can choose one.
+
+// ── The helper itself ───────────────────────────────────────────────────
+
+/// The installed helper. The sudoers line names exactly this path.
+pub const HELPER_PATH: &str = "/usr/local/libexec/k2-root-helper";
+/// Directory of [`HELPER_PATH`]; self-update stages and renames here.
+pub const HELPER_DIR: &str = "/usr/local/libexec";
+pub const HELPER_FILE: &str = "k2-root-helper";
+/// One step back for `helper self-rollback`.
+pub const HELPER_PREV_FILE: &str = "k2-root-helper.prev";
+/// Where a rolled-back build is parked.
+pub const HELPER_BAD_FILE: &str = "k2-root-helper.bad";
+/// Self-update stage (a dot name in the same directory; never on PATH).
+pub const HELPER_STAGE_FILE: &str = ".k2-root-helper.new";
+/// Reserved: a future Arch/deb/rpm package installs the helper here and
+/// owns its updates (§9.6). The helper refuses `self-update` from it.
+pub const HELPER_PACKAGE_PATH: &str = "/usr/lib/k2/k2-root-helper";
+
+/// `/etc/sudoers.d/k2-root-helper` — the one sudoers line.
+pub const SUDOERS_PATH: &str = "/etc/sudoers.d/k2-root-helper";
+/// Root-owned config written by the installer (who the daemon is).
+pub const CONFIG_DIR: &str = "/etc/k2-root-helper";
+pub const DAEMON_TOML: &str = "/etc/k2-root-helper/daemon.toml";
+/// Root-owned state: the refuse list, the keep store.
+pub const STATE_DIR: &str = "/var/lib/k2-root-helper";
+pub const STATE_JSON: &str = "/var/lib/k2-root-helper/state.json";
+/// `keep/<daemon user>/` (dirs 0700, files 0600). The user comes from the
+/// caller check, never from argv.
+pub const KEEP_DIR: &str = "/var/lib/k2-root-helper/keep";
+/// Mutating verbs take an exclusive `flock` here (30 s timeout).
+pub const LOCK_PATH: &str = "/run/k2-root-helper.lock";
+
+/// The daemon reaches the helper only through this sudo.
+pub const SUDO_PATH: &str = "/usr/bin/sudo";
+/// Executables the caller walk steps over (root-owned only). `sudo-rs`
+/// ships as `/usr/bin/sudo-rs`, and Ubuntu 25.10+ resolves `/usr/bin/sudo`
+/// to `/usr/lib/cargo/bin/sudo` through alternatives.
+pub const SUDO_EXES: &[&str] = &[
+    "/usr/bin/sudo",
+    "/usr/bin/sudo-rs",
+    "/usr/lib/cargo/bin/sudo",
+];
+
+// ── Programs the helper spawns (absolute, env cleared) ──────────────────
+
+pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
+pub const USERADD: &str = "/usr/sbin/useradd";
+pub const ID: &str = "/usr/bin/id";
+pub const RUNUSER: &str = "/usr/sbin/runuser";
+pub const PSQL: &str = "/usr/bin/psql";
+pub const VISUDO: &str = "/usr/sbin/visudo";
+pub const LOGGER: &str = "/usr/bin/logger";
+pub const JOURNALCTL: &str = "/usr/bin/journalctl";
+/// `PATH` every child gets.
+pub const CHILD_PATH: &str = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+// ── Legacy helpers (one release train of coexistence) ───────────────────
+
+pub const LEGACY_MAIL_HELPER: &str = "/usr/local/libexec/k2-mail-helper";
+pub const LEGACY_MAIL_SUDOERS: &str = "/etc/sudoers.d/k2-mail-helper";
+pub const LEGACY_PG_HELPER: &str = "/usr/local/libexec/k2-pg-helper";
+pub const LEGACY_PG_SUDOERS: &str = "/etc/sudoers.d/k2-pg-helper";
+
+// ── Stalwart (hosted mail) ──────────────────────────────────────────────
+
+pub const STALWART_BIN: &str = "/usr/local/bin/stalwart";
+pub const STALWART_CONFIG_DIR: &str = "/etc/stalwart";
+pub const STALWART_CONFIG: &str = "/etc/stalwart/config.json";
+pub const STALWART_DATA_DIR: &str = "/var/lib/stalwart";
+pub const STALWART_LOG_DIR: &str = "/var/log/stalwart";
+pub const STALWART_USER: &str = "stalwart";
+pub const STALWART_UNIT: &str = "stalwart";
+pub const STALWART_UNIT_PATH: &str = "/etc/systemd/system/stalwart.service";
+pub const STALWART_DROPIN_DIR: &str = "/etc/systemd/system/stalwart.service.d";
+pub const STALWART_DROPIN_PATH: &str = "/etc/systemd/system/stalwart.service.d/k2-hardening.conf";
+/// `k2 hostmail upgrade`'s pre-upgrade snapshot (helper `snapshot-data`):
+/// `data/` = a copy of [`STALWART_DATA_DIR`], `config/` = a copy of
+/// [`STALWART_CONFIG_DIR`], plus [`STALWART_SNAPSHOT_MARKER`] written
+/// last. Fixed path, root 0700; kept after a successful upgrade until the
+/// next upgrade replaces it.
+pub const STALWART_SNAPSHOT_DIR: &str = "/var/lib/stalwart.k2-snap";
+/// Written LAST inside the snapshot; no marker = incomplete, and restore
+/// refuses it.
+pub const STALWART_SNAPSHOT_MARKER: &str = "K2-SNAPSHOT.json";
+/// Where `install-bin` stages the binary before the atomic rename onto
+/// [`STALWART_BIN`] (never a truncate-in-place of a live binary).
+pub const STALWART_BIN_STAGING: &str = "/usr/local/bin/.stalwart.k2-new";
+/// RocksDB's lock file inside the store (`{data}/data/LOCK`); a process
+/// that still has it locked still has the store open.
+pub const STALWART_STORE_LOCK: &str = "/var/lib/stalwart/data/LOCK";
+
+// ── Postgres sidecar ────────────────────────────────────────────────────
+
+/// Distro-owned unit — K2 drops in, never rewrites postgresql.service.
+pub const PG_RAM_DROPIN_DIR: &str = "/etc/systemd/system/postgresql.service.d";
+pub const PG_RAM_DROPIN_PATH: &str = "/etc/systemd/system/postgresql.service.d/k2-ram.conf";
+/// `postgresql.service` is a oneshot wrapper on Debian/Ubuntu; the
+/// postmaster is `postgresql@.service`, so the fence goes on both.
+pub const PG_RAM_TEMPLATE_DROPIN_DIR: &str = "/etc/systemd/system/postgresql@.service.d";
+pub const PG_RAM_TEMPLATE_DROPIN_PATH: &str =
+    "/etc/systemd/system/postgresql@.service.d/k2-ram.conf";
+/// `/etc/postgresql/<n>/main/conf.d/99-k2-ram.conf` for each cluster.
+pub const PG_ETC: &str = "/etc/postgresql";
+pub const PG_CONFD_FILE: &str = "99-k2-ram.conf";
+pub const PG_OS_USER: &str = "postgres";

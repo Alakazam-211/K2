@@ -20,6 +20,8 @@ import {
   type RosterAgent,
 } from '@/lib/federation'
 import { agentDisplayName, agentHandle, setAgentDisplayName, setAgentHandle } from '@/lib/workspace-agent'
+import { onAgentIdentityChanged } from '@/stores/session-events'
+import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore, noteOptimisticProjectsMutationSuccess, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
@@ -1139,7 +1141,13 @@ function ProjectDetail({
           setPrimaryAgentName('')
         }
       })
-    return () => { cancelled = true }
+    // Agent rename live update: a rename anywhere repaints this page.
+    const offIdentity = onAgentIdentityChanged(primaryScope(), (e) => {
+      if (cancelled || !agentIdentityMatchesPath(e, project.path)) return
+      const n = agentIdentityDisplayName(e)
+      if (n) setPrimaryAgentName(n)
+    })
+    return () => { cancelled = true; offIdentity() }
   }, [project.path, project.agentMode])
 
 
@@ -3334,6 +3342,20 @@ function AgentDisplayNameField({
       .then((n) => { if (!cancelled) { setDraft(n); setSaved(n); setReady(true) } })
       .catch((e) => { if (!cancelled) { console.error('[display-name] read failed:', e); setReady(true) } })
     return () => { cancelled = true }
+  }, [projectPath])
+
+  // Agent rename live update: someone else renamed this agent. Follow it,
+  // but never clobber what this user is typing (an unsaved edit stays).
+  const savedRef = useRef(saved)
+  savedRef.current = saved
+  useEffect(() => {
+    return onAgentIdentityChanged(primaryScope(), (e) => {
+      if (!agentIdentityMatchesPath(e, projectPath)) return
+      const n = agentIdentityDisplayName(e)
+      if (!n) return
+      setDraft((d) => (d === savedRef.current ? n : d))
+      setSaved(n)
+    })
   }, [projectPath])
 
   const dirty = ready && draft !== saved

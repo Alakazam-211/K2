@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
-import { useHomesStore, type Home } from '@/stores/homes'
+import { repairHomeRowsFromList, useHomesStore, type Home } from '@/stores/homes'
 import { HostOpError, hostOpGet } from '@/lib/host-ops'
 import { credsForHomeHost } from '@/lib/home-creds'
 import { isConnectionLevelError } from '@/lib/remote-retry'
@@ -36,10 +36,8 @@ import { hostPool } from '@/lib/host-pool-instance'
 import {
   LOCAL_HOME_HOST,
   activeHomeHostKey,
-  findWorkspaceForRow,
   homeAddress,
   homeHostKey,
-  parseHomeAddress,
   workspaceHandle,
 } from '@/lib/home-address'
 import { hostDisplayAddress } from '@/components/TopBar/ServerSwitcher'
@@ -96,15 +94,7 @@ function addTo(home: Home, hostKey: string, w: ListedWorkspace): string | null {
 /** Rename repair from a freshly listed server: rows on `hostKey` whose
  *  handle moved get the new address; labels follow the name. */
 export function repairFromList(hostKey: string, workspaces: ListedWorkspace[]): void {
-  useHomesStore.getState().repairRows((row) => {
-    const p = parseHomeAddress(row.address)
-    if (!p || p.host !== hostKey) return null
-    const ws = findWorkspaceForRow(workspaces, row)
-    if (!ws) return null
-    const handle = workspaceHandle(ws)
-    if (!handle) return null
-    return { address: homeAddress(handle, hostKey), workspaceId: ws.id, label: ws.name }
-  })
+  repairHomeRowsFromList(useHomesStore, hostKey, workspaces)
 }
 
 /** One picker row for workspace `w` on `hostKey`; null when it has no

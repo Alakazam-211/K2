@@ -83,6 +83,7 @@ vi.mock('@/stores/session-events', () => ({
   onSessionAddedApp: vi.fn(() => () => undefined),
   onSessionRemovedApp: vi.fn(() => () => undefined),
   onProjectsChanged: vi.fn(() => () => undefined),
+  onAgentIdentityChanged: vi.fn(() => () => undefined),
 }))
 
 // Now import the REAL modules under test. Importing registers their

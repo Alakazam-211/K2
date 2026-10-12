@@ -363,6 +363,12 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         | SessionEvent::WorkspaceResourcesChanged { .. }
         | SessionEvent::AgentStatusChanged { .. } => None,
 
+        // Agent rename / recolor / re-image — APP-LEVEL (the
+        // WorkspaceResourcesChanged convention): the sidebar, Home and
+        // Settings of every client show every agent, not only the one
+        // under their `?path=`.
+        SessionEvent::AgentIdentityChanged { .. } => None,
+
         // 0.39.45 (GH #18/#26) APP-LEVEL — the registered project set
         // changed. Every client re-fetches its project list; there is
         // no single workspace to scope to (the new project isn't in
@@ -737,6 +743,15 @@ mod tests {
             },
             SessionEvent::PublishServicesChanged { project_id: "p".into() },
             SessionEvent::WorkspaceResourcesChanged { workspace_id: "p".into() },
+            SessionEvent::AgentIdentityChanged {
+                project_id: "p".into(),
+                workspace_path: "/x/foo".into(),
+                fields: vec!["displayName".into()],
+                name: "n".into(),
+                display_name: "n".into(),
+                handle: "h".into(),
+                color: String::new(),
+            },
             SessionEvent::TabTitleChanged {
                 workspace_path: "/x/foo".into(),
                 project: "p".into(),

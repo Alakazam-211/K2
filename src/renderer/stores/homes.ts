@@ -25,7 +25,7 @@
 // Home.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
-import { homeAddress, parseHomeAddress } from '@/lib/home-address'
+import { findWorkspaceForRow, homeAddress, parseHomeAddress, workspaceHandle } from '@/lib/home-address'
 import { homeHostKey } from '@/lib/host-key'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { onSavedHostRekey } from '@/lib/connect-host-hooks'
@@ -394,6 +394,26 @@ export function rekeyHomeRows(
     const p = parseHomeAddress(row.address)
     if (!p || p.host !== oldKey) return null
     return { ...row, address: homeAddress(p.handle, newKey) }
+  })
+}
+
+/** Rename repair from one server's fresh workspace list: rows on `hostKey`
+ *  whose handle moved get the new address; labels follow the name. Rows
+ *  whose workspace isn't in the list are left alone. */
+export function repairHomeRowsFromList(
+  store: UseBoundStore<StoreApi<HomesState>>,
+  hostKey: string,
+  workspaces: ReadonlyArray<{ id: string; handle?: string | null; name: string }>,
+): void {
+  const list = [...workspaces]
+  store.getState().repairRows((row) => {
+    const p = parseHomeAddress(row.address)
+    if (!p || p.host !== hostKey) return null
+    const ws = findWorkspaceForRow(list, row)
+    if (!ws) return null
+    const handle = workspaceHandle(ws)
+    if (!handle) return null
+    return { address: homeAddress(handle, hostKey), workspaceId: ws.id, label: ws.name }
   })
 }
 

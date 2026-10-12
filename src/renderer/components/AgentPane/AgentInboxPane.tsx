@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { agentDisplayName } from '@/lib/workspace-agent'
+import { onAgentIdentityChanged } from '@/stores/session-events'
+import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { daemonCliGet, isHostSwitchedError } from '@/lib/daemon-cli'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import Markdown from '@/components/Markdown/Markdown'
@@ -208,6 +210,16 @@ export function AgentInboxPane({ agentName, projectPath }: AgentInboxPaneProps):
     }).then((u) => { if (cancelled) u(); else unlisten = u })
     return () => { cancelled = true; unlisten?.() }
   }, [room, projectPath, isWorkspaceBoard])
+
+  // Agent rename live update (every viewer; see AgentChatPane).
+  useEffect(() => {
+    if (isWorkspaceBoard) return
+    return onAgentIdentityChanged(room.scope, (e) => {
+      if (!agentIdentityMatchesPath(e, projectPath)) return
+      const n = agentIdentityDisplayName(e)
+      if (n) setDisplayName(n)
+    })
+  }, [room.scope, projectPath, isWorkspaceBoard])
 
   const openTrayItem = async (item: InboxItem): Promise<void> => {
     setSelectedRow({ kind: 'tray', id: item.id })

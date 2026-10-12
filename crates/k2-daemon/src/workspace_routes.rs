@@ -263,6 +263,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                                 session.set_label(new_name.clone(), true);
                             }
                         }
+                        // Every connected client (Connect web/desktop, Home
+                        // rooms, other windows) repaints the name live; the
+                        // SyncProjects below only reaches this computer's
+                        // windows plus a payload-free projects refetch.
+                        crate::session_events::emit_agent_identity_changed(
+                            crate::session_events::AgentIdentityTarget::Path(&p),
+                            &["displayName", "name"],
+                        );
                         k2_core::agent_hooks::emit(
                             k2_core::agent_hooks::HookEvent::SyncProjects,
                             serde_json::Value::Null,
@@ -745,6 +753,10 @@ pub fn handle_set_handle(body: &[u8]) -> CliResponse {
     };
     match k2_core::workspace::handle::set_workspace_handle(&path, &b.handle) {
         Ok(handle) => {
+            crate::session_events::emit_agent_identity_changed(
+                crate::session_events::AgentIdentityTarget::Path(&path),
+                &["handle"],
+            );
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncProjects,
                 serde_json::Value::Null,
@@ -958,6 +970,90 @@ mod tests {
             .expect("route must be claimed by the GET chain");
         assert_eq!(resp.status, "405 Method Not Allowed");
         assert!(resp.body.contains("POST required"), "body={}", resp.body);
+    }
+
+    /// A real temp workspace (AGENT.md is written under it) + its row.
+    fn identity_workspace(label: &str) -> (String, String) {
+        let (name, _) = unique(label);
+        let dir = std::env::temp_dir().join(&name);
+        std::fs::create_dir_all(&dir).expect("mkdir workspace");
+        let path = dir.to_string_lossy().into_owned();
+        let id = insert_project(&name, &path);
+        (id, path)
+    }
+
+    fn identity_fields(ev: &crate::session_events::SessionEvent) -> Vec<String> {
+        match ev {
+            crate::session_events::SessionEvent::AgentIdentityChanged { fields, .. } => fields.clone(),
+            other => panic!("not an identity event: {other:?}"),
+        }
+    }
+
+    /// Agent rename live update: the owner route (Settings, sidebar
+    /// Rename agent…, `k2 workspace set-agent-name`, `k2 agent` all POST
+    /// it) broadcasts the new name to every client.
+    #[test]
+    fn set_agent_display_name_emits_agent_identity_changed() {
+        let (id, path) = identity_workspace("ident-disp");
+        let mut rx = crate::session_events::subscribe();
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), path.clone());
+        params.insert("name".to_string(), "Revenue Desk".to_string());
+        let resp = dispatch("/cli/workspace/set-agent-display-name", &params).expect("claimed");
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+
+        let evs = crate::session_events::take_identity_events(&mut rx, &id);
+        assert_eq!(evs.len(), 1, "exactly one identity event: {evs:?}");
+        let crate::session_events::SessionEvent::AgentIdentityChanged {
+            workspace_path,
+            name,
+            display_name,
+            ..
+        } = &evs[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(identity_fields(&evs[0]), vec!["displayName", "name"]);
+        assert_eq!(workspace_path, &path);
+        assert_eq!(display_name, "Revenue Desk");
+        assert_eq!(name, "Revenue Desk", "projects.name follows the display rename");
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// A refused rename emits nothing (no phantom repaint).
+    #[test]
+    fn set_agent_display_name_refusal_emits_nothing() {
+        let (id, path) = identity_workspace("ident-refuse");
+        let mut rx = crate::session_events::subscribe();
+        let mut params = HashMap::new();
+        params.insert("project".to_string(), path.clone());
+        params.insert("name".to_string(), "bad/name".to_string());
+        let resp = dispatch("/cli/workspace/set-agent-display-name", &params).expect("claimed");
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        let evs = crate::session_events::take_identity_events(&mut rx, &id);
+        assert!(evs.is_empty(), "refusal must not emit: {evs:?}");
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// Handle rename (`k2 workspace set-handle`, Settings) broadcasts too,
+    /// with the NEW handle.
+    #[test]
+    fn set_handle_emits_agent_identity_changed() {
+        let (id, path) = identity_workspace("ident-handle");
+        let next = format!("ident-{}", &id[..8]);
+        let mut rx = crate::session_events::subscribe();
+        let body = serde_json::json!({ "project": path, "handle": next }).to_string();
+        let resp = handle_set_handle(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+
+        let evs = crate::session_events::take_identity_events(&mut rx, &id);
+        assert_eq!(evs.len(), 1, "exactly one identity event: {evs:?}");
+        assert_eq!(identity_fields(&evs[0]), vec!["handle"]);
+        let crate::session_events::SessionEvent::AgentIdentityChanged { handle, .. } = &evs[0] else {
+            unreachable!()
+        };
+        assert_eq!(handle, &next);
+        std::fs::remove_dir_all(&path).ok();
     }
 
     #[test]

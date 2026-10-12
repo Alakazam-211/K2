@@ -52,7 +52,9 @@ import { onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import type { KeepAliveResult } from '@/lib/host-pool'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { onProjectsChanged } from '@/stores/session-events'
+import { onAgentIdentityChanged, onProjectsChanged, type AgentIdentityChangedEvent } from '@/stores/session-events'
+import { agentIdentityNeedsRefetch, applyAgentIdentity } from '@/lib/agent-identity'
+import { repairHomeRowsFromList, useHomesStore } from '@/stores/homes'
 
 export type HomeRoomPhase =
   /** Reading that server's project list. */
@@ -113,6 +115,13 @@ export interface HomeRoomsDeps {
   /** Home M5: that server's `projects_changed` (a worktree created or closed
    *  in the room), so the room's project list follows its server. */
   onProjectsChanged(scope: ServerScope, fn: () => void): () => void
+  /** Agent rename live update: that server's `agent_identity_changed`, so
+   *  the room's list (and its Home row label) follows a rename made by
+   *  anyone. Optional: absent, the room still follows `projects_changed`. */
+  onAgentIdentityChanged?(scope: ServerScope, fn: (e: AgentIdentityChangedEvent) => void): () => void
+  /** Rename repair of the Home rows on `hostKey` from that server's fresh
+   *  list (labels follow names). Optional. */
+  repairRows?(hostKey: string, projects: ProjectWithWorkspaces[]): void
   /** Z5/Z42: the server's version once `knowServer` resolved: null while
    *  the pool has not read its `/boot-status` (the room goes on and fails
    *  on its own), else whether it is below the floor and its version. */
@@ -254,15 +263,30 @@ export function createHomeRooms(deps: HomeRoomsDeps): HomeRooms {
 
     const projectsStore = createStore<{ projects: ProjectWithWorkspaces[] }>(() => ({ projects }))
     projectSubs.get(address)?.()
-    projectSubs.set(
-      address,
-      deps.onProjectsChanged(scope, () => {
-        deps.listProjects(scope).then(
-          (next) => projectsStore.setState({ projects: next }),
-          (err) => console.warn(`[home-rooms] ${entry.hostKey} projects refresh failed:`, err),
-        )
-      }),
-    )
+    const refreshProjects = (): void => {
+      deps.listProjects(scope).then(
+        (next) => {
+          projectsStore.setState({ projects: next })
+          deps.repairRows?.(entry.hostKey, next)
+        },
+        (err) => console.warn(`[home-rooms] ${entry.hostKey} projects refresh failed:`, err),
+      )
+    }
+    const offProjects = deps.onProjectsChanged(scope, refreshProjects)
+    const offIdentity =
+      deps.onAgentIdentityChanged?.(scope, (e) => {
+        const prev = projectsStore.getState().projects
+        const next = applyAgentIdentity(prev, e)
+        if (next !== prev) {
+          projectsStore.setState({ projects: next })
+          deps.repairRows?.(entry.hostKey, next)
+        }
+        if (agentIdentityNeedsRefetch(e)) refreshProjects()
+      }) ?? null
+    projectSubs.set(address, () => {
+      offProjects()
+      offIdentity?.()
+    })
     const room = deps.createRoom({
       scope,
       workspace: { projectId: project.id, workspaceId: ws.id, path: ws.worktreePath ?? project.path },
@@ -435,6 +459,8 @@ export const homeRooms: HomeRooms = createHomeRooms({
   scopeFor: (hostKey) => scopeForHost(hostKey),
   layoutRevisionSupported,
   onProjectsChanged: (scope, fn) => onProjectsChanged(scope, () => fn()),
+  onAgentIdentityChanged: (scope, fn) => onAgentIdentityChanged(scope, fn),
+  repairRows: (hostKey, projects) => repairHomeRowsFromList(useHomesStore, hostKey, projects),
   promote: promoteToPrimary,
   now: () => Date.now(),
   setInterval: (fn, ms) => setInterval(fn, ms),

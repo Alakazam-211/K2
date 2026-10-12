@@ -14,6 +14,7 @@
   "tunnel_identity_changed": "app",
   "publish_services_changed": "app",
   "workspace_resources_changed": "app",
+  "agent_identity_changed": "app",
   "tab_title_changed": "workspace",
   "session_address_changed": "workspace",
   "tab_order_changed": "workspace",

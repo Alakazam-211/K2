@@ -119,6 +119,8 @@ vi.mock('@/stores/session-events', async () => {
       return h.unsubscribe
     },
     onChatHistoryChanged: () => () => {},
+    // The header's agent name follows a rename made by anyone.
+    onAgentIdentityChanged: () => () => {},
     // The chat header's Token picker refetches on this event.
     onLlmAccountsChanged: () => () => {},
   }

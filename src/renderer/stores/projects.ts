@@ -21,7 +21,8 @@ import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // a host switch. `activeHostKey` + the store guard in-flight fetches so a
 // response from the PREVIOUS host can never land after a switch.
 import { onActiveHostChange, activeHostKey, useConnectHostStore } from '@/stores/connect-host'
-import { onProjectsChanged } from '@/stores/session-events'
+import { onAgentIdentityChanged, onProjectsChanged, type AgentIdentityChangedEvent } from '@/stores/session-events'
+import { agentIdentityNeedsRefetch, applyAgentIdentity } from '@/lib/agent-identity'
 import { useGitInitDialogStore } from './git-init-dialog'
 import { useToastStore } from './toast'
 import { useTabsStore, ensurePinnedAgentTabForMode, registerActiveProjectIdGetter, registerActivateProject, registerProjectDefaultAgentGetter, registerProjectsPathIndex, runLeaveGuard } from './tabs'
@@ -323,7 +324,7 @@ interface ProjectsState {
    *  daemon (`workspace/set-agent-display-name`; handle unchanged).
    *  Optimistic paint, rolls back and rethrows on failure so the dialog
    *  can show the error. Does NOT full-refetch on success; other clients
-   *  refetch on the daemon's ProjectsChanged. */
+   *  patch from the daemon's `agent_identity_changed`. */
   renameAgentDisplayName: (id: string, name: string) => Promise<void>
   touchInteraction: (projectId: string) => void
   setManuallyActive: (projectId: string, active: boolean) => Promise<void>
@@ -1053,6 +1054,19 @@ onDaemonConnected(() => {
 onProjectsChanged(primaryScope(), () => {
   scheduleProjectsRefreshFromSync()
 })
+
+/** Agent rename live update: patch the renamed (re-handled, recolored)
+ *  agent in place from the daemon's current values — no N+1 list refetch.
+ *  A picture change (or a field word this client doesn't know) refetches
+ *  through the debounced, self-echo-suppressed path. */
+export function applyAgentIdentityChanged(e: AgentIdentityChangedEvent): void {
+  const prev = useProjectsStore.getState().projects
+  const next = applyAgentIdentity(prev, e)
+  if (next !== prev) useProjectsStore.setState({ projects: next })
+  if (agentIdentityNeedsRefetch(e)) scheduleProjectsRefreshFromSync()
+}
+
+onAgentIdentityChanged(primaryScope(), applyAgentIdentityChanged)
 
 onActiveHostChange(() => {
   hasLoadedFromDaemon = false

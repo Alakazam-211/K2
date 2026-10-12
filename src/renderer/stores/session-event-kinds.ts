@@ -76,6 +76,9 @@ export const SESSION_EVENT_ROUTES = {
   tunnel_identity_changed: { class: 'app', app: true },
   publish_services_changed: { class: 'app', app: true, carried: true },
   workspace_resources_changed: { class: 'app', app: true, carried: true },
+  // Agent rename live update: carried, so a Home room on another server
+  // repaints its agent's name too.
+  agent_identity_changed: { class: 'app', app: true, carried: true },
   tab_title_changed: { class: 'workspace', workspace: true, tabs: true },
   // prd-thread-survives-tab-rename S3: a renamed chat's new Thread address
   // (published on the Thread address bus).

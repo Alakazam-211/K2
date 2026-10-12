@@ -3958,6 +3958,118 @@ async fn skin_guest_full_name_owner_set_clear_and_list() {
     });
 }
 
+/// Owner-only agent mark (`POST /cli/skin/users/agent`). Guests, platform
+/// passes, Member logins and agent hooks (even with manage ON) are refused,
+/// and nothing they send changes the mark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_guest_agent_mark_is_owner_only() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let handle = format!("skinagent{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sales_id, _) = seed_thread_addr(&handle);
+        add_user(port, "bot");
+        let mark_path = format!("/cli/skin/users/agent?token={OWNER_TOKEN}");
+        let listed_bot = || {
+            let r = http(port, "GET", &format!("/cli/skin/users?token={OWNER_TOKEN}"), None);
+            assert_eq!(r.status, 200, "{}", r.body);
+            json(&r.body)["users"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|u| u["username"] == "bot").cloned())
+                .expect("bot listed")
+        };
+        assert!(listed_bot()["agentWorkspace"].is_null());
+
+        let get = http(port, "GET", &mark_path, None);
+        assert_eq!(get.status, 405, "GET users/agent; {}", get.body);
+
+        let body = serde_json::json!({"username": "bot", "workspace": handle}).to_string();
+        let set = http(port, "POST", &mark_path, Some(&body));
+        assert_eq!(set.status, 200, "{}", set.body);
+        assert_eq!(json(&set.body)["agentWorkspace"], sales_id.as_str(), "{}", set.body);
+        assert_eq!(json(&set.body)["agentHandle"], handle.as_str(), "{}", set.body);
+        assert_eq!(listed_bot()["agentWorkspace"], sales_id.as_str());
+
+        let missing_ws = http(port, "POST", &mark_path, Some(r#"{"username":"bot"}"#));
+        assert_eq!(missing_ws.status, 400, "no silent unmark; {}", missing_ws.body);
+        assert_eq!(listed_bot()["agentWorkspace"], sales_id.as_str());
+        let unknown_ws = http(
+            port,
+            "POST",
+            &mark_path,
+            Some(r#"{"username":"bot","workspace":"no-such-workspace"}"#),
+        );
+        assert_eq!(unknown_ws.status, 400, "{}", unknown_ws.body);
+        let unknown_user = http(
+            port,
+            "POST",
+            &mark_path,
+            Some(&serde_json::json!({"username": "ghost", "workspace": handle}).to_string()),
+        );
+        assert_eq!(unknown_user.status, 400, "{}", unknown_user.body);
+
+        // Nobody but the owner can clear (or set) it.
+        let clear_body = r#"{"username":"bot","clear":true}"#;
+        let missing = http(port, "POST", "/cli/skin/users/agent", Some(clear_body));
+        assert_eq!(missing.status, 403, "missing token; {}", missing.body);
+        let member = provision_role(port, "markmember", "hunter2-strong-9", "member");
+        let r = http(port, "POST", &format!("/cli/skin/users/agent?token={member}"), Some(clear_body));
+        assert_eq!(r.status, 403, "member rejected; {}", r.body);
+
+        set_password(port, "bot", "s3cret-horse");
+        let login = http(
+            port,
+            "POST",
+            "/cli/skin/login",
+            Some(r#"{"username":"bot","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(login.status, 200, "{}", login.body);
+        let sess = json(&login.body)["token"].as_str().expect("session").to_string();
+        let r = http(port, "POST", &format!("/cli/skin/users/agent?token={sess}"), Some(clear_body));
+        assert_eq!(r.status, 403, "the marked guest itself rejected; {}", r.body);
+
+        let (_plat_id, plat_tok) = mint(port, "ops", &["thread:read"], &[&handle]);
+        let r = http(port, "POST", &format!("/cli/skin/users/agent?token={plat_tok}"), Some(clear_body));
+        assert_eq!(r.status, 403, "platform rejected; {}", r.body);
+
+        let hook = mint_scoped_hook_for(&sales_id);
+        let on = set_agents_manage_skin(port, &sales_id, 1);
+        assert_eq!(on.status, 200, "owner enable manage; {}", on.body);
+        let r = http(port, "POST", &format!("/cli/skin/users/agent?token={hook}"), Some(clear_body));
+        assert_eq!(r.status, 403, "agent rejected even with manage ON; {}", r.body);
+        assert!(r.body.contains("owner_only"), "{}", r.body);
+        // A manage-ON hook adding a user cannot smuggle a mark in the body.
+        let smuggle = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={hook}"),
+            Some(&serde_json::json!({"username": "smuggled", "agentWorkspace": sales_id, "agent_workspace": sales_id, "workspace": handle}).to_string()),
+        );
+        assert_eq!(smuggle.status, 200, "{}", smuggle.body);
+        let r = http(port, "GET", &format!("/cli/skin/users?token={OWNER_TOKEN}"), None);
+        let smuggled = json(&r.body)["users"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|u| u["username"] == "smuggled").cloned())
+            .expect("smuggled listed");
+        assert!(smuggled["agentWorkspace"].is_null(), "{smuggled}");
+
+        assert_eq!(listed_bot()["agentWorkspace"], sales_id.as_str(), "non-owner writes must not stick");
+
+        let both = http(
+            port,
+            "POST",
+            &mark_path,
+            Some(&serde_json::json!({"username": "bot", "workspace": handle, "clear": true}).to_string()),
+        );
+        assert_eq!(both.status, 400, "{}", both.body);
+        let cleared = http(port, "POST", &mark_path, Some(clear_body));
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        assert!(json(&cleared.body)["agentWorkspace"].is_null(), "{}", cleared.body);
+        assert!(listed_bot()["agentWorkspace"].is_null());
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
     let _g = lock();

@@ -7903,6 +7903,38 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/skin/users/agent" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // Owner-role only, like full-name: the mark decides whether
+                    // a principal's db calls read as a person or an agent, so a
+                    // scoped hook (even with agents_can_manage_skin ON), a pass
+                    // and the app gateway are refused.
+                    let Some(actor) =
+                        super::http::owner_role_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
+                        super::http::send_response(
+                            &mut *stream,
+                            f.status,
+                            f.content_type,
+                            &f.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_users_agent(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/skin/users/remove" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;

@@ -172,9 +172,16 @@ fn real_pg_guest_doors_smoke() {
         ],
     );
     let a = skin_session("alice", policy.clone());
+    let policy_for_bot = policy.clone();
     let b = skin_session("bob", policy);
     let a_id = a.principal_id.clone().expect("a");
     let b_id = b.principal_id.clone().expect("b");
+    // A guest login the owner marked as this workspace's agent.
+    let bot_principal = k2_core::skin::add_principal("salesbot").expect("bot principal");
+    k2_core::skin::set_principal_agent("salesbot", Some(&handle)).expect("owner mark");
+    let mut bot = skin_session("salesbot", policy_for_bot.clone());
+    bot.principal_id = Some(bot_principal.id.clone());
+    let bot_id = bot_principal.id.clone();
     println!("[realpg] db={db} alice={a_id} bob={b_id}");
 
     let mut results: Vec<(&str, Result<(), String>)> = Vec::new();
@@ -401,6 +408,54 @@ fn real_pg_guest_doors_smoke() {
             "person-only confirm: the guest's own login session confirms",
             want(!quote.is_empty() && body_json(&r)["rowCount"] == 1, r.body.clone()),
         ));
+        // An owner-marked agent login: kind agent, person-only confirm refuses.
+        let r = q(
+            &bot,
+            "SELECT k2.actor_kind() AS kind, k2.actor() AS actor, k2.actor_info() AS info, k2.skin_uid() AS me",
+            serde_json::json!([]),
+        );
+        let v = body_json(&r);
+        results.push((
+            "marked agent login: kind agent, agent:<handle>, workspace id, on_behalf_of null",
+            want(
+                v["rows"][0]["kind"] == "agent"
+                    && v["rows"][0]["actor"] == format!("agent:{handle}")
+                    && v["rows"][0]["info"]["workspace"] == pid
+                    && v["rows"][0]["info"]["on_behalf_of"].is_null()
+                    && v["rows"][0]["info"]["principal"] == bot_id
+                    && v["rows"][0]["me"] == bot_id,
+                r.body.clone(),
+            ),
+        ));
+        let r = q(
+            &bot,
+            "INSERT INTO quotes (owner) VALUES ($1::uuid) RETURNING id",
+            serde_json::json!([bot_id]),
+        );
+        let bot_quote = body_json(&r)["rows"][0]["id"].as_str().unwrap_or("").to_string();
+        let r = q(
+            &bot,
+            "UPDATE quotes SET confirmed = true WHERE id = $1::uuid",
+            serde_json::json!([bot_quote]),
+        );
+        results.push((
+            "person-only confirm refuses the marked agent (0 rows)",
+            want(!bot_quote.is_empty() && body_json(&r)["rowCount"] == 0, r.body.clone()),
+        ));
+        let r = q(
+            &bot,
+            "INSERT INTO audit_log (action) VALUES ('agent viewed') RETURNING actor_kind, actor",
+            serde_json::json!([]),
+        );
+        results.push((
+            "audit row from the marked agent says agent",
+            want(
+                body_json(&r)["rows"][0]["actor_kind"] == "agent"
+                    && body_json(&r)["rows"][0]["actor"] == format!("agent:{handle}"),
+                r.body.clone(),
+            ),
+        ));
+
         let r = q(
             &a,
             "SELECT set_config('k2.actor', 'agent:x', true)",

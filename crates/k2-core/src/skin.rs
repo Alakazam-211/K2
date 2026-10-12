@@ -652,6 +652,14 @@ pub struct SkinPrincipal {
     /// Owner-only writes sanitize via `sanitize_owner_display_name` (cap 64).
     #[serde(default)]
     pub full_name: Option<String>,
+    /// Owner-only mark: this guest principal is the agent of one workspace
+    /// (`projects.id`). Its brokered db calls stamp actor kind `agent`.
+    /// `None` = a person (actor kind `guest`).
+    #[serde(default)]
+    pub agent_workspace: Option<String>,
+    /// Display only: live handle of `agent_workspace` (skip when gone).
+    #[serde(default)]
+    pub agent_handle: Option<String>,
 }
 
 /// Per-room functions on the wire: `{handle, caps}`.
@@ -1086,6 +1094,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.execute("ALTER TABLE principals ADD COLUMN email TEXT", []);
     // G10: full name on the guest. Ignore duplicate ALTER like `email`.
     let _ = conn.execute("ALTER TABLE principals ADD COLUMN full_name TEXT", []);
+    // Owner-only agent mark (`k2 app user agent`). Additive like `full_name`:
+    // skin.db has no schema version; a duplicate ALTER is ignored.
+    let _ = conn.execute("ALTER TABLE principals ADD COLUMN agent_workspace TEXT", []);
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS principals_email
          ON principals(email COLLATE NOCASE)
@@ -1515,6 +1526,8 @@ pub fn add_principal_with_email(
             role_name: None,
             email,
             full_name: None,
+            agent_workspace: None,
+            agent_handle: None,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -1522,7 +1535,7 @@ pub fn add_principal_with_email(
 }
 
 const PRINCIPAL_SELECT: &str = "SELECT p.id, p.username, p.created_at, p.default_rooms,
-                p.password_hash, p.role_id, r.name, p.email, p.full_name
+                p.password_hash, p.role_id, r.name, p.email, p.full_name, p.agent_workspace
          FROM principals p
          LEFT JOIN roles r ON r.id = p.role_id";
 
@@ -1537,6 +1550,7 @@ fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
     let role_name: Option<String> = r.get(6)?;
     let email: Option<String> = r.get(7)?;
     let full_name: Option<String> = r.get(8)?;
+    let agent_workspace: Option<String> = r.get(9)?;
     Ok(SkinPrincipal {
         id: r.get(0)?,
         username: r.get(1)?,
@@ -1554,6 +1568,10 @@ fn map_principal_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinPrincipal> {
         full_name: full_name
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        agent_workspace: agent_workspace
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        agent_handle: None,
     })
 }
 
@@ -1617,12 +1635,7 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
         }
         Ok(out)
     })
-    .map(|mut users| {
-        for u in &mut users {
-            u.default_room_handles = handles_for_project_ids(&u.default_rooms);
-        }
-        users
-    })
+    .map(|users| users.into_iter().map(attach_principal_handles).collect())
 }
 
 pub fn remove_principal(username: &str) -> Result<bool, String> {
@@ -1677,6 +1690,10 @@ fn principal_by_username(
 
 fn attach_principal_handles(mut p: SkinPrincipal) -> SkinPrincipal {
     p.default_room_handles = handles_for_project_ids(&p.default_rooms);
+    p.agent_handle = p
+        .agent_workspace
+        .as_ref()
+        .and_then(|id| handles_for_project_ids(std::slice::from_ref(id)).into_iter().next());
     p
 }
 
@@ -1909,6 +1926,8 @@ pub fn set_principal_password(
             role_name: p.role_name,
             email: p.email,
             full_name: p.full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })
     .map(attach_principal_handles)
@@ -1944,6 +1963,8 @@ pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPr
             role_name: p.role_name,
             email,
             full_name: p.full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })
     .map(attach_principal_handles)
@@ -1981,9 +2002,69 @@ pub fn set_principal_full_name(
             role_name: p.role_name,
             email: p.email,
             full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })
     .map(attach_principal_handles)
+}
+
+/// Owner-only (the HTTP writer gates it): mark a guest principal as the
+/// agent of one workspace, or clear the mark with `None`. `workspace` is a
+/// handle or a `projects.id`; it is stored as the id. Live sessions keep
+/// working; the mark is read on every brokered db call
+/// ([`principal_agent_workspace`]), so it applies from the next query.
+pub fn set_principal_agent(
+    username: &str,
+    workspace: Option<&str>,
+) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let workspace_id = match workspace.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(ws) => {
+            let ids = resolve_room_tokens(&[ws.to_string()])?;
+            match ids.as_slice() {
+                [id] => Some(id.clone()),
+                _ => return Err(format!("unknown workspace handle {ws:?}")),
+            }
+        }
+    };
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        conn.execute(
+            "UPDATE principals SET agent_workspace = ?1 WHERE id = ?2",
+            params![workspace_id, p.id],
+        )
+        .map_err(|e| format!("skin agent mark update: {e}"))?;
+        Ok(SkinPrincipal {
+            agent_workspace: workspace_id,
+            agent_handle: None,
+            ..p
+        })
+    })
+    .map(attach_principal_handles)
+}
+
+/// The owner's agent mark on one principal (`projects.id`), or `None` for
+/// a person. An unknown principal is `None`: the pass resolver already
+/// requires a live principal for a login session.
+pub fn principal_agent_workspace(principal_id: &str) -> Result<Option<String>, String> {
+    with_conn(|conn| {
+        let raw: Option<Option<String>> = conn
+            .query_row(
+                "SELECT agent_workspace FROM principals WHERE id = ?1",
+                params![principal_id.trim()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin agent mark lookup: {e}"))?;
+        Ok(raw
+            .flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()))
+    })
 }
 
 fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Result<usize, String> {
@@ -2524,6 +2605,8 @@ pub fn set_principal_default_rooms(
             role_name: p.role_name,
             email: p.email,
             full_name: p.full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })
     .map(attach_principal_handles)
@@ -2972,6 +3055,8 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
             role_name: Some(role.name),
             email: p.email,
             full_name: p.full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -3001,6 +3086,8 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
             role_name: None,
             email: p.email,
             full_name: p.full_name,
+            agent_workspace: p.agent_workspace,
+            agent_handle: None,
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
@@ -5257,6 +5344,79 @@ mod tests {
             .map(|c| c.expect("col"))
             .collect();
         cols.join(",")
+    }
+
+    #[test]
+    fn principal_agent_mark_sets_clears_and_old_db_gains_the_column() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let id = uuid::Uuid::new_v4().to_string();
+            let handle = format!("agentws{}", &id[..8]);
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                    params![id, "Agent ws", format!("/tmp/skin-agent-{id}"), handle],
+                )
+                .expect("project");
+            }
+            let ada = add_principal("ada").expect("add");
+            assert!(ada.agent_workspace.is_none());
+            assert_eq!(principal_agent_workspace(&ada.id).unwrap(), None);
+            let wire = serde_json::to_value(&ada).unwrap();
+            assert!(wire["agentWorkspace"].is_null(), "{wire}");
+
+            let marked = set_principal_agent("ada", Some(&handle)).expect("mark by handle");
+            assert_eq!(marked.agent_workspace.as_deref(), Some(id.as_str()), "stored as id");
+            assert_eq!(marked.agent_handle.as_deref(), Some(handle.as_str()));
+            assert_eq!(principal_agent_workspace(&ada.id).unwrap().as_deref(), Some(id.as_str()));
+            let listed = list_principals().unwrap();
+            assert_eq!(listed[0].agent_workspace.as_deref(), Some(id.as_str()));
+            assert_eq!(listed[0].agent_handle.as_deref(), Some(handle.as_str()));
+            // Other owner edits keep the mark.
+            let named = set_principal_full_name("ada", Some("Ada")).unwrap();
+            assert_eq!(named.agent_workspace.as_deref(), Some(id.as_str()));
+
+            let by_id = set_principal_agent("ada", Some(&id)).expect("mark by id");
+            assert_eq!(by_id.agent_workspace.as_deref(), Some(id.as_str()));
+            let err = set_principal_agent("ada", Some("no-such-ws")).unwrap_err();
+            assert!(err.contains("unknown workspace"), "{err}");
+            assert_eq!(
+                principal_agent_workspace(&ada.id).unwrap().as_deref(),
+                Some(id.as_str()),
+                "a refused mark leaves the old one"
+            );
+            let err = set_principal_agent("ghost", Some(&handle)).unwrap_err();
+            assert!(err.contains("unknown skin user"), "{err}");
+
+            let cleared = set_principal_agent("ada", None).expect("clear");
+            assert!(cleared.agent_workspace.is_none() && cleared.agent_handle.is_none());
+            assert_eq!(principal_agent_workspace(&ada.id).unwrap(), None);
+            assert_eq!(principal_agent_workspace("not-a-principal").unwrap(), None);
+        });
+
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("open old skin.db");
+            conn.execute_batch(
+                "CREATE TABLE principals (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL
+                 );
+                 INSERT INTO principals (id, username, created_at) VALUES ('p1', 'bob', 1);",
+            )
+            .expect("pre-mark schema");
+            assert!(!principal_columns(&conn).split(',').any(|c| c == "agent_workspace"));
+            drop(conn);
+            let listed = list_principals().expect("open_db adds agent_workspace");
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].agent_workspace.is_none(), "{listed:?}");
+            let cols = with_conn(|conn| Ok(principal_columns(conn))).unwrap();
+            assert!(cols.split(',').any(|c| c == "agent_workspace"), "{cols}");
+        });
     }
 
     #[test]

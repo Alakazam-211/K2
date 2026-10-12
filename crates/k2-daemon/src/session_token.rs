@@ -1481,6 +1481,10 @@ mod tests {
             !is_agent_verb("/cli/skin/users/full-name"),
             "full name write is owner-only, not an agent verb"
         );
+        assert!(
+            !is_agent_verb("/cli/skin/users/agent"),
+            "an agent must never mark or unmark a principal as an agent"
+        );
         assert!(is_agent_verb("/cli/skin/users/rooms"));
         assert!(is_agent_verb("/cli/skin/roles"));
         assert!(is_agent_verb("/cli/skin/roles/update"));

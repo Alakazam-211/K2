@@ -127,7 +127,32 @@ fn real_pg_guest_doors_smoke() {
            LANGUAGE sql VOLATILE SECURITY INVOKER\n\
            AS $$ UPDATE jobs SET state = state || patch WHERE id = p_id RETURNING owner $$;\n\
          CREATE FUNCTION k2_leak() RETURNS bigint LANGUAGE sql STABLE SECURITY INVOKER\n\
-           AS $$ SELECT count(*) FROM public._k2_migrations $$;\n",
+           AS $$ SELECT count(*) FROM public._k2_migrations $$;\n\
+         CREATE TABLE audit_log (\n\
+           id bigserial PRIMARY KEY,\n\
+           actor_kind text DEFAULT k2.actor_kind(),\n\
+           actor text DEFAULT k2.actor(),\n\
+           principal uuid DEFAULT k2.skin_uid(),\n\
+           action text NOT NULL\n\
+         );\n\
+         ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;\n\
+         CREATE POLICY audit_append ON audit_log FOR INSERT TO PUBLIC\n\
+           WITH CHECK (actor_kind IS NOT DISTINCT FROM k2.actor_kind()\n\
+             AND actor IS NOT DISTINCT FROM k2.actor()\n\
+             AND principal IS NOT DISTINCT FROM k2.skin_uid());\n\
+         CREATE POLICY audit_read_own ON audit_log FOR SELECT TO PUBLIC\n\
+           USING (principal = k2.skin_uid());\n\
+         CREATE TABLE quotes (\n\
+           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n\
+           owner uuid NOT NULL,\n\
+           confirmed boolean NOT NULL DEFAULT false\n\
+         );\n\
+         ALTER TABLE quotes ENABLE ROW LEVEL SECURITY;\n\
+         CREATE POLICY quotes_read ON quotes FOR SELECT TO PUBLIC USING (owner = k2.skin_uid());\n\
+         CREATE POLICY quotes_add ON quotes FOR INSERT TO PUBLIC WITH CHECK (owner = k2.skin_uid());\n\
+         CREATE POLICY quotes_confirm_person ON quotes FOR UPDATE TO PUBLIC\n\
+           USING (owner = k2.skin_uid() AND k2.actor_kind() = 'guest')\n\
+           WITH CHECK (owner = k2.skin_uid() AND k2.actor_kind() = 'guest');\n",
     )
     .unwrap();
     let path = dir.to_string_lossy().into_owned();
@@ -306,6 +331,91 @@ fn real_pg_guest_doors_smoke() {
             ),
         ));
 
+        // Actor stamp: derived from the pass, locked before SET ROLE.
+        let r = q(
+            &a,
+            "SELECT k2.actor_kind() AS kind, k2.actor() AS actor, k2.actor_info() AS info",
+            serde_json::json!([]),
+        );
+        let v = body_json(&r);
+        results.push((
+            "actor helpers on the query door: guest, guest:<principal>, pass id",
+            want(
+                v["rows"][0]["kind"] == "guest"
+                    && v["rows"][0]["actor"] == format!("guest:{a_id}")
+                    && v["rows"][0]["info"]["principal"] == a_id
+                    && v["rows"][0]["info"]["pass"] == a.id
+                    && v["rows"][0]["info"]["kind"] == "guest",
+                r.body.clone(),
+            )
+            .and_then(|_| no_leaks(&r.body, &db)),
+        ));
+        let r = q(
+            &a,
+            "INSERT INTO audit_log (action) VALUES ('viewed quote') RETURNING actor_kind, actor, principal",
+            serde_json::json!([]),
+        );
+        let v = body_json(&r);
+        results.push((
+            "audit row defaults come from the locked actor",
+            want(
+                r.status == "200 OK"
+                    && v["rows"][0]["actor_kind"] == "guest"
+                    && v["rows"][0]["actor"] == format!("guest:{a_id}")
+                    && v["rows"][0]["principal"] == a_id,
+                r.body.clone(),
+            ),
+        ));
+        let r = routes::handle_dump_insert_gated(
+            serde_json::json!({"workspace": handle, "table": "audit_log",
+                "row": {"action": "forged", "actor_kind": "guest", "actor": "agent:sales"}})
+            .to_string()
+            .as_bytes(),
+            Some(a.clone()),
+        );
+        results.push((
+            "audit row with a forged actor refused (rows door, WITH CHECK)",
+            want(r.status == "400 Bad Request", r.body.clone()),
+        ));
+        let r = q(&a, "UPDATE audit_log SET action = 'rewritten'", serde_json::json!([]));
+        let r2 = q(&a, "DELETE FROM audit_log", serde_json::json!([]));
+        results.push((
+            "audit log is append-only for guests (no UPDATE/DELETE policy)",
+            want(
+                body_json(&r)["rowCount"] == 0 && body_json(&r2)["rowCount"] == 0,
+                format!("{} | {}", r.body, r2.body),
+            ),
+        ));
+        let r = q(
+            &a,
+            "INSERT INTO quotes (owner) VALUES ($1::uuid) RETURNING id",
+            serde_json::json!([a_id]),
+        );
+        let quote = body_json(&r)["rows"][0]["id"].as_str().unwrap_or("").to_string();
+        let r = q(
+            &a,
+            "UPDATE quotes SET confirmed = true WHERE id = $1::uuid",
+            serde_json::json!([quote]),
+        );
+        results.push((
+            "person-only confirm: the guest's own login session confirms",
+            want(!quote.is_empty() && body_json(&r)["rowCount"] == 1, r.body.clone()),
+        ));
+        let r = q(
+            &a,
+            "SELECT set_config('k2.actor', 'agent:x', true)",
+            serde_json::json!([]),
+        );
+        results.push((
+            "guest cannot set an actor GUC (parser)",
+            want(r.status == "400 Bad Request", r.body.clone()),
+        ));
+        let r = q(&a, "SELECT * FROM pg_temp.k2_actor_lock", serde_json::json!([]));
+        results.push((
+            "guest cannot touch the actor lock (parser)",
+            want(r.status == "400 Bad Request", r.body.clone()),
+        ));
+
         // Owner/agent store door, then the same under a bind role.
         let put = |id: &str| {
             routes::handle_store_put(
@@ -331,6 +441,65 @@ fn real_pg_guest_doors_smoke() {
             ),
         ));
     });
+
+    // Actor stamp outside the brokered lane. The superuser socket stands in
+    // for an agent DSN by SET ROLE to the agent login (objects it creates
+    // are owned by that role, as on a real agent connection).
+    let agent = format!("{db}_agent");
+    let migrator = format!("{db}_migrator");
+    let su = |sql: &str| cluster.run_helper(&["psql", "-d", db.as_str(), "-q", "-tA", "-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()));
+    let owner = su(
+        "SELECT pg_get_userbyid(p.proowner) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+         WHERE n.nspname = 'k2' AND p.proname = 'actor_info'",
+    );
+    results.push((
+        "k2.actor_info() is owned by the migrator (SECURITY DEFINER, not superuser)",
+        want(owner.as_deref() == Ok(migrator.as_str()), format!("{owner:?}")),
+    ));
+    let r = su(&format!(
+        "BEGIN;\nSET LOCAL ROLE \"{agent}\";\nSELECT k2.set_principal('{a_id}');\n\
+         SELECT k2.skin_uid()::text || '|' || coalesce(k2.actor_kind(), 'NULL') || '|' || coalesce(k2.actor_info()::text, 'NULL');\nCOMMIT;"
+    ));
+    results.push((
+        "BFF set_principal lane: principal set, actor NULL",
+        want(r.as_deref() == Ok(format!("{a_id}|NULL|NULL").as_str()), format!("{r:?}")),
+    ));
+    let r = su(&format!(
+        "SET ROLE \"{agent}\";\n\
+         SELECT coalesce(k2.actor_kind(), 'NULL');\n\
+         SELECT count(*) FROM quotes;"
+    ));
+    results.push((
+        "agent DSN lane: actor NULL",
+        want(r.as_ref().map(|s| s.starts_with("NULL\n")).unwrap_or(false), format!("{r:?}")),
+    ));
+    // A DSN holder plants its own lock table: ignored (not migrator-owned),
+    // so the person-only confirm still refuses. If the agent login has no
+    // TEMP privilege the plant itself fails, which is also a refusal.
+    let planted = su(&format!(
+        "BEGIN;\nSET LOCAL ROLE \"{agent}\";\n\
+         CREATE TEMP TABLE pg_temp.k2_actor_lock (kind text, actor text, principal uuid, pass text);\n\
+         INSERT INTO pg_temp.k2_actor_lock VALUES ('guest', 'guest:{a_id}', '{a_id}', NULL);\n\
+         SELECT k2.set_principal('{a_id}');\n\
+         SELECT coalesce(k2.actor_kind(), 'NULL');\n\
+         UPDATE quotes SET confirmed = false RETURNING id;\n\
+         COMMIT;"
+    ));
+    results.push((
+        "planted pg_temp actor lock from a DSN is ignored; person-only confirm refuses",
+        match &planted {
+            Ok(out) => want(out.trim() == "NULL", format!("{planted:?}")),
+            Err(e) => want(
+                e.contains("permission denied to create temporary tables"),
+                format!("{planted:?}"),
+            ),
+        },
+    ));
+    let confirmed = su("SELECT confirmed::text FROM quotes");
+    results.push((
+        "quote stays confirmed (no lane but the guest's own session changed it)",
+        want(confirmed.as_deref() == Ok("true"), format!("{confirmed:?}")),
+    ));
 
     ops::bind_role(cluster, Some(&db), Some(&pid), "app_user").expect("bind app_user");
     std::fs::write(

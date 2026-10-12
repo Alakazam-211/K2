@@ -20974,6 +20974,40 @@ BYO BFF (principal helpers)
   stays copy-into-migrations (not auto-applied). No FORCE RLS.
   `k2.skin_uid()` is a typed accessor, not a stronger identity source.
 
+ACTOR (who is calling, not just which principal)
+  Brokered app calls (POST /cli/db/query and the rows doors) also lock
+  the ACTOR, from the pass only (never the request body), before SET
+  ROLE. Read it with k2.actor_kind() (text), k2.actor() (text) and
+  k2.actor_info() (jsonb: kind, actor, principal, pass).
+    guest   guest:<principal uuid>   a guest's own login session
+    app     app:<name>               reserved (platform passes: 403 here)
+    agent   agent:<workspace>        reserved for delegation (agent acting
+                                     for a user; k2.skin_uid() = the user)
+  All three are NULL off the brokered lane: `k2 db dsn`, the migrator,
+  a BFF's own set_principal lane. An agent (`k2 db dsn`) login cannot
+  plant one: only a lock the migrator owns counts.
+  An agent you gave its own guest login is kind guest too: keep your
+  own agent_of table for that until delegation ships.
+  Person-only confirm:
+    CREATE POLICY quotes_confirm ON quotes FOR UPDATE TO PUBLIC
+      USING (owner = k2.skin_uid() AND k2.actor_kind() = 'guest')
+      WITH CHECK (owner = k2.skin_uid() AND k2.actor_kind() = 'guest');
+  Append-only audit (no UPDATE/DELETE policy = nobody but the migrator
+  changes a row):
+    CREATE TABLE audit_log (
+      id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(),
+      actor_kind text DEFAULT k2.actor_kind(),
+      actor text DEFAULT k2.actor(),
+      principal uuid DEFAULT k2.skin_uid(),
+      action text NOT NULL);
+    ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY audit_append ON audit_log FOR INSERT TO PUBLIC
+      WITH CHECK (actor_kind IS NOT DISTINCT FROM k2.actor_kind()
+        AND actor IS NOT DISTINCT FROM k2.actor()
+        AND principal IS NOT DISTINCT FROM k2.skin_uid());
+    CREATE POLICY audit_read_own ON audit_log FOR SELECT TO PUBLIC
+      USING (principal = k2.skin_uid());
+
 STORE
   `k2 store` is JSONB in the same DB. Create-new-DB still needs the
   write passport; list/get/put need ownership or a grant, not the
@@ -21708,7 +21742,11 @@ STORE
   only — not POST /cli/store/put.
   Dump (rows) doors run like POST /cli/db/query: the session's principal is
   locked into the connection, then SET ROLE to the rows login, so your RLS
-  policies apply. Policies call k2.skin_uid(). Store doors read K2's own
+  policies apply. Policies call k2.skin_uid(). The actor is locked the
+  same way, from the pass only: k2.actor_kind() is 'guest' for your own
+  login session (k2.actor() = guest:<principal>), NULL off this lane —
+  e.g. person-only confirm USING (k2.actor_kind() = 'guest'). See
+  `k2 study db` ACTOR for an append-only audit table. Store doors read K2's own
   store (room store cap only). K2's own tables (_k2_*) are closed to guests.
   Errors show only the Postgres message. Guests never hold a DSN.
   GET /cli/db/dsn teaching 403.
@@ -41784,6 +41822,9 @@ Skin helpers (ensured on create and migrate; POLICY is still copy-in):
   k2.principal_hygiene(). set_principal is SET LOCAL. A username in the
   GUC errors (does not degrade). Hygiene true means the GUC is empty now
   — not anti-spoof; the BFF LOGIN can still SET another uuid.
+  k2.actor_kind() / k2.actor() / k2.actor_info(): who is calling on the
+  brokered app lane ('guest' = a guest's own login session); NULL on any
+  DSN or set_principal lane. `k2 study db` ACTOR has example policies.
   crates/k2-daemon/src/sql/skin_rls_template.sql — GUC POLICY example;
   no CREATE ROLE skin_*; no FORCE RLS; not auto-applied; no SET ROLE.
 

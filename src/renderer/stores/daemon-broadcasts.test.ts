@@ -69,6 +69,11 @@ vi.mock('@/stores/session-events', async () => {
       ev.reg.projects.push(fn)
       return () => void (ev.reg.projects = ev.reg.projects.filter((f) => f !== fn))
     }),
+    // Agent rename live update: projects.ts subscribes at load.
+    onAgentIdentityChanged: vi.fn((scope: unknown) => {
+      expectPrimaryScope(scope)
+      return () => {}
+    }),
     onAgentStatusChanged: vi.fn((scope: unknown, fn: (...a: unknown[]) => void) => {
       expectPrimaryScope(scope)
       ev.reg.agent.push(fn)

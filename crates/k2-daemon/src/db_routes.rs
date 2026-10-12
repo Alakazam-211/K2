@@ -973,6 +973,20 @@ pub fn handle_projects_update(body: &[u8]) -> CliResponse {
         b.force_model_on_resume,
     );
     if result.is_ok() {
+        let mut fields: Vec<&str> = Vec::new();
+        if b.name.is_some() {
+            fields.push("name");
+        }
+        if b.color.is_some() {
+            fields.push("color");
+        }
+        if b.icon_url.is_some() {
+            fields.push("image");
+        }
+        crate::session_events::emit_agent_identity_changed(
+            crate::session_events::AgentIdentityTarget::Id(&b.id),
+            &fields,
+        );
         emit_projects_changed();
     }
     serialized(result)
@@ -1234,7 +1248,19 @@ pub fn handle_projects_detect_icon(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    serialized(pops::projects_detect_icon(&b.project_id))
+    let result = pops::projects_detect_icon(&b.project_id);
+    if result.is_ok() {
+        emit_image_changed(&b.project_id);
+    }
+    serialized(result)
+}
+
+/// An agent's picture changed (set / clear / detect): peers refetch.
+fn emit_image_changed(project_id: &str) {
+    crate::session_events::emit_agent_identity_changed(
+        crate::session_events::AgentIdentityTarget::Id(project_id),
+        &["image"],
+    );
 }
 
 #[derive(Deserialize)]
@@ -1249,7 +1275,11 @@ pub fn handle_projects_set_icon(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    serialized(pops::projects_set_icon(&b.project_id, &b.data_url))
+    let result = pops::projects_set_icon(&b.project_id, &b.data_url);
+    if result.is_ok() {
+        emit_image_changed(&b.project_id);
+    }
+    serialized(result)
 }
 
 pub fn handle_projects_clear_icon(body: &[u8]) -> CliResponse {
@@ -1257,7 +1287,11 @@ pub fn handle_projects_clear_icon(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    unit_ok(pops::projects_clear_icon(&b.project_id))
+    let result = pops::projects_clear_icon(&b.project_id);
+    if result.is_ok() {
+        emit_image_changed(&b.project_id);
+    }
+    unit_ok(result)
 }
 
 #[derive(Deserialize)]
@@ -1725,6 +1759,69 @@ mod projects_mutate_broadcast_tests {
         );
 
         expect_projects_changed(&mut rx);
+    }
+
+    fn fields_of(ev: &SessionEvent) -> Vec<String> {
+        match ev {
+            SessionEvent::AgentIdentityChanged { fields, .. } => fields.clone(),
+            other => panic!("not an identity event: {other:?}"),
+        }
+    }
+
+    /// Agent rename live update: a sidebar name / color / picture change
+    /// through `projects/update` names exactly the fields that changed,
+    /// with the current values.
+    #[test]
+    fn projects_update_identity_fields_emit_agent_identity_changed() {
+        let _g = TEST_LOCK.lock();
+        let project_id = unique("ident");
+        seed_project(&project_id, &format!("/tmp/{project_id}"), 0);
+
+        let mut rx = session_events::subscribe();
+        let body = serde_json::json!({ "id": project_id, "name": "Ops Desk", "color": "#00ff00" }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let evs = session_events::take_identity_events(&mut rx, &project_id);
+        assert_eq!(evs.len(), 1, "one identity event: {evs:?}");
+        assert_eq!(fields_of(&evs[0]), vec!["name", "color"]);
+        let SessionEvent::AgentIdentityChanged { name, color, .. } = &evs[0] else { unreachable!() };
+        assert_eq!(name, "Ops Desk");
+        assert_eq!(color, "#00ff00");
+
+        // A non-identity field (tab order) is not an identity change.
+        let mut rx = session_events::subscribe();
+        let body = serde_json::json!({ "id": project_id, "tabOrder": 3 }).to_string();
+        let resp = handle_projects_update(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let evs = session_events::take_identity_events(&mut rx, &project_id);
+        assert!(evs.is_empty(), "tab order is not identity: {evs:?}");
+    }
+
+    /// Set / clear picture: `image` only — the data URL is never on the bus.
+    #[test]
+    fn projects_icon_routes_emit_image_identity_change() {
+        let _g = TEST_LOCK.lock();
+        let project_id = unique("icon");
+        seed_project(&project_id, &format!("/tmp/{project_id}"), 0);
+        let data_url = "data:image/png;base64,iVBORw0KGgo=";
+
+        let mut rx = session_events::subscribe();
+        let body = serde_json::json!({ "projectId": project_id, "dataUrl": data_url }).to_string();
+        let resp = handle_projects_set_icon(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let evs = session_events::take_identity_events(&mut rx, &project_id);
+        assert_eq!(evs.len(), 1, "one identity event: {evs:?}");
+        assert_eq!(fields_of(&evs[0]), vec!["image"]);
+        let wire = serde_json::to_string(&evs[0]).expect("serialize");
+        assert!(!wire.contains("base64"), "image bytes must never ride the bus: {wire}");
+
+        let mut rx = session_events::subscribe();
+        let body = serde_json::json!({ "projectId": project_id }).to_string();
+        let resp = handle_projects_clear_icon(body.as_bytes());
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let evs = session_events::take_identity_events(&mut rx, &project_id);
+        assert_eq!(evs.len(), 1, "one identity event: {evs:?}");
+        assert_eq!(fields_of(&evs[0]), vec!["image"]);
     }
 
     #[test]

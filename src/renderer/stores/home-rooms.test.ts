@@ -28,6 +28,7 @@ import type { PinnedRoom, PinnedRoomInput } from '@/stores/room'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import type { HomeRow } from '@/stores/homes'
+import type { AgentIdentityChangedEvent } from '@/stores/session-events'
 
 const MIN = 60_000
 
@@ -68,6 +69,10 @@ function harness() {
   const knownServers: string[] = []
   /** host key → its projects_changed handlers. */
   const projectsChanged = new Map<string, Set<() => void>>()
+  /** host key → its agent_identity_changed handlers. */
+  const identityChanged = new Map<string, Set<(e: AgentIdentityChangedEvent) => void>>()
+  /** Home row repairs asked for (host key, project names). */
+  const repairs: Array<[string, string[]]> = []
   const scopes = new Map<string, ServerScope>()
   /** Rows promoted to the primary room (Z7). */
   const promoted: HomeRow[] = []
@@ -138,6 +143,15 @@ function harness() {
       projectsChanged.set(scope.hostKey, set)
       return () => set.delete(fn)
     },
+    onAgentIdentityChanged: (scope, fn) => {
+      const set = identityChanged.get(scope.hostKey) ?? new Set()
+      set.add(fn)
+      identityChanged.set(scope.hostKey, set)
+      return () => set.delete(fn)
+    },
+    repairRows: (hostKey, projects) => {
+      repairs.push([hostKey, projects.map((p) => p.name)])
+    },
     promote: (r) => {
       promoted.push(r)
     },
@@ -181,6 +195,8 @@ function harness() {
     revisionProbes,
     knownServers,
     projectsChanged,
+    identityChanged,
+    repairs,
     promoted,
     floors,
     belowFloor,
@@ -389,6 +405,64 @@ describe('Home rooms (M4, M5)', () => {
     expect(fake.input.projects.getState().projects[0].workspaces.map((w) => w.id)).toEqual(['pb-ws', 'pb-wt'])
     await h.homeRooms.close('anna::b.test')
     expect(handlers.size).toBe(0)
+  })
+
+  it('agent rename live update: the room patches its agent from its server’s agent_identity_changed (no refetch) and repairs the Home row label', async () => {
+    await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    const fake = h.rooms[0]
+    const handlers = h.identityChanged.get('b.test')
+    if (!handlers) throw new Error('no agent_identity_changed handler on b.test')
+    expect(handlers.size).toBe(1)
+    // A refetch would fail loudly: the list is gone.
+    h.lists.set('b.test', new Error('must not refetch for a rename'))
+    const ev: AgentIdentityChangedEvent = {
+      kind: 'agent_identity_changed',
+      projectId: 'pb',
+      workspacePath: '/srv/anna',
+      fields: ['displayName', 'name'],
+      name: 'Anna Ops',
+      displayName: 'Anna Ops',
+      handle: 'anna',
+      color: '#123456',
+    }
+    for (const fn of handlers) fn(ev)
+    const p = fake.input.projects.getState().projects[0]
+    expect(p.name).toBe('Anna Ops')
+    expect(p.color).toBe('#123456')
+    expect(h.repairs).toEqual([['b.test', ['Anna Ops']]])
+    // Another server's agent: nothing changes.
+    const before = fake.input.projects.getState().projects
+    for (const fn of handlers) fn({ ...ev, projectId: 'someone-else', name: 'Nope' })
+    expect(fake.input.projects.getState().projects).toBe(before)
+    expect(h.repairs.length).toBe(1)
+    await h.homeRooms.close('anna::b.test')
+    expect(handlers.size).toBe(0)
+  })
+
+  it('agent rename live update: a picture change refetches the room’s list', async () => {
+    await h.homeRooms.open(row('anna', 'b.test'), 'b.test')
+    const fake = h.rooms[0]
+    const handlers = h.identityChanged.get('b.test')
+    if (!handlers) throw new Error('no agent_identity_changed handler on b.test')
+    const refreshed = project('pb', 'anna', '/srv/anna')
+    ;(refreshed as unknown as { iconUrl: string }).iconUrl = 'data:image/png;base64,AAAA'
+    h.lists.set('b.test', [refreshed])
+    for (const fn of handlers) {
+      fn({
+        kind: 'agent_identity_changed',
+        projectId: 'pb',
+        workspacePath: '/srv/anna',
+        fields: ['image'],
+        name: 'anna',
+        displayName: 'anna',
+        handle: 'anna',
+        color: '',
+      })
+    }
+    await new Promise((r) => setTimeout(r, 0))
+    expect((fake.input.projects.getState().projects[0] as unknown as { iconUrl: string }).iconUrl).toBe(
+      'data:image/png;base64,AAAA',
+    )
   })
 
   it('a row whose agent is gone on that server is not-found', async () => {

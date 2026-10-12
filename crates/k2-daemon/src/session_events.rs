@@ -353,6 +353,40 @@ pub enum SessionEvent {
         workspace_id: String,
     },
 
+    /// An agent's identity changed: its name (sidebar `projects.name` or
+    /// the AGENT.md display name), its handle, its color or its image.
+    /// APP-LEVEL (the `workspace_resources_changed` convention) so every
+    /// connected client — other windows, Connect users on web/desktop,
+    /// Home rooms on another server — repaints without a reconnect.
+    /// Before this, panes listened to the loopback-only Tauri
+    /// `sync:projects` and a remote viewer kept the old name until it
+    /// left and re-entered the server.
+    ///
+    /// Wire: `{ "kind": "agent_identity_changed", "projectId",
+    /// "workspacePath", "fields": ["displayName"|"name"|"handle"|"color"|
+    /// "image"], "name", "displayName", "handle", "color" }`. `fields`
+    /// says what changed; the four strings are the CURRENT canonical
+    /// values read back from the daemon after the write (never the
+    /// request), so a client can patch without a refetch. The image is
+    /// never on the wire (it can be a large data URL): on `image`,
+    /// refetch. Generic on purpose: a new identity field adds a `fields`
+    /// word (and optionally a value), never a new event. No secrets.
+    /// App (guest) sockets never see this event; their nudge is the
+    /// payload-free pass-level `rooms_changed` (room-scope surfaces R27),
+    /// derived from this event on the app activity socket.
+    AgentIdentityChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        fields: Vec<String>,
+        name: String,
+        #[serde(rename = "displayName")]
+        display_name: String,
+        handle: String,
+        color: String,
+    },
+
     /// #676 — a tab title was set daemon-side. WORKSPACE-SCOPED.
     /// Push counterpart to the new `POST /cli/workspace/set-tab-title`
     /// route + the daemon-canonical `tab_titles` store. Replaces the
@@ -750,6 +784,7 @@ impl SessionEvent {
             SessionEvent::TunnelIdentityChanged { .. } => "tunnel_identity_changed",
             SessionEvent::PublishServicesChanged { .. } => "publish_services_changed",
             SessionEvent::WorkspaceResourcesChanged { .. } => "workspace_resources_changed",
+            SessionEvent::AgentIdentityChanged { .. } => "agent_identity_changed",
             SessionEvent::TabTitleChanged { .. } => "tab_title_changed",
             SessionEvent::SessionAddressChanged { .. } => "session_address_changed",
             SessionEvent::TabOrderChanged { .. } => "tab_order_changed",
@@ -908,6 +943,99 @@ pub fn emit_heartbeat_roster_changed(workspace_path: &str, project_id: &str) {
         workspace_path: workspace_path.to_string(),
         project_id: project_id.to_string(),
     });
+}
+
+/// The `fields` words an [`SessionEvent::AgentIdentityChanged`] may carry.
+pub const AGENT_IDENTITY_FIELDS: [&str; 5] = ["name", "displayName", "handle", "color", "image"];
+
+/// Which registered workspace an identity change is about.
+#[derive(Debug, Clone, Copy)]
+pub enum AgentIdentityTarget<'a> {
+    /// `projects.path`.
+    Path(&'a str),
+    /// `projects.id`.
+    Id(&'a str),
+}
+
+/// Build the [`SessionEvent::AgentIdentityChanged`] for one workspace from
+/// the daemon's CURRENT rows (never the request). `None` when the workspace
+/// isn't registered (nothing on any client shows it) or `fields` is empty.
+/// Panics on a `fields` word outside [`AGENT_IDENTITY_FIELDS`] — a typo at
+/// an emit site must fail its test, not ship a word no client knows.
+pub fn agent_identity_event(target: AgentIdentityTarget<'_>, fields: &[&str]) -> Option<SessionEvent> {
+    for f in fields {
+        assert!(
+            AGENT_IDENTITY_FIELDS.contains(f),
+            "unknown agent identity field {f:?} (add it to AGENT_IDENTITY_FIELDS)"
+        );
+    }
+    if fields.is_empty() {
+        return None;
+    }
+    let (id, path, name, color, handle) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let (sql, key) = match target {
+            AgentIdentityTarget::Path(p) => ("SELECT id, path, name, color FROM projects WHERE path = ?1", p),
+            AgentIdentityTarget::Id(i) => ("SELECT id, path, name, color FROM projects WHERE id = ?1", i),
+        };
+        let row: Option<(String, String, String, Option<String>)> = conn
+            .query_row(sql, rusqlite::params![key], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .ok();
+        let (id, path, name, color) = row?;
+        let handle = k2_core::workspace::handle::project_handle(&conn, &id).unwrap_or_default();
+        (id, path, name, color.unwrap_or_default(), handle)
+    };
+    // AGENT.md read happens outside the DB lock.
+    let display_name = k2_core::workspace::display::agent_display_name(&path);
+    Some(SessionEvent::AgentIdentityChanged {
+        project_id: id,
+        workspace_path: path,
+        fields: fields.iter().map(|f| f.to_string()).collect(),
+        name,
+        display_name,
+        handle,
+        color,
+    })
+}
+
+/// Best-effort broadcast of [`agent_identity_event`]. Call right after the
+/// identity write SUCCEEDS, on every path that renames (or recolors /
+/// re-images) an agent. The broadcast `let _ =`-swallows the
+/// no-subscribers case.
+pub fn emit_agent_identity_changed(target: AgentIdentityTarget<'_>, fields: &[&str]) {
+    if let Some(ev) = agent_identity_event(target, fields) {
+        let _ = emit(ev);
+    }
+}
+
+/// Test helper: drain everything queued on `rx` (the emit is synchronous,
+/// so call it right after the write returns) and keep the
+/// `AgentIdentityChanged` events for `project_id`. The bus is
+/// process-global; other tests' events are skipped. A lagged receiver
+/// fails loudly (an event may have been lost).
+#[cfg(test)]
+pub(crate) fn take_identity_events(
+    rx: &mut broadcast::Receiver<SessionEvent>,
+    project_id: &str,
+) -> Vec<SessionEvent> {
+    let mut out = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(ev @ SessionEvent::AgentIdentityChanged { .. }) => {
+                if let SessionEvent::AgentIdentityChanged { project_id: id, .. } = &ev {
+                    if id == project_id {
+                        out.push(ev);
+                    }
+                }
+            }
+            Ok(_) => continue,
+            Err(broadcast::error::TryRecvError::Empty) => return out,
+            Err(e) => panic!("session bus recv error: {e:?}"),
+        }
+    }
 }
 
 /// Files-drawer multi-writer live refresh — best-effort broadcast that
@@ -1078,6 +1206,66 @@ pub fn pane_group_id_from_agent(agent_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Agent rename live update: the wire shape clients patch from.
+    #[test]
+    fn agent_identity_changed_serializes_camel_case() {
+        let ev = SessionEvent::AgentIdentityChanged {
+            project_id: "pid".into(),
+            workspace_path: "/w/sales".into(),
+            fields: vec!["displayName".into(), "name".into()],
+            name: "Revenue".into(),
+            display_name: "Revenue".into(),
+            handle: "sales".into(),
+            color: "#ff00aa".into(),
+        };
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
+        assert_eq!(json["kind"], "agent_identity_changed");
+        assert_eq!(json["projectId"], "pid");
+        assert_eq!(json["workspacePath"], "/w/sales");
+        assert_eq!(json["fields"], serde_json::json!(["displayName", "name"]));
+        assert_eq!(json["name"], "Revenue");
+        assert_eq!(json["displayName"], "Revenue");
+        assert_eq!(json["handle"], "sales");
+        assert_eq!(json["color"], "#ff00aa");
+        assert!(json.get("display_name").is_none());
+        assert!(json.get("project_id").is_none());
+        assert_eq!(ev.kind_name(), "agent_identity_changed");
+    }
+
+    #[test]
+    fn agent_identity_event_reads_current_rows_and_skips_unregistered() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/k2-identity-ev-{}-{id}", std::process::id());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, color) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, "Row Name", path, "#123456"],
+            )
+            .expect("insert project");
+        }
+        let ev = agent_identity_event(AgentIdentityTarget::Id(&id), &["color"]).expect("registered");
+        let SessionEvent::AgentIdentityChanged { project_id, workspace_path, fields, name, color, .. } = ev
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(project_id, id);
+        assert_eq!(workspace_path, path);
+        assert_eq!(fields, vec!["color".to_string()]);
+        assert_eq!(name, "Row Name");
+        assert_eq!(color, "#123456");
+        assert!(agent_identity_event(AgentIdentityTarget::Path(&path), &["name"]).is_some());
+        assert!(agent_identity_event(AgentIdentityTarget::Path("/no/such/ws/anywhere"), &["name"]).is_none());
+        assert!(agent_identity_event(AgentIdentityTarget::Id(&id), &[]).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown agent identity field")]
+    fn agent_identity_event_rejects_unknown_field_words() {
+        let _ = agent_identity_event(AgentIdentityTarget::Id("whatever"), &["colour"]);
+    }
 
     /// FROZEN WIRE CONTRACT (task #672): the renderer codes against
     /// EXACTLY `{ "kind": "active_changed", "activeProjectIds":

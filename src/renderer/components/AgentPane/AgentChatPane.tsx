@@ -21,7 +21,8 @@ import {
 import { agentDisplayName, claimAgentLock, resumeChatArgs, setChatSession, reconcileColdBootSession, type ColdBootDecision } from '@/lib/workspace-agent'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { useStore } from 'zustand'
-import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged } from '@/stores/session-events'
+import { subscribeToWorkspaceSessionEvents, onChatHistoryChanged, onAgentIdentityChanged } from '@/stores/session-events'
+import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import { chatHarnessName } from '@/components/SessionView/chatHarness'
@@ -496,6 +497,16 @@ function useDisplayName(projectPath: string, agentName: string): string {
     }).then((u) => { if (cancelled) u(); else unlisten = u })
     return () => { cancelled = true; unlisten?.() }
   }, [projectPath])
+  // Agent rename live update: every viewer of this room (other windows,
+  // Connect users, a Home room on another server) repaints on its server's
+  // event — not only this computer's `sync:projects`.
+  useEffect(() => {
+    return onAgentIdentityChanged(room.scope, (e) => {
+      if (!agentIdentityMatchesPath(e, projectPath)) return
+      const n = agentIdentityDisplayName(e)
+      if (n) setDisplayName(n)
+    })
+  }, [room.scope, projectPath])
   return displayName
 }
 

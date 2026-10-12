@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { agentDisplayName, agentHandle } from '@/lib/workspace-agent'
+import { onAgentIdentityChanged } from '@/stores/session-events'
+import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 // Plan B — projects_update / workspaces_delete AND the daemon-data git
 // reads/mutations (git_remove_worktree) are host-aware: route through
 // the `/cli/*` HTTP layer (local OR remote). open_in_finder + the
@@ -129,9 +131,18 @@ export default function WorkspacePanel(): React.JSX.Element {
         else unlisten = fn
       })
     }
+    // Agent rename live update: the room's own server says who renamed
+    // what (any client, the CLI, a Connect user). Reaches every viewer.
+    const offIdentity = onAgentIdentityChanged(room.scope, (e) => {
+      if (cancelled || !agentIdentityMatchesPath(e, activeProjectPath)) return
+      const n = agentIdentityDisplayName(e)
+      if (n) setDisplayName(n)
+      if (e.handle) setHandle(e.handle)
+    })
     return () => {
       cancelled = true
       unlisten?.()
+      offIdentity()
     }
   }, [activeProjectPath, room])
 

@@ -36,6 +36,20 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
+// ── Agent rename live update: capture the store's module-load
+// `agent_identity_changed` subscription (the rest of session-events is real).
+const identityHandlers = vi.hoisted(() => [] as Array<(e: unknown) => void>)
+vi.mock('@/stores/session-events', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/stores/session-events')>()
+  return {
+    ...real,
+    onAgentIdentityChanged: (_scope: unknown, fn: (e: unknown) => void) => {
+      identityHandlers.push(fn)
+      return () => {}
+    },
+  }
+})
+
 // ── Mock the cross-window emit bus ───────────────────────────────────────
 const emitMock = vi.fn((..._args: unknown[]) => Promise.resolve())
 vi.mock('@tauri-apps/api/event', () => ({
@@ -118,6 +132,7 @@ vi.mock('@/lib/workspace-switch-focus', () => ({
 import {
   useProjectsStore,
   scheduleProjectsRefreshFromSync,
+  applyAgentIdentityChanged,
   _resetProjectsChangedSyncForTests,
   type ProjectWithWorkspaces,
 } from './projects'
@@ -349,6 +364,64 @@ describe('projects store — Plan B host-aware migration', () => {
 
     expect((useProjectsStore.getState().projects as ProjectWithWorkspaces[])[0].name).toBe('Keep Me')
     expect(emitMock).not.toHaveBeenCalledWith('sync:projects')
+  })
+
+  it('agent rename live update: a peer’s agent_identity_changed patches the name in place, no refetch', async () => {
+    vi.useFakeTimers()
+    // The store subscribed on its window server at module load.
+    expect(identityHandlers.length).toBe(1)
+    const p = mkProject('p-peer') as unknown as ProjectWithWorkspaces
+    p.name = 'Old Name'
+    p.handle = 'old'
+    p.workspaces = []
+    const other = mkProject('p-other') as unknown as ProjectWithWorkspaces
+    other.workspaces = []
+    useProjectsStore.setState({ projects: [p, other] })
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    identityHandlers[0]({
+      kind: 'agent_identity_changed',
+      projectId: 'p-peer',
+      workspacePath: '/tmp/p-peer',
+      fields: ['displayName', 'name'],
+      name: 'Revenue Desk',
+      displayName: 'Revenue Desk',
+      handle: 'old',
+      color: '#fff',
+    })
+
+    const after = useProjectsStore.getState().projects as ProjectWithWorkspaces[]
+    expect(after[0].name).toBe('Revenue Desk')
+    expect(after[0].handle).toBe('old')
+    expect(after[1]).toBe(other)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(daemonCliGet).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  it('agent rename live update: a picture change refetches through the debounced path', async () => {
+    vi.useFakeTimers()
+    daemonCliGet.mockResolvedValue([])
+    const p = mkProject('p-pic') as unknown as ProjectWithWorkspaces
+    p.workspaces = []
+    useProjectsStore.setState({ projects: [p] })
+    const fetchSpy = vi.spyOn(useProjectsStore.getState(), 'fetchProjects')
+
+    applyAgentIdentityChanged({
+      kind: 'agent_identity_changed',
+      projectId: 'p-pic',
+      workspacePath: '/tmp/p-pic',
+      fields: ['image'],
+      name: 'p-pic',
+      displayName: 'p-pic',
+      handle: '',
+      color: '#fff',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(151)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    fetchSpy.mockRestore()
   })
 
   it('reorderProjects POSTs projects/reorder and emits sync:projects', async () => {

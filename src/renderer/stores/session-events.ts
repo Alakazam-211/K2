@@ -229,6 +229,30 @@ export interface WorkspaceResourcesChangedEvent {
   workspaceId: string
 }
 
+/** The `fields` words of `agent_identity_changed`. A newer daemon may send
+ *  a word this client doesn't know; treat it like `image` (refetch). */
+export type AgentIdentityField = 'name' | 'displayName' | 'handle' | 'color' | 'image'
+
+/** APP-LEVEL — an agent was renamed (sidebar name or AGENT.md display
+ *  name), re-handled, recolored or given a new picture, by any client or
+ *  the CLI. `fields` says what changed; the strings are the daemon's
+ *  CURRENT values, so stores patch without a refetch. The picture is never
+ *  on the wire: on `image`, refetch. Same routing class as
+ *  `workspace_resources_changed` (the Files drawer's live-refresh pattern). */
+export interface AgentIdentityChangedEvent {
+  kind: 'agent_identity_changed'
+  /** `projects.id`. */
+  projectId: string
+  workspacePath: string
+  fields: string[]
+  /** `projects.name` — the sidebar / roster label. */
+  name: string
+  /** AGENT.md `display_name` — what agent panes show. */
+  displayName: string
+  handle: string
+  color: string
+}
+
 // NOTE (0.40.31): the WORKSPACE-SCOPED review events (`review_queue_changed`,
 // `review_changed`) are still broadcast by the daemon (the `k2 review` system
 // lives on), but this app no longer consumes them — the Review Queue modal +
@@ -612,6 +636,7 @@ export type SessionEventMessage =
   | TunnelIdentityChangedEvent
   | PublishServicesChangedEvent
   | WorkspaceResourcesChangedEvent
+  | AgentIdentityChangedEvent
   | TabTitleChangedEvent
   | SessionAddressChangedEvent
   | TabOrderChangedEvent
@@ -1052,6 +1077,7 @@ type TunnelSubdomainsHandler = (e: TunnelSubdomainsChangedEvent) => void
 type TunnelIdentityHandler = (e: TunnelIdentityChangedEvent) => void
 type PublishServicesHandler = (e: PublishServicesChangedEvent) => void
 type WorkspaceResourcesHandler = (e: WorkspaceResourcesChangedEvent) => void
+type AgentIdentityHandler = (e: AgentIdentityChangedEvent) => void
 /** RL4/A28: receives the hello frame (its `instance_id` tells a restart). */
 type AppHelloHandler = (hello: HelloEvent) => void
 /** RL4/A30: a `{"kind":"resync"}` control frame — the server is about to
@@ -1135,6 +1161,7 @@ interface AppBusHandlers {
   tunnelIdentity: Set<TunnelIdentityHandler>
   publishServices: Set<PublishServicesHandler>
   workspaceResources: Set<WorkspaceResourcesHandler>
+  agentIdentity: Set<AgentIdentityHandler>
   appHello: Set<AppHelloHandler>
   appResync: Set<AppResyncHandler>
   sessionAdded: Set<SessionAddedHandler>
@@ -1177,6 +1204,7 @@ function createBusState(scopeId: string): BusState {
       tunnelIdentity: new Set(),
       publishServices: new Set(),
       workspaceResources: new Set(),
+      agentIdentity: new Set(),
       appHello: new Set(),
       appResync: new Set(),
       sessionAdded: new Set(),
@@ -1285,6 +1313,14 @@ export function onWorkspaceResourcesChanged(
   fn: WorkspaceResourcesHandler,
 ): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.workspaceResources, fn)
+}
+
+/** Subscribe to APP-LEVEL `agent_identity_changed` (an agent renamed,
+ *  re-handled, recolored or re-pictured on that server, by anyone). Carries
+ *  the current values; patch, don't refetch the world. Returns an
+ *  unsubscribe fn. */
+export function onAgentIdentityChanged(scope: ServerScope, fn: AgentIdentityHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.agentIdentity, fn)
 }
 
 /** Fires on every app-level WS (re)connect — use it to re-snapshot truth
@@ -1558,6 +1594,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   workspace_resources_changed: (h, m) => {
     for (const fn of h.workspaceResources) fn(m)
   },
+  agent_identity_changed: (h, m) => {
+    for (const fn of h.agentIdentity) fn(m)
+  },
   session_added: (h, m) => {
     for (const fn of h.sessionAdded) fn(m)
   },
@@ -1636,6 +1675,7 @@ export interface AppBus {
   onTunnelIdentityChanged(fn: TunnelIdentityHandler): UnsubscribeFn
   onPublishServicesChanged(fn: PublishServicesHandler): UnsubscribeFn
   onWorkspaceResourcesChanged(fn: WorkspaceResourcesHandler): UnsubscribeFn
+  onAgentIdentityChanged(fn: AgentIdentityHandler): UnsubscribeFn
   onAppHello(fn: AppHelloHandler): UnsubscribeFn
   onSessionAddedApp(fn: SessionAddedHandler): UnsubscribeFn
   onSessionRemovedApp(fn: SessionRemovedHandler): UnsubscribeFn
@@ -1681,6 +1721,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onTunnelIdentityChanged: (fn) => onTunnelIdentityChanged(scope, fn),
     onPublishServicesChanged: (fn) => onPublishServicesChanged(scope, fn),
     onWorkspaceResourcesChanged: (fn) => onWorkspaceResourcesChanged(scope, fn),
+    onAgentIdentityChanged: (fn) => onAgentIdentityChanged(scope, fn),
     onAppHello: (fn) => onAppHello(scope, fn),
     onSessionAddedApp: (fn) => onSessionAddedApp(scope, fn),
     onSessionRemovedApp: (fn) => onSessionRemovedApp(scope, fn),

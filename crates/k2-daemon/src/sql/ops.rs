@@ -3803,11 +3803,7 @@ pub(crate) fn exec_guest_query(
         Some(super::query::quote_guest_params(params)?)
     };
     let g = guest_conn(ops, secrets, project_id, principal_id)?;
-    let exec_sql = if stmt.returns_rows {
-        super::query::rows_wrapper(&stmt.sql)
-    } else {
-        stmt.sql.clone()
-    };
+    let exec_sql = super::query::guest_exec_sql(stmt);
     // `-A` without `-t`: INSERT/UPDATE/DELETE command tags stay on stdout.
     // Row JSON lines still start with `{`.
     let mut args = guest_psql_args(&g, false);

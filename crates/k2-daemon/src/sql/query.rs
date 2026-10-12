@@ -179,6 +179,36 @@ pub fn rows_wrapper(user_sql: &str) -> String {
     )
 }
 
+/// Text a RETURNING write raises inside its own statement when it would
+/// return more than [`GUEST_ROW_CAP`] rows, so the write rolls back.
+pub const ROW_CAP_MARKER: &str = "k2 row cap";
+
+/// INSERT / UPDATE / DELETE … RETURNING. Postgres refuses a data-modifying
+/// statement as a FROM subquery, so it is a top-level data-modifying CTE.
+/// A LIMIT would not stop the write (the CTE always runs to completion),
+/// so the cap is checked inside the statement: over the cap the whole
+/// statement errors and nothing is applied.
+pub fn returning_write_wrapper(user_sql: &str) -> String {
+    format!(
+        "WITH k2_guest_src AS (\n{user_sql}\n), \
+         k2_guest_n AS (SELECT count(*) AS n FROM k2_guest_src) \
+         SELECT to_json(k2_guest_src)::text FROM k2_guest_src, k2_guest_n \
+         WHERE CASE WHEN k2_guest_n.n > {cap} \
+         THEN ('{ROW_CAP_MARKER} ' || k2_guest_n.n)::int = 0 ELSE true END",
+        cap = GUEST_ROW_CAP,
+    )
+}
+
+/// The SQL actually sent for a classified guest statement (before
+/// PREPARE): rows come back as one JSON text line each.
+pub fn guest_exec_sql(stmt: &GuestStmt) -> String {
+    match (stmt.returns_rows, stmt.read) {
+        (false, _) => stmt.sql.clone(),
+        (true, true) => rows_wrapper(&stmt.sql),
+        (true, false) => returning_write_wrapper(&stmt.sql),
+    }
+}
+
 pub fn guest_rows_json(stdout: &str) -> Result<serde_json::Value, OpsError> {
     let mut rows = Vec::new();
     for line in stdout.lines() {
@@ -261,6 +291,10 @@ pub fn map_guest_engine(err: String, internal: &[String]) -> OpsError {
         || lower.contains("sqlstate 57014")
     {
         OpsError::StatementTimeout("statement exceeded 10s".into())
+    } else if lower.contains(ROW_CAP_MARKER) {
+        OpsError::RowCap(format!(
+            "statement returned more than {GUEST_ROW_CAP} rows (nothing was written)"
+        ))
     } else {
         OpsError::Engine(guest_error_logged(&err, internal))
     }
@@ -437,6 +471,41 @@ mod tests {
         let plain = classify_guest_sql("UPDATE t SET n = 1").expect("upd");
         assert!(!plain.returns_rows);
         assert!(!plain.sql.ends_with(';'));
+    }
+
+    #[test]
+    fn returning_writes_use_a_top_level_cte_and_reads_keep_the_subquery() {
+        for sql in [
+            "INSERT INTO jobs (id) VALUES ($1) RETURNING id",
+            "UPDATE jobs SET n = n + 1 WHERE id = $1 RETURNING *",
+            "DELETE FROM jobs WHERE id = $1 RETURNING id",
+            "WITH c AS (SELECT 1 AS id) INSERT INTO jobs SELECT * FROM c RETURNING id",
+        ] {
+            let stmt = classify_guest_sql(sql).expect(sql);
+            assert!(!stmt.read && stmt.returns_rows, "{sql}");
+            let out = guest_exec_sql(&stmt);
+            assert!(out.starts_with("WITH k2_guest_src AS (\n"), "{out}");
+            assert!(out.contains(&format!("\n{sql}\n)")), "user text kept as-is: {out}");
+            assert!(!out.contains("FROM (\n"), "never a DML subquery: {out}");
+            assert!(!out.contains("LIMIT"), "a LIMIT would not stop the write: {out}");
+            assert!(out.contains("k2_guest_n.n > 5000"), "{out}");
+            assert!(out.contains(ROW_CAP_MARKER), "{out}");
+        }
+        let read = classify_guest_sql("select job_update($1,$2::jsonb)").expect("call");
+        let out = guest_exec_sql(&read);
+        assert_eq!(out, rows_wrapper("select job_update($1,$2::jsonb)"));
+        assert!(out.contains("LIMIT 5001"), "{out}");
+        let plain = classify_guest_sql("UPDATE jobs SET n = 1").expect("plain");
+        assert_eq!(guest_exec_sql(&plain), "UPDATE jobs SET n = 1", "plain writes are not wrapped");
+
+        let cap = map_guest_engine(
+            "psql …: exit Some(1): ERROR:  invalid input syntax for type integer: \"k2 row cap 5001\""
+                .into(),
+            &[],
+        );
+        assert_eq!(cap.code(), "row_cap");
+        assert_eq!(cap.status(), "409 Conflict");
+        assert!(cap.hint().contains("nothing was written"), "{}", cap.hint());
     }
 
     #[test]

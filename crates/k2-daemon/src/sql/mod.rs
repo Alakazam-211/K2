@@ -3559,6 +3559,8 @@ mod tests {
         assert!(!r.body.contains("migratorDsn"), "{}", r.body);
     }
 
+    mod real_pg;
+
     fn query_json(workspace: &str, sql: &str, params: Option<serde_json::Value>) -> Vec<u8> {
         let mut v = serde_json::json!({ "workspace": workspace, "sql": sql });
         if let Some(p) = params {

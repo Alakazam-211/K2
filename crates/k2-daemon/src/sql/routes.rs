@@ -155,18 +155,26 @@ fn ops() -> &'static dyn SystemOps {
 
 #[cfg(test)]
 thread_local! {
-    static TEST_OPS: std::cell::RefCell<Option<&'static FakeSystemOps>> = const { std::cell::RefCell::new(None) };
+    static TEST_OPS: std::cell::RefCell<Option<&'static dyn SystemOps>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 fn test_ops() -> Option<&'static dyn SystemOps> {
-    TEST_OPS.with(|c| c.borrow().map(|o| o as &dyn SystemOps))
+    TEST_OPS.with(|c| *c.borrow())
 }
 
 #[cfg(test)]
 #[allow(dead_code)]
 pub fn with_fake_ops<R>(fake: &'static FakeSystemOps, f: impl FnOnce() -> R) -> R {
-    TEST_OPS.with(|c| *c.borrow_mut() = Some(fake));
+    with_test_ops(fake, f)
+}
+
+/// Route handlers on any injected ops (the fake, or the real-Postgres
+/// smoke's throwaway cluster).
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn with_test_ops<R>(ops: &'static dyn SystemOps, f: impl FnOnce() -> R) -> R {
+    TEST_OPS.with(|c| *c.borrow_mut() = Some(ops));
     let r = f();
     TEST_OPS.with(|c| *c.borrow_mut() = None);
     r

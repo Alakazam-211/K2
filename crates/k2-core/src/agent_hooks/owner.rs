@@ -19,9 +19,19 @@
 //!    claims, unless its ancestry holds a pid that already sent hooks for
 //!    this pane (a nested `claude -p`). `session_id` equality is a logged
 //!    cross-check, never a gate.
-//! 4. **After the claim** only the owner `(pid, start_time)` is accepted.
+//! 4. **After the claim** the owner `(pid, start_time)` is accepted.
 //!    A `SessionStart` with `source` `clear|resume|fork` from the owner
 //!    updates the conversation id.
+//! 4a. **Descendants of the owner.** A sender whose real parent chain
+//!    (the same bounded walk as (2)) passes through the live owner's
+//!    exact `(pid, start_time)` is [`Verdict::Descendant`]: a Claude Code
+//!    background job (`claude --resume` → `claude daemon run` →
+//!    `bg-pty-host` → `bg-spare`) or a nested CLI. Its events are merged
+//!    into the pane's row (it may be on another conversation), but it
+//!    never claims, never moves the conversation id, and never releases
+//!    the claim. Env vars and claimed ids are never trusted for this;
+//!    only the OS process table is. A process in the pane that does not
+//!    descend from the owner (a sibling) stays [`ForeignReason::NotOwner`].
 //! 5. **Foreign** envelopes are counted and change nothing.
 //! 6. **Owner exit.** When the owner pid is gone or its start time
 //!    changed (pid reuse), the claim is released (`agent_exited`).
@@ -195,6 +205,9 @@ pub enum ForeignReason {
 pub enum Verdict {
     /// From the pane's owner: it may change the row.
     Owner,
+    /// From a verified OS-process descendant of the live owner (rule 4a):
+    /// merged into the pane's row, never a claim or a conversation move.
+    Descendant,
     Foreign(ForeignReason),
     UnknownPane,
 }
@@ -329,12 +342,21 @@ fn check_ancestry(
     });
     state.remember_sender(key);
 
-    // (4) an owner exists: only it is accepted.
+    // (4) an owner exists: it is accepted, and (4a) so is a process
+    // whose real parent chain passes through it.
     if let Some(claim) = &state.claim {
         if claim.proc == Some(key) {
             let mut o = out(Verdict::Owner);
             state.note_conversation(sender, &mut o);
             return o;
+        }
+        let descends = claim.proc.is_some_and(|owner| {
+            chain[1..]
+                .iter()
+                .any(|p| p.pid == owner.pid && p.start_time == owner.start_time)
+        });
+        if descends {
+            return out(Verdict::Descendant);
         }
         return out(Verdict::Foreign(ForeignReason::NotOwner));
     }
@@ -446,10 +468,20 @@ mod tests {
         assert_eq!(st.claim.as_ref().map(|c| c.via), Some(ClaimVia::PtyChild));
         assert_eq!(out.conversation_changed.as_deref(), Some("conv-a"));
 
-        // Grandchild of the PTY child, other session_id: foreign.
+        // Grandchild of the owner, other session_id: a verified
+        // descendant (4a). It is merged into the row (the row decides what
+        // a nested run may change), but never moves the conversation.
         let out = check(&mut st, Some(&pane(100)), &sender(300, "UserPromptSubmit", Some("conv-n")), &procs, A, 2);
-        assert_eq!(out.verdict, Verdict::Foreign(ForeignReason::NotOwner));
-        assert_eq!(st.conversation_id.as_deref(), Some("conv-a"), "a foreign envelope changes nothing");
+        assert_eq!(out.verdict, Verdict::Descendant);
+        assert!(!out.claimed_now);
+        assert_eq!(out.conversation_changed, None);
+        let mut sw = sender(300, "SessionStart", Some("conv-m"));
+        sw.source_field = Some("resume");
+        let out = check(&mut st, Some(&pane(100)), &sw, &procs, A, 3);
+        assert_eq!(out.verdict, Verdict::Descendant);
+        assert_eq!(out.conversation_changed, None, "a descendant's resume never moves the pane");
+        assert_eq!(st.conversation_id.as_deref(), Some("conv-a"));
+        assert_eq!(st.claim.as_ref().and_then(|c| c.proc).map(|k| k.pid), Some(100), "the claim stays");
     }
 
     #[test]
@@ -521,7 +553,100 @@ mod tests {
         assert_eq!(st.claim.as_ref().map(|c| c.via), Some(ClaimVia::FirstSender));
 
         let out = check(&mut st, Some(&pane(100)), &sender(400, "UserPromptSubmit", Some("c2")), &procs, A, 2);
-        assert_eq!(out.verdict, Verdict::Foreign(ForeignReason::NotOwner));
+        assert_eq!(out.verdict, Verdict::Descendant, "under the owner (200): merged, not a claim");
+    }
+
+    /// The Companion report: the pane's lead `claude --resume` (100, the
+    /// PTY child and owner) hosts a background job: `claude daemon run`
+    /// (110) → `bg-pty-host` (120) → `bg-spare` (130) on another
+    /// conversation. The job's hooks are a verified descendant.
+    #[test]
+    fn background_job_under_the_owner_is_a_descendant() {
+        let procs = agent_tree();
+        procs.add(110, 100, 11).add(120, 110, 12).add(130, 120, 13);
+        let mut st = PaneOwner::default();
+        check(&mut st, Some(&pane(100)), &sender(100, "SessionStart", Some("lead")), &procs, A, 1);
+        for event in ["SubagentStart", "PreToolUse", "PostToolUse", "SubagentStop", "Stop"] {
+            let out = check(&mut st, Some(&pane(100)), &sender(130, event, Some("bg-conv")), &procs, A, 2);
+            assert_eq!(out.verdict, Verdict::Descendant, "{event}");
+        }
+        assert_eq!(st.conversation_id.as_deref(), Some("lead"));
+    }
+
+    /// A process in the same pane that does NOT descend from the owner (a
+    /// sibling started from the shell) stays foreign.
+    #[test]
+    fn sibling_of_the_owner_in_the_same_pane_is_foreign() {
+        // PTY child = shell (100); owner `claude` (200); a second `claude`
+        // (250) started from the same shell, and its own child (260).
+        let procs = FakeProcs::default();
+        procs.add(10, 1, 1).add(100, 10, 2).add(200, 100, 3).add(250, 100, 4).add(260, 250, 5);
+        let mut st = PaneOwner::default();
+        check(&mut st, Some(&pane(100)), &sender(200, "SessionStart", Some("c1")), &procs, A, 1);
+        for pid in [250, 260] {
+            let out = check(&mut st, Some(&pane(100)), &sender(pid, "Stop", Some("c2")), &procs, A, 2);
+            assert_eq!(out.verdict, Verdict::Foreign(ForeignReason::NotOwner), "pid {pid}");
+        }
+    }
+
+    /// A descendant of ANOTHER pane's owner that claims this pane (stale
+    /// or forged `X-K2-Pane`) never reaches this pane's PTY child.
+    #[test]
+    fn descendant_of_another_panes_owner_is_foreign() {
+        // Pane A: PTY child 100 (owner). Pane B: PTY child 700 (owner),
+        // its background job 710 → 720.
+        let procs = agent_tree();
+        procs.add(700, 10, 20).add(710, 700, 21).add(720, 710, 22);
+        let mut a = PaneOwner::default();
+        let mut b = PaneOwner::default();
+        check(&mut a, Some(&pane(100)), &sender(100, "SessionStart", None), &procs, A, 1);
+        check(&mut b, Some(&pane(700)), &sender(700, "SessionStart", None), &procs, A, 1);
+        assert_eq!(check(&mut b, Some(&pane(700)), &sender(720, "Stop", None), &procs, A, 2).verdict, Verdict::Descendant);
+        let out = check(&mut a, Some(&pane(100)), &sender(720, "Stop", None), &procs, A, 2);
+        assert_eq!(out.verdict, Verdict::Foreign(ForeignReason::NotDescendant));
+    }
+
+    /// The descendant walk is the same bounded walk: a sender deeper than
+    /// [`MAX_ANCESTRY_DEPTH`] below the owner is foreign.
+    #[test]
+    fn descendant_walk_is_depth_bounded() {
+        let procs = agent_tree();
+        // 1000 → 1001 → … under the owner (100).
+        let mut parent = 100;
+        for pid in 1000..1000 + MAX_ANCESTRY_DEPTH as i32 {
+            procs.add(pid, parent, pid as u64);
+            parent = pid;
+        }
+        let mut st = PaneOwner::default();
+        check(&mut st, Some(&pane(100)), &sender(100, "SessionStart", None), &procs, A, 1);
+        // Owner at chain index MAX-1: still inside the walk.
+        let inside = 1000 + MAX_ANCESTRY_DEPTH as i32 - 2;
+        assert_eq!(check(&mut st, Some(&pane(100)), &sender(inside, "Stop", None), &procs, A, 2).verdict, Verdict::Descendant);
+        // One deeper: the walk stops before it reaches the owner.
+        let outside = 1000 + MAX_ANCESTRY_DEPTH as i32 - 1;
+        assert_eq!(
+            check(&mut st, Some(&pane(100)), &sender(outside, "Stop", None), &procs, A, 3).verdict,
+            Verdict::Foreign(ForeignReason::NotDescendant)
+        );
+    }
+
+    /// A descendant only counts through the owner's exact start time: once
+    /// the owner's pid is reused, the old claim is gone and a process under
+    /// the new one is not a descendant of the old owner.
+    #[test]
+    fn descendant_needs_the_owners_start_time() {
+        let procs = FakeProcs::default();
+        procs.add(10, 1, 1).add(100, 10, 2).add(200, 100, 3).add(300, 200, 4).add(400, 300, 5);
+        let mut st = PaneOwner::default();
+        check(&mut st, Some(&pane(100)), &sender(200, "SessionStart", None), &procs, A, 1);
+        check(&mut st, Some(&pane(100)), &sender(300, "UserPromptSubmit", None), &procs, A, 2);
+        procs.kill(200);
+        procs.add(200, 100, 99);
+        procs.add(300, 200, 4);
+        let out = check(&mut st, Some(&pane(100)), &sender(400, "Stop", None), &procs, A, 3);
+        assert!(out.released_previous);
+        assert_ne!(out.verdict, Verdict::Descendant);
+        assert_eq!(out.verdict, Verdict::Foreign(ForeignReason::NestedUnderSender));
     }
 
     #[test]

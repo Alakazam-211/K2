@@ -121,6 +121,7 @@ mod tests {
                     since: 0,
                     owed_at: None,
                     background: true,
+                    sender: None,
                 },
             );
         }

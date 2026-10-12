@@ -1,0 +1,47 @@
+{
+  "cli": "claude",
+  "version": "2.1.292",
+  "os": "synthetic",
+  "capturedAt": "synthetic",
+  "synthetic": true,
+  "registeredEvents": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "PermissionDenied",
+    "Notification",
+    "Stop",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
+    "PostCompact",
+    "SessionEnd"
+  ],
+  "childPid": 100,
+  "procs": [
+    [
+      100,
+      10,
+      1
+    ],
+    [
+      110,
+      100,
+      2
+    ],
+    [
+      120,
+      110,
+      3
+    ],
+    [
+      130,
+      120,
+      4
+    ]
+  ],
+  "notes": "Companion report 2026-10-12: the pane's `claude --resume` (100, PTY child, owner) hands the conversation to a Claude Code background job: `claude daemon run` (110) -> `bg-pty-host` (120) -> `bg-spare` (130) on another conversation. The job's hooks are a verified OS-process descendant of the owner (DA14-4a), so its tools, subagents and Stop drive the row; its SessionStart is not a pane boundary. Before the fix they were all `foreign NotOwner` and the row sat on idle/turn_done. Synthetic, scrubbed."
+}

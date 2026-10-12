@@ -148,6 +148,12 @@ pub struct HookEnvelope {
     pub cli_version: Option<String>,
     /// The body was over 1 MiB: a name-only envelope.
     pub truncated: bool,
+    /// Set by the daemon's owner check, never by the wire: the sender is
+    /// a verified OS-process descendant of the pane's claimed owner (a
+    /// Claude Code background job or a nested CLI), not the owner itself
+    /// ([`super::owner::Verdict::Descendant`]). The row merges its events
+    /// into the pane's turn but never lets it change the session.
+    pub from_descendant: bool,
 }
 
 /// Why a body didn't parse. Every case is answered 204 and counted
@@ -201,6 +207,7 @@ pub fn parse(headers: &HookHeaders, body: &[u8]) -> Result<HookEnvelope, Envelop
         cwd: None,
         cli_version: headers.cli_version.clone(),
         truncated: headers.truncated,
+        from_descendant: false,
     };
     if headers.truncated {
         env.event = headers.event_hint.clone().ok_or(EnvelopeError::NoEventName)?;

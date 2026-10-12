@@ -613,6 +613,97 @@ mod tests {
         .expect("parse")
     }
 
+    /// The Companion report, agents page: the snapshot row of a pane whose
+    /// `claude` runs its work as a background job. The job's hooks (a
+    /// verified descendant of the owner, DA14-4a) drive the row: working,
+    /// then `subagents_running` with live child counts after its Stop,
+    /// with `evidenceAt` following them. Before, they were all foreign and
+    /// the row sat on idle / `turn_done` with no children.
+    #[test]
+    fn descendant_hooks_drive_the_snapshot_row() {
+        use k2_core::agent_hooks::owner::{self, OwnerCheckMode, PaneFacts, PaneOwner, ProcInfo, ProcessTable, Sender, Verdict};
+        struct Procs;
+        impl ProcessTable for Procs {
+            fn info(&self, pid: i32) -> Option<ProcInfo> {
+                // PTY child + owner 100; `claude daemon run` 110 →
+                // `bg-pty-host` 120 → `bg-spare` 130.
+                let ppid = match pid {
+                    100 => 10,
+                    110 => 100,
+                    120 => 110,
+                    130 => 120,
+                    10 => 1,
+                    _ => return None,
+                };
+                Some(ProcInfo { pid, ppid, start_time: pid as u64 })
+            }
+        }
+        let _g = LOCK.lock();
+        k2_core::test_isolation::assert_no_prod_env();
+        let _db = k2_core::db::init_for_tests();
+        let sid = "44444444-4444-4444-8444-444444444444";
+        register(SessionFacts {
+            session_id: sid.into(),
+            agent_name: "tab-bgjob".into(),
+            cwd: None,
+            // Not a transcript harness: no follower is tracked, so nothing
+            // looks for a transcript under any HOME.
+            program: Some("bgjob-test".into()),
+        });
+        let facts = PaneFacts { child_pid: Some(100), known_conversation_id: None };
+        let mut claim = PaneOwner::default();
+        let mut feed = |pid: i32, body: &str, t: i64| {
+            let mut env = envelope::parse(
+                &HookHeaders {
+                    pane: sid.to_string(),
+                    agent_pid: Some(pid),
+                    source: HookSource::Claude,
+                    hook_version: Some(2),
+                    cli_version: None,
+                    truncated: false,
+                    event_hint: None,
+                },
+                body.as_bytes(),
+            )
+            .expect("parse");
+            let out = owner::check(&mut claim, Some(&facts), &Sender::of(&env), &Procs, OwnerCheckMode::Ancestry, t);
+            match out.verdict {
+                Verdict::Owner => {}
+                Verdict::Descendant => env.from_descendant = true,
+                other => panic!("pid {pid} {body}: {other:?}"),
+            }
+            apply_at(sid, Evidence::Hook(&env), t);
+        };
+        feed(100, r#"{"hook_event_name":"SessionStart","source":"resume","session_id":"lead"}"#, 1_000);
+        feed(100, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p1","session_id":"lead"}"#, 1_100);
+        feed(100, r#"{"hook_event_name":"Stop","prompt_id":"p1","session_id":"lead","background_tasks":[],"session_crons":[]}"#, 1_200);
+        let row = row_json(sid).expect("row");
+        assert_eq!((row["display"].as_str(), row["reason"].as_str()), (Some("idle"), Some("turn_done")), "the report's state: {row}");
+
+        feed(130, r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"bg"}"#, 2_000);
+        feed(130, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"b1","session_id":"bg"}"#, 2_100);
+        feed(130, r#"{"hook_event_name":"PreToolUse","prompt_id":"b1","session_id":"bg","tool_name":"Task","tool_use_id":"tb-1","tool_input":{"description":"scan","prompt":"Synthetic.","run_in_background":true}}"#, 2_200);
+        feed(130, r#"{"hook_event_name":"SubagentStart","session_id":"bg","agent_id":"a-b1","agent_type":"general-purpose"}"#, 2_300);
+        let row = row_json(sid).expect("row");
+        assert_eq!((row["display"].as_str(), row["reason"].as_str()), (Some("working"), Some("tool_running")), "{row}");
+        assert_eq!(row["children"]["subagents"], 1, "{row}");
+        feed(130, r#"{"hook_event_name":"PostToolUse","prompt_id":"b1","session_id":"bg","tool_name":"Task","tool_use_id":"tb-1","tool_input":{},"tool_response":{"isAsync":true,"agentId":"a-b1","status":"async_launched"}}"#, 2_400);
+        feed(
+            130,
+            r#"{"hook_event_name":"Stop","prompt_id":"b1","session_id":"bg","background_tasks":[{"id":"a-b1","type":"subagent","status":"running"}],"session_crons":[]}"#,
+            2_500,
+        );
+        let row = row_json(sid).expect("row");
+        assert_eq!(row["display"], "working", "{row}");
+        assert_eq!(row["reason"], "subagents_running", "{row}");
+        assert_eq!(row["lead"]["state"], "idle", "{row}");
+        assert_eq!(row["children"]["subagents"], 1, "{row}");
+        assert_eq!(row["counts"]["subagents"], 1, "{row}");
+        assert_eq!(row["counts"]["tools"], 1, "the background job's Task call counts: {row}");
+        assert_eq!(row["evidenceAt"], 2_500, "evidence follows the background job: {row}");
+        unregister(sid);
+    }
+
     #[test]
     fn harness_names_come_from_the_spawn_command() {
         assert_eq!(harness_for(Some("/opt/bin/claude")), "claude");

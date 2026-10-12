@@ -1,9 +1,29 @@
 //! Claude hook envelopes → lead state and roster (§6.1, DA20–DA25).
 //!
-//! Only owner envelopes get here (DA14 ran in the ingest). Child events
-//! (`agent_id` set) touch the roster only (DA20). Cursor and Gemini
-//! envelopes, and legacy `/hook/complete` posts, map through the old
-//! three buckets ([`apply_bucket`]).
+//! Only owner envelopes, and envelopes from a verified OS-process
+//! descendant of the owner (DA14-4a, `from_descendant`), get here (DA14
+//! ran in the ingest). Child events (`agent_id` set) touch the roster only
+//! (DA20). Cursor and Gemini envelopes, and legacy `/hook/complete` posts,
+//! map through the old three buckets ([`apply_bucket`]).
+//!
+//! **Descendants (DA14-4a).** A descendant is merged into the pane's
+//! turn: its tools, subagents and roster count, and it drives the lead
+//! like the owner does, because for a Claude Code background job (the
+//! pane's `claude` hands the conversation to a `bg-spare` process) it IS
+//! the agent doing the work. Two limits keep a nested run (a `claude -p`
+//! started by a Bash tool) from ending the pane's turn:
+//! - it is never a session boundary: its `SessionStart` / `SessionEnd` /
+//!   `PostCompact` are evidence only;
+//! - while another process has a tool call open (the Bash running it), its
+//!   `UserPromptSubmit` is evidence only, and so is any process's `Stop` /
+//!   `StopFailure` / idle `Notification` (the owner's too: a front
+//!   `claude` stopping while its background job is mid-tool). The last
+//!   process to finish ends the turn ([`nested_in_open_tool`]). A tool
+//!   whose Post never comes is cleared by the next owner prompt, the
+//!   Claude transcript `end_turn` cross-check, or a process exit.
+//!
+//! Tool calls and children carry their process ([`ends::sender_key`]):
+//! `None` for the owner, so an owner-only pane is unchanged.
 
 use crate::agent_hooks::envelope::{HookEnvelope, HookSource};
 use crate::agent_hooks::map_event_type;
@@ -24,7 +44,11 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
     if env.source != HookSource::Claude {
         // Cursor / Gemini: today's three buckets (their own event names).
         if let Some(bucket) = map_event_type(&env.event) {
-            apply_bucket_inner(row, bucket, now);
+            // A descendant (DA14-4a) adds work; only the owner's own
+            // stop bucket ends the lead.
+            if !(env.from_descendant && bucket == "stop") {
+                apply_bucket_inner(row, bucket, now);
+            }
         }
         // After the bucket, so a turn the bucket started counts this call.
         if let Some(command) = tools::foreign_hook_tool(env.source, &env.event, env.tool_name.as_deref()) {
@@ -35,6 +59,26 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
     if let Some(agent_id) = env.agent_id.as_deref() {
         apply_child(row, env, agent_id, now);
         return;
+    }
+    let other_tool_open = nested_in_open_tool(row, env);
+    match env.event.as_str() {
+        // A descendant is never the pane's boundary: the owner's session is.
+        "SessionStart" | "SessionEnd" | "PostCompact" if env.from_descendant => return,
+        // A descendant's prompt inside another process's tool call is a
+        // nested run, not the pane's next turn.
+        "UserPromptSubmit" if env.from_descendant && other_tool_open => return,
+        // One process stopping while another still has a tool call open
+        // (the owner's Bash running a nested `claude -p`, or a background
+        // job mid-tool when the pane's front `claude` stops) does not end
+        // the pane's turn. The last process to finish ends it.
+        "Stop" | "StopFailure" if other_tool_open => return,
+        "Notification"
+            if other_tool_open
+                && (env.from_descendant || env.notification_type.as_deref() == Some("idle_prompt")) =>
+        {
+            return
+        }
+        _ => {}
     }
     let tool = env.tool_name.as_deref().unwrap_or("");
     match env.event.as_str() {
@@ -61,7 +105,7 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
                 return;
             }
             if let Some(id) = env.tool_use_id.as_deref() {
-                remember_in_flight(row, id, tool);
+                remember_in_flight(row, id, tool, ends::sender_key(env));
             }
             if row.lead.state == LeadState::Waiting {
                 // A17: never clears waiting; a late async PreToolUse binds
@@ -85,10 +129,10 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
         "PostToolUse" | "PostToolUseFailure" => {
             let id = env.tool_use_id.as_deref();
             if let Some(id) = id {
-                row.in_flight.retain(|(t, _)| t != id);
+                row.in_flight.retain(|(t, _, _)| t != id);
             }
             if let Some(task) = env.launched_task.as_ref() {
-                ends::add_launched(row, task, now);
+                ends::add_launched(row, task, ends::sender_key(env), now);
             }
             if let Some(stopped) = env.stopped_task_id.as_deref() {
                 // Claude sends no notification for a stopped task.
@@ -127,14 +171,14 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
                 .in_flight
                 .iter()
                 .rev()
-                .find(|(_, name)| name == tool)
-                .map(|(id, _)| id.clone());
+                .find(|(_, name, _)| name == tool)
+                .map(|(id, _, _)| id.clone());
             lead_waiting(row, false, waiting_for, Some(tool.to_string()), now);
         }
         "PermissionDenied" => {
             let id = env.tool_use_id.as_deref();
             if let Some(id) = id {
-                row.in_flight.retain(|(t, _)| t != id);
+                row.in_flight.retain(|(t, _, _)| t != id);
             }
             if row.lead.state == LeadState::Waiting && !latched(row, env, now) {
                 let waited = row.lead.waiting.as_ref().and_then(|w| w.waiting_for.as_deref());
@@ -153,7 +197,7 @@ pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
             Some("permission_prompt")
                 if row.lead.state == LeadState::Working && !row.in_flight.is_empty() =>
             {
-                let (id, name) = row.in_flight.last().cloned().unwrap_or_default();
+                let (id, name, _) = row.in_flight.last().cloned().unwrap_or_default();
                 lead_waiting(row, false, Some(id), Some(name), now);
             }
             _ => {}
@@ -240,7 +284,9 @@ fn apply_child(row: &mut Row, env: &HookEnvelope, agent_id: &str, now: i64) {
         _ => {}
     }
     let lead_idle = row.lead.state == LeadState::Idle;
-    if !row.children.contains_key(agent_id) && !ends::upsert_child(row, agent_id, ChildKind::Subagent, ChildOrigin::Hook, lead_idle, now) {
+    if !row.children.contains_key(agent_id)
+        && !ends::upsert_child(row, agent_id, ChildKind::Subagent, ChildOrigin::Hook, lead_idle, ends::sender_key(env), now)
+    {
         return;
     }
     let tool = env.tool_name.as_deref().unwrap_or("");
@@ -309,14 +355,23 @@ fn count_tool(row: &mut Row, env: &HookEnvelope, tool: &str, require_id: bool) {
     row.note_tool(id, tools::is_command_tool(tool));
 }
 
-fn remember_in_flight(row: &mut Row, id: &str, tool: &str) {
-    if row.in_flight.iter().any(|(t, _)| t == id) {
+/// DA14-4a: a descendant's envelope arriving while another process has a
+/// lead tool call open is a nested run inside that call (a `claude -p` in
+/// a Bash tool): it may add tools and children, never start or end the
+/// pane's turn.
+fn nested_in_open_tool(row: &Row, env: &HookEnvelope) -> bool {
+    let me = ends::sender_key(env);
+    row.in_flight.iter().any(|(_, _, sender)| *sender != me)
+}
+
+fn remember_in_flight(row: &mut Row, id: &str, tool: &str, sender: Option<i32>) {
+    if row.in_flight.iter().any(|(t, _, _)| t == id) {
         return;
     }
     if row.in_flight.len() >= IN_FLIGHT_CAP {
         row.in_flight.remove(0);
     }
-    row.in_flight.push((id.to_string(), tool.to_string()));
+    row.in_flight.push((id.to_string(), tool.to_string(), sender));
 }
 
 pub(crate) fn lead_working(row: &mut Row, now: i64) {

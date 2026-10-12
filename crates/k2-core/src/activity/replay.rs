@@ -69,6 +69,7 @@ pub(crate) fn claude_fixtures() -> Vec<Fixture> {
         fixture!("claude-2.1.292", "permission-denied"),
         fixture!("claude-2.1.292", "permission-late-pretool"),
         fixture!("claude-2.1.292", "nested-claude-p"),
+        fixture!("claude-2.1.292", "background-job"),
         fixture!("claude-2.1.292", "compact-manual"),
         fixture!("claude-2.1.292", "clear"),
         fixture!("claude-2.1.292", "missed-stop-idle-prompt"),
@@ -148,13 +149,18 @@ pub(crate) fn replay(f: &Fixture) -> Replayed {
                     truncated: false,
                     event_hint: None,
                 };
-                let env = envelope::parse(&headers, payload.to_string().as_bytes()).unwrap_or_else(|e| panic!("{at}: {e:?}"));
+                let mut env = envelope::parse(&headers, payload.to_string().as_bytes()).unwrap_or_else(|e| panic!("{at}: {e:?}"));
                 let out = owner::check(&mut owner_state, Some(&facts), &Sender::of(&env), &procs, OwnerCheckMode::Ancestry, t);
                 if out.released_previous {
                     changes.push(row.apply(Evidence::OwnerReleased, t));
                 }
                 match out.verdict {
                     Verdict::Owner => changes.push(row.apply(Evidence::Hook(&env), t)),
+                    // DA14-4a: as the daemon's ingest does.
+                    Verdict::Descendant => {
+                        env.from_descendant = true;
+                        changes.push(row.apply(Evidence::Hook(&env), t));
+                    }
                     _ => foreign += 1,
                 }
             }

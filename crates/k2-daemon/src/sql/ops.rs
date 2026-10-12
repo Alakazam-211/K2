@@ -462,7 +462,7 @@ fn privilege_sync_for_row(
     apply_privilege_sync(ops, secrets, row, &grants)
 }
 
-fn ensure_k2_helpers(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
+fn ensure_k2_helpers_db(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
     let sql = ensure_k2_helpers_sql();
     debug_assert!(
         !sql.to_ascii_uppercase().contains("CREATE ROLE"),
@@ -472,30 +472,125 @@ fn ensure_k2_helpers(ops: &dyn SystemOps, row: &DbRow) -> Result<(), OpsError> {
     // installed schema `k2` as postgres; migrator cannot CREATE OR REPLACE
     // functions there (AX41: permission denied for schema k2).
     ops.run_helper(
-        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
         Some(sql.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
-    let owner = format!(
-        "ALTER SCHEMA k2 OWNER TO {migrator};",
-        migrator = pg_quote_ident(&format!("{}_migrator", row.name)),
-    );
+    let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
+    let owner = format!("ALTER SCHEMA k2 OWNER TO {migrator};");
     let _ = ops.run_helper(
-        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
         Some(owner.as_bytes()),
     );
     // ALTER SCHEMA does not change function owners. SECURITY DEFINER must
     // be the migrator, not postgres. CREATE OR REPLACE keeps the old owner.
-    let fn_owner = format!(
-        "ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};",
-        migrator = pg_quote_ident(&format!("{}_migrator", row.name)),
-    );
+    let fn_owner = format!("ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};");
     ops.run_helper(
-        &["psql", "-d", &row.name, "-v", "ON_ERROR_STOP=1"],
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
         Some(fn_owner.as_bytes()),
     )
     .map_err(OpsError::Engine)?;
+    seal_k2_internal_tables(ops, db_name)
+}
+
+/// K2's own tables in a workspace database. Guests never read or write
+/// them directly; K2 doors (store caps) read them as the agent.
+pub(crate) const K2_INTERNAL_TABLES: [&str; 2] = ["_k2_migrations", "_k2_store"];
+
+/// Seal K2's own tables against guest sessions. The guest doors (query,
+/// rows) SET ROLE to the same login the agent uses, and migrate keeps
+/// re-granting ALL TABLES to it, so a REVOKE would not hold (and would
+/// break `k2 store`). Row security does: any session with a locked guest
+/// principal (`k2.skin_uid()` set) is refused; the agent and the daemon
+/// (no principal) and the migrator (owner) are unaffected. Idempotent;
+/// skips tables that do not exist yet. Needs the k2 helpers first.
+pub(crate) fn seal_k2_internal_tables_sql(db_name: &str) -> String {
+    let migrator = format!("{db_name}_migrator");
+    let tables = K2_INTERNAL_TABLES
+        .iter()
+        .map(|t| pg_quote_literal(t))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "CREATE OR REPLACE FUNCTION k2.internal_table_ok() RETURNS boolean\n\
+         LANGUAGE plpgsql\n\
+         STABLE\n\
+         SET search_path = pg_catalog, pg_temp\n\
+         AS $k2fn$\n\
+         BEGIN\n\
+           IF k2.skin_uid() IS NOT NULL THEN\n\
+             RAISE EXCEPTION 'permission denied for K2 internal table' USING ERRCODE = 'insufficient_privilege';\n\
+           END IF;\n\
+           RETURN true;\n\
+         END;\n\
+         $k2fn$;\n\
+         GRANT EXECUTE ON FUNCTION k2.internal_table_ok() TO PUBLIC;\n\
+         ALTER FUNCTION k2.internal_table_ok() OWNER TO {mig_ident};\n\
+         DO $k2seal$\n\
+         DECLARE\n\
+           t text;\n\
+         BEGIN\n\
+           FOREACH t IN ARRAY ARRAY[{tables}] LOOP\n\
+             IF to_regclass(format('public.%I', t)) IS NULL THEN\n\
+               CONTINUE;\n\
+             END IF;\n\
+             IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {mig_lit}) AND NOT EXISTS (\n\
+               SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner\n\
+               WHERE c.oid = format('public.%I', t)::regclass AND r.rolname = {mig_lit}\n\
+             ) THEN\n\
+               EXECUTE format('ALTER TABLE public.%I OWNER TO %I', t, {mig_lit});\n\
+             END IF;\n\
+             IF NOT (SELECT c.relrowsecurity FROM pg_class c WHERE c.oid = format('public.%I', t)::regclass) THEN\n\
+               EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);\n\
+             END IF;\n\
+             IF NOT EXISTS (\n\
+               SELECT 1 FROM pg_policy p\n\
+               WHERE p.polrelid = format('public.%I', t)::regclass\n\
+                 AND p.polname = 'k2_internal_no_guest'\n\
+             ) THEN\n\
+               EXECUTE format('CREATE POLICY k2_internal_no_guest ON public.%I FOR ALL TO PUBLIC \
+                 USING (k2.internal_table_ok()) WITH CHECK (k2.internal_table_ok())', t);\n\
+             END IF;\n\
+           END LOOP;\n\
+         END\n\
+         $k2seal$;",
+        mig_ident = pg_quote_ident(&migrator),
+        mig_lit = pg_quote_literal(&migrator),
+    )
+}
+
+fn seal_k2_internal_tables(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsError> {
+    let sql = seal_k2_internal_tables_sql(db_name);
+    ops.run_helper(
+        &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
+        Some(sql.as_bytes()),
+    )
+    .map_err(OpsError::Engine)?;
     Ok(())
+}
+
+/// Boot pass: databases created before the seal (e.g. live boxes) get the
+/// k2 helpers + seal once. One line per database; never fatal.
+pub fn seal_existing_databases(ops: &dyn SystemOps) -> Vec<String> {
+    let names: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let st = conn.prepare("SELECT name FROM sql_databases WHERE status != 'dropped'");
+        match st {
+            Ok(mut s) => match s.query_map([], |r| r.get::<_, String>(0)) {
+                Ok(i) => i.flatten().collect(),
+                Err(_) => vec![],
+            },
+            Err(_) => vec![],
+        }
+    };
+    names
+        .into_iter()
+        .map(|name| match ensure_k2_helpers_db(ops, &name) {
+            Ok(()) => format!("{name}: sealed"),
+            Err(e) => format!("{name}: not sealed ({})", e.hint()),
+        })
+        .collect()
 }
 
 fn agent_login_for(row: &DbRow) -> String {
@@ -984,11 +1079,13 @@ fn create_database_inner(
          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
          {helpers}\n\
          ALTER SCHEMA k2 OWNER TO {migrator};\n\
-         ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};",
+         ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};\n\
+         {seal}",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
         helpers = ensure_k2_helpers_sql(),
+        seal = seal_k2_internal_tables_sql(&name),
     );
     ops.run_helper(
         &["psql", "-d", &name, "-v", "ON_ERROR_STOP=1"],
@@ -1208,35 +1305,20 @@ fn exec_as(
     password: &str,
     sql: &str,
 ) -> Result<String, OpsError> {
-    exec_as_role(ops, db, user, password, sql, None, None)
+    exec_as_role(ops, db, user, password, sql, None)
 }
 
-fn exec_as_role(
-    ops: &dyn SystemOps,
-    db: &str,
-    user: &str,
-    password: &str,
-    sql: &str,
-    set_role: Option<&str>,
-    skin_principal: Option<&str>,
-) -> Result<String, OpsError> {
-    // `-tA` without `-F` uses `|` as the unaligned field separator.
-    // Force tab so SELECT version, checksum is unambiguous; the parser
-    // still accepts `|` for older fakes / forgotten `-F`.
-    // Bind SET ROLE is `-c` so Fake `recorded()` shows it (stdin is dropped).
-    // Skin session GUC is a second `-c` after bind SET ROLE.
-    let set_sql = set_role
-        .filter(|role| *role != user)
-        .map(|role| format!("SET ROLE {}", pg_quote_ident(role)));
-    let guc_sql = skin_principal
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(|id| {
-            format!(
-                "SELECT set_config('k2.skin_principal', {}, true)",
-                pg_quote_literal(id)
-            )
-        });
+/// psql argv for one role-scoped run. Real psql never reads stdin once
+/// any `-c` is given, so with a SET ROLE prelude the statement is a `-c`
+/// too (stdin would be silently dropped). `-q` drops command tags (`SET`,
+/// `INSERT 0 1`) so stdout is only the statement's rows. `-tA` without
+/// `-F` uses `|`; force tab so `SELECT version, checksum` splits cleanly.
+fn role_psql_args<'a>(
+    db: &'a str,
+    user: &'a str,
+    set_sql: Option<&'a str>,
+    sql: &'a str,
+) -> (Vec<&'a str>, Option<&'a [u8]>) {
     let mut args: Vec<&str> = vec![
         "-h",
         "127.0.0.1",
@@ -1246,25 +1328,37 @@ fn exec_as_role(
         db,
         "-v",
         "ON_ERROR_STOP=1",
+        "-q",
         "-tA",
         "-F",
         "\t",
     ];
-    if let Some(ref set_sql) = set_sql {
-        args.push("-c");
-        args.push(set_sql.as_str());
+    match set_sql {
+        Some(set_sql) => {
+            args.push("-c");
+            args.push(set_sql);
+            args.push("-c");
+            args.push(sql);
+            (args, None)
+        }
+        None => (args, Some(sql.as_bytes())),
     }
-    if let Some(ref guc_sql) = guc_sql {
-        args.push("-c");
-        args.push(guc_sql.as_str());
-    }
+}
+
+fn exec_as_role(
+    ops: &dyn SystemOps,
+    db: &str,
+    user: &str,
+    password: &str,
+    sql: &str,
+    set_role: Option<&str>,
+) -> Result<String, OpsError> {
+    let set_sql = set_role
+        .filter(|role| *role != user)
+        .map(|role| format!("SET ROLE {}", pg_quote_ident(role)));
+    let (args, stdin) = role_psql_args(db, user, set_sql.as_deref(), sql);
     let out = ops
-        .run_cmd(
-            PSQL_PATH,
-            &args,
-            &[("PGPASSWORD", password)],
-            Some(sql.as_bytes()),
-        )
+        .run_cmd(PSQL_PATH, &args, &[("PGPASSWORD", password)], stdin)
         .map_err(OpsError::Engine)?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
@@ -1318,7 +1412,8 @@ fn ensure_migrations_table(
     // Helper GRANT even when CREATE is IF NOT EXISTS. Before migrate SQL so
     // a later checksum/apply failure still leaves the agent DSN usable.
     grant_agent_k2_tables(ops, db)?;
-    Ok(())
+    // k2 helpers + the guest seal on K2's own tables (idempotent).
+    ensure_k2_helpers_db(ops, db)
 }
 
 fn load_applied_checksums(
@@ -1422,8 +1517,8 @@ pub fn migrate(
     }
     let discovered = matching.len();
 
+    // Also installs the k2 helpers and seals K2's own tables.
     ensure_migrations_table(ops, &row.name, &user, &pw)?;
-    ensure_k2_helpers(ops, &row)?;
     privilege_sync_for_row(ops, secrets, &row)?;
     let applied = load_applied_checksums(ops, &row.name, &user, &pw)?;
 
@@ -1455,6 +1550,11 @@ pub fn migrate(
         exec_as(ops, &row.name, &user, &pw, &insert)?;
         privilege_sync_for_row(ops, secrets, &row)?;
         ran.push(version);
+    }
+    // Migration SQL runs as the tables' owner: put the seal back in case
+    // a file touched K2's own tables (re-grants never undo row security).
+    if !ran.is_empty() {
+        seal_k2_internal_tables(ops, &row.name)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -2998,7 +3098,7 @@ fn ensure_store_table(
          );",
     )?;
     grant_agent_k2_tables(ops, db)?;
-    Ok(())
+    ensure_k2_helpers_db(ops, db)
 }
 
 fn ensure_store_table_for(
@@ -3025,21 +3125,38 @@ pub fn store_create(
     Ok(serde_json::json!({ "ok": true, "collection": name }))
 }
 
+/// `_k2_store` is K2's own table, granted to the database login: store
+/// doors run as that login, never SET ROLE to the bind role (the bind role
+/// is for the app's tables and has no grant here). App sessions reach the
+/// store only through these doors (store caps); `guest` keeps engine
+/// detail (command line, role names) out of their error hints.
+fn store_exec(
+    ops: &dyn SystemOps,
+    dml: &StoreDml,
+    sql: &str,
+    guest: bool,
+) -> Result<String, OpsError> {
+    exec_as(ops, &dml.row.name, &dml.user, &dml.password, sql).map_err(|e| match e {
+        OpsError::Engine(raw) if guest => {
+            let internal = [dml.row.name.clone(), dml.user.clone()];
+            OpsError::Engine(super::query::guest_error_logged(&raw, &internal))
+        }
+        other => other,
+    })
+}
+
 pub fn store_list(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-    skin_principal: Option<&str>,
+    guest: bool,
 ) -> Result<serde_json::Value, OpsError> {
     let dml = store_dml_creds(ops, secrets, project_id)?;
-    let raw = exec_as_role(
+    let raw = store_exec(
         ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
+        &dml,
         "SELECT collection FROM _k2_store GROUP BY collection ORDER BY collection;",
-        dml.bind.as_deref(),
-        skin_principal,
+        guest,
     )
     .unwrap_or_default();
     let names: Vec<&str> = raw
@@ -3072,15 +3189,7 @@ pub fn store_put(
         id = pg_quote_literal(id),
         doc = pg_quote_literal(&doc.to_string()),
     );
-    exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        &sql,
-        dml.bind.as_deref(),
-        None,
-    )?;
+    store_exec(ops, &dml, &sql, false)?;
     Ok(serde_json::json!({ "ok": true, "id": id, "collection": name }))
 }
 
@@ -3090,7 +3199,7 @@ pub fn store_get(
     project_id: &str,
     collection: &str,
     id: &str,
-    skin_principal: Option<&str>,
+    guest: bool,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let dml = store_dml_creds(ops, secrets, project_id)?;
@@ -3099,15 +3208,7 @@ pub fn store_get(
         coll = pg_quote_literal(&name),
         id = pg_quote_literal(id.trim()),
     );
-    let raw = exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        &sql,
-        dml.bind.as_deref(),
-        skin_principal,
-    )?;
+    let raw = store_exec(ops, &dml, &sql, guest)?;
     if raw.is_empty() {
         return Err(OpsError::NotFound(format!(
             "document '{id}' not in collection '{name}'"
@@ -3124,7 +3225,7 @@ pub fn store_query(
     project_id: &str,
     collection: &str,
     limit: u32,
-    skin_principal: Option<&str>,
+    guest: bool,
 ) -> Result<serde_json::Value, OpsError> {
     let name = validate_collection(collection)?;
     let dml = store_dml_creds(ops, secrets, project_id)?;
@@ -3133,16 +3234,7 @@ pub fn store_query(
         "SELECT id::text || E'\\t' || doc::text FROM _k2_store WHERE collection = {coll} LIMIT {lim};",
         coll = pg_quote_literal(&name),
     );
-    let raw = exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        &sql,
-        dml.bind.as_deref(),
-        skin_principal,
-    )
-    .unwrap_or_default();
+    let raw = store_exec(ops, &dml, &sql, guest).unwrap_or_default();
     let mut docs = Vec::new();
     for line in raw.lines() {
         if let Some((id, doc)) = line.split_once('\t') {
@@ -3168,15 +3260,7 @@ pub fn store_rm(
         coll = pg_quote_literal(&name),
         id = pg_quote_literal(id.trim()),
     );
-    exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        &sql,
-        dml.bind.as_deref(),
-        None,
-    )?;
+    store_exec(ops, &dml, &sql, false)?;
     Ok(serde_json::json!({ "ok": true, "removed": id }))
 }
 
@@ -3192,15 +3276,7 @@ pub fn store_drop(
         "DELETE FROM _k2_store WHERE collection = {coll};",
         coll = pg_quote_literal(&name),
     );
-    exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        &sql,
-        dml.bind.as_deref(),
-        None,
-    )?;
+    store_exec(ops, &dml, &sql, false)?;
     Ok(serde_json::json!({ "ok": true, "dropped": name }))
 }
 
@@ -3274,52 +3350,214 @@ fn map_dump_engine(err: String) -> OpsError {
     OpsError::Engine(err)
 }
 
-fn dump_exec(
+/// One app session's psql connection for the guest doors (`/cli/db/query`
+/// and the rows doors): `{db}_migrator` login, a principal lock row, then
+/// SET ROLE to the rows login (bind role, else the database login).
+struct GuestConn {
+    db: String,
+    mig_user: String,
+    mig_pw: String,
+    login: String,
+    principal: String,
+    /// Database and role names a guest error must never show.
+    internal: Vec<String>,
+}
+
+fn guest_conn(
     ops: &dyn SystemOps,
-    dml: &StoreDml,
-    sql: &str,
-    skin_principal: Option<&str>,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    principal: &str,
+) -> Result<GuestConn, OpsError> {
+    let principal = principal.trim();
+    if uuid::Uuid::parse_str(principal).is_err() {
+        return Err(OpsError::Usage("session principal id is not a uuid".into()));
+    }
+    let dml = store_dml_creds(ops, secrets, project_id)?;
+    let login = dml.bind.clone().unwrap_or_else(|| dml.user.clone());
+    let (mig_user, mig_pw) = migrator_creds(secrets, &dml.row)?;
+    let internal = vec![
+        dml.row.name.clone(),
+        mig_user.clone(),
+        login.clone(),
+        dml.user.clone(),
+    ];
+    Ok(GuestConn {
+        db: dml.row.name,
+        mig_user,
+        mig_pw,
+        login,
+        principal: principal.to_string(),
+        internal,
+    })
+}
+
+fn guest_lock_sql(principal: &str, login: &str) -> String {
+    let id = format!("'{}'", principal.replace('\'', "''"));
+    format!(
+        "CREATE TEMP TABLE pg_temp.k2_principal_lock (id uuid) ON COMMIT PRESERVE ROWS;\n\
+         INSERT INTO pg_temp.k2_principal_lock (id) VALUES ({id}::uuid);\n\
+         GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO {login};",
+        login = pg_quote_ident(login),
+    )
+}
+
+/// psql argv up to (not including) the statement: lock row, SET ROLE,
+/// statement_timeout. All `-c`: real psql ignores stdin when any `-c`
+/// is set. `rows_only` (rows doors) adds `-q -tA` so stdout is only the
+/// statement's rows; `/cli/db/query` keeps command tags (`-A`) for its
+/// row count.
+fn guest_psql_args(g: &GuestConn, rows_only: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-h".into(),
+        "127.0.0.1".into(),
+        "-U".into(),
+        g.mig_user.clone(),
+        "-d".into(),
+        g.db.clone(),
+        "-v".into(),
+        "ON_ERROR_STOP=1".into(),
+    ];
+    if rows_only {
+        args.extend(["-q".into(), "-tA".into(), "-F".into(), "\t".into()]);
+    } else {
+        args.push("-A".into());
+    }
+    args.extend([
+        "-c".into(),
+        guest_lock_sql(&g.principal, &g.login),
+        "-c".into(),
+        format!("SET ROLE {}", pg_quote_ident(&g.login)),
+        "-c".into(),
+        "SET statement_timeout = '10s'".into(),
+    ]);
+    args
+}
+
+fn run_guest_psql(
+    ops: &dyn SystemOps,
+    g: &GuestConn,
+    args: &[String],
 ) -> Result<String, OpsError> {
-    match exec_as_role(
-        ops,
-        &dml.row.name,
-        &dml.user,
-        &dml.password,
-        sql,
-        dml.bind.as_deref(),
-        skin_principal,
-    ) {
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = ops
+        .run_cmd(
+            PSQL_PATH,
+            &arg_refs,
+            &[("PGPASSWORD", g.mig_pw.as_str())],
+            None,
+        )
+        .map_err(|raw| super::query::map_guest_engine(raw, &g.internal))?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Who runs a rows-door statement. Owner/agent: the database login with
+/// the bind SET ROLE. App session: the `/cli/db/query` connection (lock,
+/// SET ROLE, timeout), so the app's own RLS policies apply.
+enum DumpRunner {
+    Owner(StoreDml),
+    Guest(GuestConn),
+}
+
+fn dump_runner(
+    ops: &dyn SystemOps,
+    secrets: &dyn SecretStore,
+    project_id: &str,
+    skin_principal: Option<&str>,
+) -> Result<DumpRunner, OpsError> {
+    match skin_principal {
+        Some(p) => Ok(DumpRunner::Guest(guest_conn(ops, secrets, project_id, p)?)),
+        None => Ok(DumpRunner::Owner(store_dml_creds(ops, secrets, project_id)?)),
+    }
+}
+
+fn dump_exec(ops: &dyn SystemOps, r: &DumpRunner, sql: &str) -> Result<String, OpsError> {
+    let res = match r {
+        DumpRunner::Owner(dml) => exec_as_role(
+            ops,
+            &dml.row.name,
+            &dml.user,
+            &dml.password,
+            sql,
+            dml.bind.as_deref(),
+        ),
+        DumpRunner::Guest(g) => {
+            let mut args = guest_psql_args(g, true);
+            args.push("-c".into());
+            args.push(sql.to_string());
+            run_guest_psql(ops, g, &args).map(|s| s.trim().to_string())
+        }
+    };
+    match res {
         Ok(s) => Ok(s),
         Err(OpsError::Engine(e)) => Err(map_dump_engine(e)),
         Err(e) => Err(e),
     }
 }
 
+/// A psql command tag line (`SET`, `CREATE TABLE`, `INSERT 0 1`, …), not
+/// data. `-q` should leave none; never read one as a row.
+pub(crate) fn is_psql_command_tag(line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    let Some(head) = parts.next() else {
+        return false;
+    };
+    let rest: Vec<&str> = parts.collect();
+    let counts = !rest.is_empty() && rest.iter().all(|p| p.parse::<u64>().is_ok());
+    match head {
+        "SET" | "RESET" | "GRANT" | "REVOKE" | "PREPARE" | "BEGIN" | "COMMIT" | "DO" => {
+            rest.is_empty()
+        }
+        "CREATE" | "ALTER" | "DROP" => {
+            rest.len() == 1 && rest[0].chars().all(|c| c.is_ascii_uppercase())
+        }
+        "INSERT" | "UPDATE" | "DELETE" | "SELECT" | "MERGE" => counts,
+        _ => false,
+    }
+}
+
+fn psql_data_lines(raw: &str) -> Vec<&str> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !is_psql_command_tag(l))
+        .collect()
+}
+
+/// Rows-door stdout → JSON rows. Every data line must be a row_to_json
+/// object. Anything else means psql ran something other than the door's
+/// statement (e.g. a prelude result while the statement was dropped):
+/// fail loud, never hand it back as a row.
+pub(crate) fn dump_json_rows(raw: &str) -> Result<Vec<serde_json::Value>, OpsError> {
+    let mut rows = Vec::new();
+    for line in psql_data_lines(raw) {
+        if !line.starts_with('{') {
+            return Err(OpsError::Engine(
+                "unexpected database output (not a row)".into(),
+            ));
+        }
+        let v: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| OpsError::Engine(format!("row json: {e}")))?;
+        rows.push(v);
+    }
+    Ok(rows)
+}
+
 fn dump_qualify(table: &str) -> String {
     format!("{}.{}", pg_quote_ident("public"), pg_quote_ident(table))
 }
 
-fn dump_table_exists(
-    ops: &dyn SystemOps,
-    dml: &StoreDml,
-    table: &str,
-    skin_principal: Option<&str>,
-) -> Result<bool, OpsError> {
+fn dump_table_exists(ops: &dyn SystemOps, r: &DumpRunner, table: &str) -> Result<bool, OpsError> {
     let sql = format!(
         "SELECT to_regclass({});",
         pg_quote_literal(&format!("public.{table}"))
     );
-    let raw = dump_exec(ops, dml, &sql, skin_principal)?;
-    let t = raw.trim();
-    Ok(!t.is_empty() && !t.eq_ignore_ascii_case("null"))
+    let raw = dump_exec(ops, r, &sql)?;
+    Ok(psql_data_lines(&raw)
+        .iter()
+        .any(|l| !l.eq_ignore_ascii_case("null")))
 }
 
-fn dump_has_id_column(
-    ops: &dyn SystemOps,
-    dml: &StoreDml,
-    table: &str,
-    skin_principal: Option<&str>,
-) -> Result<bool, OpsError> {
+fn dump_has_id_column(ops: &dyn SystemOps, r: &DumpRunner, table: &str) -> Result<bool, OpsError> {
     let sql = format!(
         "SELECT a.attname \
          FROM pg_catalog.pg_attribute a \
@@ -3334,30 +3572,20 @@ fn dump_has_id_column(
          LIMIT 1;",
         pg_quote_literal(table)
     );
-    let raw = dump_exec(ops, dml, &sql, skin_principal)?;
-    Ok(!raw.trim().is_empty())
+    let raw = dump_exec(ops, r, &sql)?;
+    Ok(!psql_data_lines(&raw).is_empty())
 }
 
-fn dump_need_table(
-    ops: &dyn SystemOps,
-    dml: &StoreDml,
-    table: &str,
-    skin_principal: Option<&str>,
-) -> Result<(), OpsError> {
-    if dump_table_exists(ops, dml, table, skin_principal)? {
+fn dump_need_table(ops: &dyn SystemOps, r: &DumpRunner, table: &str) -> Result<(), OpsError> {
+    if dump_table_exists(ops, r, table)? {
         Ok(())
     } else {
         Err(OpsError::NotFound("table not found".into()))
     }
 }
 
-fn dump_need_id_column(
-    ops: &dyn SystemOps,
-    dml: &StoreDml,
-    table: &str,
-    skin_principal: Option<&str>,
-) -> Result<(), OpsError> {
-    if dump_has_id_column(ops, dml, table, skin_principal)? {
+fn dump_need_id_column(ops: &dyn SystemOps, r: &DumpRunner, table: &str) -> Result<(), OpsError> {
+    if dump_has_id_column(ops, r, table)? {
         Ok(())
     } else {
         Err(OpsError::Usage("missing id column".into()))
@@ -3365,11 +3593,10 @@ fn dump_need_id_column(
 }
 
 fn parse_dump_row_json(raw: &str) -> Result<serde_json::Value, OpsError> {
-    let t = raw.trim();
-    if t.is_empty() {
-        return Err(OpsError::NotFound("row not found".into()));
-    }
-    serde_json::from_str(t).map_err(|e| OpsError::Engine(format!("row json: {e}")))
+    dump_json_rows(raw)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| OpsError::NotFound("row not found".into()))
 }
 
 pub fn dump_list_tables(
@@ -3378,19 +3605,18 @@ pub fn dump_list_tables(
     project_id: &str,
     skin_principal: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
-    let dml = store_dml_creds(ops, secrets, project_id)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
     let sql = "SELECT c.relname \
                FROM pg_catalog.pg_class c \
                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
                WHERE n.nspname = 'public' \
                  AND c.relkind = 'r' \
-                 AND c.relname NOT ILIKE '_k2_%' \
+                 AND c.relname NOT ILIKE '\\_k2\\_%' \
                ORDER BY c.relname;";
-    let raw = dump_exec(ops, &dml, sql, skin_principal).unwrap_or_default();
-    let tables: Vec<&str> = raw
-        .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"))
+    let raw = dump_exec(ops, &r, sql)?;
+    let tables: Vec<&str> = psql_data_lines(&raw)
+        .into_iter()
+        .filter(|s| !s.eq_ignore_ascii_case("null"))
         .collect();
     Ok(serde_json::json!({ "ok": true, "tables": tables }))
 }
@@ -3404,23 +3630,13 @@ pub fn dump_list_rows(
     skin_principal: Option<&str>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    dump_need_table(ops, &dml, &table, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    dump_need_table(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let lim = limit.max(1).min(500);
     let sql = format!("SELECT row_to_json(t) FROM (SELECT * FROM {q} LIMIT {lim}) t;");
-    let raw = dump_exec(ops, &dml, &sql, skin_principal).unwrap_or_default();
-    let mut rows = Vec::new();
-    for line in raw.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.eq_ignore_ascii_case("null") {
-            continue;
-        }
-        match serde_json::from_str::<serde_json::Value>(t) {
-            Ok(v) => rows.push(v),
-            Err(_) => rows.push(serde_json::Value::String(t.to_string())),
-        }
-    }
+    let raw = dump_exec(ops, &r, &sql)?;
+    let rows = dump_json_rows(&raw)?;
     Ok(serde_json::json!({ "ok": true, "table": table, "rows": rows }))
 }
 
@@ -3437,15 +3653,15 @@ pub fn dump_get_row(
     if id.is_empty() {
         return Err(OpsError::Usage("missing id".into()));
     }
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    dump_need_table(ops, &dml, &table, skin_principal)?;
-    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    dump_need_table(ops, &r, &table)?;
+    dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let sql = format!(
         "SELECT row_to_json(t) FROM (SELECT * FROM {q} WHERE id::text = {id}) t;",
         id = pg_quote_literal(id),
     );
-    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let raw = dump_exec(ops, &r, &sql)?;
     let row = parse_dump_row_json(&raw)?;
     Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": row }))
 }
@@ -3462,8 +3678,8 @@ pub fn dump_insert(
     let obj = row
         .as_object()
         .ok_or_else(|| OpsError::Usage("row must be a JSON object".into()))?;
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    dump_need_table(ops, &dml, &table, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    dump_need_table(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let qt = pg_quote_ident(&table);
     let sql = if obj.is_empty() {
@@ -3482,7 +3698,7 @@ pub fn dump_insert(
             vals = vals.join(", "),
         )
     };
-    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let raw = dump_exec(ops, &r, &sql)?;
     let out = parse_dump_row_json(&raw)?;
     Ok(serde_json::json!({ "ok": true, "table": table, "row": out }))
 }
@@ -3507,9 +3723,9 @@ pub fn dump_update(
     if obj.is_empty() {
         return Err(OpsError::Usage("missing row".into()));
     }
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    dump_need_table(ops, &dml, &table, skin_principal)?;
-    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    dump_need_table(ops, &r, &table)?;
+    dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let qt = pg_quote_ident(&table);
     let mut sets = Vec::new();
@@ -3522,7 +3738,7 @@ pub fn dump_update(
         sets = sets.join(", "),
         id = pg_quote_literal(id),
     );
-    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let raw = dump_exec(ops, &r, &sql)?;
     let out = parse_dump_row_json(&raw)?;
     Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": out }))
 }
@@ -3540,16 +3756,16 @@ pub fn dump_delete(
     if id.is_empty() {
         return Err(OpsError::Usage("missing id".into()));
     }
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    dump_need_table(ops, &dml, &table, skin_principal)?;
-    dump_need_id_column(ops, &dml, &table, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    dump_need_table(ops, &r, &table)?;
+    dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let qt = pg_quote_ident(&table);
     let sql = format!(
         "DELETE FROM {q} WHERE id::text = {id} RETURNING row_to_json({qt}.*);",
         id = pg_quote_literal(id),
     );
-    let raw = dump_exec(ops, &dml, &sql, skin_principal)?;
+    let raw = dump_exec(ops, &r, &sql)?;
     let out = parse_dump_row_json(&raw)?;
     Ok(serde_json::json!({ "ok": true, "table": table, "id": id, "row": out }))
 }
@@ -3569,19 +3785,10 @@ fn validate_collection(name: &str) -> Result<String, OpsError> {
     Ok(n.to_string())
 }
 
-fn guest_lock_sql(principal: &str, login: &str) -> String {
-    let id = format!("'{}'", principal.replace('\'', "''"));
-    format!(
-        "CREATE TEMP TABLE pg_temp.k2_principal_lock (id uuid) ON COMMIT PRESERVE ROWS;\n\
-         INSERT INTO pg_temp.k2_principal_lock (id) VALUES ({id}::uuid);\n\
-         GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO {login};",
-        login = pg_quote_ident(login),
-    )
-}
-
 /// One psql process as `{db}_migrator`. Lock row, SET ROLE, statement_timeout,
 /// then the user statement. `-c` only: real psql ignores stdin when any `-c`
-/// is set. No `set_config('k2.skin_principal')`.
+/// is set. No `set_config('k2.skin_principal')`. Engine errors carry only
+/// the Postgres message (full detail goes to the daemon log).
 pub(crate) fn exec_guest_query(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
@@ -3595,9 +3802,7 @@ pub(crate) fn exec_guest_query(
     } else {
         Some(super::query::quote_guest_params(params)?)
     };
-    let dml = store_dml_creds(ops, secrets, project_id)?;
-    let login = dml.bind.clone().unwrap_or_else(|| dml.user.clone());
-    let (mig_user, mig_pw) = migrator_creds(secrets, &dml.row)?;
+    let g = guest_conn(ops, secrets, project_id, principal_id)?;
     let exec_sql = if stmt.returns_rows {
         super::query::rows_wrapper(&stmt.sql)
     } else {
@@ -3605,23 +3810,7 @@ pub(crate) fn exec_guest_query(
     };
     // `-A` without `-t`: INSERT/UPDATE/DELETE command tags stay on stdout.
     // Row JSON lines still start with `{`.
-    let mut args: Vec<String> = vec![
-        "-h".into(),
-        "127.0.0.1".into(),
-        "-U".into(),
-        mig_user,
-        "-d".into(),
-        dml.row.name.clone(),
-        "-v".into(),
-        "ON_ERROR_STOP=1".into(),
-        "-A".into(),
-        "-c".into(),
-        guest_lock_sql(principal_id, &login),
-        "-c".into(),
-        format!("SET ROLE {}", pg_quote_ident(&login)),
-        "-c".into(),
-        "SET statement_timeout = '10s'".into(),
-    ];
+    let mut args = guest_psql_args(&g, false);
     if let Some(list) = quoted {
         args.push("-c".into());
         args.push(format!("PREPARE k2_guest_query AS {exec_sql}"));
@@ -3631,16 +3820,7 @@ pub(crate) fn exec_guest_query(
         args.push("-c".into());
         args.push(exec_sql);
     }
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = ops
-        .run_cmd(
-            PSQL_PATH,
-            &arg_refs,
-            &[("PGPASSWORD", mig_pw.as_str())],
-            None,
-        )
-        .map_err(super::query::map_guest_engine)?;
-    let text = String::from_utf8_lossy(&out);
+    let text = run_guest_psql(ops, &g, &args)?;
     if stmt.returns_rows {
         super::query::guest_rows_json(&text)
     } else {
@@ -3651,6 +3831,42 @@ pub(crate) fn exec_guest_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seal_sql_puts_row_security_on_both_k2_tables_for_guest_principals() {
+        let sql = seal_k2_internal_tables_sql("ws_abc");
+        for t in K2_INTERNAL_TABLES {
+            assert!(sql.contains(&format!("'{t}'")), "{t}: {sql}");
+        }
+        assert!(sql.contains("ENABLE ROW LEVEL SECURITY"), "{sql}");
+        assert!(!sql.contains("FORCE ROW LEVEL SECURITY"), "owner (migrator) keeps access: {sql}");
+        assert!(sql.contains("CREATE POLICY k2_internal_no_guest"), "{sql}");
+        assert!(sql.contains("FOR ALL TO PUBLIC"), "{sql}");
+        assert!(
+            sql.contains("USING (k2.internal_table_ok()) WITH CHECK (k2.internal_table_ok())"),
+            "{sql}"
+        );
+        assert!(sql.contains("IF k2.skin_uid() IS NOT NULL THEN"), "{sql}");
+        assert!(sql.contains("ERRCODE = 'insufficient_privilege'"), "{sql}");
+        assert!(sql.contains("OWNER TO \"ws_abc_migrator\""), "{sql}");
+        assert!(sql.contains("IS NULL THEN\nCONTINUE"), "missing tables are skipped: {sql}");
+        assert!(!sql.to_ascii_uppercase().contains("CREATE ROLE"), "{sql}");
+        assert!(!sql.to_ascii_uppercase().contains("REVOKE"), "agent keeps its grants: {sql}");
+    }
+
+    #[test]
+    fn exec_as_role_with_set_role_sends_the_statement_as_c_not_stdin() {
+        let (args, stdin) = role_psql_args("db", "u", Some("SET ROLE \"r\""), "SELECT 1");
+        assert!(stdin.is_none(), "psql never reads stdin once -c is set");
+        let joined = args.join(" ");
+        let role = joined.find("-c SET ROLE").expect("set role");
+        let stmt = joined.find("-c SELECT 1").expect("statement as -c");
+        assert!(role < stmt, "{joined}");
+        assert!(args.contains(&"-q"), "{joined}");
+        let (args, stdin) = role_psql_args("db", "u", None, "SELECT 1");
+        assert_eq!(stdin, Some("SELECT 1".as_bytes()));
+        assert!(!args.contains(&"-c"), "{args:?}");
+    }
 
     #[test]
     fn create_role_sql_has_no_superuser_createdb_bypassrls() {

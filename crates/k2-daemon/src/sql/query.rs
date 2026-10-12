@@ -36,6 +36,19 @@ fn forbidden_fn(parsed: &pg_query::ParseResult) -> bool {
     })
 }
 
+/// K2's own tables (`_k2_migrations`, `_k2_store`) are sealed with row
+/// security against guest sessions; refuse direct references up front so
+/// the app gets a plain answer instead of an engine error.
+fn touches_k2_internal(parsed: &pg_query::ParseResult) -> bool {
+    parsed.tables().iter().any(|t| {
+        t.rsplit('.')
+            .next()
+            .unwrap_or(t)
+            .to_ascii_lowercase()
+            .starts_with("_k2_")
+    })
+}
+
 fn select_has_into(sel: &pg_query::protobuf::SelectStmt) -> bool {
     sel.into_clause.is_some()
         || sel.larg.as_deref().is_some_and(select_has_into)
@@ -62,6 +75,11 @@ pub fn classify_guest_sql(sql: &str) -> Result<GuestStmt, OpsError> {
     if forbidden_fn(&parsed) {
         return Err(OpsError::Usage(
             "set_config and k2.set_principal are not allowed".into(),
+        ));
+    }
+    if touches_k2_internal(&parsed) {
+        return Err(OpsError::Usage(
+            "K2's own tables (_k2_*) are not available to apps".into(),
         ));
     }
     let node = parsed
@@ -235,15 +253,72 @@ pub fn guest_command_json(stdout: &str) -> Result<serde_json::Value, OpsError> {
     }))
 }
 
-pub fn map_guest_engine(err: String) -> OpsError {
+/// Map a failed guest psql run. The hint is [`guest_error_message`]; the
+/// full text (argv, stderr) goes to the daemon log only.
+pub fn map_guest_engine(err: String, internal: &[String]) -> OpsError {
     let lower = err.to_ascii_lowercase();
     if lower.contains("canceling statement due to statement timeout")
         || lower.contains("sqlstate 57014")
     {
         OpsError::StatementTimeout("statement exceeded 10s".into())
     } else {
-        OpsError::Engine(err)
+        OpsError::Engine(guest_error_logged(&err, internal))
     }
+}
+
+/// Hint shown to a guest when the message would name K2's own setup.
+pub const GUEST_GENERIC_ERROR: &str = "database error (details are in the server log)";
+
+/// Log the full failure for the owner, return what the guest may see.
+pub fn guest_error_logged(raw: &str, internal: &[String]) -> String {
+    eprintln!("[db/guest] statement failed: {raw}");
+    guest_error_message(raw, internal)
+}
+
+/// What a guest (app session) sees when its psql run fails: only the
+/// Postgres `ERROR:` message, which the app needs ("syntax error at or
+/// near …", "permission denied for table jobs", "new row violates
+/// row-level security policy …"). Never the psql command line, database
+/// or role names, or K2's own setup statements; any message that names
+/// one of those becomes [`GUEST_GENERIC_ERROR`]. `internal` lists the
+/// database and role names for this run.
+pub fn guest_error_message(raw: &str, internal: &[String]) -> String {
+    // A failed run is `<cmd> <argv…>: exit <code>: <stderr>`. The argv
+    // (lock statement, SET ROLE, user SQL) comes before the last marker.
+    let stderr = match raw.rfind(": exit ") {
+        Some(i) => &raw[i + ": exit ".len()..],
+        None => raw,
+    };
+    let msg = stderr.lines().find_map(|l| {
+        l.find("ERROR:")
+            .map(|i| l[i + "ERROR:".len()..].trim().to_string())
+    });
+    let Some(msg) = msg.filter(|m| !m.is_empty()) else {
+        return GUEST_GENERIC_ERROR.into();
+    };
+    let low = msg.to_ascii_lowercase();
+    const SETUP: [&str; 7] = [
+        "k2_principal_lock",
+        "k2_guest_query",
+        "pg_temp",
+        "_migrator",
+        "set role",
+        "role \"",
+        "statement_timeout",
+    ];
+    if SETUP.iter().any(|t| low.contains(t)) {
+        return GUEST_GENERIC_ERROR.into();
+    }
+    for name in internal {
+        let n = name.trim().to_ascii_lowercase();
+        if n.is_empty() {
+            continue;
+        }
+        if low.contains(&format!("\"{n}\"")) || (n.starts_with("ws_") && low.contains(&n)) {
+            return GUEST_GENERIC_ERROR.into();
+        }
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -271,6 +346,80 @@ mod tests {
         reject("CALL foo()");
         let err = classify_guest_sql("VACUUM").expect_err("vacuum");
         assert!(err.hint().contains("unclassifiable"), "{}", err.hint());
+    }
+
+    #[test]
+    fn parser_refuses_k2_internal_tables_and_allows_volatile_function_calls() {
+        for sql in [
+            "SELECT * FROM _k2_store",
+            "SELECT * FROM public._k2_migrations",
+            "SELECT * FROM jobs WHERE id IN (SELECT id FROM _K2_STORE)",
+            "WITH s AS (SELECT * FROM _k2_store) SELECT * FROM s",
+            "UPDATE _k2_store SET doc = '{}'",
+            "DELETE FROM _k2_migrations",
+            "INSERT INTO _k2_store (collection, id, doc) VALUES ('a', 'b', '{}')",
+        ] {
+            let err = classify_guest_sql(sql).expect_err(sql);
+            assert_eq!(err.code(), "usage", "{sql}");
+            assert!(err.hint().contains("_k2_"), "{sql} {}", err.hint());
+        }
+        // Dannon's RLS walls call SECURITY INVOKER functions through the
+        // query door; that stays a read statement that returns rows.
+        let call = classify_guest_sql("select job_update($1,$2::jsonb)").expect("function call");
+        assert!(call.read);
+        assert!(call.returns_rows);
+        assert_eq!(call.sql, "select job_update($1,$2::jsonb)");
+        let ok = classify_guest_sql("SELECT * FROM k2_jobs").expect("not internal");
+        assert!(ok.read);
+    }
+
+    #[test]
+    fn guest_error_keeps_the_postgres_message_and_drops_the_command_line() {
+        let internal = vec![
+            "ws_abc".to_string(),
+            "ws_abc_migrator".to_string(),
+            "ws_abc_agent".to_string(),
+            "app_user".to_string(),
+        ];
+        let argv = "/usr/bin/psql -h 127.0.0.1 -U ws_abc_migrator -d ws_abc -v ON_ERROR_STOP=1 -A \
+            -c CREATE TEMP TABLE pg_temp.k2_principal_lock (id uuid) ON COMMIT PRESERVE ROWS; \
+            -c SET ROLE \"app_user\" -c SET statement_timeout = '10s' -c selec 1";
+        let user_errors = [
+            ("ERROR:  syntax error at or near \"selec\"\nLINE 1: selec 1\n        ^", "syntax error at or near \"selec\""),
+            ("ERROR:  permission denied for table jobs", "permission denied for table jobs"),
+            (
+                "ERROR:  new row violates row-level security policy for table \"jobs\"",
+                "new row violates row-level security policy for table \"jobs\"",
+            ),
+            ("psql:<stdin>:1: ERROR:  relation \"nope\" does not exist", "relation \"nope\" does not exist"),
+        ];
+        for (stderr, want) in user_errors {
+            let raw = format!("{argv}: exit Some(1): {stderr}");
+            let got = guest_error_message(&raw, &internal);
+            assert_eq!(got, want, "{raw}");
+            for leak in ["ws_abc", "_migrator", "k2_principal_lock", "SET ROLE", "-U ", "/usr/bin/psql"] {
+                assert!(!got.contains(leak), "{leak} leaked: {got}");
+            }
+        }
+        // Messages about K2's own setup (role names, the lock, the db) are
+        // replaced, not echoed.
+        for stderr in [
+            "ERROR:  permission denied to set role \"app_user\"",
+            "ERROR:  role \"ws_abc_agent\" does not exist",
+            "ERROR:  relation \"pg_temp.k2_principal_lock\" already exists",
+            "FATAL:  password authentication failed for user \"ws_abc_migrator\"",
+            "ERROR:  permission denied for database ws_abc",
+            "",
+        ] {
+            let raw = format!("{argv}: exit Some(2): {stderr}");
+            assert_eq!(guest_error_message(&raw, &internal), GUEST_GENERIC_ERROR, "{raw}");
+        }
+        // The user's own SQL text in argv never counts as the message.
+        let raw = format!("{argv} -c SELECT 'ERROR: ws_abc_migrator': exit Some(1): ERROR:  division by zero");
+        assert_eq!(guest_error_message(&raw, &internal), "division by zero");
+        let mapped = map_guest_engine(format!("{argv}: exit Some(1): ERROR:  division by zero"), &internal);
+        assert_eq!(mapped.code(), "engine");
+        assert_eq!(mapped.hint(), "division by zero");
     }
 
     #[test]
@@ -335,10 +484,11 @@ mod tests {
 
         let timeout = map_guest_engine(
             "psql: ERROR:  canceling statement due to statement timeout".into(),
+            &[],
         );
         assert_eq!(timeout.code(), "statement_timeout");
         assert_eq!(timeout.hint(), "statement exceeded 10s");
-        let state = map_guest_engine("ERROR: SQLSTATE 57014".into());
+        let state = map_guest_engine("ERROR: SQLSTATE 57014".into(), &[]);
         assert_eq!(state.code(), "statement_timeout");
     }
 }

@@ -623,7 +623,7 @@ pub fn handle_store_list(params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
-    match ops::store_list(ops(), &secrets, &project_id, None) {
+    match ops::store_list(ops(), &secrets, &project_id, false) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -658,7 +658,7 @@ pub fn handle_store_get(params: &HashMap<String, String>) -> CliResponse {
     let name = params.get("name").map(String::as_str).unwrap_or("");
     let id = params.get("id").map(String::as_str).unwrap_or("");
     let secrets = FileSecretStore::default();
-    match ops::store_get(ops(), &secrets, &project_id, name, id, None) {
+    match ops::store_get(ops(), &secrets, &project_id, name, id, false) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -678,7 +678,7 @@ pub fn handle_store_query(params: &HashMap<String, String>) -> CliResponse {
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
     let secrets = FileSecretStore::default();
-    match ops::store_query(ops(), &secrets, &project_id, name, limit, None) {
+    match ops::store_query(ops(), &secrets, &project_id, name, limit, false) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -723,15 +723,31 @@ fn need_skin_workspace(params: &HashMap<String, String>) -> Result<String, CliRe
         .ok_or_else(|| CliResponse::bad_request("missing workspace query parameter"))
 }
 
-fn skin_store_guc(pass: &SkinPass) -> Result<Option<&str>, CliResponse> {
+/// Store doors: session passes only. The store is K2's own table; the
+/// door's rule is the room's store cap, not the app's row security.
+fn skin_store_session(pass: &SkinPass) -> Result<(), CliResponse> {
     if !pass.session {
         return Err(crate::skin_routes::platform_store_forbidden());
     }
-    Ok(pass
+    Ok(())
+}
+
+/// Rows doors run like `/cli/db/query`: session pass with a uuid
+/// principal, locked into the connection before SET ROLE.
+fn skin_dump_principal(pass: &SkinPass) -> Result<String, CliResponse> {
+    skin_store_session(pass)?;
+    let principal = pass
         .principal_id
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty()))
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ops_err(OpsError::Usage("session has no principal id".into())))?;
+    if uuid::Uuid::parse_str(principal).is_err() {
+        return Err(ops_err(OpsError::Usage(
+            "session principal id is not a uuid".into(),
+        )));
+    }
+    Ok(principal.to_string())
 }
 
 fn skin_store_room(
@@ -749,26 +765,24 @@ fn skin_store_room(
 }
 
 fn handle_skin_store_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    if let Err(e) = skin_store_session(pass) {
+        return e;
+    }
     let project_id = match skin_store_room(params, pass) {
         Ok(id) => id,
         Err(e) => return e,
     };
     let secrets = FileSecretStore::default();
-    match ops::store_list(ops(), &secrets, &project_id, guc) {
+    match ops::store_list(ops(), &secrets, &project_id, true) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
 fn handle_skin_store_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    if let Err(e) = skin_store_session(pass) {
+        return e;
+    }
     let project_id = match skin_store_room(params, pass) {
         Ok(id) => id,
         Err(e) => return e,
@@ -776,17 +790,16 @@ fn handle_skin_store_get(params: &HashMap<String, String>, pass: &SkinPass) -> C
     let name = params.get("name").map(String::as_str).unwrap_or("");
     let id = params.get("id").map(String::as_str).unwrap_or("");
     let secrets = FileSecretStore::default();
-    match ops::store_get(ops(), &secrets, &project_id, name, id, guc) {
+    match ops::store_get(ops(), &secrets, &project_id, name, id, true) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
 fn handle_skin_store_query(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
-        Ok(v) => v,
-        Err(e) => return e,
-    };
+    if let Err(e) = skin_store_session(pass) {
+        return e;
+    }
     let project_id = match skin_store_room(params, pass) {
         Ok(id) => id,
         Err(e) => return e,
@@ -797,7 +810,7 @@ fn handle_skin_store_query(params: &HashMap<String, String>, pass: &SkinPass) ->
         .and_then(|s| s.parse().ok())
         .unwrap_or(50);
     let secrets = FileSecretStore::default();
-    match ops::store_query(ops(), &secrets, &project_id, name, limit, guc) {
+    match ops::store_query(ops(), &secrets, &project_id, name, limit, true) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -907,7 +920,7 @@ pub fn handle_dump_rows_gated(
 }
 
 fn handle_skin_dump_tables(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
+    let principal = match skin_dump_principal(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -919,14 +932,14 @@ fn handle_skin_dump_tables(params: &HashMap<String, String>, pass: &SkinPass) ->
         return r;
     }
     let secrets = FileSecretStore::default();
-    match ops::dump_list_tables(ops(), &secrets, &project_id, guc) {
+    match ops::dump_list_tables(ops(), &secrets, &project_id, Some(&principal)) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
 fn handle_skin_dump_rows(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
+    let principal = match skin_dump_principal(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -947,13 +960,13 @@ fn handle_skin_dump_rows(params: &HashMap<String, String>, pass: &SkinPass) -> C
     if let Err(r) = dump_linux_gate() {
         return r;
     }
-    dump_rows_for(params, &project_id, guc)
+    dump_rows_for(params, &project_id, Some(&principal))
 }
 
 fn dump_rows_for(
     params: &HashMap<String, String>,
     project_id: &str,
-    guc: Option<&str>,
+    principal: Option<&str>,
 ) -> CliResponse {
     let table = params.get("table").map(String::as_str).unwrap_or("");
     if table.trim().is_empty() {
@@ -965,7 +978,7 @@ fn dump_rows_for(
         if id.trim().is_empty() {
             return CliResponse::bad_request("missing id");
         }
-        match ops::dump_get_row(ops(), &secrets, project_id, table, id, guc) {
+        match ops::dump_get_row(ops(), &secrets, project_id, table, id, principal) {
             Ok(v) => ok_json(v),
             Err(e) => ops_err(e),
         }
@@ -974,7 +987,7 @@ fn dump_rows_for(
             .get("limit")
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
-        match ops::dump_list_rows(ops(), &secrets, project_id, table, limit, guc) {
+        match ops::dump_list_rows(ops(), &secrets, project_id, table, limit, principal) {
             Ok(v) => ok_json(v),
             Err(e) => ops_err(e),
         }
@@ -1093,7 +1106,7 @@ pub fn handle_dump_delete_gated(body: &[u8], skin: Option<SkinPass>) -> CliRespo
 }
 
 fn handle_skin_dump_write(body: &[u8], pass: &SkinPass, kind: &str) -> CliResponse {
-    let guc = match skin_store_guc(pass) {
+    let principal = match skin_dump_principal(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -1110,13 +1123,13 @@ fn handle_skin_dump_write(body: &[u8], pass: &SkinPass, kind: &str) -> CliRespon
         return r;
     }
     match kind {
-        "insert" => dump_insert_for(&b, &project_id, guc),
-        "update" => dump_update_for(&b, &project_id, guc),
-        _ => dump_delete_for(&b, &project_id, guc),
+        "insert" => dump_insert_for(&b, &project_id, Some(&principal)),
+        "update" => dump_update_for(&b, &project_id, Some(&principal)),
+        _ => dump_delete_for(&b, &project_id, Some(&principal)),
     }
 }
 
-fn dump_insert_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+fn dump_insert_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1125,13 +1138,13 @@ fn dump_insert_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResp
         return CliResponse::bad_request("row must be a JSON object");
     };
     let secrets = FileSecretStore::default();
-    match ops::dump_insert(ops(), &secrets, project_id, table, row, guc) {
+    match ops::dump_insert(ops(), &secrets, project_id, table, row, principal) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
-fn dump_update_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+fn dump_update_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1144,13 +1157,13 @@ fn dump_update_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResp
         return CliResponse::bad_request("row must be a JSON object");
     };
     let secrets = FileSecretStore::default();
-    match ops::dump_update(ops(), &secrets, project_id, table, id, row, guc) {
+    match ops::dump_update(ops(), &secrets, project_id, table, id, row, principal) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
-fn dump_delete_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResponse {
+fn dump_delete_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1160,7 +1173,7 @@ fn dump_delete_for(b: &DumpBody, project_id: &str, guc: Option<&str>) -> CliResp
         return CliResponse::bad_request("missing id");
     }
     let secrets = FileSecretStore::default();
-    match ops::dump_delete(ops(), &secrets, project_id, table, id, guc) {
+    match ops::dump_delete(ops(), &secrets, project_id, table, id, principal) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }

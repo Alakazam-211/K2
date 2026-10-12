@@ -73,7 +73,12 @@ export const SKIN_ACTIVITY_CAPS = ['activity:read'] as const
 // activity, and neither implies the other. Offered only when the window's
 // server supports `app-heartbeats` (AH24).
 export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as const
-export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS] as const
+// Own group (0.45.5 app identity surface). `agent:identity` = the room
+// agent's name, color and picture; `agent:handle` = its address, a separate
+// grant because a handle change breaks links. Neither implies the other.
+// Offered only when the window's server supports `agent-identity`.
+export const SKIN_AGENT_IDENTITY_CAPS = ['agent:identity', 'agent:handle'] as const
+export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS, ...SKIN_AGENT_IDENTITY_CAPS] as const
 export type SkinCap = (typeof SKIN_CAP_CHOICES)[number]
 
 /** What each cap lets an app do in a room — the checkbox tooltip. From the
@@ -83,11 +88,14 @@ export const SKIN_CAP_LABELS: Record<SkinCap, string> = Object.fromEntries(
   SKIN_CAP_CHOICES.map((cap) => [cap, K2_CAPS[cap].label]),
 ) as Record<SkinCap, string>
 
-/** AH24: the heartbeat caps are offered only when the server ships them. */
-export function skinCapChoices(appHeartbeats: boolean): readonly SkinCap[] {
-  if (appHeartbeats) return SKIN_CAP_CHOICES
+/** AH24: the heartbeat caps are offered only when the server ships them;
+ *  the agent identity caps likewise (an older server refuses an unknown cap). */
+export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean): readonly SkinCap[] {
+  if (appHeartbeats && agentIdentity) return SKIN_CAP_CHOICES
   return SKIN_CAP_CHOICES.filter(
-    (c) => !(SKIN_HEARTBEAT_CAPS as readonly string[]).includes(c),
+    (c) =>
+      (appHeartbeats || !(SKIN_HEARTBEAT_CAPS as readonly string[]).includes(c)) &&
+      (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)),
   )
 }
 
@@ -525,7 +533,11 @@ export function prefixLabel(prefix: string): string {
 
 export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
-  const capChoices = useMemo(() => skinCapChoices(appHeartbeats), [appHeartbeats])
+  const agentIdentity = useServerSupports('agent-identity')
+  const capChoices = useMemo(
+    () => skinCapChoices(appHeartbeats, agentIdentity),
+    [appHeartbeats, agentIdentity],
+  )
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])

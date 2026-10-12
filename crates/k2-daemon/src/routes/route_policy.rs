@@ -116,6 +116,11 @@ pub const ROUTES: &[Route] = &[
     post("/cli/agent-access/set", Admin),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
+    // 0.45.5 app identity surface: an App pass (agent:handle /
+    // agent:identity in the room) or the owner / a Connect login, the same
+    // floor as set-handle and set-agent-display-name.
+    post("/cli/agent/handle", Member),
+    both("/cli/agent/identity", Member),
     get("/cli/agent/list", Member),
     post("/cli/agent/reply", Member),
     post("/cli/agent/retire", Member),

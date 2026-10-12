@@ -354,6 +354,12 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     // Agent working (prd-daemon-activity-and-thread-working-v1 AP3): the
     // room's guest snapshot, activity:read. GET only.
     ("GET", "/cli/activity/snapshot"),
+    // App identity surface (0.45.5): read needs only the room; writes are
+    // POST only, agent:identity (name, color, picture) and agent:handle.
+    ("GET", "/cli/agent/identity"),
+    ("HEAD", "/cli/agent/identity"),
+    ("POST", "/cli/agent/identity"),
+    ("POST", "/cli/agent/handle"),
 ];
 
 /// POST routes the helper answers itself (login, logout, password). They
@@ -1820,6 +1826,21 @@ mod tests {
         assert!(!allowlisted_http("GET", "/cli/chat/transcript"));
         assert!(never_proxy("/cli/chat/transcript"));
         assert!(never_proxy("/cli/chat/transcript?session=x"));
+
+        // 0.45.5 app identity surface: identity GET/HEAD/POST, handle POST
+        // only; none of the owner identity routes, and no prefix match.
+        assert!(allowlisted_http("GET", "/cli/agent/identity?workspace=sales"));
+        assert!(allowlisted_http("HEAD", "/cli/agent/identity"));
+        assert!(allowlisted_http("POST", "/cli/agent/identity"));
+        assert!(allowlisted_http("POST", "/cli/agent/handle"));
+        assert!(!allowlisted_http("GET", "/cli/agent/handle"));
+        assert!(!allowlisted_http("POST", "/cli/agent/identity/x"));
+        assert!(!allowlisted_http("GET", "/cli/agent/conf"));
+        assert!(!allowlisted_http("POST", "/cli/agent/update"));
+        assert!(!allowlisted_http("POST", "/cli/workspace/set-handle"));
+        assert!(!allowlisted_http("POST", "/cli/workspace/set-agent-display-name"));
+        assert!(!allowlisted_http("POST", "/cli/projects/update"));
+        assert!(!allowlisted_http("POST", "/cli/projects/set-icon"));
 
         assert!(allowlisted_ws("/cli/activity/events"));
         assert!(allowlisted_ws("/cli/activity/events?workspace=sales"));

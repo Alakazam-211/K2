@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -99,6 +99,12 @@ hb_json="$("$K2" study app-heartbeats --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-heartbeats" and "no_ticks" in d["body"], d["id"]' "$hb_json"
 echo "  PASS: app-heartbeats --json id+body"
 pass=$((pass + 1))
+
+echo "== k2 study app-identity (0.45.5 app identity surface) =="
+id_out="$("$K2" study app-identity)"
+for needle in "agent:identity" "agent:handle" "/cli/agent/identity" "/cli/agent/handle" "rooms_changed" "handle_taken"; do
+    assert_contains "app-identity names $needle" "$id_out" "$needle"
+done
 
 echo "== k2 study app-tickets (prd-app-tickets-websocket-v1) =="
 tk_out="$("$K2" study app-tickets)"

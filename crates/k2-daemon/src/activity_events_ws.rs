@@ -48,6 +48,14 @@
 //! "via","hasBrief"}`. Ids and metadata only: no title, body, comment
 //! text, assignee names or brief HTML (refetch `show`; the brief stays
 //! `show?brief=1`). Not coalesced: one stored mutation, one frame.
+//!
+//! Roster nudge (0.45.5 app identity surface; room-scope surfaces R27):
+//! `{"kind":"rooms_changed"}` with no other key, sent on every open socket
+//! whose pass holds a room whose agent's name, color, picture or handle
+//! just changed (`agent_identity_changed` on the bus). Any socket cap is
+//! enough: the pass can already read that agent in `GET /cli/skin/agents`.
+//! The app refetches `skin/agents` (or `GET /cli/agent/identity`). An
+//! owner/Connect socket gets it for its own room only.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -87,6 +95,22 @@ pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read or tickets:re
 /// 0.45.2 — at most one counts-only `session_activity_changed` per session
 /// per this (ms); the last value always goes out (a trailing frame).
 pub const COUNTS_THROTTLE_MS: i64 = 1_000;
+
+/// R27 — the pass-level roster nudge. No room, name or handle on the wire.
+pub const ROOMS_CHANGED_FRAME: &str = r#"{"kind":"rooms_changed"}"#;
+
+/// R27 — does an `agent_identity_changed` for `changed` reach this socket?
+/// An App pass: when it holds that room. Owner/Connect: its own room only.
+pub fn rooms_changed_reaches(skin_pass: Option<&SkinPass>, socket_room: &str, changed: &str) -> bool {
+    let changed = changed.trim();
+    if changed.is_empty() {
+        return false;
+    }
+    match skin_pass {
+        Some(pass) => pass.has_room(changed),
+        None => changed == socket_room,
+    }
+}
 
 /// AH31 — at most one roster-derived `heartbeat_changed` per room per this.
 pub const HEARTBEAT_COALESCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -614,6 +638,17 @@ pub async fn serve_activity_events_connection(
             event = rx.recv() => {
                 match event {
                     Ok(event) => {
+                        if let SessionEvent::AgentIdentityChanged { project_id: ref changed, .. } = event {
+                            if rooms_changed_reaches(skin_pass.as_ref(), &project_id, changed)
+                                && write
+                                    .send(Message::Text(ROOMS_CHANGED_FRAME.to_string()))
+                                    .await
+                                    .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
                         if let SessionEvent::TicketChanged { .. } = event {
                             // Fail closed: no tickets:read in this room, no frame.
                             if !want_tickets {
@@ -1161,6 +1196,64 @@ mod tests {
         assert!(vb["since"].is_null(), "{vb}");
         assert!(take_text(&mut sock_b, Duration::from_millis(300)).await.is_none(), "room B never hears room A");
 
+        let _ = std::fs::remove_dir_all(&root_a);
+        let _ = std::fs::remove_dir_all(&root_b);
+    }
+
+    fn identity_event(project_id: &str) -> SessionEvent {
+        SessionEvent::AgentIdentityChanged {
+            project_id: project_id.to_string(),
+            workspace_path: "/somewhere/secret".into(),
+            fields: vec!["displayName".into(), "name".into()],
+            name: "Secret Name".into(),
+            display_name: "Secret Name".into(),
+            handle: "secret-handle".into(),
+            color: "#123456".into(),
+        }
+    }
+
+    /// 0.45.5 app identity surface (R27): `agent_identity_changed` becomes
+    /// the bare `rooms_changed` nudge on every socket whose pass holds the
+    /// changed room, whichever room the socket is on; an owner socket hears
+    /// only its own room.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rooms_changed_reaches_every_socket_whose_pass_holds_the_room() {
+        let root_a = temp_dir("rc-a");
+        let root_b = temp_dir("rc-b");
+        let handle_a = format!("ra{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let handle_b = format!("rb{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id_a = insert_project(&root_a.to_string_lossy(), &handle_a);
+        let id_b = insert_project(&root_b.to_string_lossy(), &handle_b);
+
+        let mut both_rooms = session_pass(&id_a, &[CAP_ACTIVITY_READ]);
+        both_rooms.room_policy.insert(id_b.clone(), vec![CAP_THREAD_READ.to_string()]);
+        both_rooms.rooms.push(id_b.clone());
+        assert!(rooms_changed_reaches(Some(&both_rooms), &id_a, &id_b));
+        assert!(!rooms_changed_reaches(Some(&session_pass(&id_a, &[CAP_ACTIVITY_READ])), &id_a, &id_b));
+        assert!(rooms_changed_reaches(None, &id_a, &id_a));
+        assert!(!rooms_changed_reaches(None, &id_a, &id_b));
+        assert!(!rooms_changed_reaches(Some(&both_rooms), &id_a, "  "));
+
+        let mut a_only = connect_room(Some(session_pass(&id_a, &[CAP_HEARTBEATS_READ])), &handle_a).await;
+        let mut a_and_b = connect_room(Some(both_rooms), &handle_a).await;
+        let mut owner_a = connect_room(None, &handle_a).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        session_events::emit(identity_event(&id_b)).expect("subscribers are connected");
+        let text = take_text(&mut a_and_b, Duration::from_secs(2)).await.expect("B is on this pass");
+        assert_eq!(text, ROOMS_CHANGED_FRAME);
+        assert!(take_text(&mut a_only, Duration::from_millis(300)).await.is_none(), "B is not on this pass");
+        assert!(take_text(&mut owner_a, Duration::from_millis(300)).await.is_none(), "owner socket: own room only");
+
+        session_events::emit(identity_event(&id_a)).expect("subscribers are connected");
+        for sock in [&mut a_only, &mut a_and_b, &mut owner_a] {
+            let text = take_text(sock, Duration::from_secs(2)).await.expect("room A changed");
+            let v: serde_json::Value = serde_json::from_str(&text).expect("json");
+            assert_eq!(v, serde_json::json!({"kind": "rooms_changed"}), "no room, name or handle: {text}");
+            for secret in ["Secret Name", "secret-handle", "/somewhere/secret", "#123456"] {
+                assert!(!text.contains(secret), "{secret} never reaches an app socket: {text}");
+            }
+        }
         let _ = std::fs::remove_dir_all(&root_a);
         let _ = std::fs::remove_dir_all(&root_b);
     }

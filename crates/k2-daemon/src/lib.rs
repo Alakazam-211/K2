@@ -51,6 +51,8 @@ pub mod zen_watch;
 pub mod grid_emitter;
 pub mod git_routes;
 pub mod heartbeat_app_routes;
+// 0.45.5 app identity surface: `/cli/agent/identity` + `/cli/agent/handle`.
+pub mod agent_identity_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
 pub mod heartbeat_routes;

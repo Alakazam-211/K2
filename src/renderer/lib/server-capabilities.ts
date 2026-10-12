@@ -122,6 +122,11 @@ export const FEATURES = {
    *  User Access offers the two caps only at or above this. Moves to the
    *  real version at the release cut (Rosson R5: 0.43.0). */
   'app-heartbeats': '0.43.0',
+  /** App identity surface (0.45.5): the `agent:identity` / `agent:handle`
+   *  app caps and `GET|POST /cli/agent/identity`, `POST /cli/agent/handle`.
+   *  Settings → User Access offers the two caps only at or above this (an
+   *  older server refuses an unknown cap). Confirm at the release cut. */
+  'agent-identity': '0.45.5',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

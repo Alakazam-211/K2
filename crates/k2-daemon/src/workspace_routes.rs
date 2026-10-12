@@ -235,46 +235,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         .to_string(),
                     });
                 }
-                match k2_core::workspace::display::set_agent_display_name(&p, &new_name) {
+                match apply_agent_display_name(&p, &new_name) {
                     Ok(()) => {
-                        // Phase B: live-session label propagation.
-                        // The canonical workspace+agent session is
-                        // keyed `<project_id>:<agent_name>` in
-                        // v2_session_map. Look it up via the
-                        // primary-agent helper + the project_id
-                        // resolver and push the new label.
-                        let project_id_opt = {
-                            let db = k2_core::db::shared();
-                            let conn = db.lock();
-                            conn.query_row(
-                                "SELECT id FROM projects WHERE path = ?1",
-                                rusqlite::params![p],
-                                |r| r.get::<_, String>(0),
-                            )
-                            .ok()
-                        };
-                        if let Some(project_id) = project_id_opt {
-                            // D13/label push: live map key is bare project_id.
-                            let canonical_key =
-                                crate::canonical_session::canonical_key_for(&project_id);
-                            if let Some(session) =
-                                crate::v2_session_map::lookup_by_agent_name(&canonical_key)
-                            {
-                                session.set_label(new_name.clone(), true);
-                            }
-                        }
-                        // Every connected client (Connect web/desktop, Home
-                        // rooms, other windows) repaints the name live; the
-                        // SyncProjects below only reaches this computer's
-                        // windows plus a payload-free projects refetch.
-                        crate::session_events::emit_agent_identity_changed(
-                            crate::session_events::AgentIdentityTarget::Path(&p),
-                            &["displayName", "name"],
-                        );
-                        k2_core::agent_hooks::emit(
-                            k2_core::agent_hooks::HookEvent::SyncProjects,
-                            serde_json::Value::Null,
-                        );
                         CliResponse::ok_json(
                             serde_json::json!({
                                 "success": true,
@@ -734,6 +696,73 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
     )
 }
 
+/// After any agent identity write (name, color, picture, handle), once per
+/// request: `agent_identity_changed` for every connected client (the app
+/// activity socket turns it into `rooms_changed`), then `SyncProjects` for
+/// this computer's windows. `fields` are the words that changed.
+pub fn emit_identity_refresh(
+    target: crate::session_events::AgentIdentityTarget<'_>,
+    fields: &[&str],
+) {
+    if fields.is_empty() {
+        return;
+    }
+    crate::session_events::emit_agent_identity_changed(target, fields);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::SyncProjects,
+        serde_json::Value::Null,
+    );
+}
+
+/// The display-name write without events: AGENT.md `display_name:` +
+/// `projects.name` (core), then the live canonical session's label
+/// (Phase B; it was spawned `LabelSource::Locked`, so PTY titles can't
+/// undo this). The app identity surface batches its events.
+pub fn write_agent_display_name(project_path: &str, new_name: &str) -> Result<(), String> {
+    k2_core::workspace::display::set_agent_display_name(project_path, new_name)?;
+    let project_id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT id FROM projects WHERE path = ?1",
+            rusqlite::params![project_path],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    };
+    if let Some(project_id) = project_id {
+        // D13/label push: live map key is bare project_id.
+        let canonical_key = crate::canonical_session::canonical_key_for(&project_id);
+        if let Some(session) = crate::v2_session_map::lookup_by_agent_name(&canonical_key) {
+            session.set_label(new_name.to_string(), true);
+        }
+    }
+    Ok(())
+}
+
+/// The owner display-name route's write: [`write_agent_display_name`],
+/// then one identity event + `SyncProjects`.
+pub fn apply_agent_display_name(project_path: &str, new_name: &str) -> Result<(), String> {
+    write_agent_display_name(project_path, new_name)?;
+    emit_identity_refresh(
+        crate::session_events::AgentIdentityTarget::Path(project_path),
+        &["displayName", "name"],
+    );
+    Ok(())
+}
+
+/// The one handle write, for `set-handle` and the app identity surface:
+/// core `set_workspace_handle` (slug rules, host-unique, the old handle
+/// kept as an alias, AGENT.md `name:`), then one identity event.
+pub fn apply_workspace_handle(project_path: &str, requested: &str) -> Result<String, String> {
+    let handle = k2_core::workspace::handle::set_workspace_handle(project_path, requested)?;
+    emit_identity_refresh(
+        crate::session_events::AgentIdentityTarget::Path(project_path),
+        &["handle"],
+    );
+    Ok(handle)
+}
+
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
 struct SetHandleBody {
@@ -757,16 +786,8 @@ pub fn handle_set_handle(body: &[u8]) -> CliResponse {
     let Some(path) = crate::workspace_msg::resolve_workspace(&b.project) else {
         return workspace_not_found_response(&b.project);
     };
-    match k2_core::workspace::handle::set_workspace_handle(&path, &b.handle) {
+    match apply_workspace_handle(&path, &b.handle) {
         Ok(handle) => {
-            crate::session_events::emit_agent_identity_changed(
-                crate::session_events::AgentIdentityTarget::Path(&path),
-                &["handle"],
-            );
-            k2_core::agent_hooks::emit(
-                k2_core::agent_hooks::HookEvent::SyncProjects,
-                serde_json::Value::Null,
-            );
             CliResponse::ok_json(
                 serde_json::json!({
                     "ok": true,

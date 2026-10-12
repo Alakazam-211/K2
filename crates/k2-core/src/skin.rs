@@ -82,6 +82,12 @@ pub const CAP_HEARTBEATS_READ: &str = "heartbeats:read";
 /// archive|fire`) and exactly each heartbeat's WAKEUP.md through
 /// `/cli/fs/write-file` (Rosson R2). Does not imply read.
 pub const CAP_HEARTBEATS_WRITE: &str = "heartbeats:write";
+/// The room agent's name, color and picture (`GET|POST /cli/agent/identity`).
+/// Not the handle: an address change breaks links, so it is its own cap.
+pub const CAP_AGENT_IDENTITY: &str = "agent:identity";
+/// The room agent's handle, its address (`POST /cli/agent/handle`). Does not
+/// imply `agent:identity`, and `agent:identity` does not imply it.
+pub const CAP_AGENT_HANDLE: &str = "agent:handle";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -101,6 +107,8 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_ACTIVITY_READ,
     CAP_HEARTBEATS_READ,
     CAP_HEARTBEATS_WRITE,
+    CAP_AGENT_IDENTITY,
+    CAP_AGENT_HANDLE,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -718,7 +726,8 @@ pub struct SkinTokenMeta {
     pub revoked_at: Option<i64>,
 }
 
-/// One workspace a skin pass may Thread. Wire `{handle, projectId, displayName}`.
+/// One workspace a skin pass may Thread. Wire `{handle, projectId,
+/// displayName, color, image}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkinAgent {
@@ -726,6 +735,14 @@ pub struct SkinAgent {
     pub project_id: String,
     /// Guest-facing label. Handle stays the id.
     pub display_name: String,
+    /// The agent's color, `#rrggbb` (0.45.5). `None` only for a row read
+    /// before the color was known.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// The agent's picture as a PNG/JPEG/WebP/GIF data URL, or `None` (no
+    /// picture, or one an App is never sent: SVG, oversize). 0.45.5.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 /// Resolved live pass. Safe to log `id` / `username` / `caps` — never a secret.
@@ -3933,7 +3950,8 @@ pub fn handles_for_project_ids(ids: &[String]) -> Vec<String> {
 pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
     let db = crate::db::shared();
     let conn = db.lock();
-    let mut pending: Vec<(String, String, Option<String>)> = Vec::new();
+    type Pending = (String, String, Option<String>, Option<String>, Option<String>);
+    let mut pending: Vec<Pending> = Vec::new();
     for id in ids {
         let id = id.trim();
         if id.is_empty() {
@@ -3942,23 +3960,24 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
         if let Ok(h) = crate::workspace::handle::project_handle(&conn, id) {
             let h = h.trim().to_string();
             if !h.is_empty() {
-                let path: Option<String> = conn
+                let (path, color, icon): (Option<String>, Option<String>, Option<String>) = conn
                     .query_row(
-                        "SELECT path FROM projects WHERE id = ?1",
+                        "SELECT path, color, icon_url FROM projects WHERE id = ?1",
                         params![id],
-                        |r| r.get(0),
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                     )
-                    .ok()
+                    .unwrap_or((None, None, None));
+                let path = path
                     .map(|s: String| s.trim().to_string())
                     .filter(|s| !s.is_empty());
-                pending.push((id.to_string(), h, path));
+                pending.push((id.to_string(), h, path, color, icon));
             }
         }
     }
     drop(conn);
     pending
         .into_iter()
-        .map(|(project_id, handle, path)| {
+        .map(|(project_id, handle, path, color, icon)| {
             let display_name = path
                 .map(|p| crate::workspace::display::agent_display_name(&p))
                 .map(|s| s.trim().to_string())
@@ -3968,6 +3987,9 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
                 handle,
                 project_id,
                 display_name,
+                color: color
+                    .and_then(|c| crate::workspace::agent_look::normalize_color(&c).ok()),
+                image: crate::workspace::agent_look::guest_image_view(icon.as_deref()),
             }
         })
         .collect()
@@ -4479,6 +4501,41 @@ mod tests {
         let err = parse_caps(Some(&["activity:write".into()])).unwrap_err();
         assert!(err.contains("unknown capability"), "{err}");
         assert!(err.contains("activity:write"), "{err}");
+    }
+
+    /// 0.45.5 app identity surface: both caps parse, neither is a default,
+    /// and neither implies the other (or anything else).
+    #[test]
+    fn parse_caps_accepts_agent_identity_caps_never_implied() {
+        let empty = parse_caps(None).expect("empty default");
+        assert!(!empty.iter().any(|c| c == CAP_AGENT_IDENTITY || c == CAP_AGENT_HANDLE));
+        let both = parse_caps(Some(&["agent:identity".into(), "agent:handle".into()]))
+            .expect("agent caps");
+        assert_eq!(both, vec![CAP_AGENT_IDENTITY, CAP_AGENT_HANDLE]);
+        let room = "room-id".to_string();
+        let pass_with = |caps: &[&str]| {
+            let mut room_policy = RoomPolicy::new();
+            room_policy.insert(room.clone(), caps.iter().map(|c| (*c).to_string()).collect());
+            SkinPass {
+                id: "p".into(),
+                principal_id: Some("u".into()),
+                username: "guest".into(),
+                caps: caps.iter().map(|c| (*c).to_string()).collect(),
+                rooms: vec![room.clone()],
+                session: true,
+                room_policy,
+            }
+        };
+        let ident = pass_with(&[CAP_AGENT_IDENTITY]);
+        assert!(ident.has_cap_in_room(&room, CAP_AGENT_IDENTITY));
+        assert!(!ident.has_cap_in_room(&room, CAP_AGENT_HANDLE), "identity must not imply handle");
+        let handle = pass_with(&[CAP_AGENT_HANDLE]);
+        assert!(!handle.has_cap_in_room(&room, CAP_AGENT_IDENTITY), "handle must not imply identity");
+        for cap in [CAP_THREAD_READ, CAP_FILES_WRITE, CAP_HEARTBEATS_WRITE] {
+            assert!(!pass_with(&[cap]).has_cap_in_room(&room, CAP_AGENT_IDENTITY), "{cap}");
+            assert!(!pass_with(&[cap]).has_cap_in_room(&room, CAP_AGENT_HANDLE), "{cap}");
+        }
+        assert!(!ident.has_cap_in_room("other-room", CAP_AGENT_IDENTITY));
     }
 
     #[test]

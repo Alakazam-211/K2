@@ -22,6 +22,8 @@ pub mod agent_launch;
 pub mod agent_resolve;
 pub mod checkin;
 pub mod display;
+// Agent color + picture checks for the app identity surface (agent:identity).
+pub mod agent_look;
 pub mod handle;
 pub mod events;
 pub mod launch_profile;

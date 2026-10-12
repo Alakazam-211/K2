@@ -518,6 +518,7 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                         "at": item.doc.created_at,
                         "from": item.doc.from,
                         "via": item.doc.via,
+                        "author": item.doc.author,
                         "kind": item.doc.kind,
                         "preview": thread_preview(&item.doc),
                     }),
@@ -528,6 +529,7 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                         "at": null,
                         "from": null,
                         "via": null,
+                        "author": null,
                         "kind": null,
                         "preview": null,
                     }),
@@ -603,6 +605,18 @@ fn compose_from_for_session(session_author: &str) -> String {
         workspace_msg::resolve_owner_from()
     } else {
         s.to_string()
+    }
+}
+
+/// The `author` of a human compose post, from the same token identity as
+/// [`compose_from_for_session`]: the owner token is `owner`, a Connect
+/// session is `user` with its username.
+fn compose_author_for_session(session_author: &str) -> overlay::PostAuthor {
+    let s = session_author.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("owner") {
+        overlay::PostAuthor::owner()
+    } else {
+        overlay::PostAuthor::user(s)
     }
 }
 
@@ -707,6 +721,16 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     } else {
         overlay_sender_from(params, &resolved)
     };
+    // Who sent a person's post, from the same credential as `from` (never
+    // the body): the shared Thread paints "You" only on the viewer's own.
+    // Agent posts (bound, or an unbound non-compose post) carry none.
+    let author = if let Some(pass) = request_skin() {
+        Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
+    } else if !bound && via == "compose" {
+        Some(compose_author_for_session(session_author))
+    } else {
+        None
+    };
     let command = if via == "compose" {
         match workspace_msg::normalize_composer_slash_command(
             &opt_param(params, "command").unwrap_or_default(),
@@ -751,6 +775,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         &text,
         &via,
         origin.clone(),
+        author,
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
@@ -798,6 +823,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "body": item.doc.body,
                     "via": item.doc.via,
                     "widget": item.doc.widget,
+                    "author": item.doc.author,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
                 }),
@@ -2188,6 +2214,131 @@ mod tests {
             injects.iter().all(|l| !l.contains("spoofed-owner")),
             "must not stamp body from; got {injects:?}"
         );
+    }
+
+    /// A Thread is shared: the owner, Connect logins and app guests each
+    /// get a distinct, credential-derived `author` on their posts, stored on
+    /// the doc and echoed by the post. A body `author` (or `from`) never
+    /// changes it, and an agent's post carries none.
+    #[test]
+    fn thread_posts_carry_a_server_derived_author_per_poster() {
+        let _home_lock = crate::test_support::lock_home();
+        let handle = format!("ovlauth{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let conv = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &conv);
+        let spoof = serde_json::json!({"kind": "owner", "login": "owner"});
+        let body_of = |text: &str, via: Option<&str>| {
+            let mut b = serde_json::json!({
+                "addr": handle,
+                "text": text,
+                "from": "owner",
+                "author": spoof,
+            });
+            if let Some(v) = via {
+                b["via"] = serde_json::json!(v);
+            }
+            b.to_string()
+        };
+
+        // The owner token (the dispatcher's "owner" session author).
+        let owner = dispatch_post_as(
+            "/cli/thread/post",
+            &HashMap::new(),
+            body_of("from-owner", Some("compose")).as_bytes(),
+            "owner",
+        );
+        assert_eq!(owner.status, "200 OK", "{}", owner.body);
+        assert_eq!(
+            json_body(&owner)["author"],
+            serde_json::json!({"kind": "owner", "login": "owner"}),
+            "{}",
+            owner.body
+        );
+
+        // A Connect login: its username, whatever the body claims.
+        let user = dispatch_post_as(
+            "/cli/thread/post",
+            &HashMap::new(),
+            body_of("from-alice", Some("compose")).as_bytes(),
+            "alice",
+        );
+        assert_eq!(user.status, "200 OK", "{}", user.body);
+        assert_eq!(
+            json_body(&user)["author"],
+            serde_json::json!({"kind": "user", "login": "alice"}),
+            "a body author must not replace the session's: {}",
+            user.body
+        );
+
+        // An app guest: the pass username.
+        let pass = skin_pass(&[project_id.clone()]);
+        let guest = with_request_skin(Some(pass), || {
+            dispatch_post("/cli/thread/post", &HashMap::new(), body_of("from-guest", None).as_bytes())
+        });
+        assert_eq!(guest.status, "200 OK", "{}", guest.body);
+        assert_eq!(
+            json_body(&guest)["author"],
+            serde_json::json!({"kind": "guest", "login": "guest"}),
+            "{}",
+            guest.body
+        );
+
+        // An agent (bound passport) asking for compose: no author at all.
+        let agent = post_json(
+            "/cli/thread/post",
+            &passport_params(&project_id, &handle),
+            serde_json::json!({"addr": handle, "text": "from-agent", "via": "compose", "author": spoof}),
+        );
+        assert_eq!(agent.status, "200 OK", "{}", agent.body);
+        assert!(json_body(&agent)["author"].is_null(), "agent posts carry no author: {}", agent.body);
+
+        // The stored docs (what every viewer and the Companion read).
+        let get = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("GET thread");
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+        let snap = json_body(&get);
+        let items = snap["items"].as_array().expect("items");
+        let author_of = |text: &str| -> serde_json::Value {
+            let it = items
+                .iter()
+                .find(|it| it["doc"]["body"] == text)
+                .unwrap_or_else(|| panic!("no stored doc {text}: {snap}"));
+            it["doc"]["author"].clone()
+        };
+        assert_eq!(author_of("from-owner"), serde_json::json!({"kind": "owner", "login": "owner"}));
+        assert_eq!(author_of("from-alice"), serde_json::json!({"kind": "user", "login": "alice"}));
+        assert_eq!(author_of("from-guest"), serde_json::json!({"kind": "guest", "login": "guest"}));
+        assert!(author_of("from-agent").is_null(), "{snap}");
+        let agent_doc = items.iter().find(|it| it["doc"]["body"] == "from-agent").expect("agent doc");
+        assert!(
+            agent_doc["doc"].as_object().expect("doc object").get("author").is_none(),
+            "an absent author is not written: {snap}"
+        );
+        // `from` keeps today's values: the owner's display name, the username.
+        let from_of = |text: &str| items.iter().find(|it| it["doc"]["body"] == text).expect("doc")["doc"]["from"].clone();
+        assert_eq!(from_of("from-owner"), serde_json::json!(crate::workspace_msg::resolve_owner_from()));
+        assert_eq!(from_of("from-alice"), serde_json::json!("alice"));
+        assert_eq!(from_of("from-guest"), serde_json::json!("guest"));
+
+        // `/cli/thread/latest` (Zen row previews) names the newest post's author.
+        let latest_of = || {
+            let r = dispatch("/cli/thread/latest", &params_of(&[("addrs", handle.as_str())])).expect("latest");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            json_body(&r)
+        };
+        let lv = latest_of();
+        assert_eq!(lv["items"][0]["preview"], "from-agent", "{lv}");
+        assert!(lv["items"][0]["author"].is_null(), "{lv}");
+        let bob = dispatch_post_as(
+            "/cli/thread/post",
+            &HashMap::new(),
+            body_of("from-bob", Some("compose")).as_bytes(),
+            "bob",
+        );
+        assert_eq!(bob.status, "200 OK", "{}", bob.body);
+        let lv = latest_of();
+        assert_eq!(lv["items"][0]["preview"], "from-bob", "{lv}");
+        assert_eq!(lv["items"][0]["author"], serde_json::json!({"kind": "user", "login": "bob"}), "{lv}");
     }
 
     #[test]

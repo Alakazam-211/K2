@@ -7,8 +7,25 @@ import {
   threadErrorText,
 } from '@/lib/thread-address-bus'
 import type { ServerScope } from '@/kessel/server-scope'
+import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 
 export const OVERLAY_PAGE_SIZE = 25
+
+/** `widget` / `author` when the daemon sent them (left off otherwise, so a
+ *  coerced doc stays equal to the socket's). */
+function docExtras(src: Record<string, unknown>): Pick<OverlayDoc, 'widget' | 'author'> {
+  const out: Pick<OverlayDoc, 'widget' | 'author'> = {}
+  const w = src.widget
+  if (w && typeof w === 'object' && !Array.isArray(w)) {
+    const o = w as Record<string, unknown>
+    if (typeof o.widget === 'string' && typeof o.garden === 'string') {
+      out.widget = { widget: o.widget, garden: o.garden }
+    }
+  }
+  const author = parseThreadAuthor(src.author)
+  if (author) out.author = author
+  return out
+}
 
 export interface OverlayChoice {
   prompt: string
@@ -81,6 +98,10 @@ export interface OverlayDoc {
   /** Set when a Garden widget sent this post for the person
    *  (prd-zen-user-widgets-v2 UWB12a; daemon feature `thread-widget-origin`). */
   widget?: { widget: string; garden: string } | null
+  /** Who sent a person's post, stamped by the daemon from the credential
+   *  (`owner` / `user` / `guest`). Absent on agent posts and older docs;
+   *  `isOwnThreadPost` (lib/thread-viewer) decides "You". */
+  author?: ThreadAuthor | null
 }
 
 export interface OverlayThreadItem {
@@ -210,6 +231,7 @@ export function overlayItemFromThreadPost(
       to: typeof resp.to === 'string' ? resp.to : null,
       body: typeof resp.body === 'string' ? resp.body : fallbackBody,
       via: typeof resp.via === 'string' ? resp.via : 'compose',
+      ...docExtras(resp),
     },
   }
 }
@@ -621,6 +643,7 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       via: typeof d.via === 'string' ? d.via : null,
       choice: coerceChoice(d.choice),
       secret: coerceSecret(d.secret),
+      ...docExtras(d),
     },
   }
 }

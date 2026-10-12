@@ -22,6 +22,7 @@ import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
+import { isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
@@ -55,6 +56,7 @@ function itemText(item: OverlayThreadItem): string {
 
 function Bubble({
   item,
+  viewer,
   nowSec,
   server,
   onAnswer,
@@ -62,6 +64,8 @@ function Bubble({
   onMoreOptions,
 }: {
   item: OverlayThreadItem
+  /** Who is looking: "You" only on their own posts (a Thread is shared). */
+  viewer: ThreadViewer | null
   nowSec: number
   server?: string
   /** Resolves when the daemon took the answer; throws its refusal. */
@@ -70,7 +74,7 @@ function Bubble({
   /** The full secret card, in the agent's Thread pane. */
   onMoreOptions(): void
 }): React.JSX.Element {
-  const mine = item.doc.via === 'compose'
+  const mine = isOwnThreadPost(item.doc, viewer)
   const kind = item.doc.kind
   const text = itemText(item)
   return (
@@ -362,6 +366,7 @@ export function ZenConversation({
             <Bubble
               key={it.id}
               item={it}
+              viewer={view?.viewer ?? null}
               nowSec={nowSec}
               server={row.server ?? 'this computer'}
               onAnswer={(payload) => answer(it.id, payload)}

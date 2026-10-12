@@ -15,6 +15,13 @@ import {
   type ThreadAnswerPayload,
 } from './overlayThread'
 import { SecretCard } from './SecretCard'
+import {
+  isOwnThreadPost,
+  OWNER_VIEWER,
+  parseThreadAuthor,
+  useThreadViewer,
+  type ThreadViewer,
+} from '@/lib/thread-viewer'
 
 // The vault secret card lives in its own file; Zen imports it from here.
 export { SecretCard } from './SecretCard'
@@ -45,6 +52,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   onStop,
 }: ThreadOverlayPaneProps): JSX.Element {
   const roomScope = useRoom().scope
+  // A Thread is shared: "You" only on this viewer's own posts.
+  const viewer = useThreadViewer(roomScope)
   const isTabVisible = useIsTabVisible()
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
@@ -229,6 +238,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             <ThreadItemRow
               key={it.id}
               item={it}
+              viewer={viewer}
               nowSec={nowSec}
               fontSize={editorFontSize}
               currentAddr={currentAddr}
@@ -246,12 +256,35 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   )
 })
 
-function isHumanPost(doc: OverlayDoc): boolean {
-  return doc.via === 'compose'
+/** A person's post (the compose bar, a Garden widget, an app guest): the
+ *  daemon stamped who sent it. Older docs only say `via=compose`. */
+function isPersonPost(doc: OverlayDoc): boolean {
+  return parseThreadAuthor(doc.author) !== null || doc.via === 'compose'
+}
+
+/** The author line: "You" on the viewer's own post, else the sender's
+ *  name (a person's `from` is their name: the owner's display name, the
+ *  Connect username, the guest's username; an agent's is its address). */
+export function threadAuthorLabel(
+  doc: OverlayDoc,
+  viewer: ThreadViewer | null,
+  currentAddr?: string,
+  pastAddresses?: readonly string[],
+): { label: string; mine: boolean } {
+  const mine = isOwnThreadPost(doc, viewer)
+  // UWB12a: a post a Garden widget sent for a person says which widget.
+  const viaWidget = isPersonPost(doc) ? doc.widget?.widget?.trim() : ''
+  const name = mine
+    ? 'You'
+    : isPersonPost(doc)
+      ? doc.from?.trim() || 'someone'
+      : displayThreadAddress(doc.from || '', currentAddr, pastAddresses) || 'unknown'
+  return { label: viaWidget ? `${name} · via ${viaWidget}` : name, mine }
 }
 
 export function ThreadItemRow({
   item,
+  viewer = OWNER_VIEWER,
   nowSec,
   fontSize,
   currentAddr,
@@ -261,6 +294,9 @@ export function ThreadItemRow({
   cardContext,
 }: {
   item: OverlayThreadItem
+  /** Who is looking (`useThreadViewer` on the room's server). Defaults to
+   *  the owner on this computer. */
+  viewer?: ThreadViewer | null
   nowSec?: number
   fontSize?: number
   /** Q5: an old row stamped with this chat's earlier address shows the
@@ -273,14 +309,7 @@ export function ThreadItemRow({
   cardContext?: SecretCardContext
 }): JSX.Element {
   const kind = item.doc.kind
-  const owner = isHumanPost(item.doc)
-  // UWB12a: a post a Garden widget sent for you says which widget.
-  const viaWidget = owner ? item.doc.widget?.widget?.trim() : ''
-  const author = owner
-    ? viaWidget
-      ? `You · via ${viaWidget}`
-      : 'You'
-    : displayThreadAddress(item.doc.from || '', currentAddr, pastAddresses) || 'unknown'
+  const { label: author, mine: owner } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const timeLabel = formatRelativeTime(
     item.doc.created_at,
     nowSec ?? Math.floor(Date.now() / 1000),

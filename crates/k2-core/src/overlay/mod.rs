@@ -14,7 +14,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, SecretBody, SecretProposal, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::OverlayPage;
 
@@ -181,11 +181,12 @@ pub fn post_thread(
     body: &str,
     via: &str,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
-    post_thread_with_origin(conn, conversation_id, project_id, from, to, body, via, None)
+    post_thread_with_origin(conn, conversation_id, project_id, from, to, body, via, None, None)
 }
 
 /// [`post_thread`], recording the Garden widget that sent the post for the
-/// person (prd-zen-user-widgets-v2 UWB12a) on the doc as `widget`.
+/// person (prd-zen-user-widgets-v2 UWB12a) on the doc as `widget`, and the
+/// person who sent it (the caller's credential, never the body) as `author`.
 #[allow(clippy::too_many_arguments)]
 pub fn post_thread_with_origin(
     conn: &Connection,
@@ -196,6 +197,7 @@ pub fn post_thread_with_origin(
     body: &str,
     via: &str,
     widget: Option<WidgetOrigin>,
+    author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
@@ -208,6 +210,7 @@ pub fn post_thread_with_origin(
         via,
     );
     doc.widget = widget;
+    doc.author = author;
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     let item = OverlayItem {
         collection: "thread".to_string(),

@@ -115,6 +115,13 @@ import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
 import type { ZenAgentCounts } from './zen-counts'
+import {
+  isOwnThreadPost,
+  loadThreadViewer,
+  onThreadViewerChange,
+  threadViewerNow,
+  type ThreadViewer,
+} from '@/lib/thread-viewer'
 
 // ── Shapes a widget sees ──────────────────────────────────────────────────
 
@@ -143,7 +150,8 @@ export interface ZenPreview {
   /** Seconds since the epoch, or null. */
   at: number | null
   from: string
-  /** The user's own message (`via=compose`). */
+  /** The viewer's own message (`isOwnThreadPost`: the post's `author` is
+   *  this login; an older doc without one: `via=compose`). */
   mine: boolean
   seq: number | null
 }
@@ -219,6 +227,10 @@ export interface ZenThreadView {
    *  doesn't report Thread turns (no `daemon-activity`): read the row's
    *  `working` instead (TW14). */
   turn?: ZenThreadTurn | null
+  /** Who is looking, on the agent's server: "You" only on their own posts
+   *  (`isOwnThreadPost`). Null until known. Never projected to a custom
+   *  widget (closed shapes, zen-custom-projection). */
+  viewer?: ThreadViewer | null
 }
 
 /** `thread.post` options: files on this computer, or browser files. A
@@ -380,6 +392,8 @@ export interface ThreadLatestItem {
   at: number | null
   from: string | null
   via: string | null
+  /** The newest post's `author` (a person's post on a server that stamps it). */
+  author?: unknown
   kind: string | null
   preview: string | null
   error: string | null
@@ -401,6 +415,7 @@ export function parseThreadLatest(raw: unknown): ThreadLatestItem[] {
       at: num(it.at),
       from: str(it.from),
       via: str(it.via),
+      ...(it.author !== undefined && it.author !== null ? { author: it.author } : {}),
       kind: str(it.kind),
       preview: str(it.preview),
       error: err,
@@ -409,12 +424,12 @@ export function parseThreadLatest(raw: unknown): ThreadLatestItem[] {
   return out
 }
 
-function previewFromItem(item: OverlayThreadItem): ZenPreview {
+function previewFromItem(item: OverlayThreadItem, viewer: ThreadViewer | null): ZenPreview {
   return {
     text: previewText(item.doc),
     at: typeof item.doc.created_at === 'number' ? item.doc.created_at : null,
     from: item.doc.from || '',
-    mine: item.doc.via === 'compose',
+    mine: isOwnThreadPost(item.doc, viewer),
     seq: Number.isFinite(item.seq) ? item.seq : null,
   }
 }
@@ -422,7 +437,9 @@ function previewFromItem(item: OverlayThreadItem): ZenPreview {
 function setPreview(address: string, next: ZenPreview): boolean {
   const prev = previews.get(address)
   if (prev && prev.seq !== null && next.seq !== null && next.seq < prev.seq) return false
-  if (prev && prev.text === next.text && prev.seq === next.seq && prev.at === next.at) return false
+  if (prev && prev.text === next.text && prev.seq === next.seq && prev.at === next.at && prev.mine === next.mine) {
+    return false
+  }
   previews.set(address, next)
   return true
 }
@@ -986,6 +1003,8 @@ export async function refreshZenPreviews(): Promise<void> {
 async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promise<void> {
   const scope = scopeForRow(hostKey)
   const handleOf = (r: ZenAgentRow): string => parseHomeAddress(r.address)?.handle ?? ''
+  // "You:" only on the viewer's own post (one whoami per server, memoized).
+  const viewer = await loadThreadViewer(scope)
   if (scope.serverSupports('thread-latest')) {
     for (let i = 0; i < rows.length; i += ZEN_LATEST_MAX) {
       const chunk = rows.slice(i, i + ZEN_LATEST_MAX)
@@ -998,7 +1017,7 @@ async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promis
           text: it.preview,
           at: it.at,
           from: it.from ?? '',
-          mine: it.via === 'compose',
+          mine: isOwnThreadPost({ via: it.via, author: it.author }, viewer),
           seq: it.seq,
         })
       }
@@ -1011,7 +1030,7 @@ async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promis
       const raw = await daemonCliGet<unknown>(scope, 'thread', { addr: handleOf(r), limit: 1 })
       const snap = threadItemsFromSnapshot(raw)
       const last = snap.items[snap.items.length - 1]
-      if (last) setPreview(r.address, previewFromItem(last))
+      if (last) setPreview(r.address, previewFromItem(last, viewer))
     }),
   )
 }
@@ -1308,7 +1327,35 @@ function threadView(address: string): ZenThreadView {
     loadingOlder: f?.loadingOlder ?? false,
     error: f?.error ?? null,
     turn: zenTurn(f),
+    viewer: viewerOf(address),
   }
+}
+
+/** The person looking at `address`'s Thread (its server's login), or null
+ *  before the conversation has a server. Asks the server once. */
+function viewerOf(address: string): ThreadViewer | null {
+  const scope = conversations.get(address)?.scope
+  if (!scope) return null
+  watchViewers()
+  void loadThreadViewer(scope)
+  return threadViewerNow(scope)
+}
+
+let stopViewerWatch: (() => void) | null = null
+
+/** When a server says who is looking, re-mark every open feed's posts. */
+function watchViewers(): void {
+  if (stopViewerWatch) return
+  stopViewerWatch = onThreadViewerChange(() => {
+    let rowsChanged = false
+    for (const [address, f] of feedViews) {
+      const visible = f.items.filter((it) => !isVoidedHitl(it.doc))
+      const last = visible[visible.length - 1]
+      if (last && setPreview(address, previewFromItem(last, viewerOf(address)))) rowsChanged = true
+      emitThread(address)
+    }
+    if (rowsChanged) emitRows()
+  })
 }
 
 function emitThread(address: string): void {
@@ -1324,7 +1371,7 @@ export function publishZenFeed(address: string, view: ZenFeedView, handlers: Zen
   feedHandlers.set(address, handlers)
   const visible = view.items.filter((it) => !isVoidedHitl(it.doc))
   const last = visible[visible.length - 1]
-  const changed = last ? setPreview(address, previewFromItem(last)) : false
+  const changed = last ? setPreview(address, previewFromItem(last, viewerOf(address))) : false
   emitThread(address)
   if (changed) emitRows()
 }
@@ -1374,7 +1421,7 @@ export async function postZenThread(
     : await postThreadCompose(c.scope, c.threadAddr, body)
   if (!result.ok) throw new Error(result.error)
   if (result.item) {
-    if (setPreview(address, previewFromItem(result.item))) emitRows()
+    if (setPreview(address, previewFromItem(result.item, viewerOf(address)))) emitRows()
   }
   return { id: result.item?.id ?? null, seq: result.item?.seq ?? null }
 }
@@ -1590,4 +1637,6 @@ export function __resetZenDataForTests(): void {
   iconAsked.clear()
   zenThreadFeeds.setState({ feeds: [] })
   zenViewHomes.setState({ homeIds: [] })
+  stopViewerWatch?.()
+  stopViewerWatch = null
 }

@@ -88,6 +88,46 @@ impl WidgetOrigin {
     }
 }
 
+/// Who posted a person's Thread message, stamped by the daemon from the
+/// request's credential (never from the request body). A Thread is shared
+/// by the owner, Connect logins and app guests, and `from` alone can't say
+/// which of them sent a post (an owner display name can equal a Connect
+/// username), so a viewer could not tell its own posts from other people's.
+///
+/// Wire: `author: {kind, login}` on the doc. Optional: agent posts and docs
+/// from before this field have none.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostAuthor {
+    /// [`AUTHOR_OWNER`] (the owner daemon token) | [`AUTHOR_USER`] (a
+    /// Connect login) | [`AUTHOR_GUEST`] (an app pass). A string, so a doc
+    /// with a later kind still parses.
+    pub kind: String,
+    /// `owner` for the owner token, else the Connect username or the app
+    /// guest's pass username.
+    pub login: String,
+}
+
+/// [`PostAuthor::kind`] for the owner daemon token.
+pub const AUTHOR_OWNER: &str = "owner";
+/// [`PostAuthor::kind`] for a Connect login.
+pub const AUTHOR_USER: &str = "user";
+/// [`PostAuthor::kind`] for an app guest (`k2skn_` pass).
+pub const AUTHOR_GUEST: &str = "guest";
+
+impl PostAuthor {
+    pub fn owner() -> Self {
+        Self { kind: AUTHOR_OWNER.to_string(), login: "owner".to_string() }
+    }
+
+    pub fn user(username: &str) -> Self {
+        Self { kind: AUTHOR_USER.to_string(), login: username.trim().to_string() }
+    }
+
+    pub fn guest(username: &str) -> Self {
+        Self { kind: AUTHOR_GUEST.to_string(), login: username.trim().to_string() }
+    }
+}
+
 /// One overlay document body. Secret **value** never lives here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OverlayDoc {
@@ -112,6 +152,11 @@ pub struct OverlayDoc {
     /// Set when a Garden widget sent this post for the person (UWB12a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<WidgetOrigin>,
+    /// Set on a person's post (the compose bar, a Garden widget, an app
+    /// guest): who sent it, from the credential. None on agent posts and
+    /// on docs written before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<PostAuthor>,
 }
 
 impl OverlayDoc {
@@ -128,6 +173,7 @@ impl OverlayDoc {
             choice: None,
             secret: None,
             widget: None,
+            author: None,
         }
     }
 
@@ -160,6 +206,7 @@ impl OverlayDoc {
             }),
             secret: None,
             widget: None,
+            author: None,
         }
     }
 
@@ -192,6 +239,7 @@ impl OverlayDoc {
                 reference: None,
             }),
             widget: None,
+            author: None,
         }
     }
 
@@ -215,6 +263,7 @@ impl OverlayDoc {
             choice: None,
             secret: None,
             widget: None,
+            author: None,
         }
     }
 
@@ -278,6 +327,31 @@ mod tests {
         assert_eq!(serde_json::from_str::<OverlayDoc>(&s).expect("parse"), d);
         let old = r#"{"id":"i","kind":"text","from":"alice","to":"k2/1","created_at":1,"body":"hi","via":"compose"}"#;
         assert_eq!(serde_json::from_str::<OverlayDoc>(old).expect("old doc").widget, None);
+    }
+
+    #[test]
+    fn post_author_round_trips_and_old_docs_still_parse() {
+        let mut d = OverlayDoc::text("i".into(), "alice".into(), "k2/1".into(), "hi".into(), "compose");
+        let plain = serde_json::to_string(&d).expect("json");
+        assert!(!plain.contains("author"), "absent author is not written: {plain}");
+        d.author = Some(PostAuthor::user("  alice "));
+        let s = serde_json::to_string(&d).expect("json");
+        assert!(s.contains(r#""author":{"kind":"user","login":"alice"}"#), "{s}");
+        // Every field the Companion reads keeps its name and value.
+        let v: serde_json::Value = serde_json::from_str(&s).expect("value");
+        assert_eq!(v["from"], "alice");
+        assert_eq!(v["via"], "compose");
+        assert_eq!(v["kind"], "text");
+        assert_eq!(serde_json::from_str::<OverlayDoc>(&s).expect("parse"), d);
+        let old = r#"{"id":"i","kind":"text","from":"alice","to":"k2/1","created_at":1,"body":"hi","via":"compose"}"#;
+        assert_eq!(serde_json::from_str::<OverlayDoc>(old).expect("old doc").author, None);
+        let later = r#"{"id":"i","kind":"text","from":"x","created_at":1,"author":{"kind":"robot","login":"x"}}"#;
+        assert_eq!(
+            serde_json::from_str::<OverlayDoc>(later).expect("later kind").author,
+            Some(PostAuthor { kind: "robot".into(), login: "x".into() })
+        );
+        assert_eq!(PostAuthor::owner(), PostAuthor { kind: "owner".into(), login: "owner".into() });
+        assert_eq!(PostAuthor::guest("g1"), PostAuthor { kind: "guest".into(), login: "g1".into() });
     }
 
     #[test]

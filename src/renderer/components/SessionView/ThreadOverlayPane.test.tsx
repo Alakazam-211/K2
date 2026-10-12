@@ -12,6 +12,7 @@ import { overlayViewer } from './sessionViewTab'
 import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
+import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
 
 // Home M4: room components read their scope from their room.
 const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
@@ -40,6 +41,15 @@ vi.mock('@/stores/settings', () => ({
   useSettingsStore: (sel: (s: { editor: { fontSize: number } }) => unknown) =>
     sel({ editor: { fontSize: 13 } }),
 }))
+
+// The pane asks the room's server who is looking; these tests answer for it
+// (the owner on this computer) so no request leaves the test.
+beforeEach(() => {
+  setThreadViewerForTests(overlayRoom.scope, { principal: 'owner', aliases: [] })
+})
+afterEach(() => {
+  resetThreadViewersForTests()
+})
 
 describe('Thread overlay pane', () => {
   afterEach(() => {
@@ -204,6 +214,107 @@ describe('Thread overlay choice chips + secret field', () => {
     renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
     expect(screen.getByText('cortana')).not.toBeNull()
     expect(screen.queryByText(/via Agent Arcade/)).toBeNull()
+  })
+
+  describe('a shared Thread: "You" only on the viewer\'s own posts', () => {
+    const post = (
+      id: string,
+      from: string,
+      author: { kind: string; login: string } | undefined,
+      extra: Partial<OverlayThreadItem['doc']> = {},
+    ): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: 10,
+      id,
+      doc: {
+        id,
+        kind: 'text',
+        from,
+        via: 'compose',
+        created_at: Math.floor(Date.now() / 1000),
+        body: `body of ${id}`,
+        ...(author ? { author } : {}),
+        ...extra,
+      },
+    })
+    const ownerViewer: ThreadViewer = { principal: 'owner', aliases: [] }
+    const aliceViewer: ThreadViewer = { principal: 'alice', aliases: [] }
+    /** The author line's text; "You" (and only "You") gets the own-post accent. */
+    const authorText = (): string => {
+      const row = screen.getByTestId('thread-item')
+      const el = row.querySelector('span.font-semibold')
+      if (!el) throw new Error(`no author element in ${row.innerHTML}`)
+      const text = el.textContent ?? ''
+      expect(el.className.includes('text-[var(--color-accent)]')).toBe(text.startsWith('You'))
+      return text
+    }
+
+    it('owner viewer: own post is You, a Connect user\'s post shows their name', () => {
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-own', 'Rosson', { kind: 'owner', login: 'owner' })} viewer={ownerViewer} />)
+      expect(authorText()).toBe('You')
+      cleanup()
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-bob', 'bob', { kind: 'user', login: 'bob' })} viewer={ownerViewer} />)
+      expect(authorText()).toBe('bob')
+      expect(screen.queryByText('You')).toBeNull()
+    })
+
+    it('Connect viewer: their own post is You, the owner\'s post shows the owner\'s name', () => {
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-alice', 'alice', { kind: 'user', login: 'Alice' })} viewer={aliceViewer} />)
+      expect(authorText()).toBe('You')
+      cleanup()
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-owner', 'Rosson', { kind: 'owner', login: 'owner' })} viewer={aliceViewer} />)
+      expect(authorText()).toBe('Rosson')
+      expect(screen.queryByText('You')).toBeNull()
+    })
+
+    it('the owner\'s linked login (their phone) reads as You to the owner', () => {
+      const viewer: ThreadViewer = { principal: 'owner', aliases: ['rosson'] }
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-phone', 'rosson', { kind: 'user', login: 'Rosson' })} viewer={viewer} />)
+      expect(authorText()).toBe('You')
+    })
+
+    it('an app guest\'s post shows the guest, never You', () => {
+      renderInRoom(
+        overlayRoom,
+        <ThreadItemRow item={post('p-guest', 'guest1', { kind: 'guest', login: 'guest1' }, { via: 'thread' })} viewer={ownerViewer} />,
+      )
+      expect(authorText()).toBe('guest1')
+    })
+
+    it('someone else\'s widget post names them and the widget', () => {
+      renderInRoom(
+        overlayRoom,
+        <ThreadItemRow
+          item={post('p-bob-widget', 'bob', { kind: 'user', login: 'bob' }, { widget: { widget: 'Agent Arcade', garden: 'g-test0001' } })}
+          viewer={ownerViewer}
+        />,
+      )
+      expect(authorText()).toBe('bob · via Agent Arcade')
+    })
+
+    it('an unknown viewer sees names, not You', () => {
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-unknown', 'Rosson', { kind: 'owner', login: 'owner' })} viewer={null} />)
+      expect(authorText()).toBe('Rosson')
+    })
+
+    it('an old compose doc with no author keeps the old You for any viewer', () => {
+      renderInRoom(overlayRoom, <ThreadItemRow item={post('p-old', 'bob', undefined)} viewer={aliceViewer} />)
+      expect(authorText()).toBe('You')
+    })
+
+    it('the pane paints with the room server\'s viewer', () => {
+      setThreadViewerForTests(overlayRoom.scope, aliceViewer)
+      threadHook.items = [
+        post('pane-alice', 'alice', { kind: 'user', login: 'alice' }),
+        { ...post('pane-owner', 'Rosson', { kind: 'owner', login: 'owner' }), seq: 11 },
+      ]
+      renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+      const rows = screen.getAllByTestId('thread-item')
+      expect(rows).toHaveLength(2)
+      expect(rows[0].textContent).toContain('You')
+      expect(rows[1].textContent).toContain('Rosson')
+      expect(rows[1].textContent).not.toContain('You')
+    })
   })
 
   it('does not paint via=thread from=owner as You', () => {

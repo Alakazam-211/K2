@@ -704,9 +704,9 @@ mod tests {
             !rec.contains("_migrator"),
             "store_put DML must not use migrator, got {rec}"
         );
-        let got = ops::store_get(&ops, &secrets, &pid, "items", "a", None).expect("get");
+        let got = ops::store_get(&ops, &secrets, &pid, "items", "a", false).expect("get");
         assert_eq!(got["doc"]["n"], 1);
-        let q = ops::store_query(&ops, &secrets, &pid, "items", 10, None).expect("query");
+        let q = ops::store_query(&ops, &secrets, &pid, "items", 10, false).expect("query");
         assert!(q["docs"].as_array().is_some());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2128,13 +2128,15 @@ mod tests {
         )
         .expect("put with bind");
         let rec = ops.recorded()[n..].join("\n");
+        // `_k2_store` is K2's own table (granted to the agent login); the
+        // bind role is for the app's tables. Rows doors keep the SET ROLE.
         assert!(
-            rec.contains("SET ROLE"),
-            "owned store with bind must SET ROLE, got {rec}"
+            !rec.contains("SET ROLE"),
+            "store door must not SET ROLE to the bind role, got {rec}"
         );
         assert!(
             rec.contains(&format!("-U {db_name}_agent")),
-            "SET ROLE session still logs in as owner agent, got {rec}"
+            "store door logs in as owner agent, got {rec}"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2424,20 +2426,24 @@ mod tests {
     }
 
     #[test]
-    fn skin_session_store_get_stamps_guc_agent_does_not() {
+    fn store_door_runs_as_database_login_not_bind_and_never_locks_a_principal() {
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
-        let dir = std::env::temp_dir().join(format!("k2-sql-skin-guc-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("k2-sql-skin-store-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
         let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let pid = insert_project_handle("sql-skin-guc", &path, &handle);
+        let pid = insert_project_handle("sql-skin-store", &path, &handle);
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
         let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
         let db_name = created["name"].as_str().expect("name").to_string();
         ops::store_create(&ops, &secrets, &pid, "items").expect("coll");
+        ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        // With a bind role, the old door sent `-c SET ROLE` plus the
+        // statement on stdin; real psql never reads stdin then, so the put
+        // silently wrote nothing. The fake now behaves like psql.
         ops::store_put(
             &ops,
             &secrets,
@@ -2446,64 +2452,29 @@ mod tests {
             "a",
             &serde_json::json!({"n": 1}),
         )
-        .expect("seed");
-        ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        .expect("put with a bind role");
 
-        let dentist_a = uuid::Uuid::new_v4().to_string();
-        let dentist_b = uuid::Uuid::new_v4().to_string();
-        let n = ops.recorded().len();
-        let got = ops::store_get(&ops, &secrets, &pid, "items", "a", Some(&dentist_a))
-            .expect("session get A");
-        assert_eq!(got["doc"]["n"], 1);
-        let rec = ops.recorded()[n..].join("\n");
-        assert!(
-            rec.contains("set_config('k2.skin_principal'"),
-            "session store GET must stamp GUC: {rec}"
-        );
-        assert!(rec.contains(&dentist_a), "GUC must be dentist A: {rec}");
-        assert!(
-            !rec.contains(&dentist_b),
-            "dentist A GUC must not stamp dentist B: {rec}"
-        );
-        assert!(
-            rec.contains(&format!("-U {db_name}_agent")),
-            "session store still logs in as workspace agent: {rec}"
-        );
-        assert!(rec.contains("SET ROLE"), "owned bind still SET ROLE: {rec}");
-        let set_pos = rec.find("SET ROLE").expect("SET ROLE pos");
-        let guc_pos = rec.find("set_config('k2.skin_principal'").expect("guc pos");
-        assert!(guc_pos > set_pos, "GUC -c must follow bind SET ROLE: {rec}");
-
-        let n = ops.recorded().len();
-        ops::store_get(&ops, &secrets, &pid, "items", "a", Some(&dentist_b))
-            .expect("session get B");
-        let rec_b = ops.recorded()[n..].join("\n");
-        assert!(rec_b.contains(&dentist_b), "GUC must be dentist B: {rec_b}");
-        assert!(
-            !rec_b.contains(&dentist_a),
-            "dentist B GUC must not stamp dentist A: {rec_b}"
-        );
-        assert_ne!(
-            rec.contains(&format!("'{dentist_a}'")),
-            rec_b.contains(&format!("'{dentist_a}'")),
-            "dentist A GUC ≠ dentist B"
-        );
-
-        let n = ops.recorded().len();
-        ops::store_get(&ops, &secrets, &pid, "items", "a", None).expect("agent get");
-        let rec_agent = ops.recorded()[n..].join("\n");
-        assert!(
-            !rec_agent.contains("set_config('k2.skin_principal'"),
-            "agent store must not stamp GUC: {rec_agent}"
-        );
-        assert!(
-            !rec_agent.contains(&dentist_a) && !rec_agent.contains(&dentist_b),
-            "agent store must not stamp a dentist UUID: {rec_agent}"
-        );
-        assert!(
-            rec_agent.contains(&format!("-U {db_name}_agent")),
-            "agent store still -U workspace agent: {rec_agent}"
-        );
+        for guest in [true, false] {
+            let n = ops.recorded().len();
+            let got = ops::store_get(&ops, &secrets, &pid, "items", "a", guest)
+                .expect("store get");
+            assert_eq!(got["doc"]["n"], 1, "guest={guest} {got}");
+            let rec = ops.recorded()[n..].join("\n");
+            assert!(
+                rec.contains(&format!("-U {db_name}_agent")),
+                "store door logs in as the database login: {rec}"
+            );
+            assert!(
+                !rec.contains("SET ROLE"),
+                "_k2_store is K2's table: no SET ROLE to the bind role: {rec}"
+            );
+            assert!(
+                !rec.contains("k2_principal_lock") && !rec.contains("set_config("),
+                "store door never locks or stamps a guest principal: {rec}"
+            );
+        }
+        let q = ops::store_query(&ops, &secrets, &pid, "items", 10, true).expect("query");
+        assert_eq!(q["docs"].as_array().map(|a| a.len()), Some(1), "{q}");
 
         let _ = std::fs::remove_dir_all(dir);
         let _ = path;
@@ -2570,12 +2541,12 @@ mod tests {
             );
             assert_eq!(docs.status, "200 OK", "{}", docs.body);
             let rec = fake.recorded()[n..].join("\n");
+            let pid = pass.principal_id.as_deref().expect("principal");
             assert!(
-                rec.contains("set_config('k2.skin_principal'"),
-                "session gated GET stamps GUC: {rec}"
+                !rec.contains("set_config(") && !rec.contains("k2_principal_lock"),
+                "store door is K2's: no guest principal on the connection: {rec}"
             );
-            let pid = pass.principal_id.as_deref().unwrap_or("");
-            assert!(rec.contains(pid), "GUC is this session principal: {rec}");
+            assert!(!rec.contains(pid), "{rec}");
 
             let anna = routes::handle_store_get_gated(
                 &store_ws_params(&anna_h, &[("name", "items"), ("id", "a")]),
@@ -2740,15 +2711,15 @@ mod tests {
     }
 
     #[test]
-    fn skin_session_dump_stamps_guc_after_set_role_agent_does_not() {
+    fn guest_rows_door_runs_like_db_query_and_reads_rows_not_the_lock() {
         let _g = sql_server_test_lock();
         k2_core::db::init_for_tests();
         seed_running_sidecar();
-        let dir = std::env::temp_dir().join(format!("k2-sql-dump-guc-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("k2-sql-dump-guest-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
         let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let pid = insert_project_handle("sql-dump-guc", &path, &handle);
+        let pid = insert_project_handle("sql-dump-guest", &path, &handle);
         let ops = FakeSystemOps::baked();
         let secrets = MemSecretStore::default();
         let created = ops::create_database(&ops, &secrets, &pid, 1, None, None).expect("create");
@@ -2762,43 +2733,49 @@ mod tests {
         );
         ops::bind_role(&ops, Some(&db_name), Some(&pid), "app_reader").expect("bind");
 
-        let dentist_a = uuid::Uuid::new_v4().to_string();
+        // Principal starts with digits: the old door printed it as the only
+        // "row" (GET) and failed to parse it as JSON (POST).
+        let dentist_a = format!("12345678{}", &uuid::Uuid::new_v4().to_string()[8..]);
         let dentist_b = uuid::Uuid::new_v4().to_string();
+
         let n = ops.recorded().len();
-        let got = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_a))
-            .expect("session get A");
-        assert_eq!(got["row"]["n"], 1, "{got}");
+        let list = ops::dump_list_rows(&ops, &secrets, &pid, "example", 50, Some(&dentist_a))
+            .expect("guest list");
+        assert_eq!(
+            list["rows"],
+            serde_json::json!([{"id": "a", "n": 1}]),
+            "rows are the table rows, never the lock output: {list}"
+        );
         let rec = ops.recorded()[n..].join("\n");
+        let line = ops
+            .recorded()[n..]
+            .iter()
+            .rev()
+            .find(|l| l.contains("row_to_json"))
+            .cloned()
+            .expect("rows psql line");
         assert!(
-            rec.contains("set_config('k2.skin_principal'"),
-            "session dump GET must stamp GUC: {rec}"
+            line.contains(&format!("-U {db_name}_migrator")),
+            "guest rows connect as the migrator, like /cli/db/query: {line}"
         );
-        assert!(rec.contains(&dentist_a), "GUC must be dentist A: {rec}");
-        assert!(
-            !rec.contains(&dentist_b),
-            "dentist A GUC must not stamp dentist B: {rec}"
-        );
-        assert!(
-            rec.contains(&format!("-U {db_name}_agent")),
-            "session dump still logs in as workspace agent: {rec}"
-        );
-        assert!(rec.contains("SET ROLE"), "owned bind still SET ROLE: {rec}");
-        let set_pos = rec.find("SET ROLE").expect("SET ROLE pos");
-        let guc_pos = rec.find("set_config('k2.skin_principal'").expect("guc pos");
-        assert!(guc_pos > set_pos, "GUC -c must follow bind SET ROLE: {rec}");
+        assert!(line.contains(" -q "), "rows door drops command tags: {line}");
+        let lock = line
+            .find("INSERT INTO pg_temp.k2_principal_lock")
+            .expect("lock row");
+        let role = line.find("SET ROLE \"app_reader\"").expect("SET ROLE bind");
+        let timeout = line.find("SET statement_timeout = '10s'").expect("timeout");
+        let stmt = line.find("row_to_json").expect("statement");
+        assert!(lock < role && role < timeout && timeout < stmt, "{line}");
+        assert!(line[lock..role].contains(&dentist_a), "{line}");
+        assert!(!rec.contains(&dentist_b), "{rec}");
+        assert!(!rec.contains("set_config("), "no GUC stamp: {rec}");
+
+        let got = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_b))
+            .expect("guest get");
+        assert_eq!(got["row"]["n"], 1, "{got}");
 
         let n = ops.recorded().len();
-        ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_b))
-            .expect("session get B");
-        let rec_b = ops.recorded()[n..].join("\n");
-        assert!(rec_b.contains(&dentist_b), "GUC must be dentist B: {rec_b}");
-        assert!(
-            !rec_b.contains(&dentist_a),
-            "dentist B GUC must not stamp dentist A: {rec_b}"
-        );
-
-        let n = ops.recorded().len();
-        ops::dump_insert(
+        let ins = ops::dump_insert(
             &ops,
             &secrets,
             &pid,
@@ -2806,34 +2783,62 @@ mod tests {
             &serde_json::json!({"id": "b", "n": 2}),
             Some(&dentist_a),
         )
-        .expect("session insert stamps GUC");
+        .expect("guest insert parses the RETURNING row, not the lock");
+        assert_eq!(ins["row"]["id"], "b", "{ins}");
         let rec_w = ops.recorded()[n..].join("\n");
-        assert!(
-            rec_w.contains("set_config('k2.skin_principal'"),
-            "dump WRITE must stamp GUC (not copy store_put None): {rec_w}"
-        );
-        assert!(
-            rec_w.contains(&dentist_a),
-            "write GUC is dentist A: {rec_w}"
-        );
-        let set_pos = rec_w.find("SET ROLE").expect("SET ROLE pos write");
-        let guc_pos = rec_w
-            .find("set_config('k2.skin_principal'")
-            .expect("guc pos write");
-        assert!(
-            guc_pos > set_pos,
-            "write GUC -c must follow bind SET ROLE: {rec_w}"
-        );
+        assert!(rec_w.contains("INSERT INTO pg_temp.k2_principal_lock"), "{rec_w}");
+        assert!(rec_w.contains(&dentist_a), "{rec_w}");
+        let upd = ops::dump_update(
+            &ops,
+            &secrets,
+            &pid,
+            "example",
+            "b",
+            &serde_json::json!({"n": 3}),
+            Some(&dentist_a),
+        )
+        .expect("guest update");
+        assert_eq!(upd["row"]["id"], "b", "{upd}");
 
+        let bad = ops::dump_list_rows(&ops, &secrets, &pid, "example", 5, Some("not-a-uuid"))
+            .expect_err("principal must be a uuid");
+        assert_eq!(bad.code(), "usage", "{}", bad.hint());
+
+        // Owner/agent: database login + bind SET ROLE, never a lock.
         let n = ops.recorded().len();
-        ops::dump_get_row(&ops, &secrets, &pid, "example", "a", None).expect("agent get");
+        let own = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", None).expect("agent get");
+        assert_eq!(own["row"]["n"], 1, "{own}");
         let rec_agent = ops.recorded()[n..].join("\n");
-        assert!(
-            !rec_agent.contains("set_config('k2.skin_principal'"),
-            "agent dump must not stamp GUC: {rec_agent}"
-        );
+        assert!(rec_agent.contains(&format!("-U {db_name}_agent")), "{rec_agent}");
+        assert!(rec_agent.contains("SET ROLE \"app_reader\""), "{rec_agent}");
+        assert!(!rec_agent.contains("k2_principal_lock"), "{rec_agent}");
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rows_parser_takes_json_rows_and_fails_loud_on_anything_else() {
+        let uuid = "12345678-1234-4234-8234-123456789abc";
+        // What real psql prints for the guest run without -q.
+        let shape = format!(
+            "CREATE TABLE\nINSERT 0 1\nGRANT\nSET\nSET\n{}\nINSERT 0 1\n",
+            r#"{"id":"b","n":2}"#
+        );
+        let rows = ops::dump_json_rows(&shape).expect("tags skipped");
+        assert_eq!(rows, vec![serde_json::json!({"id": "b", "n": 2})]);
+        assert!(ops::dump_json_rows("").expect("empty").is_empty());
+        // The old bug: stdout was the lock/GUC result, not the statement.
+        let err = ops::dump_json_rows(uuid).expect_err("a bare uuid is not a row");
+        assert_eq!(err.code(), "engine");
+        assert!(!err.hint().contains(uuid), "{}", err.hint());
+        let err = ops::dump_json_rows(&format!("SET\n{uuid}")).expect_err("uuid after SET");
+        assert_eq!(err.code(), "engine");
+        for tag in ["SET", "CREATE TABLE", "INSERT 0 1", "UPDATE 3", "DELETE 0", "GRANT", "PREPARE"] {
+            assert!(ops::is_psql_command_tag(tag), "{tag}");
+        }
+        for data in [uuid, "set", "jobs", "INSERT", "CREATE jobs"] {
+            assert!(!ops::is_psql_command_tag(data), "{data}");
+        }
     }
 
     #[test]
@@ -2896,11 +2901,14 @@ mod tests {
                 Some(pass.clone()),
             );
             assert_eq!(docs.status, "200 OK", "{}", docs.body);
+            assert!(docs.body.contains("\"n\":1"), "{}", docs.body);
             let rec = fake.recorded()[n..].join("\n");
+            let pid = pass.principal_id.as_deref().expect("principal");
             assert!(
-                rec.contains("set_config('k2.skin_principal'"),
-                "session gated dump GET stamps GUC: {rec}"
+                rec.contains("INSERT INTO pg_temp.k2_principal_lock") && rec.contains(pid),
+                "session gated dump GET locks this principal: {rec}"
             );
+            assert!(!rec.contains("set_config("), "{rec}");
 
             let sales = routes::handle_dump_rows_gated(
                 &store_ws_params(&sales_h, &[("table", "example"), ("id", "a")]),
@@ -3746,6 +3754,11 @@ mod tests {
                 "user SQL must keep $1: {line}"
             );
 
+            fake.pg
+                .lock()
+                .expect("pg")
+                .tables
+                .insert((db_name.clone(), "notes".into()));
             let n = fake.recorded().len();
             let write = routes::handle_db_query(
                 &query_json(
@@ -3758,7 +3771,8 @@ mod tests {
             assert_eq!(write.status, "200 OK", "{}", write.body);
             let wv: serde_json::Value = serde_json::from_str(&write.body).expect("json");
             assert_eq!(wv["rows"].as_array().map(|a| a.len()), Some(0));
-            assert_eq!(wv["rowCount"], 0);
+            // Last tag is the user statement's, not the lock's INSERT 0 1.
+            assert_eq!(wv["rowCount"], 1, "{wv}");
             let wrecs = fake.recorded();
             let wrec = wrecs[n..].join("\n");
             let wline = guest_cmd_line(&wrecs[n..]);
@@ -3777,6 +3791,180 @@ mod tests {
                 !wrec.contains("set_config('k2.skin_principal'"),
                 "{wrec}"
             );
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn guest_query_error_hint_is_the_postgres_message_not_the_command_line() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-q-err-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pid = insert_project_handle("sql-q-err", &path, &handle);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created = ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        ops::bind_role(fake, Some(&db_name), Some(&pid), "app_reader").expect("bind");
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            pid.clone(),
+            vec![
+                k2_core::skin::CAP_STORE_READ.into(),
+                k2_core::skin::CAP_STORE_WRITE.into(),
+            ],
+        );
+        let pass = skin_session("bob", policy);
+        let principal = pass.principal_id.clone().expect("principal");
+
+        routes::with_fake_ops(fake, || {
+            let r = routes::handle_db_query(
+                &query_json(&handle, "INSERT INTO nope (id) VALUES (1)", None),
+                Some(pass.clone()),
+            );
+            assert_eq!(r.status, "502 Bad Gateway", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["error"]["code"], "engine", "{v}");
+            assert_eq!(
+                v["error"]["hint"], "relation \"nope\" does not exist",
+                "the app keeps the Postgres message: {v}"
+            );
+            for leak in [
+                db_name.as_str(),
+                "_migrator",
+                "app_reader",
+                "k2_principal_lock",
+                "SET ROLE",
+                "statement_timeout",
+                "psql",
+                principal.as_str(),
+            ] {
+                assert!(!r.body.contains(leak), "{leak} leaked to the guest: {}", r.body);
+            }
+
+            // Rows doors (POST /cli/db/rows) give the same plain hints.
+            let rows = routes::handle_dump_rows_gated(
+                &store_ws_params(&handle, &[("table", "nope")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(rows.status, "404 Not Found", "{}", rows.body);
+            assert!(!rows.body.contains(&db_name), "{}", rows.body);
+        });
+
+        // Owner/agent callers keep the detailed hint.
+        let owner = ops::dump_insert(
+            fake,
+            &secrets,
+            &pid,
+            "example",
+            &serde_json::json!({"n": 1}),
+            None,
+        )
+        .expect_err("no such table");
+        assert_eq!(owner.code(), "not_found", "{}", owner.hint());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn k2_tables_are_sealed_at_create_after_migrate_and_on_boot_and_guests_are_refused() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-seal-{}", uuid::Uuid::new_v4()));
+        let mig = dir.join(".k2/db/migrations");
+        std::fs::create_dir_all(&mig).unwrap();
+        std::fs::write(
+            mig.join("0001_jobs.sql"),
+            b"CREATE TABLE jobs (id uuid primary key);\n",
+        )
+        .unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pid = insert_project_handle("sql-seal", &path, &handle);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        let created = ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
+        let db_name = created["name"].as_str().expect("name").to_string();
+        assert!(
+            fake.pg.lock().expect("pg").sealed.contains(&db_name),
+            "create seals K2's tables"
+        );
+
+        // A database from an older daemon: no seal yet. Migrate seals it,
+        // and the seal is the last helper step (after every re-grant).
+        fake.pg.lock().expect("pg").sealed.clear();
+        let n = fake.recorded().len();
+        let out = ops::migrate(fake, &secrets, &pid, &path, None).expect("migrate");
+        assert_eq!(out["applied"], serde_json::json!(["0001_jobs"]), "{out}");
+        {
+            let pg = fake.pg.lock().expect("pg");
+            assert!(pg.sealed.contains(&db_name), "migrate seals K2's tables");
+            let last_helper = pg.helper_sql.last().expect("helper sql");
+            assert!(
+                last_helper.contains("k2_internal_no_guest"),
+                "the seal runs after the last re-grant: {last_helper}"
+            );
+        }
+        let recs = fake.recorded()[n..].to_vec();
+        let last_sync = recs
+            .iter()
+            .rposition(|l| l.contains(&format!("-U {db_name}_migrator")))
+            .expect("migrator runs");
+        let last_helper = recs
+            .iter()
+            .rposition(|l| l.starts_with(&format!("helper psql -d {db_name} ")))
+            .expect("helper runs");
+        assert!(last_helper > last_sync, "{recs:#?}");
+
+        // Next daemon boot: existing databases are sealed once.
+        fake.pg.lock().expect("pg").sealed.clear();
+        let lines = ops::seal_existing_databases(fake);
+        assert!(
+            lines.iter().any(|l| l == &format!("{db_name}: sealed")),
+            "{lines:?}"
+        );
+        assert!(fake.pg.lock().expect("pg").sealed.contains(&db_name));
+
+        // A guest with store:read cannot reach them through the query door.
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(pid.clone(), vec![k2_core::skin::CAP_STORE_READ.into()]);
+        let pass = skin_session("bob", policy);
+        routes::with_fake_ops(fake, || {
+            for sql in ["SELECT * FROM _k2_store", "SELECT * FROM _k2_migrations"] {
+                let n = fake.recorded().len();
+                let r = routes::handle_db_query(&query_json(&handle, sql, None), Some(pass.clone()));
+                assert_eq!(r.status, "400 Bad Request", "{sql} {}", r.body);
+                assert!(r.body.contains("not available to apps"), "{sql} {}", r.body);
+                let rec = fake.recorded()[n..].join("\n");
+                assert!(!rec.contains("psql"), "refused before any psql: {rec}");
+            }
+            // Rows doors refuse the names too.
+            let r = routes::handle_dump_rows_gated(
+                &store_ws_params(&handle, &[("table", "_k2_store")]),
+                Some(pass.clone()),
+            );
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            // Volatile SECURITY INVOKER functions still run, under the lock.
+            let n = fake.recorded().len();
+            let r = routes::handle_db_query(
+                &query_json(
+                    &handle,
+                    "select job_update($1,$2::jsonb)",
+                    Some(serde_json::json!(["j1", "{\"state\":\"done\"}"])),
+                ),
+                Some(pass.clone()),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let line = guest_cmd_line(&fake.recorded()[n..]);
+            let role = line.find("SET ROLE").expect("SET ROLE");
+            let call = line.find("job_update($1,$2::jsonb)").expect("call");
+            assert!(role < call, "{line}");
         });
         let _ = std::fs::remove_dir_all(dir);
     }

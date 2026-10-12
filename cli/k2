@@ -21706,9 +21706,12 @@ STORE
   Doors are has_cap_in_room: store on Documents does not grant store on Sales.
   store:read = store GET + dump SELECT. store:write = dump insert/update/delete
   only — not POST /cli/store/put.
-  Session store and dump stamp GUC k2.skin_principal on the workspace LOGIN
-  (SELECT set_config('k2.skin_principal', '<uuid>', true)). Policies may call
-  k2.skin_uid(). Guests never hold a DSN. GET /cli/db/dsn teaching 403.
+  Dump (rows) doors run like POST /cli/db/query: the session's principal is
+  locked into the connection, then SET ROLE to the rows login, so your RLS
+  policies apply. Policies call k2.skin_uid(). Store doors read K2's own
+  store (room store cap only). K2's own tables (_k2_*) are closed to guests.
+  Errors show only the Postgres message. Guests never hold a DSN.
+  GET /cli/db/dsn teaching 403.
   Never /cli/db/list. Never /cli/db/dump. Never /cli/db/migrate. Never /cli/db/foo.
   Never POST put/create/rm/drop. Never /cli/store/foo. Platform --name tokens
   403 store. Never glob. Never store WS. Never dump WS.

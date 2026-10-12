@@ -360,6 +360,12 @@ pub struct FakePg {
     pub skin_principal_local: Option<String>,
     pub in_txn: bool,
     pub schemas: HashSet<String>,
+    /// Databases whose `_k2_*` guest seal ran (helper SQL).
+    pub sealed: HashSet<String>,
+    /// Principal locked by the current `-c` psql run (guest doors).
+    pub guest_principal: Option<String>,
+    /// `PREPARE k2_guest_query AS …` body for the current `-c` run.
+    pub prepared: Option<String>,
 }
 
 #[cfg(test)]
@@ -391,6 +397,9 @@ impl Default for FakePg {
             skin_principal_local: None,
             in_txn: false,
             schemas: HashSet::new(),
+            sealed: HashSet::new(),
+            guest_principal: None,
+            prepared: None,
         }
     }
 }
@@ -491,6 +500,62 @@ impl FakePg {
         None
     }
 
+    /// One `psql -c` string, the way real psql prints it: command tags
+    /// (`SET`, `CREATE TABLE`, `INSERT 0 1`, …) unless `-q`, rows from
+    /// RETURNING / SELECT. Lock / PREPARE / EXECUTE are the guest doors.
+    pub(crate) fn exec_psql_c(
+        &mut self,
+        db: Option<&str>,
+        sql: &str,
+        quiet: bool,
+    ) -> Result<String, String> {
+        let t = sql.trim();
+        let up = t.to_ascii_uppercase();
+        let tag = |s: &str| if quiet { String::new() } else { s.to_string() };
+        if up.starts_with("SET ") {
+            return Ok(tag("SET"));
+        }
+        if up.starts_with("CREATE TEMP TABLE PG_TEMP.K2_PRINCIPAL_LOCK") {
+            self.guest_principal = nth_sql_string(t, 0);
+            return Ok(tag("CREATE TABLE\nINSERT 0 1\nGRANT"));
+        }
+        if up.starts_with("PREPARE ") {
+            self.prepared = up.find(" AS ").map(|i| t[i + 4..].to_string());
+            return Ok(tag("PREPARE"));
+        }
+        let stmt = if up.starts_with("EXECUTE ") {
+            self.prepared.clone().unwrap_or_default()
+        } else {
+            t.to_string()
+        };
+        let su = stmt.trim_start().to_ascii_uppercase();
+        let write = ["INSERT", "UPDATE", "DELETE"]
+            .into_iter()
+            .find(|k| su.starts_with(k));
+        let out = self.exec_sql(db, &stmt)?;
+        let Some(kind) = write else {
+            return Ok(out);
+        };
+        let returning = su.contains("RETURNING");
+        let n = if returning {
+            out.lines().filter(|l| !l.trim().is_empty()).count()
+        } else {
+            1
+        };
+        let mut parts = Vec::new();
+        if returning && !out.is_empty() {
+            parts.push(out);
+        }
+        if !quiet {
+            parts.push(if kind == "INSERT" {
+                format!("INSERT 0 {n}")
+            } else {
+                format!("{kind} {n}")
+            });
+        }
+        Ok(parts.join("\n"))
+    }
+
     pub(crate) fn exec_sql(&mut self, db: Option<&str>, sql: &str) -> Result<String, String> {
         let trimmed = sql.trim();
         if trimmed.is_empty() {
@@ -542,6 +607,10 @@ impl FakePg {
             return Ok(String::new());
         }
         let up = trimmed.to_ascii_uppercase();
+        if trimmed.contains("_k2_store") && up.contains("CREATE TABLE") {
+            self.tables
+                .insert((db.unwrap_or("postgres").to_string(), "_k2_store".into()));
+        }
         if up.contains("CREATE POLICY") {
             for role in extract_policy_to_roles(trimmed) {
                 let skip = role.eq_ignore_ascii_case("public")
@@ -708,7 +777,18 @@ impl FakePg {
         }
         let id = extract_id_text(sql);
         if up.starts_with("INSERT") {
-            let rid = id.clone().unwrap_or_else(|| "new".into());
+            // `("id", …) VALUES ('b', …)`: the first literal is the id.
+            let rid = id
+                .clone()
+                .or_else(|| {
+                    let at = up.find("VALUES")?;
+                    if sql[..at].contains("\"id\"") {
+                        nth_sql_string(&sql[at..], 0)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "new".into());
             let row = serde_json::json!({ "id": rid });
             self.dump_rows
                 .entry((db.to_string(), table.clone()))
@@ -799,7 +879,12 @@ impl FakePg {
             return Ok(String::new());
         }
         if up.starts_with("SELECT") && up.contains("COLLECTION") {
-            let coll = nth_sql_string(sql, 0).unwrap_or_default();
+            // First literal after `collection =` (the query form also has E'\t').
+            let coll = up
+                .find("COLLECTION =")
+                .and_then(|i| nth_sql_string(&sql[i..], 0))
+                .or_else(|| nth_sql_string(sql, 0))
+                .unwrap_or_default();
             if up.contains(" AND ID") || up.contains(" ID =") {
                 let id = nth_sql_string(sql, 1).unwrap_or_default();
                 if let Some(doc) = self
@@ -816,6 +901,13 @@ impl FakePg {
                 .get(&(db.to_string(), coll))
                 .cloned()
                 .unwrap_or_default();
+            if up.contains("ID::TEXT ||") {
+                return Ok(map
+                    .iter()
+                    .map(|(id, doc)| format!("{id}\t{doc}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"));
+            }
             let mut rows = Vec::new();
             for (id, doc) in map {
                 rows.push(serde_json::json!({"id": id, "doc": doc}));
@@ -1241,6 +1333,9 @@ impl SystemOps for FakeSystemOps {
             .windows(2)
             .find(|w| w[0] == "-d")
             .map(|w| w[1].to_string());
+        if sql.contains("k2_internal_no_guest") {
+            pg.sealed.insert(db.clone().unwrap_or_default());
+        }
         pg.exec_sql(db.as_deref(), &sql)
     }
     fn run_cmd(
@@ -1291,14 +1386,42 @@ impl SystemOps for FakeSystemOps {
             let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
             return pg.exec_sql(db.as_deref(), &sql).map(|s| s.into_bytes());
         }
-        let sql = stdin
-            .map(|b| String::from_utf8_lossy(b).to_string())
-            .unwrap_or_default();
         let db = args
             .windows(2)
             .find(|w| w[0] == "-d")
             .map(|w| w[1].to_string());
         let mut pg = self.pg.lock().unwrap_or_else(|p| p.into_inner());
+        let cs: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w[0] == "-c")
+            .map(|w| w[1])
+            .collect();
+        if !cs.is_empty() {
+            // Real psql: once any `-c` is given, stdin is never read. Each
+            // `-c` prints its own output (tags unless `-q`); the first
+            // failure stops the run (ON_ERROR_STOP) with psql's error shape.
+            let quiet = args.contains(&"-q");
+            pg.guest_principal = None;
+            pg.prepared = None;
+            let mut out: Vec<String> = Vec::new();
+            for c in cs {
+                pg.psql_sql.push(c.to_string());
+                match pg.exec_psql_c(db.as_deref(), c, quiet) {
+                    Ok(o) if o.is_empty() => {}
+                    Ok(o) => out.push(o),
+                    Err(e) => {
+                        return Err(format!(
+                            "{cmd} {}: exit Some(1): ERROR:  {e}",
+                            args.join(" ")
+                        ))
+                    }
+                }
+            }
+            return Ok(out.join("\n").into_bytes());
+        }
+        let sql = stdin
+            .map(|b| String::from_utf8_lossy(b).to_string())
+            .unwrap_or_default();
         if !sql.is_empty() {
             pg.psql_sql.push(sql.clone());
         }

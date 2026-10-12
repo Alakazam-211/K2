@@ -367,8 +367,23 @@ pub fn spawn_health_loop() {
             let _ = std::panic::catch_unwind(|| {
                 let _ = refresh_health();
             });
+            // Once per boot, after the sidecar is up: databases created by
+            // older daemons get the k2 helpers + the guest seal on K2's own
+            // tables (`_k2_*`). Idempotent; never fatal.
+            if current_status().as_deref() == Some("running")
+                && !BOOT_SEAL_DONE.swap(true, Ordering::SeqCst)
+            {
+                let _ = std::panic::catch_unwind(|| {
+                    let ops = RealSystemOps;
+                    for line in super::ops::seal_existing_databases(&ops) {
+                        eprintln!("[db] boot seal: {line}");
+                    }
+                });
+            }
         });
 }
+
+static BOOT_SEAL_DONE: AtomicBool = AtomicBool::new(false);
 
 pub fn status_json(include_health: bool) -> serde_json::Value {
     let health = if sql_supported() && include_health && !enable_running().load(Ordering::SeqCst) {

@@ -405,6 +405,16 @@ pub fn handle_upload_binary_gated(body: &[u8], skin: Option<SkinPass>) -> CliRes
     }
 }
 
+/// `POST /cli/fs/upload-chunk`: owner/Member keep the absolute-`dir` form
+/// ([`handle_upload_chunk`]); an app guest gets the jailed, room-scoped,
+/// principal-bound form ([`handle_skin_upload_chunk`]).
+pub fn handle_upload_chunk_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_upload_chunk(body, &pass),
+        None => handle_upload_chunk(body),
+    }
+}
+
 pub fn handle_create_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
     match skin {
         Some(pass) => handle_skin_create(body, &pass),
@@ -834,6 +844,267 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
             CliResponse::ok_json(serde_json::json!({ "path": rel }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// Jailed `mkdir -p` for a guest write: walks `rel` from the canonical
+/// room `root` one component at a time, creating missing folders. An
+/// existing symlinked component is followed only when it resolves to a
+/// folder inside the room, so nothing is ever created outside the jail
+/// (plain `create_dir_all` would create through a symlink that points
+/// out). `rel` must already have passed [`jail_rel_path`]. Returns the
+/// canonical folder.
+fn jail_mkdir_p(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let mut cur = root.to_path_buf();
+    for comp in Path::new(rel.trim()).components() {
+        let name = match comp {
+            Component::CurDir => continue,
+            Component::Normal(n) => n,
+            _ => return Err("path must not contain '..'".to_string()),
+        };
+        let next = cur.join(name);
+        match std::fs::symlink_metadata(&next) {
+            Ok(m) if m.file_type().is_dir() => cur = next,
+            Ok(m) if m.file_type().is_symlink() => {
+                let canon = next
+                    .canonicalize()
+                    .map_err(|e| format!("Invalid path: {e}"))?;
+                if !canon.starts_with(root) {
+                    return Err("path escapes the workspace".to_string());
+                }
+                if !canon.is_dir() {
+                    return Err(format!("not a folder: {rel}"));
+                }
+                cur = canon;
+            }
+            Ok(_) => return Err(format!("not a folder: {rel}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&next) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(format!("Failed to create destination dir: {e}")),
+                }
+                // Re-check what is there now (a racing create could be a
+                // symlink): it must be a real folder inside the room.
+                let canon = next
+                    .canonicalize()
+                    .map_err(|e| format!("Invalid path: {e}"))?;
+                if !canon.starts_with(root) || !canon.is_dir() {
+                    return Err("path escapes the workspace".to_string());
+                }
+                cur = canon;
+            }
+            Err(e) => return Err(format!("Invalid path: {e}")),
+        }
+    }
+    let canon = cur.canonicalize().map_err(|e| format!("Invalid path: {e}"))?;
+    if !canon.starts_with(root) {
+        return Err("path escapes the workspace".to_string());
+    }
+    Ok(canon)
+}
+
+/// Stable identity a guest upload is bound to: the login principal (so a
+/// re-login can resume), else the platform pass id.
+fn guest_upload_principal(pass: &SkinPass) -> String {
+    match pass.principal_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => format!("principal:{p}"),
+        None => format!("pass:{}", pass.id),
+    }
+}
+
+fn chunk_status(status: &'static str, body: serde_json::Value) -> CliResponse {
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: body.to_string(),
+    }
+}
+
+fn guest_chunk_error(e: k2_core::fs_guest_upload::GuestChunkError) -> CliResponse {
+    use k2_core::fs_guest_upload::GuestChunkError as E;
+    match e {
+        E::OffsetMismatch { expected } => chunk_status(
+            "409 Conflict",
+            serde_json::json!({
+                "error": "offset_mismatch",
+                "expected": expected,
+                "message": format!("resume from offset {expected}"),
+            }),
+        ),
+        E::TooLarge(m) => chunk_status(
+            "413 Payload Too Large",
+            serde_json::json!({ "error": "too_large", "message": m }),
+        ),
+        E::NoSpace(m) => chunk_status(
+            "507 Insufficient Storage",
+            serde_json::json!({ "error": "no_space", "message": m }),
+        ),
+        E::Busy => chunk_status(
+            "409 Conflict",
+            serde_json::json!({
+                "error": "upload_busy",
+                "message": "another chunk of this upload is still being written; ask status, then continue",
+            }),
+        ),
+        E::Invalid(m) => CliResponse::bad_request(m),
+        E::Io(m) => CliResponse::internal_error(m),
+    }
+}
+
+/// App guest form of `POST /cli/fs/upload-chunk` (resumable large upload).
+///
+/// Body (JSON): `workspace` (room handle), `dir` (room-relative folder,
+/// `.` = room root; created when missing), `filename`, `upload_id`
+/// (client-chosen, at most 200 characters), and either
+/// - `status: true` → `{received, done:false}`: bytes already held for
+///   this guest + dir + filename + upload_id (0 when none), or
+/// - `offset`, `base64` (one chunk, at most 16 MiB decoded), `is_last`,
+///   optional `total_bytes` on the offset-0 chunk.
+///
+/// Needs `files:write` in that room. The temp part lives in the
+/// destination folder under a dot-name bound to the guest
+/// (`fs_guest_upload::guest_part_name`); the final chunk publishes it
+/// under `filename`, or `name (1).ext` when taken, never replacing a file.
+/// Responses: 200 `{received, done:false}` / `{path, done:true}` (`path`
+/// room-relative); 409 `{error:"offset_mismatch", expected}` or
+/// `{error:"upload_busy"}` (a retry racing its original); 413 chunk
+/// or transfer too large; 507 not enough disk; 400 bad input or a path
+/// outside the room; 403 room/cap.
+fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
+    use k2_core::fs_guest_upload as gu;
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let workspace = match skin_json_workspace(&v) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let text = |key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let dir = text("dir");
+    if dir.is_empty() {
+        return CliResponse::bad_request("Destination directory is empty");
+    }
+    let filename = text("filename");
+    if filename.is_empty() {
+        return CliResponse::bad_request("Missing 'filename' parameter");
+    }
+    let upload_id = text("upload_id");
+    if upload_id.is_empty() {
+        return CliResponse::bad_request("Missing 'upload_id' parameter");
+    }
+    if upload_id.chars().count() > gu::MAX_UPLOAD_ID_LEN {
+        return CliResponse::bad_request(format!(
+            "'upload_id' is longer than {} characters",
+            gu::MAX_UPLOAD_ID_LEN
+        ));
+    }
+    let status_only = v.get("status").and_then(|x| x.as_bool()).unwrap_or(false);
+    let resolved = match skin_resolve_write(pass, &workspace) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
+        Ok(p) => p,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    if let Some(r) = refuse_heartbeats_area(&resolved, &dir, &jailed_dir, false) {
+        return r;
+    }
+    let name = gu::final_name(&filename);
+    if let Some(r) = refuse_heartbeats_area(
+        &resolved,
+        &format!("{dir}/{name}"),
+        &jailed_dir.join(&name),
+        false,
+    ) {
+        return r;
+    }
+    let root = match Path::new(&resolved.path).canonicalize() {
+        Ok(r) => r,
+        Err(e) => return CliResponse::internal_error(format!("workspace root unavailable: {e}")),
+    };
+    let principal = guest_upload_principal(pass);
+
+    if status_only {
+        let canon = match jailed_dir.canonicalize() {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return CliResponse::ok_json(
+                    serde_json::json!({ "received": 0, "done": false }).to_string(),
+                );
+            }
+            Err(e) => return CliResponse::bad_request(format!("Invalid path: {e}")),
+        };
+        if !canon.starts_with(&root) || !canon.is_dir() {
+            return CliResponse::bad_request("path escapes the workspace");
+        }
+        let part = gu::guest_part_name(&principal, &resolved.project_id, &canon, &name, &upload_id);
+        return match gu::guest_part_len(&canon, &part) {
+            Ok(n) => CliResponse::ok_json(
+                serde_json::json!({ "received": n, "done": false }).to_string(),
+            ),
+            Err(e) => guest_chunk_error(e),
+        };
+    }
+
+    let Some(offset) = v.get("offset").and_then(|x| x.as_u64()) else {
+        return CliResponse::bad_request("Missing 'offset' parameter");
+    };
+    let Some(b64) = v.get("base64").and_then(|x| x.as_str()) else {
+        return CliResponse::bad_request("Missing 'base64' parameter");
+    };
+    let is_last = v.get("is_last").and_then(|x| x.as_bool()).unwrap_or(false);
+    let total_bytes = v.get("total_bytes").and_then(|x| x.as_u64());
+    let bytes = match B64.decode(b64.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => return CliResponse::bad_request(format!("invalid base64: {e}")),
+    };
+    if bytes.len() as u64 > fsc::MAX_UPLOAD_CHUNK_SIZE {
+        return guest_chunk_error(gu::GuestChunkError::TooLarge(format!(
+            "upload chunk too large ({} bytes > {} max)",
+            bytes.len(),
+            fsc::MAX_UPLOAD_CHUNK_SIZE
+        )));
+    }
+    let canon_dir = match jail_mkdir_p(&root, &dir) {
+        Ok(d) => d,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &canon_dir, false) {
+        return heartbeats_area_response();
+    }
+    let part = gu::guest_part_name(&principal, &resolved.project_id, &canon_dir, &name, &upload_id);
+    let part_abs = canon_dir.join(&part);
+    let ledger = gu::ledger_dir();
+    if offset == 0 {
+        if let Err(e) = gu::ledger_record(&ledger, &part_abs) {
+            return CliResponse::internal_error(e);
+        }
+    }
+    match gu::write_guest_upload_chunk(&canon_dir, &part, &name, offset, &bytes, is_last, total_bytes) {
+        Ok(gu::GuestChunkOutcome::Received(n)) => CliResponse::ok_json(
+            serde_json::json!({ "received": n, "done": false }).to_string(),
+        ),
+        Ok(gu::GuestChunkOutcome::Done(path)) => {
+            if std::fs::symlink_metadata(&part_abs).is_err() {
+                if let Err(e) = gu::ledger_clear(&ledger, &part_abs) {
+                    k2_core::log_debug!("[fs/upload-chunk] {e}");
+                }
+            }
+            let abs = path.to_string_lossy().to_string();
+            crate::session_events::emit_fs_changed_for_paths([abs.clone()]);
+            let rel = relative_under(&root, &abs);
+            CliResponse::ok_json(serde_json::json!({ "path": rel, "done": true }).to_string())
+        }
+        Err(e) => guest_chunk_error(e),
     }
 }
 

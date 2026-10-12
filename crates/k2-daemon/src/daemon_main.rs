@@ -1169,6 +1169,34 @@ async fn async_main() {
         }
     });
 
+    // App guest uploads (`POST /cli/fs/upload-chunk` with a `k2skn_`
+    // pass): delete temp parts nobody finished. Each live part has a
+    // marker in `~/.k2/upload-parts/`; a part untouched for
+    // `ABANDONED_PART_TTL` (7 days) is removed. First pass ~5 min after
+    // boot, then hourly. Only ever deletes guest part files.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        loop {
+            let swept = tokio::task::spawn_blocking(|| {
+                k2_core::fs_guest_upload::sweep_abandoned(
+                    &k2_core::fs_guest_upload::ledger_dir(),
+                    k2_core::fs_guest_upload::ABANDONED_PART_TTL,
+                    std::time::SystemTime::now(),
+                )
+            })
+            .await;
+            match swept {
+                Ok(Ok(r)) if r.removed > 0 => {
+                    log_debug!("[fs/upload-chunk] swept {} abandoned guest upload part(s)", r.removed)
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log_debug!("[fs/upload-chunk] WARN: abandoned-part sweep: {e}"),
+                Err(e) => log_debug!("[fs/upload-chunk] WARN: abandoned-part sweep join: {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    });
+
     // task #672 — canonical daemon-owned Active reaper. A single
     // long-lived task that owns the grace-reap of dormant workspace
     // chat PTYs, keyed on the canonical Active set (replaces the

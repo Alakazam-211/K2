@@ -4875,3 +4875,315 @@ async fn skin_guest_binary_create_copy_move_and_pin_find_only() {
         let _ = std::fs::remove_dir_all(&anna_dir);
     });
 }
+
+// ── App guest resumable upload (POST /cli/fs/upload-chunk) ─────────────
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// One guest chunk request. `extra` is spliced into the JSON object.
+fn guest_chunk(port: u16, tok: &str, ws: &str, dir: &str, id: &str, extra: &str) -> Resp {
+    http(
+        port,
+        "POST",
+        &format!("/cli/fs/upload-chunk?token={tok}"),
+        Some(&format!(
+            r#"{{"workspace":"{ws}","dir":"{dir}","filename":"big.bin","upload_id":"{id}",{extra}}}"#
+        )),
+    )
+}
+
+fn guest_parts_in(dir: &std::path::Path) -> Vec<String> {
+    match std::fs::read_dir(dir) {
+        Ok(rd) => rd
+            .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".k2-upload-g-"))
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("read_dir {}: {e}", dir.display()),
+    }
+}
+
+/// Raw POST with a claimed Content-Length and a short body, then a
+/// half-close; returns the status + body the daemon answered.
+fn post_claimed(port: u16, path_and_query: &str, claimed: usize, body: &[u8]) -> Resp {
+    let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect to test daemon");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .expect("set read timeout");
+    let head = format!(
+        "POST {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {claimed}\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).expect("write head");
+    stream.write_all(body).expect("write body");
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .expect("half-close");
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => break,
+            Err(e) => panic!("read response: {e:?}"),
+        }
+    }
+    let (status, body, _) = try_parse(&raw)
+        .unwrap_or_else(|| panic!("no HTTP response: {:?}", String::from_utf8_lossy(&raw)));
+    Resp {
+        status,
+        body,
+        headers: headers_of(&raw),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_docs_id, docs_dir) = seed_files_workspace(&docs);
+        let (_anna_id, anna_dir) = seed_files_workspace(&anna);
+        let docs_root = docs_dir.canonicalize().expect("canon docs");
+        add_user(port, "bob");
+        let (_id, alice) = mint(port, "guest-alice", &["files:read", "files:write"], &[&docs]);
+        let (_id, mallory) = mint(port, "guest-mallory", &["files:read", "files:write"], &[&docs]);
+        let (_id, reader) = mint(port, "guest-reader", &["files:read"], &[&docs]);
+
+        // ── happy path: three chunks, status/resume, final rename ──
+        let st0 = guest_chunk(port, &alice, &docs, "in/box", "u1", r#""status":true"#);
+        assert_eq!(st0.status, 200, "status before start; {}", st0.body);
+        assert_eq!(json(&st0.body)["received"].as_u64(), Some(0), "{}", st0.body);
+        assert!(!docs_dir.join("in").exists(), "status must not create folders");
+
+        let c0 = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            "in/box",
+            "u1",
+            &format!(r#""offset":0,"base64":"{}","is_last":false,"total_bytes":10"#, b64(b"AAAA")),
+        );
+        assert_eq!(c0.status, 200, "chunk 0; {}", c0.body);
+        let v0 = json(&c0.body);
+        assert_eq!(v0["received"].as_u64(), Some(4), "{}", c0.body);
+        assert_eq!(v0["done"].as_bool(), Some(false), "{}", c0.body);
+        let box_dir = docs_root.join("in/box");
+        assert!(box_dir.is_dir(), "dir created inside the room");
+        assert!(!box_dir.join("big.bin").exists(), "not published mid-upload");
+        let parts = guest_parts_in(&box_dir);
+        assert_eq!(parts.len(), 1, "one hidden part: {parts:?}");
+        // The ledger knows the part (abandoned-part sweep).
+        let ledger = k2_core::fs_guest_upload::ledger_dir();
+        let markers: Vec<_> = std::fs::read_dir(&ledger)
+            .expect("ledger dir under temp HOME")
+            .map(|e| e.expect("marker").path())
+            .collect();
+        assert_eq!(markers.len(), 1, "{markers:?}");
+        assert_eq!(
+            std::fs::read_to_string(&markers[0]).expect("marker"),
+            box_dir.join(&parts[0]).to_string_lossy()
+        );
+
+        // Resume: status says 4, a wrong offset says where to resume.
+        let st1 = guest_chunk(port, &alice, &docs, "in/box", "u1", r#""status":true"#);
+        assert_eq!(json(&st1.body)["received"].as_u64(), Some(4), "{}", st1.body);
+        let gap = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            "in/box",
+            "u1",
+            &format!(r#""offset":7,"base64":"{}","is_last":false"#, b64(b"X")),
+        );
+        assert_eq!(gap.status, 409, "gap; {}", gap.body);
+        let gv = json(&gap.body);
+        assert_eq!(gv["error"].as_str(), Some("offset_mismatch"), "{}", gap.body);
+        assert_eq!(gv["expected"].as_u64(), Some(4), "{}", gap.body);
+
+        // ── another guest cannot append to or read the progress of u1 ──
+        let evil = guest_chunk(
+            port,
+            &mallory,
+            &docs,
+            "in/box",
+            "u1",
+            &format!(r#""offset":4,"base64":"{}","is_last":true"#, b64(b"EVIL")),
+        );
+        assert_eq!(evil.status, 409, "other guest append; {}", evil.body);
+        assert_eq!(json(&evil.body)["expected"].as_u64(), Some(0), "{}", evil.body);
+        let evil_st = guest_chunk(port, &mallory, &docs, "in/box", "u1", r#""status":true"#);
+        assert_eq!(json(&evil_st.body)["received"].as_u64(), Some(0), "{}", evil_st.body);
+        assert!(!box_dir.join("big.bin").exists(), "nothing published by the other guest");
+
+        let c1 = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            "in/box",
+            "u1",
+            &format!(r#""offset":4,"base64":"{}","is_last":false"#, b64(b"BBBB")),
+        );
+        assert_eq!(c1.status, 200, "chunk 1; {}", c1.body);
+        assert_eq!(json(&c1.body)["received"].as_u64(), Some(8), "{}", c1.body);
+        let c2 = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            "in/box",
+            "u1",
+            &format!(r#""offset":8,"base64":"{}","is_last":true"#, b64(b"CC")),
+        );
+        assert_eq!(c2.status, 200, "final chunk; {}", c2.body);
+        let v2 = json(&c2.body);
+        assert_eq!(v2["done"].as_bool(), Some(true), "{}", c2.body);
+        assert_eq!(v2["path"].as_str(), Some("in/box/big.bin"), "room-relative; {}", c2.body);
+        assert_eq!(
+            std::fs::read(box_dir.join("big.bin")).expect("published"),
+            b"AAAABBBBCC"
+        );
+        assert!(guest_parts_in(&box_dir).is_empty(), "part gone after publish");
+        let left = std::fs::read_dir(&ledger).expect("ledger").count();
+        assert_eq!(left, 0, "ledger marker cleared after publish");
+
+        // A second upload to the same name never replaces the first.
+        let again = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            "in/box",
+            "u2",
+            &format!(r#""offset":0,"base64":"{}","is_last":true"#, b64(b"second")),
+        );
+        assert_eq!(again.status, 200, "second upload; {}", again.body);
+        assert_eq!(
+            json(&again.body)["path"].as_str(),
+            Some("in/box/big (1).bin"),
+            "{}",
+            again.body
+        );
+        assert_eq!(
+            std::fs::read(box_dir.join("big.bin")).expect("first kept"),
+            b"AAAABBBBCC"
+        );
+
+        // ── caps and rooms ──
+        let no_write = guest_chunk(
+            port,
+            &reader,
+            &docs,
+            ".",
+            "r1",
+            &format!(r#""offset":0,"base64":"{}","is_last":true"#, b64(b"x")),
+        );
+        assert_missing_cap(&no_write, "files:write");
+        let other_room = guest_chunk(
+            port,
+            &alice,
+            &anna,
+            ".",
+            "a1",
+            &format!(r#""offset":0,"base64":"{}","is_last":true"#, b64(b"x")),
+        );
+        assert_skin_room(&other_room);
+        assert!(!anna_dir.join("big.bin").exists());
+
+        // ── path escapes ──
+        let outside = std::env::temp_dir().join(format!(
+            "k2-skin-chunk-outside-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        let chunk_x = format!(r#""offset":0,"base64":"{}","is_last":true"#, b64(b"x"));
+        for bad in ["../", "..", "in/../../", "/tmp", outside.to_str().expect("utf8")] {
+            let r = guest_chunk(port, &alice, &docs, bad, "esc", &chunk_x);
+            assert_eq!(r.status, 400, "escape dir {bad:?}; {}", r.body);
+        }
+        // A symlinked folder that points out of the room: refused as the
+        // destination, and as a middle component (nothing made outside).
+        std::os::unix::fs::symlink(&outside, docs_dir.join("out")).expect("symlink out");
+        let leaf = guest_chunk(port, &alice, &docs, "out", "esc", &chunk_x);
+        assert_eq!(leaf.status, 400, "symlinked dir leaf; {}", leaf.body);
+        let mid = guest_chunk(port, &alice, &docs, "out/sub", "esc", &chunk_x);
+        assert_eq!(mid.status, 400, "symlinked middle dir; {}", mid.body);
+        assert!(!outside.join("sub").exists(), "no folder created outside the room");
+        assert!(!outside.join("big.bin").exists(), "no file written outside the room");
+        // A symlink sitting at the final name is never written through.
+        let victim = outside.join("victim.txt");
+        std::fs::write(&victim, b"untouched").expect("victim");
+        std::os::unix::fs::symlink(&victim, docs_dir.join("big.bin")).expect("symlink leaf");
+        let through = guest_chunk(port, &alice, &docs, ".", "leaf", &chunk_x);
+        assert_eq!(through.status, 200, "publishes beside the symlink; {}", through.body);
+        assert_eq!(json(&through.body)["path"].as_str(), Some("big (1).bin"), "{}", through.body);
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
+        // Heartbeats area stays closed.
+        let hb = guest_chunk(port, &alice, &docs, ".k2/heartbeats/x", "hb", &chunk_x);
+        assert_eq!(hb.status, 403, "heartbeats area; {}", hb.body);
+
+        // ── size: one chunk max, body capped before it is read ──
+        let big = vec![b'z'; 16 * 1024 * 1024 + 1];
+        let over = guest_chunk(
+            port,
+            &alice,
+            &docs,
+            ".",
+            "big",
+            &format!(r#""offset":0,"base64":"{}","is_last":true"#, b64(&big)),
+        );
+        assert_eq!(over.status, 413, "decoded chunk over 16 MiB; {}", &over.body[..over.body.len().min(300)]);
+        let huge = post_claimed(
+            port,
+            &format!("/cli/fs/upload-chunk?token={alice}"),
+            k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY + 1,
+            br#"{"workspace":"#,
+        );
+        assert_eq!(huge.status, 413, "claimed body over the cap; {}", huge.body);
+        assert_eq!(json(&huge.body)["error"].as_str(), Some("too_large"), "{}", huge.body);
+
+        // ── owner path unchanged: absolute dir, `.part` keyed on the id ──
+        let owner_dir = docs_root.join("owner-drop");
+        let owner = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-chunk?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"upload_id":"o1","dir":"{}","filename":"o.bin","offset":0,"base64":"{}","is_last":true}}"#,
+                owner_dir.display(),
+                b64(b"owner")
+            )),
+        );
+        assert_eq!(owner.status, 200, "owner upload; {}", owner.body);
+        let ov = json(&owner.body);
+        assert_eq!(ov["done"].as_bool(), Some(true), "{}", owner.body);
+        assert_eq!(
+            ov["path"].as_str(),
+            Some(owner_dir.join("o.bin").to_string_lossy().as_ref()),
+            "owner gets the absolute path; {}",
+            owner.body
+        );
+        let owner_gap = http(
+            port,
+            "POST",
+            &format!("/cli/fs/upload-chunk?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"upload_id":"o2","dir":"{}","filename":"o.bin","offset":5,"base64":"{}","is_last":false}}"#,
+                owner_dir.display(),
+                b64(b"x")
+            )),
+        );
+        assert_eq!(owner_gap.status, 400, "owner out-of-order stays 400; {}", owner_gap.body);
+        let no_token = http(port, "POST", "/cli/fs/upload-chunk", Some("{}"));
+        assert_eq!(no_token.status, 403, "no token; {}", no_token.body);
+
+        let _ = std::fs::remove_dir_all(&outside);
+        let _ = std::fs::remove_dir_all(&docs_dir);
+        let _ = std::fs::remove_dir_all(&anna_dir);
+    });
+}

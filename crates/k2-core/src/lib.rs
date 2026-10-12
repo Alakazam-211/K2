@@ -146,6 +146,8 @@ pub mod fs_atomic;
 pub mod fs_commands;
 pub mod fs_compress;
 pub mod fs_extract;
+/// Resumable chunked upload for app guests (part bound to the guest).
+pub mod fs_guest_upload;
 pub mod git;
 /// Ensure global git user.name / user.email when missing (init-git path).
 pub mod git_identity;

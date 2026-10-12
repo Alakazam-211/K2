@@ -1845,14 +1845,41 @@ async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
         );
         assert_eq!(delete.status, 404, "delete; {}", delete.body);
         assert!(delete.body.contains("not found"), "{}", delete.body);
-        let chunk = http_ex(
+        // Resumable guest upload through the gateway: jailed to the room,
+        // never a host-wide absolute dir.
+        let chunk_abs = http_ex(
             gport,
             "POST",
             "/cli/fs/upload-chunk",
-            Some(r#"{"upload_id":"x","dir":"/tmp","filename":"a","offset":0,"base64":"YQ==","is_last":true}"#),
+            Some(&format!(
+                r#"{{"workspace":"{docs}","upload_id":"x","dir":"/tmp","filename":"a","offset":0,"base64":"YQ==","is_last":true}}"#
+            )),
             &cookie,
         );
-        assert_eq!(chunk.status, 404, "upload-chunk; {}", chunk.body);
+        assert_eq!(chunk_abs.status, 400, "upload-chunk abs dir; {}", chunk_abs.body);
+        let chunk0 = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/upload-chunk",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","upload_id":"gw1","dir":"up","filename":"big.bin","offset":0,"base64":"QUJD","is_last":false,"total_bytes":6}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(chunk0.status, 200, "upload-chunk 0; {}", chunk0.body);
+        assert_eq!(json(&chunk0.body)["received"].as_u64(), Some(3), "{}", chunk0.body);
+        let chunk1 = http_ex(
+            gport,
+            "POST",
+            "/cli/fs/upload-chunk",
+            Some(&format!(
+                r#"{{"workspace":"{docs}","upload_id":"gw1","dir":"up","filename":"big.bin","offset":3,"base64":"REVG","is_last":true}}"#
+            )),
+            &cookie,
+        );
+        assert_eq!(chunk1.status, 200, "upload-chunk 1; {}", chunk1.body);
+        assert_eq!(json(&chunk1.body)["path"].as_str(), Some("up/big.bin"), "{}", chunk1.body);
+        assert_eq!(json(&chunk1.body)["done"].as_bool(), Some(true), "{}", chunk1.body);
         let ask = http_ex(
             gport,
             "POST",

@@ -5269,22 +5269,92 @@ async fn handle_one_request(
         // to a temp `.part` on the daemon's disk and finalized on is_last.
         // Same isolated `token_ok` gate as upload-binary (one-line swap to
         // tighten). Body carries the chunk bytes, never URL-logged.
+        //
+        // App guests (`k2skn_`): files:write in the named room, jailed
+        // room-relative `dir`, part bound to the guest
+        // (`fs_routes::handle_skin_upload_chunk`). Every caller's body is
+        // read with a cap of one base64 chunk + slack
+        // (`fs_guest_upload::MAX_UPLOAD_CHUNK_BODY`): a bigger body can't
+        // hold a valid chunk, so it is refused with 413 before it is read.
         p if is_post && post_allowed && p == "/cli/fs/upload-chunk" => {
-            if !super::http::token_ok(&query, state.token.as_str()) {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
+            const CHUNK_BODY_MAX: usize = k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY;
+            let skin_presented = super::http::extract_token(&query)
+                .is_some_and(k2_core::skin::is_skin_token);
+            let mut skin_pass = None;
+            let refusal = if skin_presented {
+                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                {
+                    None => Some(crate::skin_routes::revoked_skin_response()),
+                    Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::FILES_WRITE) => {
+                        skin_pass = Some(pass);
+                        None
+                    }
+                    Some(_) => Some(crate::skin_routes::missing_cap_response(
+                        crate::skin_routes::FILES_WRITE,
+                    )),
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else {
+                Some(crate::cli_response::CliResponse {
+                    status: "403 Forbidden",
+                    content_type: "application/json",
+                    body: r#"{"error":"invalid or missing token"}"#.to_string(),
+                })
+            };
+            if let Some(r) = refusal {
+                // Answer, then drain (never buffer) what the client is
+                // still sending so it sees the answer, not a reset.
+                let unread = super::http::BodyTooLarge { declared: None, read: 0, remaining: None };
+                super::http::refuse_body_too_large(
                     &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"invalid or missing token"}"#,
+                    &unread,
+                    r.status,
+                    r.content_type,
+                    &r.body,
                 )
                 .await;
                 return DispatchOutcome::Done;
             }
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let result = crate::fs_routes::handle_upload_chunk(&body_bytes);
-            super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
-                .await;
+            let body = super::http::read_post_body_capped(&mut *stream, &mut buf, CHUNK_BODY_MAX).await;
+            let body_bytes = match body {
+                Ok(b) => b,
+                Err(refused) => {
+                    let msg = serde_json::json!({
+                        "error": "too_large",
+                        "message": format!(
+                            "one upload-chunk request carries at most {} bytes of base64 ({} MiB decoded); send smaller chunks",
+                            CHUNK_BODY_MAX,
+                            k2_core::fs_commands::MAX_UPLOAD_CHUNK_SIZE / (1024 * 1024)
+                        ),
+                    })
+                    .to_string();
+                    super::http::refuse_body_too_large(
+                        &mut *stream,
+                        &refused,
+                        "413 Payload Too Large",
+                        "application/json",
+                        &msg,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            if let Some(pass) = skin_pass {
+                let resp = tokio::task::spawn_blocking(move || {
+                    crate::fs_routes::handle_upload_chunk_gated(&body_bytes, Some(pass))
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+                });
+                super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                    .await;
+            } else {
+                let result = crate::fs_routes::handle_upload_chunk(&body_bytes);
+                super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
+                    .await;
+            }
         }
         // 0.40.22 — POST /cli/fs/compress + /cli/fs/compress-cancel.
         // Server-side folder → zip as an async job (worker thread streams

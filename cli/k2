@@ -6199,7 +6199,7 @@ HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
 Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
 thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
-files:write (POST /cli/fs/write-file|upload-binary|create|copy|move).
+files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move).
 Rooms: workspace handles. Empty = Thread dark.
 Grid/PTY is never an app room. Capability check paths (full):
   GET /cli/sessions/grid  and  GET /cli/sessions/bytes
@@ -21598,6 +21598,15 @@ FILES
     GET|HEAD /cli/fs/read-range?workspace=<handle>&path=doc.pdf&offset=0&len=…
     POST     /cli/fs/write-file  {"workspace":"<handle>","path":"notes.md","content":"…"}
     POST     /cli/fs/upload-binary  {"workspace":"<handle>","dir":".","filename":"a.pdf","base64":"…"}
+    POST     /cli/fs/upload-chunk   large files, resumable (files:write):
+             {"workspace":"<handle>","dir":"plans","filename":"set.pdf","upload_id":"<yours>",
+              "offset":0,"base64":"<≤16 MiB>","is_last":false,"total_bytes":N}
+             → 200 {"received":N,"done":false} … last chunk → {"path":"plans/set.pdf","done":true}
+             Resume: same body with "status":true (no offset/base64) → {"received":N};
+             send the next chunk at that offset. Wrong offset → 409 {"expected":N};
+             one chunk at a time per upload (a racing retry → 409 upload_busy).
+             One chunk per request (body over one chunk → 413). Part is hidden
+             (.k2-upload-g-….part) and bound to you; a taken name lands as "name (1)".
     POST     /cli/fs/create  {"workspace":"<handle>","path":"folder","is_directory":true}
     POST     /cli/fs/copy  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
     POST     /cli/fs/move  {"workspace":"<handle>","sources":["a.pdf"],"destination":"inbox/"}
@@ -21606,7 +21615,7 @@ FILES
   One socket per workspace. Do not omit workspace= and fan in every agent.
   Doors are has_cap_in_room: files on Documents does not grant files on Sales.
   Jail is that room's workspace root. Relative path= only — never host-wide
-  path=/etc/passwd or path=../. info / delete / upload-chunk / search-tree and
+  path=/etc/passwd or path=../. info / delete / search-tree and
   the rest of the fs family stay 404 not found. Never /cli/fs/*. Never owner BFF.
   Never /cli/sessions/events for files. Token never in the browser.
   ensure-pinned-chat is thread:read find-only (never spawn, never forceRespawn).

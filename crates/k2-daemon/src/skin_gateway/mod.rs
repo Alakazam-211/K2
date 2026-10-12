@@ -1718,6 +1718,10 @@ mod tests {
             "users/full-name is owner roster mutate, not --skin"
         );
         assert!(
+            !allowlisted_http("POST", "/cli/skin/users/agent"),
+            "the agent mark is owner-only, never through the app gateway"
+        );
+        assert!(
             !allowlisted_http("GET", "/cli/skin/grants"),
             "grants are owner-only, not --skin"
         );

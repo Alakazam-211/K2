@@ -3386,18 +3386,9 @@ fn guest_conn(
     project_id: &str,
     actor: &GuestActor,
 ) -> Result<GuestConn, OpsError> {
-    let principal = actor.principal.trim();
-    if uuid::Uuid::parse_str(principal).is_err() {
-        return Err(OpsError::Usage("session principal id is not a uuid".into()));
-    }
-    // Only the guest kind is built (app / agent are reserved). A guest
-    // actor names the principal it was derived from; anything else is a
-    // daemon bug, never something to run.
-    if actor.kind != super::actor::ACTOR_KIND_GUEST
-        || actor.actor != format!("{}:{principal}", super::actor::ACTOR_KIND_GUEST)
-    {
-        return Err(OpsError::Engine("internal: unsupported actor".into()));
-    }
+    // A person (`guest`) or an owner-marked agent principal only; app and
+    // S43-delegated shapes are reserved and never run.
+    actor.check()?;
     let dml = store_dml_creds(ops, secrets, project_id)?;
     let login = dml.bind.clone().unwrap_or_else(|| dml.user.clone());
     let (mig_user, mig_pw) = migrator_creds(secrets, &dml.row)?;
@@ -4078,7 +4069,20 @@ mod tests {
         let mut agent = GuestActor::session(uid, "p");
         agent.kind = super::super::actor::ACTOR_KIND_AGENT;
         agent.actor = format!("agent:{uid}");
-        let err = guest_conn(&ops, &secrets, "no-project", &agent).err().expect("reserved kind");
+        let err = guest_conn(&ops, &secrets, "no-project", &agent)
+            .err()
+            .expect("agent kind with no marked workspace");
+        assert_eq!(err.hint(), "internal: unsupported actor");
+        let mut delegated = GuestActor::marked_agent(
+            uid,
+            "p",
+            "6f9619ff-8b86-4011-b42d-00c04fc964ff",
+            Some("sales"),
+        );
+        delegated.on_behalf_of = Some(format!("guest:{uid}"));
+        let err = guest_conn(&ops, &secrets, "no-project", &delegated)
+            .err()
+            .expect("S43 delegated shape is not built");
         assert_eq!(err.hint(), "internal: unsupported actor");
     }
 

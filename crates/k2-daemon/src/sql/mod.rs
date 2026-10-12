@@ -3872,7 +3872,7 @@ mod tests {
             let role = line.find("SET ROLE").expect("SET ROLE");
             assert!(actor_lock < role, "actor locked before SET ROLE: {line}");
             let want = format!(
-                "VALUES ('guest', 'guest:{principal}', '{principal}'::uuid, '{}')",
+                "VALUES ('guest', 'guest:{principal}', '{principal}'::uuid, '{}', NULL, NULL)",
                 pass.id
             );
             assert!(line[actor_lock..role].contains(&want), "{line}");
@@ -3902,6 +3902,46 @@ mod tests {
                 !fake.recorded()[n..].iter().any(|l| l.contains("k2_actor_lock")),
                 "platform pass ran psql"
             );
+
+            // An owner-marked agent principal locks kind agent; skin_uid
+            // stays the principal, and a body claiming 'guest' changes nothing.
+            let bot = k2_core::skin::add_principal("salesbot").expect("principal");
+            k2_core::skin::set_principal_agent("salesbot", Some(&handle)).expect("owner mark");
+            let mut bot_pass = skin_session("salesbot", policy.clone());
+            bot_pass.principal_id = Some(bot.id.clone());
+            let claim = serde_json::json!({
+                "workspace": handle,
+                "sql": "SELECT k2.actor_kind() AS kind",
+                "params": [],
+                "actor": format!("guest:{}", bot.id),
+                "actorKind": "guest",
+                "kind": "guest",
+                "agent": null,
+                "agentWorkspace": null,
+                "on_behalf_of": "guest:someone",
+            })
+            .to_string();
+            let n = fake.recorded().len();
+            let r = routes::handle_db_query(claim.as_bytes(), Some(bot_pass.clone()));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let line = guest_cmd_line(&fake.recorded()[n..]);
+            let agent_want = format!(
+                "VALUES ('agent', 'agent:{handle}', '{}'::uuid, '{}', '{pid}', NULL)",
+                bot.id, bot_pass.id
+            );
+            assert!(line.contains(&agent_want), "{line}");
+            let lock_at = line.find("INSERT INTO pg_temp.k2_principal_lock").expect("lock");
+            let role_at = line.find("SET ROLE").expect("role");
+            assert!(line[lock_at..role_at].contains(&bot.id), "skin_uid stays the principal: {line}");
+            assert!(!line.contains("guest:someone"), "{line}");
+
+            // Owner clears the mark: the next call is a person again.
+            k2_core::skin::set_principal_agent("salesbot", None).expect("owner unmark");
+            let n = fake.recorded().len();
+            let r = routes::handle_db_query(claim.as_bytes(), Some(bot_pass.clone()));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let line = guest_cmd_line(&fake.recorded()[n..]);
+            assert!(line.contains(&format!("VALUES ('guest', 'guest:{}'", bot.id)), "{line}");
         });
         let _ = std::fs::remove_dir_all(dir);
     }

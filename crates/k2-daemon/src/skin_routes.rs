@@ -333,6 +333,59 @@ pub fn handle_users_full_name(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// Owner-only (`POST /cli/skin/users/agent`): mark a guest principal as
+/// the agent of one workspace (`{"username","workspace"}`), or clear the
+/// mark (`{"username","clear":true}`). A marked principal's brokered db
+/// calls stamp actor kind `agent`. Clearing needs the explicit flag, so a
+/// body that drops `workspace` is a 400, never a silent unmark.
+pub fn handle_users_agent(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(username) = str_field(&v, &["username"]) else {
+        return CliResponse::bad_request("missing username");
+    };
+    let clear = v.get("clear").and_then(|x| x.as_bool()).unwrap_or(false);
+    let workspace = v
+        .get("workspace")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let target = match (clear, workspace) {
+        (true, None) => None,
+        (false, Some(ws)) => Some(ws),
+        (true, Some(_)) => {
+            return CliResponse::bad_request("pass workspace or clear, not both");
+        }
+        (false, None) => {
+            return CliResponse::bad_request("missing workspace (or clear: true to unmark)");
+        }
+    };
+    match skin::set_principal_agent(username, target) {
+        Ok(p) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} agent mark for {} workspace={}",
+                p.username,
+                p.agent_workspace.as_deref().unwrap_or("-")
+            );
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "app_user_agent_mark",
+                actor,
+                match p.agent_workspace.as_deref() {
+                    Some(ws) => format!("marked {} as agent of {ws}", p.username),
+                    None => format!("cleared agent mark on {}", p.username),
+                },
+                "-",
+                "-",
+                "cli",
+            ));
+            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 pub fn handle_users_password(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,

@@ -798,6 +798,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/templates/lines/update", Owner),
     post("/cli/skin/templates/update", Owner),
     both("/cli/skin/users", Owner),
+    post("/cli/skin/users/agent", Owner),
     post("/cli/skin/users/email", Owner),
     post("/cli/skin/users/full-name", Owner),
     post("/cli/skin/users/password", Owner),

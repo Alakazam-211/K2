@@ -2404,6 +2404,16 @@ mod tests {
             "users/full-name is roster mutate; CSRF required"
         );
         assert_eq!(users_full_name.unwrap().status, "403 Forbidden");
+        let users_agent = cookie_csrf_gate(
+            "POST",
+            "/cli/skin/users/agent",
+            true,
+            "POST /cli/skin/users/agent HTTP/1.1\r\n",
+        );
+        assert_eq!(
+            users_agent.expect("users/agent is roster mutate; CSRF required").status,
+            "403 Forbidden"
+        );
         let grants = cookie_csrf_gate(
             "POST",
             "/cli/skin/grants",

@@ -263,6 +263,13 @@ class H(BaseHTTPRequestHandler):
                 "email": "ada@clinic.com",
                 "hasPassword": True,
                 "passwordHash": "secret-hash",
+            }, {
+                "username": "bot",
+                "fullName": None,
+                "roleName": None,
+                "email": None,
+                "agentWorkspace": "6f9619ff-8b86-4011-b42d-00c04fc964ff",
+                "agentHandle": "sales",
             }]}))
         elif path == "/cli/skin/roles":
             self._send(200, json.dumps({"roles": []}))
@@ -273,6 +280,17 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         n = int(self.headers.get("Content-Length") or "0")
         raw = self.rfile.read(n)
+        if path == "/cli/skin/users/agent":
+            with open(__import__("os").environ["AGENT_LOG"], "a") as f:
+                f.write(raw.decode() + "\n")
+            body = json.loads(raw.decode() or "{}")
+            ws = body.get("workspace")
+            self._send(200, json.dumps({
+                "username": body.get("username") or "",
+                "agentWorkspace": "6f9619ff-8b86-4011-b42d-00c04fc964ff" if ws else None,
+                "agentHandle": ws or None,
+            }))
+            return
         if path != "/cli/skin/users/full-name":
             self._send(404, json.dumps({"error": "not found"}))
             return
@@ -290,7 +308,9 @@ PY
 STUB_PORT2="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 export K2_PORT="$STUB_PORT2"
 echo "$STUB_PORT2" >"$HOME/.k2/heartbeat.port"
-PORT="$STUB_PORT2" python3 "$STUB_PY2" &
+AGENT_LOG="$SANDBOX/agent-mark.log"
+: >"$AGENT_LOG"
+AGENT_LOG="$AGENT_LOG" PORT="$STUB_PORT2" python3 "$STUB_PY2" &
 STUB_PID=$!
 for _i in 1 2 3 4 5 6 7 8 9 10; do
     if curl -sf --connect-timeout 1 "http://127.0.0.1:${STUB_PORT2}/cli/skin/users" >/dev/null 2>&1; then
@@ -320,6 +340,32 @@ assert_eq "full-name omit clears exit 0" "$clear_rc" "0"
 assert_contains "full-name omit clears" "$clear_out" "cleared"
 assert_eq "full-name empty --name clears exit 0" "$empty_name_rc" "0"
 assert_contains "full-name empty --name clears" "$empty_name_out" "cleared"
+
+echo "== k2 app user agent (owner mark; stub daemon) =="
+assert_contains "list shows agent mark" "$named_list" "agent:sales"
+assert_contains "app help agent" "$(run_k2 app 2>&1 || true)" "k2 app user agent <username> <workspace> | <username> --clear"
+assert_contains "schema app user agent" "$schema" '"name": "app user agent"'
+set +e
+mark_out="$(run_k2 app user agent bot sales 2>/dev/null)"
+mark_rc=$?
+unmark_out="$(run_k2 app user agent bot --clear 2>/dev/null)"
+unmark_rc=$?
+no_ws_out="$(run_k2 app user agent bot 2>&1)"
+no_ws_rc=$?
+both_out="$(run_k2 app user agent bot sales --clear 2>&1)"
+both_rc=$?
+set -e
+assert_eq "agent mark exit 0" "$mark_rc" "0"
+assert_contains "agent mark text" "$mark_out" "is now the agent of sales"
+assert_eq "agent clear exit 0" "$unmark_rc" "0"
+assert_contains "agent clear text" "$unmark_out" "a person again"
+assert_eq "agent without workspace or --clear is usage" "$no_ws_rc" "1"
+assert_contains "agent usage text" "$no_ws_out" "k2 app user agent <username> <workspace>"
+assert_eq "agent with workspace and --clear is usage" "$both_rc" "1"
+agent_log="$(cat "$AGENT_LOG")"
+assert_eq "only the two valid calls reached the daemon" "$(printf '%s\n' "$agent_log" | grep -c username)" "2"
+assert_contains "mark body" "$agent_log" '{"username": "bot", "workspace": "sales"}'
+assert_contains "clear body" "$agent_log" '{"username": "bot", "clear": true}'
 
 echo "== k2 app user unlock and k2 skin user unlock (stub daemon) =="
 set +e

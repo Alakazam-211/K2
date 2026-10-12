@@ -268,7 +268,9 @@ pub fn resolve_workspace_allowing_handle(token: &str) -> Option<String> {
 pub fn resolve_workspace(token: &str) -> Option<String> {
     match resolve_workspace_detailed(token) {
         WorkspaceResolve::Found(path) => Some(path),
-        WorkspaceResolve::Ambiguous { .. } | WorkspaceResolve::Miss => None,
+        WorkspaceResolve::Ambiguous { .. }
+        | WorkspaceResolve::Retired { .. }
+        | WorkspaceResolve::Miss => None,
     }
 }
 
@@ -277,6 +279,9 @@ pub fn resolve_workspace(token: &str) -> Option<String> {
 pub enum WorkspaceResolve {
     Found(String),
     Ambiguous { handles: Vec<String> },
+    /// A retired handle (0159): its workspace was removed and handles are
+    /// never reused, so it names no workspace.
+    Retired { handle: String },
     Miss,
 }
 
@@ -292,6 +297,9 @@ pub fn resolve_workspace_detailed(token: &str) -> WorkspaceResolve {
         }
         k2_core::workspace::handle::WorkspaceTokenResolve::Ambiguous { handles } => {
             WorkspaceResolve::Ambiguous { handles }
+        }
+        k2_core::workspace::handle::WorkspaceTokenResolve::Retired { handle } => {
+            WorkspaceResolve::Retired { handle }
         }
         k2_core::workspace::handle::WorkspaceTokenResolve::Miss => WorkspaceResolve::Miss,
     }
@@ -845,15 +853,24 @@ pub fn deliver_live_with_via(
                 k2_core::workspace_session_handles::split_workspace_handle(workspace_token)
                     .map(|(ws, _)| ws)
                     .unwrap_or(workspace_token);
-            if let WorkspaceResolve::Ambiguous { handles } =
-                resolve_workspace_detailed(suggest_token)
-            {
-                let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
-                resp.hint = Some(format!(
-                    "AMBIG: '{suggest_token}' matches multiple workspaces. Use a unique handle: {}",
-                    handles.join(", ")
-                ));
-                return resp;
+            match resolve_workspace_detailed(suggest_token) {
+                WorkspaceResolve::Ambiguous { handles } => {
+                    let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
+                    resp.hint = Some(format!(
+                        "AMBIG: '{suggest_token}' matches multiple workspaces. Use a unique handle: {}",
+                        handles.join(", ")
+                    ));
+                    return resp;
+                }
+                WorkspaceResolve::Retired { handle } => {
+                    let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
+                    resp.hint = Some(format!(
+                        "{} Run `k2 connections list` to see current workspaces.",
+                        k2_core::workspace::handle::retired_handle_message(&handle)
+                    ));
+                    return resp;
+                }
+                _ => {}
             }
             let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
             let suggestion = {

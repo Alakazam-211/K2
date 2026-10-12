@@ -140,6 +140,12 @@ fn resolve_target_project_id(
                 handles.join(", ")
             ));
         }
+        WorkspaceTokenResolve::Retired { handle } => {
+            return Err(format!(
+                "{} Run `k2 connections list` for current workspaces.",
+                crate::workspace::handle::retired_handle_message(&handle)
+            ));
+        }
         WorkspaceTokenResolve::Miss => {
             return Err(match suggest_project_name(conn, token) {
                 Some(s) => format!(
@@ -860,6 +866,9 @@ pub fn connections_for_actor(
                     "remoteWorkspaceId": r.remote_workspace_id,
                     "handle": r.remote_handle,
                     "displayName": r.remote_display_name,
+                    // 0159 (additive): the bound workspace left the peer's
+                    // roster; sends fail with `remote_workspace_gone`.
+                    "remoteWorkspaceGone": r.remote_workspace_gone_at.is_some(),
                 }));
             }
             Ok(serde_json::json!({
@@ -910,6 +919,60 @@ pub fn connections_for_actor(
                 if WorkspaceRemoteConnection::exists(&conn, &project_id, &remote_addr)
                     .map_err(|e| e.to_string())?
                 {
+                    // 0159: re-adding a connection whose workspace is gone
+                    // from the peer is the one way it binds again. Clear the
+                    // old binding; the add's roster fetch binds it by name
+                    // to the workspace that has that name now.
+                    let gone_row = WorkspaceRemoteConnection::list_for_source(&conn, &project_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|r| {
+                            r.agent.eq_ignore_ascii_case(&agent)
+                                && r.host.eq_ignore_ascii_case(&host)
+                                && r.remote_workspace_gone_at.is_some()
+                        });
+                    if let Some(row) = gone_row {
+                        if !actor_is_privileged {
+                            return Err(format!(
+                                "{remote_addr} was connected to a workspace that is gone from \
+                                 {host}, and handles are never reused. Only your human (owner \
+                                 or admin) can add it again to connect to the workspace that \
+                                 has that name now."
+                            ));
+                        }
+                        WorkspaceRemoteConnection::set_binding(&conn, &row.id, None, None, None)
+                            .map_err(|e| e.to_string())?;
+                        log_activity(
+                            &conn,
+                            &project_id,
+                            None,
+                            "connection.rebind",
+                            None,
+                            None,
+                            None,
+                            Some(&format!(
+                                "Re-added {} after its workspace left the peer; binding cleared",
+                                remote_addr
+                            )),
+                        );
+                        let fp = peer_fp.or(row.peer_fingerprint);
+                        return Ok(serde_json::json!({
+                            "success": true,
+                            "id": row.id,
+                            "target": remote_addr,
+                            "remote": true,
+                            "rebind": true,
+                            "paired": fp.is_some(),
+                            "peerFingerprint": fp,
+                            "unbound": fp.is_none(),
+                            "message": format!(
+                                "{} was connected to a workspace that is gone from {}; the \
+                                 connection now binds to the workspace that has that name",
+                                remote_addr, host
+                            ),
+                        })
+                        .to_string());
+                    }
                     // Soft-reconcile: fill an empty peer_fingerprint if a
                     // Trusted peer is now available for this host.
                     if let Some(ref fp) = peer_fp {

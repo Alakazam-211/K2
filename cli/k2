@@ -1415,6 +1415,7 @@ sys.stderr.write(json.dumps({"error":{"code":"forbidden","hint":hint}},
             else
                 echo "no agent \"$agent\" on $host (its roster is empty)." >&2
             fi
+            echo "hint: if you were connected to it before, its workspace may have been removed there. Handles are never reused; \`k2 connections list\` marks such connections GONE." >&2
             return 2 ;;
         AMBIG)
             echo "ambiguous agent \"$agent\" on $host — multiple workspaces expose it: $rdetail. Disambiguate on the host." >&2
@@ -4929,6 +4930,7 @@ cmd_workspace_set_handle() {
     if [[ -z "$confirm" ]]; then
         echo "Changing the handle changes this agent's address (old::host → new::host)." >&2
         echo "Existing federated connections will break until the other side reconnects or updates the handle." >&2
+        echo "The old handle stays with this workspace (never given to another one)." >&2
         echo "Re-run with --i-know-this-breaks-federation to confirm." >&2
         exit 1
     fi
@@ -12409,6 +12411,8 @@ if as_json:
                 'remoteWorkspaceId': c.get('remoteWorkspaceId'),
                 'handle': c.get('handle'),
                 'displayName': c.get('displayName'),
+                # 0159: the bound workspace left the peer's roster.
+                'remoteWorkspaceGone': bool(c.get('remoteWorkspaceGone')),
             })
         else:
             out['connections'].append({
@@ -12450,7 +12454,9 @@ for c in conns:
             if display and display.strip().lower() != handle.strip().lower():
                 bound += ' (%s)' % display
         repair = '  [re-pair recommended: paired with the older pairing code]' if c.get('repairRecommended') else ''
-        print('  - %s%s   (remote)%s' % (addr, bound, repair))
+        # 0159: never moves to another workspace that takes the name.
+        gone = '  [GONE: that workspace is no longer on the host; handles are never reused, so this connection stays closed until your human adds it again]' if c.get('remoteWorkspaceGone') else ''
+        print('  - %s%s   (remote)%s%s' % (addr, bound, repair, gone))
     else:
         flag = '' if c.get('reachable', True) else '  [UNREACHABLE — project missing or path gone]'
         print('  - %s%s' % (c.get('projectName', '?'), flag))
@@ -20572,6 +20578,16 @@ ADDRESSES ARE HANDLES
   Sidecar: slash `sales/reviewer` or `sales/1`. Hyphen `sales-reviewer`
   is a workspace handle, not a sidecar.
 
+HANDLES ARE NEVER REUSED
+  A handle belongs to one workspace for good. After a rename the old
+  handle still reaches the same workspace. After a workspace is removed
+  its handles are retired: `k2 msg <retired>` fails and a new workspace
+  gets `<name>-2`. Display names stay free to change and reuse.
+  A federated connection follows the workspace, not the name: if that
+  workspace leaves the other host, sends fail with
+  `remote_workspace_gone` (never redirected to a new workspace with that
+  name) until your human adds the connection again.
+
 WHEN A CHAT IS RENAMED
   A sidecar's address follows its Chats name: `sales/3` renamed
   "Reviewer" answers at `sales/reviewer`. Old addresses keep working:
@@ -22966,6 +22982,15 @@ MSG / READ PEER GATE
   Live `k2 msg`, tray `k2 msg --inbox-wake|--inbox-silent`, and `k2 read` require a local
   connection to the target (or same-workspace). Unconnected peers
   return exit 3 with code `not_connected` — add them here first.
+
+HANDLES ARE NEVER REUSED
+  A connection to <agent>::<host> is to that WORKSPACE, not to the name.
+  Handles are never given to another workspace (a removed workspace's
+  handles are retired for good). If the workspace leaves the other host,
+  `list` marks the connection GONE and sends fail with
+  `remote_workspace_gone`; it never moves to a new workspace that has
+  the name. Only your human (owner or admin) can `add` it again to
+  connect to whichever workspace has that name now.
 
 EXAMPLES
   k2 connections list

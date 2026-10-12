@@ -355,7 +355,8 @@ pub fn resolve_workspace_slug(slug: &str) -> Option<String> {
             );
             None
         }
-        k2_core::workspace::handle::WorkspaceTokenResolve::Miss => None,
+        k2_core::workspace::handle::WorkspaceTokenResolve::Retired { .. }
+        | k2_core::workspace::handle::WorkspaceTokenResolve::Miss => None,
     }
 }
 

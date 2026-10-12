@@ -1271,6 +1271,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0157_notify_prefs",
             include_str!("../../drizzle_sql/0157_notify_prefs.sql"),
         ),
+        // 0159 — workspace handles are never reused: retired_workspace_handles
+        // + the projects delete/re-insert triggers that fill it, and
+        // workspace_remote_connections.remote_workspace_gone_at (a bound
+        // federation row never re-binds by name). 0158 is reserved (per-user
+        // focus group proposal), so this takes 0159; the integrator
+        // renumbers on slips.
+        (
+            "0159_workspace_handle_tombstones",
+            include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1931,7 +1941,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0157_notify_prefs",
+            last_name, "0159_workspace_handle_tombstones",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1958,9 +1968,71 @@ mod tests {
                 "0149_vault_manage",
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
+                "0159_workspace_handle_tombstones",
             ],
             "tail migrations out of order: {names:?}"
         );
+    }
+
+    /// 0159: deleting a workspace moves its handle and aliases into
+    /// retired_workspace_handles in the same statement; re-inserting the
+    /// SAME id gives them back as aliases.
+    #[test]
+    fn handle_tombstone_triggers_retire_on_delete_and_restore_same_id() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES ('w1', 'Sales', '/t/sales', 'sales')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_handle_aliases (project_id, alias) VALUES ('w1', 'old-sales')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM projects WHERE id = 'w1'", []).unwrap();
+        let rows: Vec<(String, String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT handle, former_workspace_id, reason FROM retired_workspace_handles \
+                     ORDER BY handle",
+                )
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert_eq!(
+            rows,
+            vec![
+                ("old-sales".to_string(), "w1".to_string(), "rename".to_string()),
+                ("sales".to_string(), "w1".to_string(), "delete".to_string()),
+            ]
+        );
+        let aliases: i64 = conn
+            .query_row("SELECT COUNT(*) FROM project_handle_aliases WHERE project_id = 'w1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(aliases, 0, "aliases moved, not left behind");
+
+        // Same id back (delete + re-insert of one workspace): names return.
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES ('w1', 'Sales', '/t/sales', 'sales')",
+            [],
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM retired_workspace_handles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "the same workspace id owns its names again");
+        let back: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT alias FROM project_handle_aliases WHERE project_id = 'w1'")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(back, vec!["old-sales".to_string()], "live handle is not doubled as an alias");
     }
 
     /// 0135 (Thread survives a tab rename, TR22): applied, right after

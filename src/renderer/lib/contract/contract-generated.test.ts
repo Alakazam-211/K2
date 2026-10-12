@@ -181,6 +181,8 @@ describe('TUWA10: one cap table', () => {
       'activity:read': 'See when the agent is working',
       'heartbeats:read': 'See heartbeats: schedule, next fire, history',
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
+      'agent:identity': "Change the agent's name, color and picture",
+      'agent:handle': "Change the agent's handle (its address)",
     })
   })
 

@@ -29,6 +29,7 @@ import {
   SKIN_CAP_LABELS,
   SKIN_HEARTBEAT_CAPS,
   skinCapChoices,
+  SKIN_AGENT_IDENTITY_CAPS,
   SKIN_FILE_CAPS,
   SKIN_STORE_CAPS,
   parseFrontDoor,
@@ -362,6 +363,8 @@ describe('SkinAccessSection', () => {
       'activity:read',
       'heartbeats:read',
       'heartbeats:write',
+      'agent:identity',
+      'agent:handle',
     ])
     expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
@@ -376,11 +379,12 @@ describe('SkinAccessSection', () => {
     for (const cap of SKIN_CAP_CHOICES) {
       expect(SKIN_CAP_LABELS[cap].length).toBeGreaterThan(0)
     }
-    expect(skinCapChoices(true)).toEqual(SKIN_CAP_CHOICES)
-    const older = skinCapChoices(false)
+    expect(skinCapChoices(true, true)).toEqual(SKIN_CAP_CHOICES)
+    const older = skinCapChoices(false, true)
     expect(older).not.toContain('heartbeats:read')
     expect(older).not.toContain('heartbeats:write')
     expect(older).toContain('activity:read')
+    expect(older).toContain('agent:identity')
     expect(older.length).toBe(SKIN_CAP_CHOICES.length - 2)
 
     h.daemonCliPost.mockImplementation(async (route: string) => {
@@ -840,6 +844,46 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'activity:read': 'See when the agent is working',
       'heartbeats:read': 'See heartbeats: schedule, next fire, history',
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
+      'agent:identity': "Change the agent's name, color and picture",
+      'agent:handle': "Change the agent's handle (its address)",
     })
+  })
+
+  it('agent identity caps are their own pair, never default, and gated by agent-identity', async () => {
+    expect(SKIN_AGENT_IDENTITY_CAPS).toEqual(['agent:identity', 'agent:handle'])
+    expect(DEFAULT_SKIN_CAPS).not.toContain('agent:identity')
+    expect(DEFAULT_SKIN_CAPS).not.toContain('agent:handle')
+    const older = skinCapChoices(true, false)
+    expect(older).not.toContain('agent:identity')
+    expect(older).not.toContain('agent:handle')
+    expect(older).toContain('heartbeats:write')
+    expect(older.length).toBe(SKIN_CAP_CHOICES.length - 2)
+    const oldest = skinCapChoices(false, false)
+    expect(oldest.length).toBe(SKIN_CAP_CHOICES.length - 4)
+
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'skin-tokens') {
+        return { id: 'tok-id', prefix: 'k2skn_idid', name: 'kiosk', secret: 'k2skn_IDSECRET' }
+      }
+      return { ok: true }
+    })
+    render(<SkinAccessSection />)
+    await openHost()
+    const ident = screen.getByLabelText('Mint cap agent:identity') as HTMLInputElement
+    const handle = screen.getByLabelText('Mint cap agent:handle') as HTMLInputElement
+    expect(ident.checked).toBe(false)
+    expect(handle.checked).toBe(false)
+    expect(ident.closest('label')?.getAttribute('title')).toBe(SKIN_CAP_LABELS['agent:identity'])
+    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'kiosk' } })
+    fireEvent.click(screen.getByLabelText('Mint agent sales'))
+    fireEvent.click(ident)
+    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    await waitFor(() => {
+      expect(screen.getByText('k2skn_IDSECRET')).not.toBeNull()
+    })
+    const mintCall = h.daemonCliPost.mock.calls.find((c) => c[0] === 'skin-tokens')
+    expect(mintCall).toBeTruthy()
+    const body = mintCall![1] as { caps: string[] }
+    expect(body.caps).toEqual(['thread:read', 'thread:post', 'agent:identity'])
   })
 })

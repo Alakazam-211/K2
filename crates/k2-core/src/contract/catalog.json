@@ -42,7 +42,9 @@
       "name": "heartbeats:write",
       "exposure": ["app"],
       "label": "Add, edit, turn on or off, archive and fire heartbeats"
-    }
+    },
+    {"name": "agent:identity", "exposure": ["app"], "label": "Change the agent's name, color and picture"},
+    {"name": "agent:handle", "exposure": ["app"], "label": "Change the agent's handle (its address)"}
   ],
   "errors": [
     {

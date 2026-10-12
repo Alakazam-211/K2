@@ -1705,6 +1705,84 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // 0.45.5 app identity surface (`agent_identity_routes`): an App pass
+        // reaches its rooms' agents (caps checked per room in the handler);
+        // the owner token or a Connect login reaches any workspace. Agent
+        // passports are never admitted. A GET to `/cli/agent/handle` was
+        // already refused (405) by the central POST-only check.
+        "/cli/agent/identity" | "/cli/agent/handle" => {
+            let presented = super::http::extract_token(&query);
+            let caller = if presented.is_some_and(k2_core::skin::is_skin_token) {
+                match presented.and_then(k2_core::skin::resolve_skin_token) {
+                    Some(pass) => Ok(crate::agent_identity_routes::Caller::App(pass)),
+                    None => Err(crate::skin_routes::revoked_skin_response()),
+                }
+            } else if super::http::token_ok(&query, state.token.as_str()) {
+                let actor = super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref())
+                    .unwrap_or_else(|| "owner".to_string());
+                Ok(crate::agent_identity_routes::Caller::Owner { actor })
+            } else {
+                Err(crate::cli::CliResponse::forbidden())
+            };
+            let caller = match caller {
+                Ok(c) => c,
+                Err(r) => {
+                    if is_post {
+                        let _ = super::http::read_post_body_capped(
+                            &mut *stream,
+                            &mut buf,
+                            crate::agent_identity_routes::MAX_BODY,
+                        )
+                        .await;
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                    }
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let body = if is_post {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::agent_identity_routes::MAX_BODY,
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"error":"too_large","message":"body over the limit"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = path.to_string();
+            let method_owned = method.clone();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::agent_identity_routes::handle(&method_owned, &p_owned, &params, &body, caller)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response_with_headers(
+                &mut *stream,
+                r.status,
+                r.content_type,
+                &r.body,
+                &crate::agent_identity_routes::extra_headers(&r),
+            )
+            .await;
+        }
         // Session Stream WS subscribe endpoint (0.34.0 Phase 2).
         // Lives on a /cli/ path but routes to the WS handler rather
         // than crate::cli::dispatch because it's an HTTP upgrade, not a

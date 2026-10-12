@@ -47,6 +47,8 @@ export const K2_CAPS = {
   'activity:read': { label: 'See when the agent is working', exposure: ['app'] },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
+  'agent:identity': { label: "Change the agent's name, color and picture", exposure: ['app'] },
+  'agent:handle': { label: "Change the agent's handle (its address)", exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS

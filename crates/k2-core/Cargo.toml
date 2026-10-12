@@ -165,7 +165,7 @@ qoi = "0.4"
 # Phase 2 Unit 4 — image decode + resize for `projects_ops::detect_project_icon`.
 # Loads PNG/JPG/ICO icons from user projects and resamples to 48×48 for
 # the data URL the renderer caches on Project.icon_url.
-image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg", "webp"] }
 
 # Low-level primitives used by the alacritty PTY event loop.
 libc = "0.2"

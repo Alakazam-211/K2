@@ -550,10 +550,16 @@ fn real_pg_guest_doors_smoke() {
             ),
         },
     ));
-    let confirmed = su("SELECT confirmed::text FROM quotes");
+    // Two quotes exist: alice's (she confirmed it) and the marked agent's
+    // (its confirm was refused). Neither the planted lock nor the agent
+    // changed either one.
+    let confirmed = su(&format!(
+        "SELECT string_agg(CASE owner WHEN '{a_id}' THEN 'alice' WHEN '{bot_id}' THEN 'bot' ELSE 'other' END \
+         || '=' || confirmed::text, ',' ORDER BY confirmed DESC) FROM quotes"
+    ));
     results.push((
-        "quote stays confirmed (no lane but the guest's own session changed it)",
-        want(confirmed.as_deref() == Ok("true"), format!("{confirmed:?}")),
+        "quotes: alice's stays confirmed, the marked agent's never was",
+        want(confirmed.as_deref() == Ok("alice=true,bot=false"), format!("{confirmed:?}")),
     ));
 
     ops::bind_role(cluster, Some(&db), Some(&pid), "app_user").expect("bind app_user");

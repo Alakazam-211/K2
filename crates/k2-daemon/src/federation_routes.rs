@@ -1723,6 +1723,18 @@ fn not_connected_response(
          Settings → Connections)"
     );
 
+    // 0159: a row saved under the typed name whose bound workspace left
+    // this peer's roster. It never follows a new workspace with that name.
+    let gone = rows.iter().find(|r| {
+        r.remote_workspace_gone_at.is_some()
+            && (k2_core::workspace::handle::names_loosely_match(typed_name, &r.agent)
+                || r.remote_handle.as_deref().is_some_and(|h| {
+                    k2_core::workspace::handle::names_loosely_match(typed_name, h)
+                }))
+    });
+    if let Some(r) = gone {
+        return remote_workspace_gone_response(r, &host);
+    }
     // A row saved under the typed name but bound to another workspace.
     let bound_elsewhere = rows.iter().find(|r| {
         r.remote_workspace_id.is_some()
@@ -1765,6 +1777,34 @@ fn not_connected_response(
         body: serde_json::json!({
             "ok": false,
             "error": { "code": "not_connected", "hint": hint },
+        })
+        .to_string(),
+    }
+}
+
+/// 0159: 410 `remote_workspace_gone` for a send through a connection whose
+/// workspace is no longer on the peer's roster (removed, re-created, or
+/// hidden there). Handles are never reused, so the connection does not
+/// move to another workspace that has the name now.
+fn remote_workspace_gone_response(
+    row: &k2_core::db::schema::WorkspaceRemoteConnection,
+    host: &str,
+) -> CliResponse {
+    let name = row.remote_handle.clone().unwrap_or_else(|| row.agent.clone());
+    let hint = format!(
+        "the workspace you connected to as {agent}::{host} is no longer on {host} (it was \
+         removed, re-created, or hidden there). A connection never moves to a different \
+         workspace that has the name {name} now. If {host} lists that workspace again, this \
+         connection works again. To reach a different workspace there, ask your human to \
+         check it and add it again: `k2 connections add <handle>::{host}`.",
+        agent = row.agent,
+    );
+    CliResponse {
+        status: "410 Gone",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "remote_workspace_gone", "hint": hint },
         })
         .to_string(),
     }
@@ -2709,6 +2749,81 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
             assert_eq!(v["code"], "unknown_agent", "{}", resp.body);
             assert!(k2_core::inbox::list_root(Path::new(&w_path)).is_empty());
+        });
+    }
+
+    /// 0159 receiver side: the old workspace "sales-<u>" was removed and a
+    /// new one has that display name (handle "sales-<u>-2"). An older
+    /// sender that re-bound `sales-<u>::host` by name to the new id is
+    /// refused (same 404 as any unknown name); the new workspace's own
+    /// handle still delivers. The published roster never lists the
+    /// retired handle as the new workspace's alias.
+    #[test]
+    fn inbound_refuses_a_retired_handle_addressed_to_a_new_workspace() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let u = uniq();
+            let old_handle = format!("sales-{u}");
+            let (old_id, _old_path) =
+                register_agent_ws("Old Sales", &old_handle, Exposure::ConnectionsOnly);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![old_id])
+                    .unwrap();
+                assert!(
+                    k2_core::workspace::handle::retired_handle(&conn, &old_handle).is_some(),
+                    "delete must retire the handle"
+                );
+            }
+            let new_handle = format!("{old_handle}-2");
+            let (new_id, new_path) =
+                register_agent_ws(&old_handle, &new_handle, Exposure::ConnectionsOnly);
+            {
+                // Slip the retired name in as an alias behind the guard's
+                // back: the roster must still not publish it.
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO project_handle_aliases (project_id, alias) VALUES (?1, ?2)",
+                    rusqlite::params![new_id, old_handle],
+                )
+                .unwrap();
+            }
+            let roster = k2_core::federation::roster::build_local_roster();
+            let entry = roster
+                .agents
+                .iter()
+                .find(|a| a.workspace_id == new_id)
+                .expect("new workspace is listed");
+            assert_eq!(entry.agent, new_handle);
+            assert!(
+                !entry.aliases.iter().any(|a| a.eq_ignore_ascii_case(&old_handle)),
+                "retired handle published as an alias: {:?}",
+                entry.aliases
+            );
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "DELETE FROM project_handle_aliases WHERE project_id = ?1",
+                    rusqlite::params![new_id],
+                )
+                .unwrap();
+            }
+
+            let key = pin_trusted_peer("peer");
+            for name in [old_handle.clone(), old_handle.to_ascii_uppercase()] {
+                let resp = handle_inbound(&seal_tray_named(&new_id, &name, &key));
+                assert_eq!(resp.status, "404 Not Found", "{name}: {}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+                assert_eq!(v["code"], "unknown_agent", "{}", resp.body);
+            }
+            assert!(k2_core::inbox::list_root(Path::new(&new_path)).is_empty());
+
+            let resp = handle_inbound(&seal_tray_named(&new_id, &new_handle, &key));
+            assert_eq!(resp.status, "200 OK", "own handle delivers: {}", resp.body);
+            assert_eq!(k2_core::inbox::list_root(Path::new(&new_path)).len(), 1);
         });
     }
 
@@ -4198,13 +4313,18 @@ mod tests {
         }
     }
 
-    /// CA9: the peer re-registered the workspace (new id, same handle).
-    /// A successful roster read re-binds; a failed one leaves the binding.
+    /// 0159 (replaces CA9's re-bind): the peer removed the workspace and a
+    /// NEW one (new id) now has the same handle and display name (an older
+    /// peer can hand names out again). A
+    /// successful roster read marks the row gone and keeps the old id; a
+    /// send naming the new id fails `remote_workspace_gone` and never
+    /// reaches the peer; a failed read leaves everything as it was. Only
+    /// the owner adding the connection again binds it to the new id.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a7_stale_binding_rebinds_on_roster_read_and_survives_a_failed_one() {
+    async fn a7_gone_workspace_is_never_rebound_by_name() {
         let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
-        let (src_path, src_uuid) = register_src_workspace("a7-stale");
+        let (src_path, src_uuid) = register_src_workspace("a7-gone");
         let w_old = uuid::Uuid::new_v4().to_string();
         let w_new = uuid::Uuid::new_v4().to_string();
         let first = spawn_peer_stub(
@@ -4230,11 +4350,16 @@ mod tests {
             assert_eq!(r.status, "200 OK", "{}", r.body);
         }
         assert_eq!(remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(), Some(w_old.as_str()));
+        assert!(remote_rows(&src_uuid)[0].remote_workspace_gone_at.is_none());
 
+        let delivered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = delivered.clone();
         let second = spawn_peer_stub(
             Some(roster_json(&[(&w_new, "quillify-website", "Seoca", &[])])),
-            "{}",
-            |_| {},
+            r#"{"delivered":true,"mode":"live"}"#,
+            move |_| {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
         );
         {
             let _base = InboundBase::set(&format!("http://127.0.0.1:{}", second.port));
@@ -4245,12 +4370,31 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(r.status, "200 OK", "{}", r.body);
+            let row = &remote_rows(&src_uuid)[0];
+            assert_eq!(
+                row.remote_workspace_id.as_deref(),
+                Some(w_old.as_str()),
+                "the bound id left the roster: kept, never moved to the new id"
+            );
+            assert!(row.remote_workspace_gone_at.is_some(), "marked gone: {row:?}");
+
+            for typed in ["seoca", "quillify-website"] {
+                let resp =
+                    send_as_agent(&src_uuid, format!("{fp}::{w_new}::{typed}"), "hello").await;
+                assert_eq!(resp.status, "410 Gone", "{typed}: {}", resp.body);
+                assert_eq!(error_code(&resp), "remote_workspace_gone", "{}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+                let hint = v["error"]["hint"].as_str().unwrap();
+                assert!(hint.contains("no longer on"), "{hint}");
+                assert!(hint.contains("k2 connections add"), "{hint}");
+            }
+            assert_eq!(
+                delivered.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "nothing reaches the new workspace"
+            );
+            assert_eq!(remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(), Some(w_old.as_str()));
         }
-        assert_eq!(
-            remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(),
-            Some(w_new.as_str()),
-            "the bound id left the roster → re-bound to the new id"
-        );
 
         {
             let _base = InboundBase::set("http://127.0.0.1:1");
@@ -4264,9 +4408,51 @@ mod tests {
         }
         assert_eq!(
             remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(),
-            Some(w_new.as_str()),
+            Some(w_old.as_str()),
             "a failed fetch never touches a binding"
         );
+
+        // An agent may not move it, even with "Allow agents to create
+        // connections" on; the owner adding it again re-binds by name.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET agents_can_create_connections = 1 WHERE id = ?1",
+                rusqlite::params![src_uuid],
+            )
+            .unwrap();
+        }
+        let err = k2_core::connections::connections_for_actor(
+            &src_path,
+            "add",
+            Some(&format!("seoca::{host}")),
+            None,
+            false,
+        )
+        .expect_err("agent can't re-add a gone connection");
+        assert!(err.contains("Only your human"), "{err}");
+        assert!(err.contains("never reused"), "{err}");
+        assert_eq!(remote_rows(&src_uuid)[0].remote_workspace_id.as_deref(), Some(w_old.as_str()));
+
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", second.port));
+        let added: serde_json::Value = serde_json::from_str(
+            &k2_core::connections::connections(&src_path, "add", Some(&format!("seoca::{host}")), None)
+                .expect("owner re-add"),
+        )
+        .unwrap();
+        assert_eq!(added["rebind"], true, "{added}");
+        let out = tokio::task::spawn_blocking({
+            let (p, t) = (src_path.clone(), format!("seoca::{host}"));
+            move || bind_after_connection_add(&p, &t)
+        })
+        .await
+        .unwrap();
+        assert_eq!(out["bound"], true, "{out}");
+        assert_eq!(out["remoteWorkspaceId"], w_new.as_str(), "{out}");
+        let row = &remote_rows(&src_uuid)[0];
+        assert!(row.remote_workspace_gone_at.is_none(), "{row:?}");
+        assert_eq!(remote_rows(&src_uuid).len(), 1, "same row, not a second one");
     }
 
     /// CA11: a verified inbound from the peer kicks one background roster

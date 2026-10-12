@@ -2951,6 +2951,12 @@ pub struct WorkspaceRemoteConnection {
     /// The bound workspace's display name at bind time (display only).
     #[serde(default)]
     pub remote_display_name: Option<String>,
+    /// 0159: unix seconds when the bound workspace left the peer's roster
+    /// (deleted or re-created there). The row keeps `remote_workspace_id`
+    /// and never re-binds to another workspace by name; sends fail with
+    /// `remote_workspace_gone` until a person re-adds the connection.
+    #[serde(default)]
+    pub remote_workspace_gone_at: Option<i64>,
 }
 
 /// Loose split of a remote user address into `(agent, host)` for gate match.
@@ -3027,7 +3033,8 @@ impl WorkspaceRemoteConnection {
     }
 
     const COLUMNS: &'static str = "id, source_project_id, remote_addr, host, agent, \
-        peer_fingerprint, created_at, remote_workspace_id, remote_handle, remote_display_name";
+        peer_fingerprint, created_at, remote_workspace_id, remote_handle, remote_display_name, \
+        remote_workspace_gone_at";
 
     fn from_row(row: &rusqlite::Row<'_>) -> Result<WorkspaceRemoteConnection> {
         Ok(WorkspaceRemoteConnection {
@@ -3041,11 +3048,13 @@ impl WorkspaceRemoteConnection {
             remote_workspace_id: row.get(7)?,
             remote_handle: row.get(8)?,
             remote_display_name: row.get(9)?,
+            remote_workspace_gone_at: row.get(10)?,
         })
     }
 
     /// A7: bind (or, with `None`, clear) a row to the peer workspace id and
-    /// the handle / display name the peer's roster showed for it.
+    /// the handle / display name the peer's roster showed for it. Either
+    /// way the row is no longer marked gone (0159).
     pub fn set_binding(
         conn: &Connection,
         id: &str,
@@ -3055,9 +3064,22 @@ impl WorkspaceRemoteConnection {
     ) -> Result<usize> {
         conn.execute(
             "UPDATE workspace_remote_connections \
-             SET remote_workspace_id = ?1, remote_handle = ?2, remote_display_name = ?3 \
+             SET remote_workspace_id = ?1, remote_handle = ?2, remote_display_name = ?3, \
+                 remote_workspace_gone_at = NULL \
              WHERE id = ?4",
             params![remote_workspace_id, remote_handle, remote_display_name, id],
+        )
+    }
+
+    /// 0159: mark a bound row's workspace as gone from the peer's roster.
+    /// Keeps the binding (id + cached names) so the row can never follow a
+    /// different workspace that takes the name. Only sets the time once.
+    pub fn mark_workspace_gone(conn: &Connection, id: &str) -> Result<usize> {
+        conn.execute(
+            "UPDATE workspace_remote_connections \
+             SET remote_workspace_gone_at = unixepoch() \
+             WHERE id = ?1 AND remote_workspace_gone_at IS NULL",
+            params![id],
         )
     }
 

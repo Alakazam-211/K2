@@ -104,7 +104,13 @@ pub fn build_local_roster() -> LocalRoster {
             let aliases = {
                 let db = crate::db::shared();
                 let conn = db.lock();
+                // 0159: a retired handle is never another workspace's
+                // alias (insert_alias_or_ignore refuses it); never publish
+                // one even if a row slipped in.
                 crate::workspace::handle::aliases_for(&conn, &p.id)
+                    .into_iter()
+                    .filter(|a| !crate::workspace::handle::is_retired_for_other(&conn, a, &p.id))
+                    .collect::<Vec<_>>()
             };
             agents.push(RosterAgent {
                 address: format!("{}::{}", p.id, agent),
@@ -156,12 +162,30 @@ pub fn accepts_inbound(workspace_id: &str, project_path: &str, to_name: &str) ->
     let Some(agent) = visible_agent_name(project_path, master_remote) else {
         return false;
     };
-    let mut names = {
+    let (mut names, own_addresses, retired_hit) = {
         let db = crate::db::shared();
         let conn = db.lock();
-        crate::workspace::handle::workspace_names(&conn, workspace_id)
+        let names = crate::workspace::handle::workspace_names(&conn, workspace_id);
+        // The workspace's own addresses: its handle and aliases.
+        let mut own: Vec<String> = crate::workspace::handle::aliases_for(&conn, workspace_id);
+        if let Ok(h) = crate::workspace::handle::project_handle(&conn, workspace_id) {
+            own.push(h);
+        }
+        let retired = crate::workspace::handle::is_retired_name_loosely(&conn, to_name);
+        (names, own, retired)
     };
     if names.is_empty() {
+        return false;
+    }
+    // 0159: a retired handle never reaches another workspace, even one
+    // whose display name or persona name matches it. An older sender may
+    // have re-bound a saved `old::host` connection by that name; refuse it
+    // unless the name is this workspace's own handle or alias.
+    if retired_hit
+        && !own_addresses
+            .iter()
+            .any(|n| crate::workspace::handle::names_loosely_match(to_name, n))
+    {
         return false;
     }
     names.push(agent);

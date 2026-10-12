@@ -24,7 +24,89 @@ pub enum WorkspaceTokenResolve {
     Found { path: String },
     /// Display-name (or other) collision — fail-closed with both handles.
     Ambiguous { handles: Vec<String> },
+    /// The token is a retired handle (its workspace was removed). Handles
+    /// are never reused, so it resolves to nothing — not even a workspace
+    /// whose display name or folder happens to match (0159).
+    Retired { handle: String },
     Miss,
+}
+
+/// One row of `retired_workspace_handles` (0159).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredHandle {
+    pub handle: String,
+    pub former_workspace_id: String,
+    pub retired_at: i64,
+    /// `delete` (the live handle when its workspace was removed) or
+    /// `rename` (an earlier name of that workspace).
+    pub reason: String,
+}
+
+/// The retired-handle row for `candidate` (case-insensitive), if any.
+pub fn retired_handle(conn: &Connection, candidate: &str) -> Option<RetiredHandle> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    conn.query_row(
+        "SELECT handle, former_workspace_id, retired_at, reason FROM retired_workspace_handles \
+         WHERE handle = ?1 COLLATE NOCASE LIMIT 1",
+        params![candidate],
+        |r| {
+            Ok(RetiredHandle {
+                handle: r.get(0)?,
+                former_workspace_id: r.get(1)?,
+                retired_at: r.get(2)?,
+                reason: r.get(3)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// True when `candidate` is retired by a workspace other than
+/// `exclude_project_id` (a live workspace never has its own tombstones;
+/// the re-insert trigger hands them back, so this is belt and braces).
+fn retired_for_other(conn: &Connection, candidate: &str, exclude_project_id: Option<&str>) -> bool {
+    retired_handle(conn, candidate)
+        .is_some_and(|r| exclude_project_id.map_or(true, |id| r.former_workspace_id != id))
+}
+
+/// Public form of the retired check for one workspace (the roster's
+/// alias filter): `name` is retired by a workspace other than `project_id`.
+pub fn is_retired_for_other(conn: &Connection, name: &str, project_id: &str) -> bool {
+    retired_for_other(conn, name, Some(project_id))
+}
+
+/// True when any retired handle matches `name` under any sender fold
+/// ([`names_loosely_match`]). Used by the federation receiver gate.
+pub fn is_retired_name_loosely(conn: &Connection, name: &str) -> bool {
+    if name.trim().is_empty() {
+        return false;
+    }
+    if retired_handle(conn, name).is_some() {
+        return true;
+    }
+    let mut stmt = match conn.prepare("SELECT handle FROM retired_workspace_handles") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let handles: Vec<String> = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+        Ok(rows) => rows.flatten().collect(),
+        Err(_) => return false,
+    };
+    let folds = name_folds(name);
+    handles
+        .iter()
+        .any(|h| name_folds(h).iter().any(|f| folds.contains(f)))
+}
+
+/// The plain error for a retired handle (rename refusal, `k2 msg`).
+pub fn retired_handle_message(handle: &str) -> String {
+    format!(
+        "Handle '{handle}' is retired: it belonged to a workspace that was removed, and \
+         handles are never reused."
+    )
 }
 
 /// Allocate a host-unique handle from `seed` (`slug`, then `slug-2`, …).
@@ -88,7 +170,7 @@ fn handle_taken(conn: &Connection, candidate: &str, exclude_project_id: Option<&
             |r| r.get(0),
         )
         .unwrap_or(0);
-    alias_hit > 0
+    alias_hit > 0 || retired_for_other(conn, candidate, exclude_project_id)
 }
 
 /// Name the workspace that already owns `candidate` (handle or alias).
@@ -127,6 +209,13 @@ pub fn insert_alias_or_ignore(conn: &Connection, project_id: &str, alias: &str) 
         if handle.eq_ignore_ascii_case(alias) {
             return;
         }
+    }
+    // 0159: a retired handle never becomes another workspace's alias.
+    if retired_for_other(conn, alias, Some(project_id)) {
+        crate::log_debug!(
+            "[handle] alias '{alias}' skipped (retired handle) for {project_id}"
+        );
+        return;
     }
     match conn.execute(
         "INSERT OR IGNORE INTO project_handle_aliases (project_id, alias) VALUES (?1, ?2)",
@@ -185,6 +274,9 @@ pub fn set_workspace_handle(project_path: &str, requested: &str) -> Result<Strin
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|_| format!("workspace not found: {project_path}"))?;
+    if retired_for_other(&conn, &slug, Some(&id)) {
+        return Err(format!("{} Pick another handle.", retired_handle_message(&slug)));
+    }
     if let Some(other) = handle_collision_owner(&conn, &slug, Some(&id)) {
         return Err(format!(
             "Handle '{slug}' is already used by workspace '{other}'."
@@ -500,6 +592,13 @@ pub fn resolve_workspace_token(conn: &Connection, token: &str) -> WorkspaceToken
         return WorkspaceTokenResolve::Found { path };
     }
 
+    // 0159: a retired handle resolves to nothing. Checked before the
+    // display-name and folder fallbacks, so a new workspace whose display
+    // name or folder matches never answers to the old address.
+    if let Some(r) = retired_handle(conn, token) {
+        return WorkspaceTokenResolve::Retired { handle: r.handle };
+    }
+
     // Display name exact, then NOCASE — fail-closed on collision.
     let exact = query_paths(conn, "SELECT path FROM projects WHERE name = ?1", token);
     match exact.len() {
@@ -755,8 +854,9 @@ pub struct RosterEntry {
 pub struct HealReport {
     /// Rows newly bound to a workspace id.
     pub bound: usize,
-    /// Rows whose bound id left the roster and were cleared (CA9).
-    pub cleared: usize,
+    /// Rows whose bound id left the roster and were marked gone (0159;
+    /// replaces CA9's clear-and-re-match). Counted once per row.
+    pub gone: usize,
     /// Rows whose `agent` was rewritten from an alias to the handle (D10).
     pub renamed: usize,
 }
@@ -829,12 +929,16 @@ pub fn roster_display_matches<'a>(agent: &str, roster: &'a [RosterEntry]) -> Vec
 ///
 /// - **Bound** and the id is still in the roster → refresh the cached
 ///   handle / display name; keep the binding.
-/// - **Bound** but the id left the roster (the peer re-registered the
-///   workspace, e.g. after `k2 migrate`) → clear it and re-match (CA9).
-///   The caller only passes a roster from a SUCCESSFUL fetch, so a failed
-///   fetch never clears anything.
-/// - **Unbound** → match the stored name against handle, alias, then
-///   display name ([`match_roster_entry`]) and bind to that workspace id.
+/// - **Bound** but the id left the roster (the workspace was removed,
+///   re-created, or hidden on the peer) → mark the row gone and keep the
+///   id. It is NEVER re-matched by name (0159): a different workspace that
+///   now has that name is a different workspace. Only a person re-adding
+///   the connection binds it again; if the same id is listed again, the
+///   row heals in place. The caller only passes a roster from a
+///   SUCCESSFUL fetch, so a failed fetch never marks anything.
+/// - **Unbound** (legacy rows, or a fresh add) → match the stored name
+///   against handle, alias, then display name ([`match_roster_entry`]) and
+///   bind to that workspace id. Once bound, the rule above applies.
 ///
 /// On a handle or alias match whose spelling differs from the handle, the
 /// row's `agent` is rewritten to the handle (D10). A display-name match
@@ -892,19 +996,26 @@ pub fn heal_remote_connections_from_roster(
                     (e, how)
                 }
                 None => {
-                    // CA9: the peer no longer lists the bound workspace.
-                    let _ = WorkspaceRemoteConnection::set_binding(conn, &row.id, None, None, None);
-                    report.cleared += 1;
-                    crate::log_debug!(
-                        "[handle] roster heal {}: bound workspace {id} left {}'s roster; re-matching {}",
-                        row.id,
-                        row.host,
-                        row.agent
-                    );
-                    match match_roster_entry(&row.agent, roster) {
-                        Some(m) => m,
-                        None => continue,
+                    // 0159: the peer no longer lists the bound workspace.
+                    // Keep the id and mark the row gone; never re-match it
+                    // by name to whatever workspace has that name now.
+                    if row.remote_workspace_gone_at.is_none() {
+                        match WorkspaceRemoteConnection::mark_workspace_gone(conn, &row.id) {
+                            Ok(_) => report.gone += 1,
+                            Err(e) => crate::log_debug!(
+                                "[handle] roster heal {}: mark gone failed: {e}",
+                                row.id
+                            ),
+                        }
+                        crate::log_debug!(
+                            "[handle] roster heal {}: bound workspace {id} left {}'s roster; \
+                             marked gone (no re-match of {})",
+                            row.id,
+                            row.host,
+                            row.agent
+                        );
                     }
+                    continue;
                 }
             },
             None => match match_roster_entry(&row.agent, roster) {
@@ -1710,23 +1821,215 @@ mod tests {
         std::fs::remove_dir_all(&path).ok();
     }
 
-    /// CA9: the bound id left the roster (the peer re-registered the
-    /// workspace) → cleared and re-matched by the saved name.
+    /// 0159 (replaces CA9's re-match): the bound id left the roster and a
+    /// NEW workspace now has the same handle and display name. The row is
+    /// marked gone, keeps its id, and is never bound to the new one by
+    /// name, not on this heal and not on the next.
     #[test]
-    fn roster_heal_rebinds_when_bound_id_leaves_the_roster() {
+    fn roster_heal_marks_gone_and_never_rebinds_by_name() {
         crate::db::init_for_tests();
-        let (src, path, rid) = one_row("rebind", "seoca");
-        heal_a("rebind", &[entry("ws-old", "quillify-website", &[], "Seoca")]);
+        let (src, path, rid) = one_row("gone", "seoca");
+        heal_a("gone", &[entry("ws-old", "quillify-website", &[], "Seoca")]);
         assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-old"));
-        let report = heal_a("rebind", &[entry("ws-new", "quillify-website", &[], "Seoca")]);
-        assert!(report.cleared >= 1, "{report:?}");
-        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-new"));
-        // Listed again under a new display name: the binding (by id) holds
-        // and the cached names follow.
-        heal_a("rebind", &[entry("ws-new", "quillify-website", &[], "Seoca Two")]);
+        assert!(row(&src, &rid).remote_workspace_gone_at.is_none());
+
+        let impostor = [entry("ws-new", "quillify-website", &["seoca"], "Seoca")];
+        let report = heal_a("gone", &impostor);
+        assert_eq!(report.gone, 1, "{report:?}");
+        assert_eq!(report.bound, 0, "{report:?}");
         let r = row(&src, &rid);
-        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-new"));
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-old"), "binding kept, not moved");
+        assert!(r.remote_workspace_gone_at.is_some(), "marked gone: {r:?}");
+        assert_eq!(r.remote_handle.as_deref(), Some("quillify-website"), "cached names kept");
+        assert_eq!(r.agent, "seoca");
+
+        // Next heal: still gone, counted once, still not bound elsewhere.
+        let again = heal_a("gone", &impostor);
+        assert_eq!(again, HealReport::default(), "nothing changes on a repeat: {again:?}");
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-old"));
+
+        // The SAME id listed again (it was only hidden): heals in place,
+        // the gone mark clears and the cached names follow.
+        heal_a("gone", &[entry("ws-old", "quillify-website", &[], "Seoca Two")]);
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-old"));
+        assert!(r.remote_workspace_gone_at.is_none(), "same id back, not gone: {r:?}");
         assert_eq!(r.remote_display_name.as_deref(), Some("Seoca Two"));
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// A rename on the peer (same id, old handle now an alias) still heals
+    /// the row to the new handle. The 0159 rule only stops binding to a
+    /// DIFFERENT id.
+    #[test]
+    fn roster_heal_follows_a_rename_of_the_same_workspace() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("rename-same", "sales");
+        heal_a("rename-same", &[entry("ws-s", "sales", &[], "Sales")]);
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-s"));
+        let report = heal_a("rename-same", &[entry("ws-s", "revenue", &["sales"], "Sales")]);
+        assert_eq!(report.renamed, 1, "{report:?}");
+        assert_eq!(report.gone, 0, "{report:?}");
+        let r = row(&src, &rid);
+        assert_eq!(r.remote_workspace_id.as_deref(), Some("ws-s"));
+        assert_eq!(r.agent, "revenue", "alias heals to the new handle");
+        assert_eq!(r.remote_handle.as_deref(), Some("revenue"));
+        assert!(r.remote_workspace_gone_at.is_none());
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    /// Legacy rows (saved before 0141, no id yet) still bind by name the
+    /// first time; once bound, the no-rebind rule applies.
+    #[test]
+    fn roster_heal_legacy_row_first_binds_by_name_then_holds() {
+        crate::db::init_for_tests();
+        let (src, path, rid) = one_row("legacy-first", "sales");
+        assert!(row(&src, &rid).remote_workspace_id.is_none(), "legacy row starts unbound");
+        let report = heal_a("legacy-first", &[entry("ws-a", "sales", &[], "Sales")]);
+        assert_eq!(report.bound, 1, "{report:?}");
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-a"));
+        let report = heal_a("legacy-first", &[entry("ws-b", "sales", &[], "Sales")]);
+        assert_eq!(report.gone, 1, "{report:?}");
+        assert_eq!(row(&src, &rid).remote_workspace_id.as_deref(), Some("ws-a"));
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    fn retired_rows(conn: &Connection) -> Vec<(String, String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT handle, former_workspace_id, reason FROM retired_workspace_handles \
+                 ORDER BY handle",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    /// 0159: deleting a workspace (any path; the trigger covers them all)
+    /// retires its live handle and every alias. A new workspace with the
+    /// same name gets a suffix, a rename to a retired handle is refused,
+    /// and the retired handle resolves to nothing — not even to the new
+    /// workspace whose display name matches it.
+    #[test]
+    fn deleted_workspace_handles_are_retired_for_good() {
+        let _scoped_db = crate::db::scoped_for_test();
+        let (old_id, old_path) = unique_dir("tomb-old");
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            crate::db::schema::Project::create(
+                &conn, &old_id, "Sales", &old_path, "#000", 0, 0, None, None,
+            )
+            .expect("create");
+        }
+        assert_eq!(handle_of(&old_id), "sales");
+        set_workspace_handle(&old_path, "revenue").expect("rename");
+        assert_eq!(aliases_of(&old_id), vec!["sales".to_string()]);
+
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            crate::db::schema::Project::delete(&conn, &old_id).expect("delete");
+            assert_eq!(
+                retired_rows(&conn),
+                vec![
+                    ("revenue".to_string(), old_id.clone(), "delete".to_string()),
+                    ("sales".to_string(), old_id.clone(), "rename".to_string()),
+                ],
+                "live handle + alias retired with the delete"
+            );
+            let left: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM project_handle_aliases WHERE project_id = ?1",
+                    params![old_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(left, 0);
+            let r = retired_handle(&conn, "SALES").expect("case-insensitive lookup");
+            assert_eq!(r.former_workspace_id, old_id);
+        }
+
+        // A new workspace named "Sales" can't take either name.
+        let (new_id, new_path) = unique_dir("tomb-new");
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            crate::db::schema::Project::create(
+                &conn, &new_id, "Sales", &new_path, "#000", 1, 0, None, None,
+            )
+            .expect("create new");
+            assert_eq!(
+                mint_handle_for_create(&conn, "Revenue"),
+                "revenue-2",
+                "allocation skips a retired handle"
+            );
+        }
+        assert_eq!(handle_of(&new_id), "sales-2", "new workspace gets a suffix");
+
+        // Rename to a retired handle: refused, named as retired.
+        let err = set_workspace_handle(&new_path, "Sales").expect_err("retired");
+        assert!(err.contains("Handle 'sales' is retired"), "{err}");
+        assert!(err.contains("never reused"), "{err}");
+        assert_eq!(handle_of(&new_id), "sales-2", "handle unchanged");
+
+        // Not even as an alias of the new workspace.
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            insert_alias_or_ignore(&conn, &new_id, "revenue");
+        }
+        assert!(aliases_of(&new_id).is_empty(), "retired handle never becomes an alias");
+
+        // Resolution: retired before the display-name fallback ("Sales"
+        // is the new workspace's display name).
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            for token in ["sales", "Sales", "revenue"] {
+                match resolve_workspace_token(&conn, token) {
+                    WorkspaceTokenResolve::Retired { handle } => {
+                        assert!(handle.eq_ignore_ascii_case(token), "{token} → {handle}")
+                    }
+                    other => panic!("{token}: expected Retired, got {other:?}"),
+                }
+            }
+            match resolve_workspace_token(&conn, "sales-2") {
+                WorkspaceTokenResolve::Found { path } => assert_eq!(path, new_path),
+                other => panic!("live handle must resolve: {other:?}"),
+            }
+            assert!(is_retired_name_loosely(&conn, "SALES"));
+            assert!(!is_retired_name_loosely(&conn, "sales-2"), "D20: different token");
+        }
+        std::fs::remove_dir_all(&old_path).ok();
+        std::fs::remove_dir_all(&new_path).ok();
+    }
+
+    /// 0159: the raw DELETE paths (agent retire, workspace remove) retire
+    /// handles too, and re-inserting the SAME id gives its names back.
+    #[test]
+    fn raw_delete_retires_and_same_id_reinsert_restores() {
+        let _scoped_db = crate::db::scoped_for_test();
+        let (id, path) = unique_dir("tomb-raw");
+        insert_project(&id, "Ops Desk", &path);
+        {
+            let dbh = db::shared();
+            let conn = dbh.lock();
+            conn.execute("UPDATE projects SET handle = 'ops-desk' WHERE id = ?1", params![id])
+                .unwrap();
+            insert_alias_or_ignore(&conn, &id, "ops");
+            conn.execute("DELETE FROM projects WHERE id = ?1", params![id]).unwrap();
+            assert_eq!(retired_rows(&conn).len(), 2, "{:?}", retired_rows(&conn));
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'Ops Desk', ?2, 'ops-desk')",
+                params![id, path],
+            )
+            .unwrap();
+            assert!(retired_rows(&conn).is_empty(), "same workspace id owns its names again");
+        }
+        assert_eq!(aliases_of(&id), vec!["ops".to_string()]);
         std::fs::remove_dir_all(&path).ok();
     }
 

@@ -343,6 +343,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         handles.join(", ")
                     ))
                 }
+                crate::workspace_msg::WorkspaceResolve::Retired { handle } => {
+                    CliResponse::bad_request(format!(
+                        "workspace not found: {q}. {}",
+                        k2_core::workspace::handle::retired_handle_message(&handle)
+                    ))
+                }
                 crate::workspace_msg::WorkspaceResolve::Miss => {
                     CliResponse::bad_request(format!("workspace not found: {q}"))
                 }

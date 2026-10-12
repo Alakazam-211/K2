@@ -390,6 +390,7 @@ import { __setZenGeometryForTests, runZenControlChecksNow } from '@/lib/zen/zen-
 import { useZenViewStore } from '@/lib/zen/zen-view'
 import { openZenCheatSheet } from '@/lib/zen/zen-theme-switch'
 import { __resetZenDataForTests } from '@/lib/zen/zen-data'
+import { resetThreadViewersForTests } from '@/lib/thread-viewer'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
 import { requestZenComposeFocus, useZenComposeFocusStore, ZEN_COMPOSE_FOCUS_TTL_MS } from '@/lib/zen/zen-compose-focus'
 import { ZenBridgeError, createZenBridge } from '@/lib/zen/zen-bridge'
@@ -624,6 +625,7 @@ afterEach(async () => {
   uninstall?.()
   uninstall = null
   __resetZenDataForTests()
+  resetThreadViewersForTests()
   __setZenGeometryForTests(null)
   await homeRooms.closeAll()
 })
@@ -1840,6 +1842,42 @@ describe('Conversation widget', () => {
     expect(document.querySelectorAll('[data-zen-message="elsewhere1"]').length).toBe(1)
     const order = [...document.querySelectorAll('[data-zen-message]')].map((e) => e.getAttribute('data-zen-message'))
     expect(order.indexOf('elsewhere1')).toBeLessThan(order.indexOf(own.id))
+  })
+
+  it('a shared Thread: another person’s post is theirs, not "You"; the owner’s own post is "You"', async () => {
+    await mountZen()
+    await select(ROWS.cortana.address)
+    await threadReady(ROWS.cortana.address)
+    const ws = h.sockets.find((s) => s.hostKey === 'local' && s.onmessage !== null)
+    if (!ws?.onmessage) throw new Error('no overlay socket')
+    const push = (frame: unknown): void => {
+      act(() => ws.onmessage?.({ data: JSON.stringify(frame) }))
+    }
+    const meta = (id: string): string => {
+      const el = document.querySelector(`[data-zen-message="${id}"] [data-zen-message-meta]`)
+      if (!el) throw new Error(`no meta for ${id}`)
+      return el.textContent ?? ''
+    }
+    push({
+      collection: 'thread',
+      seq: 400,
+      id: 'bob1',
+      doc: { id: 'bob1', kind: 'text', from: 'bob', via: 'compose', body: 'Bob here.', author: { kind: 'user', login: 'bob' } },
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-message="bob1"]')?.textContent).toContain('Bob here.'))
+    expect(document.querySelector('[data-zen-message="bob1"]')?.hasAttribute('data-mine')).toBe(false)
+    expect(meta('bob1').startsWith('bob · ')).toBe(true)
+    expect(rowEl(ROWS.cortana.address).querySelector('[data-zen-preview]')?.textContent).toBe('Bob here.')
+
+    push({
+      collection: 'thread',
+      seq: 401,
+      id: 'own1',
+      doc: { id: 'own1', kind: 'text', from: 'Rosson', via: 'compose', body: 'Mine.', author: { kind: 'owner', login: 'owner' } },
+    })
+    await waitFor(() => expect(document.querySelector('[data-zen-message="own1"]')?.hasAttribute('data-mine')).toBe(true))
+    expect(meta('own1').startsWith('You · ')).toBe(true)
+    expect(rowEl(ROWS.cortana.address).querySelector('[data-zen-preview]')?.textContent).toBe('You: Mine.')
   })
 
   it('a widget without thread:post is refused by the bridge (built-ins go through it too)', async () => {

@@ -3919,8 +3919,18 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         let mut guest_ov = open_socket(gport, &format!("/cli/overlay/events?conversation={conv}"), &cookie);
         let mut owner_ov = open_socket(dport, &format!("/cli/overlay/events?conversation={conv}&token={OWNER_TOKEN}"), "");
         std::thread::sleep(Duration::from_millis(200));
+        // A strip frame on this conversation, through the tracker's own
+        // broadcast (a Thread message alone no longer opens a turn, and
+        // this room has no agent working).
         let turn = uuid::Uuid::new_v4().to_string();
-        k2_daemon::thread_activity::start_turn(&conv, &docs, &turn, now_ms());
+        k2_daemon::overlay_ws::publish_activity(k2_daemon::overlay_ws::OverlayFrame {
+            collection: "activity".into(),
+            seq: 0,
+            id: turn.clone(),
+            doc: None,
+            activity: Some(serde_json::json!({ "turnId": turn, "state": "working", "phase": "working", "startedAt": now_ms() })),
+            conversation_id: Some(conv.clone()),
+        });
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             assert!(std::time::Instant::now() < deadline, "the owner must see the activity frame");

@@ -54,6 +54,7 @@ pub(crate) fn upsert_child(
     kind: ChildKind,
     origin: ChildOrigin,
     background: bool,
+    sender: Option<i32>,
     now: i64,
 ) -> bool {
     if let Some(child) = row.children.get_mut(id) {
@@ -83,7 +84,7 @@ pub(crate) fn upsert_child(
     }
     row.children.insert(
         id.to_string(),
-        Child { kind, state: ChildState::Running, origin, since: now, owed_at: None, background },
+        Child { kind, state: ChildState::Running, origin, since: now, owed_at: None, background, sender },
     );
     true
 }
@@ -109,9 +110,21 @@ fn status_running(raw: &str) -> Option<bool> {
     }
 }
 
+/// Which process a lead tool call or child belongs to: `None` for the
+/// pane's owner (and the transcript), the sender pid for a verified
+/// descendant (DA14-4a). Owner-only panes are therefore unchanged, and
+/// pids are only compared for descendants, whose ancestry was walked.
+pub(crate) fn sender_key(env: &HookEnvelope) -> Option<i32> {
+    if env.from_descendant {
+        env.agent_pid
+    } else {
+        None
+    }
+}
+
 /// A lead `PostToolUse` launched a background task.
-pub(crate) fn add_launched(row: &mut Row, task: &TaskEntry, now: i64) {
-    upsert_child(row, &task.id, kind_of(&task.kind), ChildOrigin::Launch, true, now);
+pub(crate) fn add_launched(row: &mut Row, task: &TaskEntry, sender: Option<i32>, now: i64) {
+    upsert_child(row, &task.id, kind_of(&task.kind), ChildOrigin::Launch, true, sender, now);
 }
 
 /// DA24: reconcile a `background_tasks` + `session_crons` inventory.
@@ -136,12 +149,18 @@ pub(crate) fn reconcile_inventory(row: &mut Row, env: &HookEnvelope, complete: b
             }
             any_subagent |= kind == ChildKind::Subagent;
             running_ids.push(task.id.clone());
-            upsert_child(row, &task.id, kind, ChildOrigin::Inventory, true, now);
+            upsert_child(row, &task.id, kind, ChildOrigin::Inventory, true, sender_key(env), now);
         }
         if complete {
             let before = row.children.len();
             row.children.retain(|id, c| {
                 if running_ids.iter().any(|r| r == id) || c.kind == ChildKind::Cron {
+                    return true;
+                }
+                // Another process's child (a merged background job's, or
+                // the owner's when a descendant stops): not this
+                // inventory's to remove (DA14-4a).
+                if c.sender != sender_key(env) {
                     return true;
                 }
                 match (c.origin, c.state) {
@@ -158,7 +177,7 @@ pub(crate) fn reconcile_inventory(row: &mut Row, env: &HookEnvelope, complete: b
     }
     match env.session_crons {
         Some(n) if n > 0 => {
-            upsert_child(row, CRON_ID, ChildKind::Cron, ChildOrigin::Cron, true, now);
+            upsert_child(row, CRON_ID, ChildKind::Cron, ChildOrigin::Cron, true, sender_key(env), now);
         }
         Some(_) if complete => {
             if row.children.remove(CRON_ID).is_some() {

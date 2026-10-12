@@ -122,6 +122,11 @@ pub struct Child {
     /// Outlived a lead turn or launched in the background: its end is
     /// owed a notification rather than final.
     pub background: bool,
+    /// Which process reported it: `None` = the owner (or the transcript),
+    /// a pid = a verified descendant ([`super::ends::sender_key`]). A
+    /// complete `Stop` inventory only reconciles its own process's
+    /// children: a pane may merge a background job's hooks (DA14-4a).
+    pub sender: Option<i32>,
 }
 
 /// What the row folds to (DA21 + DA29).
@@ -334,8 +339,12 @@ pub struct Row {
     pub facts: RowFacts,
     pub lead: Lead,
     pub children: BTreeMap<String, Child>,
-    /// Lead tools seen `PreToolUse` without a Post yet: (tool_use_id, tool_name).
-    pub(crate) in_flight: Vec<(String, String)>,
+    /// Lead tools seen `PreToolUse` without a Post yet:
+    /// (tool_use_id, tool_name, sender): sender `None` = the owner, a pid
+    /// = a verified descendant ([`super::ends::sender_key`]). It tells a
+    /// nested run (events inside another process's open tool call) from
+    /// the pane's working process (DA14-4a).
+    pub(crate) in_flight: Vec<(String, String, Option<i32>)>,
     pub(crate) latch: Option<Latch>,
     pub(crate) pending_cancel: Option<PendingCancel>,
     pub turn_started_at: Option<i64>,
@@ -704,6 +713,7 @@ mod tests {
             since: 1_000,
             owed_at: None,
             background: false,
+            sender: None,
         };
         row.children.insert("a".into(), child(ChildKind::Subagent, ChildState::Running));
         row.children.insert("b".into(), child(ChildKind::Subagent, ChildState::Owed));

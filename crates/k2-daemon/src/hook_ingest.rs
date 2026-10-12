@@ -6,9 +6,12 @@
 //! (`cell_server`). Each post is parsed into a typed
 //! [`HookEnvelope`] (the raw body is dropped right after) and put
 //! through the owner check ([`k2_core::agent_hooks::owner`]). Only an
-//! owner envelope goes on, as an [`IngestEvent`] on [`subscribe`]'s
-//! channel, which the activity store ([`crate::activity_store`]) consumes.
-//! Foreign and unknown-pane envelopes are counted and change nothing.
+//! owner envelope, or one from a verified OS-process descendant of the
+//! owner (a background job or nested CLI, DA14-4a; flagged
+//! `from_descendant`, counted `descendant`), goes on, as an
+//! [`IngestEvent`] on [`subscribe`]'s channel, which the activity store
+//! ([`crate::activity_store`]) consumes. Foreign and unknown-pane
+//! envelopes are counted and change nothing.
 //!
 //! S2 (DA13): no raw hook drives a lifecycle output any more. The store is
 //! the only writer of `workspace_sessions.status` for hook events, and it
@@ -101,6 +104,9 @@ impl IngestVerdict {
 #[serde(rename_all = "camelCase")]
 pub struct Counters {
     pub accepted: u64,
+    /// Of `accepted`: envelopes from a verified descendant of the owner
+    /// (a background job or nested CLI, DA14-4a), merged into the row.
+    pub descendant: u64,
     pub foreign: u64,
     pub unknown_pane: u64,
     pub parse_error: u64,
@@ -207,11 +213,20 @@ pub fn ingest_with(
         return (IngestVerdict::UnknownPane, None);
     };
 
+    let mut env = env;
     let mut st = state().lock();
     let entry = st.panes.entry(env.pane.clone()).or_default();
     let out = owner::check(&mut entry.owner, Some(&pane_facts), &Sender::of(&env), procs, mode, now);
     let verdict = match out.verdict {
         Verdict::Owner => IngestVerdict::Accepted,
+        Verdict::Descendant => {
+            // DA14-4a: a verified OS-process descendant of the live owner
+            // (a background job, a nested CLI). The row merges it into the
+            // pane's turn; the flag is set here, never from the wire.
+            env.from_descendant = true;
+            entry.counters.descendant += 1;
+            IngestVerdict::Accepted
+        }
         Verdict::Foreign(reason) => {
             log_debug!(
                 "[hook-event] foreign {:?} pane={} event={} pid={:?}",
@@ -236,7 +251,7 @@ pub fn ingest_with(
     if verdict == IngestVerdict::Accepted {
         // DA22: the owner's `SessionEnd` releases its claim; a `/clear`
         // re-claims at once with its `SessionStart` (same process).
-        if env.event == "SessionEnd" && env.agent_id.is_none() {
+        if env.event == "SessionEnd" && env.agent_id.is_none() && !env.from_descendant {
             entry.owner.claim = None;
         }
         entry.last_event = Some(env.event.clone());
@@ -244,6 +259,9 @@ pub fn ingest_with(
         entry.source = Some(env.source.as_str());
     }
     st.totals.bump(verdict);
+    if env.from_descendant {
+        st.totals.descendant += 1;
+    }
     if verdict == IngestVerdict::Accepted {
         st.last_by_source.insert(env.source.as_str(), now);
     }
@@ -488,10 +506,24 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
-        // Nested `claude -p` (300): foreign, nothing published.
-        let (v, env) = ingest_with(&headers(pane, 300), br#"{"hook_event_name":"Stop"}"#, &procs, &facts, a, 2);
-        assert_eq!(v, IngestVerdict::Foreign);
-        assert!(env.is_none());
+        // A process under the owner (300: a background job or a nested
+        // `claude -p`): a verified descendant, published flagged so the
+        // row merges it without letting it change the session (DA14-4a).
+        let (v, env) = ingest_with(&headers(pane, 300), br#"{"hook_event_name":"SessionEnd","session_id":"bg"}"#, &procs, &facts, a, 2);
+        assert_eq!(v, IngestVerdict::Accepted);
+        assert!(env.expect("descendant envelope").from_descendant);
+        match rx.try_recv().expect("an ingest event") {
+            IngestEvent::Envelope { envelope, claimed_now, conversation_changed, .. } => {
+                assert!(envelope.from_descendant);
+                assert!(!claimed_now);
+                assert_eq!(conversation_changed, None);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(
+            state().lock().panes.get(pane).and_then(|e| e.owner.claim.as_ref()).is_some(),
+            "a descendant's SessionEnd never releases the owner's claim"
+        );
         // T-S1d: stale env from a detached process (500, ppid 1).
         let (v, _) = ingest_with(&headers(pane, 500), br#"{"hook_event_name":"Stop"}"#, &procs, &facts, a, 3);
         assert_eq!(v, IngestVerdict::Foreign);
@@ -505,10 +537,11 @@ mod tests {
 
         assert_eq!(
             counters(pane),
-            Counters { accepted: 1, foreign: 2, unknown_pane: 0, parse_error: 1 }
+            Counters { accepted: 2, descendant: 1, foreign: 1, unknown_pane: 0, parse_error: 1 }
         );
         let status = status_json();
-        assert_eq!(status["sessions"][pane]["counters"]["foreign"], 2);
+        assert_eq!(status["sessions"][pane]["counters"]["foreign"], 1);
+        assert_eq!(status["sessions"][pane]["counters"]["descendant"], 1);
         assert_eq!(status["sessions"][pane]["owner"]["via"], "pty_child");
         assert_eq!(status["sessions"][pane]["evidence"], "hook");
         assert!(status["totals"]["unknownPane"].as_u64().expect("count") >= 1);

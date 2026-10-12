@@ -49,6 +49,16 @@ fn touches_k2_internal(parsed: &pg_query::ParseResult) -> bool {
     })
 }
 
+/// The per-connection principal and actor locks. Grants already keep a
+/// guest from writing them; refuse any reference up front too, so the
+/// only way to read who is calling is `k2.skin_uid()` / `k2.actor*()`.
+fn touches_session_lock(parsed: &pg_query::ParseResult) -> bool {
+    parsed.tables().iter().any(|t| {
+        let name = t.rsplit('.').next().unwrap_or(t).to_ascii_lowercase();
+        name == "k2_actor_lock" || name == "k2_principal_lock"
+    })
+}
+
 fn select_has_into(sel: &pg_query::protobuf::SelectStmt) -> bool {
     sel.into_clause.is_some()
         || sel.larg.as_deref().is_some_and(select_has_into)
@@ -80,6 +90,11 @@ pub fn classify_guest_sql(sql: &str) -> Result<GuestStmt, OpsError> {
     if touches_k2_internal(&parsed) {
         return Err(OpsError::Usage(
             "K2's own tables (_k2_*) are not available to apps".into(),
+        ));
+    }
+    if touches_session_lock(&parsed) {
+        return Err(OpsError::Usage(
+            "the session locks are K2's; read them with k2.skin_uid() and k2.actor_info()".into(),
         ));
     }
     let node = parsed
@@ -380,6 +395,48 @@ mod tests {
         reject("CALL foo()");
         let err = classify_guest_sql("VACUUM").expect_err("vacuum");
         assert!(err.hint().contains("unclassifiable"), "{}", err.hint());
+    }
+
+    #[test]
+    fn parser_refuses_every_way_a_guest_could_change_the_actor() {
+        for sql in [
+            // GUC / role changes.
+            "SELECT set_config('k2.actor', 'agent:x', false)",
+            "SELECT pg_catalog.set_config('role', 'postgres', true)",
+            "WITH s AS (SELECT set_config('k2.actor', 'x', true)) SELECT * FROM s",
+            "SET k2.actor = 'agent:x'",
+            "SET ROLE postgres",
+            "RESET ROLE",
+            "RESET ALL",
+            "SET SESSION AUTHORIZATION postgres",
+            // The lock tables themselves.
+            "INSERT INTO pg_temp.k2_actor_lock (kind, actor, principal) VALUES ('guest', 'guest:x', gen_random_uuid())",
+            "UPDATE pg_temp.k2_actor_lock SET kind = 'guest'",
+            "UPDATE k2_actor_lock SET actor = 'guest:x'",
+            "DELETE FROM pg_temp.k2_actor_lock",
+            "WITH d AS (DELETE FROM pg_temp.K2_ACTOR_LOCK RETURNING 1) SELECT * FROM d",
+            "SELECT * FROM pg_temp.k2_actor_lock",
+            "SELECT id FROM pg_temp.k2_principal_lock",
+            "UPDATE pg_temp.k2_principal_lock SET id = gen_random_uuid()",
+            "TRUNCATE pg_temp.k2_actor_lock",
+            "DROP TABLE pg_temp.k2_actor_lock",
+            "ALTER TABLE pg_temp.k2_actor_lock RENAME TO x",
+            "CREATE TEMP TABLE k2_actor_lock (kind text)",
+            // Transaction games around the lock.
+            "BEGIN",
+            "ROLLBACK",
+            "DISCARD TEMP",
+            "DISCARD ALL",
+        ] {
+            let err = classify_guest_sql(sql).expect_err(sql);
+            assert_eq!(err.code(), "usage", "{sql} {}", err.hint());
+        }
+        // Reading the actor through the helpers is a plain read.
+        let ok = classify_guest_sql("SELECT k2.actor_kind(), k2.actor(), k2.actor_info()")
+            .expect("helpers are readable");
+        assert!(ok.read && ok.returns_rows);
+        let err = classify_guest_sql("SELECT * FROM pg_temp.k2_actor_lock").expect_err("lock");
+        assert!(err.hint().contains("k2.actor_info()"), "{}", err.hint());
     }
 
     #[test]

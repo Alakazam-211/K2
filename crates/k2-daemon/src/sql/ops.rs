@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use super::actor::GuestActor;
 use super::paths::{resolve_in_path, resolve_out_path, InPathError};
 use super::secrets::{generate_secret, SecretStore};
 use super::supervisor::current_status;
@@ -242,9 +243,24 @@ pub(crate) fn refuse_user_migration_sql(sql: &str) -> Result<(), OpsError> {
     Ok(())
 }
 
-/// P5/P17 platform helpers. No CREATE ROLE. Idempotent CREATE OR REPLACE.
-pub(crate) fn ensure_k2_helpers_sql() -> &'static str {
-    r#"CREATE SCHEMA IF NOT EXISTS k2;
+/// P5/P17 platform helpers plus the actor helpers ([`super::actor`]).
+/// No CREATE ROLE. Idempotent CREATE OR REPLACE.
+pub(crate) fn ensure_k2_helpers_sql() -> String {
+    [PRINCIPAL_HELPERS_SQL, super::actor::ACTOR_HELPERS_SQL].concat()
+}
+
+/// SECURITY DEFINER helpers must be owned by the migrator, never by the
+/// superuser that installs them. `CREATE OR REPLACE` keeps the owner, so
+/// every install runs this after the helpers.
+pub(crate) fn k2_helper_owner_sql(db_name: &str) -> String {
+    let migrator = pg_quote_ident(&format!("{db_name}_migrator"));
+    format!(
+        "ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};\n\
+         ALTER FUNCTION k2.actor_info() OWNER TO {migrator};"
+    )
+}
+
+const PRINCIPAL_HELPERS_SQL: &str = r#"CREATE SCHEMA IF NOT EXISTS k2;
 GRANT USAGE ON SCHEMA k2 TO PUBLIC;
 CREATE OR REPLACE FUNCTION k2.skin_uid() RETURNS uuid
 LANGUAGE plpgsql
@@ -289,8 +305,7 @@ AS $k2fn$
   SELECT coalesce(current_setting('k2.skin_principal', true), '') = ''
 $k2fn$;
 GRANT EXECUTE ON FUNCTION k2.principal_hygiene() TO PUBLIC;
-"#
-}
+"#;
 
 /// One sql_grants LOGIN in a privilege sync. Empty `relations` is the
 /// broad grant (ALL TABLES + default privileges). A non-empty list is
@@ -484,7 +499,7 @@ fn ensure_k2_helpers_db(ops: &dyn SystemOps, db_name: &str) -> Result<(), OpsErr
     );
     // ALTER SCHEMA does not change function owners. SECURITY DEFINER must
     // be the migrator, not postgres. CREATE OR REPLACE keeps the old owner.
-    let fn_owner = format!("ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};");
+    let fn_owner = k2_helper_owner_sql(db_name);
     ops.run_helper(
         &["psql", "-d", db_name, "-v", "ON_ERROR_STOP=1"],
         Some(fn_owner.as_bytes()),
@@ -1079,12 +1094,13 @@ fn create_database_inner(
          GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE _k2_migrations, _k2_store TO {agent};\n\
          {helpers}\n\
          ALTER SCHEMA k2 OWNER TO {migrator};\n\
-         ALTER FUNCTION k2.skin_uid() OWNER TO {migrator};\n\
+         {fn_owner}\n\
          {seal}",
         db = pg_quote_ident(&name),
         agent = pg_quote_ident(&agent),
         migrator = pg_quote_ident(&migrator),
         helpers = ensure_k2_helpers_sql(),
+        fn_owner = k2_helper_owner_sql(&name),
         seal = seal_k2_internal_tables_sql(&name),
     );
     ops.run_helper(
@@ -3351,14 +3367,15 @@ fn map_dump_engine(err: String) -> OpsError {
 }
 
 /// One app session's psql connection for the guest doors (`/cli/db/query`
-/// and the rows doors): `{db}_migrator` login, a principal lock row, then
-/// SET ROLE to the rows login (bind role, else the database login).
+/// and the rows doors): `{db}_migrator` login, the principal and actor
+/// lock rows, then SET ROLE to the rows login (bind role, else the
+/// database login).
 struct GuestConn {
     db: String,
     mig_user: String,
     mig_pw: String,
     login: String,
-    principal: String,
+    actor: GuestActor,
     /// Database and role names a guest error must never show.
     internal: Vec<String>,
 }
@@ -3367,11 +3384,19 @@ fn guest_conn(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-    principal: &str,
+    actor: &GuestActor,
 ) -> Result<GuestConn, OpsError> {
-    let principal = principal.trim();
+    let principal = actor.principal.trim();
     if uuid::Uuid::parse_str(principal).is_err() {
         return Err(OpsError::Usage("session principal id is not a uuid".into()));
+    }
+    // Only the guest kind is built (app / agent are reserved). A guest
+    // actor names the principal it was derived from; anything else is a
+    // daemon bug, never something to run.
+    if actor.kind != super::actor::ACTOR_KIND_GUEST
+        || actor.actor != format!("{}:{principal}", super::actor::ACTOR_KIND_GUEST)
+    {
+        return Err(OpsError::Engine("internal: unsupported actor".into()));
     }
     let dml = store_dml_creds(ops, secrets, project_id)?;
     let login = dml.bind.clone().unwrap_or_else(|| dml.user.clone());
@@ -3387,18 +3412,22 @@ fn guest_conn(
         mig_user,
         mig_pw,
         login,
-        principal: principal.to_string(),
+        actor: actor.clone(),
         internal,
     })
 }
 
-fn guest_lock_sql(principal: &str, login: &str) -> String {
-    let id = format!("'{}'", principal.replace('\'', "''"));
+/// Principal lock, then the actor lock, in one `-c` (one implicit
+/// transaction: both rows or neither), before SET ROLE.
+fn guest_lock_sql(actor: &GuestActor, login: &str) -> String {
+    let id = format!("'{}'", actor.principal.replace('\'', "''"));
     format!(
         "CREATE TEMP TABLE pg_temp.k2_principal_lock (id uuid) ON COMMIT PRESERVE ROWS;\n\
          INSERT INTO pg_temp.k2_principal_lock (id) VALUES ({id}::uuid);\n\
-         GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO {login};",
+         GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO {login};\n\
+         {actor_lock}",
         login = pg_quote_ident(login),
+        actor_lock = super::actor::actor_lock_sql(actor),
     )
 }
 
@@ -3425,7 +3454,7 @@ fn guest_psql_args(g: &GuestConn, rows_only: bool) -> Vec<String> {
     }
     args.extend([
         "-c".into(),
-        guest_lock_sql(&g.principal, &g.login),
+        guest_lock_sql(&g.actor, &g.login),
         "-c".into(),
         format!("SET ROLE {}", pg_quote_ident(&g.login)),
         "-c".into(),
@@ -3463,9 +3492,9 @@ fn dump_runner(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<DumpRunner, OpsError> {
-    match skin_principal {
+    match guest {
         Some(p) => Ok(DumpRunner::Guest(guest_conn(ops, secrets, project_id, p)?)),
         None => Ok(DumpRunner::Owner(store_dml_creds(ops, secrets, project_id)?)),
     }
@@ -3603,9 +3632,9 @@ pub fn dump_list_tables(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     let sql = "SELECT c.relname \
                FROM pg_catalog.pg_class c \
                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
@@ -3627,10 +3656,10 @@ pub fn dump_list_rows(
     project_id: &str,
     table: &str,
     limit: u32,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     dump_need_table(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let lim = limit.max(1).min(500);
@@ -3646,14 +3675,14 @@ pub fn dump_get_row(
     project_id: &str,
     table: &str,
     id: &str,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
     let id = id.trim();
     if id.is_empty() {
         return Err(OpsError::Usage("missing id".into()));
     }
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     dump_need_table(ops, &r, &table)?;
     dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
@@ -3672,13 +3701,13 @@ pub fn dump_insert(
     project_id: &str,
     table: &str,
     row: &serde_json::Value,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
     let obj = row
         .as_object()
         .ok_or_else(|| OpsError::Usage("row must be a JSON object".into()))?;
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     dump_need_table(ops, &r, &table)?;
     let q = dump_qualify(&table);
     let qt = pg_quote_ident(&table);
@@ -3710,7 +3739,7 @@ pub fn dump_update(
     table: &str,
     id: &str,
     row: &serde_json::Value,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
     let id = id.trim();
@@ -3723,7 +3752,7 @@ pub fn dump_update(
     if obj.is_empty() {
         return Err(OpsError::Usage("missing row".into()));
     }
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     dump_need_table(ops, &r, &table)?;
     dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
@@ -3749,14 +3778,14 @@ pub fn dump_delete(
     project_id: &str,
     table: &str,
     id: &str,
-    skin_principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> Result<serde_json::Value, OpsError> {
     let table = validate_dump_table(table)?;
     let id = id.trim();
     if id.is_empty() {
         return Err(OpsError::Usage("missing id".into()));
     }
-    let r = dump_runner(ops, secrets, project_id, skin_principal)?;
+    let r = dump_runner(ops, secrets, project_id, guest)?;
     dump_need_table(ops, &r, &table)?;
     dump_need_id_column(ops, &r, &table)?;
     let q = dump_qualify(&table);
@@ -3785,15 +3814,17 @@ fn validate_collection(name: &str) -> Result<String, OpsError> {
     Ok(n.to_string())
 }
 
-/// One psql process as `{db}_migrator`. Lock row, SET ROLE, statement_timeout,
-/// then the user statement. `-c` only: real psql ignores stdin when any `-c`
-/// is set. No `set_config('k2.skin_principal')`. Engine errors carry only
-/// the Postgres message (full detail goes to the daemon log).
+/// One psql process as `{db}_migrator`. Principal + actor lock rows, SET
+/// ROLE, statement_timeout, then the user statement. `-c` only: real psql
+/// ignores stdin when any `-c` is set. No `set_config('k2.skin_principal')`.
+/// Engine errors carry only the Postgres message (full detail goes to the
+/// daemon log). `actor` comes from the pass ([`GuestActor::from_pass`]),
+/// never from the request body.
 pub(crate) fn exec_guest_query(
     ops: &dyn SystemOps,
     secrets: &dyn SecretStore,
     project_id: &str,
-    principal_id: &str,
+    actor: &GuestActor,
     stmt: &super::query::GuestStmt,
     params: &[serde_json::Value],
 ) -> Result<serde_json::Value, OpsError> {
@@ -3802,7 +3833,7 @@ pub(crate) fn exec_guest_query(
     } else {
         Some(super::query::quote_guest_params(params)?)
     };
-    let g = guest_conn(ops, secrets, project_id, principal_id)?;
+    let g = guest_conn(ops, secrets, project_id, actor)?;
     let exec_sql = super::query::guest_exec_sql(stmt);
     // `-A` without `-t`: INSERT/UPDATE/DELETE command tags stay on stdout.
     // Row JSON lines still start with `{`.
@@ -4003,6 +4034,52 @@ mod tests {
         let err = refuse_user_migration_sql("$tag$ CREATE ROLE inside $tag$;\n")
             .expect_err("dollar-quote leftover is fail-closed");
         assert_eq!(err.code(), "usage", "{}", err.hint());
+    }
+
+    #[test]
+    fn helpers_include_the_actor_helpers_and_owner_sql_covers_both_definers() {
+        let sql = ensure_k2_helpers_sql();
+        let schema = sql.find("CREATE SCHEMA IF NOT EXISTS k2").expect("schema");
+        let actor = sql.find("FUNCTION k2.actor_info()").expect("actor helper");
+        assert!(schema < actor, "schema first: {sql}");
+        assert_eq!(
+            sql.matches("SECURITY DEFINER").count(),
+            2,
+            "only skin_uid and actor_info are definers: {sql}"
+        );
+        let owner = k2_helper_owner_sql("ws_abc");
+        assert_eq!(
+            owner,
+            "ALTER FUNCTION k2.skin_uid() OWNER TO \"ws_abc_migrator\";\n\
+             ALTER FUNCTION k2.actor_info() OWNER TO \"ws_abc_migrator\";"
+        );
+    }
+
+    #[test]
+    fn guest_lock_sql_locks_principal_then_actor_and_grants_only_the_principal_read() {
+        let actor = GuestActor::session("1b4e28ba-2fa1-11d2-883f-0016d3cca427", "pass-1");
+        let sql = guest_lock_sql(&actor, "app_reader");
+        let p = sql.find("INSERT INTO pg_temp.k2_principal_lock").expect("principal");
+        let a = sql.find("INSERT INTO pg_temp.k2_actor_lock").expect("actor");
+        assert!(p < a, "{sql}");
+        assert_eq!(sql.matches("GRANT").count(), 1, "{sql}");
+        assert!(sql.contains("GRANT SELECT ON TABLE pg_temp.k2_principal_lock TO \"app_reader\""), "{sql}");
+    }
+
+    #[test]
+    fn guest_conn_refuses_a_reserved_or_mismatched_actor() {
+        let ops = super::super::sysops::FakeSystemOps::baked();
+        let secrets = super::super::secrets::MemSecretStore::default();
+        let uid = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
+        let mut forged = GuestActor::session(uid, "p");
+        forged.actor = "guest:00000000-0000-0000-0000-000000000000".into();
+        let err = guest_conn(&ops, &secrets, "no-project", &forged).err().expect("mismatch");
+        assert_eq!(err.hint(), "internal: unsupported actor");
+        let mut agent = GuestActor::session(uid, "p");
+        agent.kind = super::super::actor::ACTOR_KIND_AGENT;
+        agent.actor = format!("agent:{uid}");
+        let err = guest_conn(&ops, &secrets, "no-project", &agent).err().expect("reserved kind");
+        assert_eq!(err.hint(), "internal: unsupported actor");
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::caller_workspace::{principal_from_params, request_principal};
 use crate::cli_response::CliResponse;
 use k2_core::skin::SkinPass;
 
+use super::actor::GuestActor;
 use super::identity::{resolve_caller, resolve_caller_params};
 use super::ops::{self, OpsError};
 use super::secrets::FileSecretStore;
@@ -741,21 +742,11 @@ fn skin_store_session(pass: &SkinPass) -> Result<(), CliResponse> {
 }
 
 /// Rows doors run like `/cli/db/query`: session pass with a uuid
-/// principal, locked into the connection before SET ROLE.
-fn skin_dump_principal(pass: &SkinPass) -> Result<String, CliResponse> {
+/// principal; principal and actor (from the pass only) are locked into
+/// the connection before SET ROLE.
+fn skin_dump_actor(pass: &SkinPass) -> Result<GuestActor, CliResponse> {
     skin_store_session(pass)?;
-    let principal = pass
-        .principal_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| ops_err(OpsError::Usage("session has no principal id".into())))?;
-    if uuid::Uuid::parse_str(principal).is_err() {
-        return Err(ops_err(OpsError::Usage(
-            "session principal id is not a uuid".into(),
-        )));
-    }
-    Ok(principal.to_string())
+    GuestActor::from_pass(pass).map_err(ops_err)
 }
 
 fn skin_store_room(
@@ -928,7 +919,7 @@ pub fn handle_dump_rows_gated(
 }
 
 fn handle_skin_dump_tables(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let principal = match skin_dump_principal(pass) {
+    let guest = match skin_dump_actor(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -940,14 +931,14 @@ fn handle_skin_dump_tables(params: &HashMap<String, String>, pass: &SkinPass) ->
         return r;
     }
     let secrets = FileSecretStore::default();
-    match ops::dump_list_tables(ops(), &secrets, &project_id, Some(&principal)) {
+    match ops::dump_list_tables(ops(), &secrets, &project_id, Some(&guest)) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
 fn handle_skin_dump_rows(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
-    let principal = match skin_dump_principal(pass) {
+    let guest = match skin_dump_actor(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -968,13 +959,13 @@ fn handle_skin_dump_rows(params: &HashMap<String, String>, pass: &SkinPass) -> C
     if let Err(r) = dump_linux_gate() {
         return r;
     }
-    dump_rows_for(params, &project_id, Some(&principal))
+    dump_rows_for(params, &project_id, Some(&guest))
 }
 
 fn dump_rows_for(
     params: &HashMap<String, String>,
     project_id: &str,
-    principal: Option<&str>,
+    guest: Option<&GuestActor>,
 ) -> CliResponse {
     let table = params.get("table").map(String::as_str).unwrap_or("");
     if table.trim().is_empty() {
@@ -986,7 +977,7 @@ fn dump_rows_for(
         if id.trim().is_empty() {
             return CliResponse::bad_request("missing id");
         }
-        match ops::dump_get_row(ops(), &secrets, project_id, table, id, principal) {
+        match ops::dump_get_row(ops(), &secrets, project_id, table, id, guest) {
             Ok(v) => ok_json(v),
             Err(e) => ops_err(e),
         }
@@ -995,7 +986,7 @@ fn dump_rows_for(
             .get("limit")
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
-        match ops::dump_list_rows(ops(), &secrets, project_id, table, limit, principal) {
+        match ops::dump_list_rows(ops(), &secrets, project_id, table, limit, guest) {
             Ok(v) => ok_json(v),
             Err(e) => ops_err(e),
         }
@@ -1114,7 +1105,7 @@ pub fn handle_dump_delete_gated(body: &[u8], skin: Option<SkinPass>) -> CliRespo
 }
 
 fn handle_skin_dump_write(body: &[u8], pass: &SkinPass, kind: &str) -> CliResponse {
-    let principal = match skin_dump_principal(pass) {
+    let guest = match skin_dump_actor(pass) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -1131,13 +1122,13 @@ fn handle_skin_dump_write(body: &[u8], pass: &SkinPass, kind: &str) -> CliRespon
         return r;
     }
     match kind {
-        "insert" => dump_insert_for(&b, &project_id, Some(&principal)),
-        "update" => dump_update_for(&b, &project_id, Some(&principal)),
-        _ => dump_delete_for(&b, &project_id, Some(&principal)),
+        "insert" => dump_insert_for(&b, &project_id, Some(&guest)),
+        "update" => dump_update_for(&b, &project_id, Some(&guest)),
+        _ => dump_delete_for(&b, &project_id, Some(&guest)),
     }
 }
 
-fn dump_insert_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
+fn dump_insert_for(b: &DumpBody, project_id: &str, guest: Option<&GuestActor>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1146,13 +1137,13 @@ fn dump_insert_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> C
         return CliResponse::bad_request("row must be a JSON object");
     };
     let secrets = FileSecretStore::default();
-    match ops::dump_insert(ops(), &secrets, project_id, table, row, principal) {
+    match ops::dump_insert(ops(), &secrets, project_id, table, row, guest) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
-fn dump_update_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
+fn dump_update_for(b: &DumpBody, project_id: &str, guest: Option<&GuestActor>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1165,13 +1156,13 @@ fn dump_update_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> C
         return CliResponse::bad_request("row must be a JSON object");
     };
     let secrets = FileSecretStore::default();
-    match ops::dump_update(ops(), &secrets, project_id, table, id, row, principal) {
+    match ops::dump_update(ops(), &secrets, project_id, table, id, row, guest) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
 }
 
-fn dump_delete_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> CliResponse {
+fn dump_delete_for(b: &DumpBody, project_id: &str, guest: Option<&GuestActor>) -> CliResponse {
     let table = b.table.as_deref().unwrap_or("");
     if table.trim().is_empty() {
         return CliResponse::bad_request("missing table");
@@ -1181,7 +1172,7 @@ fn dump_delete_for(b: &DumpBody, project_id: &str, principal: Option<&str>) -> C
         return CliResponse::bad_request("missing id");
     }
     let secrets = FileSecretStore::default();
-    match ops::dump_delete(ops(), &secrets, project_id, table, id, principal) {
+    match ops::dump_delete(ops(), &secrets, project_id, table, id, guest) {
         Ok(v) => ok_json(v),
         Err(e) => ops_err(e),
     }
@@ -1468,22 +1459,12 @@ pub fn handle_db_query(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
         Ok(s) => s,
         Err(e) => return ops_err(e),
     };
-    let principal = match pass
-        .principal_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(id) => id.to_string(),
-        None => {
-            return ops_err(OpsError::Usage("session has no principal id".into()));
-        }
+    // Principal and actor come from the pass only. Body fields such as
+    // `actor` / `principal` are never read.
+    let actor = match GuestActor::from_pass(&pass) {
+        Ok(a) => a,
+        Err(e) => return ops_err(e),
     };
-    if uuid::Uuid::parse_str(&principal).is_err() {
-        return ops_err(OpsError::Usage(
-            "session principal id is not a uuid".into(),
-        ));
-    }
     let cap = if stmt.read {
         crate::skin_routes::STORE_READ
     } else {
@@ -1494,7 +1475,7 @@ pub fn handle_db_query(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
         Err(r) => return r,
     };
     let secrets = FileSecretStore::default();
-    match ops::exec_guest_query(ops(), &secrets, &project_id, &principal, &stmt, &params) {
+    match ops::exec_guest_query(ops(), &secrets, &project_id, &actor, &stmt, &params) {
         Ok(v) => {
             let rendered = v.to_string();
             if rendered.contains("postgres://") || rendered.contains("\"dsn\"") {

@@ -4,6 +4,7 @@
 //! at runtime (`sql_supported`); compiles + unit-tests everywhere via
 //! [`sysops::SystemOps`] fakes. Never vendors, patches, or links libpq server.
 
+pub mod actor;
 pub mod identity;
 pub mod ops;
 pub mod paths;
@@ -2737,9 +2738,11 @@ mod tests {
         // "row" (GET) and failed to parse it as JSON (POST).
         let dentist_a = format!("12345678{}", &uuid::Uuid::new_v4().to_string()[8..]);
         let dentist_b = uuid::Uuid::new_v4().to_string();
+        let actor_a = crate::sql::actor::GuestActor::session(&dentist_a, "pass-a");
+        let actor_b = crate::sql::actor::GuestActor::session(&dentist_b, "pass-b");
 
         let n = ops.recorded().len();
-        let list = ops::dump_list_rows(&ops, &secrets, &pid, "example", 50, Some(&dentist_a))
+        let list = ops::dump_list_rows(&ops, &secrets, &pid, "example", 50, Some(&actor_a))
             .expect("guest list");
         assert_eq!(
             list["rows"],
@@ -2767,10 +2770,19 @@ mod tests {
         let stmt = line.find("row_to_json").expect("statement");
         assert!(lock < role && role < timeout && timeout < stmt, "{line}");
         assert!(line[lock..role].contains(&dentist_a), "{line}");
+        let actor_lock = line
+            .find("INSERT INTO pg_temp.k2_actor_lock")
+            .expect("actor lock row on the rows door");
+        assert!(lock < actor_lock && actor_lock < role, "actor locked before SET ROLE: {line}");
+        assert!(
+            line[actor_lock..role].contains(&format!("'guest', 'guest:{dentist_a}'")),
+            "{line}"
+        );
+        assert!(line[actor_lock..role].contains("'pass-a'"), "{line}");
         assert!(!rec.contains(&dentist_b), "{rec}");
         assert!(!rec.contains("set_config("), "no GUC stamp: {rec}");
 
-        let got = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&dentist_b))
+        let got = ops::dump_get_row(&ops, &secrets, &pid, "example", "a", Some(&actor_b))
             .expect("guest get");
         assert_eq!(got["row"]["n"], 1, "{got}");
 
@@ -2781,7 +2793,7 @@ mod tests {
             &pid,
             "example",
             &serde_json::json!({"id": "b", "n": 2}),
-            Some(&dentist_a),
+            Some(&actor_a),
         )
         .expect("guest insert parses the RETURNING row, not the lock");
         assert_eq!(ins["row"]["id"], "b", "{ins}");
@@ -2795,12 +2807,12 @@ mod tests {
             "example",
             "b",
             &serde_json::json!({"n": 3}),
-            Some(&dentist_a),
+            Some(&actor_a),
         )
         .expect("guest update");
         assert_eq!(upd["row"]["id"], "b", "{upd}");
 
-        let bad = ops::dump_list_rows(&ops, &secrets, &pid, "example", 5, Some("not-a-uuid"))
+        let bad = ops::dump_list_rows(&ops, &secrets, &pid, "example", 5, Some(&crate::sql::actor::GuestActor::session("not-a-uuid", "p")))
             .expect_err("principal must be a uuid");
         assert_eq!(bad.code(), "usage", "{}", bad.hint());
 
@@ -2812,6 +2824,7 @@ mod tests {
         assert!(rec_agent.contains(&format!("-U {db_name}_agent")), "{rec_agent}");
         assert!(rec_agent.contains("SET ROLE \"app_reader\""), "{rec_agent}");
         assert!(!rec_agent.contains("k2_principal_lock"), "{rec_agent}");
+        assert!(!rec_agent.contains("k2_actor_lock"), "owner/agent lane has no actor: {rec_agent}");
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -3606,6 +3619,15 @@ mod tests {
             )),
             "skin_uid owner must be the migrator: {helper}"
         );
+        let actor_fn = helper
+            .find("CREATE OR REPLACE FUNCTION k2.actor_info()")
+            .expect("actor helpers installed at create");
+        let actor_owner = helper
+            .find(&format!("ALTER FUNCTION k2.actor_info() OWNER TO \"{migrator}\";"))
+            .expect("actor_info owner must be the migrator");
+        assert!(actor_fn < actor_owner, "owner fixed after the CREATE: {helper}");
+        assert!(helper.contains("CREATE OR REPLACE FUNCTION k2.actor_kind()"), "{helper}");
+        assert!(helper.contains("CREATE OR REPLACE FUNCTION k2.actor()"), "{helper}");
         assert!(helper.contains("pg_temp.k2_principal_lock"), "{helper}");
         assert!(helper.contains("SECURITY DEFINER"), "{helper}");
         assert!(helper.contains("undefined_table"), "{helper}");
@@ -3798,6 +3820,93 @@ mod tests {
     }
 
     #[test]
+    fn guest_query_actor_comes_from_the_pass_and_ignores_the_body() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = sql_server_test_lock();
+        k2_core::db::init_for_tests();
+        seed_running_sidecar();
+        let dir = std::env::temp_dir().join(format!("k2-sql-q-actor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let handle = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let pid = insert_project_handle("sql-q-actor", &path, &handle);
+        let fake = Box::leak(Box::new(FakeSystemOps::baked()));
+        let secrets = crate::sql::secrets::FileSecretStore::default();
+        ops::create_database(fake, &secrets, &pid, 1, None, None).expect("create");
+        let mut policy = k2_core::skin::RoomPolicy::new();
+        policy.insert(
+            pid.clone(),
+            vec![
+                k2_core::skin::CAP_STORE_READ.into(),
+                k2_core::skin::CAP_STORE_WRITE.into(),
+            ],
+        );
+        let pass = skin_session("carol", policy.clone());
+        let principal = pass.principal_id.clone().expect("principal");
+        let forged_uid = uuid::Uuid::new_v4().to_string();
+
+        routes::with_fake_ops(fake, || {
+            let n = fake.recorded().len();
+            let body = serde_json::json!({
+                "workspace": handle,
+                "sql": "SELECT k2.actor_kind() AS kind",
+                "params": [],
+                "actor": "agent:sales",
+                "actorKind": "agent",
+                "actor_kind": "agent",
+                "kind": "app",
+                "principal": forged_uid,
+                "principalId": forged_uid,
+                "pass": "forged-pass",
+                "onBehalfOf": "user:root",
+            })
+            .to_string();
+            let got = routes::handle_db_query(body.as_bytes(), Some(pass.clone()));
+            assert_eq!(got.status, "200 OK", "{}", got.body);
+            let recs = fake.recorded();
+            let line = guest_cmd_line(&recs[n..]);
+            let rec = recs[n..].join("\n");
+            let actor_lock = line
+                .find("INSERT INTO pg_temp.k2_actor_lock")
+                .expect("actor lock");
+            let role = line.find("SET ROLE").expect("SET ROLE");
+            assert!(actor_lock < role, "actor locked before SET ROLE: {line}");
+            let want = format!(
+                "VALUES ('guest', 'guest:{principal}', '{principal}'::uuid, '{}')",
+                pass.id
+            );
+            assert!(line[actor_lock..role].contains(&want), "{line}");
+            for forged in [&forged_uid, "agent:sales", "forged-pass", "user:root"] {
+                assert!(!rec.contains(forged), "body value {forged} reached psql: {rec}");
+            }
+            assert!(!rec.contains("GRANT SELECT ON TABLE pg_temp.k2_actor_lock"), "{rec}");
+
+            // The rows doors lock the same actor.
+            let n = fake.recorded().len();
+            let r = routes::handle_dump_tables_gated(
+                &store_ws_params(&handle, &[]),
+                Some(pass.clone()),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let rows_line = guest_cmd_line(&fake.recorded()[n..]);
+            assert!(rows_line.contains(&want), "{rows_line}");
+
+            // A platform pass never reaches the lane, so it never gets an actor.
+            let mut platform = pass.clone();
+            platform.session = false;
+            platform.principal_id = None;
+            let n = fake.recorded().len();
+            let r = routes::handle_db_query(body.as_bytes(), Some(platform));
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            assert!(
+                !fake.recorded()[n..].iter().any(|l| l.contains("k2_actor_lock")),
+                "platform pass ran psql"
+            );
+        });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn guest_query_error_hint_is_the_postgres_message_not_the_command_line() {
         let _home = crate::test_support::TempHome::new();
         let _g = sql_server_test_lock();
@@ -3902,6 +4011,7 @@ mod tests {
         // and the seal is the last helper step (after every re-grant).
         fake.pg.lock().expect("pg").sealed.clear();
         let n = fake.recorded().len();
+        let h_mig = fake.pg.lock().expect("pg").helper_sql.len();
         let out = ops::migrate(fake, &secrets, &pid, &path, None).expect("migrate");
         assert_eq!(out["applied"], serde_json::json!(["0001_jobs"]), "{out}");
         {
@@ -3924,14 +4034,24 @@ mod tests {
             .expect("helper runs");
         assert!(last_helper > last_sync, "{recs:#?}");
 
+        let actor_owner = format!("ALTER FUNCTION k2.actor_info() OWNER TO \"{db_name}_migrator\";");
+        let actor_installed = |from: usize| {
+            let pg = fake.pg.lock().expect("pg");
+            let h = pg.helper_sql[from..].join("\n");
+            h.contains("CREATE OR REPLACE FUNCTION k2.actor_info()") && h.contains(&actor_owner)
+        };
+        assert!(actor_installed(h_mig), "migrate installs the actor helpers + owner");
+
         // Next daemon boot: existing databases are sealed once.
         fake.pg.lock().expect("pg").sealed.clear();
+        let h0 = fake.pg.lock().expect("pg").helper_sql.len();
         let lines = ops::seal_existing_databases(fake);
         assert!(
             lines.iter().any(|l| l == &format!("{db_name}: sealed")),
             "{lines:?}"
         );
         assert!(fake.pg.lock().expect("pg").sealed.contains(&db_name));
+        assert!(actor_installed(h0), "boot pass installs the actor helpers on old databases");
 
         // A guest with store:read cannot reach them through the query door.
         let mut policy = k2_core::skin::RoomPolicy::new();

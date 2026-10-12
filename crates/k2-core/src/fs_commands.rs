@@ -387,7 +387,7 @@ pub fn ensure_downloads_dir(workspace_path: &str) -> Result<PathBuf, String> {
 /// components (`../`, `/`, `\\`, drive prefixes) and NUL bytes, keeping
 /// only the final path segment. Returns a fallback when the result would
 /// be empty or a relative marker (`.` / `..`).
-fn sanitize_filename(filename: &str) -> String {
+pub(crate) fn sanitize_filename(filename: &str) -> String {
     // Split on BOTH separators so a Windows-style `..\\x` path supplied
     // to a unix daemon is still reduced to its last segment.
     let last = filename

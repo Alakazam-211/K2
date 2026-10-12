@@ -277,7 +277,7 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/overlay/events*", daemon);
     push_handle(out, "/cli/skin/agents", daemon);
     // Files cut: exact matchers only. Never `/cli/fs/*` (would punch
-    // open-finder / upload-chunk / info through Direct).
+    // open-finder / delete / info through Direct).
     push_handle(out, "/cli/fs/events*", daemon);
     push_handle(out, "/cli/fs/read-dir*", daemon);
     push_handle(out, "/cli/fs/read-file*", daemon);
@@ -285,6 +285,8 @@ fn push_path_filter_site(out: &mut String, daemon: &str, ui_port: Option<u16>) {
     push_handle(out, "/cli/fs/read-range*", daemon);
     push_handle(out, "/cli/fs/write-file*", daemon);
     push_handle(out, "/cli/fs/upload-binary*", daemon);
+    // Guest form is jailed + bound to the guest; daemon caps each body.
+    push_handle(out, "/cli/fs/upload-chunk*", daemon);
     push_handle(out, "/cli/fs/create*", daemon);
     push_handle(out, "/cli/fs/copy*", daemon);
     push_handle(out, "/cli/fs/move*", daemon);
@@ -1076,10 +1078,7 @@ mod tests {
             !file.contains("/cli/fs/info"),
             "info stays closed at the door: {file}"
         );
-        assert!(
-            !file.contains("/cli/fs/upload-chunk"),
-            "upload-chunk stays closed at the door: {file}"
-        );
+        assert!(file.contains("/cli/fs/upload-chunk"), "{file}");
         assert!(
             !file.contains("/cli/fs/delete"),
             "delete stays closed at the door: {file}"

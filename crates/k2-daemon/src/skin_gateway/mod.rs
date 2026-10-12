@@ -296,6 +296,9 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/fs/read-range"),
     ("POST", "/cli/fs/write-file"),
     ("POST", "/cli/fs/upload-binary"),
+    // Resumable large upload: one chunk per request, body capped by
+    // `request_body_cap`; the guest form is jailed and bound to the guest.
+    ("POST", "/cli/fs/upload-chunk"),
     ("POST", "/cli/fs/create"),
     ("POST", "/cli/fs/copy"),
     ("POST", "/cli/fs/move"),
@@ -363,6 +366,40 @@ pub const GATEWAY_POST_ROUTES: &[&str] = &[
     "/cli/skin/password/reset",
     "/cli/skin/password/change",
 ];
+
+/// Request-body ceiling for a route, when it has one. Only the chunked
+/// upload: each request carries ONE chunk, so a body over a base64 chunk
+/// plus slack can never be valid. Not a file-size limit (a file is any
+/// number of chunks); other routes have none (each app decides).
+pub fn request_body_cap(method: &str, path: &str) -> Option<usize> {
+    if method.eq_ignore_ascii_case("POST") && path_only(path) == "/cli/fs/upload-chunk" {
+        Some(k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY)
+    } else {
+        None
+    }
+}
+
+fn body_cap_json(cap: usize) -> String {
+    serde_json::json!({
+        "error": "too_large",
+        "message": format!(
+            "one upload-chunk request carries at most {cap} bytes of base64 ({} MiB decoded); send smaller chunks",
+            k2_core::fs_commands::MAX_UPLOAD_CHUNK_SIZE / (1024 * 1024)
+        ),
+    })
+    .to_string()
+}
+
+/// How long the helper waits for the daemon's answer. A final upload
+/// chunk flushes the whole file to disk before it answers, which can
+/// outlast the usual 10 s on a large file or a slow disk.
+fn upstream_wait(path: &str) -> Duration {
+    if path_only(path) == "/cli/fs/upload-chunk" {
+        Duration::from_secs(300)
+    } else {
+        Duration::from_secs(10)
+    }
+}
 
 pub fn allowlisted_http(method: &str, path: &str) -> bool {
     let p = path_only(path);
@@ -459,7 +496,8 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
         Some(end) => (&raw[..end], &raw[end..]),
         None => (raw, &raw[0..0]),
     };
-    let head = String::from_utf8_lossy(header_bytes);
+    let head = String::from_utf8_lossy(header_bytes).into_owned();
+    let mut body = early_body.to_vec();
     let first = head.lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("GET").to_string();
@@ -470,18 +508,25 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
             .strip_prefix("content-length:")
             .and_then(|v| v.trim().parse::<usize>().ok())
     }).unwrap_or(0);
-    let mut body = early_body.to_vec();
-    if body.len() < content_length {
-        let need = content_length - body.len();
-        let mut more = vec![0u8; need];
-        let mut got = 0;
-        while got < need {
-            match stream.read(&mut more[got..]).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => got += n,
-            }
+    // A route with a body ceiling (one upload chunk) refuses a bigger
+    // Content-Length before reading or allocating anything for it.
+    if let Some(cap) = request_body_cap(&method, &path) {
+        if content_length > cap {
+            write_json(&gw, &mut stream, "413 Payload Too Large", &body_cap_json(cap)).await;
+            let _ = stream.shutdown().await;
+            let remaining = content_length.saturating_sub(body.len());
+            crate::routes::http::drain_refused_body(&mut stream, Some(remaining)).await;
+            return Ok(());
         }
-        body.extend_from_slice(&more[..got]);
+    }
+    // Grow with the bytes that actually arrive; never reserve the claimed
+    // Content-Length up front (SEC-5: a huge claim was a huge allocation).
+    while body.len() < content_length {
+        let want = (content_length - body.len()).min(buf.len());
+        match stream.read(&mut buf[..want]).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+        }
     }
     if body.len() > content_length {
         body.truncate(content_length);
@@ -1197,15 +1242,18 @@ async fn upstream_json(
         up.write_all(payload).await.map_err(|e| e.to_string())?;
     }
     up.flush().await.map_err(|e| e.to_string())?;
-    let (_head, status, body) = read_http_message(&mut up).await?;
+    let (_head, status, body) = read_http_message(&mut up, Duration::from_secs(10)).await?;
     Ok((status, String::from_utf8_lossy(&body).into_owned()))
 }
 
-async fn read_http_message(stream: &mut TcpStream) -> Result<(String, u16, Vec<u8>), String> {
+async fn read_http_message(
+    stream: &mut TcpStream,
+    wait: Duration,
+) -> Result<(String, u16, Vec<u8>), String> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 8192];
     let header_end = loop {
-        let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf))
+        let n = tokio::time::timeout(wait, stream.read(&mut buf))
             .await
             .map_err(|_| "upstream header timeout".to_string())?
             .map_err(|e| e.to_string())?;
@@ -1238,7 +1286,7 @@ async fn read_http_message(stream: &mut TcpStream) -> Result<(String, u16, Vec<u
     let mut body = raw[end..].to_vec();
     if let Some(need) = clen {
         while body.len() < need {
-            let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf))
+            let n = tokio::time::timeout(wait, stream.read(&mut buf))
                 .await
                 .map_err(|_| "upstream body timeout".to_string())?
                 .map_err(|e| e.to_string())?;
@@ -1309,7 +1357,7 @@ async fn proxy_http(
         return;
     }
     let _ = up.flush().await;
-    match read_http_message(&mut up).await {
+    match read_http_message(&mut up, upstream_wait(&target)).await {
         Ok((head, _status, body)) => {
             // Rebuild so Content-Length matches the body we actually hold.
             let Some(first) = head.lines().next().filter(|l| l.starts_with("HTTP/")) else {
@@ -1612,7 +1660,9 @@ mod tests {
         assert!(!allowlisted_ws("/cli/sessions/events"));
         assert!(!allowlisted_http("GET", "/cli/fs/info"));
         assert!(!allowlisted_http("POST", "/cli/fs/delete"));
-        assert!(!allowlisted_http("POST", "/cli/fs/upload-chunk"));
+        // Guest resumable upload (POST only; GET stays out).
+        assert!(allowlisted_http("POST", "/cli/fs/upload-chunk"));
+        assert!(!allowlisted_http("GET", "/cli/fs/upload-chunk"));
         assert!(!allowlisted_http("GET", "/cli/fs/events"));
         assert!(!allowlisted_http("POST", "/cli/fs/read-dir"));
         assert!(!allowlisted_http("GET", "/cli/fs/search-tree"));
@@ -2886,5 +2936,82 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("loopback"), "{err}");
+    }
+
+    #[test]
+    fn upload_chunk_body_cap_and_wait_are_route_scoped() {
+        let cap = k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY;
+        assert_eq!(request_body_cap("POST", "/cli/fs/upload-chunk"), Some(cap));
+        assert_eq!(request_body_cap("post", "/cli/fs/upload-chunk?x=1"), Some(cap));
+        // No ceiling anywhere else (each app decides its own sizes).
+        assert_eq!(request_body_cap("POST", "/cli/fs/upload-binary"), None);
+        assert_eq!(request_body_cap("POST", "/cli/fs/write-file"), None);
+        assert_eq!(request_body_cap("GET", "/cli/fs/upload-chunk"), None);
+        // A final chunk may fsync a large file: longer upstream wait.
+        assert!(upstream_wait("/cli/fs/upload-chunk") >= Duration::from_secs(60));
+        assert_eq!(upstream_wait("/cli/thread/post"), Duration::from_secs(10));
+    }
+
+    /// One raw POST with a chosen Content-Length; reads until the helper
+    /// closes. `body` may be shorter than `claimed`.
+    async fn send_claimed(port: u16, target: &str, headers: &str, claimed: usize, body: &[u8]) -> Reply {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).await.expect("connect helper");
+        let head = format!(
+            "POST {target} HTTP/1.1\r\n{headers}Content-Type: application/json\r\nContent-Length: {claimed}\r\n\r\n"
+        );
+        s.write_all(head.as_bytes()).await.expect("write head");
+        s.write_all(body).await.expect("write body");
+        // Half-close: a body shorter than `claimed` ends here.
+        s.shutdown().await.expect("half-close");
+        let mut raw = Vec::new();
+        tokio::time::timeout(Duration::from_secs(20), s.read_to_end(&mut raw))
+            .await
+            .expect("helper must answer and close within 20s")
+            .expect("read helper");
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        let (head, body) = text
+            .split_once("\r\n\r\n")
+            .unwrap_or_else(|| panic!("no HTTP head from helper: {text:?}"));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .unwrap_or_else(|| panic!("bad status line: {head:?}"));
+        Reply { status, head: head.to_string(), body: body.to_string() }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn skin_gateway_upload_chunk_proxies_a_chunk_and_413s_a_huge_claim() {
+        let stub = start_stub().await;
+        let helper = start_helper(stub.port).await;
+        let cookie = login(helper).await;
+        let headers = format!("Host: {APP}\r\n{cookie}{SAME}");
+
+        // A real-sized chunk (1 MiB of base64) reaches the daemon.
+        let chunk = format!(
+            r#"{{"workspace":"docs","dir":".","filename":"a.bin","upload_id":"u1","offset":0,"is_last":true,"base64":"{}"}}"#,
+            "A".repeat(1024 * 1024)
+        );
+        let before = stub.seen().len();
+        let ok = send_claimed(helper, "/cli/fs/upload-chunk", &headers, chunk.len(), chunk.as_bytes()).await;
+        assert_eq!(ok.status, 200, "chunk proxied: {}", ok.body);
+        let seen = stub.seen();
+        assert_eq!(seen.len(), before + 1, "{seen:?}");
+        assert_eq!(seen.last().map(String::as_str), Some("POST /cli/fs/upload-chunk"));
+
+        // A claimed body over one chunk is refused before it is read or
+        // allocated, and never reaches the daemon.
+        let before = stub.seen();
+        let huge = 50usize * 1024 * 1024 * 1024;
+        let r = send_claimed(helper, "/cli/fs/upload-chunk", &headers, huge, b"{\"workspace\":").await;
+        assert_eq!(r.status, 413, "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("413 JSON");
+        assert_eq!(v["error"].as_str(), Some("too_large"), "{}", r.body);
+        assert_eq!(stub.seen(), before, "a refused chunk must not reach the upstream");
+        // Just over the cap is refused too.
+        let over = k2_core::fs_guest_upload::MAX_UPLOAD_CHUNK_BODY + 1;
+        let r = send_claimed(helper, "/cli/fs/upload-chunk", &headers, over, b"{").await;
+        assert_eq!(r.status, 413, "{}", r.body);
+        assert_eq!(stub.seen(), before);
     }
 }

@@ -146,6 +146,8 @@ assert_contains "files read-binary" "$skins_out" "/cli/fs/read-binary?workspace=
 assert_contains "files read-range" "$skins_out" "/cli/fs/read-range?workspace="
 assert_contains "files write-file" "$skins_out" "/cli/fs/write-file"
 assert_contains "files upload-binary" "$skins_out" "/cli/fs/upload-binary"
+assert_contains "files upload-chunk" "$skins_out" "/cli/fs/upload-chunk"
+assert_contains "upload-chunk resume" "$skins_out" '"status":true'
 assert_contains "files create" "$skins_out" "/cli/fs/create"
 assert_contains "files copy" "$skins_out" "/cli/fs/copy"
 assert_contains "files move" "$skins_out" "/cli/fs/move"

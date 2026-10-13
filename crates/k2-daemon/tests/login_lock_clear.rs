@@ -384,6 +384,89 @@ async fn app_unlock_deletes_only_the_login_row() {
     });
 }
 
+fn skin_login(port: u16, username: &str, password: &str) -> Resp {
+    http(
+        port,
+        "POST",
+        "/cli/skin/login",
+        Some(&format!(
+            r#"{{"username":"{username}","password":"{password}"}}"#
+        )),
+    )
+}
+
+/// agent-nsi (0.45.5): the lock is the principal's, whichever name was
+/// typed. Username locked → the right password as the email is 423; mixed
+/// wrong tries share one limit; unlock (either name) clears it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn principal_lock_covers_username_and_email() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let added = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"cara","email":"Cara@Clinic.com"}"#),
+        );
+        assert_eq!(added.status, 200, "add principal; {}", added.body);
+        let pw = http(
+            port,
+            "POST",
+            &format!("/cli/skin/users/password?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"cara","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(pw.status, 200, "set password; {}", pw.body);
+
+        // (a) lock via the username; the email with the right password is 423.
+        for _ in 0..3 {
+            bad_skin_login(port, "cara");
+        }
+        for who in ["cara@clinic.com", "cara"] {
+            let r = skin_login(port, who, "s3cret-horse");
+            assert_eq!(r.status, 423, "{who}: {}", r.body);
+            assert_eq!(json(&r.body)["error"], "locked", "{who}: {}", r.body);
+        }
+        assert!(lock_row("cara@clinic.com").is_none(), "no email counter");
+
+        // (c) unlock by username clears it for both names.
+        let cleared = post_unlock_skin(port, OWNER_TOKEN, "cara");
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        assert_unlock_body(&cleared.body, "cara", true);
+        assert!(lock_row("cara").is_none());
+        let ok = skin_login(port, "cara@clinic.com", "s3cret-horse");
+        assert_eq!(ok.status, 200, "email after unlock; {}", ok.body);
+
+        // (b) mixed wrong tries share one limit of 3.
+        bad_skin_login(port, "cara@clinic.com");
+        bad_skin_login(port, "cara");
+        bad_skin_login(port, "CARA@clinic.com");
+        let r = skin_login(port, "cara", "s3cret-horse");
+        assert_eq!(r.status, 423, "3 mixed tries lock; {}", r.body);
+        let row = lock_row("cara").unwrap_or_else(|| panic!("principal row"));
+        assert!(row.1.is_some(), "locked_until set");
+
+        // Unlock by email clears the principal's row too.
+        let cleared = post_unlock_skin(port, OWNER_TOKEN, "cara@clinic.com");
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        assert_unlock_body(&cleared.body, "cara@clinic.com", true);
+        assert!(lock_row("cara").is_none(), "principal row deleted");
+        let ok = skin_login(port, "cara", "s3cret-horse");
+        assert_eq!(ok.status, 200, "username after unlock; {}", ok.body);
+
+        // Unknown names: still the same 401 then 423, counted per string.
+        for _ in 0..3 {
+            bad_skin_login(port, "nobody@clinic.com");
+        }
+        let r = skin_login(port, "nobody@clinic.com", "s3cret-horse");
+        assert_eq!(r.status, 423, "unknown locks like known; {}", r.body);
+        assert_eq!(json(&r.body)["error"], "locked", "{}", r.body);
+        assert!(lock_row("nobody@clinic.com").is_some());
+        assert!(lock_row("cara").is_none(), "unknown never touches cara");
+    });
+}
+
 fn post_unlock_box(port: u16, token: &str, username: &str) -> Resp {
     http(
         port,

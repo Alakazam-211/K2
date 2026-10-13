@@ -5,12 +5,15 @@
 // (closed shapes), so a new field on `ZenAgentRow` or a Thread item can't
 // leak by accident (TUWA7 pins the keys):
 //   - agent rows: `{address, label, index, server, state, stateLabel, detail,
-//     working, needsYou, activity, counts, openable, selected, avatar}`
+//     working, needsYou, activity, counts, openable, selected, avatar, color,
+//     image}`
 //     (`counts` = `{subagents, tools, commands}` numbers or null), plus
 //     `preview` with `thread:read` and `people` with `presence:read`.
 //     Dropped: `hostKey`, `role`, `reach`, `auth`. `avatar` is a `data:` URL
 //     or null (a workspace icon URL would leak a local address and can't
-//     load in the frame anyway). An offline server's rows read
+//     load in the frame anyway). `color` is `#rrggbb` or null; `image` is the
+//     agent's picture only as a PNG/JPEG/WebP/GIF data: URL ≤ 256 KiB (never
+//     SVG), else null — the App surface's rule. An offline server's rows read
 //     `state: "unreachable"`, `activity: "unreachable"` (UWB8, UWB11);
 //   - Thread items: `{seq, id, doc: {id, kind, from, to, created_at, body,
 //     via, choice}}` for `text` and `choice`; a `secret` card keeps only
@@ -20,6 +23,7 @@
 
 import type { OverlayChoice, OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import type { UserWidgetCap } from '../k2-caps.generated'
+import { agentLookColor, agentLookImage } from '../agent-look'
 import type { ZenAgentRow, ZenPerson, ZenPreview, ZenThreadView } from './zen-data'
 
 export type ZenWidgetActivity = 'working' | 'monitoring' | 'needs-you' | 'unverifiable' | 'idle' | 'unreachable'
@@ -59,6 +63,10 @@ export interface ZenWidgetRow {
   openable: boolean
   selected: boolean
   avatar: string | null
+  /** The agent's color, `#rrggbb`, or null. */
+  color: string | null
+  /** The agent's picture (PNG/JPEG/WebP/GIF data: URL ≤ 256 KiB), or null. */
+  image: string | null
   preview?: ZenWidgetPreview | null
   people?: ZenWidgetPerson[]
 }
@@ -79,6 +87,8 @@ export const ZEN_WIDGET_ROW_KEYS = [
   'openable',
   'selected',
   'avatar',
+  'color',
+  'image',
 ] as const
 
 function projectPreview(p: ZenPreview | null): ZenWidgetPreview | null {
@@ -112,6 +122,9 @@ export function projectZenRow(row: ZenAgentRow, caps: ReadonlySet<UserWidgetCap 
     openable: row.openable,
     selected: row.selected,
     avatar: typeof row.avatarUrl === 'string' && row.avatarUrl.startsWith('data:') ? row.avatarUrl : null,
+    // Checked again here: the port never trusts the row's own fields.
+    color: agentLookColor(row.color),
+    image: agentLookImage(row.image),
   }
   if (caps.has('thread:read')) out.preview = projectPreview(row.preview)
   if (caps.has('presence:read')) out.people = row.people.map(projectPerson)

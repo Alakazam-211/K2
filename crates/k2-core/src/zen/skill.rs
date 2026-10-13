@@ -376,6 +376,11 @@ treat it as done); `idle`; or `null` when that server can't say. The Agents\n\
 widget's `status` prop keeps three values: `monitoring` shows with `working`, and\n\
 `unverifiable` with `idle`. A custom widget's rows also say `unreachable` when\n\
 that agent's server is offline.\n\n\
+Rows also carry the agent's own look: `color` (`#rrggbb`, or `null` when its\n\
+server hasn't said) and `image` (its picture as a PNG, JPEG, WebP or GIF `data:`\n\
+URL of at most 256 KiB, else `null`; never SVG). Paint the initials on `color`\n\
+when there is no `image`. Both change live when someone renames, recolors or\n\
+re-pictures the agent.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
 manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
@@ -735,6 +740,33 @@ fn ticks(xs: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v14 (0.45.5 agent identity): rows carry `color` and `image`, and the
+    /// catalog's AgentRow names both, so the skill and the types agree.
+    #[test]
+    fn skill_documents_agent_row_color_and_image() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 14, "agent look needs a new skill version");
+        let body = generate_k2_zen_skill();
+        for must in ["`color` (`#rrggbb`, or `null`", "`image` (its picture as a PNG, JPEG, WebP or GIF `data:`", "never SVG"] {
+            assert!(body.contains(must), "skill must mention {must:?}");
+        }
+        let c = contract::catalog();
+        for verb in ["agents.list", "agents.subscribe"] {
+            let v = c.verbs.iter().find(|v| v.verb == verb).unwrap_or_else(|| panic!("no {verb}"));
+            let items = &v.response["items"];
+            for field in ["color", "image"] {
+                assert!(items["properties"][field].is_object(), "{verb} AgentRow has {field}");
+                let required: Vec<&str> = items["required"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{verb} AgentRow required list"))
+                    .iter()
+                    .map(|x| x.as_str().expect("required names are strings"))
+                    .collect();
+                assert!(required.contains(&field), "{verb} AgentRow requires {field}");
+                assert_eq!(items["properties"][field]["type"], serde_json::json!(["string", "null"]), "{verb}.{field} nullable string");
+            }
+        }
+    }
 
     /// TUW5.2 (UWB2): skill v12 documents custom widgets from the catalog.
     #[test]

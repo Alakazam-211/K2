@@ -1790,6 +1790,11 @@ fn t3_2_skill_documents_every_schema_token_and_the_grant_rule() {
     ] {
         assert!(body.contains(must), "skill v11 must mention {must:?}");
     }
+    // v14: rows carry the agent's own look (0.45.5 agent identity).
+    assert!(k2_core::skills::version::SKILL_VERSION_ZEN >= 14, "k2-zen skill v14 documents color + image");
+    for must in ["`color` (`#rrggbb`", "never SVG"] {
+        assert!(body.contains(must), "skill v14 must mention {must:?}");
+    }
     // v10: agents learn the guide and how to pipe an example.
     for must in [
         "`k2 zen guide` is the user guide, and it needs no daemon",

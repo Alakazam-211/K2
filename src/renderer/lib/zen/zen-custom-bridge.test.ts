@@ -35,6 +35,8 @@ function row(address: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
     selected: false,
     openable: true,
     avatarUrl: 'data:image/png;base64,AAAA',
+    color: null,
+    image: null,
     ...over,
   }
 }
@@ -415,6 +417,24 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
     expect('sessionId' in p).toBe(false)
     expect('projectPath' in p).toBe(false)
     expect(projectZenRow(row('x::h', { state: 'offline', activity: null }), new Set())).toMatchObject({ state: 'unreachable', activity: 'unreachable' })
+  })
+
+  it('color and image: the agent look crosses only under the App surface rules', () => {
+    // 1x1 PNG.
+    const png =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+    expect(projectZenRow(ALICE, new Set())).toMatchObject({ color: null, image: null })
+    expect(projectZenRow(row('x::local', { color: '#3366AA', image: png }), new Set())).toMatchObject({
+      color: '#3366aa',
+      image: png,
+    })
+    // Never SVG, never a URL, never bytes that lie about their type.
+    const svg = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg"/>')}`
+    const lying = `data:image/png;base64,${btoa('GIF89a-not-a-png')}`
+    for (const bad of [svg, lying, 'http://127.0.0.1:38472/icon.png', 'file:///x.png']) {
+      expect(projectZenRow(row('x::local', { image: bad }), new Set()).image, bad).toBeNull()
+    }
+    expect(projectZenRow(row('x::local', { color: 'red' }), new Set()).color).toBeNull()
   })
 
   it('Thread items: no conversation_id; a secret keeps only id and kind; other kinds are dropped', () => {

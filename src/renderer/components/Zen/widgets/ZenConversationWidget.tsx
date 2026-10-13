@@ -251,6 +251,7 @@ export function ZenConversation({
           label={row.label}
           url={row.avatarUrl}
           size={34}
+          agentColor={row.color}
           background="var(--zen-accent)"
           color="var(--zen-accent-text)"
           fontSize="0.9em"

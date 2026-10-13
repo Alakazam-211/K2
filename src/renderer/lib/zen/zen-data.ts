@@ -89,6 +89,7 @@ import {
 import { computeRowStatus } from '@/components/Home/home-room'
 import { cachedProjectIcon, loadProjectIcon } from '@/components/Sidebar/ProjectAvatar'
 import { homeRowAvatarFrom, useHomeAvatarStore } from '@/lib/home-avatars'
+import { agentLookColor, agentLookImage } from '@/lib/agent-look'
 import { roomRowActivity } from '@/lib/home-status'
 import { homeRoomVerdict } from '@/lib/home-room-floor'
 import { resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
@@ -199,6 +200,13 @@ export interface ZenAgentRow {
    *  paint its initials. The same sources the app's Home and Agents pages
    *  paint from (see `rowAvatar`). */
   avatarUrl: string | null
+  /** 0.45.5 agent identity: the agent's color (`#rrggbb`) from its server's
+   *  workspace row, or null when no loaded project list has it. */
+  color: string | null
+  /** The same picture as `avatarUrl`, only when a widget may get it: a
+   *  PNG/JPEG/WebP/GIF data URL ≤ 256 KiB, never SVG (`agentLookImage`, the
+   *  App surface's rule). */
+  image: string | null
 }
 
 export type ZenConversationPhase = 'opening' | 'ready' | 'unavailable' | 'failed'
@@ -752,6 +760,17 @@ function rowAvatar(row: HomeRow, onConnected: boolean): string | null {
   return homeRowAvatarFrom(row.address, activeHomeHostKey(host.activeHost), useHomeAvatarStore.getState())
 }
 
+/** A row's color: its workspace on the window's server, else in its open
+ *  room's own project list (another server), else null. */
+function rowColor(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry | undefined): string | null {
+  const list = onConnected
+    ? useProjectsStore.getState().projects
+    : (roomEntry?.room?.projects.getState().projects ?? null)
+  if (!list) return null
+  const ws = findWorkspaceForRow(list, row)
+  return ws ? agentLookColor(ws.color) : null
+}
+
 function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow {
   const host = useConnectHostStore.getState()
   const projects = useProjectsStore.getState().projects
@@ -833,6 +852,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   else if (state === 'sign-in') detail = detail ?? `Sign in to ${where} to message ${row.label}.`
   else if (state === 'not-found') detail = `${row.label} is not on ${where} any more.`
   else if (state === 'ok') detail = null
+  const avatarUrl = rowAvatar(row, onConnected)
   return {
     address: row.address,
     label: row.label,
@@ -853,7 +873,9 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     people,
     selected: view !== null && selection.get(view.key) === row.address,
     openable: state === 'ok',
-    avatarUrl: rowAvatar(row, onConnected),
+    avatarUrl,
+    color: rowColor(row, onConnected, roomEntry),
+    image: agentLookImage(avatarUrl),
   }
 }
 
@@ -919,26 +941,40 @@ function startLive(): void {
   unsubs.push(useHomeAvatarStore.subscribe(on))
   // A custom widget's server scope fills in as other servers answer.
   unsubs.push(useZenServerRosters.subscribe(on))
-  // Open rooms' own activity slices (Z39): re-subscribe when rooms change.
-  const roomSubs = new Map<string, () => void>()
+  // Open rooms' own activity slices (Z39) and project lists (an agent's
+  // color / picture after `agent_identity_changed` on that server, which
+  // home-rooms applies to the room's projects): re-subscribe when rooms
+  // change or a room is rebuilt.
+  const roomSubs = new Map<string, { room: object; off: () => void }>()
   const syncRooms = (): void => {
     const entries = homeRooms.store.getState().entries
-    for (const [address, unsub] of roomSubs) {
+    for (const [address, sub] of roomSubs) {
       const e = entries[address]
-      if (!e || !e.room) {
-        unsub()
+      if (!e || !e.room || e.room !== sub.room) {
+        sub.off()
         roomSubs.delete(address)
       }
     }
     for (const e of Object.values(entries)) {
-      if (e.room && !roomSubs.has(e.address)) roomSubs.set(e.address, e.room.activityView.subscribe(on))
+      const room = e.room
+      if (room && !roomSubs.has(e.address)) {
+        const offActivity = room.activityView.subscribe(on)
+        const offProjects = room.projects.subscribe(on)
+        roomSubs.set(e.address, {
+          room,
+          off: () => {
+            offActivity()
+            offProjects()
+          },
+        })
+      }
     }
     on()
   }
   syncRooms()
   unsubs.push(homeRooms.store.subscribe(syncRooms))
   unsubs.push(() => {
-    for (const u of roomSubs.values()) u()
+    for (const sub of roomSubs.values()) sub.off()
     roomSubs.clear()
   })
   // Z41: previews now, every 15 s, and when the window gains focus. Z37:

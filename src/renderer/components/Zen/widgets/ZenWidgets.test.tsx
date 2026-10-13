@@ -285,7 +285,6 @@ vi.mock('@/stores/home-rooms', async (importOriginal) => {
   const { roomTiers } = await import('@/lib/room-tiers')
   const { scopeForHost } = await import('@/kessel/server-scope')
   const { activityStore } = await import('@/stores/activity')
-  const { createStore } = await import('zustand/vanilla')
   const remoteProjects: Record<string, unknown[]> = {
     'akzm.k2.dev': [
       { id: 'bp1', name: 'sales', handle: 'sales', path: '/b/sales', color: '#888', agentMode: 'off', workspaces: [{ id: 'bw1', type: 'main', name: 'main' }] },
@@ -294,8 +293,6 @@ vi.mock('@/stores/home-rooms', async (importOriginal) => {
   const rooms = mod.createHomeRooms({
     tiers: roomTiers,
     createRoom: (input) => {
-      const projects = createStore(() => ({ projects: (remoteProjects[input.scope.hostKey] ?? []) as never[] }))
-      void projects
       // S5: a room reads its server's activity rows (one store per server).
       const activity = { setViewing: () => {} }
       const key = `${input.scope.hostKey}|${input.workspace.projectId}:${input.workspace.workspaceId}`
@@ -306,6 +303,8 @@ vi.mock('@/stores/home-rooms', async (importOriginal) => {
         scope: input.scope,
         readOnly: false,
         activityView: activityStore(input.scope),
+        // The room's own project list, as home-rooms hands it (createPinnedRoom keeps it).
+        projects: input.projects,
         activity,
         cwd: () => input.workspace.path,
         activeProjectId: () => input.workspace.projectId,
@@ -369,7 +368,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useFeedbackStore } from '@/stores/feedback'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
-import { useProjectsStore } from '@/stores/projects'
+import { applyAgentIdentityChanged, useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import {
   __resetActivityForTests,
@@ -2149,6 +2148,56 @@ describe('agent pictures in Zen', () => {
     await select(ROWS.cortana.address)
     await waitFor(() => expect(document.querySelector('[data-zen-conversation-title]')?.textContent).toBe('cortana'))
     expect(avatarOf(header())).toEqual({ src: null, text: 'C' })
+  })
+
+  // 0.45.5 agent identity: rows carry the agent's color; built-ins paint the
+  // initials on it, a row without one keeps today's look, and a recolor
+  // (`agent_identity_changed`) repaints live.
+  it('initials paint on the agent’s color; no color keeps today’s look; a recolor repaints', async () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: 'p1', name: 'cortana', handle: 'cortana', path: '/w/zen-av/c-cortana', color: '#C26', iconUrl: null, workspaces: [{ id: 'w1', type: 'main', name: 'main' }] },
+      ] as never,
+    })
+    await mountZen()
+    const avatarEl = (root: Element): HTMLElement => {
+      const av = root.querySelector('[data-zen-avatar]')
+      if (!(av instanceof HTMLElement)) throw new Error('no avatar')
+      return av
+    }
+    await waitFor(() => expect(avatarEl(rowEl(ROWS.cortana.address)).getAttribute('data-zen-avatar-color')).toBe('#cc2266'))
+    const own = avatarEl(rowEl(ROWS.cortana.address))
+    expect(own.textContent).toBe('C')
+    expect(own.style.background).toBe('rgb(204, 34, 102)')
+    expect(own.style.color).toBe('rgb(255, 255, 255)')
+    // A remote row whose server's project list isn't loaded: today's look.
+    const plain = avatarEl(rowEl(ROWS.ops.address))
+    expect(plain.getAttribute('data-zen-avatar-color')).toBeNull()
+    expect(plain.style.background).toBe('var(--zen-bubble-agent)')
+    expect(plain.style.color).toBe('var(--zen-bubble-agent-text)')
+
+    // The daemon's live event (any client, the CLI or an App guest) repaints.
+    act(() =>
+      applyAgentIdentityChanged({
+        kind: 'agent_identity_changed',
+        projectId: 'p1',
+        workspacePath: '/w/zen-av/c-cortana',
+        fields: ['color'],
+        name: 'cortana',
+        displayName: 'cortana',
+        handle: 'cortana',
+        color: '#f5f5a0',
+      }),
+    )
+    await waitFor(() => expect(avatarEl(rowEl(ROWS.cortana.address)).getAttribute('data-zen-avatar-color')).toBe('#f5f5a0'))
+    // Dark text on a light color.
+    expect(avatarEl(rowEl(ROWS.cortana.address)).style.color).toBe('rgb(17, 17, 17)')
+
+    // The conversation header paints the color too.
+    await select(ROWS.cortana.address)
+    const header = document.querySelector('[data-zen-conversation] [data-zen-conversation-title]')?.parentElement?.parentElement
+    if (!header) throw new Error('no conversation header')
+    expect(avatarEl(header).getAttribute('data-zen-avatar-color')).toBe('#f5f5a0')
   })
 })
 

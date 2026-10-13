@@ -738,6 +738,7 @@ function PersonDetail({
                     >
                       {grant.kind} {isHost ? 'Host' : grant.targetId}
                       {grant.scope ? ` · ${grant.scope}` : ''}
+                      {grant.kind !== 'app' ? ' · recorded, not enforced' : ''}
                     </button>
                     <span className="flex items-center gap-2">
                       <AccessSwitch

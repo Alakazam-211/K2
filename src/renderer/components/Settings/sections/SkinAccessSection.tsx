@@ -165,6 +165,8 @@ export type PublishedApp = {
   expose: string | null
   url: string | null
   kind: string
+  /** S24-15: an older `--skin` helper still signs guests in as the box login. */
+  helperNeedsRestart?: boolean
 }
 
 export type SkinGrantRow = {
@@ -409,8 +411,20 @@ export function parsePublishedApps(raw: unknown): PublishedApp[] {
       expose: asString(rec.expose),
       url: asString(rec.url),
       kind,
+      ...(rec.helperNeedsRestart === true ? { helperNeedsRestart: true } : {}),
     }]
   })
+}
+
+/** Room ids in a role-less App grant's scope (a JSON array). Anything else → []. */
+export function grantScopeRooms(scope: string | null): string[] {
+  if (!scope) return []
+  try {
+    const parsed: unknown = JSON.parse(scope)
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 export function parseSkinGrants(raw: unknown): SkinGrantRow[] {
@@ -877,6 +891,21 @@ export function SkinAccessSection(): React.JSX.Element {
     [refresh],
   )
 
+  // S24-11: everyone with the box login gets the same access on this App.
+  const copyHostLogins = useCallback(async () => {
+    if (!selectedApp || selectedApp === 'host') return
+    setBusyId('copy-host')
+    setError(null)
+    try {
+      await daemonCliPost(primaryScope(), 'skin/grants/copy-host', { app: selectedApp })
+      await refresh()
+    } catch (e) {
+      setError(errText(e))
+    } finally {
+      setBusyId(null)
+    }
+  }, [selectedApp, refresh])
+
   const addAppUser = useCallback(async () => {
     if (!selectedApp || !addPersonId || !addRoleId) {
       setError('Pick a person and a role')
@@ -980,6 +1009,16 @@ export function SkinAccessSection(): React.JSX.Element {
                       ? ` · ${selectedPublished.url}`
                       : ''}
                 </p>
+                <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+                  Logins here need a grant for this App (enforced at login since 0.45.5). A new App
+                  starts with nobody.
+                </p>
+                {selectedPublished.helperNeedsRestart ? (
+                  <p role="status" className="text-[10px] text-[var(--color-status-warning-soft)]">
+                    Waiting for a restart: this App&apos;s helper predates per-App logins and still
+                    signs guests in with the box login. Stop and start it to apply.
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -1001,7 +1040,9 @@ export function SkinAccessSection(): React.JSX.Element {
               </div>
             ) : (
               <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                Host has no publish row. Login role is principals.role_id. Host roles keep app_id empty.
+                Host is the box login: the direct login door and BFFs that name no App. Its login
+                role is this grant&apos;s role. Host roles keep app_id empty. Someone with the box
+                login can still sign in there, so per-App isolation only holds without it.
               </p>
             )}
 
@@ -1367,6 +1408,17 @@ export function SkinAccessSection(): React.JSX.Element {
                           </div>
                         ) : selectedApp !== 'host' && grantRole ? (
                           <p className="text-[10px] text-[var(--color-text-muted)]">{grantRole.name}</p>
+                        ) : selectedApp !== 'host' && grant.subjectKind === 'principal' ? (
+                          <p className="text-[10px] text-[var(--color-text-muted)]">
+                            rooms:{' '}
+                            {(() => {
+                              const ids = grantScopeRooms(grant.scope)
+                              if (!ids.length) return 'none'
+                              return ids
+                                .map((id) => workspaces.find((w) => w.id === id)?.handle ?? id)
+                                .join(', ')
+                            })()}
+                          </p>
                         ) : null}
                       </div>
                     )
@@ -1401,6 +1453,16 @@ export function SkinAccessSection(): React.JSX.Element {
               >
                 Add user
               </button>
+              {selectedApp && selectedApp !== 'host' ? (
+                <button
+                  type="button"
+                  className="ml-2 px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] no-drag cursor-pointer disabled:opacity-60"
+                  disabled={busyId === 'copy-host'}
+                  onClick={() => void copyHostLogins()}
+                >
+                  Add everyone who has the box login
+                </button>
+              ) : null}
             </SettingsGroup>
 
             {selectedApp === 'host' ? (

@@ -827,6 +827,68 @@ describe('SkinAccessSection', () => {
     })
     expect(h.daemonCliPost.mock.calls.map((c) => c[0])).not.toContain('skin/users')
   })
+
+  it('S24: App detail says logins are per App, shows role-less rooms, a waiting helper, and copies box logins', async () => {
+    const ada = { id: 'p-ada', username: 'ada' }
+    h.daemonCliGet.mockImplementation(async (route: string, params?: { project?: string }) => {
+      if (route === 'skin/users') return { users: [ada] }
+      if (route === 'skin/roles') return { roles: [] }
+      if (route === 'skin-tokens') return { tokens: [] }
+      if (route === 'skin/hydra') return HYDRA_UNSUPPORTED
+      if (route === 'projects/list') return [WS_SALES, WS_SUPPORT]
+      if (route === 'skin/grants') {
+        return {
+          grants: [
+            {
+              id: 'g-ada-wiki',
+              subjectKind: 'principal',
+              subjectId: 'p-ada',
+              kind: 'app',
+              targetId: 'svc-wiki',
+              roleId: null,
+              scope: '["proj-support"]',
+              enabled: true,
+              createdBy: 'upgrade:0.45.5',
+            },
+          ],
+        }
+      }
+      if (route === 'publish/list') {
+        if (params?.project === 'proj-sales') {
+          return {
+            services: [
+              {
+                id: 'svc-wiki',
+                projectId: 'proj-sales',
+                name: 'wiki',
+                kind: 'skin',
+                status: 'running',
+                expose: 'local',
+                url: null,
+                helperNeedsRestart: true,
+              },
+            ],
+          }
+        }
+        return { services: [] }
+      }
+      throw new Error(`unexpected GET ${route}`)
+    })
+    h.daemonCliPost.mockResolvedValue({ ok: true, app: 'svc-wiki', added: [] })
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
+    expect(screen.getByText(/enforced at login since 0\.45\.5/)).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toMatch(/Waiting for a restart/)
+    expect(screen.getByText('rooms: support')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Add everyone who has the box login' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants/copy-host', { app: 'svc-wiki' })
+    })
+    // The host row has no copy-host button (it IS the box login).
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+    expect(screen.queryByRole('button', { name: 'Add everyone who has the box login' })).toBeNull()
+  })
 })
 
 describe('TUWA10: Settings → Apps reads the shared cap table', () => {

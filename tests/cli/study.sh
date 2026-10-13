@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications agent-hire"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -100,7 +100,12 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-hea
 echo "  PASS: app-heartbeats --json id+body"
 pass=$((pass + 1))
 
-echo "== k2 study app-identity (0.45.5 app identity surface) =="
+echo "== k2 study agent-hire (0.45.6 agent hire through the v1 API) =="
+ah_out="$("$K2" study agent-hire)"
+for needle in "POST /v1/agents/hire" "Idempotency-Key" "k2 api-key create --hire" "owner confirm" "managed_by_link" "k2 msg who" "app-asserted" "retire_blocked" "stay retired"; do
+    assert_contains "agent-hire names $needle" "$ah_out" "$needle"
+done
+
 id_out="$("$K2" study app-identity)"
 for needle in "agent:identity" "agent:handle" "/cli/agent/identity" "/cli/agent/handle" "rooms_changed" "handle_taken"; do
     assert_contains "app-identity names $needle" "$id_out" "$needle"

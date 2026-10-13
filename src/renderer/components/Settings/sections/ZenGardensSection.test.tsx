@@ -11,9 +11,13 @@
 //     Context Catalog, and hides when this computer's daemon has no Gardens
 //     routes (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
 //   - not set up: one "Set up Gardens" button that POSTs `zen/setup`;
-//   - list, rename, reorder and delete (the row's ⋯ menu) hit the LOCAL
-//     scope with the right bodies; delete asks first and says a copy stays
-//     in history;
+//   - list, rename and delete (the row's ⋯ menu) hit the LOCAL scope with
+//     the right bodies; delete asks first and says a copy stays in history;
+//   - reorder is drag and drop on the row's grip (Rosson 2026-10-13): mouse
+//     drag and the keyboard (arrows; Space pick / arrows / Space drop /
+//     Escape) post one `garden/reorder {garden, to}` with the final spot,
+//     paint at once, and roll back with an error toast on a refusal; a
+//     locked Garden still moves; no Move up/down left in the ⋯ menu;
 //   - prd-garden-lock-and-sync-v1: two checkboxes per row, "Lock garden"
 //     (`garden/lock`) and "Keep in sync with future template updates"
 //     (`garden/sync`, part both; a dash when mixed); an Undo toast after
@@ -309,6 +313,32 @@ function rowNames(): string[] {
   return [...document.querySelectorAll('[data-zen-garden-row]')].map((el) => el.getAttribute('data-zen-garden-row') ?? '')
 }
 
+/** A row's drag grip. */
+function handle(id: string): HTMLButtonElement {
+  const el = document.querySelector<HTMLButtonElement>(`[data-zen-garden-handle="${id}"]`)
+  if (!el) throw new Error(`no grip for ${id}`)
+  return el
+}
+
+/** jsdom has no layout: give each row 40 px, in list order, read live. */
+function layOutRows(): void {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-zen-garden-row]')) {
+    el.getBoundingClientRect = () => {
+      const i = rowNames().indexOf(el.getAttribute('data-zen-garden-row') ?? '')
+      if (i < 0) throw new Error('row left the list')
+      return { top: i * 40, bottom: i * 40 + 40, height: 40, left: 0, right: 400, width: 400, x: 0, y: i * 40, toJSON: () => ({}) } as DOMRect
+    }
+  }
+}
+
+/** What the reorder live region last said. */
+function announced(): string {
+  const el = document.querySelector('[data-zen-gardens-announce]')
+  if (!el) throw new Error('no live region')
+  expect(el.getAttribute('aria-live')).toBe('polite')
+  return el.textContent ?? ''
+}
+
 /** The New Garden modal's cards, in order (Rosson 2026-10-08). */
 function newGardenCards(): string[] {
   return [...document.querySelectorAll('[data-zen-new-garden-card]')].map((el) => el.getAttribute('data-zen-new-garden-card') ?? '')
@@ -547,8 +577,10 @@ describe('Settings → Gardens: the section', () => {
     expect(document.querySelector('[data-zen-settings-grants]')).toBeNull()
     expect(document.querySelector('[data-zen-settings-catalog]')).toBeNull()
     // Every clickable element is a pointer.
+    // (The drag grip is a grab hand instead.)
     for (const b of document.querySelectorAll('[data-zen-gardens-section] button')) {
-      expect(b.className, b.textContent ?? '').toContain('cursor-pointer')
+      const cursor = b.hasAttribute('data-zen-garden-handle') ? 'cursor-grab' : 'cursor-pointer'
+      expect(b.className, b.textContent ?? '').toContain(cursor)
     }
   })
 
@@ -584,23 +616,124 @@ describe('Settings → Gardens: the section', () => {
     expect(screen.getByRole('textbox', { name: 'New name for Mornings' })).toBeTruthy()
   })
 
-  it('⋯ → Move up / Move down posts {garden, to} (1-based); the ends are disabled', async () => {
+  it('the ⋯ menu is Rename and Delete only: no Move up / Move down', async () => {
     await mountSection()
-    expect(menuItem('Garden 1', 'Move up').disabled).toBe(true)
-    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'More for Garden 2' }))
+    const m = screen.getByRole('menu', { name: 'Garden 2 menu' })
+    expect(within(m).getAllByRole('menuitem').map((b) => b.textContent)).toEqual(['Rename', 'Delete'])
+  })
+
+  it('drag a row by its grip: the drop line shows, one reorder posts the final spot (locked Gardens move too)', async () => {
+    // A locked Garden: the person can still reorder it.
+    h.sync['g-1'] = { page: 'synced', theme: 'synced', locked: true }
+    await mountSection()
+    await waitFor(() => expect(box('lock', 'g-1').checked).toBe(true))
+    layOutRows()
+    const grip = handle('g-1')
+    expect(grip.getAttribute('aria-label')).toBe('Reorder Garden 1')
+    expect(grip.className).toContain('cursor-grab')
+    // Pick Garden 1 (row 0, y 0–40) and drag it below Mornings (row 2, 80–120).
+    fireEvent.mouseDown(grip, { button: 0, clientX: 5, clientY: 20 })
+    fireEvent.mouseMove(document, { clientX: 5, clientY: 60 })
+    fireEvent.mouseMove(document, { clientX: 5, clientY: 110 })
     await settle()
-    expect(screen.queryByRole('menu')).toBeNull()
-    expect(menuItem('Mornings', 'Move down').disabled).toBe(true)
-    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(row('g-1').className).toContain('opacity-30')
+    expect(row('g-3').querySelector('[data-zen-garden-drop-line="bottom"]')).not.toBeNull()
+    expect(document.querySelectorAll('[data-zen-garden-drop-line]').length).toBe(1)
+    fireEvent.mouseUp(document, { clientX: 5, clientY: 110 })
+    // Painted at once, before the daemon answers.
+    expect(rowNames()).toEqual(['g-2', 'g-3', 'g-1'])
     await settle()
-    await menu('Mornings', 'Move up')
+    expect(document.querySelector('[data-zen-garden-drop-line]')).toBeNull()
+    expect(zenPosts()).toEqual([['zen/garden/reorder', { garden: 'g-1', to: 3 }]])
+    expect(h.gardens.map((g) => g.id)).toEqual(['g-2', 'g-3', 'g-1'])
+    await waitFor(() => expect(rowNames()).toEqual(['g-2', 'g-3', 'g-1']))
+    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
+  })
+
+  it('a drag that lands where it started, or a plain click on the grip, posts nothing', async () => {
+    await mountSection()
+    layOutRows()
+    fireEvent.mouseDown(handle('g-2'), { button: 0, clientX: 5, clientY: 60 })
+    fireEvent.mouseMove(document, { clientX: 5, clientY: 70 })
+    fireEvent.mouseUp(document, { clientX: 5, clientY: 70 })
+    fireEvent.mouseDown(handle('g-3'), { button: 0, clientX: 5, clientY: 100 })
+    fireEvent.mouseUp(document, { clientX: 5, clientY: 100 })
+    await settle()
+    expect(zenPosts()).toEqual([])
+    expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
+  })
+
+  it('keyboard: ArrowUp/ArrowDown on the grip moves the Garden one place, keeps focus and announces it', async () => {
+    await mountSection()
+    handle('g-3').focus()
+    fireEvent.keyDown(handle('g-3'), { key: 'ArrowUp' })
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-3', 'g-2']))
-    await menu('Garden 1', 'Move down')
+    await settle()
+    expect(document.activeElement).toBe(handle('g-3'))
+    expect(announced()).toBe('Mornings moved to position 2 of 3.')
+    // The top Garden can't go higher: nothing posts.
+    fireEvent.keyDown(handle('g-1'), { key: 'ArrowUp' })
+    fireEvent.keyDown(handle('g-1'), { key: 'ArrowDown' })
     await waitFor(() => expect(rowNames()).toEqual(['g-3', 'g-1', 'g-2']))
     expect(zenPosts()).toEqual([
       ['zen/garden/reorder', { garden: 'g-3', to: 2 }],
       ['zen/garden/reorder', { garden: 'g-1', to: 2 }],
     ])
+  })
+
+  it('keyboard: Space picks up, the arrows walk the drop line, Space drops with one post; Escape cancels', async () => {
+    await mountSection()
+    const grip = handle('g-1')
+    grip.focus()
+    fireEvent.keyDown(grip, { key: ' ' })
+    await settle()
+    expect(grip.getAttribute('aria-pressed')).toBe('true')
+    expect(announced()).toContain('Picked up Garden 1, position 1 of 3.')
+    fireEvent.keyDown(grip, { key: 'ArrowDown' })
+    await settle()
+    expect(announced()).toBe('Garden 1, position 2 of 3.')
+    expect(row('g-3').querySelector('[data-zen-garden-drop-line="top"]')).not.toBeNull()
+    fireEvent.keyDown(grip, { key: 'ArrowDown' })
+    await settle()
+    expect(announced()).toBe('Garden 1, position 3 of 3.')
+    expect(row('g-3').querySelector('[data-zen-garden-drop-line="bottom"]')).not.toBeNull()
+    // Nothing posts while carrying.
+    expect(zenPosts()).toEqual([])
+    fireEvent.keyDown(grip, { key: ' ' })
+    await waitFor(() => expect(rowNames()).toEqual(['g-2', 'g-3', 'g-1']))
+    expect(zenPosts()).toEqual([['zen/garden/reorder', { garden: 'g-1', to: 3 }]])
+    expect(announced()).toBe('Garden 1 moved to position 3 of 3.')
+    await settle()
+    expect(document.activeElement).toBe(handle('g-1'))
+
+    // Escape puts it down where it was.
+    fireEvent.keyDown(handle('g-2'), { key: 'Enter' })
+    fireEvent.keyDown(handle('g-2'), { key: 'ArrowDown' })
+    fireEvent.keyDown(handle('g-2'), { key: 'Escape' })
+    await settle()
+    expect(handle('g-2').getAttribute('aria-pressed')).toBe('false')
+    expect(document.querySelector('[data-zen-garden-drop-line]')).toBeNull()
+    expect(announced()).toBe('Move cancelled. Garden 2 stays at position 1 of 3.')
+    expect(zenPosts()).toEqual([['zen/garden/reorder', { garden: 'g-1', to: 3 }]])
+  })
+
+  it('a refused reorder puts the old order back and says why in a toast', async () => {
+    await mountSection()
+    layOutRows()
+    h.failNext = 'unknown_garden'
+    fireEvent.mouseDown(handle('g-3'), { button: 0, clientX: 5, clientY: 100 })
+    fireEvent.mouseMove(document, { clientX: 5, clientY: 10 })
+    fireEvent.mouseUp(document, { clientX: 5, clientY: 10 })
+    // Optimistic first...
+    expect(rowNames()).toEqual(['g-3', 'g-1', 'g-2'])
+    // ...then back.
+    await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
+    expect(zenPosts()).toEqual([['zen/garden/reorder', { garden: 'g-3', to: 1 }]])
+    const toast = useToastStore.getState().toasts.at(-1)
+    expect(toast?.type).toBe('error')
+    expect(toast?.message).toBe('Couldn’t move “Mornings”: That Garden is gone. It may have been deleted somewhere else.')
+    expect(announced()).toBe('Couldn’t move Mornings. That Garden is gone. It may have been deleted somewhere else.')
   })
 
   it('⋯ → Delete asks first, says a copy stays in history, then posts {garden}', async () => {

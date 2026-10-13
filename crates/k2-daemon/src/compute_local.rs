@@ -4,8 +4,10 @@
 //! 1. **The binary.** `k2-node` ships next to the daemon (Linux release
 //!    assets, the Arch package, K2.app on macOS). A standalone Linux box
 //!    without it downloads `k2-node-linux-<arch>` for this exact version
-//!    and checks its minisign signature with the updater key (the same
-//!    check as a daemon self-update) before anything runs it.
+//!    and checks its minisign signature with the **root-helper key**
+//!    (`k2_root_proto::node_build`, prd-k2-node-admin-v1 §8.1: k2-node
+//!    has a root mode, so never the app-updater key) before anything runs
+//!    it.
 //! 2. **Root, once.** In order: the root helper's `node install` verb
 //!    (feature-checked: only when the installed helper reports the `node`
 //!    namespace), passwordless sudo for exactly `k2-node setup` (boxes
@@ -146,8 +148,24 @@ fn cached_version(p: &Path) -> Option<String> {
     v
 }
 
+/// The check on a downloaded `k2-node-linux-<arch>` (§8.1): a minisign
+/// signature by one of `keys` (the root-helper keys; never the updater
+/// key) whose trusted comment names exactly this asset, a 64-bit ELF for
+/// `arch`, one build marker equal to the comment, and that version is
+/// `want_version` (this daemon's own). Fail closed: any doubt is an error.
+pub fn check_node_download(bin: &[u8], sig: &str, keys: &[k2_root_proto::keys::TrustedKey], arch: &str, want_version: &str) -> Result<(), String> {
+    let asset = k2_root_proto::node_build::asset_name("linux", arch);
+    let v = k2_root_proto::node_build::verify_node_build(bin, sig, keys, "linux", arch)
+        .map_err(|m| format!("{asset} signature check failed (root-helper key), refusing it: {m}"))?;
+    if v.version.to_string() != want_version {
+        return Err(format!("{asset} is signed as v{}, this daemon is v{want_version}; refusing it", v.version));
+    }
+    Ok(())
+}
+
 /// Linux: `k2-node-linux-<arch>` for this daemon's version, signature
-/// checked with the updater key, into `~/.k2/bin/k2-node`.
+/// checked with the root-helper key ([`check_node_download`]), into
+/// `~/.k2/bin/k2-node`.
 #[cfg(not(feature = "airgap"))]
 pub fn download_binary() -> Result<PathBuf, String> {
     if !cfg!(target_os = "linux") {
@@ -178,8 +196,7 @@ pub fn download_binary() -> Result<PathBuf, String> {
     };
     let bin = get(&url)?;
     let sig = String::from_utf8(get(&format!("{url}.sig"))?).map_err(|_| "signature isn't text".to_string())?;
-    crate::update_routes::verify_minisign(crate::update_routes::UPDATER_PUBKEY_B64, &sig, &bin)
-        .map_err(|e| format!("k2-node signature check failed, refusing it: {e}"))?;
+    check_node_download(&bin, &sig, &k2_root_proto::keys::trusted_keys(false), arch, env!("CARGO_PKG_VERSION"))?;
     let dir = k2_core::paths::k2_home().join("bin");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".k2-node.{}", std::process::id()));
@@ -619,6 +636,37 @@ mod tests {
         assert_eq!(bad(bad_name).0, "bad_request");
         let bad_ticket = EnableReq { ticket: Some("garbage!".into()), controller: Some("https://x.k2.dev".into()), name: Some("n".into()), ..Default::default() };
         assert!(bad(bad_ticket).2.starts_with("ticket:"));
+    }
+
+    #[test]
+    fn node_downloads_need_the_root_helper_key_and_this_version() {
+        use k2_root_proto::keys::{trusted_keys, TEST_KEY};
+        use k2_root_proto::node_build::{format_marker, trusted_comment};
+        use k2_root_proto::testsign::{fake_elf, sign, sign_with_test_key};
+        let keys = [TEST_KEY];
+        let elf = fake_elf("x86_64", &format_marker("0.45.5", 2, "linux", "x86_64"));
+        let good = sign_with_test_key(&elf, &trusted_comment("linux", "x86_64", "0.45.5", 2));
+        check_node_download(&elf, &good, &keys, "x86_64", "0.45.5").unwrap();
+        // Production trusts only RELEASE_KEYS: a test-key signature is refused.
+        assert!(check_node_download(&elf, &good, &trusted_keys(false), "x86_64", "0.45.5").is_err());
+        // Another key (e.g. the app-updater key) is refused even with a perfect comment.
+        let other = sign(&[9u8; 32], [1, 2, 3, 4, 5, 6, 7, 8], &elf, &trusted_comment("linux", "x86_64", "0.45.5", 2));
+        let e = check_node_download(&elf, &other, &keys, "x86_64", "0.45.5").unwrap_err();
+        assert!(e.contains("not valid for any trusted key"), "{e}");
+        // The real updater-key signature format (tauri's wrapped text) is not even readable here.
+        assert!(check_node_download(&elf, "dW50cnVzdGVkIGNvbW1lbnQ6", &keys, "x86_64", "0.45.5").is_err());
+        // Wrong trusted comment: the root helper's own file name, or another arch.
+        let helper = sign_with_test_key(&elf, &k2_root_proto::sig::trusted_comment("x86_64", "0.45.5", 2));
+        assert!(check_node_download(&elf, &helper, &keys, "x86_64", "0.45.5").unwrap_err().contains("names another file"));
+        let arm = sign_with_test_key(&elf, &trusted_comment("linux", "aarch64", "0.45.5", 2));
+        assert!(check_node_download(&elf, &arm, &keys, "x86_64", "0.45.5").is_err());
+        // A good build of another release is refused (this daemon's version only).
+        let e = check_node_download(&elf, &good, &keys, "x86_64", "0.45.6").unwrap_err();
+        assert!(e.contains("this daemon is v0.45.6"), "{e}");
+        // Tampered bytes.
+        let mut bad = elf.clone();
+        bad[70] ^= 1;
+        assert!(check_node_download(&bad, &good, &keys, "x86_64", "0.45.5").is_err());
     }
 
     #[test]

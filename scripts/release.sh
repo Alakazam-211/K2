@@ -341,6 +341,17 @@ else
     echo "Step 0.55: Root-helper signing preflight..."
     bash "$PROJECT_DIR/scripts/sign-root-helper.sh" --preflight
 fi
+# k2-node (prd-k2-node-admin-v1 §8.1) is signed with the SAME root-helper key
+# at Step 10.5: nodes self-update only to builds signed by it. Escape (no
+# k2-node signature this release; nodes and `k2 compute local enable`
+# downloads refuse the unsigned assets, nothing breaks): K2_SKIP_K2_NODE_SIGN=1.
+if [ "${K2_SKIP_K2_NODE_SIGN:-0}" = "1" ]; then
+    echo "  WARNING: K2_SKIP_K2_NODE_SIGN=1 — this release's k2-node assets will NOT be signed;" >&2
+    echo "  WARNING: compute nodes can't update to it and Linux daemons can't download it." >&2
+else
+    echo "Step 0.55: k2-node signing preflight (root-helper key)..."
+    bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --preflight
+fi
 
 # ── Step 0.6: Linux build gate (k2-ci@40.160.54.133) ──
 # Shared with scripts/build-app.sh — full rationale + designated-box details
@@ -808,6 +819,49 @@ ${ARTIFACTS_JSON}
 MANIFEST
 echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json"
 
+# ── Step 8.55: Standalone k2-node for macOS (prd-k2-node-admin-v1 §8.2) ──
+# A Mac compute node runs /Library/Application Support/K2/node/k2-node,
+# outside K2.app, and self-updates from the release asset
+# k2-node-macos-aarch64 (the bare Mach-O; the controller downloads it,
+# checks it and sends the bytes to the node). It is the SAME binary that
+# Step 3 codesigned inside K2.app (Developer ID + hardened runtime, the
+# Team ID the node's executor requires). Step 4 already notarized it as
+# part of the app; it is ALSO submitted on its own here (a zip holding the
+# bare binary; a bare Mach-O can't be stapled, so Gatekeeper finds the
+# ticket online by cdhash). The minisign .sig is added at Step 10.5 by
+# sign-k2-node.sh with the root-helper key. Escape for a resumed or
+# offline run: K2_SKIP_NODE_NOTARIZE=1 (the app's notarization still
+# covers the same cdhash).
+echo ""
+echo "Step 8.55: Standalone macOS k2-node asset..."
+NODE_MAC_ASSET="k2-node-macos-aarch64"
+NODE_MAC_SRC="$PROJECT_DIR/target/release/bundle/macos/K2.app/Contents/MacOS/k2-node"
+[ -f "$NODE_MAC_SRC" ] || { echo "  FATAL: $NODE_MAC_SRC missing (Step 2.5 bundles it)" >&2; exit 1; }
+cp "$NODE_MAC_SRC" "$DIST_DIR/$NODE_MAC_ASSET"
+chmod 0755 "$DIST_DIR/$NODE_MAC_ASSET"
+codesign --verify --strict \
+    -R '=anchor apple generic and certificate leaf[subject.OU] = "36B8R93HXV"' \
+    "$DIST_DIR/$NODE_MAC_ASSET" \
+    || { echo "  FATAL: $NODE_MAC_ASSET is not signed with K2's Developer ID" >&2; exit 1; }
+# Same byte checks sign-k2-node.sh runs at Step 10.5 (marker = this
+# release, not a test-keys build), so a bad build stops here, not after
+# the tag is out.
+bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --check "$DIST_DIR/$NODE_MAC_ASSET" macos aarch64 "$VERSION" >/dev/null
+if [ "${K2_SKIP_NODE_NOTARIZE:-0}" = "1" ]; then
+    echo "  WARNING: K2_SKIP_NODE_NOTARIZE=1 — standalone k2-node not submitted on its own (the app's ticket covers it)." >&2
+else
+    NODE_ZIP="/tmp/k2-node-macos-aarch64_${VERSION}.zip"
+    rm -f "$NODE_ZIP"
+    ditto -c -k "$DIST_DIR/$NODE_MAC_ASSET" "$NODE_ZIP"
+    NODE_NOTARY_AUTH=()
+    while IFS= read -r arg; do NODE_NOTARY_AUTH+=("$arg"); done < <(notary_auth_args)
+    xcrun notarytool submit "$NODE_ZIP" "${NODE_NOTARY_AUTH[@]}" --wait
+    rm -f "$NODE_ZIP"
+    echo "  k2-node notarized (bare Mach-O: no staple; ticket is online)."
+fi
+( cd "$DIST_DIR" && shasum -a 256 "$NODE_MAC_ASSET" > "$NODE_MAC_ASSET.sha256" )
+echo "  $NODE_MAC_ASSET staged (+ .sha256); minisign .sig comes at Step 10.5."
+
 # ── Step 8.6: Publish hosted-web SPA to Cloudflare R2 ──
 #
 # Additive, versioned layout: app/<ver>/index.html + content-hashed assets.
@@ -862,6 +916,12 @@ for LX in "linux-x86_64" "linux-aarch64"; do
         ASSETS+=("$DIST_DIR/$LX_ASSET" "$DIST_DIR/${LX_ASSET}.sig")
     fi
 done
+# Standalone macOS k2-node (Step 8.55): bare binary + .sha256. Its .sig
+# (root-helper key) is uploaded at Step 10.5.
+ASSETS+=(
+    "$DIST_DIR/${NODE_MAC_ASSET}"
+    "$DIST_DIR/${NODE_MAC_ASSET}.sha256"
+)
 
 # Arch/Omarchy pacman package. The k2-arch runner builds this after the
 # tag and uploads it (arch-package.yml). If a file is already in DIST_DIR,
@@ -1028,6 +1088,17 @@ if [ "${K2_SKIP_ROOT_HELPER_SIGN:-0}" != "1" ]; then
         echo "  ✗ root helper NOT signed — re-run: bash scripts/sign-root-helper.sh ${VERSION}" >&2
     fi
 fi
+# k2-node (prd-k2-node-admin-v1 §8.1): same key, after the helper. Waits
+# for daemon-binaries.yml's two Linux assets; the macOS one went up at Step 9.
+K2_NODE_SIGN_FAILED=""
+if [ "${K2_SKIP_K2_NODE_SIGN:-0}" != "1" ]; then
+    echo ""
+    echo "Step 10.5: Signing k2-node assets with the root-helper key..."
+    if ! bash "$PROJECT_DIR/scripts/sign-k2-node.sh" "${VERSION}"; then
+        K2_NODE_SIGN_FAILED=1
+        echo "  ✗ k2-node NOT signed — re-run: bash scripts/sign-k2-node.sh ${VERSION}" >&2
+    fi
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════"
@@ -1035,5 +1106,6 @@ echo "  Release ${TAG} complete!"
 echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
+[ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"
 echo "═══════════════════════════════════════════════════"
-[ -z "$ROOT_HELPER_SIGN_FAILED" ] || exit 1
+[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] || exit 1

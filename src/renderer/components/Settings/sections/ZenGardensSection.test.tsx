@@ -11,8 +11,9 @@
 //     Context Catalog, and hides when this computer's daemon has no Gardens
 //     routes (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
 //   - not set up: one "Set up Gardens" button that POSTs `zen/setup`;
-//   - list, rename and delete (the row's ⋯ menu) hit the LOCAL scope with
-//     the right bodies; delete asks first and says a copy stays in history;
+//   - list, rename (the name is the editor, with Save) and delete (asks in
+//     K2's confirm dialog; a copy stays in history) hit the LOCAL scope
+//     with the right bodies; no ⋯ menu;
 //   - reorder is drag and drop on the row's grip (Rosson 2026-10-13): mouse
 //     drag and the keyboard (arrows; Space pick / arrows / Space drop /
 //     Escape) post one `garden/reorder {garden, to}` with the final spot,
@@ -283,6 +284,8 @@ import { __resetZenTemplatesForTests } from '@/lib/zen/zen-templates'
 import { __resetZenSyncForTests } from '@/lib/zen/zen-sync'
 import { useHomesStore } from '@/stores/homes'
 import { useToastStore } from '@/stores/toast'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -357,23 +360,32 @@ async function settle(): Promise<void> {
 }
 
 async function mountSection(): Promise<void> {
-  render(<ZenGardensSection />)
+  // K2's shared confirm dialog (App.tsx mounts it once) answers Delete.
+  render(
+    <>
+      <ZenGardensSection />
+      <ConfirmDialog />
+    </>,
+  )
   await waitFor(() => expect(useZenSettingsStore.getState().status).toBe('ready'))
   await settle()
 }
 
-/** Open a row's ⋯ menu and pick an item. */
-async function menu(name: string, item: string): Promise<void> {
-  fireEvent.click(screen.getByRole('button', { name: `More for ${name}` }))
-  const m = await screen.findByRole('menu', { name: `${name} menu` })
-  fireEvent.click(within(m).getByRole('menuitem', { name: item }))
-  await settle()
+/** A row's name field (the name is the editor). */
+function nameField(id: string): HTMLInputElement {
+  const el = row(id).querySelector<HTMLInputElement>('[data-zen-garden-name]')
+  if (!el) throw new Error(`no name field for ${id}`)
+  return el
 }
 
-function menuItem(name: string, item: string): HTMLButtonElement {
-  fireEvent.click(screen.getByRole('button', { name: `More for ${name}` }))
-  const m = screen.getByRole('menu', { name: `${name} menu` })
-  return within(m).getByRole('menuitem', { name: item }) as HTMLButtonElement
+function saveButton(id: string): HTMLButtonElement {
+  return within(row(id)).getByRole('button', { name: /^Save name of / }) as HTMLButtonElement
+}
+
+/** The open confirm dialog's text, or null. */
+function dialogText(): string | null {
+  const st = useConfirmDialogStore.getState()
+  return st.isOpen ? `${st.title} ${st.message}` : null
 }
 
 function openAdvanced(): void {
@@ -419,6 +431,7 @@ beforeEach(() => {
   __resetZenTemplatesForTests()
   __resetZenSyncForTests()
   useToastStore.setState({ toasts: [] })
+  useConfirmDialogStore.getState().close()
   h.templates = null
   h.sync = {}
   h.lockSupported = true
@@ -551,10 +564,10 @@ describe('Settings → Gardens: the section', () => {
   it('lists Gardens in order by name only (no template label, no position); the folder is under Advanced', async () => {
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
-    expect(row('g-1').textContent).toContain('Garden 1')
+    expect(nameField('g-1').value).toBe('Garden 1')
     // No template label by the name (the only one is the Keep in sync tag).
-    const nameButton = within(row('g-1')).getByRole('button', { name: 'Garden 1' })
-    expect(nameButton.parentElement?.textContent).toBe('Garden 1')
+    expect(nameField('g-1').parentElement?.textContent).toBe('')
+    expect(nameField('g-1').parentElement?.children.length).toBe(1)
     expect(row('g-3').textContent).not.toContain('Empty')
     expect(within(row('g-3')).queryByTitle('Position')).toBeNull()
     // Advanced starts collapsed: no folder, no global theme.
@@ -587,43 +600,83 @@ describe('Settings → Gardens: the section', () => {
     }
   })
 
-  it('rename inline (⋯ → Rename): Enter posts {garden, name} to the local daemon', async () => {
+  it('each row: the name field, Save and Delete; no ⋯ menu, no Move up / Move down', async () => {
     await mountSection()
-    await menu('Mornings', 'Rename')
-    const input = screen.getByRole('textbox', { name: 'New name for Mornings' })
-    fireEvent.change(input, { target: { value: 'Evenings' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(row('g-3').textContent).toContain('Evenings'))
-    expect(zenPosts()).toEqual([['zen/garden/rename', { garden: 'g-3', name: 'Evenings' }]])
-    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
+    expect(screen.queryByRole('button', { name: /^More for/ })).toBeNull()
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.queryByText('Move up')).toBeNull()
+    expect(nameField('g-2').value).toBe('Garden 2')
+    expect(within(row('g-2')).getByRole('button', { name: 'Delete Garden 2' }).textContent).toBe('Delete')
+    expect(saveButton('g-2').textContent).toBe('Save')
   })
 
-  it('rename onto a taken name shows the 409 inline, from the daemon too', async () => {
+  it('Save is disabled while the name is unchanged (trimmed) or empty, enabled once it changes', async () => {
     await mountSection()
-    // Caught before posting (case aside). Clicking the name renames too.
-    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Mornings' }))
-    fireEvent.change(screen.getByRole('textbox', { name: 'New name for Mornings' }), { target: { value: 'garden 1' } })
-    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Save' }))
+    expect(saveButton('g-3').disabled).toBe(true)
+    fireEvent.change(nameField('g-3'), { target: { value: '  Mornings ' } })
+    expect(saveButton('g-3').disabled).toBe(true)
+    fireEvent.change(nameField('g-3'), { target: { value: '   ' } })
+    expect(saveButton('g-3').disabled).toBe(true)
+    // Enter on an empty or unchanged name posts nothing.
+    fireEvent.keyDown(nameField('g-3'), { key: 'Enter' })
+    await settle()
+    expect(zenPosts()).toEqual([])
+    fireEvent.change(nameField('g-3'), { target: { value: 'Evenings' } })
+    expect(saveButton('g-3').disabled).toBe(false)
+    fireEvent.click(saveButton('g-3'))
+    await waitFor(() => expect(nameField('g-3').value).toBe('Evenings'))
+    await waitFor(() => expect(saveButton('g-3').disabled).toBe(true))
+    expect(zenPosts()).toEqual([['zen/garden/rename', { garden: 'g-3', name: 'Evenings' }]])
+    expect(h.gardens.find((g) => g.id === 'g-3')?.name).toBe('Evenings')
+  })
+
+  it('Enter saves (trimmed) to the local daemon, painted at once; Escape puts the name back', async () => {
+    await mountSection()
+    fireEvent.change(nameField('g-3'), { target: { value: '  Evenings  ' } })
+    fireEvent.keyDown(nameField('g-3'), { key: 'Enter' })
+    // Painted before the daemon answers.
+    expect(useZenSettingsStore.getState().gardens.find((g) => g.id === 'g-3')?.name).toBe('Evenings')
+    await waitFor(() => expect(zenPosts()).toEqual([['zen/garden/rename', { garden: 'g-3', name: 'Evenings' }]]))
+    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
+    // Escape: back to the saved name, nothing posted.
+    fireEvent.change(nameField('g-1'), { target: { value: 'Something else' } })
+    expect(saveButton('g-1').disabled).toBe(false)
+    fireEvent.keyDown(nameField('g-1'), { key: 'Escape' })
+    expect(nameField('g-1').value).toBe('Garden 1')
+    expect(saveButton('g-1').disabled).toBe(true)
+    await settle()
+    expect(zenPosts()).toHaveLength(1)
+  })
+
+  it('rename onto a taken name: caught inline before posting; a daemon refusal rolls back with a toast', async () => {
+    await mountSection()
+    // Caught before posting (case aside).
+    fireEvent.change(nameField('g-3'), { target: { value: 'garden 1' } })
+    fireEvent.click(saveButton('g-3'))
     await settle()
     expect(screen.getByTestId('zen-garden-error-g-3').textContent).toBe('You already have a Garden called “garden 1”.')
     expect(zenPosts()).toEqual([])
     // A clash the list didn't know about yet: the daemon's 409.
     h.failNext = 'garden_exists'
-    fireEvent.change(screen.getByRole('textbox', { name: 'New name for Mornings' }), { target: { value: 'Launch' } })
-    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Save' }))
-    await waitFor(() =>
-      expect(screen.getByTestId('zen-garden-error-g-3').textContent).toBe('You already have a Garden called “Launch”.'),
+    fireEvent.change(nameField('g-3'), { target: { value: 'Launch' } })
+    fireEvent.click(saveButton('g-3'))
+    await waitFor(() => expect(useToastStore.getState().toasts.at(-1)?.type).toBe('error'))
+    expect(useToastStore.getState().toasts.at(-1)?.message).toBe(
+      'Couldn’t rename “Mornings”: You already have a Garden called “Launch”.',
     )
     expect(zenPosts()).toEqual([['zen/garden/rename', { garden: 'g-3', name: 'Launch' }]])
-    // Still editing, so the person can fix it.
-    expect(screen.getByRole('textbox', { name: 'New name for Mornings' })).toBeTruthy()
+    // Rolled back: the old name, in the store and the field.
+    await waitFor(() => expect(nameField('g-3').value).toBe('Mornings'))
+    expect(useZenSettingsStore.getState().gardens.find((g) => g.id === 'g-3')?.name).toBe('Mornings')
   })
 
-  it('the ⋯ menu is Rename and Delete only: no Move up / Move down', async () => {
+  it('a rename from elsewhere shows in the field (when not mid-edit)', async () => {
     await mountSection()
-    fireEvent.click(screen.getByRole('button', { name: 'More for Garden 2' }))
-    const m = screen.getByRole('menu', { name: 'Garden 2 menu' })
-    expect(within(m).getAllByRole('menuitem').map((b) => b.textContent)).toEqual(['Rename', 'Delete'])
+    h.gardens[0].name = 'Renamed in Zen'
+    await act(async () => {
+      for (const z of h.zenHandlers) z.fn()
+    })
+    await waitFor(() => expect(nameField('g-1').value).toBe('Renamed in Zen'))
   })
 
   it('drag a row by its grip: the drop line shows, one reorder posts the final spot (locked Gardens move too)', async () => {
@@ -739,27 +792,39 @@ describe('Settings → Gardens: the section', () => {
     expect(announced()).toBe('Couldn’t move Mornings. That Garden is gone. It may have been deleted somewhere else.')
   })
 
-  it('⋯ → Delete asks first, says a copy stays in history, then posts {garden}', async () => {
+  it('Delete opens K2’s confirm dialog (a copy stays in history); Cancel does nothing', async () => {
     await mountSection()
-    await menu('Garden 2', 'Delete')
-    const confirm = document.querySelector<HTMLElement>('[data-zen-garden-confirm="g-2"]')
-    expect(confirm?.textContent).toContain('Delete “Garden 2”?')
-    expect(confirm?.textContent).toContain('A copy stays in history')
+    fireEvent.click(within(row('g-2')).getByRole('button', { name: 'Delete Garden 2' }))
+    await settle()
+    expect(dialogText()).toBe('Delete Garden 2? Its page moves to history in the Gardens folder, so a copy stays.')
+    expect(useConfirmDialogStore.getState().confirmDestructive).toBe(true)
+    expect(screen.getByText('Delete Garden 2?')).toBeTruthy()
+    // No inline "are you sure" any more.
+    expect(document.querySelector('[data-zen-garden-confirm]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await settle()
+    expect(dialogText()).toBeNull()
     expect(zenPosts()).toEqual([])
-    // Cancel posts nothing.
-    fireEvent.click(within(confirm as HTMLElement).getByRole('button', { name: 'Cancel' }))
-    expect(document.querySelector('[data-zen-garden-confirm="g-2"]')).toBeNull()
-    await menu('Garden 2', 'Delete')
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Garden' }))
+    expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
+  })
+
+  it('confirming Delete posts {garden} and the row goes', async () => {
+    await mountSection()
+    fireEvent.click(within(row('g-2')).getByRole('button', { name: 'Delete Garden 2' }))
+    await settle()
+    // The dialog's destructive button (the row's own is "Delete Garden 2").
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-3']))
     expect(zenPosts()).toEqual([['zen/garden/delete', { garden: 'g-2' }]])
+    expect(dialogText()).toBeNull()
   })
 
   it('deleting the last Garden shows the refusal inline', async () => {
     h.gardens = [{ id: 'g-1', name: 'Garden 1', template: 'k2.texting@1', theme: null }]
     await mountSection()
-    await menu('Garden 1', 'Delete')
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Garden' }))
+    fireEvent.click(within(row('g-1')).getByRole('button', { name: 'Delete Garden 1' }))
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() =>
       expect(screen.getByTestId('zen-garden-error-g-1').textContent).toBe('That’s your last Garden. You need at least one.'),
     )
@@ -774,7 +839,7 @@ describe('Settings → Gardens: the section', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Launch room' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
-    expect(row(rowNames()[3]).textContent).toContain('Launch room')
+    expect(nameField(rowNames()[3]).value).toBe('Launch room')
     await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
 
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
@@ -783,7 +848,7 @@ describe('Settings → Gardens: the section', () => {
     expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Garden 5')
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(row(rowNames()[4]).textContent).toContain('Garden 5')
+    expect(nameField(rowNames()[4]).value).toBe('Garden 5')
 
     expect(zenPosts()).toEqual([
       ['zen/garden/new', { name: 'Launch room', template: 'texting' }],
@@ -840,7 +905,7 @@ describe('Settings → Gardens: the section', () => {
     // Renamed somewhere else (the Zen switcher, the CLI, an agent).
     h.gardens[2].name = 'Launch room'
     act(() => local[0].fn())
-    await waitFor(() => expect(row('g-3').textContent).toContain('Launch room'))
+    await waitFor(() => expect(nameField('g-3').value).toBe('Launch room'))
   })
 
   it('stops listening when the section closes', async () => {
@@ -1061,7 +1126,7 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Notebook' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
-    expect(row(rowNames()[3]).textContent).toContain('Notebook')
+    expect(nameField(rowNames()[3]).value).toBe('Notebook')
     expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Notebook', template: 'diary' }]])
   })
 

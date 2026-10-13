@@ -1,7 +1,7 @@
 // Settings → Gardens (prd-zen-gardens-v1 item 17; prd-garden-lock-and-sync-v1
 // §3, Rosson 2026-10-13). This computer's Zen Gardens, one row each: the
-// grip to drag it into place (Rosson 2026-10-13), the name, a ⋯ menu
-// (Rename, Delete) and two checkboxes,
+// grip to drag it into place, the name as an in-place editor with Save,
+// Delete (asks in K2's confirm dialog) (Rosson 2026-10-13), and two checkboxes,
 // "Lock garden" and "Keep in sync with future template updates"
 // (`ZenGardenSyncControls`). + New Garden opens the same modal as Zen's. A
 // collapsed Advanced holds the global theme and the folder. Thin client over
@@ -25,7 +25,7 @@ import {
   deleteZenSettingsGarden,
   loadZenSettings,
   reorderZenSettingsGarden,
-  renameZenSettingsGarden,
+  renameZenSettingsGardenNow,
   setZenGlobalTheme,
   setupZenGardens,
   useZenSettingsStore,
@@ -36,6 +36,7 @@ import {
 } from '@/lib/zen/zen-settings'
 import { ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
 import { useToastStore } from '@/stores/toast'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   {
@@ -58,10 +59,9 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-const ICON_BTN =
-  'w-6 h-6 flex items-center justify-center text-xs border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-30 disabled:cursor-default'
-const MENU_ITEM =
-  'block w-full text-left px-3 py-1 text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+/** A Garden's name: reads as plain text, edits in place (border on hover/focus). */
+const NAME_INPUT =
+  'w-full px-1 py-0.5 -ml-1 text-xs bg-transparent border border-transparent text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-bg)] no-drag cursor-text truncate'
 const DANGER_BTN =
   'px-2 py-1 text-xs border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const INPUT =
@@ -106,71 +106,6 @@ function themeOptions(themes: readonly ZenSettingsTheme[]): { value: string; lab
   return themes.map((t) => ({ value: t.name, label: t.name }))
 }
 
-/** A row's ⋯ menu: Rename, Delete. (Reorder is the row's drag handle.) */
-function RowMenu({
-  name,
-  busy,
-  onRename,
-  onDelete,
-}: {
-  name: string
-  busy: boolean
-  onRename(): void
-  onDelete(): void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const box = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const away = (e: MouseEvent): void => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
-    }
-    const esc = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', away)
-    document.addEventListener('keydown', esc)
-    return () => {
-      document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', esc)
-    }
-  }, [open])
-  const pick = (fn: () => void) => (): void => {
-    setOpen(false)
-    fn()
-  }
-  return (
-    <div ref={box} className="relative flex-shrink-0">
-      <button
-        type="button"
-        aria-label={`More for ${name}`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="More"
-        disabled={busy}
-        onClick={() => setOpen((o) => !o)}
-        className={ICON_BTN}
-      >
-        ⋯
-      </button>
-      {open && (
-        <div
-          role="menu"
-          aria-label={`${name} menu`}
-          className="absolute right-0 top-7 z-[400] min-w-[140px] py-1 border border-[var(--color-border)] bg-[var(--color-bg)] shadow"
-        >
-          <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onRename)}>
-            Rename
-          </button>
-          <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onDelete)}>
-            Delete
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 /** Where the drop line paints on a row: above it, below it, or nowhere. */
 type DropEdge = 'top' | 'bottom' | null
 
@@ -209,24 +144,29 @@ function GardenRow({
   onHandleKeyDown(e: React.KeyboardEvent): void
   onHandleBlur(): void
 }): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(garden.name)
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (editing) inputRef.current?.select()
-  }, [editing])
 
-  const startRename = (): void => {
+  // A rename from elsewhere (Zen, the CLI) shows here unless the person is
+  // mid-edit (the field still held the old name).
+  const shownName = useRef(garden.name)
+  useEffect(() => {
+    setDraft((d) => (d === shownName.current ? garden.name : d))
+    shownName.current = garden.name
+  }, [garden.name])
+
+  const trimmed = draft.trim()
+  const canSave = !busy && trimmed !== '' && trimmed !== garden.name
+
+  const revert = (): void => {
     setDraft(garden.name)
     setError(null)
-    setConfirmDelete(false)
-    setEditing(true)
   }
 
   const saveRename = async (): Promise<void> => {
+    if (!canSave) return
     let clean: string
     try {
       clean = checkZenGardenName(draft, gardens, garden.id)
@@ -234,13 +174,29 @@ function GardenRow({
       setError(err instanceof Error ? err.message : String(err))
       return
     }
-    if (clean === garden.name) {
-      setEditing(false)
-      setError(null)
-      return
+    const old = garden.name
+    setError(null)
+    setBusy(true)
+    setDraft(clean)
+    try {
+      await renameZenSettingsGardenNow(garden.id, clean)
+    } catch (err) {
+      setDraft(old)
+      useToastStore.getState().addToast(`Couldn’t rename “${old}”: ${zenSettingsErrorText(err, clean)}`, 'error')
+    } finally {
+      setBusy(false)
     }
-    const ok = await attempt(() => renameZenSettingsGarden(garden.id, clean), setBusy, setError)
-    if (ok) setEditing(false)
+  }
+
+  const askDelete = async (): Promise<void> => {
+    setError(null)
+    const yes = await useConfirmDialogStore.getState().confirm({
+      title: `Delete ${garden.name}?`,
+      message: 'Its page moves to history in the Gardens folder, so a copy stays.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (yes) await attempt(() => deleteZenSettingsGarden(garden.id), setBusy, setError)
   }
 
   return (
@@ -272,92 +228,56 @@ function GardenRow({
         >
           <GripIcon />
         </button>
+        {/* The name is the editor: plain text until hovered or focused. */}
         <div className="flex-1 min-w-0">
-          {editing ? (
-            <input
-              ref={inputRef}
-              aria-label={`New name for ${garden.name}`}
-              value={draft}
-              disabled={busy}
-              maxLength={80}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  void saveRename()
-                } else if (e.key === 'Escape') {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  setEditing(false)
-                  setError(null)
-                }
-              }}
-              className={`${INPUT} w-full`}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={startRename}
-              title="Rename"
-              className="max-w-full truncate text-left text-xs text-[var(--color-text-primary)] hover:underline no-drag cursor-pointer"
-            >
-              {garden.name}
-            </button>
-          )}
-        </div>
-
-        {editing ? (
-          <>
-            <button type="button" disabled={busy} onClick={() => void saveRename()} className={BTN}>
-              Save
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false)
-                setError(null)
-              }}
-              className={BTN}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
-          <RowMenu
-            name={garden.name}
-            busy={busy}
-            onRename={startRename}
-            onDelete={() => {
+          <input
+            ref={inputRef}
+            data-zen-garden-name={garden.id}
+            aria-label={`Name of ${garden.name}`}
+            title="Rename"
+            value={draft}
+            disabled={busy}
+            maxLength={80}
+            spellCheck={false}
+            onChange={(e) => {
+              setDraft(e.target.value)
               setError(null)
-              setConfirmDelete(true)
             }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                void saveRename()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                revert()
+                inputRef.current?.blur()
+              }
+            }}
+            className={NAME_INPUT}
           />
-        )}
+        </div>
+        <button
+          type="button"
+          aria-label={`Save name of ${garden.name}`}
+          disabled={!canSave}
+          onClick={() => void saveRename()}
+          className={BTN}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          aria-label={`Delete ${garden.name}`}
+          title="Delete"
+          disabled={busy}
+          onClick={() => void askDelete()}
+          className={DANGER_BTN}
+        >
+          Delete
+        </button>
       </div>
 
-      {confirmDelete && !editing && (
-        <div className="mt-2 flex flex-wrap items-center gap-2" data-zen-garden-confirm={garden.id}>
-          <span className="text-[11px] text-[var(--color-text-secondary)]">
-            Delete “{garden.name}”? A copy stays in history in the Gardens folder.
-          </span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void attempt(() => deleteZenSettingsGarden(garden.id), setBusy, setError).then((ok) => {
-                if (ok) setConfirmDelete(false)
-              })
-            }
-            className={DANGER_BTN}
-          >
-            Delete Garden
-          </button>
-          <button type="button" disabled={busy} onClick={() => setConfirmDelete(false)} className={BTN}>
-            Cancel
-          </button>
-        </div>
-      )}
       <ZenGardenSyncControls garden={garden} />
       <InlineError text={error} testId={`zen-garden-error-${garden.id}`} />
     </li>

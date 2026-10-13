@@ -702,6 +702,35 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::sidecar_routes::handle(p, caller, body, params, "cell"))
             }
+            // Root helper (prd-k2-root-helper-v1 §8.3): `k2 root-helper
+            // status` from inside a K2 terminal. Only status passes
+            // require_hook on this socket; update/rollback are refused by the
+            // handler for any passport (owner/admin steps) should one ever
+            // arrive. Not in `cli::dispatch`, so without this arm the status
+            // read fell through to its "route not found".
+            p if crate::root_helper_routes::is_route(p) => {
+                if crate::root_helper_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::root_helper_routes::MAX_BODY {
+                    return from_cli(crate::root_helper_routes::too_large());
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::root_helper_routes::handle(p, caller, body, params))
+            }
+            // App (skin) roster reads. On TCP these GETs admit the owner or
+            // any validated passport (`owner_or_scoped_hook_auth`); here the
+            // passport is already validated for this path. They live only in
+            // the TCP dispatcher, not `cli::dispatch`. Manage POSTs still get
+            // the cell sentinel below so the CLI uses TCP, where the
+            // Agent-tab switch is checked.
+            "/cli/skin/users" if !is_post => from_cli(crate::skin_routes::handle_users_get()),
+            "/cli/skin/roles" if !is_post => from_cli(crate::skin_routes::handle_roles_get()),
+            "/cli/skin-tokens" if !is_post => from_cli(crate::skin_routes::handle_tokens_get()),
+            // `/cli/respond` is POST-only (TCP answers a GET with 405).
+            "/cli/respond" if !is_post => {
+                from_cli(crate::cli_response::CliResponse::method_not_allowed())
+            }
             "/cli/thread" => from_cli(crate::cli::dispatch(path, params)),
             path if is_post && path.starts_with("/cli/thread/") => {
                 from_cli(crate::overlay_routes::dispatch_post(path, params, body))
@@ -1292,6 +1321,86 @@ mod unix_impl {
                 "sid-1",
             );
             assert_eq!(gstatus, "405 Method Not Allowed");
+        }
+
+        // ── every agent GET verb is served on the cell socket ────────────
+
+        /// `k2 root-helper status` from a K2 terminal answered "route not
+        /// found": the path passed `is_agent_verb`, so the cell handed it to
+        /// `cli::dispatch`, which never knew root-helper routes. Sweep: for
+        /// EVERY classified `/cli` route with a GET form that a passport may
+        /// call, the cell socket must not answer `cli::dispatch`'s "route
+        /// not found" (the CLI only falls back to TCP on the cell sentinel,
+        /// so that 404 is a dead end) nor the cell sentinel itself (a GET
+        /// agent verb belongs on this socket).
+        #[test]
+        fn every_agent_get_verb_is_known_on_the_cell_socket() {
+            let _home = crate::test_support::TempHome::new();
+            let _ = k2_core::db::init_for_tests();
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            let mut checked = 0usize;
+            let mut misses = Vec::new();
+            for r in crate::routes::route_policy::ROUTES {
+                if r.get.is_none() || !crate::session_token::is_agent_verb(r.path) {
+                    continue;
+                }
+                checked += 1;
+                let (status, _, body) =
+                    dispatch_cell_verb("GET", r.path, &params, b"", &p, "sid-sweep");
+                if body.contains("route not found") || body.contains("not served on cell socket") {
+                    misses.push(format!("{} -> {status} {body}", r.path));
+                }
+            }
+            assert!(checked >= 100, "sweep must cover the agent GET verbs, saw {checked}");
+            assert!(misses.is_empty(), "agent GET verbs unknown on the cell socket:\n{}", misses.join("\n"));
+        }
+
+        #[test]
+        fn cell_dispatch_serves_app_roster_reads_and_respond_get_is_405() {
+            let _home = crate::test_support::TempHome::new();
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            for (path, key) in [
+                ("/cli/skin/users", "users"),
+                ("/cli/skin/roles", "roles"),
+                ("/cli/skin-tokens", "tokens"),
+            ] {
+                let (status, _, body) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-1");
+                assert_eq!(status, "200 OK", "{path}: {body}");
+                let v: serde_json::Value = serde_json::from_str(&body).expect("JSON body");
+                assert!(v.get(key).is_some(), "{path}: want `{key}` in {body}");
+                // Manage POSTs keep the sentinel: the CLI retries over TCP,
+                // where the Agent-tab switch is checked.
+                let (status, _, body) = dispatch_cell_verb("POST", path, &params, b"{}", &p, "sid-1");
+                assert_eq!(status, "404 Not Found", "{path} POST: {body}");
+                assert!(body.contains("not served on cell socket"), "{path} POST: {body}");
+            }
+            let (status, _, _) = dispatch_cell_verb("GET", "/cli/respond", &params, b"", &p, "sid-1");
+            assert_eq!(status, "405 Method Not Allowed");
+        }
+
+        #[test]
+        fn cell_dispatch_serves_root_helper_status_and_refuses_update() {
+            let _home = crate::test_support::TempHome::new();
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            let (status, _, body) =
+                dispatch_cell_verb("GET", "/cli/root-helper/status", &params, b"", &p, "sid-rh");
+            assert_eq!(status, "200 OK", "body: {body}");
+            let v: serde_json::Value = serde_json::from_str(&body).expect("status JSON");
+            assert!(v.get("state").is_some(), "status body has state: {body}");
+            for path in ["/cli/root-helper/update", "/cli/root-helper/rollback"] {
+                let (status, _, body) = dispatch_cell_verb("POST", path, &params, b"{}", &p, "sid-rh");
+                assert_eq!(status, "403 Forbidden", "{path}: {body}");
+                assert!(body.contains("owner_only"), "{path}: {body}");
+                let (status, _, _) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-rh");
+                assert_eq!(status, "405 Method Not Allowed", "{path}");
+            }
+            // The socket's auth gate still keeps update/rollback off it.
+            assert!(crate::session_token::is_agent_verb("/cli/root-helper/status"));
+            assert!(!crate::session_token::is_agent_verb("/cli/root-helper/update"));
+            assert!(!crate::session_token::is_agent_verb("/cli/root-helper/rollback"));
         }
 
         // ── awareness body re-stamp (identity from principal, not body) ──

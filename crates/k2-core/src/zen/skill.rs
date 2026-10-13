@@ -80,10 +80,11 @@ the app's top bar); until then every `k2 zen` verb exits 3.\n\n\
 - `active.json`: the active theme. K2 writes it. **Never write active.json**; use `k2 zen theme`.\n\
 - `.history/`: the last 20 good versions of each file, and deleted Gardens. K2 writes it. **Never write .history/.**\n\
 - `widgets/<name>/`: your custom widgets (see Custom widgets). **You edit these too.**\n\
-- `sync.json`, `news.json`, `.defaults/`: which Gardens sync with K2's defaults, which\n\
-  Garden news was seen, and K2's defaults that own-copy Gardens sit on. K2 writes\n\
-  them. **Never write sync.json, news.json or .defaults/**; read them with\n\
-  `k2 zen sync` and `k2 zen news`.\n\
+- `sync.json`, `news.json`, `.defaults/`, `.locks/`: which Gardens sync with K2's\n\
+  defaults or are locked, which Garden news was seen, K2's defaults that own-copy\n\
+  Gardens sit on, and locked Gardens' frozen copies. K2 writes them. **Never write\n\
+  sync.json, news.json, .defaults/ or .locks/**; read them with `k2 zen sync`,\n\
+  `k2 zen garden list` and `k2 zen news`.\n\
 - Widgets in your own Gardens need no permissions: a widget can talk to your agents\n\
   right away. **Never write grants.json** or `pins.json` (K2 never reads them).\n\n\
 ## Synced with K2's defaults, or its own copy\n\n\
@@ -96,6 +97,14 @@ sync off in Settings → Gardens (you can't: `k2 zen sync <garden> on|off` answe
 agent with 403 `zen_local_only`). Suggest it to the person when it matters.\n\
 `k2 zen sync` lists each Garden's state; `k2 zen sync <garden> preview` prints it as\n\
 if synced; `k2 zen news` lists new catalog Gardens. `k2 zen guide sync` has more.\n\n\
+## Locked Gardens\n\n\
+**A locked Garden: don't edit it. Ask the person.** The person locks a Garden in\n\
+Settings → Gardens so agents can't change it (`k2 zen garden list` marks it\n\
+`locked`). K2 puts back any edit to a locked Garden's file (the edit is kept in\n\
+`.history/gardens/<id>.toml/refused/`), refuses `k2 zen garden rename|delete|template|reorder`,\n\
+`k2 zen reset --garden` and `k2 zen theme set|next|prev --garden` with exit 3\n\
+(`garden_locked`), and `k2 zen validate --garden <id>` exits 3. Only the person can\n\
+unlock it (`k2 zen garden lock|unlock` refuses agents). Themes it uses still change it.\n\n\
 ## Workflow\n\n\
 1. `k2 zen garden list` to find the Garden (or make one with `k2 zen garden new`).\n\
 2. Edit `~/.k2/zen/gardens/<id>.toml`. Every Zen window reloads on save.\n\
@@ -252,7 +261,8 @@ add a background image next to it if asked, run `k2 zen validate`, then\n\
 - No raw CSS, no selectors, no HTML, no fonts from the network.\n\
 - `[layout]`, `[[widget]]` and `template` belong only in `gardens/<id>.toml`.\n\
 - Agents never write grants.json, gardens.json, active.json, sync.json, news.json,\n\
-  .defaults/ or .history/: K2 owns them.\n\n",
+  .defaults/, .locks/ or .history/: K2 owns them.\n\
+- A locked Garden: don't edit it. Ask the person.\n\n",
     );
 
     s.push_str("## Tokens\n\n### `[theme]`\n\n");

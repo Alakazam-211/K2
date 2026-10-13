@@ -20180,8 +20180,8 @@ cmd_schema() {
     },
     {
       "name": "zen garden",
-      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>|template <garden> texting|blank [--force]> [--json]",
-      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one. <garden> is an id or a name.",
+      "usage": "k2 zen garden <list|new <name> [--texting] [--at <n>]|rename <garden> <name>|delete <garden>|reorder <garden> <position>|template <garden> texting|blank [--force]|lock <garden>|unlock <garden>> [--json]",
+      "description": "The Gardens on this computer. list prints index, id, name and template (* = its own theme); new makes an empty Garden (--texting: the texting page) and prints its id and file; rename and reorder keep the id; template turns a Garden into the texting page (the default) or an empty one, same id, name and place, keeping the old file in .history/; delete moves the page into .history/ and exits 1 with \"That's your last Garden.\" on the last one; lock and unlock are for the person only (agents exit 3), and a locked Garden refuses agent changes with exit 3 (garden_locked). <garden> is an id or a name.",
       "args": [{"name": "garden", "required": false}, {"name": "name|position", "required": false}],
       "flags": [
         {"name": "--texting", "arg": null, "description": "new: start from the texting template (k2.texting@1) instead of the empty one (k2.blank@1)."},
@@ -22281,6 +22281,12 @@ USING THE WHOLE CANVAS
   at most 32) and drags the window from its own element with
   k2.window.startDrag() in a mousedown. K2's controls always win, and
   some drag space always stays. Details: k2 zen guide api.
+
+LOCKED GARDENS
+  A locked Garden: don't edit it. Ask the person. k2 zen garden list
+  marks it locked; K2 puts back any edit to its file, refuses k2 zen
+  changes to it (exit 3, garden_locked), and only the person unlocks
+  it, in Settings → Gardens.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -42472,6 +42478,7 @@ USAGE
   k2 zen garden reorder <garden> <position> [--json]
   k2 zen garden template <garden> texting|blank [--force] [--json]
   k2 zen garden delete <garden> [--json]
+  k2 zen garden lock | unlock <garden> [--json]
   k2 zen theme list [--garden <name|id>] [--json]
   k2 zen theme next | prev [--garden <name|id>] [--json]
   k2 zen theme set <name> [--garden <name|id>] [--json]
@@ -42502,7 +42509,9 @@ COMMANDS
             empty page (blank), keeping its id, name and place and the old
             file in .history/ (--force when the file has its own layout,
             widgets or theme tables); delete moves the page into .history/
-            (the last Garden stays). <garden> is an id or a name.
+            (the last Garden stays). lock/unlock are for the person only:
+            a locked Garden can't be changed by agents (list marks it).
+            <garden> is an id or a name.
   theme     The active theme: one for this computer, plus an optional pick
             per Garden (--garden). list shows K2's themes and yours (* =
             active); next/prev cycle them; set picks one; new copies a theme
@@ -42546,7 +42555,9 @@ RULES
   "In my Zen Garden ... (id g-...)" means: edit ~/.k2/zen/gardens/<id>.toml.
   Run `k2 zen validate --garden <id>` before you say it's done.
   Never write grants.json, gardens.json, active.json, sync.json, news.json,
-  .defaults/ or .history/: K2 writes them.
+  .defaults/, .locks/ or .history/: K2 writes them.
+  A locked Garden: don't edit it. Ask the person. K2 puts back edits to
+  its file and refuses k2 zen changes to it with exit 3 (garden_locked).
   Editing a Garden's file never changes whether it syncs; only the person
   turns sync on or off (Settings → Gardens). k2 zen guide sync.
   A custom widget: k2 zen validate --widget <name>; it talks to your
@@ -42556,7 +42567,8 @@ RULES
 EXIT
   0 ok · 1 errors (validate) or a refused request · 2 a usage error (an
   unknown guide topic or example included) · 3 Zen isn't set up on this
-  computer (turn it on with the Zen toggle in the K2 app's top bar).
+  computer (turn it on with the Zen toggle in the K2 app's top bar), or the
+  Garden is locked / only the person may do this: stop and ask.
 EOF
 }
 
@@ -43071,9 +43083,10 @@ TWO PARTS, TWO STATES
              changes it. The Garden file is never rewritten.
 
 WHO DECIDES
-  The switch is the truth. Editing a Garden's file never changes it.
-  Only the person turns sync on or off, in Settings → Gardens (or k2 zen
-  sync <garden> on|off). An agent gets 403 zen_local_only: suggest it to
+  The setting is the truth. Editing a Garden's file never changes it.
+  Only the person turns sync on or off, in Settings → Gardens ("Keep in
+  sync with future template updates": page and theme together) or k2 zen
+  sync <garden> on|off. An agent gets 403 zen_local_only: suggest it to
   the person instead.
   Start with the default (k2 zen garden template) and k2 zen reset
   --garden <id> turn page sync on; reset --to <snapshot> leaves it.
@@ -43099,9 +43112,16 @@ WHAT STILL CHANGES FOR EVERY GARDEN
   safety UI (safe mode, pause notices, banners), and everything outside
   the Garden. New options appear only when a file asks for them.
 
+LOCK (the person)
+  "Lock garden" in Settings → Gardens: agents can't change it. K2 puts
+  back edits to its file (kept in .history/gardens/<id>.toml/refused/)
+  and refuses k2 zen changes to it with exit 3. Its layout, widgets and
+  widget code stay as they were; themes still change it, and K2's
+  template updates still reach it while sync is on.
+
 FILES (K2 writes them; never edit)
-  sync.json, news.json, .defaults/<fp>.json, and a copy of each
-  Garden's state in .history/gardens/<id>.toml/sync.json.
+  sync.json, news.json, .defaults/<fp>.json, .locks/<id>/, and a copy of
+  each Garden's state in .history/gardens/<id>.toml/sync.json.
   k2 zen doctor checks them.
 EOF
 }
@@ -43675,6 +43695,12 @@ if err == "zen_not_set_up" or (verb in ("path", "garden-list") and d.get("setUp"
         print(json.dumps(d, separators=(",", ":")))
     print(d.get("message") or NOT_SET_UP, file=sys.stderr)
     sys.exit(3)
+if err == "garden_locked" or (err == "owner_only" and verb == "garden-lock"):
+    # prd-garden-lock-and-sync-v1 §6: forbidden, stop and ask the person.
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    print(d.get("message") or "This Garden is locked. Ask the person to unlock it in Settings → Gardens.", file=sys.stderr)
+    sys.exit(3)
 if err is not None:
     if as_json:
         print(json.dumps(d, separators=(",", ":")))
@@ -43691,6 +43717,13 @@ if err is not None:
     else:
         print("Error: %s" % (d.get("message") or err), file=sys.stderr)
     sys.exit(1)
+if verb == "validate" and isinstance(d.get("locked"), dict):
+    # §6: validating a locked Garden exits 3 with the message, so an agent
+    # sees the lock even after a raw file edit K2 put back.
+    if as_json:
+        print(json.dumps(d, indent=2))
+    print(d["locked"].get("message") or "This Garden is locked. Ask the person to unlock it in Settings → Gardens.", file=sys.stderr)
+    sys.exit(3)
 if as_json:
     print(json.dumps(d, indent=2))
     if verb == "validate" and d.get("ok") is False:
@@ -43719,6 +43752,8 @@ def garden_line(g):
     line = "%s %d  %s  %s  %s" % ("*" if g.get("theme") else " ", g.get("index"), g.get("id"), g.get("name"), g.get("template"))
     if g.get("id") in SYNC:
         line += "  " + sync_word(SYNC[g.get("id")])
+    if g.get("locked"):
+        line += "  locked (agents can\x27t change it)"
     return line
 
 def part_line(name, part):
@@ -43811,6 +43846,10 @@ elif verb == "garden-template":
             print("its previous file is kept as snapshot %s (k2 zen reset --garden %s --to %s to undo)" % (d["snapshot"], g.get("id"), d["snapshot"]))
     else:
         print("Garden %s (“%s”) is already %s (unchanged)" % (g.get("id"), g.get("name"), d.get("template")))
+elif verb == "garden-lock":
+    row = d.get("garden") or {}
+    state = "locked: agents can\x27t change it" if d.get("locked") else "unlocked: agents can change it again"
+    print("%s (%s) is %s%s" % (row.get("name"), row.get("id"), state, "" if d.get("changed") else " (unchanged)"))
 elif verb == "garden-delete":
     snap = d.get("snapshot")
     print("deleted Garden %s (“%s”)%s" % (d.get("deleted"), d.get("name"), "; its page is kept in .history as %s" % snap if snap else ""))
@@ -44089,7 +44128,7 @@ print(json.dumps(b))
 import json, os
 print(json.dumps({"garden": os.environ["ZG"], "name": os.environ["ZN"]}))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/rename" "$body")
+            raw=$(_zen_session_post "/cli/zen/garden/rename" "$body")
             _zen_print garden-rename "$as_json" "$raw"
             ;;
         reorder)
@@ -44099,7 +44138,7 @@ print(json.dumps({"garden": os.environ["ZG"], "name": os.environ["ZN"]}))
 import json, os
 print(json.dumps({"garden": os.environ["ZG"], "to": int(os.environ["ZP"])}))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/reorder" "$body")
+            raw=$(_zen_session_post "/cli/zen/garden/reorder" "$body")
             _zen_print garden-reorder "$as_json" "$raw"
             ;;
         template)
@@ -44115,7 +44154,7 @@ if os.environ.get("ZF") == "true":
     b["force"] = True
 print(json.dumps(b))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/template" "$body")
+            raw=$(_zen_session_post "/cli/zen/garden/template" "$body")
             _zen_print garden-template "$as_json" "$raw"
             ;;
         delete)
@@ -44124,14 +44163,26 @@ print(json.dumps(b))
 import json, os
 print(json.dumps({"garden": os.environ["ZG"]}))
 ')
-            raw=$(cli_post_json "/cli/zen/garden/delete" "$body")
+            raw=$(_zen_session_post "/cli/zen/garden/delete" "$body")
             _zen_print garden-delete "$as_json" "$raw"
+            ;;
+        lock|unlock)
+            # prd-garden-lock-and-sync-v1 §5.2: the person only. Inside a
+            # K2 terminal this sends the session's passport and the daemon
+            # refuses it (agents can neither lock nor unlock).
+            [ "$n" -eq 1 ] || { echo "Error: k2 zen garden $verb needs one Garden (an id or a name)" >&2; exit 2; }
+            body=$(ZG="${pos[0]}" ZL="$verb" python3 -c '
+import json, os
+print(json.dumps({"garden": os.environ["ZG"], "locked": os.environ["ZL"] == "lock"}))
+')
+            raw=$(_zen_person_post "/cli/zen/garden/lock" "$body")
+            _zen_print garden-lock "$as_json" "$raw"
             ;;
         ""|help|--help|-h)
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete)" >&2
+            echo "Unknown 'k2 zen garden' subcommand: $verb (list, new, rename, reorder, template, delete, lock, unlock)" >&2
             exit 2
             ;;
     esac
@@ -44174,7 +44225,7 @@ cmd_zen_theme() {
         next|prev)
             [ -z "$name$from" ] && [ "$clear" = false ] || { echo "Error: k2 zen theme $verb takes only --garden and --json" >&2; exit 2; }
             body=$(ZG="$garden" python3 -c 'import json, os; print(json.dumps({"garden": os.environ["ZG"]} if os.environ.get("ZG") else {}))')
-            raw=$(cli_post_json "/cli/zen/theme/$verb" "$body")
+            raw=$(_zen_session_post "/cli/zen/theme/$verb" "$body")
             _zen_print theme-switch "$as_json" "$raw"
             ;;
         set)
@@ -44195,7 +44246,7 @@ if os.environ.get("ZC") == "true":
     b["clear"] = True
 print(json.dumps(b))
 ')
-            raw=$(cli_post_json "/cli/zen/theme/set" "$body")
+            raw=$(_zen_session_post "/cli/zen/theme/set" "$body")
             _zen_print theme-switch "$as_json" "$raw"
             ;;
         new)
@@ -44225,10 +44276,29 @@ print(json.dumps(b))
 # daemon owns sync.json and news.json; the changes are owner-only, so an
 # agent gets 403 zen_local_only and the message to ask the person.
 
+# A Zen change that names a Garden, from inside a K2 terminal, carries the
+# session's passport (prd-garden-lock-and-sync-v1 §5.3). `zen` is an Open
+# tool, so the CLI would otherwise send the disk owner token and the daemon
+# could not tell an agent from the person. With the passport the daemon
+# lets the change through on an unlocked Garden and answers 423
+# garden_locked on a locked one. Outside K2 the owner token is used.
+_zen_session_post() {
+    local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    if [ -n "$hook_sock" ]; then
+        local saved="$TOKEN"
+        TOKEN="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+        cli_post_json "$endpoint" "$body"
+        TOKEN="$saved"
+    else
+        cli_post_json "$endpoint" "$body"
+    fi
+}
+
 # GS32: a person-only Zen change (sync on/off/undo/keep-previous, news
-# seen). `zen` is an Open tool, so inside a K2 terminal the CLI would
-# otherwise send the disk owner token; this sends the session's passport
-# instead, and the daemon refuses it. Outside K2 the owner token is used.
+# seen, Garden lock/unlock). `zen` is an Open tool, so inside a K2 terminal
+# the CLI would otherwise send the disk owner token; this sends the
+# session's passport instead, and the daemon refuses it. Outside K2 the
+# owner token is used.
 _zen_person_post() {
     local endpoint="$1" body="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
     if [ -n "$hook_sock" ]; then
@@ -44372,7 +44442,7 @@ for k, e in (("garden", "ZG"), ("file", "ZF"), ("to", "ZT"), ("theme", "ZM"), ("
         b[k] = os.environ[e]
 print(json.dumps(b))
 ')
-            raw=$(cli_post_json "/cli/zen/reset" "$body")
+            raw=$(_zen_session_post "/cli/zen/reset" "$body")
             _zen_print reset "$ZEN_AS_JSON" "$raw"
             ;;
         doctor|path)

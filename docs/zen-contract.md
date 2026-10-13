@@ -11,8 +11,9 @@ side: `src/renderer/lib/zen/`.
 Every Zen request goes to **this computer's** daemon through
 `scopeForHost('local')` with its owner token. None goes through
 `primaryScope()`. Any other token (a Connect login of any role, an app pass,
-an agent passport) gets 403 `{error: "zen_local_only"}`. Bodies over 64 KB
-get 413. A GET on a POST route is 405.
+an agent passport) gets 403 `{error: "zen_local_only"}`, except the Garden
+writes a session passport may make (see "Garden Lock" below). Bodies over
+64 KB get 413. A GET on a POST route is 405.
 
 Feature key: `/boot-status` `features` carries **`zen-gardens-v1`** (G19).
 The renderer requires it from the local scope; without it, Zen shows safe
@@ -76,6 +77,7 @@ talking to a daemon without it builds the template's chrome itself (FC32).
   "hasFile": true,                  // gardens/<id>.toml exists
   "createdAt": "2026-10-04T18:00:00Z",
   "theme": "paper",                 // its own theme pick, or null (follows the computer)
+  "locked": false,                  // Garden Lock (zen-garden-lock-v1); absent on older daemons
   "seedHome": "<home id>"           // only when garden/new was given one (G27)
 }
 ```
@@ -89,6 +91,7 @@ talking to a daemon without it builds the template's chrome itself (FC32).
 | 409 | `garden_exists` | `garden/new` or `garden/rename` onto a name in use (case aside). `message`: "You already have a Garden called “Notes”." |
 | 409 | `last_garden` | `garden/delete` of the only Garden. `message`: "That's your last Garden." |
 | 409 | `garden_has_changes` | `garden/template` without `force` onto a Garden whose file sets its own layout, widgets or theme tables (or doesn't parse). `{garden, keys: [top-level key], message}`. Nothing is written |
+| 423 | `garden_locked` | a session passport's Garden write naming a locked Garden. `{garden, name, message}`; `message`: "“Diary” is locked. Agents can't change it. Ask the person to unlock it in Settings → Gardens." Nothing is written |
 | 400 | `bad_request` | a name that is empty or over 60 characters, `at`/`to` outside the list, an unknown `template`, an unknown body field (bodies are strict), or the old `home` key/query |
 | 404 / 409 | `unknown_theme` / `theme_exists` | as before (Themes) |
 
@@ -694,7 +697,7 @@ rows, 64 KB request bodies, a GET on a POST route is 405.
 | Route | Body / query | Answer |
 |---|---|---|
 | `GET widgets` | — | `{ok, widgets: [{name, title, description, caps, hash, state, errors, warnings, placements: [{garden, gardenName, placement, paused}]}]}` |
-| `GET widget/bundle` | `?widget=<name or k2:…@n>` | `{ok, widget, hash, nonce, html, bytes}`; 404 `unknown_widget`; 409 `widget_broken` |
+| `GET widget/bundle` | `?widget=<name or k2:…@n>&garden=<id>?` | `{ok, widget, hash, nonce, html, bytes}`; 404 `unknown_widget`; 409 `widget_broken`. With `garden=` naming a locked Garden, that Garden's frozen copy (zen-garden-lock-v1) |
 | `POST widget/new` | `{name, from?}` (`hello`, `arcade`, `k2:diary`) | `{ok, name, path, files, changed}`; 409 `widget_exists`; 404 `zen_not_set_up` |
 | `POST widget/pause` | `{garden, placement, reason: "runaway"}` | `{ok, paused, changed}`; the renderer's runaway guard tripped. Taking power away: anything Zen accepts |
 | `POST widget/resume` | `{garden, placement}` | `{ok, paused: null, resumed, changed}`; the person's Resume click: owner token only (a passport, Connect login, API key or app pass gets 403 `owner_only`) |
@@ -859,6 +862,43 @@ changed a default; never pruned) and a per-Garden mirror
 one-time upgrade pass (the first Zen read after the first boot of 0.45.1)
 makes every Garden whose file sets anything its own copy, page and theme,
 and leaves every untouched Garden synced; it writes no Garden file.
+
+Settings → Gardens shows this as ONE checkbox, "Keep in sync with future
+template updates" (prd-garden-lock-and-sync-v1 §4): checked = page and
+theme synced, unchecked = both own copies, a dash when they differ; a click
+posts `garden/sync` with `part: "both"`.
+
+## Garden Lock (zen-garden-lock-v1)
+
+prd-garden-lock-and-sync-v1 with Rosson's rulings of 2026-10-13. A locked
+Garden can't be changed by agents. The person still renames, rethemes,
+resets, starts over and deletes it in the app, and K2's template updates
+still reach it while it keeps in sync.
+
+| Call | Who | Body | Answer |
+|---|---|---|---|
+| `POST /cli/zen/garden/lock` | the person only (Settings, `k2 zen garden lock\|unlock` outside K2) | `{garden, locked: bool}` | `{ok, garden: SyncRow, locked, changed, widgets: [name], announced}`. Owner token only: a passport, a Connect login or an app pass gets 403 `owner_only`. GET → 405 |
+
+- `SyncRow` and `Garden` carry `locked` (and `SyncRow` `lockedAt`).
+- **State**: `locked` on the Garden's `sync.json` entry and its mirror.
+  Missing means unlocked, so every Garden from before Lock is unlocked.
+- **Frozen copy**: `.locks/<id>/garden.toml` (the Garden's live text when
+  locked) and `.locks/<id>/widgets/<name>/` (the live bundle of each widget
+  folder its page places). Themes and `zen.toml` are not frozen: a theme
+  change reaches a locked Garden.
+- **File edits**: a locked Garden's live text is always its frozen copy.
+  On the next refresh an edited file moves to
+  `.history/gardens/<id>.toml/refused/<utc>.toml`, the locked text is
+  written back, and the daemon writes the audit line
+  `zen.garden.lock_refused` (actor `file_edit`).
+- **Agent writes**: inside a K2 terminal `k2 zen garden
+  rename|delete|template|reorder`, `k2 zen reset` and `k2 zen theme
+  set|next|prev` carry the session passport. The daemon lets them through
+  on an unlocked Garden and answers 423 `garden_locked` on a locked one
+  (CLI exit 3). Every other Zen route still answers a passport 403
+  `zen_local_only`.
+- `GET /cli/zen/validate?garden=<locked>` adds `locked: {garden, name,
+  message}`; `k2 zen validate --garden` exits 3.
 
 ## Contract changes from the PRD text (flagged for the renderer)
 

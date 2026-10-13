@@ -62,6 +62,7 @@ pub fn trash_created_folder(path: &Path) -> Result<(), String> {
 
 #[derive(Debug, Clone)]
 enum Undo {
+    AppLogin(String),
     Folder(PathBuf),
     Workspace { path: String, id: String },
     Group(String),
@@ -101,6 +102,7 @@ fn run_undo(steps: Vec<Undo>) -> Vec<String> {
                 crate::workspace::lifecycle::remove_workspace_db_only(path).map(|_| ())
             }
             Undo::Folder(p) => trash_created_folder(p),
+            Undo::AppLogin(u) => crate::skin::remove_principal(u).map(|_| ()),
         };
         if let Err(e) = r {
             crate::log_debug!("[hire] undo {step:?} failed: {e}");
@@ -121,6 +123,8 @@ pub struct HiredMember {
     pub path: String,
     pub name: String,
     pub lead: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_login: Option<serde_json::Value>,
 }
 
 /// A launch/brief the daemon runs after the hire commits.
@@ -175,6 +179,62 @@ fn injected_failure(plan: &Plan, step: usize) -> Option<HireError> {
     }
     let _ = (plan, step);
     None
+}
+
+/// S5: the member's App login — an App grant via `add_principal_for_app`
+/// (never the box login, S24-19), whole rooms (`self` = this member) or a
+/// role, marked as this workspace's agent. Returns the response object
+/// (the password, when asked for, only here).
+fn apply_app_login(
+    a: &super::plan::PlannedAppLogin,
+    ws_id: &str,
+    instance_id: &str,
+    caller: &HireCaller,
+    undo: &mut Vec<Undo>,
+) -> Result<serde_json::Value, HireError> {
+    let created_by = caller.actor();
+    let p = crate::skin::add_principal_for_app(&a.username, a.email.as_deref(), &a.app, a.role.as_deref(), &created_by)
+        .map_err(|e| HireError::new(409, "app_login_failed", format!("app login {}: {e}", a.username)))?;
+    undo.push(Undo::AppLogin(p.username.clone()));
+    let rooms: Vec<String> = a
+        .rooms
+        .iter()
+        .map(|r| if r == super::apps::SELF_ROOM { ws_id.to_string() } else { r.clone() })
+        .collect();
+    if a.role.is_none() {
+        crate::skin::set_app_grant_rooms(&p.username, &a.app, &rooms, false, &created_by)
+            .map_err(|e| HireError::internal(format!("app login rooms: {e}")))?;
+    }
+    crate::skin::set_principal_agent(&p.username, Some(ws_id))
+        .map_err(|e| HireError::internal(format!("app login agent mark: {e}")))?;
+    let password = if a.password {
+        let pw = super::apps::random_password();
+        crate::skin::set_principal_password(&p.username, Some(&pw))
+            .map_err(|e| HireError::internal(format!("app login password: {e}")))?;
+        Some(pw)
+    } else {
+        None
+    };
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let _ = conn.execute(
+            "UPDATE agent_instance_members SET app_login = ?3 WHERE instance_id = ?1 AND workspace_id = ?2",
+            rusqlite::params![instance_id, ws_id, serde_json::json!({ "app": a.app, "username": p.username }).to_string()],
+        );
+    }
+    let mut out = serde_json::json!({
+        "app": a.app,
+        "username": p.username,
+        "principalId": p.id,
+        "rooms": rooms,
+        "role": a.role,
+        "wholeRooms": true,
+    });
+    if let Some(pw) = password {
+        out["password"] = serde_json::json!(pw);
+    }
+    Ok(out)
 }
 
 fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Vec<Undo>) -> Result<(Vec<HiredMember>, Option<String>, Vec<links::Link>, Vec<LaunchJob>), HireError> {
@@ -254,6 +314,10 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             let d = crate::workspace::display::agent_display_name(&path_s);
             if d.is_empty() { m.handle.clone() } else { d }
         };
+        let app_login = match m.app_login.as_ref() {
+            Some(a) => Some(apply_app_login(a, &ws_id, instance_id, caller, undo)?),
+            None => None,
+        };
         if r.launch.unwrap_or(false) || r.brief.is_some() {
             launches.push(LaunchJob { path: path_s.clone(), handle: m.handle.clone(), brief: r.brief.clone() });
         }
@@ -264,6 +328,7 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             path: path_s,
             name,
             lead: m.lead,
+            app_login,
         });
     }
     if let Some(e) = injected_failure(plan, plan.members.len()) {
@@ -381,7 +446,7 @@ pub fn instantiate(
     // Plan + claim the ledger row under one DB lock so two concurrent hires
     // by one key can't both pass the quota.
     let instance_id = format!("inst_{}", uuid::Uuid::new_v4().simple());
-    let plan = {
+    let (plan, _reserved) = {
         let db = crate::db::shared();
         let conn = db.lock();
         let plan = super::plan::plan(&req, members, ctx)?;
@@ -402,7 +467,10 @@ pub fn instantiate(
             plan.team_name.as_deref(),
             plan.members.len(),
         )?;
-        plan
+        // Planned handles and login names stay reserved (taken under the
+        // same lock, so a concurrent plan skips them) until this hire ends.
+        let reserved = super::plan::Reservation::reserve(&plan);
+        (plan, reserved)
     };
 
     let mut undo: Vec<Undo> = Vec::new();
@@ -418,9 +486,17 @@ pub fn instantiate(
                 "links": made_links,
                 "onBehalfOf": plan.on_behalf_of.as_ref().map(|v| serde_json::json!({ "value": v, "verified": false })),
             });
+            let mut stored = body.clone();
+            if let Some(ms) = stored["members"].as_array_mut() {
+                for m in ms {
+                    if let Some(obj) = m.get_mut("appLogin").and_then(|x| x.as_object_mut()) {
+                        obj.remove("password");
+                    }
+                }
+            }
             let db = crate::db::shared();
             let conn = db.lock();
-            ledger::finish(&conn, &instance_id, "active", None, Some(&body.to_string()));
+            ledger::finish(&conn, &instance_id, "active", None, Some(&stored.to_string()));
             ledger::event(
                 &conn,
                 "agent-hire",
@@ -516,6 +592,14 @@ pub fn teardown(
         // Gets past the PoC guard: the team goes, the members retire next.
         let _ = crate::project_groups::delete_group(g);
     }
+    // HT13: retire leaves app logins alone, so teardown revokes them.
+    let mut logins_revoked = Vec::new();
+    for login in ledger::app_logins_of(instance_id) {
+        match crate::skin::remove_principal(&login) {
+            Ok(_) => logins_revoked.push(login),
+            Err(e) => crate::log_debug!("[hire] teardown: revoke app login {login}: {e}"),
+        }
+    }
     let mut members_out = Vec::new();
     let mut blocked = Vec::new();
     // Reverse order: helpers before the lead.
@@ -546,6 +630,7 @@ pub fn teardown(
         "status": status,
         "members": members_out,
         "unlinked": unlinked,
+        "appLoginsRevoked": logins_revoked,
         "hint": (!blocked.is_empty()).then(|| "some members were not retired (a guard refused); the owner decides: k2 agent retire <handle> --force from a terminal outside K2"),
     }))
 }

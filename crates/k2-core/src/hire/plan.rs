@@ -23,6 +23,19 @@ pub struct PlannedMember {
     pub handle: String,
     pub path: PathBuf,
     pub lead: bool,
+    pub app_login: Option<PlannedAppLogin>,
+}
+
+/// S5: the App login a member gets (resolved, checked against the key).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedAppLogin {
+    pub app: String,
+    pub username: String,
+    pub email: Option<String>,
+    /// Workspace ids or `self`; empty when a role decides the rooms.
+    pub rooms: Vec<String>,
+    pub role: Option<String>,
+    pub password: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +67,9 @@ impl Plan {
                 "path": m.path,
                 "lead": m.lead,
                 "launch": m.recipe.launch.unwrap_or(false) || m.recipe.brief.is_some(),
+                "appLogin": m.app_login.as_ref().map(|a| serde_json::json!({
+                    "app": a.app, "username": a.username, "rooms": a.rooms, "role": a.role,
+                })),
             })).collect::<Vec<_>>(),
             "links": self.links.iter().map(|l| serde_json::json!({
                 "workspace": l.target.id,
@@ -88,12 +104,56 @@ fn handle_seed(m: &MemberRecipe, role: &str, team: Option<&str>) -> String {
 
 /// The first free handle from `seed` that also has a free folder under
 /// `base` and isn't already taken by an earlier member of this plan.
+/// Handles (and app login names) planned by hires that are still applying.
+/// Two concurrent hires with the same seed must not predict the same
+/// handle: the second one skips what the first reserved.
+static IN_FLIGHT: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+
+fn in_flight_has(name: &str) -> bool {
+    IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .is_some_and(|s| s.contains(name))
+}
+
+/// Holds a plan's handles and login names until the hire finishes.
+#[derive(Debug, Default)]
+pub struct Reservation(Vec<String>);
+
+impl Reservation {
+    pub fn reserve(plan: &Plan) -> Self {
+        let mut names: Vec<String> = plan.members.iter().map(|m| format!("h:{}", m.handle.to_ascii_lowercase())).collect();
+        names.extend(plan.members.iter().filter_map(|m| m.app_login.as_ref()).map(|a| format!("u:{}", a.username)));
+        let mut g = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        let set = g.get_or_insert_with(HashSet::new);
+        for n in &names {
+            set.insert(n.clone());
+        }
+        Self(names)
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut g = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(set) = g.as_mut() {
+            for n in &self.0 {
+                set.remove(n);
+            }
+        }
+    }
+}
+
 fn predict_handle(conn: &Connection, seed: &str, base: &Path, taken: &HashSet<String>) -> Result<String, HireError> {
     let slug = crate::workspace_session_handles::slugify_address_token(seed)
         .map_err(|e| HireError::usage(format!("handle '{seed}': {e}")))?;
     for n in 1u32..=10_000 {
         let cand = if n == 1 { slug.clone() } else { format!("{slug}-{n}") };
-        if taken.contains(&cand.to_ascii_lowercase()) || base.join(&cand).exists() {
+        if taken.contains(&cand.to_ascii_lowercase())
+            || base.join(&cand).exists()
+            || in_flight_has(&format!("h:{}", cand.to_ascii_lowercase()))
+        {
             continue;
         }
         let got = crate::workspace::handle::allocate_unique_handle(conn, &cand, None)
@@ -119,6 +179,56 @@ fn group_name_taken(conn: &Connection, name: &str) -> bool {
 pub fn key_may_link(conn: &Connection, key_id: &str, limits: &HireLimits, ws_id: &str) -> bool {
     limits.names_link_target(ws_id)
         || super::ledger::creator_key_of(conn, ws_id).as_deref() == Some(key_id)
+}
+
+/// Resolve and check one member's App login (S5). A key may give only
+/// what its ceiling names (App, whole rooms or roles); unknown and
+/// not-allowed answer the same 403 for a key (no App oracle).
+fn plan_app_login(
+    a: &super::recipe::AppLoginIn,
+    handle: &str,
+    ctx: &PlanContext,
+    limits: Option<&HireLimits>,
+    taken: &HashSet<String>,
+) -> Result<PlannedAppLogin, HireError> {
+    let is_key = matches!(ctx.caller, HireCaller::ApiKey { .. });
+    let refuse_key = || {
+        HireError::new(
+            403,
+            "exceeds_key",
+            format!("appLogin on {:?}: this key may give logins only on the Apps, rooms and roles its owner named", a.app),
+        )
+    };
+    let app = match super::apps::resolve_app(&a.app)? {
+        Some(id) => id,
+        None if is_key => return Err(refuse_key()),
+        None => return Err(HireError::new(404, "not_found", format!("appLogin: no published App {:?}", a.app))),
+    };
+    let role = a.role.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let rooms = match (&role, a.rooms.as_ref()) {
+        (Some(_), _) => Vec::new(),
+        (None, Some(r)) => super::apps::resolve_rooms(r)?,
+        (None, None) => vec![super::apps::SELF_ROOM.to_string()],
+    };
+    if is_key {
+        let ok = limits.is_some_and(|l| l.allows_app_login(&app, &rooms, role.as_deref()));
+        if !ok {
+            return Err(refuse_key());
+        }
+    }
+    let username = crate::skin::normalize_username(a.username.as_deref().unwrap_or(handle))
+        .map_err(|e| HireError::usage(format!("appLogin.username: {e}")))?;
+    if taken.contains(&username)
+        || in_flight_has(&format!("u:{username}"))
+        || crate::skin::principal_exists(&username).map_err(HireError::internal)?
+    {
+        return Err(HireError::new(409, "username_taken", format!("app login '{username}' already exists; pass appLogin.username")));
+    }
+    let email = match a.email.as_deref() {
+        Some(e) => crate::skin::normalize_email(e).map_err(HireError::usage)?,
+        None => None,
+    };
+    Ok(PlannedAppLogin { app, username, email, rooms, role, password: a.password.unwrap_or(false) })
 }
 
 /// Build the plan. Holds no lock of its own; the caller decides.
@@ -191,6 +301,7 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
         .and_then(|n| crate::workspace_session_handles::slugify_address_token(n).ok());
     let explicit_lead = members.iter().any(|m| m.lead.unwrap_or(false));
     let mut taken: HashSet<String> = HashSet::new();
+    let mut taken_logins: HashSet<String> = HashSet::new();
     let mut planned = Vec::with_capacity(members.len());
     for (i, m) in members.into_iter().enumerate() {
         let role = m.role.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("agent").to_string();
@@ -199,7 +310,14 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
         let handle = predict_handle(&conn, &seed, &base, &taken)?;
         taken.insert(handle.to_ascii_lowercase());
         let path = base.join(&handle);
-        planned.push(PlannedMember { recipe: m, role, handle, path, lead });
+        let app_login = match m.app_login.as_ref() {
+            None => None,
+            Some(a) => Some(plan_app_login(a, &handle, ctx, limits.as_ref(), &taken_logins)?),
+        };
+        if let Some(a) = app_login.as_ref() {
+            taken_logins.insert(a.username.clone());
+        }
+        planned.push(PlannedMember { recipe: m, role, handle, path, lead, app_login });
     }
     // Lead first: the first member of a group becomes its PoC.
     planned.sort_by_key(|m| !m.lead);

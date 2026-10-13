@@ -4340,11 +4340,16 @@ pub fn set_app_grant_rooms(
     })
 }
 
-// S24-19 (hire templates S5, 0.45.6) plugs in HERE: an App login a hire key
-// creates must call `add_principal_for_app` (or `create_grant` with an App
-// target) for the App named in the template or the key's `grantCeiling`,
-// never `add_principal_with_email` (which grants the box login). Not built
-// in this slice.
+// S24-19 (agent hire S5, 0.45.6): an App login a hire makes calls
+// `add_principal_for_app` (an App grant, never the box login) for the App
+// the recipe names and the key's ceiling allows; see `k2_core::hire::apply`.
+
+/// Is `username` taken by a guest (App or box login)? The hire plan checks
+/// before any write.
+pub fn principal_exists(username: &str) -> Result<bool, String> {
+    let username = normalize_username(username)?;
+    with_conn(|conn| Ok(principal_by_username(conn, &username)?.is_some()))
+}
 
 // ── Access templates ─────────────────────────────────────────────────
 // A line is kind + optional role. Apply copies that into real grants

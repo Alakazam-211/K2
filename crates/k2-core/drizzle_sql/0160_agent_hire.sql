@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS agent_instance_members (
     path TEXT NOT NULL,
     lead INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'retired', 'rolled_back')),
+    -- S5: {"app": <service id>, "username": <login>} when the member got an
+    -- App login (an App grant, never the box login); teardown revokes it.
+    app_login TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (instance_id, workspace_id)
 );

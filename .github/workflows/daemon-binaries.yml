@@ -30,6 +30,15 @@
 # key). Daemons fetch only signed assets, so an unsigned window is a
 # harmless 404 for auto-heal.
 #
+# k2-node (0.45.5+, prd-k2-node-admin-v1 §8.1). Also built here UNSIGNED:
+#   k2-node-linux-x86_64{,.sha256}
+#   k2-node-linux-aarch64{,.sha256}
+# k2-node has a root mode, so its .sig is the ROOT-HELPER key's, added on
+# z3mbpZ by scripts/sign-k2-node.sh (trusted comment
+# `file:k2-node-linux-<arch> version:<v> protocol:<p>`). This workflow no
+# longer signs k2-node with the updater key. Until the .sig is up, daemons
+# and controllers refuse the asset (fail closed).
+#
 # Do NOT attach an air-gap daemon to the GitHub release. `--features airgap`
 # is a custom/enterprise compile (bakes air-gap ON, omits the GitHub
 # daemon-latest.json ping URL). Distribution is off-band / portal, not
@@ -186,12 +195,16 @@ jobs:
             echo "root helper was built with test-keys — refusing" >&2; exit 1
           fi
           test "$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.root_asset }}" | wc -l)" = 1
-          # Compute nodes (polish v1): k2-node ships beside the daemon so
-          # `k2 compute local enable` never needs a hand-copied binary. The
-          # daemon downloads k2-node-linux-<arch> for its own version and
-          # checks the .sig with the updater key before anything runs it.
+          # Compute nodes: k2-node ships beside the daemon so `k2 compute
+          # local enable` never needs a hand-copied binary, and controllers
+          # send it to nodes as a signed self-update. Signed LATER on z3mbpZ
+          # with the root-helper key (scripts/sign-k2-node.sh), never here.
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-node" \
              "${{ matrix.node_asset }}"
+          if grep -a -q K2_NODE_TEST_KEYS_ENABLED "${{ matrix.node_asset }}"; then
+            echo "k2-node was built with test-keys — refusing" >&2; exit 1
+          fi
+          test "$(grep -a -o 'K2_NODE_BUILD v=[0-9.]* proto=[0-9]* os=linux arch=[a-z0-9_]*;' "${{ matrix.node_asset }}" | wc -l)" = 1
           file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
@@ -208,7 +221,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          for f in "${{ matrix.asset }}" "${{ matrix.node_asset }}"; do
+          # The daemon only. k2-node and the root helper are signed on
+          # z3mbpZ with the root-helper key (sign-k2-node.sh /
+          # sign-root-helper.sh).
+          for f in "${{ matrix.asset }}"; do
             cargo tauri signer sign \
               --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
               --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
@@ -231,7 +247,8 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
-          # sign-root-helper.sh checks the downloaded asset against this.
+          # sign-root-helper.sh / sign-k2-node.sh check the downloaded
+          # assets against these.
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
           sha256sum "${{ matrix.node_asset }}" | tee "${{ matrix.node_asset }}.sha256"
 
@@ -249,7 +266,6 @@ jobs:
             "${{ matrix.asset }}" \
             "${{ matrix.asset }}.sig" \
             "${{ matrix.node_asset }}" \
-            "${{ matrix.node_asset }}.sig" \
             "${{ matrix.node_asset }}.sha256" \
             "${{ matrix.root_asset }}" \
             "${{ matrix.root_asset }}.sha256" \

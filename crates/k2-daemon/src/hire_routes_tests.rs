@@ -253,8 +253,9 @@ fn a_failure_at_every_step_leaves_zero_residue() {
 #[test]
 fn shape_refusals() {
     let who = owner();
-    let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "appLogin": { "room": "docs" } } }), None);
-    assert_eq!((st, v["error"]["code"].as_str()), (400, Some("not_available")), "{v}");
+    // Folder lines on app logins aren't built (T17): unknown field → 400.
+    let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": { "appLogin": { "app": "x", "folders": ["plans/"] } } }), None);
+    assert_eq!((st, v["error"]["code"].as_str()), (400, Some("usage")), "{v}");
     let (st, v) = call(V1_HIRE, &who, true, json!({ "agent": {}, "templateId": "plans-desk" }), None);
     assert_eq!(st, 400, "unknown field refuses: {v}");
     let (st, v) = call(V1_HIRE, &who, true, json!({ "members": [{}, {}] }), None);

@@ -524,9 +524,9 @@ function CreateKeyModal({
                 <SquareCheckbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
                 May retire the agents it hired
               </label>
-              <p className="text-[10px] text-[var(--color-status-warning-soft)]">
-                App logins for hired agents come with per-app logins; until folder grants exist they cover
-                whole rooms.
+              <p className="text-[10px] text-[var(--color-status-warning-soft)]" data-testid="hire-whole-room-warning">
+                App logins for hired agents cover whole rooms until folder grants exist. Name the Apps a key
+                may give logins on from a terminal: k2 api-key create --hire --app-login APP[:ROOMS[:ROLES]].
               </p>
             </div>
           )}

@@ -56,6 +56,30 @@ pub struct HeartbeatIn {
     pub instructions: Option<String>,
 }
 
+/// S5: an App login for a hired agent — an App grant on ONE published App
+/// (never the box login), whole rooms (T17), marked as the agent.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppLoginIn {
+    /// Published service id or `<workspace>/<publish name>`.
+    pub app: String,
+    /// Login name (default: the member's handle).
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Whole rooms (workspace handles/ids; `self` = this member). Default
+    /// `["self"]`. Exclusive with `role`.
+    #[serde(default)]
+    pub rooms: Option<Vec<String>>,
+    /// An App role (its rooms and caps). Exclusive with `rooms`.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Set a random password and return it once in the response.
+    #[serde(default)]
+    pub password: Option<bool>,
+}
+
 /// One member of the recipe. `persona` is the ROLE.md body.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -110,10 +134,9 @@ pub struct MemberRecipe {
     /// `off` | `read` | `write` (capped by the key's DB door).
     #[serde(default)]
     pub db_access: Option<String>,
-    /// App login for the agent (S5): needs per-App logins (S24) on this
-    /// server. Refused until then.
+    /// App login for the agent (S5).
     #[serde(default)]
-    pub app_login: Option<serde_json::Value>,
+    pub app_login: Option<AppLoginIn>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -328,15 +351,22 @@ pub fn validate_member(m: &MemberRecipe, idx: usize) -> Result<(), HireError> {
             return Err(HireError::usage(format!("{}: off, read or write", at("dbAccess"))));
         }
     }
-    if m.app_login.is_some() {
-        return Err(HireError::new(
-            400,
-            "not_available",
-            format!(
-                "{}: app logins for hired agents need per-app logins on this server (a later 0.45.x); hire without it and add the login with `k2 app user add` + `k2 app user agent`",
-                at("appLogin")
-            ),
-        ));
+    if let Some(a) = m.app_login.as_ref() {
+        if a.app.trim().is_empty() {
+            return Err(HireError::usage(format!("{}: missing app", at("appLogin"))));
+        }
+        if let Some(u) = a.username.as_deref() {
+            crate::skin::normalize_username(u).map_err(|e| HireError::usage(format!("{}: {e}", at("appLogin.username"))))?;
+        }
+        if let Some(e) = a.email.as_deref() {
+            crate::skin::normalize_email(e).map_err(|e| HireError::usage(format!("{}: {e}", at("appLogin.email"))))?;
+        }
+        if a.rooms.is_some() && a.role.is_some() {
+            return Err(HireError::usage(format!("{}: rooms or role, not both", at("appLogin"))));
+        }
+        if a.rooms.as_ref().is_some_and(|r| r.is_empty() || r.len() > 20) {
+            return Err(HireError::usage(format!("{}: 1–20 rooms", at("appLogin.rooms"))));
+        }
     }
     Ok(())
 }
@@ -455,7 +485,11 @@ mod tests {
         assert_eq!(bad(serde_json::json!({"wikiNotes": [{"id": "../x.md", "body": "b"}]})).code, "usage");
         assert_eq!(bad(serde_json::json!({"skills": [{"name": "a b", "body": "x"}]})).code, "usage");
         assert_eq!(bad(serde_json::json!({"heartbeats": [{"name": "n", "frequency": "secondly"}]})).code, "usage");
-        assert_eq!(bad(serde_json::json!({"appLogin": {"room": "docs"}})).code, "not_available");
+        assert_eq!(bad(serde_json::json!({"appLogin": {"app": "a", "rooms": ["self"], "role": "r"}})).code, "usage");
+        assert_eq!(bad(serde_json::json!({"appLogin": {"app": "a", "username": "Bad Name!"}})).code, "usage");
+        assert_eq!(bad(serde_json::json!({"appLogin": {"app": "a", "rooms": []}})).code, "usage");
+        // Folder lines aren't built (T17): a `folders` field is unknown → refused.
+        assert!(req(serde_json::json!({"agent": {"appLogin": {"app": "a", "folders": ["plans/"]}}})).is_err());
         assert_eq!(bad(serde_json::json!({"brief": "  "})).code, "usage");
     }
 

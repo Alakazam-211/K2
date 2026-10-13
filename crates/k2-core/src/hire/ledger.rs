@@ -247,6 +247,25 @@ pub fn live_members(conn: &Connection, api_key_id: &str) -> u32 {
     .unwrap_or(u32::MAX)
 }
 
+/// App login usernames this instance's members got (S5).
+pub fn app_logins_of(instance_id: &str) -> Vec<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT app_login FROM agent_instance_members WHERE instance_id = ?1 AND app_login IS NOT NULL",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(params![instance_id], |r| r.get::<_, String>(0))
+        .map(|rows| {
+            rows.flatten()
+                .filter_map(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                .filter_map(|v| v["username"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The API key that created live workspace `workspace_id`, if any.
 pub fn creator_key_of(conn: &Connection, workspace_id: &str) -> Option<String> {
     conn.query_row(

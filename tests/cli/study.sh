@@ -102,7 +102,7 @@ pass=$((pass + 1))
 
 echo "== k2 study agent-hire (0.45.6 agent hire through the v1 API) =="
 ah_out="$("$K2" study agent-hire)"
-for needle in "POST /v1/agents/hire" "Idempotency-Key" "k2 api-key create --hire" "owner confirm" "managed_by_link" "k2 msg who" "app-asserted" "retire_blocked" "stay retired"; do
+for needle in "POST /v1/agents/hire" "Idempotency-Key" "k2 api-key create --hire" "owner confirm" "managed_by_link" "k2 msg who" "app-asserted" "retire_blocked" "stay retired" "never the box login"; do
     assert_contains "agent-hire names $needle" "$ah_out" "$needle"
 done
 

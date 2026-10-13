@@ -9698,27 +9698,68 @@ ask your human (k2 tickets ask). Never install Stalwart or Postgres by hand.
 EOF
 }
 
+# _root_helper_fail_if_error <raw "body\ncode"> — when the daemon gave no
+# answer, a non-200, or an `error` body (a string like "route not found",
+# or {code, hint}), print one plain line on stderr and exit 1. Otherwise
+# return 0 and print nothing.
+_root_helper_fail_if_error() {
+    local raw="$1" code body
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ -z "$code" ] || [ "$code" = "000" ]; then
+        echo "k2 root-helper: daemon unreachable" >&2
+        exit 1
+    fi
+    local line
+    line="$(K2_RH_BODY="$body" K2_RH_CODE="$code" python3 -c '
+import json, os
+raw, code = os.environ["K2_RH_BODY"], os.environ["K2_RH_CODE"]
+try:
+    d = json.loads(raw)
+except Exception:
+    d = None
+e = d.get("error") if isinstance(d, dict) else None
+if isinstance(e, dict):
+    msg = str(e.get("code") or "error")
+    if e.get("hint"):
+        msg += ": " + str(e["hint"])
+elif e is not None:
+    msg = str(e)
+elif code != "200":
+    msg = "HTTP " + code + (": " + raw.strip()[:200] if raw.strip() else "")
+elif not isinstance(d, dict):
+    msg = "unexpected answer from the daemon: " + (raw.strip()[:200] or "(empty)")
+else:
+    msg = ""
+print(msg)
+')" || line="unreadable answer from the daemon (HTTP $code)"
+    if [ -n "$line" ]; then
+        echo "k2 root-helper: error: $line" >&2
+        exit 1
+    fi
+    return 0
+}
+
 _root_helper_render() {
     # _root_helper_render <as_json> <raw "body\ncode">
+    # --json passes the daemon body through untouched (still exit 1 when it
+    # is an error); otherwise an error is one plain stderr line + exit 1.
     local as_json="$1" raw="$2" code body
     code="${raw##*$'\n'}"
     body="${raw%$'\n'*}"
-    if [ -z "$raw" ]; then
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ]; then
         echo "k2 root-helper: daemon unreachable" >&2
         exit 1
     fi
     if [ "$as_json" = "1" ]; then
         printf '%s\n' "$body"
-    else
-        K2_RH_BODY="$body" python3 -c '
+        [ "$code" = "200" ] || exit 1
+        return 0
+    fi
+    _root_helper_fail_if_error "$raw"
+    K2_RH_BODY="$body" python3 -c '
 import json, os
-try:
-    d = json.loads(os.environ["K2_RH_BODY"])
-except Exception:
-    print(os.environ["K2_RH_BODY"]); raise SystemExit(0)
-if "error" in d:
-    e = d["error"]
-    print("error:", e.get("code"), "—", e.get("hint")); raise SystemExit(0)
+d = json.loads(os.environ["K2_RH_BODY"])
 h = d.get("heal")
 if h is not None:
     print("heal       :", h.get("result"), {k: v for k, v in h.items() if k != "result"} or "")
@@ -9742,8 +9783,6 @@ if "state" in d:
         x = e.get("event") or {}
         print("  event", e.get("at"), x.get("verb"), x.get("result"), (x.get("caller") or {}).get("pid"))
 '
-    fi
-    [ "$code" = "200" ] || exit 1
 }
 
 cmd_root_helper() {
@@ -9784,8 +9823,18 @@ cmd_root_helper() {
             ;;
         install-command)
             raw="$(_sidecar_send GET /cli/root-helper/status "")" || true
-            local body="${raw%$'\n'*}"
-            K2_RH_BODY="$body" python3 -c 'import json, os; print(json.loads(os.environ["K2_RH_BODY"]).get("installCommand", ""))'
+            if [ "$as_json" = "1" ]; then
+                _root_helper_render 1 "$raw"
+                return 0
+            fi
+            _root_helper_fail_if_error "$raw"
+            local body="${raw%$'\n'*}" cmd
+            cmd="$(K2_RH_BODY="$body" python3 -c 'import json, os; print(json.loads(os.environ["K2_RH_BODY"]).get("installCommand") or "")')"
+            if [ -z "$cmd" ]; then
+                echo "k2 root-helper: error: the daemon gave no install command" >&2
+                exit 1
+            fi
+            printf '%s\n' "$cmd"
             ;;
         *)
             echo "usage: unknown root-helper verb '$sub' (status|update|rollback|install-command)" >&2

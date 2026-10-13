@@ -14,6 +14,12 @@
 //   GET  /cli/zen/news                                  unseen Garden news
 //   POST /cli/zen/news/seen {ids}                        mark shown news seen
 //   GET  /cli/zen/get?garden=<id>&preview=page|theme|both  (zen-api.ts)
+//   POST /cli/zen/garden/lock {garden, locked}          lock / unlock (person only)
+//
+// Settings → Gardens shows two checkboxes per Garden (prd-garden-lock-and-
+// sync-v1): "Lock garden" and "Keep in sync with future template updates".
+// The sync checkbox is both parts at once (`part: "both"`); one part synced
+// and one a copy shows as a dash (`zenSyncChecked` → 'mixed').
 //
 // A daemon without `zen-sync-v1` answers these routes with "unknown zen
 // route": then there are no switches and no card (`supported: false`).
@@ -62,6 +68,9 @@ export interface ZenSyncRow {
   themeBuiltin: boolean
   /** The built-in under the Garden's theme ("Basic", "Paper", …). */
   themeBase: { name: string; label: string }
+  /** Agents can't change this Garden (prd-garden-lock-and-sync-v1). null when
+   *  this daemon has no Garden lock (no `locked` in its answer). */
+  locked: boolean | null
 }
 
 export interface ZenSyncList {
@@ -185,6 +194,7 @@ export function parseZenSyncList(raw: unknown): ZenSyncList {
         themeLabel: str(r.themeLabel, `${at}.themeLabel`),
         themeBuiltin: bool(r.themeBuiltin, `${at}.themeBuiltin`),
         themeBase: { name: str(base.name, `${at}.themeBase.name`), label: str(base.label, `${at}.themeBase.label`) },
+        locked: r.locked === undefined || r.locked === null ? null : bool(r.locked, `${at}.locked`),
       }
     }),
   }
@@ -262,6 +272,26 @@ export async function undoZenGardenSync(garden: string): Promise<void> {
 
 export async function keepZenPreviousLook(garden: string, part: ZenSyncParts = 'both'): Promise<void> {
   await daemonCliPost(localScope(), 'zen/garden/sync', { garden, keep: 'previous', part })
+  await loadZenSync()
+}
+
+/** The one "Keep in sync" checkbox: both parts on or both off. */
+export async function setZenGardenSyncBoth(garden: string, sync: boolean): Promise<void> {
+  await setZenGardenSync(garden, 'both', sync)
+}
+
+/** The checkbox's state: both parts synced, both a copy, or one of each. */
+export function zenSyncChecked(row: Pick<ZenSyncRow, 'page' | 'theme'>): boolean | 'mixed' {
+  const page = row.page.mode === 'synced'
+  const theme = row.theme.mode === 'synced'
+  if (page && theme) return true
+  if (!page && !theme) return false
+  return 'mixed'
+}
+
+/** Lock or unlock a Garden (person only; the app holds the owner token). */
+export async function setZenGardenLock(garden: string, locked: boolean): Promise<void> {
+  await daemonCliPost(localScope(), 'zen/garden/lock', { garden, locked })
   await loadZenSync()
 }
 

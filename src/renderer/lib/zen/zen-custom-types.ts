@@ -75,7 +75,7 @@ export function zenWidgetMayRun(w: Pick<ZenCustomWidgetPayload, 'origin'>): bool
 
 // ── Routes (UW35, UWB6, UWB15, UWB22, UWB23) ────────────────────────────
 
-/** GET /cli/zen/widget/bundle?widget=<name> */
+/** GET /cli/zen/widget/bundle?widget=<name>&garden=<id> */
 export interface ZenWidgetBundleResponse {
   ok: true
   widget: string

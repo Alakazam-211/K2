@@ -35,12 +35,15 @@ import {
   markZenNewsSeen,
   parseZenNews,
   parseZenSyncList,
+  setZenGardenLock,
+  setZenGardenSyncBoth,
   useZenSyncPreviewStore,
   useZenSyncStore,
   ZEN_NEWS_CARD_MIN_WIDTH,
   zenNewCatalogShorts,
   zenNewsCardModel,
   zenNewsCardText,
+  zenSyncChecked,
   zenSyncPreviewParam,
   ZenSyncParseError,
   type ZenNews,
@@ -70,6 +73,7 @@ const SYNC_ANSWER = {
       themeBase: { name: 'basic', label: 'Basic' },
       gardenTheme: null,
       damaged: [],
+      locked: false,
     },
     {
       id: 'g-2',
@@ -87,6 +91,7 @@ const SYNC_ANSWER = {
       themeBase: { name: 'basic', label: 'Basic' },
       gardenTheme: 'hearth',
       damaged: [],
+      locked: true,
     },
   ],
 }
@@ -138,6 +143,44 @@ describe('zen-sync parsing (GS30, GS31, GS43a)', () => {
     expect(news.copiesWithNewerDefault).toBe(2)
     expect(zenNewCatalogShorts(news)).toEqual(['diary'])
     expect(zenNewCatalogShorts(null)).toEqual([])
+  })
+})
+
+describe('Garden lock and the one sync checkbox (prd-garden-lock-and-sync-v1)', () => {
+  it('parses locked; an older daemon (no locked) reads as null', () => {
+    const [g1, g2] = parseZenSyncList(SYNC_ANSWER).gardens
+    expect(g1.locked).toBe(false)
+    expect(g2.locked).toBe(true)
+    const old = structuredClone(SYNC_ANSWER) as { gardens: Array<Record<string, unknown>> }
+    for (const g of old.gardens) delete g.locked
+    expect(parseZenSyncList(old).gardens.map((g) => g.locked)).toEqual([null, null])
+  })
+
+  it('refuses a locked that is not a boolean', () => {
+    const bad = structuredClone(SYNC_ANSWER) as { gardens: Array<Record<string, unknown>> }
+    bad.gardens[0].locked = 'yes'
+    expect(() => parseZenSyncList(bad)).toThrow(/garden g-1\.locked is not a boolean/)
+  })
+
+  it('zenSyncChecked: both synced, both a copy, or mixed', () => {
+    const p = (mode: 'synced' | 'copy') => ({ mode, defaults: null, since: null, reason: null, newerDefault: false, k2Version: null })
+    expect(zenSyncChecked({ page: p('synced'), theme: p('synced') })).toBe(true)
+    expect(zenSyncChecked({ page: p('copy'), theme: p('copy') })).toBe(false)
+    expect(zenSyncChecked({ page: p('synced'), theme: p('copy') })).toBe('mixed')
+    expect(zenSyncChecked({ page: p('copy'), theme: p('synced') })).toBe('mixed')
+  })
+
+  it('lock and sync gestures post to the local daemon, then re-read', async () => {
+    h.answers.set('zen/sync', SYNC_ANSWER)
+    h.answers.set('zen/news', NEWS_ANSWER)
+    await setZenGardenLock('g-1', true)
+    await setZenGardenSyncBoth('g-2', true)
+    expect(h.calls.filter((c) => c.method === 'POST')).toEqual([
+      { method: 'POST', hostKey: 'local', route: 'zen/garden/lock', data: { garden: 'g-1', locked: true } },
+      { method: 'POST', hostKey: 'local', route: 'zen/garden/sync', data: { garden: 'g-2', part: 'both', sync: true } },
+    ])
+    expect(h.calls.filter((c) => c.route === 'zen/sync')).toHaveLength(2)
+    expect(h.calls.every((c) => c.hostKey === 'local')).toBe(true)
   })
 })
 

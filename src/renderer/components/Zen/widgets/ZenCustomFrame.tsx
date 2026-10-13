@@ -117,7 +117,7 @@ export function ZenCustomFrame({
   useEffect(() => {
     let live = true
     const root = boxRef.current?.closest<HTMLElement>('[data-zen-root]') ?? null
-    void Promise.all([fetchZenWidgetBundle(widget.widget), zenLib.texts(widget.libs)])
+    void Promise.all([fetchZenWidgetBundle(widget.widget, gardenId), zenLib.texts(widget.libs)])
       .then(([bundle, libs]) => {
         if (!live) return
         const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: readZenFrameTheme(root), libs })

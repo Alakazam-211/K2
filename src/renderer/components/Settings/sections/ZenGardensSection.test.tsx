@@ -11,11 +11,17 @@
 //     Context Catalog, and hides when this computer's daemon has no Gardens
 //     routes (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
 //   - not set up: one "Set up Gardens" button that POSTs `zen/setup`;
-//   - list, rename, reorder and delete hit the LOCAL scope with the right
-//     bodies; delete asks first and says a copy stays in history;
+//   - list, rename, reorder and delete (the row's ⋯ menu) hit the LOCAL
+//     scope with the right bodies; delete asks first and says a copy stays
+//     in history;
+//   - prd-garden-lock-and-sync-v1: two checkboxes per row, "Lock garden"
+//     (`garden/lock`) and "Keep in sync with future template updates"
+//     (`garden/sync`, part both; a dash when mixed); an Undo toast after
+//     each; Lock hidden on a daemon without it; none of the removed
+//     controls or captions;
 //   - + New Garden sends the chosen template (texting / blank);
-//   - theme global and per-Garden (set and Follow global) bodies; theme
-//     names come from `theme/list`;
+//   - Advanced (collapsed): the global theme (names from `theme/list`) and
+//     the folder;
 //   - a `zen_changed` from the local daemon re-reads the list;
 //   - refusals (409 garden_exists, last_garden) show inline.
 
@@ -37,6 +43,10 @@ const h = vi.hoisted(() => ({
   label: 'main',
   /** `GET templates` rows; null = the daemon has no such route. */
   templates: null as null | Array<Record<string, unknown>>,
+  /** Per-Garden sync and lock state (`GET zen/sync`); missing = synced, unlocked. */
+  sync: {} as Record<string, { page: 'synced' | 'copy'; theme: 'synced' | 'copy'; locked: boolean }>,
+  /** false = an older daemon: its sync rows carry no `locked`. */
+  lockSupported: true,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -70,8 +80,45 @@ function gardenJson(g: FakeGarden, i: number): unknown {
   return { id: g.id, name: g.name, index: i + 1, template: g.template, hasFile: true, createdAt: null, theme: g.theme }
 }
 
+function syncOf(id: string): { page: 'synced' | 'copy'; theme: 'synced' | 'copy'; locked: boolean } {
+  h.sync[id] ??= { page: 'synced', theme: 'synced', locked: false }
+  return h.sync[id]
+}
+
+function syncRow(g: FakeGarden, i: number): Record<string, unknown> {
+  const st = syncOf(g.id)
+  const part = (mode: string): unknown =>
+    mode === 'copy' ? { mode, defaults: 'd-3f9a12c0b1e4d7a2', newerDefault: true, k2Version: '0.45.1' } : { mode, newerDefault: false }
+  const r: Record<string, unknown> = {
+    id: g.id,
+    name: g.name,
+    index: i + 1,
+    page: part(st.page),
+    theme: part(st.theme),
+    ownChanges: ['layout'],
+    undo: null,
+    keepPrevious: { page: true, theme: true },
+    themeName: 'basic',
+    themeLabel: 'Basic',
+    themeBuiltin: true,
+    themeBase: { name: 'basic', label: 'Basic' },
+  }
+  if (h.lockSupported) r.locked = st.locked
+  return r
+}
+
 function fakeGet(route: string): unknown {
   if (h.outdated && route.startsWith('zen/')) throw new Error('unknown zen route')
+  if (route === 'zen/sync') {
+    return { ok: true, liveDefaults: 'd-1111222233334444', k2Version: '0.45.5', previousDefaults: 'd-3f9a12c0b1e4d7a2', gardens: h.gardens.map(syncRow) }
+  }
+  if (route === 'zen/news') {
+    return {
+      ok: true,
+      items: [{ id: 'catalog:diary', kind: 'catalog', short: 'diary', label: 'Diary', description: 'A journal.', template: 'k2.diary@1', version: 1 }],
+      copiesWithNewerDefault: 1,
+    }
+  }
   if (route === 'zen/gardens') return { ok: true, setUp: h.setUp, gardens: h.setUp ? h.gardens.map(gardenJson) : [] }
   if (route === 'zen/status') return { ok: true, setUp: h.setUp, path: '/Users/r/.k2/zen', gardens: [] }
   if (route === 'zen/theme/list') {
@@ -145,6 +192,24 @@ function fakePost(route: string, body: Record<string, unknown>): unknown {
       h.gardens.splice(h.gardens.indexOf(g), 1)
       return { ok: true }
     }
+    case 'zen/garden/lock': {
+      const g = findGarden(String(body.garden))
+      syncOf(g.id).locked = body.locked === true
+      return { ok: true, locked: body.locked === true, changed: true }
+    }
+    case 'zen/garden/sync': {
+      const g = findGarden(String(body.garden))
+      const st = syncOf(g.id)
+      if (body.undo === true) {
+        st.page = 'synced'
+        st.theme = 'synced'
+        return { ok: true, changed: true }
+      }
+      if (body.part !== 'both') throw new Error(`expected part both, got ${String(body.part)}`)
+      st.page = body.sync === true ? 'synced' : 'copy'
+      st.theme = st.page
+      return { ok: true, changed: true }
+    }
     case 'zen/theme/set': {
       if (body.clear === true) {
         findGarden(String(body.garden)).theme = null
@@ -210,8 +275,10 @@ import {
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import Settings, { settingsNav } from '../Settings'
 import { ZEN_GARDENS_MANIFEST, ZenGardensSection } from './ZenGardensSection'
-import { __resetZenTemplatesForTests, setZenCatalogBadge } from '@/lib/zen/zen-templates'
+import { __resetZenTemplatesForTests } from '@/lib/zen/zen-templates'
+import { __resetZenSyncForTests } from '@/lib/zen/zen-sync'
 import { useHomesStore } from '@/stores/homes'
+import { useToastStore } from '@/stores/toast'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -265,6 +332,33 @@ async function mountSection(): Promise<void> {
   await settle()
 }
 
+/** Open a row's ⋯ menu and pick an item. */
+async function menu(name: string, item: string): Promise<void> {
+  fireEvent.click(screen.getByRole('button', { name: `More for ${name}` }))
+  const m = await screen.findByRole('menu', { name: `${name} menu` })
+  fireEvent.click(within(m).getByRole('menuitem', { name: item }))
+  await settle()
+}
+
+function menuItem(name: string, item: string): HTMLButtonElement {
+  fireEvent.click(screen.getByRole('button', { name: `More for ${name}` }))
+  const m = screen.getByRole('menu', { name: `${name} menu` })
+  return within(m).getByRole('menuitem', { name: item }) as HTMLButtonElement
+}
+
+function openAdvanced(): void {
+  const btn = screen.getByRole('button', { name: /Advanced/ })
+  expect(btn.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(btn)
+  expect(btn.getAttribute('aria-expanded')).toBe('true')
+}
+
+function box(kind: 'lock' | 'sync', id: string): HTMLInputElement {
+  const el = document.querySelector<HTMLInputElement>(`[data-zen-garden-${kind}="${id}"] input[type="checkbox"]`)
+  if (!el) throw new Error(`no ${kind} checkbox for ${id}\n${document.body.innerHTML.slice(0, 2000)}`)
+  return el
+}
+
 async function pickDropdown(label: string, option: string): Promise<void> {
   fireEvent.click(screen.getByRole('button', { name: label }))
   const menu = await screen.findByTestId('setting-dropdown-menu')
@@ -292,7 +386,11 @@ beforeEach(() => {
   setPlatform('MacIntel')
   __resetZenSettingsForTests()
   __resetZenTemplatesForTests()
+  __resetZenSyncForTests()
+  useToastStore.setState({ toasts: [] })
   h.templates = null
+  h.sync = {}
+  h.lockSupported = true
   // A light section underneath, so only the sidebar and Gardens matter.
   useSettingsStore.setState({ settingsOpen: true, activeSection: 'keybindings' })
 })
@@ -419,19 +517,24 @@ describe('Settings → Gardens: the section', () => {
     expect(zenCalls().every(([, hostKey]) => hostKey === 'local')).toBe(true)
   })
 
-  it('lists Gardens in order with template label and position, and the folder', async () => {
+  it('lists Gardens in order by name only (no template label, no position); the folder is under Advanced', async () => {
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
     expect(row('g-1').textContent).toContain('Garden 1')
-    expect(row('g-1').textContent).toContain('Default layout')
-    expect(row('g-2').textContent).toContain('Empty')
-    expect(within(row('g-3')).getByTitle('Position').textContent).toBe('3')
+    expect(row('g-1').textContent).not.toContain('Default layout')
+    expect(row('g-2').textContent).not.toContain('Empty')
+    expect(within(row('g-3')).queryByTitle('Position')).toBeNull()
+    // Advanced starts collapsed: no folder, no global theme.
+    expect(document.querySelector('[data-zen-gardens-path]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Global Zen theme' })).toBeNull()
+    openAdvanced()
     expect(document.querySelector('[data-zen-gardens-path]')?.textContent).toBe('/Users/r/.k2/zen')
+    expect(screen.getByRole('button', { name: 'Global Zen theme' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }))
     await settle()
     expect(h.reveals).toEqual(['/Users/r/.k2/zen'])
-    // Every request went to this computer's daemon (the Garden sync reads,
-    // zen/sync and zen/news, are ZenGardenSyncControls' own and tested there).
+    // Every request went to this computer's daemon (the Garden sync read,
+    // zen/sync (+ zen/news), is ZenGardenSyncControls' own, tested below).
     expect(zenCalls().every(([, k]) => k === 'local')).toBe(true)
     expect(zenCalls().filter(([, , r]) => r !== 'zen/sync' && r !== 'zen/news').map(([m, k, r]) => [m, k, r])).toEqual([
       ['GET', 'local', 'zen/gardens'],
@@ -449,9 +552,9 @@ describe('Settings → Gardens: the section', () => {
     }
   })
 
-  it('rename inline: Enter posts {garden, name} to the local daemon', async () => {
+  it('rename inline (⋯ → Rename): Enter posts {garden, name} to the local daemon', async () => {
     await mountSection()
-    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Rename' }))
+    await menu('Mornings', 'Rename')
     const input = screen.getByRole('textbox', { name: 'New name for Mornings' })
     fireEvent.change(input, { target: { value: 'Evenings' } })
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -462,8 +565,8 @@ describe('Settings → Gardens: the section', () => {
 
   it('rename onto a taken name shows the 409 inline, from the daemon too', async () => {
     await mountSection()
-    // Caught before posting (case aside).
-    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Rename' }))
+    // Caught before posting (case aside). Clicking the name renames too.
+    fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Mornings' }))
     fireEvent.change(screen.getByRole('textbox', { name: 'New name for Mornings' }), { target: { value: 'garden 1' } })
     fireEvent.click(within(row('g-3')).getByRole('button', { name: 'Save' }))
     await settle()
@@ -481,13 +584,18 @@ describe('Settings → Gardens: the section', () => {
     expect(screen.getByRole('textbox', { name: 'New name for Mornings' })).toBeTruthy()
   })
 
-  it('move up / down posts {garden, to} (1-based); the ends are disabled', async () => {
+  it('⋯ → Move up / Move down posts {garden, to} (1-based); the ends are disabled', async () => {
     await mountSection()
-    expect((screen.getByRole('button', { name: 'Move Garden 1 up' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Move Mornings down' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Move Mornings up' }))
+    expect(menuItem('Garden 1', 'Move up').disabled).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(menuItem('Mornings', 'Move down').disabled).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await settle()
+    await menu('Mornings', 'Move up')
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-3', 'g-2']))
-    fireEvent.click(screen.getByRole('button', { name: 'Move Garden 1 down' }))
+    await menu('Garden 1', 'Move down')
     await waitFor(() => expect(rowNames()).toEqual(['g-3', 'g-1', 'g-2']))
     expect(zenPosts()).toEqual([
       ['zen/garden/reorder', { garden: 'g-3', to: 2 }],
@@ -495,9 +603,9 @@ describe('Settings → Gardens: the section', () => {
     ])
   })
 
-  it('delete asks first, says a copy stays in history, then posts {garden}', async () => {
+  it('⋯ → Delete asks first, says a copy stays in history, then posts {garden}', async () => {
     await mountSection()
-    fireEvent.click(within(row('g-2')).getByRole('button', { name: 'Delete' }))
+    await menu('Garden 2', 'Delete')
     const confirm = document.querySelector<HTMLElement>('[data-zen-garden-confirm="g-2"]')
     expect(confirm?.textContent).toContain('Delete “Garden 2”?')
     expect(confirm?.textContent).toContain('A copy stays in history')
@@ -505,7 +613,7 @@ describe('Settings → Gardens: the section', () => {
     // Cancel posts nothing.
     fireEvent.click(within(confirm as HTMLElement).getByRole('button', { name: 'Cancel' }))
     expect(document.querySelector('[data-zen-garden-confirm="g-2"]')).toBeNull()
-    fireEvent.click(within(row('g-2')).getByRole('button', { name: 'Delete' }))
+    await menu('Garden 2', 'Delete')
     fireEvent.click(screen.getByRole('button', { name: 'Delete Garden' }))
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-3']))
     expect(zenPosts()).toEqual([['zen/garden/delete', { garden: 'g-2' }]])
@@ -514,7 +622,7 @@ describe('Settings → Gardens: the section', () => {
   it('deleting the last Garden shows the refusal inline', async () => {
     h.gardens = [{ id: 'g-1', name: 'Garden 1', template: 'k2.texting@1', theme: null }]
     await mountSection()
-    fireEvent.click(within(row('g-1')).getByRole('button', { name: 'Delete' }))
+    await menu('Garden 1', 'Delete')
     fireEvent.click(screen.getByRole('button', { name: 'Delete Garden' }))
     await waitFor(() =>
       expect(screen.getByTestId('zen-garden-error-g-1').textContent).toBe('That’s your last Garden. You need at least one.'),
@@ -530,7 +638,7 @@ describe('Settings → Gardens: the section', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Launch room' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
-    expect(row(rowNames()[3]).textContent).toContain('Default layout')
+    expect(row(rowNames()[3]).textContent).toContain('Launch room')
     await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
 
     fireEvent.click(screen.getByRole('button', { name: '+ New Garden' }))
@@ -539,7 +647,7 @@ describe('Settings → Gardens: the section', () => {
     expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Garden 5')
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(row(rowNames()[4]).textContent).toContain('Empty')
+    expect(row(rowNames()[4]).textContent).toContain('Garden 5')
 
     expect(zenPosts()).toEqual([
       ['zen/garden/new', { name: 'Launch room', template: 'texting' }],
@@ -561,33 +669,25 @@ describe('Settings → Gardens: the section', () => {
     expect(rowNames()).toHaveLength(3)
   })
 
-  it('theme: the global pick and a per-Garden override and Follow global, names from theme/list', async () => {
+  it('Advanced: the global theme, names from theme/list; no per-Garden theme pick in Settings', async () => {
     // A theme the client has never heard of comes straight from the daemon.
     h.themes = ['basic', 'paper', 'midnight', 'sunrise']
     h.global = 'basic'
     await mountSection()
+    expect(screen.queryByRole('button', { name: /^Theme for / })).toBeNull()
+    openAdvanced()
+    expect(screen.queryByRole('button', { name: /^Theme for / })).toBeNull()
 
     await pickDropdown('Global Zen theme', 'sunrise')
     await waitFor(() => expect(useZenSettingsStore.getState().globalTheme).toBe('sunrise'))
 
-    await pickDropdown('Theme for Garden 1', 'midnight')
-    await waitFor(() =>
-      expect(useZenSettingsStore.getState().gardens.find((g) => g.id === 'g-1')?.theme).toBe('midnight'),
-    )
-
-    await pickDropdown('Theme for Garden 2', 'Follow global (sunrise)')
-    await waitFor(() => expect(useZenSettingsStore.getState().gardens.find((g) => g.id === 'g-2')?.theme).toBeNull())
-
-    expect(zenPosts()).toEqual([
-      ['zen/theme/set', { name: 'sunrise' }],
-      ['zen/theme/set', { name: 'midnight', garden: 'g-1' }],
-      ['zen/theme/set', { garden: 'g-2', clear: true }],
-    ])
+    expect(zenPosts()).toEqual([['zen/theme/set', { name: 'sunrise' }]])
     expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
   })
 
   it('a theme refusal shows inline', async () => {
     await mountSection()
+    openAdvanced()
     h.failNext = 'unknown_theme'
     await pickDropdown('Global Zen theme', 'paper')
     await waitFor(() =>
@@ -625,6 +725,111 @@ describe('Settings → Gardens: the section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3']))
     expect(screen.queryByTestId('zen-gardens-load-error')).toBeNull()
+  })
+})
+
+describe('Settings → Gardens: two checkboxes per Garden (prd-garden-lock-and-sync-v1)', () => {
+  it('each row has Lock garden and Keep in sync, with one-line tooltips', async () => {
+    h.sync['g-2'] = { page: 'copy', theme: 'copy', locked: true }
+    await mountSection()
+    await waitFor(() => box('lock', 'g-1'))
+    for (const id of ['g-1', 'g-2', 'g-3']) {
+      expect(row(id).querySelectorAll('input[type="checkbox"]')).toHaveLength(2)
+    }
+    expect(box('lock', 'g-1').checked).toBe(false)
+    expect(box('lock', 'g-2').checked).toBe(true)
+    expect(box('sync', 'g-1').checked).toBe(true)
+    expect(box('sync', 'g-2').checked).toBe(false)
+    expect(box('sync', 'g-1').indeterminate).toBe(false)
+    expect(within(row('g-1')).getByLabelText('Lock garden')).toBe(box('lock', 'g-1'))
+    expect(within(row('g-1')).getByLabelText('Keep in sync with future template updates')).toBe(box('sync', 'g-1'))
+    expect(document.querySelector('[data-zen-garden-lock="g-1"]')?.getAttribute('title')).toBe('Agents can’t change this Garden. You still can.')
+    expect(document.querySelector('[data-zen-garden-sync="g-1"]')?.getAttribute('title')).toBe(
+      'Gets K2’s improvements to this Garden’s template and theme.',
+    )
+  })
+
+  it('Lock posts {garden, locked: true}; the Undo toast unlocks again', async () => {
+    await mountSection()
+    await waitFor(() => box('lock', 'g-3'))
+    fireEvent.click(box('lock', 'g-3'))
+    await waitFor(() => expect(box('lock', 'g-3').checked).toBe(true))
+    expect(zenPosts()).toEqual([['zen/garden/lock', { garden: 'g-3', locked: true }]])
+    const toast = useToastStore.getState().toasts.at(-1) as { message: string; duration?: number; action?: { label: string; onClick(): void } }
+    expect(toast.message).toBe('Mornings is locked')
+    expect(toast.action?.label).toBe('Undo')
+    await act(async () => toast.action?.onClick())
+    await waitFor(() => expect(box('lock', 'g-3').checked).toBe(false))
+    expect(zenPosts()).toEqual([
+      ['zen/garden/lock', { garden: 'g-3', locked: true }],
+      ['zen/garden/lock', { garden: 'g-3', locked: false }],
+    ])
+    expect(h.calls.filter((c) => c.method === 'POST').every((c) => c.hostKey === 'local')).toBe(true)
+  })
+
+  it('Keep in sync off / on posts part both; Undo puts the state back', async () => {
+    await mountSection()
+    await waitFor(() => box('sync', 'g-1'))
+    fireEvent.click(box('sync', 'g-1'))
+    await waitFor(() => expect(box('sync', 'g-1').checked).toBe(false))
+    fireEvent.click(box('sync', 'g-1'))
+    await waitFor(() => expect(box('sync', 'g-1').checked).toBe(true))
+    expect(zenPosts()).toEqual([
+      ['zen/garden/sync', { garden: 'g-1', part: 'both', sync: false }],
+      ['zen/garden/sync', { garden: 'g-1', part: 'both', sync: true }],
+    ])
+    const toast = useToastStore.getState().toasts.at(-1) as { action?: { label: string; onClick(): void } }
+    expect(toast.action?.label).toBe('Undo')
+    await act(async () => toast.action?.onClick())
+    await waitFor(() => expect(zenPosts().at(-1)).toEqual(['zen/garden/sync', { garden: 'g-1', undo: true }]))
+  })
+
+  it('mixed (page synced, theme a copy) shows a dash; one click syncs both', async () => {
+    h.sync['g-2'] = { page: 'synced', theme: 'copy', locked: false }
+    await mountSection()
+    await waitFor(() => box('sync', 'g-2'))
+    expect(box('sync', 'g-2').indeterminate).toBe(true)
+    expect(box('sync', 'g-2').getAttribute('aria-checked')).toBe('mixed')
+    fireEvent.click(box('sync', 'g-2'))
+    await waitFor(() => expect(box('sync', 'g-2').indeterminate).toBe(false))
+    expect(box('sync', 'g-2').checked).toBe(true)
+    expect(zenPosts()).toEqual([['zen/garden/sync', { garden: 'g-2', part: 'both', sync: true }]])
+  })
+
+  it('an older daemon (no `locked` in zen/sync): no Lock checkbox, Keep in sync stays', async () => {
+    h.lockSupported = false
+    await mountSection()
+    await waitFor(() => box('sync', 'g-1'))
+    expect(document.querySelector('[data-zen-garden-lock]')).toBeNull()
+    expect(screen.queryByLabelText('Lock garden')).toBeNull()
+  })
+
+  it('none of the removed controls or captions are on the screen', async () => {
+    h.sync['g-1'] = { page: 'copy', theme: 'copy', locked: false }
+    await mountSection()
+    await waitFor(() => box('sync', 'g-1'))
+    openAdvanced()
+    const text = document.querySelector('[data-zen-gardens-section]')?.textContent ?? ''
+    for (const gone of [
+      'Follow global',
+      'Garden catalog',
+      'New for your Gardens',
+      'Keep my previous look',
+      'Preview in Zen',
+      'Preview',
+      'Sync with K2’s default',
+      'Sync theme with',
+      'K2’s default has changed',
+      'This release changed',
+      'Gets K2’s improvements',
+      'Your own copy',
+      'They live on this computer',
+      'Every Garden uses it unless',
+    ]) {
+      expect(text, gone).not.toContain(gone)
+    }
+    expect(document.querySelector('[data-zen-garden-news], [data-zen-sync-keep-previous], [data-zen-sync-newer], [data-zen-sync-confirm]')).toBeNull()
+    expect(text).toContain('Your Zen pages on this computer.')
   })
 })
 
@@ -675,7 +880,7 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     fireEvent.change(screen.getByRole('textbox', { name: 'New Garden name' }), { target: { value: 'Notebook' } })
     fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
     await waitFor(() => expect(rowNames()).toHaveLength(4))
-    expect(row(rowNames()[3]).textContent).toContain('Diary')
+    expect(row(rowNames()[3]).textContent).toContain('Notebook')
     expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Notebook', template: 'diary' }]])
   })
 
@@ -692,39 +897,19 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Garden 4', template: 'texting' }]])
   })
 
-  it('Rosson 2026-10-08: the Garden catalog area uses the same cards; a card opens New Garden on it', async () => {
-    h.templates = [...STARTS, DIARY, { ...DIARY, id: 'k2.stickers@1', short: 'stickers', label: 'Stickers' }]
-    h.gardens.push({ id: 'g-diary', name: 'Diary', template: 'k2.diary@1', theme: null })
+  it('prd-garden-lock-and-sync-v1: no Garden catalog area in Settings (New Garden has the cards)', async () => {
+    h.templates = [...STARTS, DIARY]
     await mountSection()
-    act(() => setZenCatalogBadge('diary', 'New'))
-    const cards = [...document.querySelectorAll('[data-zen-catalog-card]')].map((c) => c.getAttribute('data-zen-catalog-card'))
-    expect(cards).toEqual(['diary', 'stickers'])
-    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-badge="diary"]')?.textContent).toBe('New')
-    expect(document.querySelector('[data-zen-catalog-card="stickers"] [data-zen-catalog-badge]')).toBeNull()
-    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-garden-sketch="diary"]')).not.toBeNull()
-    expect(document.querySelector('[data-zen-catalog-card="diary"] [data-zen-catalog-in-use="1"]')).not.toBeNull()
-    // Nothing is created until Create.
-    fireEvent.click(document.querySelector('[data-zen-catalog-card="diary"]') as HTMLElement)
-    await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="diary"]').getAttribute('aria-checked')).toBe('true'))
-    expect(zenPosts()).toEqual([])
-    expect((screen.getByRole('textbox', { name: 'New Garden name' }) as HTMLInputElement).value).toBe('Diary 2')
-    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
-    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
-    await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(zenPosts()).toEqual([['zen/garden/new', { name: 'Diary 2', template: 'diary' }]])
-    // Another catalog Garden: the same, no consent, no grant.
-    await waitFor(() => expect(document.querySelector('[data-testid="zen-new-garden-modal"]')).toBeNull())
-    fireEvent.click(document.querySelector('[data-zen-catalog-card="stickers"]') as HTMLElement)
-    await waitFor(() => expect(newGardenEl('[data-zen-new-garden-card="stickers"]').getAttribute('aria-checked')).toBe('true'))
-    expect(document.querySelector('[data-zen-new-garden-consent]')).toBeNull()
-    fireEvent.click(newGardenEl('[data-zen-new-garden-create]'))
-    await waitFor(() => expect(zenPosts()).toHaveLength(2))
-    expect(zenPosts()[1]).toEqual(['zen/garden/new', { name: 'Stickers', template: 'stickers' }])
+    expect(document.querySelector('[data-zen-settings-catalog-area], [data-zen-catalog-card]')).toBeNull()
+    expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.catalog')
   })
 
-  it('no catalog (older daemon): no catalog area', async () => {
+  it('prd-garden-lock-and-sync-v1: every search entry lands on something on the page, Advanced collapsed', async () => {
     await mountSection()
-    expect(document.querySelector('[data-zen-settings-catalog-area]')).toBeNull()
+    expect(document.querySelector('[data-zen-gardens-advanced] button')?.getAttribute('aria-expanded')).toBe('false')
+    for (const e of ZEN_GARDENS_MANIFEST) {
+      expect(document.querySelector(`[data-settings-id="${e.id}"]`), e.id).not.toBeNull()
+    }
   })
 
   it('Rosson 2026-10-08: nothing in Settings mentions widget permissions, sending switches or grants', async () => {

@@ -1142,6 +1142,22 @@ mod tests {
     }
 
     #[test]
+    fn operate_switch_rides_the_projects_list() {
+        // The Agent tab reads `agentsCanOperateCompute` off the projects list.
+        let c = crate::db::isolated_test_connection();
+        c.execute("INSERT INTO projects (id, name, path) VALUES ('w1', 'it', '/w/it')", []).unwrap();
+        let p = crate::db::schema::Project::get(&c, "w1").unwrap();
+        assert_eq!(p.agents_can_operate_compute, 0);
+        set_agents_can_operate_compute(&c, "w1", true).unwrap();
+        let listed = crate::db::schema::Project::list(&c).unwrap();
+        let p = listed.iter().find(|p| p.id == "w1").expect("w1 listed");
+        assert_eq!(p.agents_can_operate_compute, 1);
+        let v = serde_json::to_value(p).unwrap();
+        assert_eq!(v["agentsCanOperateCompute"], 1);
+        assert_eq!(crate::db::schema::Project::get(&c, "w1").unwrap().agents_can_operate_compute, 1);
+    }
+
+    #[test]
     fn health_alerts_and_offline_rules() {
         use super::super::proto::health::{DiskFact, ExecutorFact, Thermal, Updates};
         let c = conn_with_node();

@@ -382,6 +382,24 @@ export async function setWorkspaceComputeSwitch(
   return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute', value, workspace })
 }
 
+/** "Allow this agent to operate compute nodes" (node admin Q14, 0156):
+ *  the owner's standing approval for the operate class only (narrow,
+ *  pause, update, restart). Root actions still wait for the owner each
+ *  time. Same Admin route as the CLI (`k2 compute operate on|off`). */
+export interface ComputeOperateSetResult {
+  ok: boolean
+  workspace?: string
+  toggle?: string
+  agentsCanOperateCompute?: boolean
+}
+
+export async function setWorkspaceComputeOperate(
+  workspace: string,
+  value: boolean,
+): Promise<ComputeOperateSetResult> {
+  return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute_operate', value, workspace })
+}
+
 // ── This computer (local daemon) ────────────────────────────────────────
 
 export async function fetchLocalStatus(): Promise<LocalStatus> {

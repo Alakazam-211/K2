@@ -3,8 +3,9 @@
 // grip to drag it into place, the name as an in-place editor with Save,
 // Delete (asks in K2's confirm dialog) (Rosson 2026-10-13), and two checkboxes,
 // "Lock garden" and "Keep in sync with future template updates"
-// (`ZenGardenSyncControls`). + New Garden opens the same modal as Zen's. A
-// collapsed Advanced holds the global theme and the folder. Thin client over
+// (`ZenGardenSyncControls`). Above the list: + New Garden (the same modal as
+// Zen's) and a search by name. A collapsed Advanced holds the global theme
+// and the folder. Thin client over
 // `lib/zen/zen-settings.ts`: every request goes to the LOCAL daemon. Re-reads
 // on every local `zen_changed`, like the Garden switcher, so Settings and an
 // open Zen window stay in step.
@@ -129,6 +130,7 @@ function GardenRow({
   dragging,
   picked,
   dropEdge,
+  reorderable,
   onHandleMouseDown,
   onHandleKeyDown,
   onHandleBlur,
@@ -140,6 +142,8 @@ function GardenRow({
   /** Carried with the keyboard (Space picked it up). */
   picked: boolean
   dropEdge: DropEdge
+  /** False while a search filters the list: the grip is dimmed and inert. */
+  reorderable: boolean
   onHandleMouseDown(e: React.MouseEvent): void
   onHandleKeyDown(e: React.KeyboardEvent): void
   onHandleBlur(): void
@@ -218,13 +222,16 @@ function GardenRow({
           aria-roledescription="drag handle"
           aria-pressed={picked}
           aria-describedby="zen-gardens-reorder-help"
-          title="Drag to reorder"
+          aria-disabled={!reorderable}
+          title={reorderable ? 'Drag to reorder' : 'Clear search to reorder'}
           onMouseDown={onHandleMouseDown}
           onKeyDown={onHandleKeyDown}
           onBlur={onHandleBlur}
-          className={`w-4 h-6 flex-shrink-0 flex items-center justify-center hover:text-[var(--color-text-primary)] focus:text-[var(--color-text-primary)] no-drag cursor-grab active:cursor-grabbing outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
-            picked ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
-          }`}
+          className={`w-4 h-6 flex-shrink-0 flex items-center justify-center no-drag outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
+            reorderable
+              ? 'cursor-grab active:cursor-grabbing hover:text-[var(--color-text-primary)] focus:text-[var(--color-text-primary)]'
+              : 'cursor-default opacity-30'
+          } ${picked ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}
         >
           <GripIcon />
         </button>
@@ -298,8 +305,22 @@ function slotToPosition(from: number, drop: number): number | null {
  * up, the arrows choose a spot, Space/Enter drops it, Escape cancels. One
  * `zen/garden/reorder` per move with the final position; the list paints
  * at once and goes back (with a toast) if the daemon refuses.
+ *
+ * `query` filters by name (case-insensitive substring). While it filters,
+ * reordering is off (a partial list would make a confusing order): the
+ * grips dim and say "Clear search to reorder". Rename, Delete and the
+ * checkboxes still work on the rows shown.
  */
-function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
+function GardenList({
+  gardens: all,
+  query,
+}: {
+  gardens: readonly ZenSettingsGarden[]
+  query: string
+}): React.JSX.Element {
+  const q = query.trim().toLocaleLowerCase()
+  const filtering = q !== ''
+  const gardens = filtering ? all.filter((g) => g.name.toLocaleLowerCase().includes(q)) : all
   const listRef = useRef<HTMLOListElement>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [dropSlot, setDropSlot] = useState<number | null>(null)
@@ -338,7 +359,7 @@ function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Rea
   )
 
   const onHandleMouseDown = (e: React.MouseEvent, from: number): void => {
-    if (e.button !== 0) return
+    if (e.button !== 0 || filtering) return
     e.preventDefault()
     const garden = gardens[from]
     const startY = e.clientY
@@ -383,6 +404,7 @@ function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Rea
   }
 
   const onHandleKeyDown = (e: React.KeyboardEvent, from: number): void => {
+    if (filtering) return
     const garden = gardens[from]
     const carrying = pickedId === garden.id
     const key = e.key
@@ -445,7 +467,8 @@ function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Rea
           <GardenRow
             key={g.id}
             garden={g}
-            gardens={gardens}
+            gardens={all}
+            reorderable={!filtering}
             dragging={g.id === active}
             picked={g.id === pickedId}
             dropEdge={!showLine ? null : dropSlot === i ? 'top' : dropSlot === count && i === count - 1 ? 'bottom' : null}
@@ -457,10 +480,50 @@ function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Rea
           />
         ))}
       </ol>
+      {filtering && gardens.length === 0 && (
+        <p data-zen-gardens-no-match="" className="py-3 text-xs text-[var(--color-text-muted)]">
+          No Gardens match “{query.trim()}”
+        </p>
+      )}
       <div aria-live="polite" role="status" className="sr-only" data-zen-gardens-announce="">
         {announce}
       </div>
     </>
+  )
+}
+
+/** Search the Gardens by name (Rosson 2026-10-13): the Settings search-field
+ *  look, a × to clear, Escape clears too. Not remembered. */
+function GardenSearch({ value, onChange }: { value: string; onChange(v: string): void }): React.JSX.Element {
+  return (
+    <div className="relative mb-3" data-zen-gardens-search="">
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && value !== '') {
+            e.preventDefault()
+            e.stopPropagation()
+            onChange('')
+          }
+        }}
+        placeholder="Search Gardens"
+        aria-label="Search Gardens"
+        className={`${INPUT} w-full pr-7 [&::-webkit-search-cancel-button]:hidden`}
+      />
+      {value !== '' && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          title="Clear search"
+          onClick={() => onChange('')}
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+        >
+          ×
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -487,7 +550,7 @@ function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Reac
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={`${BTN} mt-3`}>
+      <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={`${BTN} mb-3`}>
         + New Garden
       </button>
       {open && (
@@ -586,6 +649,7 @@ export function ZenGardensSection(): React.JSX.Element {
   const st = useZenSettingsStore()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     void loadZenSettings()
@@ -626,8 +690,9 @@ export function ZenGardensSection(): React.JSX.Element {
         </div>
       ) : (
         <section data-settings-id="zen-gardens.list">
-          <GardenList gardens={st.gardens} />
           <NewGarden gardens={st.gardens} />
+          <GardenSearch value={query} onChange={setQuery} />
+          <GardenList gardens={st.gardens} query={query} />
         </section>
       )}
 

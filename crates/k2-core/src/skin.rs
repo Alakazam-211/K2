@@ -2635,7 +2635,11 @@ pub fn verify_principal_password(username: &str, password: &str) -> bool {
 pub enum SkinLoginOutcome {
     Ok(SkinPrincipal),
     BadCreds,
-    LockedOut,
+    /// The presented username/email is locked (3 bad tries → 15 min). Set
+    /// for ANY presented string with a live lock row, known principal or
+    /// not (failures are counted per presented string), so telling a
+    /// caller "locked" reveals nothing about which usernames exist.
+    LockedOut { retry_after_secs: i64 },
 }
 
 /// Same row key as [`check_and_record_login`]: trim + ASCII lowercase; an
@@ -2683,8 +2687,9 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
             .optional()
             .map_err(|e| format!("skin lockout lookup: {e}"))?;
         if let Some((_count, Some(until))) = row {
-            if now_secs() < until {
-                return Ok(true);
+            let now = now_secs();
+            if now < until {
+                return Ok(Some(until - now));
             }
             conn.execute(
                 "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0 WHERE username = ?1",
@@ -2692,11 +2697,13 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
             )
             .map_err(|e| format!("skin lockout expire: {e}"))?;
         }
-        Ok(false)
+        Ok(None)
     })
-    .unwrap_or(false);
-    if locked {
-        return SkinLoginOutcome::LockedOut;
+    .unwrap_or(None);
+    if let Some(left) = locked {
+        return SkinLoginOutcome::LockedOut {
+            retry_after_secs: left.max(1),
+        };
     }
 
     let stored = with_conn(|conn| lookup_login_hash(conn, &presented)).unwrap_or(None);
@@ -5929,12 +5936,37 @@ mod tests {
                 }
             }
             match check_and_record_login("eve", "right-password") {
-                SkinLoginOutcome::LockedOut => {}
+                SkinLoginOutcome::LockedOut { .. } => {}
                 _ => panic!("4th attempt after 3 fails is lockout, not a verify"),
             }
             match check_and_record_login("eve", "wrong") {
-                SkinLoginOutcome::LockedOut => {}
+                SkinLoginOutcome::LockedOut { .. } => {}
                 _ => panic!("locked username stays generic LockedOut"),
+            }
+        });
+    }
+
+    /// nsi BFF ask (2026-10-13): a locked login says how long is left, and
+    /// an unknown username locks exactly like a known one (no oracle).
+    #[test]
+    fn lockout_reports_retry_after_for_known_and_unknown_alike() {
+        with_temp_home(|| {
+            add_principal("eve").unwrap();
+            set_principal_password("eve", Some("right-password")).unwrap();
+            for who in ["eve", "nobody-here"] {
+                for _ in 0..3 {
+                    assert!(matches!(
+                        check_and_record_login(who, "wrong"),
+                        SkinLoginOutcome::BadCreds
+                    ));
+                }
+                match check_and_record_login(who, "right-password") {
+                    SkinLoginOutcome::LockedOut { retry_after_secs } => assert!(
+                        (1..=LOCKOUT_DURATION_SECS).contains(&retry_after_secs),
+                        "{who}: {retry_after_secs}"
+                    ),
+                    other => panic!("{who}: want LockedOut, got {other:?}"),
+                }
             }
         });
     }
@@ -6266,7 +6298,7 @@ mod tests {
                 }
             }
             match check_and_record_login("jane@clinic.com", "s3cret-horse") {
-                SkinLoginOutcome::LockedOut => {}
+                SkinLoginOutcome::LockedOut { .. } => {}
                 other => panic!("lockout is on presented email, got {other:?}"),
             }
             match check_and_record_login("jane", "s3cret-horse") {

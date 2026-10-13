@@ -1614,6 +1614,8 @@ fn status_line(code: u16) -> &'static str {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         400 => "400 Bad Request",
+        // A locked login passes through to the browser as-is (nsi BFF ask).
+        423 => "423 Locked",
         429 => "429 Too Many Requests",
         502 => "502 Bad Gateway",
         _ => "500 Internal Server Error",

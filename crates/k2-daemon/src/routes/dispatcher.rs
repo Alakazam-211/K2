@@ -3715,12 +3715,28 @@ async fn handle_one_request(
                 )),
                 token: None,
                 location: None,
+                retry_after: None,
             });
-            if anonymous && r.response.status.starts_with("401") {
+            // A locked login (423) is a refused login too: same ceiling
+            // and the same 500 ms as a 401.
+            let refused =
+                r.response.status.starts_with("401") || r.response.status.starts_with("423");
+            if anonymous && refused {
                 limiter.record_global_failure(crate::login_throttle::Door::Skin, limiter.now());
             }
-            if r.response.status.starts_with("401") {
+            if refused {
                 tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            if let Some(secs) = r.retry_after {
+                super::http::send_response_with_headers(
+                    &mut *stream,
+                    r.response.status,
+                    r.response.content_type,
+                    &r.response.body,
+                    &format!("Retry-After: {secs}\r\n"),
+                )
+                .await;
+                return DispatchOutcome::Done;
             }
             let max_age = k2_core::connect_users::session_ttl_days().saturating_mul(86_400);
             let set_cookie = r.token.as_deref().filter(|t| !t.is_empty()).map(|t| {

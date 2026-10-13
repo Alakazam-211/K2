@@ -121,6 +121,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/DisableWorktreesDialog.tsx',
   'components/Settings/sections/AgentsSection.tsx',
   'components/Settings/sections/ApiTokensSection.tsx',
+  'components/Settings/sections/api-keys-api.ts',
   'components/Settings/sections/CanonicalAgentButtons.tsx',
   'components/Settings/sections/CanonicalAgentModal.tsx',
   'components/Settings/sections/CompanionSection.tsx',

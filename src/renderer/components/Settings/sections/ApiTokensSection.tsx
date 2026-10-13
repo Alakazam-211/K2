@@ -1,17 +1,24 @@
 // Settings → K2 API Tokens — daemon-wide inventory of k2sk_ keys.
 // Owner-tier routes (/cli/api-keys/*). Secret shown once on create only.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonErrorText } from '@/lib/daemon-error'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import {
   capsSummary,
+  finishHireKeyConfirm,
   formatGrant,
+  HIRE_FORM_DEFAULTS,
+  hireLimitsFromForm,
+  hireSummary,
   keyGrantsWorkspace,
   keyState,
+  startHireKeyConfirm,
   type ApiKeyRow,
+  type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
@@ -32,6 +39,9 @@ export const API_TOKENS_MANIFEST: SettingEntry[] = [
       'disable',
       'public api',
       'v1',
+      'hire',
+      'hire agents',
+      'database',
     ],
   },
 ]
@@ -50,6 +60,7 @@ function stateBadge(state: ReturnType<typeof keyState>): React.JSX.Element {
 
 export function ApiTokensSection(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
+  const apiEnabled = useSettingsStore((s) => s.apiEnabled)
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -106,6 +117,12 @@ export function ApiTokensSection(): React.JSX.Element {
           is shown only once when created. Disable for emergencies (re-enableable); revoke is
           permanent.
         </p>
+        {!apiEnabled && (
+          <p className="text-[11px] text-[var(--color-status-warning-soft)] mt-1 max-w-2xl" data-testid="api-surface-off">
+            The public /v1 API is off on this server, so no key works yet (hiring agents included).
+            Turn it on under Settings → K2 Connect → Public API, or <code className="text-[10px]">k2 api on</code>.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -184,6 +201,11 @@ export function ApiTokensSection(): React.JSX.Element {
                     {k.anthropicKeySet ? ' · LLM key staged' : ' · no LLM key'}
                     {k.provider ? ` · ${k.provider}` : ''}
                   </p>
+                  {k.capabilities?.hire && k.hireLimits && (
+                    <p className="text-[11px] text-[var(--color-text-secondary)]" data-testid={`hire-limits-${k.id}`}>
+                      Hires agents: {hireSummary(k.hireLimits)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-1.5 flex-shrink-0">
                   {state === 'active' && (
@@ -257,8 +279,16 @@ function CreateKeyModal({
   const [hostSessions, setHostSessions] = useState(true)
   const [canonicalMessage, setCanonicalMessage] = useState(false)
   const [sandboxes, setSandboxes] = useState(false)
+  const [db, setDb] = useState(false)
+  const [hire, setHire] = useState(false)
+  const [hireForm, setHireForm] = useState<HireForm>(HIRE_FORM_DEFAULTS)
+  const [confirmStep, setConfirmStep] = useState<'idle' | 'mac' | 'password'>('idle')
+  const [pwMethod, setPwMethod] = useState('vault-password')
+  const pwRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const setHireField = <K extends keyof HireForm>(k: K, v: HireForm[K]) =>
+    setHireForm((prev) => ({ ...prev, [k]: v }))
 
   const slugs = useMemo(
     () =>
@@ -269,31 +299,81 @@ function CreateKeyModal({
     [workspaceOptions],
   )
 
+  const mint = async (confirmToken?: string) => {
+    const body: Record<string, unknown> = {
+      label: label.trim() || undefined,
+      capabilities: {
+        hostSessions,
+        canonicalMessage,
+        sandboxes,
+        db,
+      },
+    }
+    if (allWs) {
+      body.workspaces = '*'
+    } else if (selected.size > 0) {
+      body.workspaces = [...selected]
+    }
+    if (hire) {
+      body.hire = hireLimitsFromForm(hireForm, db)
+      body.confirmToken = confirmToken
+    }
+    const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(),
+      'api-keys/create',
+      body,
+    )
+    if (!res.key) throw new Error(res.error || 'create returned no key')
+    onCreated(res.key)
+  }
+
   const submit = async () => {
     setSubmitting(true)
     setErr(null)
     try {
-      const body: Record<string, unknown> = {
-        label: label.trim() || undefined,
-        capabilities: {
-          hostSessions,
-          canonicalMessage,
-          sandboxes,
-        },
+      if (!hire) {
+        await mint()
+        return
       }
-      if (allWs) {
-        body.workspaces = '*'
-      } else if (selected.size > 0) {
-        body.workspaces = [...selected]
+      // Validate the limits before asking for the confirm.
+      hireLimitsFromForm(hireForm, db)
+      // A key that can hire agents needs a fresh owner confirm (Touch ID /
+      // login password, or the vault password), owner token included.
+      const { methods } = await startHireKeyConfirm()
+      if (methods.includes('local-auth')) {
+        setConfirmStep('mac')
+        const { token } = await finishHireKeyConfirm('local-auth')
+        setConfirmStep('idle')
+        await mint(token)
+        return
       }
-      const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(),
-        'api-keys/create',
-        body,
-      )
-      if (!res.key) throw new Error(res.error || 'create returned no key')
-      onCreated(res.key)
+      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
+      if (pw) {
+        setPwMethod(pw)
+        setConfirmStep('password')
+        return
+      }
+      setErr('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setConfirmStep('idle')
+      setErr(daemonErrorText(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const submitPassword = async () => {
+    const el = pwRef.current
+    if (!el) return
+    const pw = el.value
+    el.value = ''
+    setSubmitting(true)
+    setErr(null)
+    try {
+      const { token } = await finishHireKeyConfirm(pwMethod, pw)
+      setConfirmStep('idle')
+      await mint(token)
+    } catch (e) {
+      setErr(daemonErrorText(e))
     } finally {
       setSubmitting(false)
     }
@@ -359,6 +439,7 @@ function CreateKeyModal({
               ['hostSessions', hostSessions, setHostSessions, 'host-sessions'],
               ['canonicalMessage', canonicalMessage, setCanonicalMessage, 'canonical-message'],
               ['sandboxes', sandboxes, setSandboxes, 'sandboxes'],
+              ['db', db, setDb, 'db (create, migrate and dump workspace databases)'],
             ] as const
           ).map(([key, val, set, lab]) => (
             <label
@@ -370,6 +451,113 @@ function CreateKeyModal({
             </label>
           ))}
         </div>
+        <div className="space-y-1" data-testid="hire-scope">
+          <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+            <SquareCheckbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
+            Allow hiring agents (POST /v1/agents/hire)
+          </label>
+          {hire && (
+            <div className="border border-[var(--color-border)] p-2 space-y-1.5">
+              <p className="text-[10px] text-[var(--color-text-muted)]">
+                Agents this key hires never get more than the key allows. Limits can&apos;t be edited later:
+                mint a new key and revoke this one. Creating it asks you to confirm (Touch ID or a password).
+              </p>
+              {(
+                [
+                  ['maxMembersPerDay', 'Agents per day'],
+                  ['maxLiveMembers', 'Live agents'],
+                  ['maxMembersPerTeam', 'Agents per team'],
+                ] as const
+              ).map(([k, lab]) => (
+                <label key={k} className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                  {lab}
+                  <input
+                    aria-label={lab}
+                    value={hireForm[k]}
+                    onChange={(e) => setHireField(k, e.target.value)}
+                    inputMode="numeric"
+                    className="w-20 px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                  />
+                </label>
+              ))}
+              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                Database access for hired agents
+                <select
+                  aria-label="Database access for hired agents"
+                  value={hireForm.db}
+                  onChange={(e) => setHireField('db', e.target.value as HireForm['db'])}
+                  className="px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                >
+                  <option value="off">off</option>
+                  <option value="read" disabled={!db}>read</option>
+                  <option value="write" disabled={!db}>write</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                Messages and sessions to its agents
+                <select
+                  aria-label="Reach"
+                  value={hireForm.reach}
+                  onChange={(e) => setHireField('reach', e.target.value as HireForm['reach'])}
+                  className="px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                >
+                  <option value="none">none (hire, link, retire only)</option>
+                  <option value="message">message</option>
+                  <option value="host-sessions">message + host sessions</option>
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                Folder under the hire root
+                <input
+                  aria-label="Folder under the hire root"
+                  value={hireForm.folder}
+                  onChange={(e) => setHireField('folder', e.target.value)}
+                  placeholder="(the root)"
+                  className="w-32 px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+                <SquareCheckbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
+                May link teams (only to agents this key hired)
+              </label>
+              <label className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+                <SquareCheckbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
+                May retire the agents it hired
+              </label>
+              <p className="text-[10px] text-[var(--color-status-warning-soft)]">
+                App logins for hired agents come with per-app logins; until folder grants exist they cover
+                whole rooms.
+              </p>
+            </div>
+          )}
+        </div>
+        {confirmStep === 'mac' && (
+          <p className="text-[11px] text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
+        )}
+        {confirmStep === 'password' && (
+          <div className="space-y-1">
+            <p className="text-[11px] text-[var(--color-text-secondary)]">
+              {pwMethod === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm
+            </p>
+            <input
+              ref={pwRef}
+              type="password"
+              aria-label="Confirm password"
+              className="w-full px-2 py-1.5 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitPassword()
+              }}
+            />
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => void submitPassword()}
+              className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+            >
+              Confirm and create
+            </button>
+          </div>
+        )}
         {err && <p className="text-[11px] text-[var(--color-status-error-soft)]">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  capsSummary,
+  HIRE_FORM_DEFAULTS,
+  hireLimitsFromForm,
+  hireSummary,
   keyGrantsWorkspace,
   keyState,
   parseWorkspaceGrant,
@@ -60,5 +64,33 @@ describe('parseWorkspaceGrant / keyGrantsWorkspace', () => {
     expect(formatGrant('*')).toContain('*')
     expect(formatGrant(JSON.stringify(['a', 'b']))).toBe('a, b')
     expect(formatGrant(null)).toContain('none')
+  })
+})
+
+describe('hire scope helpers (0.45.6)', () => {
+  it('capsSummary names the db and hire doors', () => {
+    expect(capsSummary({ hostSessions: false, db: true, hire: true })).toBe('db, hire')
+  })
+
+  it('hireLimitsFromForm validates numbers and the db ceiling', () => {
+    expect(hireLimitsFromForm(HIRE_FORM_DEFAULTS, false)).toEqual({
+      maxMembersPerDay: 20,
+      maxLiveMembers: 100,
+      maxMembersPerTeam: 12,
+      db: 'off',
+      link: false,
+      retire: false,
+      reach: 'none',
+    })
+    expect(() => hireLimitsFromForm({ ...HIRE_FORM_DEFAULTS, maxLiveMembers: 'x' }, false)).toThrow(/Live agents/)
+    expect(() => hireLimitsFromForm({ ...HIRE_FORM_DEFAULTS, db: 'read' }, false)).toThrow(/db door/)
+    expect(hireLimitsFromForm({ ...HIRE_FORM_DEFAULTS, db: 'read', folder: ' acme ' }, true)).toMatchObject({
+      db: 'read',
+      folder: 'acme',
+    })
+  })
+
+  it('hireSummary is empty without limits', () => {
+    expect(hireSummary(null)).toBe('')
   })
 })

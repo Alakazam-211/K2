@@ -114,6 +114,14 @@ pub const ROUTES: &[Route] = &[
     get("/cli/activity/snapshot", Member),
     // k2 sidecar v1: the "Allow hiring and managing agents" switch.
     post("/cli/agent-access/set", Admin),
+    // Agent hire (0.45.6): instances list + recipe hire + teardown are
+    // Admin (T7); links GET is Member (a passport sees its own workspace).
+    get("/cli/agent-instances", Admin),
+    post("/cli/agent-instances/hire", Admin),
+    post("/cli/agent-instances/retire", Admin),
+    post("/cli/agent-teams/link", Admin),
+    get("/cli/agent-teams/links", Member),
+    post("/cli/agent-teams/unlink", Admin),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
     // 0.45.5 app identity surface: an App pass (agent:handle /
@@ -138,6 +146,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/agents/heartbeat", Member),
     get("/cli/agents/heartbeat/action", Member),
     get("/cli/agents/heartbeat/noop", Member),
+    // `k2 agent hire <dir>` on the shared hire core (same floor as the
+    // Member routes it replaced); the hire root: read Member, set Owner.
+    post("/cli/agents/hire", Member),
+    split("/cli/agents/hire-root", Member, Owner),
     post("/cli/agents/launch", Member),
     get("/cli/agents/list", Member),
     post("/cli/agents/lock", Member),
@@ -603,6 +615,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/mail/status", Member),
     get("/cli/mail/wait", Member),
     both("/cli/mode", Member),
+    // `k2 msg who <id>` (0.45.6 S7): any login; a passport sees only
+    // deliveries to or from its own workspace.
+    get("/cli/msg/who", Member),
     // prd-thread-push-notifications-v1 §5 (TP19): own row = any login;
     // everyone + defaults = Admin. Other people's rows are Owner-only in
     // the handler (Admins are read-only on people).
@@ -1023,7 +1038,14 @@ pub const ROUTES: &[Route] = &[
 /// Non-`/cli` POST paths the top-level method guard admits. The external
 /// `/v1` surface authenticates with API keys and refuses a login on its
 /// own; it is outside this table's role check.
-pub const V1_POST_EXACT: &[&str] = &["/v1/sandboxes"];
+pub const V1_POST_EXACT: &[&str] = &[
+    "/v1/sandboxes",
+    // Agent hire through the v1 API (0.45.6, HT7).
+    "/v1/agents/hire",
+    "/v1/agents/retire",
+    "/v1/agent-teams/link",
+    "/v1/agent-teams/unlink",
+];
 
 /// Non-`/cli` hook ingest (prd-daemon-activity-and-thread-working-v1 DA12,
 /// A4). Authenticated by the owner token or a scoped token pinned to the

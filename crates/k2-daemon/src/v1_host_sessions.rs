@@ -66,7 +66,7 @@ use std::time::Duration;
 use crate::cli_response::CliResponse;
 use crate::routes::http::{V1Capability, V1Principal};
 use crate::v1_sandboxes::{
-    decode_and_validate_segment, resolve_authorized_workspace, session_is_canonical,
+    decode_and_validate_segment, resolve_authorized_workspace_door, session_is_canonical,
     uniform_ws_404,
 };
 use crate::{sandbox_quota, stream_token, v2_spawn};
@@ -466,7 +466,7 @@ pub(crate) fn handle_v1_host_new(principal: &V1Principal, ws_raw: &str, body: &[
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -857,7 +857,7 @@ pub(crate) fn handle_v1_host_queue_list(principal: &V1Principal, ws_raw: &str) -
     let Some(slug) = decode_and_validate_segment(ws_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -888,7 +888,7 @@ pub(crate) fn handle_v1_host_queue_get(
     let Some(job_id) = decode_and_validate_segment(job_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -918,7 +918,7 @@ pub(crate) fn handle_v1_host_queue_cancel(
     let Some(job_id) = decode_and_validate_segment(job_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -962,7 +962,7 @@ pub(crate) fn handle_v1_host_list(principal: &V1Principal, ws_raw: &str) -> CliR
         return uniform_ws_404();
     };
     // Authz FIRST — an unauthorized caller must not even learn the ws exists.
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -1125,7 +1125,7 @@ pub(crate) fn handle_v1_host_message(
     let Some(sid_seg) = decode_and_validate_segment(sid_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -1204,7 +1204,7 @@ pub(crate) fn handle_v1_host_messages(
     let Some(sid) = decode_and_validate_segment(sid_raw) else {
         return uniform_ws_404();
     };
-    if let Err(resp) = resolve_authorized_workspace(principal, &slug) {
+    if let Err(resp) = resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         return resp;
     }
     if session_is_canonical(&sid) {
@@ -1389,7 +1389,7 @@ pub(crate) fn handle_v1_host_kill(
     let Some(sid_seg) = decode_and_validate_segment(sid_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -1610,7 +1610,7 @@ pub(crate) fn handle_v1_host_status(
     let Some(sid_seg) = decode_and_validate_segment(sid_raw) else {
         return uniform_ws_404();
     };
-    let ws_path = match resolve_authorized_workspace(principal, &slug) {
+    let ws_path = match resolve_authorized_workspace_door(principal, &slug, k2_core::hire::limits::ReachDoor::HostSessions) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -1937,6 +1937,7 @@ mod tests {
                 canonical_message: true,
                 sandboxes: true,
                 db: false,
+                hire: false,
             },
         );
         for call in [

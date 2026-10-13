@@ -219,6 +219,19 @@ pub fn remove(project_path: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Replace an existing skill's `SKILL.md` text (the hire recipe writes a
+/// skill's whole body after [`create`] scaffolds it).
+pub fn write_skill_md(project_path: &str, name: &str, body: &str) -> Result<(), String> {
+    let dir = skill_dir(project_path, name);
+    if !dir.is_dir() {
+        return Err(format!("Skill '{}' does not exist", name));
+    }
+    crate::fs_atomic::atomic_write_str(&dir.join("SKILL.md"), body)
+        .map_err(|e| format!("Failed to write SKILL.md for '{}': {}", name, e))?;
+    refresh_agents_md_if_skills_roster(project_path);
+    Ok(())
+}
+
 fn refresh_agents_md_if_skills_roster(project_path: &str) {
     crate::workspace::context_layers::refresh_roster_after_live_kind_change(
         &[project_path],

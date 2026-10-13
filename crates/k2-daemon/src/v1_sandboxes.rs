@@ -377,6 +377,39 @@ pub(crate) fn resolve_authorized_workspace(
     principal: &V1Principal,
     slug: &str,
 ) -> Result<String, CliResponse> {
+    resolve_authorized_workspace_door(principal, slug, k2_core::hire::limits::ReachDoor::Other)
+}
+
+/// [`resolve_authorized_workspace`] for one `/v1` door. A workspace an API
+/// key CREATED (agent hire) is reachable through that key only as its
+/// `reach` limit allows (T16, HT20): default none, even with a `*` grant;
+/// `message` / `host-sessions` open those doors even outside the grant.
+/// The key's own capability flags still gate each door first.
+pub(crate) fn resolve_authorized_workspace_door(
+    principal: &V1Principal,
+    slug: &str,
+    door: k2_core::hire::limits::ReachDoor,
+) -> Result<String, CliResponse> {
+    // Only hire-scoped keys: a pre-0.45.6 `*` key that made a workspace on
+    // `POST /v1/w` (Scout) keeps reaching it through its grant as before.
+    if let V1Principal::Api(p) = principal {
+        if let Some(path) = resolve_workspace_slug(slug).filter(|_| p.capabilities.hire) {
+            let creator = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+                    .and_then(|id| k2_core::hire::ledger::creator_key_of(&conn, &id))
+            };
+            if creator.as_deref() == Some(p.id.as_str()) {
+                let allowed = p.capabilities.hire
+                    && k2_core::hire::limits::HireLimits::parse_stored(
+                        k2_core::api_keys::hire_limits_for(&p.id).as_deref(),
+                    )
+                    .is_some_and(|l| l.reach_allows(door));
+                return if allowed { Ok(path) } else { Err(uniform_ws_404()) };
+            }
+        }
+    }
     let authorized = match principal {
         V1Principal::Owner => true,
         V1Principal::Api(p) => p.authorizes_workspace(slug),

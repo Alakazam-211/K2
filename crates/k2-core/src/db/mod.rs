@@ -1281,6 +1281,22 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0159_workspace_handle_tombstones",
             include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
         ),
+        // 0160 — agent hire through the v1 API (prd-agent-hire-templates-v1,
+        // "build A only", 0.45.6): api_keys.cap_hire / hire_limits /
+        // legacy_new_workspace, hire_settings (the owner-set root),
+        // agent_instances + agent_instance_members (the ledger) and
+        // hire_events (audit). 0158 stays reserved; the integrator
+        // renumbers on slips.
+        (
+            "0160_agent_hire",
+            include_str!("../../drizzle_sql/0160_agent_hire.sql"),
+        ),
+        // 0161 — team links (workspace_relations.origin_link_id + team_links)
+        // and msg_deliveries for the `k2 msg who` sender check (S6/S7).
+        (
+            "0161_team_links_and_deliveries",
+            include_str!("../../drizzle_sql/0161_team_links_and_deliveries.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1941,7 +1957,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0159_workspace_handle_tombstones",
+            last_name, "0161_team_links_and_deliveries",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1969,6 +1985,8 @@ mod tests {
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
                 "0159_workspace_handle_tombstones",
+                "0160_agent_hire",
+                "0161_team_links_and_deliveries",
             ],
             "tail migrations out of order: {names:?}"
         );

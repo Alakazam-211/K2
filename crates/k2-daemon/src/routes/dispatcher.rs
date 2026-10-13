@@ -5793,6 +5793,41 @@ async fn handle_one_request(
         // K2_COMPUTE / computePreview is on (CN30). The two sockets carry no
         // HTTP credential: `Public` rows whose handlers fail closed on the
         // signed handshake / one-time code (CN11, CN19).
+        // Agent hire (prd-agent-hire-templates-v1 "build A", 0.45.6): the
+        // recipe door, teardown, team links, the hire root and the
+        // `k2 msg who` sender check. Floors live in route_policy; the
+        // handler classifies the caller (owner, login, passport) itself.
+        p if crate::hire_routes::is_route(p) => {
+            if crate::hire_routes::is_post_route(p)
+                && !super::http::require_post(&mut *stream, &mut buf, is_post).await
+            {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::hire_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::hire_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let idem = super::http::extract_header(&headers_blob, "Idempotency-Key").map(str::to_string);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::hire_routes::handle_cli(&p_owned, who, is_post, &body_bytes, &params, idem.as_deref())
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::compute_routes::is_route(p) => {
             if !k2_core::compute::enabled() {
                 let _ = stream.read(&mut buf).await;
@@ -8756,6 +8791,34 @@ async fn handle_one_request(
                 //   GET  /v1/w/<ws>/sessions                    → list <ws>'s
                 //        sandbox sessions (audit; empty in slice 1)
                 //
+                // Agent hire through the v1 API (0.45.6): exact paths, ahead
+                // of the `/v1/w/` parser (HT7). A key without the hire scope
+                // gets the uniform 404 inside the handler.
+                _ if crate::hire_routes::V1_PATHS.contains(&p) => {
+                    let body = if is_post {
+                        match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::hire_routes::MAX_BODY).await {
+                            Ok(b) => b,
+                            Err(refused) => {
+                                let r = crate::hire_routes::too_large();
+                                super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                                    .await;
+                                return DispatchOutcome::Done;
+                            }
+                        }
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let params = super::http::parse_params(&path, &query);
+                    let idem = super::http::extract_header(&headers_blob, "Idempotency-Key").map(str::to_string);
+                    let p_owned = p.to_string();
+                    let pr = principal.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::hire_routes::handle_v1(&p_owned, &pr, is_post, &body, &params, idem.as_deref())
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")))
+                }
                 // Hire (Julie 2): exact `POST /v1/w` — MUST run before the
                 // `/v1/w/<slug>/…` parser. GET → 405 (POST-only).
                 "/v1/w" => {

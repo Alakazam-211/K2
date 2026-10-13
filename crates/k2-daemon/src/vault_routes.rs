@@ -1014,6 +1014,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Node admin (prd-k2-node-admin-v1 §7.4): approving a held request;
     // the token is bound to the request id (`secretId`).
     "node-admin",
+    // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
+    // that can hire agents, for every caller (owner token included).
+    "hire-key-mint",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

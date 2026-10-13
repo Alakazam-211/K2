@@ -587,6 +587,18 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             CliResponse::ok_json(body)
                         }
                     }
+                    Err(e) if e.starts_with(k2_core::connections::MANAGED_BY_LINK) => CliResponse {
+                        status: "409 Conflict",
+                        content_type: "application/json",
+                        body: serde_json::json!({
+                            "ok": false,
+                            "error": {
+                                "code": k2_core::connections::MANAGED_BY_LINK,
+                                "hint": e.trim_start_matches(k2_core::connections::MANAGED_BY_LINK).trim_start_matches(':').trim(),
+                            },
+                        })
+                        .to_string(),
+                    },
                     Err(e) => {
                         // Teaching deny (toggle off for agent) → 403 so
                         // CLI maps to exit 3; other errors stay 400.
@@ -1716,18 +1728,52 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
     // object (`hostSessions`/`canonicalMessage`/`sandboxes` bools) OR
     // `allow`/`deny` string arrays (CLI shape). Absent → new-key defaults
     // (host-sessions ON, canonical + sandboxes OFF — the wiki-chat recipe).
-    let capabilities = match parse_create_capabilities(&v) {
+    let mut capabilities = match parse_create_capabilities(&v) {
         Ok(c) => c,
         Err(e) => return CliResponse::bad_request(e),
     };
 
-    match k2_core::api_keys::create_api_key(
+    // 0.45.6 — the hire scope (prd-agent-hire-templates-v1 §5.2). A `hire`
+    // object (or `true`) mints a key that may hire agents within the
+    // normalized limits. A hire-only key: host-sessions turns OFF unless the
+    // request named its doors (HT3). Needs the vault owner confirm for every
+    // caller, owner token included (HT5/T18): agents can read the owner
+    // token on disk, but they can't pass the confirm.
+    let hire_req = v
+        .get("hire")
+        .filter(|h| !h.is_null() && h.as_bool() != Some(false))
+        .cloned();
+    let mut hire_json: Option<String> = None;
+    let mut confirm_method: Option<String> = None;
+    if let Some(h) = hire_req.as_ref() {
+        let doors_named = v.get("capabilities").or_else(|| v.get("caps")).is_some() || v.get("allow").is_some();
+        if !doors_named {
+            capabilities.host_sessions = false;
+        }
+        capabilities.hire = true;
+        let limits = match k2_core::hire::limits::HireLimits::from_request(h, capabilities.db) {
+            Ok(l) => l,
+            Err(e) => return crate::hire_routes::hire_error_response(&e),
+        };
+        let token = v.get("confirmToken").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty());
+        match take_hire_mint_confirm(actor, token) {
+            Ok(m) => confirm_method = Some(m),
+            Err(resp) => {
+                crate::hire_routes::audit("hire-key-mint", actor, "deny no-confirm");
+                return resp;
+            }
+        }
+        hire_json = Some(limits.to_json());
+    }
+
+    match k2_core::api_keys::create_api_key_ex(
         label,
         anthropic_key,
         workspaces_grant.as_deref(),
         provider_canonical,
         base_url,
         Some(capabilities),
+        hire_json.as_deref(),
     ) {
         // The ONLY place the raw key is ever returned. Not logged — the audit
         // line carries the id + label + ACTOR only, never a secret.
@@ -1735,16 +1781,81 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
             k2_core::log_debug!(
                 "[api-keys] created key {id} (label {label:?}) caps={capabilities:?} by {actor}"
             );
-            CliResponse::ok_json(
-                serde_json::json!({
-                    "id": id,
-                    "key": raw,
-                    "capabilities": capabilities,
-                })
-                .to_string(),
-            )
+            if hire_json.is_some() {
+                let caller = if actor == "owner-token" {
+                    k2_core::hire::HireCaller::Owner
+                } else {
+                    k2_core::hire::HireCaller::Login { username: actor.trim_start_matches("user:").to_string() }
+                };
+                {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::hire::ledger::event(
+                        &conn,
+                        "hire-key-mint",
+                        &caller,
+                        None,
+                        None,
+                        None,
+                        "ok",
+                        None,
+                        Some(&serde_json::json!({ "keyId": id, "label": label, "via": confirm_method })),
+                    );
+                }
+                crate::hire_routes::audit("hire-key-mint", actor, &format!("ok {id} via {}", confirm_method.as_deref().unwrap_or("-")));
+            }
+            let mut out = serde_json::json!({
+                "id": id,
+                "key": raw,
+                "capabilities": capabilities,
+            });
+            if let Some(h) = hire_json.as_deref() {
+                out["hireLimits"] = serde_json::from_str(h).unwrap_or(serde_json::Value::Null);
+            }
+            CliResponse::ok_json(out.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// Take the one-use vault owner confirm for minting a hire key (action
+/// `hire-key-mint`, 60 s). `actor` is the mint gate's identity
+/// (`owner-token` | `user:<name>`). Returns the confirm method.
+fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, CliResponse> {
+    let refuse = |code: &str, hint: &str| CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "ok": false, "error": { "code": code, "hint": hint } }).to_string(),
+    };
+    let stamp = if actor == "owner-token" {
+        "owner".to_string()
+    } else if let Some(u) = actor.strip_prefix("user:") {
+        format!("connect:{u}")
+    } else {
+        return Err(refuse("owner_only", "only the server's owner mints keys"));
+    };
+    let Some(token) = token else {
+        return Err(refuse(
+            "vault_confirm_required",
+            "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → K2 API Tokens",
+        ));
+    };
+    let vault = match crate::vault::get() {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(CliResponse {
+                status: "503 Service Unavailable",
+                content_type: "application/json",
+                body: serde_json::json!({ "ok": false, "error": { "code": "vault_closed", "hint": format!("the vault isn't open ({}): {}", e.code, e.hint) } }).to_string(),
+            })
+        }
+    };
+    match vault.confirm.take(token, "hire-key-mint", None, &stamp) {
+        Ok(k2_vault::HumanProof::Confirmed { method }) => Ok(method),
+        _ => Err(refuse(
+            "vault_confirm_required",
+            "confirm again: a confirm works once, for minting a hire key, within 60 seconds",
+        )),
     }
 }
 
@@ -1786,6 +1897,7 @@ fn parse_create_capabilities(
             ),
             sandboxes: bool_field(&["sandboxes", "sandbox"], base.sandboxes),
             db: bool_field(&["db", "sql", "database"], base.db),
+            hire: false,
         });
     }
     let to_list = |key: &str| -> Option<Vec<String>> {
@@ -1920,6 +2032,10 @@ pub fn handle_api_key_list() -> CliResponse {
                         "baseUrl": m.base_url,
                         // Phase 0 — capability flags (not a secret).
                         "capabilities": m.capabilities,
+                        // 0.45.6 — the hire envelope (null = no hire door)
+                        // and the T19 back-compat flag.
+                        "hireLimits": m.hire_limits,
+                        "legacyNewWorkspace": m.legacy_new_workspace,
                     })
                 })
                 .collect();

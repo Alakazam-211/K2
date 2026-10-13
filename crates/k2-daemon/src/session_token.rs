@@ -559,6 +559,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         // always bypasses; agents need the effective toggle ON). List is
         // free for any authenticated agent principal.
         "/cli/connections",
+        // Agent hire (0.45.6): `k2 agent hire <dir>` in a cell sends the
+        // passport (the handler refuses a DB-access raise, HT14); `k2 agent
+        // team` reads its own workspace's links; `k2 msg who` checks the
+        // sender of a delivery to or from its own workspace. Team hire,
+        // link, unlink and retire are NOT here (people only).
+        "/cli/agents/hire",
+        "/cli/agent-teams/links",
+        "/cli/msg/who",
         // k2 sidecar v1 (SC36): new / list / stop. The handler classifies
         // the validated session (canonical harness, sidecar, shell tab,
         // api cell) and applies the agent gate. `/cli/agent-access/set`

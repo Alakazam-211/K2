@@ -2635,16 +2635,18 @@ pub fn verify_principal_password(username: &str, password: &str) -> bool {
 pub enum SkinLoginOutcome {
     Ok(SkinPrincipal),
     BadCreds,
-    /// The presented username/email is locked (3 bad tries → 15 min). Set
-    /// for ANY presented string with a live lock row, known principal or
-    /// not (failures are counted per presented string), so telling a
-    /// caller "locked" reveals nothing about which usernames exist.
+    /// The login is locked (3 bad tries → 15 min). A name that resolves to
+    /// a principal (by username OR email) is locked per principal, so the
+    /// username and the email share one counter and one lock. A name that
+    /// resolves to nothing is counted per presented string and locks the
+    /// same way, so "locked" never says which usernames exist.
     LockedOut { retry_after_secs: i64 },
 }
 
-/// Same row key as [`check_and_record_login`]: trim + ASCII lowercase; an
-/// `@` keeps that string; otherwise [`normalize_username`], and on failure
-/// the trim+lowercase string (how a non-principal row was stored).
+/// Presented-string key: trim + ASCII lowercase; an `@` keeps that string;
+/// otherwise [`normalize_username`], and on failure the trim+lowercase
+/// string. Used for names that resolve to no principal, and the key
+/// [`clear_login_lockout`] reports back.
 fn login_lockout_key(username: &str) -> String {
     let presented = username.trim().to_ascii_lowercase();
     if presented_looks_like_email(&presented) {
@@ -2654,16 +2656,65 @@ fn login_lockout_key(username: &str) -> String {
     }
 }
 
-/// Delete the `login_lockouts` row for the login key. Does not create a
-/// principal, touch `password_hash`, or revoke sessions. `Ok((key, false))`
-/// when no row was stored.
+/// The principal a login name resolves to (by email when it has an `@`,
+/// else by username), password or not.
+struct LoginPrincipalRow {
+    username: String,
+    email: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// Which `login_lockouts` rows one login attempt reads and writes.
+///
+/// `primary` is the one counter failures bump. For a known principal it is
+/// the principal's username: usernames are unique, never renamed, and can
+/// never contain `@`, so no presented email can land on it, and typing the
+/// username or the email hits the same row. For an unknown name it is the
+/// presented-string key, exactly as before.
+///
+/// `extra` is the principal's email key: rows written there by 0.45.5
+/// (which counted the email separately) still lock until they expire, and
+/// unlock/success clear them. For an unknown name `extra == primary`, so
+/// both paths run the very same queries.
+struct LoginLockSlot {
+    primary: String,
+    extra: String,
+}
+
+fn login_lock_slot(presented_key: &str, principal: Option<&LoginPrincipalRow>) -> LoginLockSlot {
+    match principal {
+        Some(p) => LoginLockSlot {
+            primary: p.username.clone(),
+            extra: p
+                .email
+                .as_deref()
+                .map(|e| e.trim().to_ascii_lowercase())
+                .filter(|e| !e.is_empty())
+                .unwrap_or_else(|| p.username.clone()),
+        },
+        None => LoginLockSlot {
+            primary: presented_key.to_string(),
+            extra: presented_key.to_string(),
+        },
+    }
+}
+
+/// Delete every `login_lockouts` row for this login: for a name that
+/// resolves to a principal (username or email) that is the principal's
+/// username row, its email row and the presented row; otherwise only the
+/// presented row. Does not create a principal, touch `password_hash`, or
+/// revoke sessions. Returns the presented key and whether any row was
+/// deleted (`false` when none was stored).
 pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
     let key = login_lockout_key(username);
+    let presented = username.trim().to_ascii_lowercase();
     let deleted = with_conn(|conn| {
+        let principal = lookup_login_principal(conn, &presented)?;
+        let slot = login_lock_slot(&key, principal.as_ref());
         let n = conn
             .execute(
-                "DELETE FROM login_lockouts WHERE username = ?1",
-                params![key],
+                "DELETE FROM login_lockouts WHERE username IN (?1, ?2, ?3)",
+                params![key, slot.primary, slot.extra],
             )
             .map_err(|e| format!("skin lockout clear: {e}"))?;
         Ok(n)
@@ -2672,43 +2723,48 @@ pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
 }
 
 pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcome {
-    // Lockout 3/15 stays on the presented string (trim+lowercase). `@` →
-    // email lookup; else username. Invalid email is a miss, not 400.
+    // Lockout 3/15. `@` → email lookup; else username. Invalid email is a
+    // miss, not 400. A name that resolves to a principal is counted on
+    // that principal (see [`LoginLockSlot`]); anything else on the
+    // presented string. The lock is checked before the password, with the
+    // same queries for known and unknown names.
     let presented = username.trim().to_ascii_lowercase();
     let key = login_lockout_key(username);
 
-    let locked = with_conn(|conn| {
-        let row: Option<(i64, Option<i64>)> = conn
+    let looked_up = with_conn(|conn| {
+        let principal = lookup_login_principal(conn, &presented)?;
+        let slot = login_lock_slot(&key, principal.as_ref());
+        let now = now_secs();
+        let until: Option<i64> = conn
             .query_row(
-                "SELECT failed_count, locked_until FROM login_lockouts WHERE username = ?1",
-                params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT MAX(locked_until) FROM login_lockouts
+                 WHERE username IN (?1, ?2) AND locked_until > ?3",
+                params![slot.primary, slot.extra, now],
+                |r| r.get(0),
             )
-            .optional()
             .map_err(|e| format!("skin lockout lookup: {e}"))?;
-        if let Some((_count, Some(until))) = row {
-            let now = now_secs();
-            if now < until {
-                return Ok(Some(until - now));
-            }
-            conn.execute(
-                "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0 WHERE username = ?1",
-                params![key],
-            )
-            .map_err(|e| format!("skin lockout expire: {e}"))?;
+        if let Some(until) = until {
+            return Ok((principal, slot, Some(until - now)));
         }
-        Ok(None)
-    })
-    .unwrap_or(None);
-    if let Some(left) = locked {
-        return SkinLoginOutcome::LockedOut {
-            retry_after_secs: left.max(1),
-        };
-    }
+        conn.execute(
+            "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0
+             WHERE username IN (?1, ?2) AND locked_until IS NOT NULL",
+            params![slot.primary, slot.extra],
+        )
+        .map_err(|e| format!("skin lockout expire: {e}"))?;
+        Ok((principal, slot, None))
+    });
+    let (principal, slot) = match looked_up {
+        Ok((_, _, Some(left))) => {
+            return SkinLoginOutcome::LockedOut {
+                retry_after_secs: left.max(1),
+            };
+        }
+        Ok((principal, slot, None)) => (principal, slot),
+        Err(_) => (None, login_lock_slot(&key, None)),
+    };
 
-    let stored = with_conn(|conn| lookup_login_hash(conn, &presented)).unwrap_or(None);
-
-    let ok = match stored.as_ref().map(|(_, h)| h.as_str()) {
+    let ok = match principal.as_ref().and_then(|p| p.password_hash.as_deref()) {
         Some(h) => verify_hash(password, h),
         None => {
             dummy_verify(password);
@@ -2719,15 +2775,15 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     let _ = with_conn(|conn| {
         if ok {
             conn.execute(
-                "DELETE FROM login_lockouts WHERE username = ?1",
-                params![key],
+                "DELETE FROM login_lockouts WHERE username IN (?1, ?2, ?3)",
+                params![key, slot.primary, slot.extra],
             )
             .map_err(|e| format!("skin lockout clear: {e}"))?;
         } else {
             let failed: i64 = conn
                 .query_row(
                     "SELECT failed_count FROM login_lockouts WHERE username = ?1",
-                    params![key],
+                    params![slot.primary],
                     |r| r.get(0),
                 )
                 .optional()
@@ -2739,7 +2795,7 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
                     "INSERT INTO login_lockouts (username, failed_count, locked_until)
                      VALUES (?1, 0, ?2)
                      ON CONFLICT(username) DO UPDATE SET failed_count = 0, locked_until = excluded.locked_until",
-                    params![key, now_secs().saturating_add(LOCKOUT_DURATION_SECS)],
+                    params![slot.primary, now_secs().saturating_add(LOCKOUT_DURATION_SECS)],
                 )
                 .map_err(|e| format!("skin lockout set: {e}"))?;
             } else {
@@ -2747,7 +2803,7 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
                     "INSERT INTO login_lockouts (username, failed_count, locked_until)
                      VALUES (?1, ?2, NULL)
                      ON CONFLICT(username) DO UPDATE SET failed_count = excluded.failed_count, locked_until = NULL",
-                    params![key, failed],
+                    params![slot.primary, failed],
                 )
                 .map_err(|e| format!("skin lockout bump: {e}"))?;
             }
@@ -2758,47 +2814,52 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
     if !ok {
         return SkinLoginOutcome::BadCreds;
     }
-    let resolved_username = stored
-        .as_ref()
-        .map(|(u, _)| u.as_str())
-        .unwrap_or(key.as_str());
-    match with_conn(|conn| principal_by_username(conn, resolved_username)) {
+    let Some(principal) = principal else {
+        return SkinLoginOutcome::BadCreds;
+    };
+    match with_conn(|conn| principal_by_username(conn, &principal.username)) {
         Ok(Some(p)) => SkinLoginOutcome::Ok(attach_principal_handles(p)),
         _ => SkinLoginOutcome::BadCreds,
     }
 }
 
-fn lookup_login_hash(
+/// Resolve a presented login name (already trim + lowercase) to its
+/// principal: an `@` means email (any case), else username. A malformed
+/// email or username is a miss. The password hash is `None` when unset or
+/// blank (that principal can never password-login).
+fn lookup_login_principal(
     conn: &Connection,
     presented: &str,
-) -> Result<Option<(String, String)>, String> {
-    if presented_looks_like_email(presented) {
-        let Ok(Some(email)) = normalize_email(presented) else {
-            return Ok(None);
-        };
-        let row: Option<(String, Option<String>)> = conn
-            .query_row(
-                "SELECT username, password_hash FROM principals
+) -> Result<Option<LoginPrincipalRow>, String> {
+    let row: Option<(String, Option<String>, Option<String>)> =
+        if presented_looks_like_email(presented) {
+            let Ok(Some(email)) = normalize_email(presented) else {
+                return Ok(None);
+            };
+            conn.query_row(
+                "SELECT username, email, password_hash FROM principals
                  WHERE email = ?1 COLLATE NOCASE
                    AND email IS NOT NULL AND trim(email) != ''",
                 params![email],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()
-            .map_err(|e| format!("skin password lookup: {e}"))?;
-        Ok(row.and_then(|(u, h)| h.filter(|s| !s.trim().is_empty()).map(|hash| (u, hash))))
-    } else {
-        let key = normalize_username(presented).unwrap_or_else(|_| presented.to_string());
-        let row: Option<(String, Option<String>)> = conn
-            .query_row(
-                "SELECT username, password_hash FROM principals WHERE username = ?1",
+            .map_err(|e| format!("skin password lookup: {e}"))?
+        } else {
+            let key = normalize_username(presented).unwrap_or_else(|_| presented.to_string());
+            conn.query_row(
+                "SELECT username, email, password_hash FROM principals WHERE username = ?1",
                 params![key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()
-            .map_err(|e| format!("skin password lookup: {e}"))?;
-        Ok(row.and_then(|(u, h)| h.filter(|s| !s.trim().is_empty()).map(|hash| (u, hash))))
-    }
+            .map_err(|e| format!("skin password lookup: {e}"))?
+        };
+    Ok(row.map(|(username, email, hash)| LoginPrincipalRow {
+        username,
+        email,
+        password_hash: hash.filter(|s| !s.trim().is_empty()),
+    }))
 }
 
 pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
@@ -5971,6 +6032,234 @@ mod tests {
         });
     }
 
+    fn lock_rows() -> Vec<(String, i64, Option<i64>)> {
+        with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT username, failed_count, locked_until FROM login_lockouts
+                     ORDER BY username",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            Ok(rows)
+        })
+        .expect("lock rows")
+    }
+
+    /// agent-nsi (0.45.5): username locked, the right password typed as
+    /// the EMAIL still signed in. The lock is the principal's.
+    #[test]
+    fn lock_via_username_refuses_email_with_right_password() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            for _ in 0..3 {
+                match check_and_record_login("jane", "wrong") {
+                    SkinLoginOutcome::BadCreds => {}
+                    other => panic!("pre-lock via username, got {other:?}"),
+                }
+            }
+            for who in ["jane@clinic.com", "  JANE@Clinic.com ", "jane", "JANE"] {
+                match check_and_record_login(who, "s3cret-horse") {
+                    SkinLoginOutcome::LockedOut { retry_after_secs } => assert!(
+                        (1..=LOCKOUT_DURATION_SECS).contains(&retry_after_secs),
+                        "{who}: {retry_after_secs}"
+                    ),
+                    other => panic!("{who}: locked principal must refuse, got {other:?}"),
+                }
+            }
+            let rows = lock_rows();
+            assert_eq!(rows.len(), 1, "one counter for the principal: {rows:?}");
+            assert_eq!(rows[0].0, "jane", "{rows:?}");
+        });
+    }
+
+    /// Wrong tries on the username and the email share ONE limit (0.45.5
+    /// counted them separately, doubling it to 6).
+    #[test]
+    fn mixed_username_and_email_wrong_tries_share_one_limit() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            for who in ["jane", "Jane@Clinic.COM", "jane"] {
+                match check_and_record_login(who, "wrong") {
+                    SkinLoginOutcome::BadCreds => {}
+                    other => panic!("{who}: pre-lock, got {other:?}"),
+                }
+            }
+            for who in ["jane", "jane@clinic.com"] {
+                match check_and_record_login(who, "s3cret-horse") {
+                    SkinLoginOutcome::LockedOut { .. } => {}
+                    other => panic!("{who}: 3 mixed tries lock, got {other:?}"),
+                }
+            }
+            let rows = lock_rows();
+            assert_eq!(rows.len(), 1, "{rows:?}");
+            assert_eq!(rows[0].0, "jane", "{rows:?}");
+            assert_eq!(rows[0].1, 0, "a lock zeroes the count: {rows:?}");
+            assert!(rows[0].2.is_some(), "{rows:?}");
+        });
+    }
+
+    /// A correct login resets the principal's counter whichever name it
+    /// came in on.
+    #[test]
+    fn success_by_email_resets_the_username_counter() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            for _ in 0..2 {
+                assert!(matches!(
+                    check_and_record_login("jane", "wrong"),
+                    SkinLoginOutcome::BadCreds
+                ));
+            }
+            assert!(matches!(
+                check_and_record_login("jane@clinic.com", "s3cret-horse"),
+                SkinLoginOutcome::Ok(_)
+            ));
+            assert!(lock_rows().is_empty(), "{:?}", lock_rows());
+            for _ in 0..2 {
+                assert!(matches!(
+                    check_and_record_login("jane@clinic.com", "wrong"),
+                    SkinLoginOutcome::BadCreds
+                ));
+            }
+            assert!(
+                matches!(
+                    check_and_record_login("jane", "s3cret-horse"),
+                    SkinLoginOutcome::Ok(_)
+                ),
+                "2 fails after a reset are under the limit"
+            );
+        });
+    }
+
+    /// `k2 app user unlock` by username or by email clears the principal's
+    /// lock, and any 0.45.5 email-keyed row left from before the upgrade.
+    #[test]
+    fn unlock_by_username_or_email_clears_every_principal_row() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            for (unlock_as, want_key) in [("Jane", "jane"), ("JANE@clinic.com", "jane@clinic.com")] {
+                for _ in 0..3 {
+                    assert!(matches!(
+                        check_and_record_login("jane@clinic.com", "wrong"),
+                        SkinLoginOutcome::BadCreds
+                    ));
+                }
+                // A row written by 0.45.5 under the email key.
+                with_conn(|conn| {
+                    conn.execute(
+                        "INSERT OR REPLACE INTO login_lockouts (username, failed_count, locked_until)
+                         VALUES ('jane@clinic.com', 0, ?1)",
+                        params![now_secs().saturating_add(900)],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok(())
+                })
+                .expect("legacy email row");
+                let (key, cleared) = clear_login_lockout(unlock_as).expect("unlock");
+                assert_eq!(key, want_key);
+                assert!(cleared, "{unlock_as}");
+                assert!(lock_rows().is_empty(), "{unlock_as}: {:?}", lock_rows());
+                for who in ["jane", "jane@clinic.com"] {
+                    assert!(
+                        matches!(
+                            check_and_record_login(who, "s3cret-horse"),
+                            SkinLoginOutcome::Ok(_)
+                        ),
+                        "{unlock_as}: {who} signs in after unlock"
+                    );
+                }
+            }
+        });
+    }
+
+    /// A pre-upgrade (0.45.5) live lock under the email key still refuses
+    /// the username until it expires or is unlocked.
+    #[test]
+    fn legacy_email_row_lock_still_refuses_the_username() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES ('jane@clinic.com', 0, ?1), ('jane', 2, NULL)",
+                    params![now_secs().saturating_add(600)],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .expect("seed");
+            match check_and_record_login("jane", "s3cret-horse") {
+                SkinLoginOutcome::LockedOut { retry_after_secs } => {
+                    assert!((1..=600).contains(&retry_after_secs), "{retry_after_secs}")
+                }
+                other => panic!("legacy email lock refuses username, got {other:?}"),
+            }
+            // An expired legacy row is not a lock.
+            with_conn(|conn| {
+                conn.execute(
+                    "UPDATE login_lockouts SET locked_until = ?1 WHERE username = 'jane@clinic.com'",
+                    params![now_secs() - 1],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .expect("expire");
+            assert!(matches!(
+                check_and_record_login("jane", "s3cret-horse"),
+                SkinLoginOutcome::Ok(_)
+            ));
+            assert!(lock_rows().is_empty(), "{:?}", lock_rows());
+        });
+    }
+
+    /// Names that resolve to nothing keep a counter per presented string,
+    /// lock after 3 like a known name, and an unknown email never touches
+    /// a principal's row.
+    #[test]
+    fn unknown_names_still_count_per_presented_string() {
+        with_temp_home(|| {
+            add_principal_with_email("jane", Some("jane@clinic.com")).unwrap();
+            set_principal_password("jane", Some("s3cret-horse")).unwrap();
+            for who in ["ghost", "ghost@nowhere.io", "Not A Name"] {
+                for _ in 0..3 {
+                    assert!(matches!(
+                        check_and_record_login(who, "wrong"),
+                        SkinLoginOutcome::BadCreds
+                    ));
+                }
+                match check_and_record_login(who, "s3cret-horse") {
+                    SkinLoginOutcome::LockedOut { retry_after_secs } => assert!(
+                        (1..=LOCKOUT_DURATION_SECS).contains(&retry_after_secs),
+                        "{who}: {retry_after_secs}"
+                    ),
+                    other => panic!("{who}: unknown locks like known, got {other:?}"),
+                }
+            }
+            let keys: Vec<String> = lock_rows().into_iter().map(|r| r.0).collect();
+            assert_eq!(keys, vec!["ghost", "ghost@nowhere.io", "not a name"]);
+            // Unknown strings sharing nothing with jane leave her alone.
+            assert!(matches!(
+                check_and_record_login("jane@clinic.com", "s3cret-horse"),
+                SkinLoginOutcome::Ok(_)
+            ));
+            // A different unknown string is a fresh counter.
+            assert!(matches!(
+                check_and_record_login("ghost2", "wrong"),
+                SkinLoginOutcome::BadCreds
+            ));
+        });
+    }
+
     #[test]
     fn null_password_cannot_k2_login_static_mint_still_works() {
         with_temp_home(|| {
@@ -6299,12 +6588,13 @@ mod tests {
             }
             match check_and_record_login("jane@clinic.com", "s3cret-horse") {
                 SkinLoginOutcome::LockedOut { .. } => {}
-                other => panic!("lockout is on presented email, got {other:?}"),
+                other => panic!("lockout via email, got {other:?}"),
             }
             match check_and_record_login("jane", "s3cret-horse") {
-                SkinLoginOutcome::Ok(_) => {}
-                other => panic!("username lockout is a different slot, got {other:?}"),
+                SkinLoginOutcome::LockedOut { .. } => {}
+                other => panic!("the lock is the principal's, not the email's, got {other:?}"),
             }
+            clear_login_lockout("jane").expect("unlock jane");
             set_principal_email("jane", None).unwrap();
             let cleared = list_principals()
                 .unwrap()

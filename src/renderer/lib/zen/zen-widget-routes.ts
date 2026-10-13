@@ -1,7 +1,9 @@
 // prd-zen-user-widgets-v2 UW35, UWB9 — custom-widget routes on THIS
 // computer's daemon. There are no permission routes: a widget in your own
 // Garden runs with every Garden-safe cap it asks for (Rosson 2026-10-08).
-//   GET  /cli/zen/widget/bundle?widget=<name>  the last good bundle (nonced)
+//   GET  /cli/zen/widget/bundle?widget=<name>&garden=<id>  the last good bundle
+//                                              (nonced); `garden` lets a locked
+//                                              Garden get its frozen copy
 //   POST /cli/zen/widget/pause                 the runaway guard tripped
 //   POST /cli/zen/widget/resume                the person's Resume click
 //                                              (owner token only)
@@ -88,9 +90,12 @@ export function parseZenWidgetBundle(raw: unknown): ZenWidgetBundleResponse {
   }
 }
 
-export async function fetchZenWidgetBundle(widget: string): Promise<ZenWidgetBundleResponse> {
+/** The live bundle. With `garden`, a locked Garden gets the copy frozen when
+ *  it was locked (prd-garden-lock-and-sync-v1); older daemons ignore it. */
+export async function fetchZenWidgetBundle(widget: string, garden?: string): Promise<ZenWidgetBundleResponse> {
   try {
-    return parseZenWidgetBundle(await daemonCliGet<unknown>(zenLocalScope(), 'zen/widget/bundle', { widget }))
+    const params = garden ? { widget, garden } : { widget }
+    return parseZenWidgetBundle(await daemonCliGet<unknown>(zenLocalScope(), 'zen/widget/bundle', params))
   } catch (err) {
     throw zenWidgetError(err)
   }

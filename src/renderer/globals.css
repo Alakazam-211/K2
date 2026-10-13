@@ -1077,6 +1077,15 @@ a,
   background-position: center;
   background-repeat: no-repeat;
 }
+/* One of two parts on (Settings → Gardens "Keep in sync"): a dash. */
+.k2-square-check:indeterminate {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+  background-image: linear-gradient(var(--color-on-accent), var(--color-on-accent));
+  background-size: 8px 2px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
 .k2-square-radio:focus,
 .k2-square-check:focus {
   outline: none;

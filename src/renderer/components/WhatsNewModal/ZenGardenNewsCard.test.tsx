@@ -12,8 +12,8 @@
 //   - closing the dialog posts `zen/news/seen` with exactly the ids the
 //     card showed; a hidden card marks nothing;
 //   - the card's button marks seen, does its action and closes the dialog;
-//   - Settings: turning sync off writes at once; turning it on asks first
-//     (Preview in Zen / Turn on) and only Turn on writes;
+//   - Settings: one "Keep in sync" checkbox; a mixed state is a dash and a
+//     click syncs both parts (prd-garden-lock-and-sync-v1);
 //   - the preview bar's "Back to my copy" never writes;
 //   - New Garden shows "New" on an entry with unseen catalog news.
 
@@ -231,8 +231,8 @@ describe('What’s new dismissal marks the card’s news seen (GS43)', () => {
   })
 })
 
-describe('Settings → Gardens switches (GS33–GS34a)', () => {
-  it('off writes at once; on asks first and only Turn on writes', async () => {
+describe('Settings → Gardens checkboxes (prd-garden-lock-and-sync-v1)', () => {
+  it('one "Keep in sync" checkbox: a dash for one part synced, one click syncs both; no Preview or Turn on', async () => {
     h.sync = {
       ok: true,
       liveDefaults: 'd-3f9a12c0b1e4d7a2',
@@ -242,21 +242,14 @@ describe('Settings → Gardens switches (GS33–GS34a)', () => {
     }
     render(<ZenGardenSyncControls garden={{ id: 'g-1', name: 'Garden 1' }} />)
     await waitFor(() => el('[data-zen-sync-controls="g-1"]'))
-    const page = el('[data-testid="zen-sync-page-g-1"] [role="switch"]')
-    expect(page.getAttribute('aria-checked')).toBe('true')
-    expect(el('[data-zen-sync-part="theme"]').textContent).toContain('Sync theme with K2’s Basic')
-    expect(el('[data-zen-sync-part="theme"]').textContent).toContain('K2 themes from 0.45.1.')
-    await act(async () => void fireEvent.click(page))
-    await waitFor(() => expect(posts('zen/garden/sync')).toEqual([{ garden: 'g-1', part: 'page', sync: false }]))
-    const theme = el('[data-testid="zen-sync-theme-g-1"] [role="switch"]')
-    await act(async () => void fireEvent.click(theme))
-    el('[data-zen-sync-confirm="theme"]')
-    expect(posts('zen/garden/sync')).toHaveLength(1)
-    await act(async () => void fireEvent.click(el('[data-zen-sync-turn-on="theme"]')))
-    await waitFor(() => expect(posts('zen/garden/sync')).toEqual([
-      { garden: 'g-1', part: 'page', sync: false },
-      { garden: 'g-1', part: 'theme', sync: true },
-    ]))
+    const box = el('[data-zen-garden-sync="g-1"] input[type="checkbox"]') as HTMLInputElement
+    expect(box.indeterminate).toBe(true)
+    expect(box.getAttribute('aria-checked')).toBe('mixed')
+    // No lock in this daemon's answer: no Lock checkbox.
+    expect(document.querySelector('[data-zen-garden-lock]')).toBeNull()
+    await act(async () => void fireEvent.click(box))
+    await waitFor(() => expect(posts('zen/garden/sync')).toEqual([{ garden: 'g-1', part: 'both', sync: true }]))
+    expect(document.body.textContent).not.toMatch(/Preview in Zen|Turn on|Sync with K2’s default/)
   })
 
   it('draws nothing when the daemon has no Garden sync', async () => {

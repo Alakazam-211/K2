@@ -1,10 +1,12 @@
-// Settings → Gardens (prd-zen-gardens-v1 item 17, Rosson 2026-10-04).
-// This computer's Zen Gardens: list, rename, reorder, delete, + New Garden
-// (the same modal as Zen's: a name and the catalog's cards, Rosson
-// 2026-10-08), the global theme with per-Garden overrides, and
-// the folder. Thin client over `lib/zen/zen-settings.ts`: every request goes
-// to the LOCAL daemon. Re-reads on every local `zen_changed`, like the
-// Garden switcher, so Settings and an open Zen window stay in step.
+// Settings → Gardens (prd-zen-gardens-v1 item 17; prd-garden-lock-and-sync-v1
+// §3, Rosson 2026-10-13). This computer's Zen Gardens, one row each: the
+// name, a ⋯ menu (Rename, Move up, Move down, Delete) and two checkboxes,
+// "Lock garden" and "Keep in sync with future template updates"
+// (`ZenGardenSyncControls`). + New Garden opens the same modal as Zen's. A
+// collapsed Advanced holds the global theme and the folder. Thin client over
+// `lib/zen/zen-settings.ts`: every request goes to the LOCAL daemon. Re-reads
+// on every local `zen_changed`, like the Garden switcher, so Settings and an
+// open Zen window stay in step.
 //
 // Settings only shows this where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
@@ -13,7 +15,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
-import { ZenGardenSettingsNews, ZenGardenSyncControls } from './ZenGardenSyncControls'
+import { ZenGardenSyncControls } from './ZenGardenSyncControls'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import {
@@ -23,47 +25,32 @@ import {
   loadZenSettings,
   moveZenSettingsGarden,
   renameZenSettingsGarden,
-  setZenGardenTheme,
   setZenGlobalTheme,
   setupZenGardens,
   useZenSettingsStore,
   zenSettingsErrorText,
-  zenTemplateLabel,
   type ZenNewGardenTemplate,
   type ZenSettingsGarden,
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
-import { useZenCatalogBadges, useZenTemplatesStore, zenTemplateSections } from '@/lib/zen/zen-templates'
-import { ZenGardenSketch, ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
+import { ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   {
     id: 'zen-gardens.list',
     section: 'zen-gardens',
     label: 'Gardens',
-    description: 'Rename, reorder or delete your Zen Gardens',
-    keywords: ['zen', 'garden', 'gardens', 'rename', 'reorder', 'delete', 'new garden'],
+    description: 'Lock, sync, rename, reorder or delete your Zen Gardens',
+    keywords: ['zen', 'garden', 'gardens', 'lock', 'unlock', 'sync', 'template', 'rename', 'reorder', 'delete', 'new garden'],
   },
   {
-    id: 'zen-gardens.theme',
+    // The collapsed Advanced section: a search lands on it (its inner rows
+    // aren't in the page until it opens).
+    id: 'zen-gardens.advanced',
     section: 'zen-gardens',
-    label: 'Zen Theme',
-    description: 'The theme every Garden uses, and per-Garden overrides',
-    keywords: ['zen', 'theme', 'garden', 'appearance'],
-  },
-  {
-    id: 'zen-gardens.catalog',
-    section: 'zen-gardens',
-    label: 'Garden Catalog',
-    description: 'Browse ready-made Gardens (like the Diary) and add one',
-    keywords: ['zen', 'garden', 'catalog', 'diary', 'ready-made', 'template', 'add'],
-  },
-  {
-    id: 'zen-gardens.folder',
-    section: 'zen-gardens',
-    label: 'Gardens Folder',
-    description: 'Where Gardens live on this computer (~/.k2/zen)',
-    keywords: ['zen', 'folder', 'path', 'finder'],
+    label: 'Zen Theme and Gardens Folder',
+    description: 'Advanced: the theme every Garden uses, and where Gardens live (~/.k2/zen)',
+    keywords: ['zen', 'theme', 'garden', 'appearance', 'folder', 'path', 'finder', 'advanced'],
   },
 ]
 
@@ -71,6 +58,8 @@ const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const ICON_BTN =
   'w-6 h-6 flex items-center justify-center text-xs border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-30 disabled:cursor-default'
+const MENU_ITEM =
+  'block w-full text-left px-3 py-1 text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const DANGER_BTN =
   'px-2 py-1 text-xs border border-[var(--color-status-error)] text-[var(--color-status-error)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const INPUT =
@@ -115,16 +104,91 @@ function themeOptions(themes: readonly ZenSettingsTheme[]): { value: string; lab
   return themes.map((t) => ({ value: t.name, label: t.name }))
 }
 
+/** A row's ⋯ menu: Rename, Move up, Move down, Delete. */
+function RowMenu({
+  name,
+  busy,
+  canUp,
+  canDown,
+  onRename,
+  onUp,
+  onDown,
+  onDelete,
+}: {
+  name: string
+  busy: boolean
+  canUp: boolean
+  canDown: boolean
+  onRename(): void
+  onUp(): void
+  onDown(): void
+  onDelete(): void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent): void => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
+    }
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [open])
+  const pick = (fn: () => void) => (): void => {
+    setOpen(false)
+    fn()
+  }
+  return (
+    <div ref={box} className="relative flex-shrink-0">
+      <button
+        type="button"
+        aria-label={`More for ${name}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More"
+        disabled={busy}
+        onClick={() => setOpen((o) => !o)}
+        className={ICON_BTN}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={`${name} menu`}
+          className="absolute right-0 top-7 z-[400] min-w-[140px] py-1 border border-[var(--color-border)] bg-[var(--color-bg)] shadow"
+        >
+          <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onRename)}>
+            Rename
+          </button>
+          <button type="button" role="menuitem" className={MENU_ITEM} disabled={!canUp} onClick={pick(onUp)}>
+            Move up
+          </button>
+          <button type="button" role="menuitem" className={MENU_ITEM} disabled={!canDown} onClick={pick(onDown)}>
+            Move down
+          </button>
+          <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onDelete)}>
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function GardenRow({
   garden,
   gardens,
-  themes,
-  globalTheme,
 }: {
   garden: ZenSettingsGarden
   gardens: readonly ZenSettingsGarden[]
-  themes: readonly ZenSettingsTheme[]
-  globalTheme: string | null
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(garden.name)
@@ -163,41 +227,9 @@ function GardenRow({
     if (ok) setEditing(false)
   }
 
-  const followLabel = globalTheme ? `Follow global (${globalTheme})` : 'Follow global'
-
   return (
     <li data-zen-garden-row={garden.id} className="py-2 border-b border-[var(--color-border)]">
       <div className="flex items-center gap-2">
-        <span className="w-5 text-right text-[11px] tabular-nums text-[var(--color-text-muted)]" title="Position">
-          {at}
-        </span>
-        <div className="flex flex-col">
-          <button
-            type="button"
-            aria-label={`Move ${garden.name} up`}
-            title="Move up"
-            disabled={busy || at <= 1}
-            onClick={() => void attempt(() => moveZenSettingsGarden(garden.id, at - 1), setBusy, setError)}
-            className={`${ICON_BTN} h-3 border-b-0`}
-          >
-            <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor" aria-hidden>
-              <path d="M5 2 9 8H1z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            aria-label={`Move ${garden.name} down`}
-            title="Move down"
-            disabled={busy || at >= count}
-            onClick={() => void attempt(() => moveZenSettingsGarden(garden.id, at + 1), setBusy, setError)}
-            className={`${ICON_BTN} h-3`}
-          >
-            <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor" aria-hidden>
-              <path d="M5 8 1 2h8z" />
-            </svg>
-          </button>
-        </div>
-
         <div className="flex-1 min-w-0">
           {editing ? (
             <input
@@ -230,7 +262,6 @@ function GardenRow({
               {garden.name}
             </button>
           )}
-          <div className="text-[10px] text-[var(--color-text-muted)]">{zenTemplateLabel(garden.template)}</div>
         </div>
 
         {editing ? (
@@ -251,37 +282,24 @@ function GardenRow({
             </button>
           </>
         ) : (
-          <>
-            <SettingDropdown
-              ariaLabel={`Theme for ${garden.name}`}
-              value={garden.theme ?? ''}
-              options={[{ value: '', label: followLabel }, ...themeOptions(themes)]}
-              placeholder={garden.theme ?? followLabel}
-              disabled={busy || themes.length === 0}
-              onChange={(v) =>
-                void attempt(() => setZenGardenTheme(garden.id, v === '' ? null : v), setBusy, setError)
-              }
-            />
-            <button type="button" disabled={busy} onClick={startRename} className={BTN}>
-              Rename
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setError(null)
-                setConfirmDelete(true)
-              }}
-              className={BTN}
-            >
-              Delete
-            </button>
-          </>
+          <RowMenu
+            name={garden.name}
+            busy={busy}
+            canUp={at > 1}
+            canDown={at < count}
+            onRename={startRename}
+            onUp={() => void attempt(() => moveZenSettingsGarden(garden.id, at - 1), setBusy, setError)}
+            onDown={() => void attempt(() => moveZenSettingsGarden(garden.id, at + 1), setBusy, setError)}
+            onDelete={() => {
+              setError(null)
+              setConfirmDelete(true)
+            }}
+          />
         )}
       </div>
 
       {confirmDelete && !editing && (
-        <div className="mt-2 ml-12 flex flex-wrap items-center gap-2" data-zen-garden-confirm={garden.id}>
+        <div className="mt-2 flex flex-wrap items-center gap-2" data-zen-garden-confirm={garden.id}>
           <span className="text-[11px] text-[var(--color-text-secondary)]">
             Delete “{garden.name}”? A copy stays in history in the Gardens folder.
           </span>
@@ -303,9 +321,7 @@ function GardenRow({
         </div>
       )}
       <ZenGardenSyncControls garden={garden} />
-      <div className="ml-12">
-        <InlineError text={error} testId={`zen-garden-error-${garden.id}`} />
-      </div>
+      <InlineError text={error} testId={`zen-garden-error-${garden.id}`} />
     </li>
   )
 }
@@ -326,33 +342,9 @@ const ZEN_TOKENS_IN_SETTINGS = {
 
 /**
  * Settings' New Garden: the same modal as Zen's (Rosson 2026-10-08): a
- * name and the catalog's cards, the Diary first. `highlight` opens it on
- * a catalog entry (the Garden catalog's cards). Creates through the local
+ * name and the catalog's cards, the Diary first. Creates through the local
  * daemon; there is nothing to allow.
  */
-function SettingsNewGardenModal({
-  gardens,
-  highlight,
-  onClose,
-}: {
-  gardens: readonly ZenSettingsGarden[]
-  highlight: string | null
-  onClose(): void
-}): React.JSX.Element {
-  return (
-    <ZenNewGardenModal
-      taken={gardens.map((g) => g.name)}
-      highlight={highlight}
-      vars={ZEN_TOKENS_IN_SETTINGS}
-      onClose={onClose}
-      onCreate={async (pick) => {
-        const clean = checkZenGardenName(pick.name, gardens)
-        await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate)
-      }}
-    />
-  )
-}
-
 function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
@@ -360,67 +352,94 @@ function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Reac
       <button type="button" data-zen-settings-new-garden="" onClick={() => setOpen(true)} className={`${BTN} mt-3`}>
         + New Garden
       </button>
-      {open && <SettingsNewGardenModal gardens={gardens} highlight={null} onClose={() => setOpen(false)} />}
+      {open && (
+        <ZenNewGardenModal
+          taken={gardens.map((g) => g.name)}
+          highlight={null}
+          vars={ZEN_TOKENS_IN_SETTINGS}
+          onClose={() => setOpen(false)}
+          onCreate={async (pick) => {
+            const clean = checkZenGardenName(pick.name, gardens)
+            await createZenSettingsGarden(clean, pick.entry.short as ZenNewGardenTemplate)
+          }}
+        />
+      )}
     </>
   )
 }
 
-/**
- * Settings → Gardens → Garden catalog (Rosson 2026-10-08): the ready-made
- * Gardens as the same cards New Garden shows. The list is the daemon's
- * (`GET /cli/zen/templates`, section `catalog`), so a new catalog Garden
- * shows here with no code change. Picking a card opens New Garden on it;
- * Create makes a NEW Garden (the person's Gardens never change), and for
- * K2's own Gardens the click is the consent, said in one sentence there.
- */
-function GardenCatalog({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element | null {
-  const templates = useZenTemplatesStore((s) => s.templates)
-  const badges = useZenCatalogBadges((s) => s.badges)
-  const catalog = zenTemplateSections(templates).catalog
-  const [adding, setAdding] = useState<string | null>(null)
-  if (catalog.length === 0) return null
+/** Advanced (collapsed until opened): the global theme and the folder. */
+function Advanced({
+  setUp,
+  path,
+  themes,
+  globalTheme,
+}: {
+  setUp: boolean
+  path: string | null
+  themes: readonly ZenSettingsTheme[]
+  globalTheme: string | null
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [revealError, setRevealError] = useState<string | null>(null)
   return (
-    <section data-settings-id="zen-gardens.catalog" className="mt-8" data-zen-settings-catalog-area="">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-        Garden catalog
-      </h3>
-      <p className="text-[10px] text-[var(--color-text-muted)] mb-3">
-        Ready-made Gardens from K2. Adding one makes a new Garden; your Gardens stay as they are.
-      </p>
-      <div className="grid grid-cols-2 gap-3" style={ZEN_TOKENS_IN_SETTINGS}>
-        {catalog.map((t) => {
-          const inUse = gardens.filter((g) => g.template === t.id).length
-          return (
-            <button
-              key={t.short}
-              type="button"
-              data-zen-catalog-card={t.short}
-              onClick={() => setAdding(t.short)}
-              className="text-left p-2 border border-[var(--color-border)] transition-colors no-drag cursor-pointer hover:bg-[var(--color-bg-elevated)] flex flex-col gap-1"
-            >
-              <ZenGardenSketch entry={t} />
-              <div className="mt-1 flex items-center text-xs text-[var(--color-text-primary)]">
-                <span className="truncate">{t.label}</span>
-                {badges[t.short] && (
-                  <span
-                    data-zen-catalog-badge={t.short}
-                    className="ml-2 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--color-accent)] border border-[var(--color-accent)]"
-                  >
-                    {badges[t.short]}
-                  </span>
-                )}
+    <section className="mt-8" data-zen-gardens-advanced="" data-settings-id="zen-gardens.advanced">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="zen-gardens-advanced-body"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider no-drag cursor-pointer hover:text-[var(--color-text-primary)]"
+      >
+        <span aria-hidden>{open ? '▾' : '▸'}</span>
+        Advanced
+      </button>
+      {open && (
+        <div id="zen-gardens-advanced-body" className="mt-2">
+          {setUp && (
+            <div data-settings-id="zen-gardens.theme">
+              <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
+                <div className="text-xs text-[var(--color-text-primary)]">Global theme</div>
+                <SettingDropdown
+                  ariaLabel="Global Zen theme"
+                  value={globalTheme ?? ''}
+                  options={themeOptions(themes)}
+                  placeholder={globalTheme ?? 'No theme'}
+                  disabled={busy || themes.length === 0}
+                  onChange={(v) => void attempt(() => setZenGlobalTheme(v), setBusy, setError)}
+                />
               </div>
-              <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">{t.description}</div>
-              {inUse > 0 && (
-                <div className="text-[10px] text-[var(--color-text-muted)]" data-zen-catalog-in-use={inUse}>
-                  You have {inUse === 1 ? 'one Garden' : `${inUse} Gardens`} from it already.
-                </div>
-              )}
-            </button>
-          )
-        })}
-      </div>
-      {adding && <SettingsNewGardenModal gardens={gardens} highlight={adding} onClose={() => setAdding(null)} />}
+              <InlineError text={error} testId="zen-gardens-theme-error" />
+            </div>
+          )}
+          {path ? (
+            <div data-settings-id="zen-gardens.folder">
+              <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
+                <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
+                  {path}
+                </span>
+                {setUp ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRevealError(null)
+                      revealItemInDir(path).catch((err: unknown) =>
+                        setRevealError(err instanceof Error ? err.message : String(err)),
+                      )
+                    }}
+                    className={`${BTN} flex-shrink-0`}
+                  >
+                    {revealLabel()}
+                  </button>
+                ) : null}
+              </div>
+              <InlineError text={revealError} testId="zen-gardens-reveal-error" />
+            </div>
+          ) : null}
+        </div>
+      )}
     </section>
   )
 }
@@ -429,7 +448,6 @@ export function ZenGardensSection(): React.JSX.Element {
   const st = useZenSettingsStore()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [revealError, setRevealError] = useState<string | null>(null)
 
   useEffect(() => {
     void loadZenSettings()
@@ -442,9 +460,7 @@ export function ZenGardensSection(): React.JSX.Element {
   return (
     <div className="max-w-2xl" data-zen-gardens-section="">
       <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">
-        Your Zen Mode pages. They live on this computer and only you see them.
-      </p>
+      <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
 
       {st.failure ? (
         <div className="mb-4">
@@ -459,9 +475,7 @@ export function ZenGardensSection(): React.JSX.Element {
         st.failure ? null : <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
       ) : !st.setUp ? (
         <div data-zen-gardens-setup="">
-          <p className="text-xs text-[var(--color-text-secondary)] mb-3">
-            Gardens aren’t set up on this computer yet.
-          </p>
+          <p className="text-xs text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
           <button
             type="button"
             disabled={busy}
@@ -473,79 +487,18 @@ export function ZenGardensSection(): React.JSX.Element {
           <InlineError text={error} testId="zen-gardens-setup-error" />
         </div>
       ) : (
-        <>
-          <section data-settings-id="zen-gardens.list">
-            <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-              Your Gardens
-            </h3>
-            <ZenGardenSettingsNews />
-            <ol className="border-t border-[var(--color-border)]">
-              {st.gardens.map((g) => (
-                <GardenRow
-                  key={g.id}
-                  garden={g}
-                  gardens={st.gardens}
-                  themes={st.themes}
-                  globalTheme={st.globalTheme}
-                />
-              ))}
-            </ol>
-            <NewGarden gardens={st.gardens} />
-          </section>
-
-          <GardenCatalog gardens={st.gardens} />
-
-          <section data-settings-id="zen-gardens.theme" className="mt-8">
-            <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-              Theme
-            </h3>
-            <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
-              <div>
-                <div className="text-xs text-[var(--color-text-primary)]">Global theme</div>
-                <div className="text-[10px] text-[var(--color-text-muted)]">
-                  Every Garden uses it unless the Garden picks its own above.
-                </div>
-              </div>
-              <SettingDropdown
-                ariaLabel="Global Zen theme"
-                value={st.globalTheme ?? ''}
-                options={themeOptions(st.themes)}
-                placeholder={st.globalTheme ?? 'No theme'}
-                disabled={busy || st.themes.length === 0}
-                onChange={(v) => void attempt(() => setZenGlobalTheme(v), setBusy, setError)}
-              />
-            </div>
-            <InlineError text={error} testId="zen-gardens-theme-error" />
-          </section>
-        </>
+        <section data-settings-id="zen-gardens.list">
+          <ol className="border-t border-[var(--color-border)]">
+            {st.gardens.map((g) => (
+              <GardenRow key={g.id} garden={g} gardens={st.gardens} />
+            ))}
+          </ol>
+          <NewGarden gardens={st.gardens} />
+        </section>
       )}
 
-      {st.path ? (
-        <section data-settings-id="zen-gardens.folder" className="mt-8">
-          <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1">
-            Folder
-          </h3>
-          <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
-            <span className="text-[11px] font-mono text-[var(--color-text-primary)] select-all truncate" data-zen-gardens-path="">
-              {st.path}
-            </span>
-            {st.setUp ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setRevealError(null)
-                  revealItemInDir(st.path as string).catch((err: unknown) =>
-                    setRevealError(err instanceof Error ? err.message : String(err)),
-                  )
-                }}
-                className={`${BTN} flex-shrink-0`}
-              >
-                {revealLabel()}
-              </button>
-            ) : null}
-          </div>
-          <InlineError text={revealError} testId="zen-gardens-reveal-error" />
-        </section>
+      {hasData && (st.setUp || st.path) ? (
+        <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
       ) : null}
     </div>
   )

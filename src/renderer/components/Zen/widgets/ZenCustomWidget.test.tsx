@@ -12,12 +12,14 @@ const h = vi.hoisted(() => ({
   posts: [] as Array<{ hostKey: string; route: string; body: unknown }>,
   postImpl: null as null | ((route: string, body: unknown) => unknown),
   gets: [] as string[],
+  getParams: [] as unknown[],
   bundleError: null as string | null,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_s: unknown, route: string, params?: { widget?: string }) => {
     h.gets.push(route)
+    h.getParams.push(params)
     if (route !== 'zen/widget/bundle') throw new Error(`unexpected GET ${route}`)
     if (h.bundleError) throw new Error(h.bundleError)
     return {
@@ -118,6 +120,7 @@ beforeEach(() => {
   h.posts = []
   h.postImpl = null
   h.gets = []
+  h.getParams = []
   h.bundleError = null
   __resetZenCustomRunForTests()
   // This window's boot decision (UW32, B3): nothing was running.
@@ -211,6 +214,9 @@ describe('TUW3.1: the sealed frame', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-testid="zen-custom-frame"]')).not.toBeNull())
     const f = q('[data-testid="zen-custom-frame"]')
     expect(h.gets).toEqual(['zen/widget/bundle'])
+    // prd-garden-lock-and-sync-v1: the Garden goes along, so a locked Garden
+    // gets the widget copy frozen when it was locked.
+    expect(h.getParams).toEqual([{ widget: payload().widget, garden: 'g-test0001' }])
     expect(f.getAttribute('sandbox')).toBe('allow-scripts')
     expect(f.getAttribute('data-frame-profile')).toBe('widget')
     const doc = f.getAttribute('srcdoc') ?? ''

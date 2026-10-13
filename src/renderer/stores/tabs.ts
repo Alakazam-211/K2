@@ -2186,7 +2186,7 @@ export interface TabsRoomApi {
   /** MS67 — may this room call this computer's Tauri commands? */
   readonly localCommands: boolean
   /** Ensure the pinned Chat/Inbox tabs for the room's active workspace. */
-  ensurePinnedAgentTabForMode(agentMode: string, projectPath: string): void
+  ensurePinnedAgentTabForMode(agentMode: string, projectPath: string): Promise<void>
   /** Spawn 409 `session_owned_elsewhere`: drop the pane, no close. */
   releasePaneOwnedElsewhere(paneId: string): void
   dropTabAfterFailedSidecarRefresh(paneGroupId: string): void
@@ -2769,11 +2769,14 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
   /** Ensure the pinned system agent tab matches the given agent mode.
    *  Called by the projects store after workspace restore/switch.
-   *  Resolves the primary agent name from the backend asynchronously. */
+   *  Resolves the primary agent name from the backend asynchronously.
+   *  The returned promise settles once that resolution has stamped the
+   *  tabs or bailed (callers may ignore it; tests await it instead of
+   *  counting event-loop ticks). */
   function ensurePinnedAgentTabForMode(
     agentMode: string,
     projectPath: string,
-  ): void {
+  ): Promise<void> {
     // Capture the workspace this call is FOR. setActiveWorkspace sets
     // activeWorkspaceKey (via restoreWorkspace) synchronously before
     // calling us, so this is the workspace the caller intends to pin
@@ -2781,7 +2784,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     // below and bail if the user switched away in the meantime — see
     // the guard before ensureSystemAgentTabs.
     const expectedWorkspaceKey = store.getState().activeWorkspaceKey
-    setTimeout(async () => {
+    const resolveAndStamp = async (): Promise<void> => {
       const tabsStore = store.getState()
 
       // 0.39.0: Chat + Inbox tabs render for EVERY workspace, including
@@ -2861,7 +2864,12 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       // Bail if the active workspace changed since we were scheduled.
       if (store.getState().activeWorkspaceKey !== expectedWorkspaceKey) return
       tabsStore.ensureSystemAgentTabs(agentName, projectPath, title)
-    }, 0)
+    }
+    return new Promise<void>((resolve, reject) => {
+      setTimeout(() => {
+        resolveAndStamp().then(resolve, reject)
+      }, 0)
+    })
   }
 
   function restampBuiltTabs(tabs: Tab[], liveById: Map<string, Tab>): Tab[] {
@@ -7550,8 +7558,8 @@ export const useTabsStore: TabsStore = createTabsStore({
 // these; room components call their room's `tabs.room.*` instead.
 
 /** Primary room: ensure the pinned agent tabs (projects store). */
-export function ensurePinnedAgentTabForMode(agentMode: string, projectPath: string): void {
-  useTabsStore.room.ensurePinnedAgentTabForMode(agentMode, projectPath)
+export function ensurePinnedAgentTabForMode(agentMode: string, projectPath: string): Promise<void> {
+  return useTabsStore.room.ensurePinnedAgentTabForMode(agentMode, projectPath)
 }
 
 /** Primary room: spawn 409 `session_owned_elsewhere` drop. */

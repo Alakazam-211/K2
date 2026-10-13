@@ -403,7 +403,8 @@ beforeEach(() => {
   h.reveals.length = 0
   h.gardens = [
     { id: 'g-1', name: 'Garden 1', template: 'k2.texting@1', theme: null },
-    { id: 'g-2', name: 'Garden 2', template: 'k2.blank@1', theme: 'paper' },
+    // g-2 came from the catalog; g-3 was made from scratch (the blank start).
+    { id: 'g-2', name: 'Garden 2', template: 'k2.diary@1', theme: 'paper' },
     { id: 'g-3', name: 'Mornings', template: 'k2.blank@1', theme: null },
   ]
   h.setUp = true
@@ -551,8 +552,10 @@ describe('Settings → Gardens: the section', () => {
     await mountSection()
     expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
     expect(row('g-1').textContent).toContain('Garden 1')
-    expect(row('g-1').textContent).not.toContain('Default layout')
-    expect(row('g-2').textContent).not.toContain('Empty')
+    // No template label by the name (the only one is the Keep in sync tag).
+    const nameButton = within(row('g-1')).getByRole('button', { name: 'Garden 1' })
+    expect(nameButton.parentElement?.textContent).toBe('Garden 1')
+    expect(row('g-3').textContent).not.toContain('Empty')
     expect(within(row('g-3')).queryByTitle('Position')).toBeNull()
     // Advanced starts collapsed: no folder, no global theme.
     expect(document.querySelector('[data-zen-gardens-path]')).toBeNull()
@@ -927,6 +930,51 @@ describe('Settings → Gardens: two checkboxes per Garden (prd-garden-lock-and-s
     await waitFor(() => expect(box('sync', 'g-2').indeterminate).toBe(false))
     expect(box('sync', 'g-2').checked).toBe(true)
     expect(zenPosts()).toEqual([['zen/garden/sync', { garden: 'g-2', part: 'both', sync: true }]])
+  })
+
+  it('Keep in sync checked (or the dash) shows the template it follows in a tag; off shows none', async () => {
+    h.sync['g-2'] = { page: 'synced', theme: 'copy', locked: false }
+    await mountSection()
+    await waitFor(() => box('sync', 'g-1'))
+    const tag = (id: string): Element | null => document.querySelector(`[data-zen-garden-sync-template="${id}"]`)
+    // Checked: the start's own name, to the right of the label, inside it.
+    expect(box('sync', 'g-1').checked).toBe(true)
+    expect(tag('g-1')?.textContent).toBe('Default layout')
+    const label = document.querySelector('[data-zen-garden-sync="g-1"]')
+    expect(label?.contains(tag('g-1'))).toBe(true)
+    expect(label?.lastElementChild).toBe(tag('g-1'))
+    // The dash: a catalog Garden's tag reads the template id's name (no catalog loaded).
+    expect(box('sync', 'g-2').indeterminate).toBe(true)
+    expect(tag('g-2')?.textContent).toBe('Diary')
+    // Unchecked: no tag.
+    fireEvent.click(box('sync', 'g-1'))
+    await waitFor(() => expect(box('sync', 'g-1').checked).toBe(false))
+    expect(tag('g-1')).toBeNull()
+  })
+
+  it('a catalog Garden’s tag uses the catalog’s label once the catalog is read', async () => {
+    h.templates = [
+      { id: 'k2.texting@1', short: 'texting', label: 'Start with the default', description: 'd', section: 'start', newUsers: true },
+      { id: 'k2.diary@1', short: 'diary', label: 'My Diary', description: 'A journal.', section: 'catalog', newUsers: true },
+    ]
+    await mountSection()
+    await waitFor(() => expect(document.querySelector('[data-zen-garden-sync-template="g-2"]')?.textContent).toBe('My Diary'))
+  })
+
+  it('a Garden made from scratch: Keep in sync is off and disabled, with the tooltip, and no tag', async () => {
+    await mountSection()
+    await waitFor(() => box('sync', 'g-3'))
+    expect(box('sync', 'g-3').disabled).toBe(true)
+    expect(box('sync', 'g-3').checked).toBe(false)
+    expect(document.querySelector('[data-zen-garden-sync="g-3"]')?.getAttribute('title')).toBe(
+      'Made from scratch, no template to follow',
+    )
+    expect(document.querySelector('[data-zen-garden-sync-template="g-3"]')).toBeNull()
+    fireEvent.click(box('sync', 'g-3'))
+    await settle()
+    expect(zenPosts()).toEqual([])
+    // Lock still works on it.
+    expect(box('lock', 'g-3').disabled).toBe(false)
   })
 
   it('an older daemon (no `locked` in zen/sync): no Lock checkbox, Keep in sync stays', async () => {

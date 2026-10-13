@@ -173,6 +173,19 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/skin/grants/delete":
             self._send(200, json.dumps({"success": True}))
             return
+        if path == "/cli/skin/grants/copy-host":
+            self._send(200, json.dumps({
+                "ok": True,
+                "app": "svc-1",
+                "dryRun": bool(body.get("dryRun")),
+                "added": ["ada", "bob"],
+                "keptExisting": [{"username": "dora", "enabled": False}],
+                "skippedOtherAppRole": ["olga"],
+            }))
+            return
+        if path == "/cli/skin/users":
+            self._send(200, json.dumps({"username": body.get("username"), "id": "p-new"}))
+            return
         self._send(404, json.dumps({"error": "not found"}))
 
     def log_message(self, *_args):
@@ -201,6 +214,14 @@ add_out="$(run_k2 app grant add --subject-kind principal --subject p-ada --kind 
 add_rc=$?
 rm_out="$(run_k2 app grant rm --subject-kind workspace --subject ws-1 --kind mailbox --target inbox 2>/dev/null)"
 rm_rc=$?
+rooms_out="$(run_k2 app grant add --subject-kind principal --subject p-bob --kind app --target docs/portal --room sales --room docs 2>/dev/null)"
+rooms_rc=$?
+copy_out="$(run_k2 app grant copy-host docs/portal --dry-run 2>/dev/null)"
+copy_rc=$?
+add_app_out="$(run_k2 app user add eve --app docs/portal --role desk 2>/dev/null)"
+add_app_rc=$?
+add_role_only="$(run_k2 app user add eve --role desk 2>&1)"
+add_role_only_rc=$?
 set -e
 assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
@@ -210,6 +231,16 @@ assert_eq "grant add exit 0" "$add_rc" "0"
 assert_contains "add prints id" "$add_out" "g-new"
 assert_eq "grant rm exit 0" "$rm_rc" "0"
 assert_contains "rm removed" "$rm_out" "Grant removed."
+assert_eq "grant add --room exit 0" "$rooms_rc" "0"
+assert_contains "add --room prints id" "$rooms_out" "g-new"
+assert_eq "copy-host exit 0" "$copy_rc" "0"
+assert_contains "copy-host dry run verb" "$copy_out" "Would copy the box login onto App svc-1 for 2 user(s): ada, bob"
+assert_contains "copy-host kept" "$copy_out" "kept dora"
+assert_contains "copy-host skipped" "$copy_out" "skipped olga"
+assert_eq "user add --app exit 0" "$add_app_rc" "0"
+assert_contains "user add --app says no box login" "$add_app_out" "no box login"
+assert_eq "user add --role without --app exit 2" "$add_role_only_rc" "2"
+assert_contains "user add --role teaches --app" "$add_role_only" "needs --app"
 
 seen="$(cat "$SEEN")"
 assert_contains "add posts grants" "$seen" "/cli/skin/grants"
@@ -222,6 +253,11 @@ assert_contains "rm posts delete" "$seen" "/cli/skin/grants/delete"
 assert_contains "rm body workspace" "$seen" '"subjectKind": "workspace"'
 assert_contains "rm body kind" "$seen" '"kind": "mailbox"'
 assert_contains "rm body target" "$seen" '"targetId": "inbox"'
+assert_contains "add --room body" "$seen" '"rooms": ["sales", "docs"]'
+assert_contains "add --room target" "$seen" '"targetId": "docs/portal"'
+assert_contains "copy-host posts" "$seen" "/cli/skin/grants/copy-host"
+assert_contains "copy-host body" "$seen" '{"app": "docs/portal", "dryRun": true}'
+assert_contains "user add --app body" "$seen" '{"username": "eve", "app": "docs/portal", "role": "desk"}'
 
 echo
 echo "$pass passed, $fail failed"

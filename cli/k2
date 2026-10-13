@@ -6213,7 +6213,9 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
   Leftover aliases (still work): k2 skin …    k2 skin-token …
 
   k2 app user add <username> [--email e] [--password-stdin]
-                                        Add an app principal (not a Connect user)
+                                        Add an app principal (not a Connect user) with the box login
+  k2 app user add <username> --app <app> [--role R] [--email e] [--password-stdin]
+                                        Owner only. A guest of ONE App: that App's grant, no box login
   k2 app user email <username> [--email e]
                                         Set/clear guest email (omit/empty clears)
   k2 app user full-name <username> [--name <text>]
@@ -6227,12 +6229,13 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
                                         Clear an app guest login lock (does not change the password)
   k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—  [agent:<ws>]; no secrets)
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
-  k2 app user rooms <username> --agent sales [--apply-tokens]
-                                        Set default rooms (unassigned guests only)
+  k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]
+                                        Set default rooms (unassigned guests only); --app sets that App's rooms (owner)
   k2 app user role <username> <role>   Assign an app role (not Connect owner/admin/member)
   k2 app user unassign <username>      Clear the assigned role (restore Thread-only + default rooms)
-  k2 app role create <name> [--agent sales]
+  k2 app role create <name> [--agent sales] [--app <app>]
                                         Named bundle. No --agent = Thread dark. --agent without --caps = Thread-only on that room.
+                                        --app tags the role for one App (usable only on that App's grants).
   k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
   k2 app role room <role> <handle> --clear
@@ -6242,10 +6245,15 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
                                         --clear empties the whole map. Always rewrites live sessions.
   k2 app role remove <name>            Drop an unassigned role
   k2 app grant list                    Grants (subject, kind, target, role|scope)
-  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]
-                                        Owner only. kind=app needs --role. Other kinds need --scope and no --role.
+  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]
+                                        Owner only. kind=app is a login on one App: --role, or --room (repeatable;
+                                        Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
+                                        Other kinds need --scope and no --role (recorded, not enforced).
   k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>
-  k2 app grant rm --id <id>            Revoke the grant. The role stays. Login is unchanged.
+  k2 app grant rm --id <id>            Revoke the grant. The role stays. Ends that App's live logins.
+  k2 app grant copy-host <app> [--dry-run] [--json]
+                                        Owner only. Everyone with the box login gets the same access on <app>
+                                        (an App published after 0.45.5 starts with nobody).
   k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
@@ -6256,6 +6264,14 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
 
 WHAT THIS IS
   Users + roles + tokens + scopes (caps + rooms). Never a host. Never grid.
+
+PER-APP LOGINS (0.45.5)
+  A login is for ONE App: the box login (host) or a published App. It needs
+  that person's enabled grant for that App, and its pass only reaches that
+  App's rooms. Wrong App = the same 401 as a bad password. A --skin App's
+  helper always logs in for its own App. A BFF (--cmd) names its App on
+  POST /cli/skin/login with {"app": $K2_APP_ID}; no app = the box login.
+  See k2 study apps.
 
 HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
   k2 publish run <label> --skin --port N
@@ -6296,10 +6312,13 @@ cmd_skin() {
     shift || true
     case "$sub" in
         user|users)
-            local _a
+            local _a _has_app=0
             for _a in "$@"; do
-                if [[ "$_a" == "--role" ]]; then
-                    echo "Error: Connect --role is not a skin command. Use k2 app user role <username> <role> or k2 app role create." >&2
+                case "$_a" in --app|--app=*) _has_app=1 ;; esac
+            done
+            for _a in "$@"; do
+                if [[ "$_a" == "--role" && "$_has_app" -eq 0 ]]; then
+                    echo "Error: Connect --role is not a skin command. Use k2 app user role <username> <role> or k2 app role create (--role on user add needs --app)." >&2
                     exit 2
                 fi
             done
@@ -6307,13 +6326,17 @@ cmd_skin() {
             shift || true
             case "$action" in
                 add)
-                    local username="" password_stdin=0 email=""
+                    local username="" password_stdin=0 email="" app="" role=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --password-stdin) password_stdin=1; shift ;;
                             --email) email="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --email=*) email="${1#--email=}"; shift ;;
-                            --help|-h) echo "Usage: k2 app user add <username> [--email e] [--password-stdin]" >&2; exit 0 ;;
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --role) role="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --role=*) role="${1#--role=}"; shift ;;
+                            --help|-h) echo "Usage: k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
@@ -6324,7 +6347,7 @@ cmd_skin() {
                         pw=$(cat)
                     fi
                     local body raw
-                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" python3 -c '
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_PW="$pw" K2_SKIN_PW_SET="$password_stdin" K2_SKIN_EMAIL="$email" K2_SKIN_APP="$app" K2_SKIN_ROLE="$role" python3 -c '
 import json,os
 b={"username": os.environ["K2_SKIN_USER"]}
 if os.environ.get("K2_SKIN_PW_SET","0") == "1":
@@ -6332,13 +6355,23 @@ if os.environ.get("K2_SKIN_PW_SET","0") == "1":
 em=os.environ.get("K2_SKIN_EMAIL","")
 if em:
     b["email"]=em
+app=os.environ.get("K2_SKIN_APP","").strip()
+if app:
+    b["app"]=app
+role=os.environ.get("K2_SKIN_ROLE","").strip()
+if role:
+    b["role"]=role
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/users" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
-                    printf '%s' "$raw" | python3 -c '
-import json,sys
+                    printf '%s' "$raw" | K2_SKIN_APP="$app" python3 -c '
+import json,os,sys
 d=json.load(sys.stdin)
-print("Skin user added: %s" % d.get("username",""))'
+app=os.environ.get("K2_SKIN_APP","")
+if app:
+    print("App user added: %s (App %s only; no box login)" % (d.get("username",""), app))
+else:
+    print("Skin user added: %s" % d.get("username",""))'
                     ;;
                 password)
                     local username=""
@@ -6517,12 +6550,14 @@ d=json.load(sys.stdin)
 print("Skin user removed." if d.get("success") else "No matching skin user.")'
                     ;;
                 rooms)
-                    local username="" apply_tokens=0 agents=()
+                    local username="" apply_tokens=0 agents=() app=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
                             --apply-tokens|--applyTokens) apply_tokens=1; shift ;;
-                            --help|-h) echo "Usage: k2 app user rooms <username> --agent sales [--apply-tokens]" >&2; exit 0 ;;
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --help|-h) echo "Usage: k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$username" ]] && username="$1"; shift ;;
                         esac
@@ -6535,20 +6570,27 @@ print("Skin user removed." if d.get("success") else "No matching skin user.")'
                         done
                     fi
                     local body raw
-                    body=$(K2_SKIN_USER="$username" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_APPLY="$apply_tokens" python3 -c '
+                    body=$(K2_SKIN_USER="$username" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_APPLY="$apply_tokens" K2_SKIN_APP="$app" python3 -c '
 import json,os
 b={"username": os.environ.get("K2_SKIN_USER","")}
 b["rooms"]=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
 if os.environ.get("K2_SKIN_APPLY","0") == "1":
     b["applyTokens"]=True
+app=os.environ.get("K2_SKIN_APP","").strip()
+if app:
+    b["app"]=app
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/users/rooms" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-handles=d.get("defaultRoomHandles") or d.get("default_room_handles") or []
-print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))'
+if d.get("app"):
+    handles=d.get("roomHandles") or []
+    print("App user %s rooms on %s: %s" % (d.get("username",""), d.get("app"), ", ".join(handles) if handles else "(none)"))
+else:
+    handles=d.get("defaultRoomHandles") or d.get("default_room_handles") or []
+    print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))'
                     ;;
                 role)
                     local username="${1:-}" role="${2:-}"
@@ -6591,12 +6633,14 @@ print("Skin user %s unassigned." % d.get("username",""))'
             shift || true
             case "$action" in
                 create)
-                    local name="" caps="" agents=()
+                    local name="" caps="" agents=() app=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --caps|--cap) caps="${2:-}"; shift 2 ;;
                             --agent|--agents) agents+=("${2:-}"); shift 2 ;;
-                            --help|-h) echo "Usage: k2 app role create <name> [--agent sales]" >&2; exit 0 ;;
+                            --app) app="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --app=*) app="${1#--app=}"; shift ;;
+                            --help|-h) echo "Usage: k2 app role create <name> [--agent sales] [--app <app>]" >&2; exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) [[ -z "$name" ]] && name="$1"; shift ;;
                         esac
@@ -6613,12 +6657,15 @@ print("Skin user %s unassigned." % d.get("username",""))'
                         done
                     fi
                     local body raw
-                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" python3 -c '
+                    body=$(K2_SKIN_NAME="$name" K2_SKIN_AGENTS="$agents_nl" K2_SKIN_APP="$app" python3 -c '
 import json,os
 b={"name": os.environ.get("K2_SKIN_NAME","")}
 rooms=[s.strip() for s in os.environ.get("K2_SKIN_AGENTS","").splitlines() if s.strip()]
 if rooms:
     b["rooms"]=rooms
+app=os.environ.get("K2_SKIN_APP","").strip()
+if app:
+    b["app"]=app
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/roles" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
@@ -6791,7 +6838,7 @@ for g in grants:
     ))'
                     ;;
                 add|create)
-                    local subject_kind="" subject="" kind="" target="" role="" scope=""
+                    local subject_kind="" subject="" kind="" target="" role="" scope="" rooms_nl=""
                     while [[ $# -gt 0 ]]; do
                         case "$1" in
                             --subject-kind) subject_kind="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
@@ -6806,8 +6853,10 @@ for g in grants:
                             --role=*) role="${1#--role=}"; shift ;;
                             --scope) scope="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --scope=*) scope="${1#--scope=}"; shift ;;
+                            --room) rooms_nl="${rooms_nl}${2-}"$'\n'; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --room=*) rooms_nl="${rooms_nl}${1#--room=}"$'\n'; shift ;;
                             --help|-h)
-                                echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]" >&2
+                                echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]" >&2
                                 exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -6818,7 +6867,7 @@ for g in grants:
                         exit 1
                     fi
                     local body raw
-                    body=$(K2_GRANT_SUBJECT_KIND="$subject_kind" K2_GRANT_SUBJECT="$subject" K2_GRANT_KIND="$kind" K2_GRANT_TARGET="$target" K2_GRANT_ROLE="$role" K2_GRANT_SCOPE="$scope" python3 -c '
+                    body=$(K2_GRANT_SUBJECT_KIND="$subject_kind" K2_GRANT_SUBJECT="$subject" K2_GRANT_KIND="$kind" K2_GRANT_TARGET="$target" K2_GRANT_ROLE="$role" K2_GRANT_SCOPE="$scope" K2_GRANT_ROOMS="$rooms_nl" python3 -c '
 import json,os
 b={
   "subjectKind": os.environ.get("K2_GRANT_SUBJECT_KIND",""),
@@ -6828,10 +6877,13 @@ b={
 }
 role=os.environ.get("K2_GRANT_ROLE","").strip()
 scope=os.environ.get("K2_GRANT_SCOPE","").strip()
+rooms=[r.strip() for r in os.environ.get("K2_GRANT_ROOMS","").splitlines() if r.strip()]
 if role:
     b["roleId"]=role
 if scope:
     b["scope"]=scope
+if rooms:
+    b["rooms"]=rooms
 print(json.dumps(b))')
                     raw=$(cli_post_json "/cli/skin/grants" "$body")
                     printf '%s' "$raw" | _skin_die_if_err
@@ -6893,12 +6945,50 @@ import json,sys
 d=json.load(sys.stdin)
 print("Grant removed." if d.get("success") else "No matching grant.")'
                     ;;
+                copy-host|copyhost)
+                    local app="" dry_run=0 json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --dry-run) dry_run=1; shift ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h)
+                                echo "Usage: k2 app grant copy-host <app> [--dry-run] [--json]   (<app> = service id or <workspace>/<name>)" >&2
+                                exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) [[ -z "$app" ]] && app="$1"; shift ;;
+                        esac
+                    done
+                    [[ -z "$app" ]] && { echo "Usage: k2 app grant copy-host <app> [--dry-run] [--json]" >&2; exit 1; }
+                    local body raw
+                    body=$(K2_GRANT_APP="$app" K2_GRANT_DRY="$dry_run" python3 -c '
+import json,os
+b={"app": os.environ.get("K2_GRANT_APP","")}
+if os.environ.get("K2_GRANT_DRY","0") == "1":
+    b["dryRun"]=True
+print(json.dumps(b))')
+                    raw=$(cli_post_json "/cli/skin/grants/copy-host" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    if [ "$json_out" = 1 ]; then
+                        printf '%s\n' "$raw"
+                        return 0
+                    fi
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+verb="Would copy" if d.get("dryRun") else "Copied"
+added=d.get("added") or []
+print("%s the box login onto App %s for %d user(s)%s" % (verb, d.get("app",""), len(added), (": " + ", ".join(added)) if added else ""))
+for k in d.get("keptExisting") or []:
+    print("  kept %s: an App grant already exists (%s)" % (k.get("username",""), "enabled" if k.get("enabled") else "disabled"))
+for u in d.get("skippedOtherAppRole") or []:
+    print("  skipped %s: the box-login role is tagged for another App" % u)'
+                    ;;
                 --help|-h)
-                    echo "Usage: k2 app grant <list|add|rm>" >&2
+                    echo "Usage: k2 app grant <list|add|rm|copy-host>" >&2
                     exit 0
                     ;;
                 *)
-                    echo "Usage: k2 app grant <list|add|rm>" >&2
+                    echo "Usage: k2 app grant <list|add|rm|copy-host>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -19553,12 +19643,14 @@ cmd_schema() {
     },
     {
       "name": "app user add",
-      "usage": "k2 app user add <username> [--email e] [--password-stdin]",
-      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login.",
+      "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
+      "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host). With --app (owner only) the person is a guest of that one App: its grant (the role, or no rooms) and no box login.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--email", "arg": "e", "description": "Optional guest email (password-reset plumbing; K2 never mails guests)."},
-        {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."}
+        {"name": "--password-stdin", "arg": null, "description": "Read K2-login password from stdin (no public register)."},
+        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>. No box login."},
+        {"name": "--role", "arg": "role", "description": "With --app: the role on that App (host-wide or tagged for that App)."}
       ]
     },
     {
@@ -19622,12 +19714,13 @@ cmd_schema() {
     },
     {
       "name": "app user rooms",
-      "usage": "k2 app user rooms <username> --agent sales [--apply-tokens]",
-      "description": "Set default rooms for an unassigned guest. Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens).",
+      "usage": "k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]",
+      "description": "Set default rooms for an unassigned guest (the box login). Assigned guests 400 until unassigned. --apply-tokens copies onto live sessions only (never platform tokens). --app (owner only) sets the rooms of that guest's role-less grant on one App, creating it if missing.",
       "args": [{"name": "username", "required": true}],
       "flags": [
         {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable)."},
-        {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."}
+        {"name": "--apply-tokens", "arg": null, "description": "Copy onto live login sessions."},
+        {"name": "--app", "arg": "app", "description": "Owner only. Published service id or <workspace>/<name>."}
       ]
     },
     {
@@ -19656,11 +19749,12 @@ cmd_schema() {
     },
     {
       "name": "app role create",
-      "usage": "k2 app role create <name> [--agent sales]",
-      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member (and the retired viewer) are rejected.",
+      "usage": "k2 app role create <name> [--agent sales] [--app <app>]",
+      "description": "Create an app role. --agent optional (0 = Thread dark). Name charset is the same as usernames; Connect owner/admin/member (and the retired viewer) are rejected. --app tags the role for one App: it can only be used on that App's grants.",
       "args": [{"name": "name", "required": true}],
       "flags": [
-        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable; 0 allowed)."}
+        {"name": "--agent", "arg": "handle", "description": "Workspace handle (repeatable; 0 allowed)."},
+        {"name": "--app", "arg": "app", "description": "Published service id or <workspace>/<name>."}
       ]
     },
     {
@@ -19702,8 +19796,8 @@ cmd_schema() {
     },
     {
       "name": "app grant",
-      "usage": "k2 app grant <list|add|rm> ...",
-      "description": "Owner-only grants. kind=app is membership (a role on one app). Other kinds store a scope and no role. Revoke deletes the grant and keeps the role. Login is unchanged.",
+      "usage": "k2 app grant <list|add|rm|copy-host> ...",
+      "description": "Owner-only grants. kind=app is a login on one App (host = the box login): a role, or Thread-only rooms. Since 0.45.5 a login needs the grant for that App and its pass reaches only that App's rooms. Other kinds store a scope and no role (recorded, not enforced). Revoke deletes the grant, keeps the role, and ends that App's live logins.",
       "args": [],
       "flags": []
     },
@@ -19716,22 +19810,23 @@ cmd_schema() {
     },
     {
       "name": "app grant add",
-      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]",
-      "description": "Create a grant. kind=app requires --role (role id or name) and no --scope. Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). Owner only.",
+      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]",
+      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). Owner only.",
       "args": [],
       "flags": [
         {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
         {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
-        {"name": "--kind", "arg": "app|mailbox|database|cli", "description": "What is granted. app is membership."},
-        {"name": "--target", "arg": "id", "description": "App, mailbox, database, or cli target id."},
-        {"name": "--role", "arg": "role", "description": "Role id or name. Required for kind=app."},
+        {"name": "--kind", "arg": "app|mailbox|database|cli", "description": "What is granted. app is a login on one App."},
+        {"name": "--target", "arg": "id", "description": "App (host, service id, or <workspace>/<name>), mailbox, database, or cli target id."},
+        {"name": "--role", "arg": "role", "description": "Role id or name (kind=app)."},
+        {"name": "--room", "arg": "handle", "description": "Thread-only room for a role-less kind=app grant (repeatable)."},
         {"name": "--scope", "arg": "text", "description": "Scope string. Required when kind is not app."}
       ]
     },
     {
       "name": "app grant rm",
       "usage": "k2 app grant rm --id <id> | --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>",
-      "description": "Revoke a grant. The role stays. Does not change login.",
+      "description": "Revoke a grant. The role stays. A kind=app grant's live logins on that App end.",
       "args": [],
       "flags": [
         {"name": "--id", "arg": "id", "description": "Grant id."},
@@ -19739,6 +19834,16 @@ cmd_schema() {
         {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
         {"name": "--kind", "arg": "kind", "description": "Grant kind."},
         {"name": "--target", "arg": "id", "description": "Target id."}
+      ]
+    },
+    {
+      "name": "app grant copy-host",
+      "usage": "k2 app grant copy-host <app> [--dry-run] [--json]",
+      "description": "Owner only. Give everyone who has the box login the same access on one App (their role when it is host-wide or that App's, else their rooms). A grant already on that App wins (even a disabled one); a role tagged for another App is skipped. Use after publishing an App (it starts with nobody) or before a BFF starts sending app on login.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Show who would be copied; write nothing."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body {app,dryRun,added,keptExisting,skippedOtherAppRole}."}
       ]
     },
     {
@@ -21818,19 +21923,46 @@ HOW TO MAKE ONE (copy this)
        {"ok":true,"username":"…","rooms":[…],"roomHandles":[…],
         "caps":[…],"role":"dentist"|null,
         "roomAccess":[{"handle":"docs","caps":["thread:read","thread:post"]}]}
-     Set-Cookie: k2_skin_ui=…; HttpOnly; SameSite=Lax; Path=/
+     Set-Cookie: __Host-k2_skin_ui=…; HttpOnly; SameSite=Lax; Path=/; Secure
+     (plain `k2_skin_ui` only on a loopback / http dev origin).
      The gateway holds k2skn_ in helper memory. Guests re-login
      after a helper/daemon restart.
-  4. Daemon login (unchanged, if you are not using the gateway):
-       POST /cli/skin/login   {"username":"…","password":"…"}
+  4. Daemon login (if you are not using the gateway):
+       POST /cli/skin/login   {"username":"…","password":"…"[,"app":"<service id>"]}
      200 body (verbatim):
        {"ok":true,"token":"k2skn_…","username":"…","principalId":"<uuid>",
         "rooms":["<id>",…],"roomHandles":["sales",…],
         "caps":[…],"role":"dentist"|null,
-        "roomAccess":[{"handle":"sales","caps":[…]}]}
+        "roomAccess":[{"handle":"sales","caps":[…]}],"app":"host"|"<service id>"}
      `token` is a Bearer session. Cookie `k2_skin_session` may
      also be set (leftover Caddy door). Prefer keeping the
      token on the SERVER so the browser never holds the pass.
+     No "app" = the box login (host), exactly as before 0.45.5.
+
+PER-APP LOGINS (0.45.5)
+  Every login is for ONE App: the box login (`host`) or one published
+  App (its service id). It needs that person's ENABLED app grant for that
+  App, and the pass reaches only that App's rooms: the role on that grant,
+  or its rooms with Thread-only caps. Two Apps can give one person two
+  different roles. Wrong App, no grant, a disabled grant, an unknown or
+  removed App: the same 401 as a bad password (no App enumeration).
+  --skin Apps: the helper always logs in for its own App (`--app`); the
+    browser body can't choose another one.
+  --cmd Apps (BFF): K2 sets K2_APP_ID (this service's id), K2_HOST and
+    K2_PORT (the daemon's loopback address). Send {"app": $K2_APP_ID} on
+    POST /cli/skin/login to make logins per App. Before you switch, give
+    people the App: `k2 app grant copy-host <workspace>/<name>`.
+  New Apps start with NOBODY. Owner adds people:
+    k2 app grant copy-host <app>               everyone with the box login
+    k2 app user add <u> --app <app> [--role R]  a guest of this App only
+                                               (no box login)
+    k2 app user rooms <u> --app <app> --agent sales   that App's rooms
+    k2 app grant add … --kind app --target <app> --role R | --room sales
+    k2 app role create R --app <app>           a role only that App can use
+  <app> = a service id, or <workspace>/<publish name>. `host` = box login.
+  Isolation for a person only holds when they have no box login (User
+  Access → host switch off). Box login off still ends ALL their sessions.
+  Removing an App (`k2 publish rm`) ends its passes; its grants stay.
 
 BYO BFF (not --skin)
   Same permission system as official --skin. Same Apps roster,

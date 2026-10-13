@@ -4981,3 +4981,105 @@ async fn publish_cmd_service_gets_app_id_env() {
         let _ = std::fs::remove_dir_all(&path);
     });
 }
+
+/// nsi BFF asks (2026-10-13), so a BFF never reads skin.db:
+/// (a) `POST /cli/skin/login` takes an email in place of the username,
+///     with and without `app`; an unknown email is the generic 401;
+/// (b) a locked login is `423 {"error":"locked","retryAfterSecs":N}` with
+///     `Retry-After`, for a known OR unknown name alike (the lock counts
+///     per presented string, so it is no username oracle), on the daemon
+///     door and through a `--skin` helper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skin_login_email_and_locked_reply() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("s24l{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        add_user(dport, "jane");
+        set_rooms(dport, "jane", &handle);
+        set_password(dport, "jane", "s3cret-horse");
+        owner_post(
+            dport,
+            "/cli/skin/users/email",
+            r#"{"username":"jane","email":"Jane@Clinic.example"}"#,
+        );
+        let gport = free_port();
+        let app = publish_skin(dport, &path, gport, None);
+
+        // (a) email in place of the username, case-insensitive.
+        let r = daemon_login(dport, r#"{"username":"jane@clinic.EXAMPLE","password":"s3cret-horse"}"#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(json(&r.body)["username"], "jane");
+        assert_eq!(json(&r.body)["app"], "host");
+        let r = daemon_login(
+            dport,
+            &format!(r#"{{"username":"jane@clinic.example","password":"s3cret-horse","app":"{app}"}}"#),
+        );
+        assert_eq!(r.status, 200, "email + app; {}", r.body);
+        assert_eq!(json(&r.body)["app"], app.as_str());
+        let generic = daemon_login(dport, r#"{"username":"jane","password":"wrong-horse"}"#);
+        assert_eq!(generic.status, 401);
+        let unknown = daemon_login(dport, r#"{"username":"who@nowhere.example","password":"s3cret-horse"}"#);
+        assert_eq!(unknown.status, 401);
+        assert_eq!(unknown.body, generic.body, "unknown email = generic 401");
+
+        // (b) lockout: two more bad tries for jane (3 in all), then 423.
+        for _ in 0..2 {
+            assert_eq!(
+                daemon_login(dport, r#"{"username":"jane","password":"wrong-horse"}"#).status,
+                401
+            );
+        }
+        let locked = daemon_login(dport, r#"{"username":"jane","password":"s3cret-horse"}"#);
+        assert_eq!(locked.status, 423, "{}", locked.body);
+        let lv = json(&locked.body);
+        assert_eq!(lv["error"], "locked", "{}", locked.body);
+        let secs = lv["retryAfterSecs"].as_i64().expect("retryAfterSecs");
+        assert!((1..=900).contains(&secs), "{secs}");
+        let ra: i64 = header_value(&locked.headers, "retry-after")
+            .expect("Retry-After")
+            .parse()
+            .expect("Retry-After seconds");
+        assert_eq!(ra, secs);
+        assert!(!locked.body.contains("k2skn_"));
+        // With an App named, still locked (the lock is on the person).
+        let r = daemon_login(
+            dport,
+            &format!(r#"{{"username":"jane","password":"s3cret-horse","app":"{app}"}}"#),
+        );
+        assert_eq!(r.status, 423, "{}", r.body);
+        // Through the --skin helper the browser sees the same 423.
+        let r = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"jane","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(r.status, 423, "gateway; {}", r.body);
+        assert_eq!(json(&r.body)["error"], "locked");
+        assert!(header_value(&r.headers, "set-cookie").is_none());
+
+        // An unknown name locks the same way: "locked" says nothing about
+        // whether a username exists.
+        for _ in 0..3 {
+            assert_eq!(
+                daemon_login(dport, r#"{"username":"ghost","password":"x-wrong-1"}"#).status,
+                401
+            );
+        }
+        let ghost = daemon_login(dport, r#"{"username":"ghost","password":"x-wrong-1"}"#);
+        assert_eq!(ghost.status, 423, "{}", ghost.body);
+        assert_eq!(json(&ghost.body)["error"], "locked");
+
+        // Owner unlock clears it.
+        owner_post(dport, "/cli/skin/users/unlock", r#"{"username":"jane"}"#);
+        assert_eq!(
+            daemon_login(dport, r#"{"username":"jane","password":"s3cret-horse"}"#).status,
+            200
+        );
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}

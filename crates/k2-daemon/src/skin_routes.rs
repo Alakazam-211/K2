@@ -1654,6 +1654,45 @@ pub struct SkinLoginReply {
     pub token: Option<String>,
     /// HTML form success → 302 Location. JSON leaves this `None`.
     pub location: Option<String>,
+    /// A locked login (423): seconds until it may try again, sent as
+    /// `Retry-After`. `None` on every other reply.
+    pub retry_after: Option<i64>,
+}
+
+/// Machine-readable lockout reply (nsi BFF, 2026-10-13): `423 Locked`
+/// `{"error":"locked","retryAfterSecs":N}`. Given for any presented
+/// username/email with a live lock — known principal or not — because the
+/// lock is counted per presented string, so it is no username oracle. It
+/// is checked before the password, so it is no password oracle either.
+pub const LOGIN_LOCKED_ERROR: &str = "locked";
+
+fn login_locked(form: bool, retry_after_secs: i64) -> SkinLoginReply {
+    let mins = (retry_after_secs + 59) / 60;
+    let response = if form {
+        CliResponse {
+            status: "423 Locked",
+            content_type: "text/html; charset=utf-8",
+            body: format!(
+                "<!DOCTYPE html><html><body><p>Too many tries. Try again in {mins} minute(s).</p></body></html>"
+            ),
+        }
+    } else {
+        CliResponse {
+            status: "423 Locked",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": LOGIN_LOCKED_ERROR,
+                "retryAfterSecs": retry_after_secs,
+            })
+            .to_string(),
+        }
+    };
+    SkinLoginReply {
+        response,
+        token: None,
+        location: None,
+        retry_after: Some(retry_after_secs),
+    }
 }
 
 fn is_form_body(content_type: &str) -> bool {
@@ -1752,6 +1791,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             },
             token: None,
             location: None,
+            retry_after: None,
         };
     };
     if username.trim().is_empty() || password.is_empty() {
@@ -1763,11 +1803,15 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             },
             token: None,
             location: None,
+            retry_after: None,
         };
     }
     let principal = match skin::check_and_record_login(&username, &password) {
         skin::SkinLoginOutcome::Ok(p) => p,
-        skin::SkinLoginOutcome::BadCreds | skin::SkinLoginOutcome::LockedOut => {
+        skin::SkinLoginOutcome::LockedOut { retry_after_secs } => {
+            return login_locked(form, retry_after_secs);
+        }
+        skin::SkinLoginOutcome::BadCreds => {
             return SkinLoginReply {
                 response: if form {
                     login_failed_html()
@@ -1776,6 +1820,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
                 },
                 token: None,
                 location: None,
+                retry_after: None,
             };
         }
     };
@@ -1800,6 +1845,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
                 },
                 token: None,
                 location: None,
+                retry_after: None,
             };
         }
         Err(e) => {
@@ -1807,6 +1853,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
                 response: CliResponse::internal_error(e),
                 token: None,
                 location: None,
+                retry_after: None,
             };
         }
     };
@@ -1826,6 +1873,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             },
             token: Some(raw),
             location: Some(location),
+            retry_after: None,
         };
     }
     // `role` is the role on the grant this login used (AM1). For a host
@@ -1857,6 +1905,7 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         response: CliResponse::ok_json(body),
         token: Some(raw),
         location: None,
+        retry_after: None,
     }
 }
 

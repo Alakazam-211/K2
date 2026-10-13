@@ -21938,6 +21938,13 @@ HOW TO MAKE ONE (copy this)
      also be set (leftover Caddy door). Prefer keeping the
      token on the SERVER so the browser never holds the pass.
      No "app" = the box login (host), exactly as before 0.45.5.
+     "username" may also be the guest's email (any case); an unknown
+     email is the same 401 as a bad password. A BFF never reads skin.db.
+     Locked (3 bad tries → 15 min): 423 {"error":"locked","retryAfterSecs":N}
+     plus Retry-After: N. The lock counts per presented name, known or
+     not, so "locked" says nothing about which usernames exist. The
+     --skin helper passes the same 423 to the browser. Owner clears it:
+     k2 app user unlock <username|email>.
 
 PER-APP LOGINS (0.45.5)
   Every login is for ONE App: the box login (`host`) or one published

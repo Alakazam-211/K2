@@ -4578,13 +4578,20 @@ async fn skin_loopback_sixth_login_without_forwarded_header_is_not_429() {
                 "loopback skin attempt {i} must not 429; body={}",
                 r.body
             );
-            assert_eq!(r.status, 401, "loopback skin attempt {i}; body={}", r.body);
-            assert_eq!(
-                r.body.trim(),
-                r#"{"error":"invalid username or password"}"#,
-                "generic 401 body unchanged; attempt {i}: {}",
-                r.body
-            );
+            if i <= 3 {
+                assert_eq!(r.status, 401, "loopback skin attempt {i}; body={}", r.body);
+                assert_eq!(
+                    r.body.trim(),
+                    r#"{"error":"invalid username or password"}"#,
+                    "generic 401 body unchanged; attempt {i}: {}",
+                    r.body
+                );
+            } else {
+                // 0.45.5: the 3/15 username lock answers 423 `locked` (for
+                // any presented name, so it is no username oracle).
+                assert_eq!(r.status, 423, "locked attempt {i}; body={}", r.body);
+                assert!(r.body.contains(r#""error":"locked""#), "{}", r.body);
+            }
         }
     });
 }
@@ -4684,10 +4691,12 @@ async fn tunnel_skin_login_still_locks_username_after_three_failures() {
             "three failures over the tunnel must lock the username"
         );
         let locked = http_host_ex(tunnel, "POST", "/cli/skin/login", Some(good), "127.0.0.1", "");
-        assert_eq!(locked.status, 401, "locked username refuses the right password; body={}", locked.body);
+        assert_eq!(locked.status, 423, "locked username refuses the right password; body={}", locked.body);
+        assert!(locked.body.contains(r#""error":"locked""#), "{}", locked.body);
+        assert!(!locked.body.contains("k2skn_"), "{}", locked.body);
         let locked_lo = http(port, "POST", "/cli/skin/login", Some(good));
         assert_eq!(
-            locked_lo.status, 401,
+            locked_lo.status, 423,
             "the username lockout applies on loopback too; body={}",
             locked_lo.body
         );

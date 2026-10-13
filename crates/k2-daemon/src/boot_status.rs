@@ -233,6 +233,12 @@ pub const FEATURE_THREAD_WIDGET_ORIGIN: &str = "thread-widget-origin";
 /// Garden news card.
 pub const FEATURE_ZEN_SYNC: &str = "zen-sync-v1";
 
+/// Garden Lock (prd-garden-lock-and-sync-v1): `POST /cli/zen/garden/lock`,
+/// `locked` on `/cli/zen/sync` and `/cli/zen/gardens` rows, 423
+/// `garden_locked` for an agent's change to a locked Garden, and
+/// `widget/bundle?garden=` serving a locked Garden's frozen widgets.
+pub const FEATURE_ZEN_GARDEN_LOCK: &str = "zen-garden-lock-v1";
+
 /// Zen Z41: `GET /cli/thread/latest?addrs=` answers on this server. A
 /// client without it falls back to `GET /cli/thread?addr=&limit=1`.
 pub const FEATURE_THREAD_LATEST: &str = "thread-latest";
@@ -280,6 +286,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ZEN_WIDGETS);
     out.push(FEATURE_ZEN_LIB);
     out.push(FEATURE_ZEN_SYNC);
+    out.push(FEATURE_ZEN_GARDEN_LOCK);
     out.push(FEATURE_THREAD_LATEST);
     out.push(FEATURE_THREAD_WIDGET_ORIGIN);
     out.push(FEATURE_HOME_AVATARS);
@@ -322,6 +329,7 @@ mod tests {
                 "zen-widgets-v1",
                 "zen-lib-v1",
                 "zen-sync-v1",
+                "zen-garden-lock-v1",
                 "thread-latest",
                 "thread-widget-origin",
                 "home-avatars-v1",

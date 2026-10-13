@@ -24,6 +24,15 @@
 //! `owner_only`). Both write an audit line.
 //! `.history/` is written only as a side effect of the clean-save snapshot,
 //! `reset`, `garden/template` and `garden/delete`.
+//!
+//! Garden Lock (prd-garden-lock-and-sync-v1): `garden/lock` takes ONLY the
+//! owner token (agents can neither lock nor unlock). A session passport
+//! (an agent, or a K2 terminal) may make the Garden writes in
+//! [`AGENT_GARDEN_WRITES`]; one that names a locked Garden is 423
+//! `garden_locked`, with an audit line. The person's app (owner token, no
+//! passport) still renames, rethemes, resets and deletes a locked Garden.
+//! An edit to a locked Garden's file is put back on the next refresh
+//! (`ZenFiles::enforce_locks`), audited as `zen.garden.lock_refused`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,6 +54,7 @@ pub const MAX_BODY: usize = 64 * 1024;
 /// `/cli/zen/lib/fetch` is `zen_lib_routes`'s (B3, UWB15).
 pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/delete",
+    "/cli/zen/garden/lock",
     "/cli/zen/garden/new",
     "/cli/zen/garden/rename",
     "/cli/zen/garden/reorder",
@@ -144,6 +154,10 @@ fn err(e: ZenError) -> CliResponse {
         ZenError::WidgetBroken(m) => resp("409 Conflict", json!({ "ok": false, "error": "widget_broken", "message": m })),
         ZenError::WidgetChanged(m) => resp("409 Conflict", json!({ "ok": false, "error": "widget_changed", "message": m })),
         ZenError::OwnerOnly(m) => resp("403 Forbidden", json!({ "ok": false, "error": "owner_only", "message": m })),
+        ZenError::GardenLocked { garden, name } => resp(
+            "423 Locked",
+            json!({ "ok": false, "error": "garden_locked", "garden": garden, "name": name, "message": message }),
+        ),
         ZenError::Io(m) => resp("500 Internal Server Error", json!({ "ok": false, "error": "io", "message": m })),
     }
 }
@@ -165,7 +179,8 @@ fn pauses() -> WidgetPauses {
 pub fn refresh_and_emit() -> Result<bool, ZenError> {
     let mut last = LAST_FINGERPRINT.lock().unwrap_or_else(|e| e.into_inner());
     let f = files();
-    let fp = f.refresh_with(&pauses())?;
+    let (fp, refused) = f.refresh_with_report(&pauses())?;
+    audit_lock_refusals(&refused);
     let changed = last.as_deref() != Some(fp.as_str());
     if changed {
         let first = last.is_none();
@@ -185,9 +200,31 @@ pub fn prime() {
     let mut last = LAST_FINGERPRINT.lock().unwrap_or_else(|e| e.into_inner());
     if last.is_none() {
         let f = files();
-        if let Ok(fp) = f.refresh_with(&pauses()) {
+        if let Ok((fp, refused)) = f.refresh_with_report(&pauses()) {
+            audit_lock_refusals(&refused);
             *last = Some(fp);
         }
+    }
+}
+
+/// One audit line per edit to a locked Garden's file that `refresh` put
+/// back (prd-garden-lock-and-sync-v1 §5.4). The daemon can't tell who
+/// saved the file, so the actor is `file_edit`.
+fn audit_lock_refusals(refused: &[k2_core::zen::lock::LockRefusal]) {
+    for r in refused {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "zen.garden.lock_refused",
+            "file_edit",
+            format!(
+                "{} ({}): edit put back; kept at {}",
+                r.garden,
+                r.name,
+                r.kept.as_deref().unwrap_or("- (the file was deleted)")
+            ),
+            "local",
+            "-",
+            "cli",
+        ));
     }
 }
 
@@ -457,12 +494,13 @@ fn handle_widget_resume(body: &[u8], caller: &Caller, ingress: &str) -> Result<J
     Ok(json!({ "ok": true, "paused": J::Null, "resumed": was, "changed": changed }))
 }
 
-/// GET `/cli/zen/widget/bundle?widget=` (UW35): the live bundle with a
-/// fresh nonce in every script.
+/// GET `/cli/zen/widget/bundle?widget=&garden=` (UW35): the live bundle
+/// with a fresh nonce in every script. With `garden=` naming a locked
+/// Garden, its frozen copy (prd-garden-lock-and-sync-v1).
 fn handle_widget_bundle(params: &HashMap<String, String>) -> Result<J, ZenError> {
     let widget = param(params, "widget").ok_or_else(|| ZenError::BadRequest("widget/bundle needs widget=<name>".into()))?;
     let f = files();
-    let st = f.widget_bundle(widget)?;
+    let st = f.widget_bundle_in(param(params, "garden"), widget)?;
     let b = st.bundle.as_ref().ok_or_else(|| ZenError::WidgetBroken(format!("{widget} has no good version")))?;
     let nonce = k2_core::zen::bundle::new_nonce();
     let html = b.render(&nonce);
@@ -503,6 +541,108 @@ fn person_only(path: &str) -> bool {
 }
 
 const OWNER_ONLY: &str = "Only you can resume a paused widget, in the K2 app: click Resume on it. Agents, K2 terminals, Connect logins and app passes can't.";
+
+// ── Garden Lock (prd-garden-lock-and-sync-v1 §5.2, §5.3, §6) ───────────
+
+/// `POST /cli/zen/garden/lock {garden, locked}`: the person only.
+pub const LOCK_ROUTE: &str = "/cli/zen/garden/lock";
+
+const LOCK_OWNER_ONLY: &str = "Only the person can lock or unlock a Garden, in Settings \u{2192} Gardens. Agents and K2 terminals can't, either way.";
+
+/// The Garden writes a session passport may make (`k2 zen garden …`,
+/// `k2 zen reset`, `k2 zen theme set|next|prev` from inside a K2
+/// terminal). Each is refused with 423 `garden_locked` when the Garden it
+/// names is locked; otherwise it runs as it always did (agents reached
+/// these with the disk owner token before Lock). Every other Zen route
+/// still answers a passport 403 `zen_local_only`.
+pub const AGENT_GARDEN_WRITES: &[&str] = &[
+    "/cli/zen/garden/delete",
+    "/cli/zen/garden/rename",
+    "/cli/zen/garden/reorder",
+    "/cli/zen/garden/template",
+    "/cli/zen/reset",
+    "/cli/zen/theme/next",
+    "/cli/zen/theme/prev",
+    "/cli/zen/theme/set",
+];
+
+/// Who called a Zen route. Zen paths aren't agent verbs, so
+/// `caller_from_tcp` reports a session passport as `WrongCredential`; Lock
+/// needs to know it is a passport (an agent, or a K2 terminal), so a valid
+/// passport is classified from its session here.
+pub fn zen_caller(path: &str, query: &str, bearer: Option<&str>, owner_token: &str) -> Caller {
+    let c = crate::sidecar_routes::caller_from_tcp(path, query, bearer, owner_token);
+    if c != Caller::WrongCredential {
+        return c;
+    }
+    let presented = crate::routes::http::extract_token(query)
+        .filter(|s| !s.is_empty())
+        .or_else(|| bearer.map(str::trim).filter(|s| !s.is_empty()))
+        .unwrap_or("");
+    match crate::session_token::validate_hook(presented) {
+        Some(v) => crate::sidecar_routes::caller_from_hook(&v),
+        None => c,
+    }
+}
+
+/// A passport the daemon treats as an agent on Zen writes (§5.3): any
+/// harness session or K2 terminal on this computer. A sandboxed agent and
+/// an API cell never reach Zen.
+fn is_local_passport(caller: &Caller) -> bool {
+    match caller {
+        Caller::Agent(a) => !a.sandboxed,
+        Caller::Shell { .. } => true,
+        _ => false,
+    }
+}
+
+/// The Garden an agent write names, if any: `garden`, or a `file` that is
+/// `gardens/<id>.toml` (reset).
+fn garden_named(body: &[u8]) -> Option<String> {
+    let v = body_json(body).ok()?;
+    if let Some(g) = v["garden"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(g.to_string());
+    }
+    match v["file"].as_str().map(ZenFile::parse) {
+        Some(Ok(ZenFile::Garden(id))) => Some(id),
+        _ => None,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LockBody {
+    garden: String,
+    locked: bool,
+}
+
+/// `POST /cli/zen/garden/lock` (§5.2). The caller is checked in [`handle`].
+fn handle_garden_lock(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, ZenError> {
+    let b: LockBody = parse_body(body, "garden/lock takes {garden, locked}")?;
+    let f = files();
+    set_up(&f)?;
+    let out = f.set_garden_lock(&b.garden, b.locked)?;
+    audit(
+        if out.locked { "zen.garden.lock" } else { "zen.garden.unlock" },
+        caller,
+        format!("{} ({}) changed={} widgets={}", out.garden, out.name, out.changed, out.widgets.join(",")),
+        ingress,
+    );
+    let announced = refresh_and_emit()?;
+    let list = f.sync_list()?;
+    let row = list["gardens"]
+        .as_array()
+        .and_then(|a| a.iter().find(|g| g["id"] == out.garden.as_str()).cloned())
+        .unwrap_or(J::Null);
+    Ok(json!({
+        "ok": true,
+        "garden": row,
+        "locked": out.locked,
+        "changed": out.changed,
+        "widgets": out.widgets,
+        "announced": announced,
+    }))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -729,12 +869,28 @@ pub fn handle(
         return resp("404 Not Found", json!({ "error": "unknown zen route", "path": path }));
     }
     let owner_token = owner && *caller == Caller::Owner;
+    if path == LOCK_ROUTE && !owner_token {
+        // §5.2: agents can neither lock nor unlock (Rosson ruling 6).
+        audit("zen.garden.lock_refused", caller, format!("{path}: the person only"), ingress);
+        return err(ZenError::OwnerOnly(LOCK_OWNER_ONLY.into()));
+    }
     if person_only(path) && !owner_token {
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(OWNER_ONLY.into()));
     }
     if !owner {
-        return local_only();
+        // §5.3: a passport (an agent or a K2 terminal) may make the Garden
+        // writes it always could, unless the Garden is locked.
+        if !(is_local_passport(caller) && AGENT_GARDEN_WRITES.contains(&path)) {
+            return local_only();
+        }
+        if let Some(sel) = garden_named(body) {
+            let f = files();
+            if let Err(e) = f.refuse_if_locked(&sel) {
+                audit("zen.garden.lock_refused", caller, format!("{path}: garden {sel} is locked"), ingress);
+                return err(e);
+            }
+        }
     }
     let r = match path {
         "/cli/zen/get" => handle_get(params),
@@ -784,6 +940,7 @@ pub fn handle(
         "/cli/zen/garden/delete" => handle_garden_delete(body),
         "/cli/zen/garden/reorder" => handle_garden_reorder(body),
         "/cli/zen/garden/template" => handle_garden_template(body),
+        LOCK_ROUTE => handle_garden_lock(body, caller, ingress),
         "/cli/zen/reload" => handle_reload(),
         "/cli/zen/reset" => handle_reset(body),
         // Garden sync (prd-zen-garden-sync-defaults-v1 GS31/GS32): a change

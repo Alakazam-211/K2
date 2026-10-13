@@ -23,19 +23,6 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }))
 
-/** Flush the setTimeout(…,0) + awaited invoke chain inside
- *  ensurePinnedAgentTabForMode.
- *
- *  16 ticks, not the historical 6: the resolution races other store
- *  machinery's microtasks (e.g. 0.40.48's synchronous layout flush issues
- *  a fetch attempt whose rejection chain shares these ticks), and under
- *  full-suite CPU load 6 was observed to flake ~1/15 runs. The guard
- *  tests' NEGATIVE assertions are unaffected — waiting longer only gives
- *  a dropped resolution more chances to (correctly) not stamp. */
-async function flushPinnedTabResolution(): Promise<void> {
-  for (let i = 0; i < 16; i++) await new Promise((r) => setTimeout(r, 0))
-}
-
 /**
  * Tests for the post-0.36.0 pinned-agent-tab split behaviour.
  *
@@ -284,20 +271,21 @@ describe('ensurePinnedAgentTabForMode active-workspace guard', () => {
     // switches to B before resolution finishes. The stale callback must
     // not write A's agent into B's (now-active) tab set.
     useTabsStore.setState({ activeWorkspaceKey: 'projA:wsA' })
-    ensurePinnedAgentTabForMode('off', '/tmp/workspaceA')
+    // The returned promise settles when the resolution has stamped or
+    // bailed: no counting event-loop ticks (that raced the agent-name
+    // lookup under full-suite load).
+    const resolution = ensurePinnedAgentTabForMode('off', '/tmp/workspaceA')
     // User switches away before resolution completes.
     useTabsStore.setState({ activeWorkspaceKey: 'projB:wsB' })
 
-    await flushPinnedTabResolution()
+    await resolution
 
     expect(useTabsStore.getState().tabs.filter((t) => t.isSystemAgent)).toHaveLength(0)
   })
 
   it('stamps pinned tabs when the workspace is unchanged', async () => {
     useTabsStore.setState({ activeWorkspaceKey: 'projA:wsA' })
-    ensurePinnedAgentTabForMode('off', '/tmp/workspaceA')
-
-    await flushPinnedTabResolution()
+    await ensurePinnedAgentTabForMode('off', '/tmp/workspaceA')
 
     const sys = useTabsStore.getState().tabs.filter((t) => t.isSystemAgent)
     expect(sys.length).toBeGreaterThan(0)

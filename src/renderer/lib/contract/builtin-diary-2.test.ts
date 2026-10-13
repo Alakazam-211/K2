@@ -523,8 +523,14 @@ describe('k2:diary@2: your words stay dark, and markdown', () => {
     h.view('cortana::local', { items: [item(1, 'from long ago', true), { ...item(99, 'Do you **remember** me?', true), id: 'm99' }] })
     h.$('soak').dispatchEvent(new Event('animationend'))
     // Well past the soak, the reveal and every ghost timer.
+    // The ghost writes for all 120 s (about 3,000 timer firings). Those fire
+    // synchronously: `advanceTimersByTimeAsync` yields to the REAL event
+    // loop after every fired timer, so the run's wall time tracked machine
+    // load and blew the test budget in the full suite. One async tick per
+    // second still runs any promise work the timers queued.
     for (let i = 0; i < 120; i++) {
-      await vi.advanceTimersByTimeAsync(1000)
+      vi.advanceTimersByTime(1000)
+      await vi.advanceTimersByTimeAsync(0)
       h.advance(500)
     }
     const mine = [...document.querySelectorAll<HTMLElement>('.entry.mine')]
@@ -540,7 +546,10 @@ describe('k2:diary@2: your words stay dark, and markdown', () => {
     expect(mine[1].querySelector('strong')?.textContent).toBe('remember')
     // No rule anywhere fades or blurs your words.
     expect(CSS).not.toMatch(/\.entry\.mine[^{]*\{[^}]*(opacity|blur|filter)/)
-  })
+    // Its own budget, like the stroke test below: two minutes of ghost is
+    // about 11,000 jsdom span writes, 1.5–2 s of CPU on an idle machine,
+    // so the 5 s default left no room when the full suite shares the cores.
+  }, 30_000)
 
   it('a reply renders headings, emphasis, lists, quotes, rules, inline code, code blocks and links as elements', async () => {
     const h = await harness({ reduced: true })

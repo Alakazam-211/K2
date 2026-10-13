@@ -17,11 +17,25 @@ const getDaemonWs = vi.hoisted(() =>
   }),
 )
 
+// Only the Thread / Chatter routes these hooks call reach the spies the
+// tests queue answers on. Other modules in the import graph fire their own
+// daemon calls on import (stores/settings.ts loads custom themes through a
+// dynamic import → `themes/list`), and that call lands at a moment that
+// depends on machine load: on the shared spy it ate a queued page or broke a
+// call count (flaky only in the full run). Those calls get a loud rejection
+// here instead, which their stores already handle.
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
+  const isOverlayRoute = (path: string): boolean =>
+    path === 'thread' || path.startsWith('thread/') || path === 'chatter' || path.startsWith('chatter/')
+  const routed = (spy: (path: string, ...rest: unknown[]) => unknown) =>
+    (path: string, ...rest: unknown[]) =>
+      isOverlayRoute(path)
+        ? spy(path, ...rest)
+        : Promise.reject(new Error(`useOverlayThread.test: daemon route not mocked here: ${path}`))
   return {
-    daemonCliGet: primaryOnly(daemonCliGet),
-    daemonCliPost: primaryOnly(daemonCliPost),
+    daemonCliGet: primaryOnly(routed(daemonCliGet)),
+    daemonCliPost: primaryOnly(routed(daemonCliPost)),
   }
 })
 

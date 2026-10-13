@@ -11,7 +11,7 @@
 // (over its 10 MB cap, or not UTF-8: old ANSI-codepage DXFs),
 // `DxfHostBytesViewer` reads the bytes instead and decodes them here.
 
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useRoom } from '@/components/Room/RoomContext'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import { loadHostBinary } from '@/lib/load-host-binary'
@@ -133,7 +133,11 @@ export function DxfViewer({ text }: { text: string }): React.JSX.Element {
   const fit = drawing?.bounds ? fitBox(drawing.bounds) : null
 
   // Gestures write the viewBox straight to the DOM: no React render per frame.
-  useEffect(() => {
+  // A layout effect: the listeners are bound in the same commit that shows
+  // the drawing, so the first wheel / drag on a just-shown drawing is never
+  // dropped (a passive effect could still be pending; that flaked the wheel
+  // test under load).
+  useLayoutEffect(() => {
     const el = boxRef.current
     const svg = svgRef.current
     if (!el || !svg || !fit) return

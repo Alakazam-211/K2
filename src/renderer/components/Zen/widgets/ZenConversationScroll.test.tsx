@@ -304,6 +304,8 @@ function row(working: boolean): ZenAgentRow {
     selected: true,
     openable: true,
     avatarUrl: null,
+    color: null,
+    image: null,
   } as ZenAgentRow
 }
 

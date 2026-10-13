@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
+import { agentLookColor, agentLookTextOn } from '@/lib/agent-look'
 
 /** The Home's rows, live (`agents.list` + `agents.subscribe`). */
 export function useZenRows(bridge: ZenWidgetBridge): ZenAgentRow[] {
@@ -63,7 +64,9 @@ export function initials(name: string): string {
 
 /** An agent's round avatar: its picture (`row.avatarUrl`, from the bridge)
  *  cropped to the circle, else its initials on `background`. A picture
- *  that fails to load paints the initials too. */
+ *  that fails to load paints the initials too. `agentColor` (the row's
+ *  `color`, 0.45.5 agent identity) replaces `background` for the initials,
+ *  with text that reads on it; null keeps today's look. */
 export function ZenAgentAvatar({
   label,
   url,
@@ -71,6 +74,7 @@ export function ZenAgentAvatar({
   background,
   color,
   fontSize,
+  agentColor = null,
 }: {
   label: string
   url: string | null
@@ -78,21 +82,24 @@ export function ZenAgentAvatar({
   background: string
   color: string
   fontSize: string
+  agentColor?: string | null
 }): React.JSX.Element {
   const [failed, setFailed] = useState<string | null>(null)
   const image = url !== null && url !== failed ? url : null
+  const own = agentLookColor(agentColor)
   return (
     <span
       aria-hidden
       data-zen-avatar={image ? 'image' : 'initials'}
+      data-zen-avatar-color={!image && own ? own : undefined}
       className="flex flex-shrink-0 items-center justify-center"
       style={{
         width: size,
         height: size,
         borderRadius: 999,
         overflow: 'hidden',
-        background: image ? 'var(--zen-surface-raised)' : background,
-        color,
+        background: image ? 'var(--zen-surface-raised)' : (own ?? background),
+        color: own ? agentLookTextOn(own) : color,
         fontWeight: 600,
         fontSize,
       }}

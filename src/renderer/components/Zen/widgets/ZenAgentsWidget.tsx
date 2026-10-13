@@ -341,6 +341,7 @@ function AgentRow({
             label={row.label}
             url={row.avatarUrl}
             size={40}
+            agentColor={row.selected ? null : row.color}
             background={row.selected ? 'var(--zen-accent)' : 'var(--zen-bubble-agent)'}
             color={row.selected ? 'var(--zen-accent-text)' : 'var(--zen-bubble-agent-text)'}
             fontSize="0.95em"

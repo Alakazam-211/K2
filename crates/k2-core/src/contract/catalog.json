@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 4,
+  "catalogVersion": 5,
   "caps": [
     {
       "name": "agents:read",
@@ -147,6 +147,14 @@
             "openable": {"type": "boolean"},
             "selected": {"type": "boolean"},
             "avatar": {"type": ["string", "null"], "description": "A data: URL, or null."},
+            "color": {
+              "type": ["string", "null"],
+              "description": "The agent's color, #rrggbb, or null when its server hasn't said."
+            },
+            "image": {
+              "type": ["string", "null"],
+              "description": "The agent's picture as a PNG, JPEG, WebP or GIF data: URL of at most 256 KiB, or null (never SVG). Paint initials on color when null."
+            },
             "preview": {
               "title": "AgentPreview",
               "type": ["object", "null"],
@@ -187,7 +195,9 @@
             "counts",
             "openable",
             "selected",
-            "avatar"
+            "avatar",
+            "color",
+            "image"
           ],
           "additionalProperties": false
         }
@@ -258,6 +268,14 @@
             "openable": {"type": "boolean"},
             "selected": {"type": "boolean"},
             "avatar": {"type": ["string", "null"], "description": "A data: URL, or null."},
+            "color": {
+              "type": ["string", "null"],
+              "description": "The agent's color, #rrggbb, or null when its server hasn't said."
+            },
+            "image": {
+              "type": ["string", "null"],
+              "description": "The agent's picture as a PNG, JPEG, WebP or GIF data: URL of at most 256 KiB, or null (never SVG). Paint initials on color when null."
+            },
             "preview": {
               "title": "AgentPreview",
               "type": ["object", "null"],
@@ -298,7 +316,9 @@
             "counts",
             "openable",
             "selected",
-            "avatar"
+            "avatar",
+            "color",
+            "image"
           ],
           "additionalProperties": false
         }

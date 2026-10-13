@@ -109,7 +109,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// write sync.json/news.json/.defaults/) rides the same v12.
 /// v13 = using the whole canvas (0.45.3): `k2.canvas.setHitRegions` and
 /// `k2.window.startDrag` for full-canvas Gardens.
-pub const SKILL_VERSION_ZEN: u32 = 13;
+/// v14 = `agents.list()` / `agents.subscribe(cb)` rows carry the agent's
+/// `color` and `image` (0.45.5 agent identity; catalog version 5).
+pub const SKILL_VERSION_ZEN: u32 = 14;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

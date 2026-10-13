@@ -115,6 +115,7 @@ function Chooser({
                 label={r.label}
                 url={r.avatarUrl}
                 size={26}
+                agentColor={r.color}
                 background="var(--zen-bubble-agent)"
                 color="var(--zen-bubble-agent-text)"
                 fontSize="0.8em"

@@ -157,7 +157,9 @@ pub const SKILL_VERSION_ZEN: u32 = 14;
 /// Bumped to 30 (0.43.2, assignee policy): "Ask a human" teaches
 /// `--assign <user>` and `k2 tickets assign`.
 /// Bumped to 31 (k2 sidecar v1): the k2-cli skill gains a Sidecars block.
-pub const SKILL_VERSION_WORKSPACE: u32 = 31;
+/// Bumped to 32 (0.45.5, Thread cards): prose never closes a card; agents
+/// void their own obsolete cards with `k2 thread void`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 32;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

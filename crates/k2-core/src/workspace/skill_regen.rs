@@ -377,13 +377,16 @@ k2 thread <addr> "text"                         # overlay text (not PTY; that's 
 k2 thread <addr>                                # read / tail
 k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
 k2 thread secret <addr> --name NAME             # secret field; you never see the value
+k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
 ```
 
 Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
-Post and continue. The human may tap later or just chat; the card marks or voids; you get a later turn.
-Do not `--wait`. Do not emit widget JSON.
+Post and continue; you get a later turn when they answer. Do not `--wait`. Do not emit widget JSON.
+A card stays open until the person taps or dismisses it, or you void it. People may discuss a card before answering:
+keep it open, answer their questions in prose, and never treat their prose as the card's answer.
+Void your own card only when the question is truly obsolete (`k2 thread void`), or post a new card if the options changed.
 
 **If a message arrives prefixed `[thread:<addr>]`, the human wrote on the Thread tab.** Reply with `k2 thread <addr> "your reply"`. Do **not** answer in this terminal — they are not looking at the TUI. Never `k2 msg` for this (that is agent-to-agent). Use the `<addr>` in the stamp (`ghostbird`, `sales`, `sales/reviewer`).
 
@@ -1884,6 +1887,12 @@ mod tests {
                 && body.contains("k2 thread secret <addr> --name NAME")
                 && body.contains("do not wait"),
             "k2-cli skill must document k2 thread write/read/ask/secret; body missing overlay lines"
+        );
+        assert!(
+            body.contains("k2 thread void <addr> <card-id>")
+                && body.contains("never treat their prose as the card's answer")
+                && !body.contains("the card marks or voids"),
+            "k2-cli skill must teach that prose never closes a card and agents void their own"
         );
         assert!(
             body.contains("[thread:<addr>]")

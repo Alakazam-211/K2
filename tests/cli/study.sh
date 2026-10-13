@@ -536,6 +536,9 @@ echo "  PASS: notifications --json id+body"
 pass=$((pass + 1))
 human_out="$("$K2" study human)"
 assert_contains "human page points at notifications" "$human_out" "k2 study notifications"
+assert_contains "human page: cards stay open while people talk" "$human_out" "CARDS STAY OPEN WHILE PEOPLE TALK"
+assert_contains "human page: prose is not the answer" "$human_out" "never close it and are never its answer"
+assert_contains "human page: void your own obsolete card" "$human_out" "k2 thread void <addr> <card-id>"
 assert_contains "thread schema mentions pushes" "$(grep -F '"name": "thread",' -A2 "$K2_CLI")" "k2 study notifications"
 
 echo "== --help exit 0; bad flag exit 2 =="

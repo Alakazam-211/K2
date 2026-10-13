@@ -13,7 +13,7 @@
 //!      human compose bar (Agents page, Zen, Home), as an agent
 //!      (`k2 thread`), as another Connect user, and as an app guest;
 //!      `thread/ask`, `thread/answer`, `thread/secret`, `thread/void`;
-//!      and the card a human's compose prose resolves.
+//!      and a card tapped after prose (prose alone never closes a card).
 //!   2. The frame carries the same id and seq as the POST answer, so a
 //!      client's own send and the echo merge by id.
 //!   3. An app guest's socket sees the Thread frames of its room only
@@ -394,8 +394,10 @@ async fn every_thread_write_reaches_every_live_view() {
                 assert_eq!(f["doc"]["secret"]["status"], "voided", "{f}");
             }
 
-            // 6. A human's compose prose resolves a pending card: the card's
-            //    new status is a frame too, not only the prose itself.
+            // 6. A human's compose prose (even the exact option label) leaves
+            //    a pending card open (Rosson 2026-10-13: people may discuss
+            //    a card first). Only the prose is a frame; the later tap
+            //    is the card's frame, on every window.
             let ask2 = post_as(port, OWNER_TOKEN, "/cli/thread/ask", serde_json::json!({
                 "addr": sales, "prompt": "Color?", "options": "Red,Blue", "from": sales
             }));
@@ -408,9 +410,17 @@ async fn every_thread_write_reaches_every_live_view() {
             let prose_id = prose["id"].as_str().expect("id").to_string();
             for (ws, who) in [(&mut a, "window A"), (&mut b, "window B")] {
                 frame_for(ws, &prose_id, &format!("prose on {who}")).await;
-                let f = frame_for(ws, &ask2_id, &format!("prose-answered card on {who}")).await;
+                assert_no_frame(ws, 300, &format!("a card update after prose on {who}")).await;
+            }
+            let tapped = post_as(port, OWNER_TOKEN, "/cli/thread/answer", serde_json::json!({
+                "addr": sales, "id": ask2_id, "answer": "Blue"
+            }));
+            assert_eq!(tapped["status"], "answered", "{tapped}");
+            for (ws, who) in [(&mut a, "window A"), (&mut b, "window B")] {
+                let f = frame_for(ws, &ask2_id, &format!("tapped card on {who}")).await;
                 assert_eq!(f["doc"]["choice"]["status"], "answered", "{f}");
                 assert_eq!(f["doc"]["choice"]["answer"], "Blue", "{f}");
+                assert_eq!(f["doc"]["choice"]["answeredBy"], serde_json::json!({"kind": "owner", "login": "owner"}), "{f}");
                 assert_eq!(f["seq"], ask2["seq"], "a card keeps its seq: {f}");
             }
 

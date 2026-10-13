@@ -16,6 +16,14 @@ pub struct ChoiceBody {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// Who answered or dismissed the card, from the caller's credential
+    /// (never the body), like a post's `author`. None while pending, for
+    /// an agent's own answer, and on docs from before this field.
+    #[serde(default, rename = "answeredBy", skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<PostAuthor>,
+    /// Unix seconds the card was answered or dismissed.
+    #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -42,6 +50,14 @@ pub struct SecretBody {
     /// After a person saved it: the `k2v://` reference (never the value).
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    /// Who answered or dismissed the card, from the caller's credential
+    /// (never the body), like a post's `author`. None while pending, for
+    /// an agent's own answer, and on docs from before this field.
+    #[serde(default, rename = "answeredBy", skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<PostAuthor>,
+    /// Unix seconds the card was answered or dismissed.
+    #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<i64>,
 }
 
 /// The vault-side proposal on a secret card (KV9).
@@ -203,6 +219,8 @@ impl OverlayDoc {
                 allow_custom,
                 status: "pending".to_string(),
                 answer: None,
+                answered_by: None,
+                answered_at: None,
             }),
             secret: None,
             widget: None,
@@ -237,6 +255,8 @@ impl OverlayDoc {
                 delivery: proposal.delivery,
                 secret_kind: proposal.kind,
                 reference: None,
+                answered_by: None,
+                answered_at: None,
             }),
             widget: None,
             author: None,
@@ -284,7 +304,7 @@ impl OverlayDoc {
     }
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -352,6 +372,29 @@ mod tests {
         );
         assert_eq!(PostAuthor::owner(), PostAuthor { kind: "owner".into(), login: "owner".into() });
         assert_eq!(PostAuthor::guest("g1"), PostAuthor { kind: "guest".into(), login: "g1".into() });
+    }
+
+    #[test]
+    fn card_answered_by_round_trips_and_old_cards_still_parse() {
+        let mut d = OverlayDoc::choice("c".into(), "k2".into(), "k2/1".into(), "Ship?".into(), vec!["Go".into()], false);
+        let plain = serde_json::to_string(&d).expect("json");
+        assert!(!plain.contains("answeredBy") && !plain.contains("answeredAt"), "pending card writes neither: {plain}");
+        let c = d.choice.as_mut().expect("choice");
+        c.status = "answered".into();
+        c.answer = Some("Go".into());
+        c.answered_by = Some(PostAuthor::guest("g1"));
+        c.answered_at = Some(42);
+        let s = serde_json::to_string(&d).expect("json");
+        assert!(s.contains(r#""answeredBy":{"kind":"guest","login":"g1"}"#), "{s}");
+        assert!(s.contains(r#""answeredAt":42"#), "{s}");
+        assert_eq!(serde_json::from_str::<OverlayDoc>(&s).expect("parse"), d);
+        let old = r#"{"id":"c","kind":"choice","from":"k2","created_at":1,"choice":{"prompt":"?","options":[{"label":"Go"}],"allow_custom":false,"status":"answered","answer":"Go"}}"#;
+        let old = serde_json::from_str::<OverlayDoc>(old).expect("old card");
+        let oc = old.choice.expect("choice");
+        assert_eq!((oc.answered_by, oc.answered_at), (None, None));
+        let old_secret = r#"{"id":"s","kind":"secret","from":"k2","created_at":1,"secret":{"name":"T","status":"set"}}"#;
+        let os = serde_json::from_str::<OverlayDoc>(old_secret).expect("old secret").secret.expect("secret");
+        assert_eq!((os.answered_by, os.answered_at), (None, None));
     }
 
     #[test]

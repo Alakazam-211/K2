@@ -37,6 +37,7 @@ vi.mock('@/stores/session-events', () => ({
 }))
 
 import {
+  cardAnswererLabel,
   guessThreadViewer,
   isOwnThreadPost,
   loadThreadViewer,
@@ -191,5 +192,52 @@ describe('Thread docs keep author and widget', () => {
     if (!posted) throw new Error('post answer did not parse')
     expect(posted.doc.author).toEqual({ kind: 'owner', login: 'owner' })
     expect('widget' in posted.doc).toBe(false)
+  })
+})
+
+describe('cardAnswererLabel', () => {
+  const owner = { principal: 'owner', aliases: ['rosson'] }
+  const alice = { principal: 'alice', aliases: [] }
+  it('says You for the viewer, the owner for the owner token, else the login', () => {
+    expect(cardAnswererLabel({ kind: 'owner', login: 'owner' }, owner)).toBe('You')
+    expect(cardAnswererLabel({ kind: 'user', login: 'rosson' }, owner)).toBe('You')
+    expect(cardAnswererLabel({ kind: 'user', login: 'alice' }, alice)).toBe('You')
+    expect(cardAnswererLabel({ kind: 'owner', login: 'owner' }, alice)).toBe('the owner')
+    expect(cardAnswererLabel({ kind: 'guest', login: 'patty' }, owner)).toBe('patty')
+    expect(cardAnswererLabel({ kind: 'guest', login: 'alice' }, alice)).toBe('alice')
+  })
+  it('names nobody for a card without answeredBy (older cards render as before)', () => {
+    expect(cardAnswererLabel(undefined, owner)).toBeNull()
+    expect(cardAnswererLabel(null, owner)).toBeNull()
+    expect(cardAnswererLabel({ kind: '', login: 'x' }, owner)).toBeNull()
+  })
+})
+
+describe('card answeredBy coercion', () => {
+  it('keeps answeredBy/answeredAt from the daemon and leaves older cards alone', () => {
+    const { items } = threadItemsFromSnapshot({
+      items: [
+        {
+          collection: 'thread',
+          seq: 1,
+          id: 'c1',
+          doc: {
+            id: 'c1',
+            kind: 'choice',
+            from: 'k2',
+            choice: { prompt: '?', options: [{ label: 'Go' }], allow_custom: false, status: 'answered', answer: 'Go', answeredBy: { kind: 'guest', login: 'g1' }, answeredAt: 42 },
+          },
+        },
+        {
+          collection: 'thread',
+          seq: 2,
+          id: 'c2',
+          doc: { id: 'c2', kind: 'choice', from: 'k2', choice: { prompt: '?', options: [{ label: 'Go' }], allow_custom: false, status: 'answered', answer: 'Go' } },
+        },
+      ],
+    })
+    expect(items[0].doc.choice?.answeredBy).toEqual({ kind: 'guest', login: 'g1' })
+    expect(items[0].doc.choice?.answeredAt).toBe(42)
+    expect(items[1].doc.choice && 'answeredBy' in items[1].doc.choice).toBe(false)
   })
 })

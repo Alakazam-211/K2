@@ -8328,6 +8328,7 @@ cmd_thread() {
     case "$first_pos" in
         ask) cmd_thread_ask "$@"; return $? ;;
         secret) cmd_thread_secret "$@"; return $? ;;
+        void) cmd_thread_void "$@"; return $? ;;
         post)
             echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
             exit 1 ;;
@@ -8364,6 +8365,7 @@ cmd_thread() {
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
         echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
+        echo "       k2 thread void <addr> <card-id>" >&2
         exit 1
     }
 
@@ -8550,6 +8552,57 @@ print(d.get("id",""))
     return $rc
 }
 
+cmd_thread_void() {
+    local target="" card="" json="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            void) shift ;;
+            --json) json="true"; shift ;;
+            -*)
+                echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
+                exit 1 ;;
+            *)
+                if [[ -z "$target" ]]; then target="$1"
+                elif [[ -z "$card" ]]; then card="$1"
+                else
+                    echo "Error: unexpected extra argument '$1'" >&2
+                    exit 1
+                fi
+                shift ;;
+        esac
+    done
+    [[ -n "$target" ]] || { echo "Error: address required" >&2; echo "Usage: k2 thread void <addr> <card-id>" >&2; exit 1; }
+    [[ -n "$card" ]] || { echo "Error: card id required (the id k2 thread ask / secret printed)" >&2; echo "Usage: k2 thread void <addr> <card-id>" >&2; exit 1; }
+    local body
+    body=$(ADDR="$target" CARD="$card" python3 -c 'import json,os
+print(json.dumps({"addr":os.environ["ADDR"],"id":os.environ["CARD"]}))
+')
+    local response
+    response=$(cli_send cli_post_json "/cli/thread/void" "$body")
+    local rc=$?
+    _k2_moved_from_note "$response"
+    if [[ "$json" == "true" ]]; then
+        echo "$response"
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+print("%s  %s" % (d.get("id",""), d.get("status","")))
+'
+}
+
 cmd_thread_secret() {
     local target="" json="false" explicit_from="" name="" prompt="" dest=""
     local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl=""
@@ -8663,12 +8716,18 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       The value goes into the K2 vault; you get a k2v:// reference and use it with
       `k2 vault fetch --secret NAME …`. The person can change the sites, the scope and
       how you get it. Exact hosts only. More: k2 study vault
+  k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
 
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
 sales = live alias for pinned Chat now. sales/reviewer is durable.
 
-Post and continue. The human may tap later or just chat; the card marks or voids;
-you get a later turn. Do not --wait. Do not emit widget JSON.
+Post and continue; you get a later turn when they answer. Do not --wait. Do not
+emit widget JSON.
+
+A card stays open until the person taps it (or dismisses it) or you void it. People
+may discuss a card before answering: keep it open, answer their questions in prose,
+and never treat their prose as the card's answer. Void your own card only when the
+question is truly obsolete (k2 thread void), or post a new card if the options changed.
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
 
@@ -17465,8 +17524,8 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME",
-      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
+      "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
+      "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); void your own card only when it is obsolete (k2 thread void <addr> <card-id>). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
         {"name": "--json", "arg": null, "description": "JSON output (ask: {id,prompt,options}; secret never includes the value)."},
@@ -20812,9 +20871,18 @@ THREAD
                                 choice card; returns immediately
   `k2 thread secret <addr> --name NAME`
                                 secret field; you never see the value
+  `k2 thread void <addr> <card-id>`
+                                close your own card (obsolete question)
 
   Same first-arg grammar as msg: sales / sales/reviewer / sales/1.
   Post and continue. Do not --wait. Do not emit widget JSON.
+
+CARDS STAY OPEN WHILE PEOPLE TALK
+  A person may discuss a card before answering it. Their messages
+  never close it and are never its answer. Keep it open and answer
+  their questions in prose; they tap when ready. Void your own card
+  only when the question is truly obsolete (`k2 thread void`), or post
+  a new card if the options changed.
   Your posts may push people's phones: `k2 study notifications`.
 
 [thread:addr]

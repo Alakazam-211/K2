@@ -620,6 +620,33 @@ fn compose_author_for_session(session_author: &str) -> overlay::PostAuthor {
     }
 }
 
+/// Who answered or dismissed a card, for the `[from <name>]` on the line
+/// the agent gets. Credential-derived, never the body: an app guest's pass
+/// username, a Connect user's login, the owner's display name for the
+/// owner token, or (an agent answering its own card through its passport)
+/// the stamped `from`. Same sources as a compose post's `from`.
+fn card_actor_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay, session_author: &str) -> String {
+    if let Some(pass) = request_skin() {
+        skin_from_stamp(&pass)
+    } else if principal_is_bound(params) {
+        overlay_sender_from(params, resolved)
+    } else {
+        compose_from_for_session(session_author)
+    }
+}
+
+/// The card's `answeredBy`, from the same credential as [`card_actor_from`]
+/// (and as a compose post's `author`). None for an agent's own answer.
+fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> Option<overlay::PostAuthor> {
+    if let Some(pass) = request_skin() {
+        Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
+    } else if principal_is_bound(params) {
+        None
+    } else {
+        Some(compose_author_for_session(session_author))
+    }
+}
+
 /// `principal_bound` is exactly `"1"`. Boolean `true` stringifies to `"true"`
 /// and must not count. A body flag with no prior stamp must not count either.
 fn principal_is_bound(params: &HashMap<String, String>) -> bool {
@@ -781,12 +808,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
             crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
             if !bound && via == "compose" {
-                apply_human_prose(
-                    &resolved.conversation_id,
-                    &resolved.project_id,
-                    &resolved.addr,
-                    &text,
-                );
+                // A person's prose never closes a pending card: they may
+                // discuss it first and answer by tapping later. Only a tap,
+                // a dismiss / `k2 thread void`, or the card's expiry close it.
                 let turn = ThreadTurn::new(&resolved, &item.id, received_at);
                 inject_thread_compose(&resolved, &from, &text, &command, turn);
                 // A widget's posts never fill the person's compose history
@@ -1044,7 +1068,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                 answered_at: None,
             };
             if let Err(e) = vault.request_create(req) {
-                let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into());
+                let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into(), None);
                 return error_json("400 Bad Request", e.code, e.hint);
             }
             crate::overlay_ws::emit_links(&links, &item.doc);
@@ -1225,11 +1249,12 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
         crate::vault_routes::use_hint(m),
     );
-    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line) {
+    let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line, card_actor_author(params, session_author)) {
         Ok(cb) => cb,
         Err(e) => return error_json("409 Conflict", "card_not_pending", e),
     };
-    fire_card_callbacks(&resolved.addr, vec![cb.clone()], true);
+    let from = card_actor_from(params, resolved, session_author);
+    fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
     CliResponse::ok_json(
         serde_json::json!({
             "ok": true,
@@ -1296,11 +1321,13 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
         &card_id,
         answer.as_deref(),
         None,
+        card_actor_author(params, session_author),
     ) {
         Ok(cb) => {
             // TW1: a person answering a card starts a Thread turn (an
             // agent's own answer does not).
-            fire_card_callbacks(&resolved.addr, vec![cb.clone()], !principal_is_bound(params));
+            let from = card_actor_from(params, &resolved, session_author);
+            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
             let mut body = serde_json::json!({
                 "ok": true,
                 "id": cb.doc_id,
@@ -1349,7 +1376,7 @@ fn card_error(e: String) -> CliResponse {
     }
 }
 
-fn handle_void(params: &HashMap<String, String>) -> CliResponse {
+fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     let addr = str_param(params, "addr");
     let card_id = card_id_of(params);
     if addr.is_empty() {
@@ -1369,12 +1396,13 @@ fn handle_void(params: &HashMap<String, String>) -> CliResponse {
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
     }
-    match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id) {
+    match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id, card_actor_author(params, session_author)) {
         Ok(cb) => {
             if cb.doc.secret.is_some() {
                 void_vault_request(&card_id);
             }
-            fire_card_callbacks(&resolved.addr, vec![cb.clone()], !principal_is_bound(params));
+            let from = card_actor_from(params, &resolved, session_author);
+            fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
             let status = cb
                 .doc
                 .choice
@@ -1471,9 +1499,10 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: 
     );
 }
 
-/// `start_turns`: a person answered or dismissed the card (TW1). Cards a
-/// compose post's prose resolves ride that post's own turn.
-fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>, start_turns: bool) {
+/// `from`: who answered or dismissed the card ([`card_actor_from`]), so
+/// the agent sees `[from <guest>]` for an app guest, never the owner.
+/// `start_turns`: a person answered or dismissed the card (TW1).
+fn fire_card_callbacks(addr: &str, from: &str, cbs: Vec<CardCallback>, start_turns: bool) {
     let started_at = chrono::Utc::now().timestamp_millis();
     for cb in cbs {
         crate::overlay_ws::publish(OverlayFrame {
@@ -1485,14 +1514,13 @@ fn fire_card_callbacks(addr: &str, cbs: Vec<CardCallback>, start_turns: bool) {
             conversation_id: Some(cb.conversation_id.clone()),
         });
         let payload = format!("[thread:{addr}] {}", cb.inject_line);
-        record_test_inject(&payload);
-        let from = crate::workspace_msg::resolve_owner_from();
+        record_test_inject(&format_thread_compose_pty_line(from, addr, &cb.inject_line));
         let turn = start_turns.then_some(ThreadTurn {
             conversation_id: &cb.conversation_id,
             turn_id: &cb.doc_id,
             started_at,
         });
-        deliver_thread_to_pty(addr, &payload, &from, "thread", "", turn);
+        deliver_thread_to_pty(addr, &payload, from, "thread", "", turn);
     }
 }
 
@@ -1538,38 +1566,6 @@ fn deliver_thread_to_pty(
         let now_conversation = resolve_addr(addr).ok().map(|r| r.conversation_id);
         crate::thread_activity::delivered(t.conversation_id, t.turn_id, target, now_conversation.as_deref());
     }
-}
-
-fn apply_human_prose(conversation_id: &str, project_id: &str, addr: &str, text: &str) {
-    match overlay::apply_prose(conversation_id, project_id, text) {
-        Ok(cbs) if !cbs.is_empty() => {
-            for cb in &cbs {
-                if cb.doc.secret.is_some() {
-                    void_vault_request(&cb.doc_id);
-                }
-            }
-            fire_card_callbacks(addr, cbs, false)
-        }
-        Ok(_) => {}
-        Err(e) => k2_core::log_debug!("[overlay] apply_prose failed: {e}"),
-    }
-}
-
-/// T25 for Terminal Message-the-agent. Best-effort; never fails the inject.
-pub fn on_human_pty_text(session_id: &str, text: &str) {
-    let session_id = session_id.trim();
-    let text = text.trim();
-    if session_id.is_empty() || text.is_empty() {
-        return;
-    }
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let Some((project_id, _, _)) = overlay::catalog::get(&conn, session_id).ok().flatten() else {
-        return;
-    };
-    let addr = display_addr_for(&conn, &project_id, session_id);
-    drop(conn);
-    apply_human_prose(session_id, &project_id, &addr, text);
 }
 
 /// Agent Thread `from`: room handle, never `k2`. UUID pin → handle via
@@ -1692,7 +1688,7 @@ pub fn dispatch_post_as(
         "/cli/thread/ask" => handle_ask(&params),
         "/cli/thread/secret" => handle_secret(&params),
         "/cli/thread/answer" => handle_answer(&params, session_author),
-        "/cli/thread/void" => handle_void(&params),
+        "/cli/thread/void" => handle_void(&params, session_author),
         _ => CliResponse::not_found(),
     }
 }
@@ -2683,12 +2679,14 @@ mod tests {
         assert_eq!(answered["status"], "answered", "{answered}");
         assert_eq!(answered["answer"], "Go", "{answered}");
         let injects = recorded_injects();
+        let owner = workspace_msg::resolve_owner_from();
         assert!(
             injects
                 .iter()
-                .any(|l| l == &format!("[thread:{handle}] chose Go")),
-            "async inject must fire after tap; got {injects:?}"
+                .any(|l| l == &format!("[from {owner}] [thread:{handle}] chose Go")),
+            "async inject must fire after tap, from the owner who tapped; got {injects:?}"
         );
+        assert_eq!(answered_doc_by(&handle, &id), serde_json::json!({"kind": "owner", "login": "owner"}));
 
         let get2 = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
             .expect("GET after tap");
@@ -2724,110 +2722,210 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compose_prose_voids_pending_exact_label_marks() {
-        let handle = format!("ovlprose{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let (project_id, _) = seed(&handle);
-        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+    /// The stored card's `answeredBy` (or Null).
+    fn answered_doc_by(addr: &str, card_id: &str) -> serde_json::Value {
+        let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", addr)])).expect("read"));
+        let item = snap["items"].as_array().expect("items").iter().find(|i| i["id"] == card_id).cloned().expect("card");
+        let body = if item["doc"]["kind"] == "choice" { &item["doc"]["choice"] } else { &item["doc"]["secret"] };
+        assert!(body["answeredBy"].is_null() || body["answeredAt"].as_i64().is_some_and(|t| t > 0), "answeredAt rides answeredBy: {item}");
+        body["answeredBy"].clone()
+    }
 
+    fn ask_card(addr: &str, options: &str) -> String {
         let ask = dispatch_post(
             "/cli/thread/ask",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle,
-                "prompt": "?",
-                "options": "Go,Stop",
-                "from": "k2",
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": addr, "prompt": "Ship?", "options": options, "from": "k2" }).to_string().as_bytes(),
         );
         assert_eq!(ask.status, "200 OK", "{}", ask.body);
+        json_body(&ask)["id"].as_str().expect("id").to_string()
+    }
 
-        let void_post = dispatch_post(
-            "/cli/thread/post",
+    fn card_status(addr: &str, card_id: &str) -> String {
+        let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", addr)])).expect("read"));
+        let item = snap["items"].as_array().expect("items").iter().find(|i| i["id"] == card_id).cloned().expect("card");
+        let body = if item["doc"]["kind"] == "choice" { &item["doc"]["choice"] } else { &item["doc"]["secret"] };
+        body["status"].as_str().expect("status").to_string()
+    }
+
+    /// Rosson 2026-10-13: a person may talk about a card before answering
+    /// it. Their prose (compose bar, a Garden widget, the exact option
+    /// label, an app guest) never closes a pending choice or secret card,
+    /// and the card can still be tapped afterwards.
+    #[test]
+    fn prose_leaves_pending_cards_open_and_still_answerable() {
+        let handle = format!("ovlprose{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let choice = ask_card(&handle, "Go,Stop");
+        let secret = dispatch_post(
+            "/cli/thread/secret",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle,
-                "text": "never mind",
-                "from": "owner",
-                "via": "compose",
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": handle, "name": "PROSE_TOKEN", "from": "k2" }).to_string().as_bytes(),
         );
-        assert_eq!(void_post.status, "200 OK", "{}", void_post.body);
-        let snap = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("read"),
-        );
-        let items = snap["items"].as_array().expect("items");
-        let choice = items
-            .iter()
-            .find(|i| i["doc"]["kind"] == "choice")
-            .expect("choice card");
-        assert_eq!(
-            choice["doc"]["choice"]["status"], "voided",
-            "human thread text must void pending: {snap}"
-        );
+        assert_eq!(secret.status, "200 OK", "{}", secret.body);
+        let secret = json_body(&secret)["id"].as_str().expect("id").to_string();
+
+        for (text, origin) in [
+            ("hmm, what does Stop mean exactly?", None),
+            ("Go", None),
+            ("I'll paste it later", None),
+            ("from my widget", Some(serde_json::json!({ "widget": "Agent Arcade", "garden": "g-test0001" }))),
+        ] {
+            let mut body = serde_json::json!({ "addr": handle, "text": text, "via": "compose" });
+            if let Some(o) = origin {
+                body["origin"] = o;
+            }
+            let posted = post_as_owner(&HashMap::new(), body);
+            assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        }
+        let guest = with_request_skin(Some(skin_pass(&[project_id.clone()])), || {
+            dispatch_post(
+                "/cli/thread/post",
+                &HashMap::new(),
+                serde_json::json!({ "addr": handle, "text": "a guest chimes in" }).to_string().as_bytes(),
+            )
+        });
+        assert_eq!(guest.status, "200 OK", "{}", guest.body);
+
+        assert_eq!(card_status(&handle, &choice), "pending", "prose must not close a choice card");
+        assert_eq!(card_status(&handle, &secret), "pending", "prose must not close a secret card");
+        let vault = crate::vault::get().expect("vault");
+        assert_eq!(vault.request_get(&secret).expect("req").status, "pending");
         let injects = recorded_injects();
         assert!(
-            injects
-                .iter()
-                .any(|l| l.contains(&format!("[thread:{handle}]"))
-                    && l.contains("card voided — human replied in chat")),
-            "void inject: {injects:?}"
+            !injects.iter().any(|l| l.contains(&format!("[thread:{handle}] card voided")) || l.contains(&format!("[thread:{handle}] chose"))),
+            "prose fires no card callback: {injects:?}"
         );
 
-        let handle2 = format!("ovlmark{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let (project_id2, _) = seed(&handle2);
-        pin(&project_id2, &uuid::Uuid::new_v4().to_string());
-        let ask2 = dispatch_post(
-            "/cli/thread/ask",
+        // Still answerable by tapping after all that talk.
+        let tap = dispatch_post(
+            "/cli/thread/answer",
             &HashMap::new(),
-            serde_json::json!({
-                "addr": handle2,
-                "prompt": "?",
-                "options": "Go,Stop",
-                "from": "k2",
-            })
-            .to_string()
-            .as_bytes(),
+            serde_json::json!({ "addr": handle, "id": choice, "answer": "Stop" }).to_string().as_bytes(),
         );
-        assert_eq!(ask2.status, "200 OK", "{}", ask2.body);
-        let mark = dispatch_post(
-            "/cli/thread/post",
-            &HashMap::new(),
-            serde_json::json!({
-                "addr": handle2,
-                "text": "Go",
-                "from": "owner",
-                "via": "compose",
-            })
-            .to_string()
-            .as_bytes(),
-        );
-        assert_eq!(mark.status, "200 OK", "{}", mark.body);
-        let snap2 = json_body(
-            &dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read2"),
-        );
-        let choice2 = snap2["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .find(|i| i["doc"]["kind"] == "choice")
-            .expect("choice");
-        assert_eq!(
-            choice2["doc"]["choice"]["status"], "answered",
-            "exact Go must mark rather than void: {snap2}"
-        );
-        assert_eq!(choice2["doc"]["choice"]["answer"], "Go");
-        let injects2 = recorded_injects();
+        assert_eq!(tap.status, "200 OK", "{}", tap.body);
+        assert_eq!(card_status(&handle, &choice), "answered");
+    }
+
+    /// The agent hears who really answered: an app guest's pass username,
+    /// a Connect user's login, the owner's name. `answeredBy` on the card
+    /// is credential-derived too, never the body.
+    #[test]
+    fn card_answers_inject_and_record_the_real_answerer() {
+        let handle = format!("ovlwho{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let owner = workspace_msg::resolve_owner_from();
+
+        // App guest through the gateway's pass.
+        let guest_name = format!("guest{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let mut pass = skin_pass(&[project_id.clone()]);
+        pass.username = guest_name.clone();
+        let g_card = ask_card(&handle, "GuestGo,Stop");
+        let g = with_request_skin(Some(pass.clone()), || {
+            dispatch_post(
+                "/cli/thread/answer",
+                &HashMap::new(),
+                serde_json::json!({ "addr": handle, "id": g_card, "answer": "GuestGo", "from": "spoofed-owner" })
+                    .to_string()
+                    .as_bytes(),
+            )
+        });
+        assert_eq!(g.status, "200 OK", "{}", g.body);
+        let injects = recorded_injects();
         assert!(
-            injects2
-                .iter()
-                .any(|l| l == &format!("[thread:{handle2}] chose Go")),
-            "chose inject: {injects2:?}"
+            injects.iter().any(|l| l == &format!("[from {guest_name}] [thread:{handle}] chose GuestGo")),
+            "guest answer must say [from <guest>]: {injects:?}"
         );
+        assert!(!injects.iter().any(|l| l.contains("spoofed-owner")), "body from is never used: {injects:?}");
+        assert_eq!(answered_doc_by(&handle, &g_card), serde_json::json!({"kind": "guest", "login": guest_name}));
+
+        // Connect user.
+        let user = format!("cu{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let u_card = ask_card(&handle, "UserGo,Stop");
+        let u = dispatch_post_as(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": u_card, "answer": "UserGo", "from": owner }).to_string().as_bytes(),
+            &user,
+        );
+        assert_eq!(u.status, "200 OK", "{}", u.body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &format!("[from {user}] [thread:{handle}] chose UserGo")),
+            "Connect user's answer must say [from <login>]: {injects:?}"
+        );
+        assert_eq!(answered_doc_by(&handle, &u_card), serde_json::json!({"kind": "user", "login": user}));
+
+        // Owner token (desktop, CLI outside K2, Zen widgets).
+        let o_card = ask_card(&handle, "OwnerGo,Stop");
+        let o = dispatch_post_as(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": o_card, "answer": "OwnerGo" }).to_string().as_bytes(),
+            "owner",
+        );
+        assert_eq!(o.status, "200 OK", "{}", o.body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &format!("[from {owner}] [thread:{handle}] chose OwnerGo")),
+            "owner answer keeps the owner's name: {injects:?}"
+        );
+        assert_eq!(answered_doc_by(&handle, &o_card), serde_json::json!({"kind": "owner", "login": "owner"}));
+
+        // A guest dismissing a card: the agent hears the guest too.
+        let d_card = ask_card(&handle, "DismissMe,Stop");
+        let d = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/void",
+                &HashMap::new(),
+                serde_json::json!({ "addr": handle, "id": d_card }).to_string().as_bytes(),
+            )
+        });
+        assert_eq!(d.status, "200 OK", "{}", d.body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l == &format!("[from {guest_name}] [thread:{handle}] card voided")),
+            "guest dismiss must say [from <guest>]: {injects:?}"
+        );
+        assert_eq!(answered_doc_by(&handle, &d_card), serde_json::json!({"kind": "guest", "login": guest_name}));
+    }
+
+    /// A guest's secret card answer is stamped with the guest, not the owner.
+    #[test]
+    fn guest_secret_answer_injects_from_the_guest() {
+        crate::vault::ensure_test_vault();
+        let handle = format!("ovlgsec{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let posted = dispatch_post(
+            "/cli/thread/secret",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "name": "GUEST_TOKEN", "for": "api.example.com", "from": "k2" })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let id = json_body(&posted)["id"].as_str().expect("id").to_string();
+        let guest_name = format!("gsec{}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let mut pass = skin_pass(&[project_id]);
+        pass.username = guest_name.clone();
+        let set = with_request_skin(Some(pass), || {
+            dispatch_post(
+                "/cli/thread/answer",
+                &HashMap::new(),
+                serde_json::json!({ "addr": handle, "id": id, "secret": "guest-value-xyz" }).to_string().as_bytes(),
+            )
+        });
+        assert_eq!(set.status, "200 OK", "{}", set.body);
+        let injects = recorded_injects();
+        assert!(
+            injects.iter().any(|l| l.starts_with(&format!("[from {guest_name}] [thread:{handle}] secret GUEST_TOKEN set"))),
+            "guest secret answer must say [from <guest>]: {injects:?}"
+        );
+        assert!(injects.iter().all(|l| !l.contains("guest-value-xyz")), "never the value: {injects:?}");
+        assert_eq!(answered_doc_by(&handle, &id), serde_json::json!({"kind": "guest", "login": guest_name}));
     }
 
     #[test]
@@ -2906,7 +3004,7 @@ mod tests {
         );
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}] secret API_TOKEN set → k2v://ws/{handle}/API_TOKEN (fetch; api.x.ai)"))),
+            injects.iter().any(|l| l.contains(&format!("[thread:{handle}] secret API_TOKEN set → k2v://ws/{handle}/API_TOKEN (fetch; api.x.ai)"))),
             "set inject: {injects:?}"
         );
         assert!(injects.iter().all(|l| !l.contains(secret_val)), "inject must never carry secret bytes: {injects:?}");
@@ -2922,17 +3020,25 @@ mod tests {
         );
         assert_eq!(pending.status, "200 OK", "{}", pending.body);
         let pid = json_body(&pending)["id"].as_str().expect("id").to_string();
-        let voided = dispatch_post(
+        let talk = dispatch_post(
             "/cli/thread/post",
             &HashMap::new(),
             serde_json::json!({ "addr": handle2, "text": "I'll paste later", "from": "owner", "via": "compose" })
                 .to_string()
                 .as_bytes(),
         );
-        assert_eq!(voided.status, "200 OK", "{}", voided.body);
-        let snap2 = json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read void"));
+        assert_eq!(talk.status, "200 OK", "{}", talk.body);
+        let snap2 = json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle2.as_str())])).expect("read"));
         let secret_item = snap2["items"].as_array().expect("items").iter().find(|i| i["id"] == pid).expect("secret card");
-        assert_eq!(secret_item["doc"]["secret"]["status"], "voided", "chat instead must void secret: {snap2}");
+        assert_eq!(secret_item["doc"]["secret"]["status"], "pending", "talking must leave the secret card open: {snap2}");
+        assert_eq!(vault.request_get(&pid).expect("req").status, "pending");
+        // The person dismisses it: void, and the vault request goes too.
+        let dismissed = dispatch_post(
+            "/cli/thread/void",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle2, "id": pid }).to_string().as_bytes(),
+        );
+        assert_eq!(dismissed.status, "200 OK", "{}", dismissed.body);
         assert_eq!(vault.request_get(&pid).expect("req").status, "void");
         let _ = project_id2;
     }
@@ -4141,10 +4247,11 @@ mod tests {
         assert_eq!(json_body(&ws)["conversation_id"], pinned.as_str(), "`ws` unchanged");
     }
 
-    /// Test 10 (Side finding B): a card answered by typing in a sidecar's
-    /// Terminal injects into the sidecar's address, never the workspace's.
+    /// Test 10 (Side finding B): a sidecar's card answer injects into the
+    /// sidecar's address, never the workspace's. (Typing in the Terminal no
+    /// longer answers a card: only a tap does.)
     #[test]
-    fn terminal_card_answer_goes_to_the_sidecar_address() {
+    fn sidecar_card_answer_goes_to_the_sidecar_address() {
         let handle = format!("ovlcard{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
@@ -4163,14 +4270,22 @@ mod tests {
             .as_bytes(),
         );
         assert_eq!(ask.status, "200 OK", "{}", ask.body);
-        on_human_pty_text(&conv, &label);
+        let id = json_body(&ask)["id"].as_str().expect("id").to_string();
+        let answer = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": format!("{handle}/reviewer"), "id": id, "answer": label })
+                .to_string()
+                .as_bytes(),
+        );
+        assert_eq!(answer.status, "200 OK", "{}", answer.body);
         let injects = recorded_injects();
         assert!(
-            injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}/reviewer] ")) && l.contains(&label)),
+            injects.iter().any(|l| l.contains(&format!("[thread:{handle}/reviewer] ")) && l.contains(&label)),
             "card callback must address the sidecar: {injects:?}"
         );
         assert!(
-            !injects.iter().any(|l| l.starts_with(&format!("[thread:{handle}] ")) && l.contains(&label)),
+            !injects.iter().any(|l| l.contains(&format!("[thread:{handle}] ")) && l.contains(&label)),
             "never the main Chat: {injects:?}"
         );
     }

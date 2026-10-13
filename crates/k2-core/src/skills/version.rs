@@ -111,7 +111,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `k2.window.startDrag` for full-canvas Gardens.
 /// v14 = `agents.list()` / `agents.subscribe(cb)` rows carry the agent's
 /// `color` and `image` (0.45.5 agent identity; catalog version 5).
-pub const SKILL_VERSION_ZEN: u32 = 14;
+/// v15 = locked Gardens (prd-garden-lock-and-sync-v1 §6): "A locked Garden:
+/// don't edit it. Ask the person."; `.locks/` joins the never-write list.
+pub const SKILL_VERSION_ZEN: u32 = 15;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

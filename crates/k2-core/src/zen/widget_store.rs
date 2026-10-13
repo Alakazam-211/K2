@@ -235,36 +235,48 @@ impl ZenFiles {
 
     /// The last good bundle kept for a folder: `(manifest, bundle, at)`.
     fn last_good(&self, name: &str) -> Option<(Manifest, Bundle, String)> {
-        let dir = self.widget_history_dir(name);
-        let meta: J = serde_json::from_str(&fs::read_to_string(dir.join(LAST_GOOD_JSON)).ok()?).ok()?;
-        let html = fs::read_to_string(dir.join(LAST_GOOD_HTML)).ok()?;
-        let offsets: Vec<usize> = meta["nonceAt"].as_array()?.iter().map(|v| v.as_u64().map(|n| n as usize)).collect::<Option<_>>()?;
-        let code = meta["codeBytes"].as_u64()? as usize;
-        let bundle = Bundle::from_template(&html, &offsets, code)?;
-        if Some(bundle.hash.as_str()) != meta["hash"].as_str() {
-            return None;
-        }
-        let manifest = Manifest::from_saved(&meta["manifest"])?;
-        Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string()))
+        read_saved_bundle(&self.widget_history_dir(name))
     }
 
     fn write_last_good(&self, name: &str, m: &Manifest, b: &Bundle) -> Result<(), ZenError> {
-        let dir = self.widget_history_dir(name);
-        fs::create_dir_all(&dir).map_err(|e| io(e, &dir))?;
-        let html = dir.join(LAST_GOOD_HTML);
-        crate::fs_atomic::atomic_write_str(&html, &b.template()).map_err(|e| io(e, &html))?;
-        let meta = json!({
-            "hash": b.hash,
-            "at": now_rfc3339(),
-            "nonceAt": b.nonce_offsets(),
-            "codeBytes": b.code_bytes,
-            "manifest": widgets::manifest_json(m),
-        });
-        let path = dir.join(LAST_GOOD_JSON);
-        let body = serde_json::to_string_pretty(&meta).map_err(|e| ZenError::Io(e.to_string()))?;
-        crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
+        write_saved_bundle(&self.widget_history_dir(name), m, b)
     }
+}
 
+/// A bundle saved as `last-good.html` + `last-good.json` in `dir` (a
+/// widget's last good, or a locked Garden's frozen copy): `(manifest,
+/// bundle, at)`, or `None` when it is missing or doesn't check out.
+pub(crate) fn read_saved_bundle(dir: &std::path::Path) -> Option<(Manifest, Bundle, String)> {
+    let meta: J = serde_json::from_str(&fs::read_to_string(dir.join(LAST_GOOD_JSON)).ok()?).ok()?;
+    let html = fs::read_to_string(dir.join(LAST_GOOD_HTML)).ok()?;
+    let offsets: Vec<usize> = meta["nonceAt"].as_array()?.iter().map(|v| v.as_u64().map(|n| n as usize)).collect::<Option<_>>()?;
+    let code = meta["codeBytes"].as_u64()? as usize;
+    let bundle = Bundle::from_template(&html, &offsets, code)?;
+    if Some(bundle.hash.as_str()) != meta["hash"].as_str() {
+        return None;
+    }
+    let manifest = Manifest::from_saved(&meta["manifest"])?;
+    Some((manifest, bundle, meta["at"].as_str().unwrap_or_default().to_string()))
+}
+
+/// Save `m` + `b` in `dir` in the [`read_saved_bundle`] shape.
+pub(crate) fn write_saved_bundle(dir: &std::path::Path, m: &Manifest, b: &Bundle) -> Result<(), ZenError> {
+    fs::create_dir_all(dir).map_err(|e| io(e, dir))?;
+    let html = dir.join(LAST_GOOD_HTML);
+    crate::fs_atomic::atomic_write_str(&html, &b.template()).map_err(|e| io(e, &html))?;
+    let meta = json!({
+        "hash": b.hash,
+        "at": now_rfc3339(),
+        "nonceAt": b.nonce_offsets(),
+        "codeBytes": b.code_bytes,
+        "manifest": widgets::manifest_json(m),
+    });
+    let path = dir.join(LAST_GOOD_JSON);
+    let body = serde_json::to_string_pretty(&meta).map_err(|e| ZenError::Io(e.to_string()))?;
+    crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
+}
+
+impl ZenFiles {
     /// A widget's live state (read-only: never writes history).
     pub fn widget_status(&self, widget: &str) -> WidgetStatus {
         let builtin = widget.starts_with(builtin_widgets::BUILTIN_PREFIX);
@@ -651,7 +663,8 @@ impl ZenFiles {
         for w in widgets.iter_mut().filter(|w| w["kind"] == schema::CUSTOM_KIND) {
             let widget = w["widget"].as_str().unwrap_or_default().to_string();
             let placement = w["id"].as_str().unwrap_or_default().to_string();
-            let st = self.widget_status(&widget);
+            // A locked Garden runs its frozen copy (prd-garden-lock-and-sync-v1).
+            let st = self.garden_widget_status(garden, &widget);
             let requested = st.requested();
             let origin = WidgetOrigin::of(&widget);
             let m = st.manifest.as_ref();
@@ -678,6 +691,7 @@ impl ZenFiles {
     /// Garden file's.
     pub fn placement_diagnostics(
         &self,
+        garden: Option<&str>,
         file: &str,
         page: &J,
         file_widgets: Option<&J>,
@@ -699,7 +713,10 @@ impl ZenFiles {
             // Only what the file itself declares is the file's finding; a
             // template's widget shows its own state on the page.
             let Some(i) = index_of(id) else { continue };
-            if self.check_now(widget).is_none() {
+            // A locked Garden's frozen copy keeps running when the folder
+            // is gone.
+            let frozen = garden.is_some_and(|g| self.frozen_widget(g, widget).is_some());
+            if self.check_now(widget).is_none() && !frozen {
                 let (line, col) = at(format!("page.widget.{i}.widget"));
                 let message = if widget.starts_with(builtin_widgets::BUILTIN_PREFIX) {
                     format!("this K2 has no built-in widget '{widget}'; update K2, or name one it has")
@@ -717,7 +734,11 @@ impl ZenFiles {
             let Some(custom) = widgets.iter().find(|x| x["id"] == target && x["kind"] == schema::CUSTOM_KIND) else {
                 continue;
             };
-            let st = self.widget_status(custom["widget"].as_str().unwrap_or_default());
+            let cw = custom["widget"].as_str().unwrap_or_default();
+            let st = match garden {
+                Some(g) => self.garden_widget_status(g, cw),
+                None => self.widget_status(cw),
+            };
             let id = w["id"].as_str().unwrap_or_default();
             let Some(i) = index_of(id) else { continue };
             if st.manifest.is_some() && !st.requested().iter().any(|c| c == "agents:read") {

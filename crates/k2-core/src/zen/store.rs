@@ -209,7 +209,17 @@ pub enum ZenError {
     /// A grant route called by anything but the owner token (403
     /// `owner_only`, UWB3).
     OwnerOnly(String),
+    /// An agent's change to a locked Garden (423 `garden_locked`,
+    /// prd-garden-lock-and-sync-v1 §6). `garden` is the id.
+    GardenLocked { garden: String, name: String },
     Io(String),
+}
+
+/// What an agent is told about a locked Garden (§6).
+pub fn garden_locked_message(name: &str) -> String {
+    format!(
+        "\u{201c}{name}\u{201d} is locked. Agents can't change it. Ask the person to unlock it in Settings \u{2192} Gardens."
+    )
 }
 
 impl std::fmt::Display for ZenError {
@@ -226,6 +236,7 @@ impl std::fmt::Display for ZenError {
                 "no Garden '{garden}' on this computer; list them with k2 zen garden list"
             ),
             ZenError::LastGarden => f.write_str(LAST_GARDEN),
+            ZenError::GardenLocked { name, .. } => f.write_str(&garden_locked_message(name)),
             ZenError::GardenHasChanges { keys, .. } => write!(
                 f,
                 "this Garden's file has its own changes ({}); starting over replaces them (the file is kept in history). Pass force to go ahead",
@@ -457,7 +468,7 @@ impl ZenFiles {
         self.root.join(f.label())
     }
 
-    fn history_dir(&self, f: &ZenFile) -> PathBuf {
+    pub(crate) fn history_dir(&self, f: &ZenFile) -> PathBuf {
         self.history_root().join(f.label())
     }
 
@@ -627,7 +638,7 @@ impl ZenFiles {
         }
     }
 
-    fn now() -> String {
+    pub(crate) fn now() -> String {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
@@ -841,6 +852,7 @@ impl ZenFiles {
         record["deletedAt"] = json!(Self::now());
         record["snapshot"] = json!(snapshot);
         self.sync_on_delete(&g.id, &mut record)?;
+        self.lock_on_delete(&g.id)?;
         let rec = dir.join(DELETED_RECORD);
         let body = serde_json::to_string_pretty(&record).map_err(|e| ZenError::Io(e.to_string()))?;
         crate::fs_atomic::atomic_write_str(&rec, &(body + "\n")).map_err(|e| io(e, &rec))?;
@@ -918,6 +930,7 @@ impl ZenFiles {
             self.write_list(&list)?;
         }
         self.prune(&f);
+        self.lock_follow_owner_write(&g.id)?;
         self.sync_follow_k2(&g.id)?;
         if let Err(e) = self.news_mark_template_seen(tid) {
             crate::log_debug!("[zen/sync] news for {}: {e}", g.id);
@@ -927,7 +940,7 @@ impl ZenFiles {
 
     /// Check one file's text with the rules for its kind. A Garden page is
     /// checked against its own default template (G38).
-    fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
+    pub(crate) fn check_src(&self, f: &ZenFile, text: &str, base: &Layer) -> Checked {
         self.check_src_in(f, text, base, &self.defaults_for(f))
     }
 
@@ -949,7 +962,20 @@ impl ZenFiles {
         }
     }
 
-    fn read_current(&self, f: &ZenFile) -> Option<Result<String, String>> {
+    /// The text a file stands for now. A locked Garden's is its frozen copy
+    /// (`.locks/<id>/garden.toml`, prd-garden-lock-and-sync-v1 §5.4): an
+    /// edit on disk never goes live, and `refresh` puts the locked text back.
+    pub(crate) fn read_current(&self, f: &ZenFile) -> Option<Result<String, String>> {
+        if let ZenFile::Garden(id) = f {
+            if let Some(text) = self.frozen_text_if_locked(id) {
+                return Some(Ok(text));
+            }
+        }
+        self.read_disk(f)
+    }
+
+    /// The file on disk as it is, lock or not.
+    pub(crate) fn read_disk(&self, f: &ZenFile) -> Option<Result<String, String>> {
         let p = self.path_of(f);
         match fs::read(&p) {
             Ok(bytes) => Some(String::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".into())),
@@ -992,7 +1018,7 @@ impl ZenFiles {
         out
     }
 
-    fn snapshot_text(&self, f: &ZenFile, name: &str) -> Option<String> {
+    pub(crate) fn snapshot_text(&self, f: &ZenFile, name: &str) -> Option<String> {
         if !valid_snapshot_name(name) {
             return None;
         }
@@ -1474,6 +1500,7 @@ impl ZenFiles {
             "hasFile": self.path_of(&ZenFile::Garden(g.id.clone())).is_file(),
             "createdAt": g.created_at,
             "theme": active.gardens.get(&g.id),
+            "locked": self.is_locked(&g.id),
         });
         if let Some(h) = &g.seed_home {
             v["seedHome"] = json!(h);
@@ -1577,6 +1604,7 @@ impl ZenFiles {
         let (page_layer, page_template) = gd.page_layer(&page.layer, &entry.template);
         let mut page_json = super::garden_page_in(&gd.page, &page_layer, &page_template);
         errors.extend(self.placement_diagnostics(
+            Some(&id),
             &gfile.label(),
             &page_json,
             page.layer.get("page.widgets"),
@@ -1679,7 +1707,7 @@ impl ZenFiles {
             }
             if let (ZenFile::Garden(id), true) = (f, c.is_clean()) {
                 let page = super::garden_page(&c.layer, &self.default_template(id));
-                errors.extend(self.placement_diagnostics(&f.label(), &page, c.layer.get("page.widgets"), &c.positions));
+                errors.extend(self.placement_diagnostics(Some(id), &f.label(), &page, c.layer.get("page.widgets"), &c.positions));
             }
             errors.extend(c.errors);
             warnings.extend(c.warnings);
@@ -1691,12 +1719,21 @@ impl ZenFiles {
             warnings.extend(w);
             checked.extend(labels);
         }
-        Ok(json!({
+        let mut out = json!({
             "ok": errors.is_empty(),
             "errors": errors,
             "warnings": warnings,
             "files": checked,
-        }))
+        });
+        // §6: an agent checking a locked Garden learns it is locked (the
+        // CLI exits 3), even after a raw file edit that was put back.
+        if let Some(ZenFile::Garden(id)) = target {
+            if self.is_locked(id) {
+                let name = self.find_garden(id).map(|(_, g)| g.name).unwrap_or_else(|| id.clone());
+                out["locked"] = json!({ "garden": id, "name": name, "message": garden_locked_message(&name) });
+            }
+        }
+        Ok(out)
     }
 
     /// Re-read the folder: snapshot every clean file with new content (Z14),
@@ -1713,7 +1750,18 @@ impl ZenFiles {
     /// its last good bundle and code history, UW11) and the daemon's runaway
     /// pauses (UW12): a widget save, a pause and a resume each move it once.
     pub fn refresh_with(&self, pauses: &super::widget_access::WidgetPauses) -> Result<String, ZenError> {
+        self.refresh_with_report(pauses).map(|(fp, _)| fp)
+    }
+
+    /// [`ZenFiles::refresh_with`] that first puts every locked Garden's
+    /// frozen text back over an edit on disk (prd-garden-lock-and-sync-v1
+    /// §5.4) and returns what it refused, for the daemon's audit line.
+    pub fn refresh_with_report(
+        &self,
+        pauses: &super::widget_access::WidgetPauses,
+    ) -> Result<(String, Vec<super::lock::LockRefusal>), ZenError> {
         self.require()?;
+        let refused = self.enforce_locks();
         let mut state = serde_json::Map::new();
         state.insert(WIDGETS_DIR_KEY.to_string(), self.refresh_widgets()?);
         state.insert(PAUSES_KEY.to_string(), pauses.fingerprint());
@@ -1747,7 +1795,7 @@ impl ZenFiles {
             let eff = self.refresh_one(&f, &self.base_for(&f))?;
             state.insert(f.label(), effective_state(&eff));
         }
-        Ok(schema::fnv_hex(J::Object(state).to_string().as_bytes()))
+        Ok((schema::fnv_hex(J::Object(state).to_string().as_bytes()), refused))
     }
 
     fn refresh_one(&self, f: &ZenFile, base: &Layer) -> Result<Effective, ZenError> {
@@ -1881,6 +1929,11 @@ impl ZenFiles {
             },
         }
         self.prune(f);
+        if let ZenFile::Garden(id) = f {
+            // The person may reset a locked Garden (Rosson 2026-10-13): the
+            // lock now holds the new text.
+            self.lock_follow_owner_write(id)?;
+        }
         if let (ZenFile::Garden(id), None) = (f, to) {
             self.sync_follow_k2(id)?;
         }

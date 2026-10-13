@@ -1317,6 +1317,27 @@ pub fn handle_relations_delete(body: &[u8], actor_is_privileged: bool) -> CliRes
     if b.id.is_empty() {
         return CliResponse::bad_request("missing id");
     }
+    // HT10: rows a team link (or a hired team) wrote are removed with the
+    // link, never one by one.
+    let managed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::hire::links::managing_origin(&conn, &b.id)
+    };
+    if let Some(origin) = managed {
+        return CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": k2_core::connections::MANAGED_BY_LINK,
+                    "hint": k2_core::hire::links::managed_hint(&origin),
+                },
+            })
+            .to_string(),
+        };
+    }
     // Look up the source project for the toggle gate before delete.
     let source_id: Option<String> = {
         let db = k2_core::db::shared();

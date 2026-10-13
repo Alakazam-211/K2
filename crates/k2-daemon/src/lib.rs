@@ -56,6 +56,7 @@ pub mod agent_identity_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
 pub mod heartbeat_routes;
+pub mod hire_routes;
 pub mod heartbeat_wait;
 pub mod home_avatar_routes;
 pub mod power;

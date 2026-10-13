@@ -65,6 +65,9 @@ pub struct Peer {
     pub remote: bool,
 }
 
+/// Error prefix for a refused manual removal of a team-link edge (HT10).
+pub const MANAGED_BY_LINK: &str = "managed_by_link";
+
 /// Best-effort "did you mean" over registered project names (0.39.45,
 /// #33). Ranks case-insensitive containment first, then small edit
 /// distance (≤ 3). Returns `None` when nothing is plausibly close —
@@ -1092,6 +1095,7 @@ pub fn connections_for_actor(
                 .query_row(
                     "SELECT id, relation_type FROM workspace_relations \
                      WHERE source_project_id = ?1 AND target_project_id = ?2 \
+                       AND origin_link_id IS NULL \
                      LIMIT 1",
                     rusqlite::params![target_id, project_id],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
@@ -1198,11 +1202,32 @@ pub fn connections_for_actor(
                 )
                 .unwrap_or_default();
 
+            // HT10: a team link's rows are managed by the link; manual
+            // remove takes only a hand-made row and refuses a link row.
             let rel_id: Result<String, _> = conn.query_row(
-                "SELECT id FROM workspace_relations WHERE source_project_id = ?1 AND target_project_id = ?2",
+                "SELECT id FROM workspace_relations WHERE source_project_id = ?1 AND target_project_id = ?2 \
+                   AND origin_link_id IS NULL",
                 rusqlite::params![project_id, target_id],
                 |row| row.get(0),
             );
+            if rel_id.is_err() {
+                let managed: Option<String> = conn
+                    .query_row(
+                        "SELECT origin_link_id FROM workspace_relations \
+                         WHERE origin_link_id IS NOT NULL AND ( \
+                           (source_project_id = ?1 AND target_project_id = ?2) OR \
+                           (source_project_id = ?2 AND target_project_id = ?1)) LIMIT 1",
+                        rusqlite::params![project_id, target_id],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if let Some(origin) = managed {
+                    return Err(format!(
+                        "{MANAGED_BY_LINK}: {}",
+                        crate::hire::links::managed_hint(&origin)
+                    ));
+                }
+            }
             match rel_id {
                 Ok(id) => {
                     WorkspaceRelation::delete(&conn, &id).map_err(|e| e.to_string())?;

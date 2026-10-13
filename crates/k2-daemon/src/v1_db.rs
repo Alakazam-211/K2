@@ -213,6 +213,7 @@ mod tests {
                 canonical_message: true,
                 sandboxes: true,
                 db: false,
+                hire: false,
             },
         );
         for call in [

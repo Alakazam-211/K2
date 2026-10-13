@@ -83,7 +83,11 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
     };
 
     // (1) AUTH — resolve the slug to its registered path + enforce the key's grant.
-    let project_path = match crate::v1_sandboxes::resolve_authorized_workspace(principal, &slug) {
+    let project_path = match crate::v1_sandboxes::resolve_authorized_workspace_door(
+        principal,
+        &slug,
+        k2_core::hire::limits::ReachDoor::Message,
+    ) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -138,19 +142,42 @@ pub(crate) fn handle_v1_ws_message(principal: &V1Principal, ws_raw: &str, body: 
 
     // Deliver via the SAME engine as `k2 talk` (wake=true → live-inject or
     // wake+resume+inject a dormant canonical session).
-    let result = crate::workspace_msg::deliver_live(
+    // S7: recorded, so the recipient can check the sender (`k2 msg who`).
+    let on_behalf_of = v
+        .get("onBehalfOf")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().chars().take(200).collect::<String>())
+        .filter(|s| !s.is_empty());
+    let sender = match principal {
+        V1Principal::Owner => crate::hire_routes::Sender {
+            workspace_id: None,
+            via: "owner",
+            actor: "owner-token".into(),
+            on_behalf_of: None,
+        },
+        V1Principal::Api(p) => crate::hire_routes::Sender {
+            workspace_id: None,
+            via: "api-key",
+            actor: format!("api-key:{}", p.id),
+            on_behalf_of,
+        },
+    };
+    let (result, delivery) = crate::hire_routes::deliver_recorded(
         &project_path,
         &text,
         &from,
         "",
         wake,
         crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+        "v1",
+        &sender,
     );
     CliResponse::ok_json(
         serde_json::json!({
             "delivered": result.success,
             "mode": "live",
             "result": result,
+            "deliveryId": delivery,
         })
         .to_string(),
     )

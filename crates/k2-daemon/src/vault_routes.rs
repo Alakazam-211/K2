@@ -1019,6 +1019,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // batch approval (`secretId` = the batch hash).
     "source-secret",
     "source-batch",
+    // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
+    // that can hire agents, for every caller (owner token included).
+    "hire-key-mint",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

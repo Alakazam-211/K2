@@ -77,6 +77,18 @@ export function isOwnThreadPost(
   return doc.via === 'compose'
 }
 
+/** Who answered (or dismissed) a card, from the card's `answeredBy` (the
+ *  daemon stamps it from the answerer's credential, like a post's
+ *  `author`): "You" for the viewer, "the owner" for the owner token, else
+ *  the login. Null when the card names nobody (still pending, an agent's
+ *  own answer, or a card from before the field), so it renders as before. */
+export function cardAnswererLabel(raw: unknown, viewer: ThreadViewer | null): string | null {
+  const a = parseThreadAuthor(raw)
+  if (!a) return null
+  if (isViewerAuthor(a, viewer)) return 'You'
+  return a.kind === 'owner' ? 'the owner' : a.login
+}
+
 /** The viewer before the server answers: the saved login on the scope's
  *  server entry, or the owner on this computer. A remote with no saved
  *  login (a hosted web page) is unknown until whoami answers. */

@@ -85,6 +85,8 @@ export interface SecretCardProps {
   secret: OverlaySecret
   /** Who asked (the Thread item's `from`, stamped by the daemon). */
   agent: string
+  /** `cardAnswererLabel` of the card's `answeredBy` ("You", a login). */
+  answeredBy?: string | null
   /** The asking agent's workspace (its Thread address before any `/`). */
   workspace?: string
   /** The server's label (the room's). */
@@ -99,6 +101,7 @@ export interface SecretCardProps {
 
 export function SecretCard({
   secret,
+  answeredBy,
   agent: agentIn,
   workspace: workspaceIn,
   server,
@@ -198,6 +201,7 @@ export function SecretCard({
       <div data-testid="thread-secret-card" data-status={secret.status} className="mt-1">
         <div className={`text-[11px] ${muted}`} data-testid="thread-secret-set">
           <span className="font-mono">{secret.name}</span> {done}
+          {secret.status === 'set' && answeredBy ? <span data-testid="thread-secret-answered-by"> by {answeredBy}</span> : null}
           {secret.status === 'set' && secret.ref ? (
             <>
               {' '}

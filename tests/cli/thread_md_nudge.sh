@@ -46,6 +46,13 @@ assert_absent() {
 echo "== k2 thread --help mentions markdown =="
 help_out="$(env K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_CLI" thread --help 2>&1 || true)"
 assert_contains "help markdown" "$help_out" "render markdown"
+assert_contains "help: k2 thread void" "$help_out" "k2 thread void <addr> <card-id>"
+assert_contains "help: prose is not the answer" "$help_out" "never treat their prose as the card's answer"
+assert_absent "help: no prose-voids rule" "$help_out" "the card marks or voids"
+
+echo "== k2 thread void needs a card id (no daemon) =="
+void_out="$(env K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_CLI" thread void sales 2>&1 || true)"
+assert_contains "void usage" "$void_out" "card id required"
 
 echo "== nudge first + every 10 =="
 eval "$(sed -n '/^_ws_dot_dir()/,/^}/p; /^_thread_md_nudge()/,/^}/p' "$K2_CLI")"

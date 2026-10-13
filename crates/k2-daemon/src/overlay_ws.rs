@@ -4,7 +4,7 @@
 //! and from grid-WS. Frames: `{collection, seq, id, doc?}`.
 //!
 //! Thread sync: every overlay write route (`thread/post|ask|secret|answer|
-//! void`, compose prose that voids cards, `k2 msg` chatter) publishes one
+//! void`, the card expiry sweep, `k2 msg` chatter) publishes one
 //! frame here, and every client view of a Thread subscribes and merges by
 //! id. This socket is the only push path, so it must not die quietly:
 //!

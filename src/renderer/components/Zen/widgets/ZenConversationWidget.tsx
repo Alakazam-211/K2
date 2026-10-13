@@ -22,7 +22,7 @@ import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
+import { cardAnswererLabel, isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
@@ -107,6 +107,7 @@ function Bubble({
             allowCustom={item.doc.choice.allow_custom}
             status={item.doc.choice.status}
             answer={item.doc.choice.answer}
+            answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
             onPick={(label) => {
               onAnswer({ answer: label }).catch((err: unknown) => console.warn('[zen] answer failed:', err))
             }}
@@ -119,6 +120,7 @@ function Bubble({
             <SecretCard
               compact
               secret={item.doc.secret}
+              answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
               agent={item.doc.from || ''}
               server={server}
               onSubmit={onAnswer}

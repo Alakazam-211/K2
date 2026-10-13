@@ -401,6 +401,56 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(go.className).toContain('bg-[var(--thread-card-accent,var(--color-accent))]/15')
   })
 
+  it('names who answered a card ("You" for the viewer); an older card names nobody', () => {
+    const answered = (answeredBy?: { kind: string; login: string }): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: 1,
+      id: 'c-by',
+      doc: {
+        id: 'c-by',
+        kind: 'choice',
+        from: 'k2',
+        choice: {
+          prompt: 'Ship it?',
+          options: [{ label: 'Go' }, { label: 'Stop' }],
+          allow_custom: false,
+          status: 'answered',
+          answer: 'Go',
+          ...(answeredBy ? { answeredBy, answeredAt: 1_700_000_000 } : {}),
+        },
+      },
+    })
+    const owner: ThreadViewer = { principal: 'owner', aliases: [] }
+    const alice: ThreadViewer = { principal: 'alice', aliases: [] }
+    renderInRoom(overlayRoom, <ThreadItemRow item={answered({ kind: 'guest', login: 'patty' })} viewer={owner} />)
+    expect(screen.getByTestId('thread-choice-answered-by').textContent).toBe('answered by patty')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={answered({ kind: 'user', login: 'alice' })} viewer={alice} />)
+    expect(screen.getByTestId('thread-choice-answered-by').textContent).toBe('answered by You')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={answered({ kind: 'owner', login: 'owner' })} viewer={alice} />)
+    expect(screen.getByTestId('thread-choice-answered-by').textContent).toBe('answered by the owner')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={answered()} viewer={owner} />)
+    expect(screen.queryByTestId('thread-choice-answered-by')).toBeNull()
+  })
+
+  it('a saved secret card names who saved it', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 1,
+      id: 's-by',
+      doc: {
+        id: 's-by',
+        kind: 'secret',
+        from: 'k2',
+        secret: { name: 'API_TOKEN', status: 'set', ref: 'k2v://ws/k2/API_TOKEN', answeredBy: { kind: 'user', login: 'bob' } },
+      },
+    }
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} viewer={{ principal: 'owner', aliases: [] }} />)
+    expect(screen.getByTestId('thread-secret-answered-by').textContent).toBe(' by bob')
+  })
+
   it('renders a secret field and submit/dismiss; never shows the value as body text', async () => {
     const submitted: string[] = []
     let dismissed = 0

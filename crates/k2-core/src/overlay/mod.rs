@@ -334,13 +334,16 @@ pub fn card_is_secret(conversation_id: &str, card_id: &str) -> Result<bool, Stri
     Ok(thread_item(conversation_id, card_id)?.doc.secret.is_some())
 }
 
-/// Tap an option (or custom) / submit a secret.
+/// Tap an option (or custom) / submit a secret. `by` is who tapped (the
+/// caller's credential; None for an agent's own answer), stored on the
+/// card as `answeredBy` with `answeredAt`.
 pub fn answer_card(
     conversation_id: &str,
     project_id: &str,
     card_id: &str,
     choice_answer: Option<&str>,
     secret_bytes: Option<&[u8]>,
+    by: Option<PostAuthor>,
 ) -> Result<CardCallback, String> {
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
@@ -357,6 +360,8 @@ pub fn answer_card(
         }
         choice.status = "answered".to_string();
         choice.answer = Some(answer.to_string());
+        choice.answered_by = by;
+        choice.answered_at = Some(doc::now_secs());
         format!("chose {answer}")
     } else if doc.is_pending_secret() {
         // K2 vault (prd-k2-vault-v1 §10.1): the daemon stores the value in
@@ -379,12 +384,14 @@ pub fn answer_card(
 
 /// After the vault stored a secret card's value (or the person declined):
 /// mark the card `set` / `voided` with the reference. Never takes a value.
+/// `by`: the person who answered (`answeredBy`), None for the daemon.
 pub fn mark_secret(
     conversation_id: &str,
     card_id: &str,
     status: &str,
     reference: Option<String>,
     inject_line: String,
+    by: Option<PostAuthor>,
 ) -> Result<CardCallback, String> {
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
@@ -395,6 +402,8 @@ pub fn mark_secret(
     if let Some(s) = doc.secret.as_mut() {
         s.status = status.to_string();
         s.reference = reference;
+        s.answered_by = by;
+        s.answered_at = Some(doc::now_secs());
     }
     store::put_doc(&doc)?;
     Ok(CardCallback {
@@ -406,21 +415,27 @@ pub fn mark_secret(
     })
 }
 
-/// Explicit dismiss (secret X / chrome dismiss).
+/// Explicit dismiss (secret X / chrome dismiss) or the asking agent's
+/// `k2 thread void` of its own superseded card. `by`: the person who
+/// dismissed it (`answeredBy`), None for an agent.
 pub fn void_card(
     conversation_id: &str,
     _project_id: &str,
     card_id: &str,
+    by: Option<PostAuthor>,
 ) -> Result<CardCallback, String> {
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
     let mut doc = item.doc;
+    let at = Some(doc::now_secs());
     let inject_line = if doc.is_pending_choice() {
         if let Some(c) = doc.choice.as_mut() {
             c.status = "voided".to_string();
             c.answer = None;
+            c.answered_by = by;
+            c.answered_at = at;
         }
-        "card voided — human replied in chat".to_string()
+        "card voided".to_string()
     } else if doc.is_pending_secret() {
         // A pending card never wrote a value, so voiding it deletes
         // nothing: a stored value under the same name belongs to an
@@ -428,6 +443,8 @@ pub fn void_card(
         let name = doc.secret.as_ref().expect("pending secret").name.clone();
         if let Some(s) = doc.secret.as_mut() {
             s.status = "voided".to_string();
+            s.answered_by = by;
+            s.answered_at = at;
         }
         format!("secret {name} declined")
     } else {
@@ -441,65 +458,6 @@ pub fn void_card(
         doc,
         inject_line,
     })
-}
-
-/// T25: human prose on this conversation. Matching option label marks
-/// that choice; every other pending card voids. Secrets are never scraped.
-pub fn apply_prose(
-    conversation_id: &str,
-    _project_id: &str,
-    text: &str,
-) -> Result<Vec<CardCallback>, String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let _guard = WRITE.lock();
-    let items = store::read_thread(conversation_id, 0)?;
-    let mut out = Vec::new();
-    for item in items {
-        let mut doc = item.doc;
-        if doc.is_pending_choice() {
-            let choice = doc.choice.as_mut().expect("pending choice");
-            if choice.options.iter().any(|o| o.label == trimmed) {
-                choice.status = "answered".to_string();
-                choice.answer = Some(trimmed.to_string());
-                store::put_doc(&doc)?;
-                out.push(CardCallback {
-                    conversation_id: conversation_id.to_string(),
-                    doc_id: doc.id.clone(),
-                    seq: item.seq,
-                    inject_line: format!("chose {trimmed}"),
-                    doc,
-                });
-            } else {
-                choice.status = "voided".to_string();
-                choice.answer = None;
-                store::put_doc(&doc)?;
-                out.push(CardCallback {
-                    conversation_id: conversation_id.to_string(),
-                    doc_id: doc.id.clone(),
-                    seq: item.seq,
-                    inject_line: "card voided — human replied in chat".to_string(),
-                    doc,
-                });
-            }
-        } else if doc.is_pending_secret() {
-            // Pending = never written; keep any earlier answer's value.
-            if let Some(s) = doc.secret.as_mut() {
-                s.status = "voided".to_string();
-            }
-            store::put_doc(&doc)?;
-            out.push(CardCallback {
-                conversation_id: conversation_id.to_string(),
-                doc_id: doc.id.clone(),
-                seq: item.seq,
-                inject_line: "card voided — human replied in chat".to_string(),
-                doc,
-            });
-        }
-    }
-    Ok(out)
 }
 
 fn thread_item(conversation_id: &str, card_id: &str) -> Result<OverlayItem, String> {
@@ -830,13 +788,16 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].collection, "thread");
 
-        let cb = answer_card(&conv, &project_id, &item.id, Some("Go"), None).expect("tap Go");
+        let cb = answer_card(&conv, &project_id, &item.id, Some("Go"), None, Some(PostAuthor::guest("g1"))).expect("tap Go");
         assert_eq!(cb.doc.choice.as_ref().expect("choice").status, "answered");
         assert_eq!(
             cb.doc.choice.as_ref().expect("choice").answer.as_deref(),
             Some("Go")
         );
         assert_eq!(cb.inject_line, "chose Go");
+        let answered = cb.doc.choice.as_ref().expect("choice");
+        assert_eq!(answered.answered_by, Some(PostAuthor::guest("g1")), "who tapped is on the card");
+        assert!(answered.answered_at.is_some_and(|t| t > 0), "when they tapped: {answered:?}");
         let items = read_thread(&conv, 0).expect("read");
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -844,106 +805,6 @@ mod tests {
             "answered",
             "tap must mark answered; got {:?}",
             items[0].doc.choice
-        );
-    }
-
-    #[test]
-    fn prose_voids_pending_unless_exact_option_label() {
-        let project_id = seed_project("ovl-prose");
-        let conv = uuid::Uuid::new_v4().to_string();
-        let dbh = conn();
-        let c = dbh.lock();
-        let (go, _) = post_choice(
-            &c,
-            &conv,
-            &project_id,
-            "k2",
-            "ovl-prose",
-            "?",
-            vec!["Go".to_string(), "Stop".to_string()],
-            false,
-        )
-        .expect("choice");
-        let (secret, _) = post_secret(&c, &conv, &project_id, "k2", "ovl-prose", "API_TOKEN", None, SecretProposal::default())
-            .expect("secret");
-
-        let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
-        assert_eq!(voided.len(), 2, "both pending cards void: {voided:?}");
-        assert!(
-            voided.iter().all(|cb| cb.inject_line.contains("voided")),
-            "void inject: {voided:?}"
-        );
-        let items = read_thread(&conv, 0).expect("read");
-        let choice = items
-            .iter()
-            .find(|i| i.id == go.id)
-            .expect("choice still on thread")
-            .doc
-            .choice
-            .as_ref()
-            .expect("choice");
-        assert_eq!(choice.status, "voided", "{choice:?}");
-        let secret_doc = items
-            .iter()
-            .find(|i| i.id == secret.id)
-            .expect("secret still on thread")
-            .doc
-            .secret
-            .as_ref()
-            .expect("secret");
-        assert_eq!(secret_doc.status, "voided", "{secret_doc:?}");
-        assert!(
-            !vault::exists(&project_id, "API_TOKEN"),
-            "chat must not scrape a secret into the vault"
-        );
-
-        let conv2 = uuid::Uuid::new_v4().to_string();
-        let (marked, _) = post_choice(
-            &c,
-            &conv2,
-            &project_id,
-            "k2",
-            "ovl-prose",
-            "?",
-            vec!["Go".to_string(), "Stop".to_string()],
-            false,
-        )
-        .expect("choice2");
-        let (other, _) = post_choice(
-            &c,
-            &conv2,
-            &project_id,
-            "k2",
-            "ovl-prose",
-            "other",
-            vec!["Hold".to_string()],
-            false,
-        )
-        .expect("other");
-        let cbs = apply_prose(&conv2, &project_id, "Go").expect("exact Go");
-        assert_eq!(cbs.len(), 2, "{cbs:?}");
-        let items = read_thread(&conv2, 0).expect("read2");
-        let marked_doc = items.iter().find(|i| i.id == marked.id).expect("marked");
-        assert_eq!(
-            marked_doc.doc.choice.as_ref().expect("c").status,
-            "answered",
-            "exact option label marks rather than void: {:?}",
-            marked_doc.doc.choice
-        );
-        assert_eq!(
-            marked_doc.doc.choice.as_ref().expect("c").answer.as_deref(),
-            Some("Go")
-        );
-        let other_doc = items.iter().find(|i| i.id == other.id).expect("other");
-        assert_eq!(
-            other_doc.doc.choice.as_ref().expect("c").status,
-            "voided",
-            "other pending still void: {:?}",
-            other_doc.doc.choice
-        );
-        assert!(
-            cbs.iter().any(|cb| cb.inject_line == "chose Go"),
-            "chose inject: {cbs:?}"
         );
     }
 
@@ -974,14 +835,15 @@ mod tests {
         assert_eq!(sb.status, "pending");
         assert_eq!(sb.hosts, vec!["https://api.x.ai:443".to_string()]);
         let secret_bytes = b"s3cr3t-NEVER-IN-REDB-xyz";
-        let refused = answer_card(&conv, &project_id, &item.id, None, Some(secret_bytes.as_slice()));
+        let refused = answer_card(&conv, &project_id, &item.id, None, Some(secret_bytes.as_slice()), None);
         assert!(refused.is_err(), "values go to the K2 vault, never through here");
         assert!(!vault::exists(&project_id, "API_TOKEN"), "nothing written to the old folder");
-        let cb = mark_secret(&conv, &item.id, "set", Some("k2v://ws/ovl-sec/API_TOKEN".into()), "secret API_TOKEN set".into())
+        let cb = mark_secret(&conv, &item.id, "set", Some("k2v://ws/ovl-sec/API_TOKEN".into()), "secret API_TOKEN set".into(), Some(PostAuthor::user("alice")))
             .expect("mark set");
         assert_eq!(cb.doc.secret.as_ref().expect("secret").status, "set");
         assert_eq!(cb.doc.secret.as_ref().expect("secret").reference.as_deref(), Some("k2v://ws/ovl-sec/API_TOKEN"));
-        assert!(mark_secret(&conv, &item.id, "set", None, "again".into()).is_err(), "no second answer");
+        assert_eq!(cb.doc.secret.as_ref().expect("secret").answered_by, Some(PostAuthor::user("alice")));
+        assert!(mark_secret(&conv, &item.id, "set", None, "again".into(), None).is_err(), "no second answer");
         let items = read_thread(&conv, 0).expect("read");
         assert!(
             !snapshot_contains_secret(&items, "s3cr3t-NEVER-IN-REDB-xyz"),
@@ -1010,7 +872,7 @@ mod tests {
             SecretProposal::default(),
         )
         .expect("pending");
-        let voided = void_card(&conv2, &project_id, &pending.id).expect("void");
+        let voided = void_card(&conv2, &project_id, &pending.id, Some(PostAuthor::owner())).expect("void");
         assert_eq!(voided.doc.secret.as_ref().expect("s").status, "voided");
         assert!(
             !vault::exists(&project_id, "OTHER_TOKEN"),
@@ -1022,7 +884,7 @@ mod tests {
     /// the vault, the card only records `set` + the reference): a second
     /// mark is refused, a void after the answer is refused with
     /// [`CARD_NOT_PENDING`], no path here takes a value, and voiding a
-    /// later same-name card (button or prose) leaves the first card `set`.
+    /// later same-name card leaves the first card `set`.
     #[test]
     fn answered_secret_card_is_never_overwritten_or_deleted() {
         let project_id = seed_project("ovl-final");
@@ -1034,15 +896,15 @@ mod tests {
         )
         .expect("post first");
         assert!(card_is_secret(&conv, &first.id).expect("kind"), "secret card");
-        answer_card(&conv, &project_id, &first.id, None, Some(b"human-value".as_slice()))
+        answer_card(&conv, &project_id, &first.id, None, Some(b"human-value".as_slice()), None)
             .expect_err("values never go through answer_card");
-        mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/FINAL_TOKEN".into()), "set".into())
+        mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/FINAL_TOKEN".into()), "set".into(), None)
             .expect("first answer");
 
-        let again = mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/OTHER".into()), "set".into())
+        let again = mark_secret(&conv, &first.id, "set", Some("k2v://ws/ovl-final/OTHER".into()), "set".into(), None)
             .expect_err("second answer must be refused");
         assert_eq!(again, "card is not pending");
-        let void_after = void_card(&conv, &project_id, &first.id)
+        let void_after = void_card(&conv, &project_id, &first.id, None)
             .expect_err("voiding an answered card must be refused");
         assert_eq!(void_after, CARD_NOT_PENDING);
 
@@ -1050,13 +912,12 @@ mod tests {
             &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
         )
         .expect("post same-name card");
-        void_card(&conv, &project_id, &second.id).expect("void pending same-name card");
+        void_card(&conv, &project_id, &second.id, None).expect("void pending same-name card");
         let (third, _) = post_secret(
             &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
         )
         .expect("post third");
-        let voided = apply_prose(&conv, &project_id, "never mind").expect("prose");
-        assert!(voided.iter().any(|cb| cb.doc_id == third.id), "prose voids the pending card");
+        void_card(&conv, &project_id, &third.id, None).expect("void third");
         let first_now = thread_item(&conv, &first.id).expect("first card");
         let sb = first_now.doc.secret.as_ref().expect("secret body");
         assert_eq!(sb.status, "set", "the first answer stays set");

@@ -1418,6 +1418,96 @@ mod tests {
         assert!(t.turns.contains_key(CONV), "no end either: still waiting for the agent");
     }
 
+    /// Ratchet (Rosson 2026-10-12, e7664f24a): for a session whose turns
+    /// follow the agent's own lifecycle, a Thread post never begins or
+    /// ends a turn and never flips the strip's status, whatever the lead
+    /// and row show. Every lead × display, with no turn, an unopened turn
+    /// and an open one: the posts send no end frame and leave the turn's
+    /// state, phase and id exactly where a twin with no posts has them.
+    #[test]
+    fn thread_posts_never_begin_end_or_flip_an_agent_turn() {
+        let leads = [LeadState::Idle, LeadState::Working, LeadState::Waiting];
+        let displays = [Display::Working, Display::Monitoring, Display::Waiting, Display::Idle, Display::Unverifiable];
+        let view = |v: Option<Value>| v.map(|b| (b["turnId"].clone(), b["state"].clone(), b["phase"].clone(), b["end"].clone()));
+        for lead in leads {
+            for display in displays {
+                let case = format!("{lead:?}/{display:?}");
+                let row = Fake::new(snap(lead, display, 500));
+                // No turn: posts create none and send nothing.
+                let mut t = Tracker::default();
+                for at in [600, 700, 800] {
+                    assert!(t.reply(CONV, &row.lookup(), at).is_empty(), "{case}: no turn, no frame");
+                }
+                assert!(t.turns.is_empty(), "{case}: a post never creates a turn");
+                assert!(t.current(CONV, &row.lookup(), 900).is_none(), "{case}");
+
+                // A delivered turn (open when the lead is busy, else
+                // waiting for the agent), with and without posts.
+                let mut posted = Tracker::default();
+                let mut twin = Tracker::default();
+                live(&mut posted, &row);
+                live(&mut twin, &row);
+                let before = view(posted.current(CONV, &row.lookup(), 1_150));
+                for at in [1_200, 1_300, 1_400] {
+                    no_end(&posted.reply(CONV, &row.lookup(), at));
+                }
+                assert!(posted.turns.contains_key(CONV), "{case}: a post never ends the turn");
+                let after = view(posted.current(CONV, &row.lookup(), 1_450));
+                assert_eq!(after, before, "{case}: a post never opens, closes or flips the turn");
+                assert_eq!(after, view(twin.current(CONV, &row.lookup(), 1_450)), "{case}: same as no post");
+                no_end(&posted.tick(&row.lookup(), 1_500));
+                no_end(&twin.tick(&row.lookup(), 1_500));
+                assert_eq!(
+                    view(posted.current(CONV, &row.lookup(), 1_550)),
+                    view(twin.current(CONV, &row.lookup(), 1_550)),
+                    "{case}: still the same after a tick"
+                );
+            }
+        }
+    }
+
+    /// Ratchet: the only door that begins a turn is a person's message
+    /// delivered to the agent (`deliver_thread_to_pty`); agent posts, cards
+    /// and secret requests reach the tracker only as `note_reply`.
+    #[test]
+    fn only_a_persons_delivery_starts_a_turn_in_daemon_source() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for e in std::fs::read_dir(dir).expect("read src dir") {
+                let p = e.expect("dir entry").path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push((p.display().to_string(), std::fs::read_to_string(&p).expect("read source")));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        let needle = ["thread_activity", "::start_turn("].concat();
+        let mut hits = Vec::new();
+        for (path, src) in &files {
+            let prod = src.split("\n#[cfg(test)]\nmod tests").next().expect("prod part");
+            for (at, _) in prod.match_indices(&needle) {
+                let fn_start = prod[..at].rfind("\nfn ").expect("inside a fn");
+                let name = prod[fn_start + 4..].split('(').next().expect("fn name").to_string();
+                hits.push((path.rsplit('/').next().expect("file").to_string(), name));
+            }
+        }
+        assert_eq!(
+            hits,
+            vec![("overlay_routes.rs".to_string(), "deliver_thread_to_pty".to_string())],
+            "only a person's delivery begins a Thread turn"
+        );
+        let overlay = &files.iter().find(|(p, _)| p.ends_with("/overlay_routes.rs")).expect("overlay_routes").1;
+        let prod = overlay.split("\n#[cfg(test)]\nmod tests").next().expect("prod");
+        for arm in ["fn handle_ask(", "fn handle_secret("] {
+            let body = &prod[prod.find(arm).expect(arm)..];
+            let body = &body[..body[1..].find("\nfn ").map_or(body.len(), |i| i + 1)];
+            assert!(body.contains("thread_activity::note_reply("), "{arm} records a reply");
+            assert!(!body.contains("deliver_thread_to_pty("), "{arm} never delivers a turn");
+        }
+    }
+
     /// Unopened turns end silently: a failed delivery, a supersede, and
     /// the A24 bound on a turn the agent never started.
     #[test]

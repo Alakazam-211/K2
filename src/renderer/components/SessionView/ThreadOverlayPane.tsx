@@ -16,6 +16,7 @@ import {
 } from './overlayThread'
 import { SecretCard } from './SecretCard'
 import {
+  cardAnswererLabel,
   isOwnThreadPost,
   OWNER_VIEWER,
   parseThreadAuthor,
@@ -341,11 +342,13 @@ export function ThreadItemRow({
               allowCustom={item.doc.choice.allow_custom}
               status={item.doc.choice.status}
               answer={item.doc.choice.answer}
+              answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
               onPick={(label) => onAnswer?.({ answer: label })}
             />
           ) : kind === 'secret' && item.doc.secret ? (
             <SecretCard
               secret={item.doc.secret}
+              answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
               agent={item.doc.from || ''}
               workspace={cardContext?.workspace}
               server={cardContext?.server}
@@ -377,12 +380,15 @@ export function ChoiceCard({
   allowCustom,
   status,
   answer,
+  answeredBy,
   onPick,
 }: {
   options: { label: string }[]
   allowCustom: boolean
   status: string
   answer?: string | null
+  /** `cardAnswererLabel` of the card's `answeredBy` ("You", a login). */
+  answeredBy?: string | null
   onPick: (label: string) => void
 }): JSX.Element {
   const pending = status === 'pending'
@@ -426,6 +432,14 @@ export function ChoiceCard({
             </button>
           )
       })}
+      {status === 'answered' && answeredBy && (
+        <div
+          data-testid="thread-choice-answered-by"
+          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
+        >
+          answered by {answeredBy}
+        </div>
+      )}
       {allowCustom && pending && (
         <div className="mt-0.5 flex gap-2">
           <input

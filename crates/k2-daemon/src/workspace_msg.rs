@@ -1458,10 +1458,7 @@ pub fn send_message_to_session_with_command(
     };
 
     Ok(match inject_and_submit(&live, &payload) {
-        InjectOutcome::Delivered => {
-            crate::overlay_routes::on_human_pty_text(session_id, text);
-            MsgResponse::ok(live.session_id().to_string(), "send_message")
-        }
+        InjectOutcome::Delivered => MsgResponse::ok(live.session_id().to_string(), "send_message"),
         InjectOutcome::PtyDied => MsgResponse::fail(MsgReason::PtyDied),
         InjectOutcome::Stalled => MsgResponse::fail(MsgReason::PtyStalled),
         InjectOutcome::GateHold => MsgResponse::fail(MsgReason::HitlGateOpen),

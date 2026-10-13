@@ -33,6 +33,12 @@ export interface OverlayChoice {
   allow_custom: boolean
   status: string
   answer?: string | null
+  /** Who answered or dismissed the card (daemon-stamped from the
+   *  credential, like a post's `author`). Absent while pending, on an
+   *  agent's own answer and on older cards. */
+  answeredBy?: ThreadAuthor | null
+  /** Unix seconds it was answered or dismissed. */
+  answeredAt?: number | null
 }
 
 export interface OverlaySecret {
@@ -50,6 +56,12 @@ export interface OverlaySecret {
   secretKind?: string | null
   /** After a person saved it: the `k2v://` reference (never the value). */
   ref?: string | null
+  /** Who answered or dismissed the card (daemon-stamped from the
+   *  credential, like a post's `author`). Absent while pending, on an
+   *  agent's own answer and on older cards. */
+  answeredBy?: ThreadAuthor | null
+  /** Unix seconds it was answered or dismissed. */
+  answeredAt?: number | null
 }
 
 /** Where a secret card's answer is kept (the vault's scope). */
@@ -667,7 +679,18 @@ function coerceChoice(raw: unknown): OverlayChoice | null {
     allow_custom: c.allow_custom === true,
     status: typeof c.status === 'string' ? c.status : 'pending',
     answer: typeof c.answer === 'string' ? c.answer : null,
+    ...closedExtras(c),
   }
+}
+
+/** `answeredBy` / `answeredAt` when the daemon sent them (left off
+ *  otherwise, so an older card coerces as before). */
+function closedExtras(src: Record<string, unknown>): Pick<OverlayChoice, 'answeredBy' | 'answeredAt'> {
+  const out: Pick<OverlayChoice, 'answeredBy' | 'answeredAt'> = {}
+  const by = parseThreadAuthor(src.answeredBy)
+  if (by) out.answeredBy = by
+  if (typeof src.answeredAt === 'number') out.answeredAt = src.answeredAt
+  return out
 }
 
 function coerceSecret(raw: unknown): OverlaySecret | null {
@@ -685,5 +708,6 @@ function coerceSecret(raw: unknown): OverlaySecret | null {
   if (typeof s.delivery === 'string') out.delivery = s.delivery
   if (typeof s.secretKind === 'string') out.secretKind = s.secretKind
   if (typeof s.ref === 'string') out.ref = s.ref
+  Object.assign(out, closedExtras(s))
   return out
 }

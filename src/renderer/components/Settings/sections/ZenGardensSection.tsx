@@ -4,9 +4,9 @@
 // Delete (asks in K2's confirm dialog) (Rosson 2026-10-13), and two checkboxes,
 // "Lock garden" and "Keep in sync with future template updates"
 // (`ZenGardenSyncControls`). Above the list: + New Garden (the same modal as
-// Zen's) and a search by name. Advanced (always shown, right of the list
-// behind a divider; below it on narrow panes) holds the global theme and the
-// folder. Thin client over
+// Zen's) and a search by name. Advanced (always shown, the right half behind
+// a full-height divider, laid out like Settings → LLMs) holds the global
+// theme and the folder. Thin client over
 // `lib/zen/zen-settings.ts`: every request goes to the LOCAL daemon. Re-reads
 // on every local `zen_changed`, like the Garden switcher, so Settings and an
 // open Zen window stay in step.
@@ -61,18 +61,16 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
-// The two columns, from the Tunnel / Connected Servers split
-// (K2ConnectSettingsShell): each side scrolls on its own with a stable
-// gutter, the right side carries `border-l` + `pl-6` against the left's
-// `pr-3`, and both fill the body's height, so the line runs top to bottom.
-// The right column's width is the air-gap Connected Servers split's
-// `w-[min(22rem,40%)]`. Below `lg` they stack (the body scrolls as one) and
-// Advanced gets a horizontal divider instead.
-const COLUMNS =
-  'flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] flex flex-col lg:flex-row lg:overflow-hidden lg:[scrollbar-gutter:auto]'
-const LIST_COLUMN = 'min-w-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-3 lg:[scrollbar-gutter:stable]'
+// The two columns are Settings → LLMs' (AgentsSection), class for class
+// (Rosson 2026-10-13): a full-height row, two equal columns that each
+// scroll on their own and carry their own padding, the right one with the
+// divider (`border-l`). The padding is inside the columns, so the line
+// touches the top and bottom of the pane, in the middle. Settings gives
+// both pages `overflow-hidden p-0`.
+const COLUMNS = 'flex h-full min-h-0'
+const LIST_COLUMN = 'flex-1 min-w-0 overflow-y-auto p-6 pr-3 [scrollbar-gutter:stable]'
 const ADVANCED_COLUMN =
-  'mt-8 pt-4 border-t border-[var(--color-border)] lg:mt-0 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6 lg:pr-3 lg:w-[min(22rem,40%)] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]'
+  'flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]'
 
 /** A Garden's name: reads as plain text, edits in place (border on hover/focus). */
 const NAME_INPUT =
@@ -599,8 +597,7 @@ function Advanced({
   const [error, setError] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
   return (
-    // Wide: the right column behind the full-height divider. Narrow (below
-    // `lg`, as Token Usage stacks): under the list behind a horizontal one.
+    // The right column, behind the full-height divider (LLMs' right column).
     <section
       aria-labelledby="zen-gardens-advanced-title"
       className={ADVANCED_COLUMN}
@@ -674,21 +671,13 @@ export function ZenGardensSection(): React.JSX.Element {
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
 
   return (
-    // The page owns its height and scroll (Settings gives it `p-0`), like the
-    // Tunnel / Connected Servers split in K2ConnectSettingsShell: a fixed
-    // header, then two columns that scroll on their own, so the divider runs
-    // the full height of the pane.
-    <div className="flex flex-col h-full min-h-0 overflow-hidden p-6" data-zen-gardens-section="">
-      <div className="flex-shrink-0 pb-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
-        <p className="text-xs text-[var(--color-text-muted)]">Your Zen pages on this computer.</p>
-      </div>
-
-      {/* Left: New Garden, search, the list. Right (stacked below on narrow
-          panes, where the whole body scrolls as one): Advanced, always shown. */}
-      <div className={COLUMNS} data-zen-gardens-columns="">
+    // Settings → LLMs' layout (AgentsSection): left = the title, New Garden,
+    // search and the list; right = Advanced, always shown, behind the
+    // full-height divider in the middle.
+    <div className={COLUMNS} data-zen-gardens-section="" data-zen-gardens-columns="">
         <div className={LIST_COLUMN} data-zen-gardens-list-column="">
-          <div className="max-w-2xl">
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
+          <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
           {st.failure ? (
             <div className="mb-4">
               <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
@@ -720,13 +709,11 @@ export function ZenGardensSection(): React.JSX.Element {
               <GardenList gardens={st.gardens} query={query} />
             </section>
           )}
-          </div>
         </div>
 
         {hasData && (st.setUp || st.path) ? (
           <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
         ) : null}
-      </div>
     </div>
   )
 }

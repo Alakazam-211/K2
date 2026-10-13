@@ -287,7 +287,18 @@ import { useToastStore } from '@/stores/toast'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+// Settings → LLMs' (AgentsSection) two-column layout, which Gardens copies
+// (Rosson 2026-10-13). Checked against LLMs' source below, so the two pages
+// can't drift apart. (LLMs' left column adds `space-y-8` for its own stacked
+// blocks; that is content spacing, not the column.)
+const LLMS_ROW = 'flex h-full min-h-0'
+const LLMS_LEFT = 'flex-1 min-w-0 overflow-y-auto p-6 pr-3 [scrollbar-gutter:stable]'
+const LLMS_RIGHT = 'flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]'
 
 function setPlatform(platform: string): void {
   Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true })
@@ -536,6 +547,20 @@ describe('Settings → Gardens: where it shows', () => {
     expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
   })
 
+  it('the copied layout is still Settings → LLMs’ (AgentsSection source)', () => {
+    // (jsdom: `import.meta.url` isn't a file URL; vitest runs from the repo root.)
+    const dir = join(process.cwd(), 'src/renderer/components/Settings')
+    const src = readFileSync(join(dir, 'sections/AgentsSection.tsx'), 'utf8')
+    expect(src).toContain(`<div className="${LLMS_ROW}">`)
+    expect(src).toContain(`<div className="${LLMS_LEFT} space-y-8">`)
+    expect(src).toContain(`<div className="${LLMS_RIGHT}">`)
+    // Both pages get the same content-area treatment from Settings.
+    const settings = readFileSync(join(dir, 'Settings.tsx'), 'utf8')
+    const list = settings.slice(settings.indexOf("activeSection === 'general' ||"), settings.indexOf("? 'overflow-hidden p-0'"))
+    expect(list).toContain("activeSection === 'agents'")
+    expect(list).toContain("activeSection === 'zen-gardens'")
+  })
+
   it('clicking the item opens the section', async () => {
     render(<Settings />)
     await settle()
@@ -586,30 +611,18 @@ describe('Settings → Gardens: the section', () => {
     expect(within(adv).getByRole('button', { name: 'Global Zen theme' })).toBeTruthy()
     const list = document.querySelector('[data-settings-id="zen-gardens.list"]') as HTMLElement
     expect(list.contains(adv)).toBe(false)
-    // Two columns from `lg` (vertical divider), stacked with a horizontal one below.
-    const cols = document.querySelector('[data-zen-gardens-columns]') as HTMLElement
-    expect(cols.className).toContain('flex-col')
-    expect(cols.className).toContain('lg:flex-row')
-    expect(adv.parentElement).toBe(cols)
-    expect(adv.className).toContain('border-t')
-    expect(adv.className).toContain('lg:border-l')
-    expect(adv.className).toContain('lg:border-t-0')
-    // The divider runs the full pane height (the Tunnel split's shape): the
-    // page owns its height, the columns fill the body and scroll on their
-    // own, even spacing either side of the line (pr-3 | border-l pl-6), and
-    // both columns start at the top of the body.
+    // Settings → LLMs' layout, class for class (Rosson 2026-10-13): the page
+    // is the full-height row; two equal columns carry their own padding, so
+    // the divider (the right column's border-l) touches the top and bottom
+    // of the pane, in the middle. The title sits in the left column.
     const page = document.querySelector('[data-zen-gardens-section]') as HTMLElement
-    for (const c of ['flex', 'flex-col', 'h-full', 'min-h-0', 'overflow-hidden', 'p-6']) expect(page.className.split(' ')).toContain(c)
-    expect(cols.parentElement).toBe(page)
-    for (const c of ['flex-1', 'min-h-0', 'lg:overflow-hidden']) expect(cols.className.split(' ')).toContain(c)
-    expect(cols.className).not.toContain('items-')
+    expect(page.className).toBe(LLMS_ROW)
     const left = document.querySelector('[data-zen-gardens-list-column]') as HTMLElement
-    expect(left.parentElement).toBe(cols)
-    expect([...cols.children]).toEqual([left, adv])
-    for (const c of ['lg:flex-1', 'lg:min-h-0', 'lg:overflow-y-auto', 'lg:pr-3']) expect(left.className.split(' ')).toContain(c)
-    for (const c of ['lg:pl-6', 'lg:pr-3', 'lg:min-h-0', 'lg:overflow-y-auto', 'lg:mt-0', 'lg:pt-0']) {
-      expect(adv.className.split(' ')).toContain(c)
-    }
+    expect(left.className).toBe(LLMS_LEFT)
+    expect(adv.className).toBe(LLMS_RIGHT)
+    expect([...page.children]).toEqual([left, adv])
+    expect(left.querySelector('h2')?.textContent).toBe('Gardens')
+    expect(left.contains(list)).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }))
     await settle()
     expect(h.reveals).toEqual(['/Users/r/.k2/zen'])

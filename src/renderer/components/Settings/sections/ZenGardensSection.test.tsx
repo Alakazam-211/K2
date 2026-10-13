@@ -543,6 +543,12 @@ describe('Settings → Gardens: where it shows', () => {
     await settle()
     expect(useSettingsStore.getState().activeSection).toBe('zen-gardens')
     await waitFor(() => expect(document.querySelector('[data-zen-garden-row="g-1"]')).not.toBeNull())
+    // Gardens owns its chrome and scroll like the other split pages:
+    // Settings' content area gives it no padding and no scroll of its own.
+    const page = document.querySelector('[data-zen-gardens-section]') as HTMLElement
+    const area = page.closest('.flex-1.min-h-0.relative') as HTMLElement
+    expect(area.className.split(/\s+/)).toEqual(expect.arrayContaining(['overflow-hidden', 'p-0']))
+    expect(area.className).not.toContain('overflow-y-auto')
   })
 })
 
@@ -588,6 +594,22 @@ describe('Settings → Gardens: the section', () => {
     expect(adv.className).toContain('border-t')
     expect(adv.className).toContain('lg:border-l')
     expect(adv.className).toContain('lg:border-t-0')
+    // The divider runs the full pane height (the Tunnel split's shape): the
+    // page owns its height, the columns fill the body and scroll on their
+    // own, even spacing either side of the line (pr-3 | border-l pl-6), and
+    // both columns start at the top of the body.
+    const page = document.querySelector('[data-zen-gardens-section]') as HTMLElement
+    for (const c of ['flex', 'flex-col', 'h-full', 'min-h-0', 'overflow-hidden', 'p-6']) expect(page.className.split(' ')).toContain(c)
+    expect(cols.parentElement).toBe(page)
+    for (const c of ['flex-1', 'min-h-0', 'lg:overflow-hidden']) expect(cols.className.split(' ')).toContain(c)
+    expect(cols.className).not.toContain('items-')
+    const left = document.querySelector('[data-zen-gardens-list-column]') as HTMLElement
+    expect(left.parentElement).toBe(cols)
+    expect([...cols.children]).toEqual([left, adv])
+    for (const c of ['lg:flex-1', 'lg:min-h-0', 'lg:overflow-y-auto', 'lg:pr-3']) expect(left.className.split(' ')).toContain(c)
+    for (const c of ['lg:pl-6', 'lg:pr-3', 'lg:min-h-0', 'lg:overflow-y-auto', 'lg:mt-0', 'lg:pt-0']) {
+      expect(adv.className.split(' ')).toContain(c)
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }))
     await settle()
     expect(h.reveals).toEqual(['/Users/r/.k2/zen'])

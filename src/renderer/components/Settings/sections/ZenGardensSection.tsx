@@ -61,6 +61,19 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
+// The two columns, from the Tunnel / Connected Servers split
+// (K2ConnectSettingsShell): each side scrolls on its own with a stable
+// gutter, the right side carries `border-l` + `pl-6` against the left's
+// `pr-3`, and both fill the body's height, so the line runs top to bottom.
+// The right column's width is the air-gap Connected Servers split's
+// `w-[min(22rem,40%)]`. Below `lg` they stack (the body scrolls as one) and
+// Advanced gets a horizontal divider instead.
+const COLUMNS =
+  'flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] flex flex-col lg:flex-row lg:overflow-hidden lg:[scrollbar-gutter:auto]'
+const LIST_COLUMN = 'min-w-0 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:pr-3 lg:[scrollbar-gutter:stable]'
+const ADVANCED_COLUMN =
+  'mt-8 pt-4 border-t border-[var(--color-border)] lg:mt-0 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6 lg:pr-3 lg:w-[min(22rem,40%)] lg:flex-shrink-0 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]'
+
 /** A Garden's name: reads as plain text, edits in place (border on hover/focus). */
 const NAME_INPUT =
   'w-full px-1 py-0.5 -ml-1 text-xs bg-transparent border border-transparent text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-bg)] no-drag cursor-text truncate'
@@ -586,11 +599,11 @@ function Advanced({
   const [error, setError] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
   return (
-    // Wide: a column on the right behind a vertical divider. Narrow (below
+    // Wide: the right column behind the full-height divider. Narrow (below
     // `lg`, as Token Usage stacks): under the list behind a horizontal one.
     <section
       aria-labelledby="zen-gardens-advanced-title"
-      className="mt-8 pt-4 border-t border-[var(--color-border)] lg:mt-0 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6 lg:w-80 lg:flex-shrink-0"
+      className={ADVANCED_COLUMN}
       data-zen-gardens-advanced=""
       data-settings-id="zen-gardens.advanced"
     >
@@ -661,14 +674,21 @@ export function ZenGardensSection(): React.JSX.Element {
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
 
   return (
-    <div className="max-w-5xl" data-zen-gardens-section="">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
-      <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
+    // The page owns its height and scroll (Settings gives it `p-0`), like the
+    // Tunnel / Connected Servers split in K2ConnectSettingsShell: a fixed
+    // header, then two columns that scroll on their own, so the divider runs
+    // the full height of the pane.
+    <div className="flex flex-col h-full min-h-0 overflow-hidden p-6" data-zen-gardens-section="">
+      <div className="flex-shrink-0 pb-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
+        <p className="text-xs text-[var(--color-text-muted)]">Your Zen pages on this computer.</p>
+      </div>
 
       {/* Left: New Garden, search, the list. Right (stacked below on narrow
-          panes): Advanced, always shown (Rosson 2026-10-13). */}
-      <div className="flex flex-col lg:flex-row lg:gap-6" data-zen-gardens-columns="">
-        <div className="flex-1 min-w-0 max-w-2xl">
+          panes, where the whole body scrolls as one): Advanced, always shown. */}
+      <div className={COLUMNS} data-zen-gardens-columns="">
+        <div className={LIST_COLUMN} data-zen-gardens-list-column="">
+          <div className="max-w-2xl">
           {st.failure ? (
             <div className="mb-4">
               <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
@@ -700,6 +720,7 @@ export function ZenGardensSection(): React.JSX.Element {
               <GardenList gardens={st.gardens} query={query} />
             </section>
           )}
+          </div>
         </div>
 
         {hasData && (st.setUp || st.path) ? (

@@ -410,6 +410,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'projects' ||
           activeSection === 'project-groups' ||
           activeSection === 'context-catalog' ||
+          activeSection === 'zen-gardens' ||
           activeSection === 'k2-connect' ||
           activeSection === 'k2-access' ||
           activeSection === 'connections' ||

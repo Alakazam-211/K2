@@ -14,11 +14,104 @@
 //!
 //! Names and versions are a small charset so a need can never become a
 //! shell word, a flag or a path.
+//!
+//! **Supported tools.** A plain tool name must be one the node knows how
+//! to install and check ([`SUPPORTED_TOOLS`]: node, python, go, java,
+//! bun, deno, zig, cmake, ninja, protoc, uv, pnpm); anything else is
+//! refused with [`TOOL_UNSUPPORTED`] before the job starts, never dropped.
+//! The long tail is still reachable by naming a mise backend explicitly
+//! (`aqua:owner/repo@1`, `npm:prettier@3`, …; [`ALLOWED_BACKENDS`]).
+//! asdf/vfox plugins (third-party shell scripts) are never used.
 
 use serde::{Deserialize, Serialize};
 
 /// Most needs per job.
 pub const MAX_NEEDS: usize = 32;
+
+/// Refusal code: a well-formed need the node can't provide.
+pub const TOOL_UNSUPPORTED: &str = "tool_unsupported";
+/// Refusal code: a malformed need.
+pub const NEED_INVALID: &str = "need_invalid";
+
+/// Plain tool names the node installs with mise, and the commands each
+/// must put on the job's PATH (checked after the install, so a tool that
+/// "installed" but provides nothing fails the job instead of a later
+/// `command not found`). Non-core tools resolve through mise's registry
+/// to their aqua backend (prebuilt release assets, checksum-checked).
+pub const SUPPORTED_TOOLS: &[(&str, &[&str])] = &[
+    ("node", &["node"]),
+    ("python", &["python3"]),
+    ("go", &["go"]),
+    ("java", &["java"]),
+    ("bun", &["bun"]),
+    ("deno", &["deno"]),
+    ("zig", &["zig"]),
+    ("cmake", &["cmake"]),
+    ("ninja", &["ninja"]),
+    ("protoc", &["protoc"]),
+    ("uv", &["uv"]),
+    ("pnpm", &["pnpm"]),
+];
+
+/// mise backends a need may name explicitly (`aqua:cli/cli@2`). Never
+/// `asdf:`/`vfox:` (plugins are shell scripts from third-party repos).
+pub const ALLOWED_BACKENDS: &[&str] = &["aqua", "ubi", "github", "npm", "pipx", "cargo", "go"];
+
+/// The commands a supported plain tool must provide (empty for a
+/// backend-qualified tool, which is only checked for a bin dir).
+pub fn expected_bins(tool: &str) -> &'static [&'static str] {
+    SUPPORTED_TOOLS.iter().find(|(t, _)| *t == tool).map(|(_, b)| *b).unwrap_or(&[])
+}
+
+/// What `--needs` takes, for help text and refusals.
+pub fn supported_list() -> String {
+    let mut v: Vec<String> = SUPPORTED_TOOLS.iter().map(|(t, _)| format!("{t}@<v>")).collect();
+    v.extend(["rust@<channel>", "cargo-nextest", "sys:<package>"].map(String::from));
+    v.join(", ")
+}
+
+/// Can the node provide this need? Rust, nextest and system packages
+/// parse to their own kinds; a tool must be supported or name an allowed
+/// backend.
+pub fn check_supported(n: &Need) -> Result<(), String> {
+    let Need::Tool { tool, version } = n else { return Ok(()) };
+    if let Some((backend, rest)) = tool.split_once(':') {
+        if ALLOWED_BACKENDS.contains(&backend) && !rest.is_empty() {
+            return Ok(());
+        }
+        return Err(format!(
+            "{tool}@{version}: the {backend}: backend isn't allowed (use one of {}, e.g. aqua:owner/repo@1)",
+            ALLOWED_BACKENDS.iter().map(|b| format!("{b}:")).collect::<Vec<_>>().join(" ")
+        ));
+    }
+    if SUPPORTED_TOOLS.iter().any(|(t, _)| t == tool) {
+        return Ok(());
+    }
+    Err(format!(
+        "{tool}@{version}: k2-node doesn't install {tool:?}. Supported: {}. Or name a mise backend (aqua:owner/repo@1), or ask the machine's owner to install it (Linux: --needs sys:<package> once approved)",
+        supported_list()
+    ))
+}
+
+/// A refused need list: a stable code ([`NEED_INVALID`] or
+/// [`TOOL_UNSUPPORTED`]) and words an agent can act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeedError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for NeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+
+impl From<NeedError> for String {
+    fn from(e: NeedError) -> String {
+        e.to_string()
+    }
+}
 
 /// Offer feature: the node understands `Plan::needs`.
 pub const FEATURE_NEEDS: &str = "needs";
@@ -134,17 +227,21 @@ pub fn parse(token: &str) -> Result<Need, String> {
     Ok(Need::Tool { tool: tool.to_string(), version: version.to_string() })
 }
 
-/// Parse a list (the CLI's comma list arrives split already). Refuses
-/// duplicates of the same tool and more than [`MAX_NEEDS`].
-pub fn parse_all<S: AsRef<str>>(tokens: &[S]) -> Result<Vec<Need>, String> {
+/// Parse an explicit list (the CLI's comma list arrives split already):
+/// every token must parse **and** be supported ([`check_supported`]).
+/// Refuses duplicates of the same tool and more than [`MAX_NEEDS`].
+/// Nothing is ever dropped: one bad token refuses the whole list.
+pub fn parse_all<S: AsRef<str>>(tokens: &[S]) -> Result<Vec<Need>, NeedError> {
+    let invalid = |message: String| NeedError { code: NEED_INVALID, message };
     if tokens.len() > MAX_NEEDS {
-        return Err(format!("at most {MAX_NEEDS} needs per job"));
+        return Err(invalid(format!("at most {MAX_NEEDS} needs per job")));
     }
     let mut out: Vec<Need> = Vec::new();
     for t in tokens {
-        let n = parse(t.as_ref())?;
+        let n = parse(t.as_ref()).map_err(invalid)?;
+        check_supported(&n).map_err(|message| NeedError { code: TOOL_UNSUPPORTED, message })?;
         if out.iter().any(|o| o.key() == n.key()) {
-            return Err(format!("{} is listed twice", n.key()));
+            return Err(invalid(format!("{} is listed twice", n.key())));
         }
         out.push(n);
     }
@@ -177,6 +274,30 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?} must be refused");
         }
+    }
+
+    #[test]
+    fn unsupported_tools_are_refused_not_dropped() {
+        let ok = parse_all(&["cmake@3", "ninja", "protoc@28", "aqua:cli/cli@2", "npm:prettier@3", "node@22"]).unwrap();
+        assert_eq!(ok[0], Need::Tool { tool: "cmake".into(), version: "3".into() });
+        assert_eq!(expected_bins("cmake"), &["cmake"]);
+        assert_eq!(expected_bins("python"), &["python3"]);
+        assert!(expected_bins("aqua:cli/cli").is_empty());
+        for (bad, why) in [
+            ("make@4", "doesn't install \"make\""),
+            ("terraform@1", "Supported: node@<v>"),
+            ("asdf:asdf-community/asdf-cmake@3", "asdf: backend isn't allowed"),
+            ("vfox:x/y@1", "vfox: backend isn't allowed"),
+        ] {
+            let e = parse_all(&["node@22", bad]).unwrap_err();
+            assert_eq!(e.code, TOOL_UNSUPPORTED, "{bad}");
+            assert!(e.message.contains(why), "{bad}: {}", e.message);
+            assert!(e.to_string().starts_with("tool_unsupported: "), "{e}");
+        }
+        assert!(supported_list().contains("cmake@<v>"));
+        // Malformed stays need_invalid; rust/nextest/sys are their own kinds.
+        assert_eq!(parse_all(&["node@;x"]).unwrap_err().code, NEED_INVALID);
+        assert_eq!(parse_all(&["rust@stable", "cargo-nextest", "sys:cmake"]).unwrap().len(), 3);
     }
 
     #[test]

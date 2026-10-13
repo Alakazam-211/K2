@@ -51,7 +51,8 @@ const INSTALL_LIMIT: Duration = Duration::from_secs(20 * 60);
 
 /// Stable failure codes (the job's `reason`).
 pub mod codes {
-    pub const NEED_INVALID: &str = "need_invalid";
+    pub const NEED_INVALID: &str = k2_node_proto::needs::NEED_INVALID;
+    pub const TOOL_UNSUPPORTED: &str = k2_node_proto::needs::TOOL_UNSUPPORTED;
     pub const TOOL_INSTALL_FAILED: &str = "tool_install_failed";
     pub const PACKAGE_NOT_APPROVED: &str = "package_not_approved";
     pub const PACKAGE_INSTALL_FAILED: &str = "package_install_failed";
@@ -127,6 +128,10 @@ impl Toolchains {
             ("MISE_YES".into(), "1".into()),
             ("MISE_HIDE_UPDATE_WARNING".into(), "1".into()),
             ("MISE_PYTHON_COMPILE".into(), "0".into()),
+            // Never asdf/vfox plugins (shell scripts from third-party
+            // repos): registry names like `cmake` resolve to their aqua
+            // backend (prebuilt release, checksum-checked) or fail.
+            ("MISE_DISABLE_BACKENDS".into(), "asdf,vfox".into()),
         ]
     }
 
@@ -227,6 +232,16 @@ impl Toolchains {
         let dirs = self.bin_paths(&mise, &spec).await;
         if dirs.is_empty() {
             return Err(format!("mise installed {spec} but reports no bin dir"));
+        }
+        // The commands this tool must provide (cmake → `cmake`): checked
+        // now, so the job fails here instead of a later `command not found`.
+        for want in needs::expected_bins(tool) {
+            if !dirs.iter().any(|d| is_executable(&d.join(want))) {
+                return Err(format!(
+                    "mise installed {spec} but there is no `{want}` in {}",
+                    dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ")
+                ));
+            }
         }
         Ok((dirs, installed))
     }
@@ -497,6 +512,11 @@ fn check_sha256(p: &Path, want: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
 fn last_lines(s: &str, n: usize) -> String {
     let lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
     let start = lines.len().saturating_sub(n);
@@ -617,9 +637,10 @@ pub fn declared_in_repo(root: &Path) -> (Vec<(Need, String)>, Vec<String>) {
     }
     let mut out: Vec<(Need, String)> = Vec::new();
     for (tok, src) in found {
-        match needs::parse(&tok) {
+        match needs::parse(&tok).and_then(|n| needs::check_supported(&n).map(|_| n)) {
             // rust-toolchain files are handled separately; a `rust` entry
-            // in mise.toml/.tool-versions is honoured like any need.
+            // in mise.toml/.tool-versions is honoured like any need. A
+            // tool the node can't provide is skipped with a note.
             Ok(n) => {
                 if !out.iter().any(|(o, _)| o.key() == n.key()) {
                     out.push((n, src));
@@ -645,7 +666,7 @@ mod tests {
     fn repo_files_become_needs() {
         let d = crate::util::temp_dir("tc-repo");
         write(&d, "mise.toml", "[tools]\nnode = \"22\"\npython = [\"3.12\", \"3.11\"]\ngo = { version = \"1.23\" }\n");
-        write(&d, ".tool-versions", "nodejs 20.1.0 # ignored: mise.toml came first\njava 21\n");
+        write(&d, ".tool-versions", "nodejs 20.1.0 # ignored: mise.toml came first\njava 21\nterraform 1.9\n");
         write(&d, ".nvmrc", "lts/iron\n");
         write(&d, ".python-version", "3.10\n");
         write(&d, ".k2/compute.toml", "needs = [\"sys:pkg-config\", \"bun@1.2\"]\n");
@@ -664,7 +685,9 @@ mod tests {
             ],
             "mise.toml beats .tool-versions/.nvmrc/.python-version for the same tool"
         );
-        assert!(skipped.is_empty(), "{skipped:?}");
+        // A tool the node can't provide is skipped with a note, not tried.
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert!(skipped[0].starts_with(".tool-versions: terraform@1.9: k2-node doesn't install"), "{skipped:?}");
     }
 
     #[test]
@@ -724,7 +747,10 @@ mod tests {
 D="$MISE_DATA_DIR/installs"
 case "$1" in
   --version) echo "{MISE_VERSION} fake" ;;
-  install) t="${{2%@*}}"; v="${{2#*@}}"; mkdir -p "$D/$t/$v/bin"; echo "$2" >> "$MISE_DATA_DIR/install.log" ;;
+  install) t="${{2%@*}}"; v="${{2#*@}}"; mkdir -p "$D/$t/$v/bin"; echo "$2" >> "$MISE_DATA_DIR/install.log"
+     [ "$MISE_DISABLE_BACKENDS" = "asdf,vfox" ] || {{ echo "plugin backends not disabled" >&2; exit 7; }}
+     b="$t"; [ "$t" = python ] && b=python3
+     [ -f "$MISE_DATA_DIR/empty-installs" ] || {{ printf '#!/bin/sh\n' > "$D/$t/$v/bin/$b"; chmod 755 "$D/$t/$v/bin/$b"; }} ;;
   bin-paths) t="${{2%@*}}"; v="${{2#*@}}"; [ -d "$D/$t/$v/bin" ] && echo "$D/$t/$v/bin" ;;
   *) exit 9 ;;
 esac
@@ -752,6 +778,17 @@ esac
         let tools = tc.installed_tools();
         assert_eq!(tools.get("mise:node").map(String::as_str), Some("22"));
         assert_eq!(tools.get("mise:python").map(String::as_str), Some("3.12"));
+        // cmake (Rosson 2026-10-13: K2's own build shells out to it).
+        let r3 = tc.resolve(&needs::parse_all(&["cmake@3"]).unwrap(), &[], None, &mut |_| {}).await.unwrap();
+        assert_eq!(r3.path_prepend[0], data.join("cmake/3/bin"));
+        assert!(is_executable(&data.join("cmake/3/bin/cmake")));
+        // "Installed" without the command it must provide: the job fails
+        // now (tool_install_failed), never a later `cmake: command not found`.
+        std::fs::write(tc.mise_data().join("empty-installs"), b"").unwrap();
+        let e = tc.resolve(&needs::parse_all(&["ninja@1"]).unwrap(), &[], None, &mut |_| {}).await.unwrap_err();
+        assert_eq!(e.0, codes::TOOL_INSTALL_FAILED);
+        assert!(e.1.contains("ninja@1") && e.1.contains("no `ninja`"), "{}", e.1);
+        std::fs::remove_file(tc.mise_data().join("empty-installs")).unwrap();
         // A failing explicit install fails the job with a stable code; a
         // failing repo-declared one is only a note.
         std::fs::write(&bin, format!("#!/bin/sh\ncase \"$1\" in --version) echo {MISE_VERSION};; install) echo 'no such tool' >&2; exit 1;; *) exit 0;; esac\n")).unwrap();

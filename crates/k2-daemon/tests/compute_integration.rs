@@ -800,6 +800,27 @@ async fn one_click_tickets_and_declared_toolchains() {
     assert_eq!(r.status, 400, "{}", r.body);
     assert_eq!(code(&r), "need_invalid");
 
+    // An unsupported tool is refused before any job exists, never dropped
+    // (k2n3-m1, 2026-10-13: a job ran without what it asked for).
+    let mut unsup = run_body("n5", &["true"], "client-0000000204");
+    unsup["workspace"] = json!(ws_.id);
+    unsup["needs"] = json!(["cmake@3", "make@4"]);
+    let r = post(port, "/cli/compute/run", OWNER, unsup).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(code(&r), "tool_unsupported");
+    assert!(r.body.contains("make@4"), "{}", r.body);
+
+    // cmake is a supported toolchain: installed, first on PATH, runs.
+    let mut cm = run_body("n5", &["cmake"], "client-0000000205");
+    cm["workspace"] = json!(ws_.id);
+    cm["needs"] = json!(["cmake@3"]);
+    let r = post(port, "/cli/compute/run", OWNER, cm).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let (out, _, fin) = follow(port, OWNER, &job).await;
+    assert_eq!(fin["state"], "done", "{fin}");
+    assert!(out.starts_with("fake-cmake-3\n"), "{out}");
+
     let mut sys = run_body("n5", &["true"], "client-0000000203");
     sys["workspace"] = json!(ws_.id);
     sys["needs"] = json!(["sys:k2-test-no-such-package-xyz"]);

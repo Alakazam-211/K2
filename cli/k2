@@ -9647,7 +9647,10 @@ Agents:
                  [--detach] [--dirty] [--sha REV] [--no-source]
                  [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw]
-                 [--needs node@22,python@3.12,rust@stable,cargo-nextest,sys:pkg-config]
+                 [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
+                 (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
+                  rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
+                  anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
   k2 compute jobs [--node N] [--mine] [--state S] [--limit N] [--json]
   k2 compute get <job> [--json]
@@ -22261,8 +22264,17 @@ TOOLCHAINS (what the job needs installed)
   starts (cached for the next job; no root):
     k2 compute run <node> --needs node@22,python@3.12 -- npm test
     --needs rust@stable | rust@1.99 | cargo-nextest | go@1.23 | bun@1.2 | java@21
-  Node, Python, Go, Java, Bun… come from mise (pinned, checksum-checked);
-  Rust from rustup. The repo's own files count too (best effort):
+    --needs cmake@3,ninja,protoc   (C/C++ builds: llama.cpp, prost-build, …)
+  Supported tools: node python go java bun deno zig cmake ninja protoc uv
+  pnpm (from mise, pinned, checksum-checked; never asdf/vfox plugins),
+  rust@<channel> + cargo-nextest (rustup), sys:<package> (root, below).
+  Anything else is refused before the job starts (tool_unsupported,
+  exit 2), never silently skipped; for the long tail name a mise backend:
+  aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
+  After installing, the node checks the tool's command exists (cmake →
+  `cmake`); if not, the job fails with tool_install_failed.
+  The repo's own files count too (best effort; unsupported tools there
+  are skipped with a note in the log):
   mise.toml, .tool-versions, .nvmrc, .node-version, .python-version,
   rust-toolchain(.toml), .k2/compute.toml (needs = ["node@22"]).
   System packages need root: --needs sys:libssl-dev,sys:pkg-config.
@@ -22352,7 +22364,11 @@ COMMON ERRORS
   approval_expired       the owner didn't decide in 24 h, or the node stayed offline
   verb_not_allowed       not an admin verb; a root script is the escape hatch
   node_upgrade_required  --needs on an older k2-node: update it there (sudo k2-node setup)
-  tool_install_failed    a --needs tool didn't install (name/version wrong, no network)
+  tool_install_failed    a --needs tool didn't install, or installed without its
+                         command (version wrong, no network); the job never started
+  tool_unsupported       k2-node doesn't install that tool (exit 2, nothing runs):
+                         use a supported one, a backend (aqua:owner/repo@1), or ask
+                         the owner (Linux: sys:<package> once approved)
   need_invalid           a --needs token isn't tool@version or sys:<name>
   package_not_approved   ask the owner: sudo k2-node packages allow <name>
   private_home_choice    enable: say --private-home or --no-private-home

@@ -1126,8 +1126,9 @@ impl Node {
         stop: &mut watch::Receiver<Option<StopReason>>,
     ) -> Result<crate::toolchain::Resolved, (JobState, String, String)> {
         use crate::toolchain;
-        let explicit = k2_node_proto::needs::parse_all(&a.plan.needs)
-            .map_err(|e| (JobState::Failed, toolchain::codes::NEED_INVALID.to_string(), e))?;
+        // Same parser as the controller: an unsupported or malformed need
+        // fails the job before anything runs (never dropped).
+        let explicit = k2_node_proto::needs::parse_all(&a.plan.needs).map_err(|e| (JobState::Failed, e.code.to_string(), e.message))?;
         let repo_files = a.plan.src.is_some() && self.local.lock().unwrap().policy.repo_toolchains;
         let (repo, skipped, rust_file) = if repo_files {
             let (r, s) = toolchain::declared_in_repo(&dirs.src);

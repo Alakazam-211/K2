@@ -9,12 +9,17 @@
 //     has no Garden lock (its rows carry no `locked`).
 //   - Keep in sync: `POST zen/garden/sync {garden, part: "both", sync}`.
 //     One part synced and one a copy shows a dash; a click syncs both.
+//     Checked (or the dash): a tag to its right names the template the
+//     Garden follows (Rosson 2026-10-13). A Garden made from scratch
+//     (`k2.blank@1`, or no template) has nothing to follow: the box is off
+//     and disabled, with no tag.
 // After either change, an 8 s toast with Undo. A daemon without
 // `zen-sync-v1` draws nothing.
 
 import React, { useEffect, useRef, useState } from 'react'
 import { SquareCheckbox } from '@/components/ui'
-import { useZenSettingsStore } from '@/lib/zen/zen-settings'
+import { useZenSettingsStore, zenTemplateLabel } from '@/lib/zen/zen-settings'
+import { useZenTemplatesStore } from '@/lib/zen/zen-templates'
 import { useToastStore } from '@/stores/toast'
 import {
   loadZenSync,
@@ -29,6 +34,16 @@ export const ZEN_LOCK_LABEL = 'Lock garden'
 export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can.'
 export const ZEN_SYNC_LABEL = 'Keep in sync with future template updates'
 export const ZEN_SYNC_TIP = 'Gets K2’s improvements to this Garden’s template and theme.'
+export const ZEN_SYNC_SCRATCH_TIP = 'Made from scratch, no template to follow'
+
+/** The blank start ("Start empty and ask my agent"): a Garden made from scratch. */
+const SCRATCH_TEMPLATE_ID = 'k2.blank@1'
+
+/** Was this Garden made from scratch (no template to follow)? `template` is
+ *  the Garden list's template id; not passed (undefined) = not known, not scratch. */
+export function zenGardenFromScratch(template: string | undefined): boolean {
+  return template !== undefined && (template === '' || template === SCRATCH_TEMPLATE_ID)
+}
 
 // Settings → Gardens already re-reads its list on every local `zen_changed`
 // (`watchLocalZenChanged` in ZenGardensSection). Rather than hold a second
@@ -63,6 +78,7 @@ function Check({
   tip,
   disabled,
   dataAttr,
+  tag,
   onChange,
 }: {
   checked: boolean | 'mixed'
@@ -70,6 +86,8 @@ function Check({
   tip: string
   disabled: boolean
   dataAttr: Record<string, string>
+  /** A small tag to the right of the label (the template synced with). */
+  tag?: React.ReactNode
   onChange(next: boolean): void
 }): React.JSX.Element {
   const ref = useRef<HTMLInputElement>(null)
@@ -78,7 +96,13 @@ function Check({
     if (ref.current) ref.current.indeterminate = mixed
   }, [mixed])
   return (
-    <label title={tip} className="flex items-center gap-2 py-0.5 text-xs text-[var(--color-text-primary)] no-drag cursor-pointer" {...dataAttr}>
+    <label
+      title={tip}
+      className={`flex items-center gap-2 py-0.5 text-xs text-[var(--color-text-primary)] no-drag ${
+        disabled ? 'cursor-default' : 'cursor-pointer'
+      }`}
+      {...dataAttr}
+    >
       <SquareCheckbox
         ref={ref}
         checked={checked === true}
@@ -86,17 +110,27 @@ function Check({
         aria-label={label}
         disabled={disabled}
         // A dash (one part synced, one a copy): one click syncs both.
-        onChange={(e) => onChange(mixed ? true : e.target.checked)}
+        onChange={(e) => {
+          if (!disabled) onChange(mixed ? true : e.target.checked)
+        }}
       />
       <span>{label}</span>
+      {tag}
     </label>
   )
 }
 
 /** The two checkboxes for one Garden row. Nothing when this daemon has no
  *  Garden sync, or before its first answer. */
-export function ZenGardenSyncControls({ garden }: { garden: { id: string; name: string } }): React.JSX.Element | null {
+export function ZenGardenSyncControls({
+  garden,
+}: {
+  /** `template`: the Garden list's template id (where the Garden came from). */
+  garden: { id: string; name: string; template?: string }
+}): React.JSX.Element | null {
   useZenSyncLive()
+  // Re-render when the catalog arrives, so a catalog Garden's tag reads its label.
+  useZenTemplatesStore((s) => s.templates)
   const row = useZenSyncStore((s) => s.list?.gardens.find((g) => g.id === garden.id) ?? null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,7 +150,18 @@ export function ZenGardenSyncControls({ garden }: { garden: { id: string; name: 
       .finally(() => setBusy(false))
   }
 
-  const synced = zenSyncChecked(row)
+  const scratch = zenGardenFromScratch(garden.template)
+  const synced = scratch ? false : zenSyncChecked(row)
+  const templateLabel = garden.template ? zenTemplateLabel(garden.template) : null
+  const tag =
+    synced !== false && templateLabel ? (
+      <span
+        data-zen-garden-sync-template={garden.id}
+        className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]"
+      >
+        {templateLabel}
+      </span>
+    ) : null
   return (
     <div className="mt-1" data-zen-sync-controls={garden.id}>
       {row.locked !== null && (
@@ -138,9 +183,10 @@ export function ZenGardenSyncControls({ garden }: { garden: { id: string; name: 
       <Check
         checked={synced}
         label={ZEN_SYNC_LABEL}
-        tip={ZEN_SYNC_TIP}
-        disabled={busy}
+        tip={scratch ? ZEN_SYNC_SCRATCH_TIP : ZEN_SYNC_TIP}
+        disabled={busy || scratch}
         dataAttr={{ 'data-zen-garden-sync': garden.id }}
+        tag={tag}
         onChange={(next) =>
           run(
             () => setZenGardenSyncBoth(garden.id, next),

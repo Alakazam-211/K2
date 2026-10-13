@@ -246,6 +246,23 @@ export function renameZenSettingsGarden(id: string, name: string): Promise<void>
   return post('zen/garden/rename', { garden: id, name }, name)
 }
 
+/**
+ * Settings' inline rename (Rosson 2026-10-13): paint the new name at once,
+ * then post `zen/garden/rename`. A refusal puts the old name back and
+ * rethrows (the caller says why).
+ */
+export async function renameZenSettingsGardenNow(id: string, name: string): Promise<void> {
+  const before = useZenSettingsStore.getState().gardens
+  useZenSettingsStore.setState({ gardens: before.map((g) => (g.id === id ? { ...g, name } : g)) })
+  try {
+    await renameZenSettingsGarden(id, name)
+  } catch (err) {
+    useZenSettingsStore.setState({ gardens: before })
+    void loadZenSettings()
+    throw err
+  }
+}
+
 /** Move Garden `id` to 1-based position `to`. */
 export function moveZenSettingsGarden(id: string, to: number): Promise<void> {
   return post('zen/garden/reorder', { garden: id, to })

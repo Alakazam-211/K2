@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ServerScope } from '@/kessel/server-scope'
-import { threadItemsFromSnapshot, overlayItemFromThreadPost } from '@/components/SessionView/overlayThread'
+import { cardExpiryLabel, threadItemsFromSnapshot, overlayItemFromThreadPost } from '@/components/SessionView/overlayThread'
 
 const calls = vi.hoisted(() => ({
   whoami: [] as unknown[],
@@ -239,5 +239,24 @@ describe('card answeredBy coercion', () => {
     expect(items[0].doc.choice?.answeredBy).toEqual({ kind: 'guest', login: 'g1' })
     expect(items[0].doc.choice?.answeredAt).toBe(42)
     expect(items[1].doc.choice && 'answeredBy' in items[1].doc.choice).toBe(false)
+  })
+})
+
+describe('cardExpiryLabel', () => {
+  it('says how long a card has, expired once its time passed, nothing without a time frame', () => {
+    const now = 1_000_000
+    expect(cardExpiryLabel(undefined, now)).toBeNull()
+    expect(cardExpiryLabel(null, now)).toBeNull()
+    expect(cardExpiryLabel(now, now)).toBe('expired')
+    expect(cardExpiryLabel(now + 30, now)).toBe('expires in 1 minute')
+    expect(cardExpiryLabel(now + 90 * 60, now)).toBe('expires in 2 hours')
+    expect(cardExpiryLabel(now + 3600, now)).toBe('expires in 1 hour')
+    expect(cardExpiryLabel(now + 7 * 86400, now)).toBe('expires in 7 days')
+  })
+  it('keeps expiresAt through coercion', () => {
+    const { items } = threadItemsFromSnapshot({
+      items: [{ collection: 'thread', seq: 1, id: 'c', doc: { id: 'c', kind: 'choice', from: 'k2', choice: { prompt: '?', options: ['Go'], allow_custom: false, status: 'pending', expiresAt: 99 } } }],
+    })
+    expect(items[0].doc.choice?.expiresAt).toBe(99)
   })
 })

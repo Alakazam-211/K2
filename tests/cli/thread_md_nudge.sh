@@ -54,6 +54,13 @@ echo "== k2 thread void needs a card id (no daemon) =="
 void_out="$(env K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_CLI" thread void sales 2>&1 || true)"
 assert_contains "void usage" "$void_out" "card id required"
 
+echo "== k2 thread ask time frame (no daemon) =="
+assert_contains "help: --expires" "$help_out" "--expires 2h|3d|90m"
+assert_contains "help: --no-expiry" "$help_out" "--no-expiry"
+assert_contains "help: talking never shortens" "$help_out" "talking never closes or shortens it"
+both_out="$(env K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_CLI" thread ask sales "Ship?" --options "Go,Stop" --expires 2h --no-expiry 2>&1 || true)"
+assert_contains "ask: --expires with --no-expiry refused" "$both_out" "not both"
+
 echo "== nudge first + every 10 =="
 eval "$(sed -n '/^_ws_dot_dir()/,/^}/p; /^_thread_md_nudge()/,/^}/p' "$K2_CLI")"
 tmp=$(mktemp -d)

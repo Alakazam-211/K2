@@ -435,6 +435,39 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.queryByTestId('thread-choice-answered-by')).toBeNull()
   })
 
+  it('shows a pending card\'s time frame, and an expired card as expired with no live chips', () => {
+    const now = 1_700_000_000
+    const card = (status: string, expiresAt?: number): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: 1,
+      id: 'c-exp',
+      doc: {
+        id: 'c-exp',
+        kind: 'choice',
+        from: 'k2',
+        choice: {
+          prompt: 'Ship it?',
+          options: [{ label: 'Go' }, { label: 'Stop' }],
+          allow_custom: false,
+          status,
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        },
+      },
+    })
+    renderInRoom(overlayRoom, <ThreadItemRow item={card('pending', now + 3 * 86400)} nowSec={now} />)
+    expect(screen.getByTestId('thread-choice-expiry').textContent).toBe('expires in 3 days')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={card('pending', now + 2 * 3600)} nowSec={now} />)
+    expect(screen.getByTestId('thread-choice-expiry').textContent).toBe('expires in 2 hours')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={card('expired', now - 10)} nowSec={now} />)
+    expect(screen.getByTestId('thread-choice-expiry').textContent).toBe('expired')
+    for (const chip of screen.getAllByTestId('thread-choice-chip')) expect(chip.getAttribute('disabled')).not.toBeNull()
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={card('pending')} nowSec={now} />)
+    expect(screen.queryByTestId('thread-choice-expiry')).toBeNull()
+  })
+
   it('a saved secret card names who saved it', () => {
     const item: OverlayThreadItem = {
       collection: 'thread',

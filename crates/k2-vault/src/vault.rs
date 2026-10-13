@@ -2128,8 +2128,9 @@ impl LocalVault {
     // ── maintenance ─────────────────────────────────────────────────
 
     /// Periodic work: flush roll-ups, drop versions revoked > 30 days ago,
-    /// expire chat secrets and old requests.
-    pub fn tick(&self) -> Result<()> {
+    /// expire chat secrets and old requests. Returns the requests it
+    /// expired, so the daemon can close their Thread cards.
+    pub fn tick(&self) -> Result<Vec<SecretRequest>> {
         self.flush_rollups_if_due();
         let cutoff = ts(now() - chrono::Duration::days(VERSION_RETENTION_DAYS));
         let req_cutoff = ts(now() - chrono::Duration::days(REQUEST_EXPIRY_DAYS));
@@ -2166,10 +2167,13 @@ impl LocalVault {
             let it = st.query_map(params![req_cutoff], |r| r.get::<_, String>(0))?;
             it.collect::<std::result::Result<_, _>>()?
         };
+        let mut expired = Vec::with_capacity(stale.len());
         for c in stale {
-            let _ = self.request_set_status(&c, "expired", None, None, "system:expiry");
+            if let Ok(r) = self.request_set_status(&c, "expired", None, None, "system:expiry") {
+                expired.push(r);
+            }
         }
-        Ok(())
+        Ok(expired)
     }
 
     // ── Thread secret requests (§10.1, VS12, VS13, VS23) ────────────
@@ -2261,6 +2265,23 @@ impl LocalVault {
             Ok(((), vec![Entry::new("request", &st, &format!("ok:{}", r2.status)).consumer(format!("card:{}", r2.card_id))]))
         })?;
         Ok(r)
+    }
+
+    /// Tests: move a request's `created_at` back `days` (re-MACed), so the
+    /// expiry paths run without waiting a week.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn backdate_request_for_tests(&self, card_id: &str, days: i64) -> Result<()> {
+        let mut r = self.request_get(card_id)?;
+        let created = parse_ts(&r.created_at).ok_or_else(|| VaultError::bad_request("bad_ts", "request time"))?;
+        r.created_at = ts(created - chrono::Duration::days(days));
+        self.mutate(false, |tx, keys| {
+            let mac = hmac(&keys.row, &request_mac_input(&r));
+            tx.execute(
+                "UPDATE secret_request SET created_at = ?2, row_mac = ?3 WHERE card_id = ?1",
+                params![r.card_id, r.created_at, mac.to_vec()],
+            )?;
+            Ok(((), Vec::new()))
+        })
     }
 
     pub fn request_void(&self, card_id: &str, actor: &Actor) -> Result<SecretRequest> {

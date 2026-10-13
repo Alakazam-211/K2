@@ -375,7 +375,7 @@ for this conversation. Same first-arg grammar as `k2 msg`.
 ```
 k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
 k2 thread <addr>                                # read / tail
-k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
+k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait (open 7 days; --expires 2h|3d, --no-expiry)
 k2 thread secret <addr> --name NAME             # secret field; you never see the value
 k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
 ```
@@ -387,6 +387,7 @@ Post and continue; you get a later turn when they answer. Do not `--wait`. Do no
 A card stays open until the person taps or dismisses it, or you void it. People may discuss a card before answering:
 keep it open, answer their questions in prose, and never treat their prose as the card's answer.
 Void your own card only when the question is truly obsolete (`k2 thread void`), or post a new card if the options changed.
+Pick a time frame that fits the decision (`--expires`); talking never closes or shortens a card.
 
 **If a message arrives prefixed `[thread:<addr>]`, the human wrote on the Thread tab.** Reply with `k2 thread <addr> "your reply"`. Do **not** answer in this terminal — they are not looking at the TUI. Never `k2 msg` for this (that is agent-to-agent). Use the `<addr>` in the stamp (`ghostbird`, `sales`, `sales/reviewer`).
 

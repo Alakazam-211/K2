@@ -37,8 +37,11 @@ export interface OverlayChoice {
    *  credential, like a post's `author`). Absent while pending, on an
    *  agent's own answer and on older cards. */
   answeredBy?: ThreadAuthor | null
-  /** Unix seconds it was answered or dismissed. */
+  /** Unix seconds it was answered, dismissed or expired. */
   answeredAt?: number | null
+  /** Unix seconds a still-pending card expires (the daemon turns it
+   *  `expired`; never a client timer). Absent: open until answered. */
+  expiresAt?: number | null
 }
 
 export interface OverlaySecret {
@@ -60,8 +63,11 @@ export interface OverlaySecret {
    *  credential, like a post's `author`). Absent while pending, on an
    *  agent's own answer and on older cards. */
   answeredBy?: ThreadAuthor | null
-  /** Unix seconds it was answered or dismissed. */
+  /** Unix seconds it was answered, dismissed or expired. */
   answeredAt?: number | null
+  /** Unix seconds a still-pending card expires (the daemon turns it
+   *  `expired`; never a client timer). Absent: open until answered. */
+  expiresAt?: number | null
 }
 
 /** Where a secret card's answer is kept (the vault's scope). */
@@ -683,14 +689,30 @@ function coerceChoice(raw: unknown): OverlayChoice | null {
   }
 }
 
-/** `answeredBy` / `answeredAt` when the daemon sent them (left off
- *  otherwise, so an older card coerces as before). */
-function closedExtras(src: Record<string, unknown>): Pick<OverlayChoice, 'answeredBy' | 'answeredAt'> {
-  const out: Pick<OverlayChoice, 'answeredBy' | 'answeredAt'> = {}
+/** `answeredBy` / `answeredAt` / `expiresAt` when the daemon sent them
+ *  (left off otherwise, so an older card coerces as before). */
+function closedExtras(
+  src: Record<string, unknown>,
+): Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt'> {
+  const out: Pick<OverlayChoice, 'answeredBy' | 'answeredAt' | 'expiresAt'> = {}
   const by = parseThreadAuthor(src.answeredBy)
   if (by) out.answeredBy = by
   if (typeof src.answeredAt === 'number') out.answeredAt = src.answeredAt
+  if (typeof src.expiresAt === 'number') out.expiresAt = src.expiresAt
   return out
+}
+
+const plural = (n: number, unit: string): string => `${n} ${unit}${n === 1 ? '' : 's'}`
+
+/** "expires in 3 days" for a pending card with a time frame; "expired"
+ *  once its time passed (the daemon's sweep closes it). Null without one. */
+export function cardExpiryLabel(expiresAt: number | null | undefined, nowSec: number): string | null {
+  if (typeof expiresAt !== 'number') return null
+  const left = expiresAt - nowSec
+  if (left <= 0) return 'expired'
+  if (left < 3600) return `expires in ${plural(Math.max(1, Math.ceil(left / 60)), 'minute')}`
+  if (left < 2 * 86400) return `expires in ${plural(Math.round(left / 3600), 'hour')}`
+  return `expires in ${plural(Math.round(left / 86400), 'day')}`
 }
 
 function coerceSecret(raw: unknown): OverlaySecret | null {

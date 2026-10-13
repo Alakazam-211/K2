@@ -919,6 +919,10 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return e,
     };
     let allow_custom = bool_param(params, "allow_custom") || bool_param(params, "allow-custom");
+    let expires_at = match choice_card_expiry(params, overlay::now_secs()) {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
     let resolved = match resolve_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
@@ -939,6 +943,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         prompt.trim(),
         options,
         allow_custom,
+        expires_at,
     ) {
         Ok((item, links)) => {
             crate::overlay_ws::emit_links(&links, &item.doc);
@@ -959,6 +964,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
                     "options": labels,
                     "allow_custom": choice.map(|c| c.allow_custom).unwrap_or(allow_custom),
                     "status": choice.map(|c| c.status.clone()).unwrap_or_else(|| "pending".to_string()),
+                    "expiresAt": choice.and_then(|c| c.expires_at),
                     "kind": item.doc.kind,
                     "seq": item.seq,
                     "conversation_id": resolved.conversation_id,
@@ -1040,6 +1046,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         name.trim(),
         prompt.as_deref(),
         proposal.clone(),
+        Some(overlay::now_secs() + k2_vault::vault::REQUEST_EXPIRY_DAYS * 24 * 60 * 60),
     ) {
         Ok((item, links)) => {
             drop(conn);
@@ -1083,6 +1090,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                     "from": item.doc.from,
                     "name": secret.map(|s| s.name.clone()).unwrap_or_else(|| name.trim().to_string()),
                     "status": secret.map(|s| s.status.clone()).unwrap_or_else(|| "pending".to_string()),
+                    "expiresAt": secret.and_then(|s| s.expires_at),
                     "kind": item.doc.kind,
                     "seq": item.seq,
                     "conversation_id": resolved.conversation_id,
@@ -1232,7 +1240,13 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     };
     let result = match vault.request_answer(card_id, k2_vault::SecretBytes::from_string(value), &ans, &actor) {
         Ok(r) => r,
-        Err(e) => return vault_error(&e),
+        Err(e) => {
+            // The vault found the request past its 7 days: the card says so.
+            if e.code == "card_not_pending" && vault.request_get(card_id).is_ok_and(|r| r.status == "expired") {
+                close_expired_card(&resolved.conversation_id, card_id);
+            }
+            return vault_error(&e);
+        }
     };
     let m = &result.meta;
     let reference = crate::vault::display_ref(m).unwrap_or_else(|| result.reference.clone());
@@ -1292,6 +1306,9 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
+    }
+    if let Some(r) = refuse_if_expired(&resolved, &card_id) {
+        return r;
     }
     // KV8: only a person answers a secret card. Any session passport
     // (agent harness, plain shell tab, API cell) is refused, whichever
@@ -1396,6 +1413,9 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
     }
+    if let Some(r) = refuse_if_expired(&resolved, &card_id) {
+        return r;
+    }
     match overlay::void_card(&resolved.conversation_id, &resolved.project_id, &card_id, card_actor_author(params, session_author)) {
         Ok(cb) => {
             if cb.doc.secret.is_some() {
@@ -1499,20 +1519,99 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: 
     );
 }
 
+/// A card's new status, to every open view of its Thread.
+fn publish_card_frame(cb: &CardCallback) {
+    crate::overlay_ws::publish(OverlayFrame {
+        collection: "thread".to_string(),
+        seq: cb.seq,
+        id: cb.doc_id.clone(),
+        doc: Some(cb.doc.clone()),
+        activity: None,
+        conversation_id: Some(cb.conversation_id.clone()),
+    });
+}
+
+/// `--expires 2h|3d|90m|3600` (from now), `--no-expiry` / `expires=never`
+/// (open until answered or voided), else the 7-day default (Rosson
+/// 2026-10-13: a card is not an open gate forever).
+fn choice_card_expiry(params: &HashMap<String, String>, now: i64) -> Result<Option<i64>, CliResponse> {
+    if bool_param(params, "no_expiry") || bool_param(params, "no-expiry") {
+        return Ok(None);
+    }
+    match opt_param(params, "expires").map(|s| s.trim().to_ascii_lowercase()) {
+        None => Ok(Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS)),
+        Some(s) if s.is_empty() => Ok(Some(now + overlay::DEFAULT_CARD_EXPIRY_SECS)),
+        Some(s) if matches!(s.as_str(), "never" | "none" | "off") => Ok(None),
+        Some(s) => parse_ttl(&s)
+            .map(|secs| Some(now + secs))
+            .map_err(|_| usage("--expires is like 2h, 3d, 90m or 3600 seconds (or --no-expiry)")),
+    }
+}
+
+/// Check-on-touch before an answer or a void: a card past its time turns
+/// `expired` now (its frame goes out) and the caller gets 409.
+fn refuse_if_expired(resolved: &ResolvedOverlay, card_id: &str) -> Option<CliResponse> {
+    match overlay::expire_if_due(&resolved.conversation_id, card_id, overlay::now_secs()) {
+        Ok(Some(cb)) => {
+            publish_card_frame(&cb);
+            Some(error_json("409 Conflict", "card_not_pending", "this card expired"))
+        }
+        // Not due, or not found: the normal path answers.
+        Ok(None) | Err(_) => None,
+    }
+}
+
+/// A card whose time ran out (the sweep, or its vault request expired):
+/// it turns `expired` and every open view updates. The agent is not woken
+/// (nobody acted); it sees the card expired when it reads the Thread.
+pub fn close_expired_card(conversation_id: &str, card_id: &str) {
+    match overlay::expire_card(conversation_id, card_id) {
+        Ok(cb) => publish_card_frame(&cb),
+        Err(e) if e == overlay::CARD_NOT_PENDING => {}
+        Err(e) => k2_core::log_debug!("[overlay] expire card {card_id}: {e}"),
+    }
+}
+
+/// One expiry sweep: every pending card past its `expiresAt` turns
+/// `expired`, with its frame. Returns how many.
+pub fn sweep_expired_cards(now: i64) -> usize {
+    match overlay::expire_due_cards(now) {
+        Ok(cbs) => {
+            for cb in &cbs {
+                publish_card_frame(cb);
+            }
+            cbs.len()
+        }
+        Err(e) => {
+            k2_core::log_debug!("[overlay] card expiry sweep: {e}");
+            0
+        }
+    }
+}
+
+/// The daemon's card expiry loop (headless-safe, never a client timer):
+/// a sweep at start, then every minute. Starts once per process.
+pub fn spawn_card_expiry() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let r = std::thread::Builder::new().name("thread-card-expiry".into()).spawn(|| loop {
+        sweep_expired_cards(overlay::now_secs());
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    });
+    if let Err(e) = r {
+        k2_core::log_debug!("[overlay] could not start the card expiry sweep: {e}");
+    }
+}
+
 /// `from`: who answered or dismissed the card ([`card_actor_from`]), so
 /// the agent sees `[from <guest>]` for an app guest, never the owner.
 /// `start_turns`: a person answered or dismissed the card (TW1).
 fn fire_card_callbacks(addr: &str, from: &str, cbs: Vec<CardCallback>, start_turns: bool) {
     let started_at = chrono::Utc::now().timestamp_millis();
     for cb in cbs {
-        crate::overlay_ws::publish(OverlayFrame {
-            collection: "thread".to_string(),
-            seq: cb.seq,
-            id: cb.doc_id.clone(),
-            doc: Some(cb.doc.clone()),
-            activity: None,
-            conversation_id: Some(cb.conversation_id.clone()),
-        });
+        publish_card_frame(&cb);
         let payload = format!("[thread:{addr}] {}", cb.inject_line);
         record_test_inject(&format_thread_compose_pty_line(from, addr, &cb.inject_line));
         let turn = start_turns.then_some(ThreadTurn {
@@ -2806,6 +2905,188 @@ mod tests {
         );
         assert_eq!(tap.status, "200 OK", "{}", tap.body);
         assert_eq!(card_status(&handle, &choice), "answered");
+    }
+
+    fn ask_with(addr: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut body = serde_json::json!({ "addr": addr, "prompt": "Ship?", "options": "Go,Stop", "from": "k2" });
+        for (k, v) in extra.as_object().expect("object") {
+            body[k] = v.clone();
+        }
+        let ask = dispatch_post("/cli/thread/ask", &HashMap::new(), body.to_string().as_bytes());
+        assert_eq!(ask.status, "200 OK", "{}", ask.body);
+        json_body(&ask)
+    }
+
+    fn card_expires_at(addr: &str, card_id: &str) -> serde_json::Value {
+        let snap = json_body(&dispatch("/cli/thread", &params_of(&[("addr", addr)])).expect("read"));
+        let item = snap["items"].as_array().expect("items").iter().find(|i| i["id"] == card_id).cloned().expect("card");
+        let body = if item["doc"]["kind"] == "choice" { &item["doc"]["choice"] } else { &item["doc"]["secret"] };
+        body["expiresAt"].clone()
+    }
+
+    /// The frames on `rx` so far for `id`.
+    fn frames_for(rx: &mut tokio::sync::broadcast::Receiver<OverlayFrame>, id: &str) -> Vec<OverlayFrame> {
+        let mut out = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(f) if f.id == id => out.push(f),
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => return out,
+            }
+        }
+    }
+
+    /// Rosson 2026-10-13: a card has a time frame so it is not an open gate.
+    /// Default 7 days; `--expires` sets it; `--no-expiry` keeps it open; a
+    /// bad value is refused; prose never shortens or removes it.
+    #[test]
+    fn ask_card_time_frames_default_custom_and_none() {
+        let handle = format!("ovlexp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let now = overlay::now_secs();
+        let near = |got: &serde_json::Value, want: i64| {
+            let t = got.as_i64().unwrap_or_else(|| panic!("expiresAt is a number: {got}"));
+            assert!((want - 5..=want + 5).contains(&t), "expiresAt {t} not near {want}");
+        };
+
+        let default = ask_with(&handle, serde_json::json!({}));
+        near(&default["expiresAt"], now + 7 * 24 * 3600);
+        let id = default["id"].as_str().expect("id").to_string();
+        near(&card_expires_at(&handle, &id), now + 7 * 24 * 3600);
+
+        let custom = ask_with(&handle, serde_json::json!({ "expires": "2h" }));
+        near(&custom["expiresAt"], now + 7_200);
+        let days = ask_with(&handle, serde_json::json!({ "expires": "3d" }));
+        near(&days["expiresAt"], now + 3 * 86_400);
+
+        let open = ask_with(&handle, serde_json::json!({ "no_expiry": true }));
+        assert!(open["expiresAt"].is_null(), "{open}");
+        let open_id = open["id"].as_str().expect("id").to_string();
+        assert!(card_expires_at(&handle, &open_id).is_null(), "no time frame stored");
+        let never = ask_with(&handle, serde_json::json!({ "expires": "never" }));
+        assert!(never["expiresAt"].is_null(), "{never}");
+
+        let bad = dispatch_post(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "prompt": "?", "options": "Go", "expires": "soon" }).to_string().as_bytes(),
+        );
+        assert_eq!(bad.status, "400 Bad Request", "{}", bad.body);
+        assert!(bad.body.contains("--expires"), "{}", bad.body);
+
+        // Talking never changes a card's time frame.
+        let before = card_expires_at(&handle, &id);
+        let talk = post_as_owner(&HashMap::new(), serde_json::json!({ "addr": handle, "text": "let me think", "via": "compose" }));
+        assert_eq!(talk.status, "200 OK", "{}", talk.body);
+        assert_eq!(card_expires_at(&handle, &id), before);
+        assert_eq!(card_status(&handle, &id), "pending");
+    }
+
+    /// The daemon sweep turns a due card `expired` with a frame; an answer
+    /// or a void after the time is refused 409 (check-on-touch closes it
+    /// first, with its own frame, when the sweep hasn't run yet).
+    #[test]
+    fn expired_cards_close_on_the_sweep_and_refuse_late_answers() {
+        let handle = format!("ovlexpd{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let mut rx = crate::overlay_ws::subscribe();
+
+        let swept = ask_with(&handle, serde_json::json!({ "expires": "1" }));
+        let swept_id = swept["id"].as_str().expect("id").to_string();
+        let touched = ask_with(&handle, serde_json::json!({ "expires": "1" }));
+        let touched_id = touched["id"].as_str().expect("id").to_string();
+        let lasting = ask_with(&handle, serde_json::json!({ "expires": "1h" }));
+        let lasting_id = lasting["id"].as_str().expect("id").to_string();
+        let _ = frames_for(&mut rx, &swept_id);
+        std::thread::sleep(std::time::Duration::from_millis(2_100));
+
+        // Check-on-touch: the answer is refused and the card closes now.
+        let late = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": touched_id, "answer": "Go" }).to_string().as_bytes(),
+        );
+        assert_eq!(late.status, "409 Conflict", "{}", late.body);
+        assert!(late.body.contains("card_not_pending") && late.body.contains("expired"), "{}", late.body);
+        assert_eq!(card_status(&handle, &touched_id), "expired");
+        let f = frames_for(&mut rx, &touched_id);
+        assert_eq!(f.len(), 1, "one frame for the touched card: {f:?}");
+        assert_eq!(f[0].doc.as_ref().expect("doc").choice.as_ref().expect("c").status, "expired");
+
+        // The sweep (as the daemon loop runs it) closes the other one.
+        assert!(sweep_expired_cards(overlay::now_secs()) >= 1);
+        assert_eq!(card_status(&handle, &swept_id), "expired");
+        assert_eq!(card_status(&handle, &lasting_id), "pending", "time left");
+        let f = frames_for(&mut rx, &swept_id);
+        assert_eq!(f.len(), 1, "the sweep's frame: {f:?}");
+        assert_eq!(f[0].conversation_id.as_deref(), Some(json_body(&dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())])).expect("read"))["conversation_id"].as_str().expect("conv")));
+
+        for (route, body) in [
+            ("/cli/thread/answer", serde_json::json!({ "addr": handle, "id": swept_id, "answer": "Go" })),
+            ("/cli/thread/void", serde_json::json!({ "addr": handle, "id": swept_id })),
+        ] {
+            let r = dispatch_post(route, &HashMap::new(), body.to_string().as_bytes());
+            assert_eq!(r.status, "409 Conflict", "{route}: {}", r.body);
+        }
+        let injects = recorded_injects();
+        assert!(
+            !injects.iter().any(|l| l.contains(&format!("[thread:{handle}] card expired"))),
+            "expiry wakes no one: {injects:?}"
+        );
+    }
+
+    /// A vault secret request past its 7 days: the vault's tick expires
+    /// it and its Thread card turns `expired` with a frame; an answer to a
+    /// card the vault already expired closes the card too.
+    #[test]
+    fn expired_vault_requests_mark_their_secret_cards_expired() {
+        let vault = crate::vault::ensure_test_vault();
+        let handle = format!("ovlvexp{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let post = |name: &str| {
+            let r = dispatch_post(
+                "/cli/thread/secret",
+                &HashMap::new(),
+                serde_json::json!({ "addr": handle, "name": name, "from": "k2" }).to_string().as_bytes(),
+            );
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let b = json_body(&r);
+            let at = b["expiresAt"].as_i64().expect("secret cards show the request's 7 days");
+            assert!((at - overlay::now_secs() - 7 * 86_400).abs() <= 5, "{b}");
+            b["id"].as_str().expect("id").to_string()
+        };
+        let ticked = post("TICK_TOKEN");
+        let answered_late = post("LATE_TOKEN");
+        let mut rx = crate::overlay_ws::subscribe();
+        vault.backdate_request_for_tests(&ticked, 8).expect("backdate");
+        vault.backdate_request_for_tests(&answered_late, 8).expect("backdate");
+
+        // An answer after the vault's 7 days: refused, and the card closes.
+        let late = dispatch_post(
+            "/cli/thread/answer",
+            &HashMap::new(),
+            serde_json::json!({ "addr": handle, "id": answered_late, "secret": "late-value-xyz" }).to_string().as_bytes(),
+        );
+        assert_eq!(late.status, "409 Conflict", "{}", late.body);
+        assert_eq!(vault.request_get(&answered_late).expect("req").status, "expired");
+        assert_eq!(card_status(&handle, &answered_late), "expired");
+        assert_eq!(frames_for(&mut rx, &answered_late).len(), 1);
+
+        // The vault tick (as its minute loop runs it) closes the other.
+        let expired = vault.tick().expect("tick");
+        let mine: Vec<_> = expired.iter().filter(|r| r.card_id == ticked).collect();
+        assert_eq!(mine.len(), 1, "the tick returns what it expired");
+        close_expired_card(&mine[0].conversation, &mine[0].card_id);
+        assert_eq!(card_status(&handle, &ticked), "expired");
+        let f = frames_for(&mut rx, &ticked);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].doc.as_ref().expect("doc").secret.as_ref().expect("s").status, "expired");
+        close_expired_card(&mine[0].conversation, &mine[0].card_id);
+        assert!(frames_for(&mut rx, &ticked).is_empty(), "closing twice is a no-op");
     }
 
     /// The agent hears who really answered: an app guest's pass username,

@@ -12,7 +12,7 @@ pub struct ChoiceBody {
     pub prompt: String,
     pub options: Vec<ChoiceOption>,
     pub allow_custom: bool,
-    /// `pending` | `answered` | `voided`
+    /// `pending` | `answered` | `voided` | `expired`
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
@@ -21,15 +21,21 @@ pub struct ChoiceBody {
     /// an agent's own answer, and on docs from before this field.
     #[serde(default, rename = "answeredBy", skip_serializing_if = "Option::is_none")]
     pub answered_by: Option<PostAuthor>,
-    /// Unix seconds the card was answered or dismissed.
+    /// Unix seconds the card was answered, dismissed or expired.
     #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<i64>,
+    /// Unix seconds when a still-pending card expires (status `expired`,
+    /// set by the daemon's sweep, never a client timer). Choice cards
+    /// default to 7 days; a secret card shows its vault request's 7 days.
+    /// None: open until answered or voided (`--no-expiry`, older cards).
+    #[serde(default, rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SecretBody {
     pub name: String,
-    /// `pending` | `set` | `voided`
+    /// `pending` | `set` | `voided` | `expired`
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -55,9 +61,15 @@ pub struct SecretBody {
     /// an agent's own answer, and on docs from before this field.
     #[serde(default, rename = "answeredBy", skip_serializing_if = "Option::is_none")]
     pub answered_by: Option<PostAuthor>,
-    /// Unix seconds the card was answered or dismissed.
+    /// Unix seconds the card was answered, dismissed or expired.
     #[serde(default, rename = "answeredAt", skip_serializing_if = "Option::is_none")]
     pub answered_at: Option<i64>,
+    /// Unix seconds when a still-pending card expires (status `expired`,
+    /// set by the daemon's sweep, never a client timer). Choice cards
+    /// default to 7 days; a secret card shows its vault request's 7 days.
+    /// None: open until answered or voided (`--no-expiry`, older cards).
+    #[serde(default, rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
 }
 
 /// The vault-side proposal on a secret card (KV9).
@@ -221,6 +233,7 @@ impl OverlayDoc {
                 answer: None,
                 answered_by: None,
                 answered_at: None,
+                expires_at: None,
             }),
             secret: None,
             widget: None,
@@ -257,6 +270,7 @@ impl OverlayDoc {
                 reference: None,
                 answered_by: None,
                 answered_at: None,
+                expires_at: None,
             }),
             widget: None,
             author: None,
@@ -293,6 +307,18 @@ impl OverlayDoc {
                 .choice
                 .as_ref()
                 .is_some_and(|c| c.status == "pending")
+    }
+
+    /// A pending card whose `expiresAt` has passed (`now` in unix seconds).
+    pub fn is_due(&self, now: i64) -> bool {
+        let at = if self.is_pending_choice() {
+            self.choice.as_ref().and_then(|c| c.expires_at)
+        } else if self.is_pending_secret() {
+            self.secret.as_ref().and_then(|s| s.expires_at)
+        } else {
+            None
+        };
+        at.is_some_and(|t| t <= now)
     }
 
     pub fn is_pending_secret(&self) -> bool {

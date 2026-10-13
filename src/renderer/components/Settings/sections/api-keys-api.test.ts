@@ -93,4 +93,21 @@ describe('hire scope helpers (0.45.6)', () => {
   it('hireSummary is empty without limits', () => {
     expect(hireSummary(null)).toBe('')
   })
+
+  it('hireSummary counts app-login Apps', () => {
+    expect(
+      hireSummary({
+        maxMembersPerDay: 1,
+        maxLiveMembers: 2,
+        maxMembersPerTeam: 3,
+        db: 'off',
+        link: false,
+        linkTargets: 'created',
+        retire: false,
+        reach: 'none',
+        folder: '',
+        apps: [{ app: 'svc', rooms: ['self'], roles: [] }],
+      }),
+    ).toBe('1/day · 2 live · 3 per team · db off · app logins on 1 App')
+  })
 })

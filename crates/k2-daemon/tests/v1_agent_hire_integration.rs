@@ -213,3 +213,110 @@ async fn hire_key_mints_hires_links_replays_and_retires_end_to_end() {
     }
     drop(env);
 }
+
+/// S5: a hired agent gets an App login — an App grant on the named App
+/// (never the box login), whole rooms, marked as the agent — only within
+/// the key's ceiling; a rollback and a teardown remove the login.
+#[tokio::test(flavor = "multi_thread")]
+async fn hire_key_gives_app_logins_inside_its_ceiling_only() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    k2_core::test_isolation::assert_no_prod_env();
+    let env = Env::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let port = d.port;
+    let r = http(port, "POST", &owner_q("/cli/agents/hire-root"), None, None, Some(&json!({ "root": env.tmp.join("agents") })));
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    // An owner-made workspace that publishes the App (and another App).
+    let host_ws = env.tmp.join("portal");
+    let r = http(port, "POST", "/v1/w", Some(OWNER_TOKEN), None, Some(&json!({ "path": host_ws })));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let host_id = r.body["id"].as_str().unwrap().to_string();
+    let (app, other_app) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mk = |name: &str| {
+            k2_core::published_services::insert(
+                &conn,
+                &host_id,
+                name,
+                k2_core::published_services::CMD_SKIN_SENTINEL,
+                "/tmp",
+                1,
+                k2_core::published_services::EXPOSE_LOCAL,
+                k2_core::published_services::DESIRED_STOPPED,
+                k2_core::published_services::KIND_SKIN,
+                "",
+            )
+            .expect("service row")
+            .id
+        };
+        (mk("jobs"), mk("billing"))
+    };
+
+    // Mint a hire key whose ceiling names the jobs App, rooms: self only.
+    let confirm = k2_daemon::vault::get().expect("vault").confirm.mint("hire-key-mint", None, "owner", "local-auth");
+    let mint = json!({ "label": "jobs-app", "confirmToken": confirm, "hire": { "retire": true, "apps": [{ "app": app, "rooms": ["self"] }] } });
+    let r = http(port, "POST", &owner_q("/cli/api-keys/create"), None, None, Some(&mint));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["hireLimits"]["apps"][0]["app"], app.as_str(), "{}", r.body);
+    let key = r.body["key"].as_str().unwrap().to_string();
+
+    // Outside the ceiling: another App, or a room the owner didn't name → 403, nothing written.
+    for (login, label) in [
+        (json!({ "app": other_app }), "other app"),
+        (json!({ "app": app, "rooms": [host_id] }), "unnamed room"),
+        (json!({ "app": app, "role": "admin" }), "unnamed role"),
+    ] {
+        let r = http(port, "POST", "/v1/agents/hire", Some(&key), None, Some(&json!({ "agent": { "handle": "fieldbot", "appLogin": login } })));
+        assert_eq!(r.status, 403, "{label}: {}", r.body);
+        assert_eq!(r.body["error"]["code"], "exceeds_key", "{label}");
+        assert!(!k2_core::skin::principal_exists("fieldbot").unwrap(), "{label}: no login written");
+    }
+
+    // Inside: the login is an App grant on `app`, rooms = the agent itself.
+    let r = http(port, "POST", "/v1/agents/hire", Some(&key), Some("field-1"), Some(&json!({
+        "agent": { "handle": "fieldbot", "appLogin": { "app": app, "password": true } },
+    })));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m = r.body["members"][0].clone();
+    let ws_id = m["workspaceId"].as_str().unwrap().to_string();
+    let login = m["appLogin"].clone();
+    assert_eq!(login["username"], "fieldbot");
+    assert_eq!(login["rooms"], json!([ws_id]));
+    assert_eq!(login["wholeRooms"], true);
+    assert_eq!(login["password"].as_str().map(str::len), Some(24), "password shown once: {login}");
+    let principal = login["principalId"].as_str().unwrap().to_string();
+    let grants: Vec<_> = k2_core::skin::list_grants().unwrap().into_iter().filter(|g| g.subject_id == principal).collect();
+    assert_eq!(grants.len(), 1, "exactly one grant: {grants:?}");
+    assert_eq!(grants[0].kind, "app");
+    assert_eq!(grants[0].target_id, app, "an App grant, never the box login (host)");
+    assert_eq!(k2_core::skin::principal_agent_workspace(&principal).unwrap().as_deref(), Some(ws_id.as_str()));
+    // A replay never prints the password again.
+    let r2 = http(port, "POST", "/v1/agents/hire", Some(&key), Some("field-1"), Some(&json!({
+        "agent": { "handle": "fieldbot", "appLogin": { "app": app, "password": true } },
+    })));
+    assert_eq!(r2.body["changed"], false);
+    assert!(r2.body["members"][0]["appLogin"].get("password").is_none(), "{}", r2.body);
+
+    // A hire that fails after a member's login was made undoes the login
+    // (the second member's unknown context layer fails at apply time).
+    let r = http(port, "POST", "/v1/agents/hire", Some(&key), None, Some(&json!({
+        "team": { "name": "Roll Team" },
+        "members": [
+            { "handle": "rollbot", "lead": true, "appLogin": { "app": app } },
+            { "handle": "rollbot-two", "context": ["nope:missing-layer"] },
+        ],
+    })));
+    assert!(r.status >= 400, "the hire fails: {}", r.body);
+    assert!(r.body["error"]["hint"].as_str().unwrap_or("").contains("nothing was kept"), "{}", r.body);
+    assert!(!k2_core::skin::principal_exists("rollbot").unwrap(), "rolled-back login removed");
+
+    // Teardown revokes the login (retire alone wouldn't, HT13).
+    let r = http(port, "POST", "/v1/agents/retire", Some(&key), None, Some(&json!({ "instance": r2.body["instance"] })));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["appLoginsRevoked"], json!(["fieldbot"]));
+    assert!(!k2_core::skin::principal_exists("fieldbot").unwrap(), "login revoked");
+    drop(env);
+}

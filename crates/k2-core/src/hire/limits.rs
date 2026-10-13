@@ -48,6 +48,36 @@ pub struct HireLimits {
     /// Sub-folder of the hire root this key's agents go into (`""` = root).
     #[serde(default)]
     pub folder: String,
+    /// S5 grant ceiling: the Apps a hired agent may get a login on, and
+    /// which whole rooms / roles there (T17: no folder lines yet). Empty =
+    /// no app logins.
+    #[serde(default)]
+    pub apps: Vec<AppCeiling>,
+}
+
+/// One App a key's hired agents may log in to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppCeiling {
+    /// Published service id (resolved at mint).
+    pub app: String,
+    /// Workspace ids, or `self` (the hired member's own workspace).
+    #[serde(default)]
+    pub rooms: Vec<String>,
+    /// App role names/ids a hired agent may be given.
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+/// The mint request's form of [`AppCeiling`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppCeilingIn {
+    pub app: String,
+    #[serde(default)]
+    pub rooms: Option<Vec<String>>,
+    #[serde(default)]
+    pub roles: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +101,7 @@ impl Default for HireLimits {
             retire: false,
             reach: Reach::None,
             folder: String::new(),
+            apps: Vec::new(),
         }
     }
 }
@@ -98,6 +129,8 @@ pub struct HireLimitsIn {
     pub reach: Option<Reach>,
     #[serde(default)]
     pub folder: Option<String>,
+    #[serde(default)]
+    pub apps: Option<Vec<AppCeilingIn>>,
 }
 
 impl HireLimits {
@@ -147,7 +180,45 @@ impl HireLimits {
             retire: input.retire.unwrap_or(false),
             reach: input.reach.unwrap_or(Reach::None),
             folder: super::root::validate_sub_folder(input.folder.as_deref().unwrap_or(""))?,
+            apps: Self::apps_from_request(input.apps.unwrap_or_default())?,
         })
+    }
+
+    fn apps_from_request(apps: Vec<AppCeilingIn>) -> Result<Vec<AppCeiling>, HireError> {
+        if apps.len() > 20 {
+            return Err(HireError::usage("hire limits: at most 20 apps"));
+        }
+        let mut out: Vec<AppCeiling> = Vec::new();
+        for a in apps {
+            let id = super::apps::resolve_app(&a.app)?
+                .ok_or_else(|| HireError::usage(format!("hire limits: no published App {:?}", a.app)))?;
+            if out.iter().any(|x| x.app == id) {
+                return Err(HireError::usage(format!("hire limits: App {:?} twice", a.app)));
+            }
+            let rooms = match a.rooms {
+                Some(r) => super::apps::resolve_rooms(&r)?,
+                None => vec![super::apps::SELF_ROOM.to_string()],
+            };
+            let roles: Vec<String> = a
+                .roles
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect();
+            out.push(AppCeiling { app: id, rooms, roles });
+        }
+        Ok(out)
+    }
+
+    /// Does this key's ceiling allow an App login on `app` with these
+    /// (resolved) rooms, or this role?
+    pub fn allows_app_login(&self, app: &str, rooms: &[String], role: Option<&str>) -> bool {
+        let Some(c) = self.apps.iter().find(|c| c.app == app) else { return false };
+        match role {
+            Some(r) => c.roles.iter().any(|x| x.eq_ignore_ascii_case(r.trim())),
+            None => !rooms.is_empty() && rooms.iter().all(|room| c.rooms.contains(room)),
+        }
     }
 
     /// Parse a stored envelope. `None` on anything unreadable (fail closed).
@@ -253,6 +324,24 @@ mod tests {
         assert!(!l.names_link_target("ws-2"));
         assert!(l.reach_allows(ReachDoor::Message));
         assert!(!l.reach_allows(ReachDoor::HostSessions));
+    }
+
+    #[test]
+    fn app_ceiling_is_whole_rooms_or_named_roles() {
+        let l = HireLimits {
+            apps: vec![AppCeiling { app: "svc-1".into(), rooms: vec!["self".into(), "ws-a".into()], roles: vec!["Reader".into()] }],
+            ..HireLimits::default()
+        };
+        assert!(l.allows_app_login("svc-1", &["self".into()], None));
+        assert!(l.allows_app_login("svc-1", &["self".into(), "ws-a".into()], None));
+        assert!(!l.allows_app_login("svc-1", &["ws-b".into()], None), "a room the owner didn't name");
+        assert!(!l.allows_app_login("svc-1", &[], None), "no rooms is no login");
+        assert!(l.allows_app_login("svc-1", &[], Some("reader")));
+        assert!(!l.allows_app_login("svc-1", &[], Some("admin")));
+        assert!(!l.allows_app_login("svc-2", &["self".into()], None), "another App");
+        assert!(!HireLimits::default().allows_app_login("svc-1", &["self".into()], None), "no apps = no logins");
+        let unknown_app = HireLimits::from_request(&serde_json::json!({ "apps": [{ "app": "no-such-service" }] }), false);
+        assert!(unknown_app.is_err(), "an App must exist at mint");
     }
 
     #[test]

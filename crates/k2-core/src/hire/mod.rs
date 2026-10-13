@@ -24,6 +24,7 @@
 //! daemon runs them after the durable steps commit.
 
 pub mod apply;
+pub mod apps;
 pub mod converge;
 pub mod deliveries;
 pub mod ledger;

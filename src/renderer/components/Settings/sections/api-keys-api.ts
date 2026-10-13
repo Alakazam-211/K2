@@ -24,6 +24,8 @@ export type HireLimits = {
   retire: boolean
   reach: 'none' | 'message' | 'host-sessions'
   folder: string
+  /** S5: Apps a hired agent may get a login on (whole rooms or roles). */
+  apps?: Array<{ app: string; rooms: string[]; roles: string[] }>
 }
 
 /** The Settings form for a new hire key (strings as typed). */
@@ -148,6 +150,7 @@ export function hireSummary(l: HireLimits | null | undefined): string {
   if (l.retire) parts.push('retire')
   if (l.reach !== 'none') parts.push(`reach ${l.reach}`)
   if (l.folder) parts.push(`folder ${l.folder}`)
+  if (l.apps && l.apps.length) parts.push(`app logins on ${l.apps.length} App${l.apps.length === 1 ? '' : 's'}`)
   return parts.join(' · ')
 }
 

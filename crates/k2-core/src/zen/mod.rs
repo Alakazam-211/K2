@@ -46,6 +46,7 @@ pub mod builtin_widgets;
 pub mod bundle;
 pub mod defaults;
 pub mod garden_catalog;
+pub mod lock;
 pub mod news;
 pub mod schema;
 pub mod skill;

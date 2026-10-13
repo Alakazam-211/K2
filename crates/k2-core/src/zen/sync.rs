@@ -165,6 +165,18 @@ pub struct GardenSync {
     pub theme: Option<PartState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo: Option<UndoSlot>,
+    /// Lock (prd-garden-lock-and-sync-v1 §5.1): agents can't change this
+    /// Garden; its frozen copy is in `.locks/<id>/`. Missing = unlocked, so
+    /// every Garden from before Lock stays as it was (no migration).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    /// When the lock was set (RFC 3339).
+    #[serde(default, rename = "lockedAt", skip_serializing_if = "Option::is_none")]
+    pub locked_at: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl GardenSync {
@@ -438,7 +450,7 @@ impl ZenFiles {
         self.history_root().join(ZenFile::Garden(id.to_string()).label()).join(MIRROR_FILE)
     }
 
-    fn read_mirror(&self, id: &str) -> Option<GardenSync> {
+    pub(crate) fn read_mirror(&self, id: &str) -> Option<GardenSync> {
         let text = fs::read_to_string(self.mirror_path(id)).ok()?;
         serde_json::from_str(&text).ok()
     }
@@ -509,7 +521,7 @@ impl ZenFiles {
     /// `sync.json` as stored, with entries for list Gardens that have
     /// none taken from their mirror (a restored Garden comes back with its
     /// state, GS27). `None` when there is no readable file.
-    fn read_sync_file(&self) -> Option<SyncFile> {
+    pub(crate) fn read_sync_file(&self) -> Option<SyncFile> {
         let text = fs::read_to_string(self.sync_path()).ok()?;
         serde_json::from_str(&text).ok()
     }
@@ -529,13 +541,13 @@ impl ZenFiles {
         sf
     }
 
-    fn write_sync(&self, sf: &SyncFile) -> Result<(), ZenError> {
+    pub(crate) fn write_sync(&self, sf: &SyncFile) -> Result<(), ZenError> {
         let mut sf = sf.clone();
         sf.version = SYNC_VERSION;
         write_json(&self.sync_path(), &sf)
     }
 
-    fn write_mirror(&self, id: &str, g: &GardenSync) -> Result<(), ZenError> {
+    pub(crate) fn write_mirror(&self, id: &str, g: &GardenSync) -> Result<(), ZenError> {
         let mut v = serde_json::to_value(g).map_err(|e| ZenError::Io(e.to_string()))?;
         v["garden"] = json!(id);
         write_json(&self.mirror_path(id), &v)
@@ -717,13 +729,13 @@ impl ZenFiles {
                 GardenSync {
                     page: Some(PartState::synced_because("upgrade")),
                     theme: Some(PartState::synced_because("upgrade")),
-                    undo: None,
+                    ..GardenSync::default()
                 }
             } else {
                 GardenSync {
                     page: Some(PartState::copy_of(fp, "upgrade")),
                     theme: Some(PartState::copy_of(fp, "upgrade")),
-                    undo: None,
+                    ..GardenSync::default()
                 }
             };
             lines.push(Self::describe(&id, &name, &entry));
@@ -778,7 +790,7 @@ impl ZenFiles {
                 let e = GardenSync {
                     page: Some(PartState::copy_of(&set, "upgrade")),
                     theme: Some(PartState::copy_of(&set, "upgrade")),
-                    undo: None,
+                    ..GardenSync::default()
                 };
                 self.write_mirror(&id, &e)?;
                 e
@@ -859,7 +871,7 @@ impl ZenFiles {
 
     /// [`ZenFiles::sync_state`] without the loader (the caller holds the
     /// sync lock and already ran it).
-    fn sync_state_unlocked(&self) -> SyncFile {
+    pub(crate) fn sync_state_unlocked(&self) -> SyncFile {
         let mut sf = self.read_sync_file().unwrap_or_else(|| SyncFile {
             version: SYNC_VERSION,
             live_defaults: Some(self.live_defaults().fingerprint().to_string()),
@@ -1072,6 +1084,8 @@ impl ZenFiles {
                 "theme": part(Part::Theme, &gd.theme_state, &gd.theme)?,
                 "ownChanges": own,
                 "ownChangesError": own_err,
+                "locked": entry.locked,
+                "lockedAt": entry.locked_at,
                 "undo": entry.undo.as_ref().map(|u| {
                     let parts: Vec<&str> = [Part::Page, Part::Theme]
                         .into_iter()
@@ -1152,7 +1166,7 @@ impl ZenFiles {
         }
         for g in self.gardens() {
             if let (Some(e), Some(m)) = (sf.gardens.get(&g.id), self.read_mirror(&g.id)) {
-                if e.page != m.page || e.theme != m.theme {
+                if e.page != m.page || e.theme != m.theme || e.locked != m.locked {
                     problems.push(format!("{} ({}): its mirror disagrees with sync.json", g.name, g.id));
                 }
             }

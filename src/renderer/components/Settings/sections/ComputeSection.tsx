@@ -1360,15 +1360,16 @@ function PolicyEditor({
     }),
     [policy],
   )
-  const [draft, setDraft] = useState<Record<PolicyKey, string>>(base)
-  const [dirty, setDirty] = useState(false)
-  useEffect(() => {
-    if (!dirty) setDraft(base)
-  }, [base, dirty])
+  // The owner's edits over the node's truth. The draft is derived, never
+  // synced from `base` in an effect: a mount effect still pending when the
+  // first click lands (a just-shown panel) ran after that click and put the
+  // old value back, so Save sent nothing.
+  const [edits, setEdits] = useState<Partial<Record<PolicyKey, string>>>({})
+  const dirty = Object.keys(edits).length > 0
+  const draft = useMemo<Record<PolicyKey, string>>(() => ({ ...base, ...edits }), [base, edits])
 
   const edit = (k: PolicyKey, v: string): void => {
-    setDraft((d) => ({ ...d, [k]: v }))
-    setDirty(true)
+    setEdits((e) => ({ ...e, [k]: v }))
   }
 
   const save = async (): Promise<void> => {
@@ -1380,11 +1381,11 @@ function PolicyEditor({
       else set[k] = Number(draft[k])
     }
     if (Object.keys(set).length === 0) {
-      setDirty(false)
+      setEdits({})
       return
     }
     const out = await run(() => setLocalPolicy(set))
-    if (out) setDirty(false)
+    if (out) setEdits({})
   }
 
   return (
@@ -1459,10 +1460,7 @@ function PolicyEditor({
         {dirty ? (
           <Button
             variant="ghost"
-            onClick={() => {
-              setDraft(base)
-              setDirty(false)
-            }}
+            onClick={() => setEdits({})}
           >
             Undo
           </Button>

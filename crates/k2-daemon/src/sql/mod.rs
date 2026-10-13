@@ -2411,6 +2411,7 @@ mod tests {
             rooms,
             session: true,
             room_policy: policy,
+            app: "host".to_string(),
         }
     }
 
@@ -2583,6 +2584,7 @@ mod tests {
                 rooms: vec![docs_id.clone()],
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
+                app: String::new(),
             };
             let n = fake.recorded().len();
             let plat = routes::handle_store_get_gated(
@@ -2998,6 +3000,7 @@ mod tests {
                 rooms: vec![docs_id.clone()],
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
+                app: String::new(),
             };
             let n = fake.recorded().len();
             let plat =
@@ -4171,6 +4174,7 @@ mod tests {
                 rooms: vec![pid.clone()],
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
+                app: String::new(),
             };
             let plat = routes::handle_db_query(
                 &query_json(&handle, "SELECT 1", None),

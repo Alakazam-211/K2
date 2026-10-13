@@ -16,7 +16,24 @@ use tokio::sync::Mutex;
 
 use k2_core::frame_policy::FramePolicy;
 
+/// Session cookie on a loopback / plain-http dev origin (no `Secure`).
 pub const COOKIE_NAME: &str = "k2_skin_ui";
+/// Session cookie whenever it is `Secure` (S24-14, SR14). The `__Host-`
+/// prefix means the browser only accepts it host-only, `Path=/`, `Secure`
+/// and with no `Domain`, so a sibling `*.k2.dev` site (k2.dev is not on the
+/// PSL) can't plant a `Domain=k2.dev` cookie to sign a victim in as the
+/// attacker (login fixation). Sids live in this helper's memory only, so a
+/// restarted helper had no sessions to keep: the rename costs nobody a login.
+pub const SECURE_COOKIE_NAME: &str = "__Host-k2_skin_ui";
+
+/// The cookie this request's scheme uses ([`request_is_secure`]).
+pub fn cookie_name(secure: bool) -> &'static str {
+    if secure {
+        SECURE_COOKIE_NAME
+    } else {
+        COOKIE_NAME
+    }
+}
 pub const GATEWAY_FORBIDDEN_JSON: &str = r#"{"error":"not allowed"}"#;
 /// 403 body for a state-changing request or socket that came from another
 /// origin (security-review-app-cookie-csrf-v1 §6 option 1). Written before
@@ -46,6 +63,9 @@ struct Session {
 
 struct Gateway {
     upstream_host: String,
+    /// The published service id this helper serves (S24-8). Sent as `app`
+    /// on every upstream login; never taken from the browser.
+    app: String,
     root: Option<PathBuf>,
     sessions: Mutex<HashMap<String, Session>>,
     /// This App's framing headers (`Content-Security-Policy:
@@ -57,6 +77,7 @@ struct Gateway {
 #[derive(Debug)]
 struct Args {
     listen: SocketAddr,
+    app: String,
     upstream: String,
     root: Option<PathBuf>,
     frame: FramePolicy,
@@ -134,6 +155,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut upstream: Option<String> = None;
     let mut root: Option<PathBuf> = None;
     let mut frame: Option<FramePolicy> = None;
+    let mut app: Option<String> = None;
     let mut i = 1usize;
     while i < args.len() {
         let a = args[i].as_str();
@@ -149,6 +171,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             ("--root", Some(rest.to_string()))
         } else if let Some(rest) = a.strip_prefix("--frame-ancestors=") {
             ("--frame-ancestors", Some(rest.to_string()))
+        } else if let Some(rest) = a.strip_prefix("--app=") {
+            ("--app", Some(rest.to_string()))
         } else {
             (a, None)
         };
@@ -210,9 +234,26 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     .map_err(|e| format!("--frame-ancestors: {e}"))?;
                 frame = Some(p);
             }
+            "--app" => {
+                let v = match inline {
+                    Some(v) => v,
+                    None => {
+                        i += 1;
+                        args.get(i).cloned().ok_or("--app needs the published service id")?
+                    }
+                };
+                let v = v.trim().to_string();
+                if v.is_empty()
+                    || v == k2_core::skin::HOST_APP_ID
+                    || !v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                {
+                    return Err(format!("invalid --app {v:?} (a published service id)"));
+                }
+                app = Some(v);
+            }
             "--help" | "-h" => {
                 return Err(
-                    "k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR] [--frame-ancestors SOURCES]"
+                    "k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON --app SERVICE_ID [--root DIR] [--frame-ancestors SOURCES]"
                         .into(),
                 );
             }
@@ -222,8 +263,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     }
     let listen = listen.ok_or("missing --listen 127.0.0.1:N")?;
     let upstream = upstream.ok_or("missing --upstream http://127.0.0.1:DAEMON")?;
+    // S24-8: required. The daemon always passes it (same binary, no skew);
+    // a helper that doesn't know its App would sign guests in as `host`.
+    let app = app.ok_or("missing --app SERVICE_ID (the published service this helper serves)")?;
     Ok(Args {
         listen,
+        app,
         upstream,
         root,
         // No flag (a helper started by hand): the App default.
@@ -234,11 +279,14 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 /// Synthesize helper argv (no exe). Daemon port is **current**, never persisted.
 /// `--frame-ancestors` is always passed, so a helper's policy is explicit
 /// in `ps` and the daemon's drift check can compare it.
+/// `--app` names the published service (S24-8): every login this helper
+/// makes is a login for that App only.
 pub fn helper_argv(
     listen_port: u16,
     daemon_port: u16,
     root: Option<&Path>,
     frame: &FramePolicy,
+    app: &str,
 ) -> Vec<String> {
     let mut v = vec![
         "--skin-gateway".into(),
@@ -246,6 +294,8 @@ pub fn helper_argv(
         format!("127.0.0.1:{listen_port}"),
         "--upstream".into(),
         format!("http://127.0.0.1:{daemon_port}"),
+        "--app".into(),
+        app.to_string(),
     ];
     if let Some(root) = root {
         v.push("--root".into());
@@ -473,6 +523,7 @@ async fn serve(args: Args) -> Result<(), String> {
         .to_string();
     let gw = Arc::new(Gateway {
         upstream_host: host,
+        app: args.app,
         root: args.root,
         sessions: Mutex::new(HashMap::new()),
         frame_lines: args.frame.header_lines(),
@@ -538,8 +589,10 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
         body.truncate(content_length);
     }
     let upgrade = header_has_upgrade(&head);
-    let cookie = extract_cookie(&head, COOKIE_NAME);
     let secure = request_is_secure(&head);
+    // S24-14: a Secure request only reads `__Host-k2_skin_ui`; a plain
+    // `k2_skin_ui` there (maybe planted by a sibling site) is ignored.
+    let cookie = extract_cookie(&head, cookie_name(secure));
 
     if never_proxy(&path) {
         write_json(&gw, &mut stream, "403 Forbidden", GATEWAY_FORBIDDEN_JSON).await;
@@ -850,7 +903,8 @@ fn extract_cookie(head: &str, name: &str) -> Option<String> {
 /// ([`request_is_secure`]). Host-only (no `Domain`).
 fn set_cookie_value(id: &str, secure: bool) -> String {
     let max_age = session_max_age_secs();
-    let mut v = format!("{COOKIE_NAME}={id}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
+    let name = cookie_name(secure);
+    let mut v = format!("{name}={id}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
     if secure {
         v.push_str("; Secure");
     }
@@ -858,7 +912,8 @@ fn set_cookie_value(id: &str, secure: bool) -> String {
 }
 
 fn clear_cookie_value(secure: bool) -> String {
-    let mut v = format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    let name = cookie_name(secure);
+    let mut v = format!("{name}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     if secure {
         v.push_str("; Secure");
     }
@@ -884,9 +939,12 @@ async fn handle_login(
         .await;
         return;
     }
+    // S24-8: the App is this helper's own `--app`; the browser body is
+    // parsed for username and password only, so a guest can't pick it.
     let payload = serde_json::json!({
         "username": username,
         "password": password,
+        "app": gw.app,
     })
     .to_string();
     match upstream_json(
@@ -2081,6 +2139,9 @@ mod tests {
     fn cookie_name_is_k2_skin_ui_not_session() {
         assert_eq!(COOKIE_NAME, "k2_skin_ui");
         assert_ne!(COOKIE_NAME, "k2_skin_session");
+        assert_eq!(SECURE_COOKIE_NAME, "__Host-k2_skin_ui");
+        assert_eq!(cookie_name(true), SECURE_COOKIE_NAME);
+        assert_eq!(cookie_name(false), COOKIE_NAME);
         let v = set_cookie_value("abc", false);
         assert_eq!(
             v,
@@ -2090,7 +2151,7 @@ mod tests {
         let s = set_cookie_value("abc", true);
         assert_eq!(
             s,
-            "k2_skin_ui=abc; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800; Secure"
+            "__Host-k2_skin_ui=abc; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800; Secure"
         );
         assert_eq!(
             session_max_age_secs(),
@@ -2099,7 +2160,7 @@ mod tests {
         );
         assert_eq!(
             clear_cookie_value(true),
-            "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+            "__Host-k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
         );
         assert!(!v.contains("k2skn_"));
     }
@@ -2406,6 +2467,7 @@ mod tests {
         let port = listener.local_addr().expect("helper addr").port();
         let gw = Arc::new(Gateway {
             upstream_host: format!("127.0.0.1:{upstream_port}"),
+            app: TEST_APP_ID.to_string(),
             root,
             sessions: Mutex::new(HashMap::new()),
             frame_lines: frame.header_lines(),
@@ -2478,11 +2540,11 @@ mod tests {
         assert!(!r.body.contains("k2skn_"), "{}", r.body);
         let sc = set_cookie_of(&r).expect("Set-Cookie on login");
         let sid = sc
-            .strip_prefix("k2_skin_ui=")
+            .strip_prefix("__Host-k2_skin_ui=")
             .and_then(|v| v.split(';').next())
-            .expect("k2_skin_ui value")
+            .expect("__Host-k2_skin_ui value")
             .to_string();
-        format!("Cookie: k2_skin_ui={sid}\r\n")
+        format!("Cookie: __Host-k2_skin_ui={sid}\r\n")
     }
 
     /// Every state-changing route the helper knows, from its own tables.
@@ -2632,7 +2694,7 @@ mod tests {
             assert_eq!(stub.seen().len(), before + 1, "{p} upstream once");
             assert_eq!(
                 set_cookie_of(&r).expect("clear cookie"),
-                "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure",
+                "__Host-k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure",
                 "{p}"
             );
             let gone = send(
@@ -2716,12 +2778,13 @@ mod tests {
             .await;
             assert_eq!(r.status, 200, "{host}: {}", r.body);
             let sc = set_cookie_of(&r).expect("Set-Cookie");
+            let name = if secure { "__Host-k2_skin_ui" } else { "k2_skin_ui" };
             let sid = sc
-                .strip_prefix("k2_skin_ui=")
+                .strip_prefix(&format!("{name}="))
                 .and_then(|v| v.split(';').next())
                 .expect("sid");
             let mut want =
-                format!("k2_skin_ui={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
+                format!("{name}={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
             if secure {
                 want.push_str("; Secure");
             }
@@ -2736,6 +2799,7 @@ mod tests {
         let stub = start_stub().await;
         let gw = Gateway {
             upstream_host: format!("127.0.0.1:{}", stub.port),
+            app: TEST_APP_ID.to_string(),
             root: None,
             sessions: Mutex::new(HashMap::new()),
             frame_lines: FramePolicy::app_default().header_lines(),
@@ -2761,8 +2825,11 @@ mod tests {
 
     #[test]
     fn helper_argv_does_not_embed_cmd_shell() {
-        let a = helper_argv(8788, 4242, None, &FramePolicy::app_default());
+        let a = helper_argv(8788, 4242, None, &FramePolicy::app_default(), TEST_APP_ID);
         assert_eq!(a[0], "--skin-gateway");
+        // S24-8: the App travels explicitly and parses back.
+        let j = a.iter().position(|s| s == "--app").expect("--app");
+        assert_eq!(a[j + 1], TEST_APP_ID);
         assert!(a.contains(&"127.0.0.1:8788".to_string()));
         assert!(a.contains(&"http://127.0.0.1:4242".to_string()));
         assert!(!a.iter().any(|s| s.contains("(skin)")));
@@ -2771,8 +2838,40 @@ mod tests {
         assert_eq!(a[i + 1], k2_core::frame_policy::APP_DEFAULT_SOURCES);
         let mut argv = vec!["k2-daemon".to_string()];
         argv.extend(a.iter().cloned());
-        assert_eq!(parse_args(&argv).expect("argv round-trips").frame, FramePolicy::app_default());
+        let parsed = parse_args(&argv).expect("argv round-trips");
+        assert_eq!(parsed.frame, FramePolicy::app_default());
+        assert_eq!(parsed.app, TEST_APP_ID);
     }
+
+    /// S24-8: a helper with no App (or `host`, or junk) refuses to start.
+    #[test]
+    fn helper_requires_app() {
+        let no_app: Vec<String> = [
+            "k2-daemon",
+            "--skin-gateway",
+            "--listen",
+            "127.0.0.1:9",
+            "--upstream",
+            "http://127.0.0.1:8",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let err = parse_args(&no_app).unwrap_err();
+        assert!(err.contains("missing --app"), "{err}");
+        for bad in ["host", "", "a b", "../x"] {
+            let mut argv = no_app.clone();
+            argv.push("--app".into());
+            argv.push(bad.into());
+            let err = parse_args(&argv).unwrap_err();
+            assert!(err.contains("--app"), "{bad:?}: {err}");
+        }
+        let mut inline = no_app.clone();
+        inline.push(format!("--app={TEST_APP_ID}"));
+        assert_eq!(parse_args(&inline).expect("inline --app").app, TEST_APP_ID);
+    }
+
+    const TEST_APP_ID: &str = "0f5e7c1a-3b2d-4e6f-8a9b-1c2d3e4f5a6b";
 
     fn argv_with(extra: &[&str]) -> Vec<String> {
         let mut v: Vec<String> = [
@@ -2782,6 +2881,8 @@ mod tests {
             "127.0.0.1:9",
             "--upstream",
             "http://127.0.0.1:8",
+            "--app",
+            TEST_APP_ID,
         ]
         .iter()
         .map(|s| s.to_string())
@@ -2958,6 +3059,8 @@ mod tests {
             "0.0.0.0:9".into(),
             "--upstream".into(),
             "http://127.0.0.1:8".into(),
+            "--app".into(),
+            TEST_APP_ID.into(),
         ])
         .unwrap_err();
         assert!(err.contains("loopback"), "{err}");

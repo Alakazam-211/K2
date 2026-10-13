@@ -959,6 +959,7 @@ mod tests {
             rooms: vec![],
             session: true,
             room_policy: Default::default(),
+            app: "host".to_string(),
         }
     }
 

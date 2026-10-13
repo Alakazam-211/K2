@@ -3407,6 +3407,7 @@ mod tests {
             rooms: rooms.to_vec(),
             session: false,
             room_policy: k2_core::skin::RoomPolicy::new(),
+            app: String::new(),
         }
     }
 

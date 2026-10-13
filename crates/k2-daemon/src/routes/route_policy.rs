@@ -780,6 +780,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/skin/agents", NoLogin),
     both("/cli/skin/front-door", Owner),
     both("/cli/skin/grants", Owner),
+    post("/cli/skin/grants/copy-host", Owner),
     post("/cli/skin/grants/delete", Owner),
     post("/cli/skin/grants/enabled", Owner),
     post("/cli/skin/grants/host", Owner),

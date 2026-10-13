@@ -186,19 +186,40 @@ pub fn parse_env_k2(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// S24-9: every published `--cmd` service learns which App it is and where
+/// the daemon is, in both env modes. A BFF names its App on
+/// `POST /cli/skin/login` with `{"app": $K2_APP_ID}`; `K2_HOST`/`K2_PORT`
+/// are the daemon's loopback address (runtime litmus D2).
+pub const APP_ID_ENV: &str = "K2_APP_ID";
+
+/// The App identity variables (names and values) for one service.
+pub fn app_identity_env(service_id: &str, daemon_port: u16) -> Vec<(&'static str, String)> {
+    let mut v = vec![
+        (APP_ID_ENV, service_id.to_string()),
+        ("K2_HOST", "127.0.0.1".to_string()),
+    ];
+    if daemon_port != 0 {
+        v.push(("K2_PORT", daemon_port.to_string()));
+    }
+    v
+}
+
 /// Prepare the child's environment. Returns the secrets dir to remove
 /// when the service stops (file deliveries).
 pub fn apply(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path, port: u16) -> Option<PathBuf> {
     let se = get(service_id);
+    let identity = app_identity_env(service_id, crate::publish_runtime::loopback_port());
     if se.mode == "legacy" {
         let mut names: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
         names.sort();
         record_inherited(service_id, names);
+        cmd.envs(identity);
         return None;
     }
     cmd.env_clear();
     cmd.envs(base_env());
     cmd.env("PORT", port.to_string());
+    cmd.envs(identity);
     let Ok(vault) = super::get() else { return None };
     // `.env.k2`: references resolved, literals passed through.
     let env_file = se.env_file.clone().unwrap_or_else(|| ".env.k2".into());
@@ -277,6 +298,35 @@ fn resolve_ref(vault: &k2_vault::LocalVault, r: &str, workspace_id: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env_of(cmd: &Command, key: &str) -> Option<String> {
+        cmd.get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new(key))
+            .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    /// S24-9: a `--cmd` service learns its App id and the daemon address in
+    /// both env modes (clean and legacy).
+    #[test]
+    fn app_identity_is_injected_in_both_modes() {
+        crate::test_support::with_temp_home(|| {
+            let dir = std::env::temp_dir();
+            for mode in ["clean", "legacy"] {
+                let id = uuid::Uuid::new_v4().to_string();
+                set(&id, Some(mode), None).expect("mode");
+                let mut cmd = Command::new("true");
+                let _ = apply(&mut cmd, &id, "ws-1", &dir, 4321);
+                assert_eq!(env_of(&cmd, APP_ID_ENV).as_deref(), Some(id.as_str()), "{mode}");
+                assert_eq!(env_of(&cmd, "K2_HOST").as_deref(), Some("127.0.0.1"), "{mode}");
+            }
+            let v = app_identity_env("svc-1", 5555);
+            assert!(v.contains(&("K2_PORT", "5555".to_string())), "{v:?}");
+            assert!(
+                !app_identity_env("svc-1", 0).iter().any(|(k, _)| *k == "K2_PORT"),
+                "no port known → no K2_PORT"
+            );
+        });
+    }
 
     #[test]
     fn env_k2_parsing() {

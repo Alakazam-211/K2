@@ -8333,6 +8333,7 @@ async fn handle_one_request(
                 }
                 "/cli/skin/grants/enabled"
                 | "/cli/skin/grants/host"
+                | "/cli/skin/grants/copy-host"
                 | "/cli/skin/templates/update"
                 | "/cli/skin/templates/delete"
                 | "/cli/skin/templates/lines"

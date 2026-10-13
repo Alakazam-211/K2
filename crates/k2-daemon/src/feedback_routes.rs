@@ -2824,6 +2824,7 @@ mod tests {
             rooms,
             session: true,
             room_policy: policy,
+            app: "host".to_string(),
         }
     }
 

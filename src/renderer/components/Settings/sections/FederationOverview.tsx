@@ -12,6 +12,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import {
   listAllRemoteConnections,
   removeRemoteConnection,
+  remoteConnectionGoneNote,
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
 import { SettingsGroup } from '../controls/SettingControls'
@@ -118,6 +119,11 @@ export function FederationOverview({
                       may speak with workspace{' '}
                       <span className="text-[var(--color-text-secondary)]">{c.sourceWorkspace}</span>
                     </span>
+                    {c.gone && (
+                      <span className="text-[10px] text-[var(--color-text-muted)]" data-gone="true">
+                        Gone: {remoteConnectionGoneNote(c.host)}
+                      </span>
+                    )}
                   </div>
                   <button
                     type="button"

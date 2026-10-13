@@ -9,6 +9,8 @@ import { isBuiltinAgentType } from '@/lib/agent-type'
 import {
   addRemoteConnection,
   removeRemoteConnection,
+  reAddGoneRemoteConnection,
+  canReAddGoneConnection,
   listRemoteConnections,
   listFederationPeers,
   trustedPeers,
@@ -52,6 +54,8 @@ import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
 import { RoleSkillButton, CanonicalAgentButton } from './CanonicalAgentButtons'
 import { WorkspaceApiKeysPanel } from './ApiTokensSection'
+import { FederatedConnectionRow } from './FederatedConnectionRow'
+import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
@@ -3728,7 +3732,20 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
   const [remoteError, setRemoteError] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+  // 0159: a gone connection's Re-add is owner/admin only (the daemon checks too).
+  const [viewerRole, setViewerRole] = useState<string | null>(null)
+  const [reAdding, setReAdding] = useState<string | null>(null)
   const projects = useProjectsStore((s) => s.projects)
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchViewerRole().then((role) => {
+      if (!cancelled) setViewerRole(role)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const sourcePath = useMemo(
     () => projects.find((p) => p.id === projectId)?.path ?? '',
@@ -3905,6 +3922,29 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
         const msg = e instanceof Error ? e.message : String(e)
         console.error('[connected-workspaces] Remote disconnect failed:', e)
         setRemoteError(msg || 'Failed to remove remote connection')
+      }
+    },
+    [sourcePath, fetchRelations],
+  )
+
+  const handleReAddGone = useCallback(
+    async (address: string) => {
+      if (!sourcePath) {
+        setRemoteError(
+          'This workspace has no resolved path on the active server — cannot re-add the remote connection.',
+        )
+        return
+      }
+      setReAdding(address)
+      setRemoteError(null)
+      try {
+        const { reverseWarning } = await reAddGoneRemoteConnection(sourcePath, address)
+        await fetchRelations()
+        if (reverseWarning) setRemoteError(reverseWarning)
+      } catch (e) {
+        setRemoteError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setReAdding(null)
       }
     },
     [sourcePath, fetchRelations],
@@ -4168,29 +4208,14 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
         ) : (
           <div className="border border-[var(--color-border)]">
             {remoteConns.map((rc) => (
-              <div
+              <FederatedConnectionRow
                 key={rc.address}
-                className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0"
-              >
-                <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
-                <span className="text-xs text-[var(--color-text-primary)] flex-1 truncate" title={rc.address}>
-                  {rc.address}
-                </span>
-                <span className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-wider">
-                  federated
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void handleRemoveRemote(rc.address)}
-                  className="w-5 h-5 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors no-drag cursor-pointer flex-shrink-0"
-                  title="Remove federated connection"
-                >
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <line x1="1" y1="1" x2="7" y2="7" />
-                    <line x1="7" y1="1" x2="1" y2="7" />
-                  </svg>
-                </button>
-              </div>
+                entry={rc}
+                canReAdd={canReAddGoneConnection(viewerRole)}
+                busy={reAdding === rc.address}
+                onRemove={() => void handleRemoveRemote(rc.address)}
+                onReAdd={() => void handleReAddGone(rc.address)}
+              />
             ))}
           </div>
         )}

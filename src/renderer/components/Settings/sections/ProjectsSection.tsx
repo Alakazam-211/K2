@@ -63,7 +63,8 @@ import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
-import { computeErrorMessage, setWorkspaceComputeSwitch } from './compute-api'
+import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
+import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -97,6 +98,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1601,6 +1603,7 @@ function ProjectDetail({
               <AgentsManageAgentsToggle project={project} />
               <AgentsManageVaultToggle project={project} />
               <AgentsUseComputeToggle project={project} />
+              <AgentsOperateComputeToggle project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -2351,6 +2354,123 @@ export function AgentsUseComputeToggle({
           ) : null}
           {error ? (
             <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-error">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Node admin (prd-k2-node-admin-v1 Q14, 0156) — "Allow this agent to
+// operate compute nodes". DEFAULTS OFF. The owner's standing approval for
+// the operate class only (narrow, pause/drain/resume, update to a newer
+// signed build, roll back, restart a service); root actions still wait for
+// the owner every time. Writes POST /cli/agent-access/set `{workspace,
+// toggle: 'compute_operate', value}` (Owner/Admin) via
+// `setWorkspaceComputeOperate`, the same route as `k2 compute operate`.
+// Owner/Admin only: a Member never sees it; until whoami answers it shows
+// but can't be flipped. Optimistic store patch; no projects refetch here.
+export type OperateComputeRole = 'owner' | 'admin' | 'member'
+
+export function operateComputeVisibility(role: OperateComputeRole | null): { show: boolean; canFlip: boolean } {
+  if (role === 'member') return { show: false, canFlip: false }
+  return { show: true, canFlip: role === 'owner' || role === 'admin' }
+}
+
+export function AgentsOperateComputeToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [role, setRole] = useState<OperateComputeRole | null>(null)
+  const enabled = (project.agentsCanOperateCompute ?? 0) === 1
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchViewerRole().then((r) => {
+      if (!cancelled) setRole(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const { show, canFlip } = operateComputeVisibility(role)
+  if (!show) return null
+
+  const toggle = async (): Promise<void> => {
+    if (busy || !canFlip) return
+    const next = !enabled
+    const before = project.agentsCanOperateCompute
+    setBusy(true)
+    setError(null)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanOperateCompute: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await setWorkspaceComputeOperate(project.path, next)
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanOperateCompute: before } : p,
+        ),
+      }))
+      setError(computeErrorMessage(err))
+      console.error('[agent-access] compute_operate write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Allow this agent to operate compute nodes"
+          disabled={busy || !canFlip}
+          data-settings-id="projects.agents-can-operate-compute"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            !canFlip
+              ? 'Checking that you are the owner or an admin of this server'
+              : enabled
+                ? 'This workspace\'s agent may operate your compute machines; root actions still wait for you'
+                : 'This workspace\'s agent cannot operate compute machines'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow this agent to operate compute nodes{' '}
+            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Lets this agent look after your compute machines without asking each time: pause, drain
+            and resume them, tighten their limits, update them to a newer signed build or roll one
+            back, and restart their services. It can also propose anything that needs root (power,
+            packages, scripts, loosening limits); each of those still waits for your approval. Off:
+            it can&rsquo;t operate your compute machines or propose changes to them.
+          </div>
+          {error ? (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
               {error}
             </div>
           ) : null}

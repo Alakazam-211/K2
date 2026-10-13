@@ -246,9 +246,20 @@ fi
 # are unit-testable via the BEGIN/END markers (see tests/cli/).
 # BEGIN_CLI_TOOL_POLICY
 
-# Map a top-level `k2 <verb>` to a catalog tool id (empty = ungoverned).
+# Map a top-level `k2 <verb>` (and, for `agent`, its sub-verb) to a catalog
+# tool id (empty = ungoverned).
 _cli_tool_id_for_verb() {
     case "${1:-}" in
+        # Agent hire (0.45.6, HT14): `k2 agent team` / `k2 agent instances`
+        # are an `id` tool, so inside a K2 terminal the daemon sees the
+        # session's passport (an agent reads its own links; it never links,
+        # hires teams or retires). `k2 agent hire` stays open until noun
+        # tiers S6, but sends its passport for the hire core itself.
+        agent)
+            case "${2:-}" in
+                team|teams|instances|instance) echo "agent-teams" ;;
+                *) echo "" ;;
+            esac ;;
         help|--help|-h|glossary|help-deprecated|help-internal|help-advanced) echo "help" ;;
         --schema|schema) echo "schema" ;;
         study) echo "study" ;;
@@ -322,7 +333,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -330,7 +341,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -357,9 +368,9 @@ _cli_require_session_passport() {
 # Outside a scoped cell (no $K2_HOOK_SOCK), disk owner discovery above is the
 # human/external-terminal path and remains valid Owner proof for ID tools.
 _cli_apply_auth_for_verb() {
-    local verb="${1:-}"
+    local verb="${1:-}" sub="${2:-}"
     local tool_id mode
-    tool_id="$(_cli_tool_id_for_verb "$verb")"
+    tool_id="$(_cli_tool_id_for_verb "$verb" "$sub")"
     mode="$(_cli_tool_default_mode "$tool_id")"
     local hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
 
@@ -6107,8 +6118,11 @@ PY
 #   k2 api-key create [--label L] [--key-stdin] \
 #                     [--provider anthropic|openai|google|xai] [--base-url U] \
 #                     [--workspaces '*'|ws1,ws2,...] \
-#                     [--allow host-sessions,canonical-message,sandboxes] \
-#                     [--deny  host-sessions,canonical-message,sandboxes]
+#                     [--allow host-sessions,canonical-message,sandboxes,db] \
+#                     [--deny  host-sessions,canonical-message,sandboxes,db] \
+#                     [--hire [--max-per-day N] [--max-live N] [--max-per-team N] \
+#                             [--hire-db off|read|write] [--link] [--link-targets ws1,ws2] \
+#                             [--retire] [--reach none|message|host-sessions] [--folder SUB]]
 #   k2 api-key list
 #   k2 api-key revoke <id>
 # --workspaces is the per-key WORKSPACE GRANT (PRD §G2 #4): '*' = every
@@ -6123,6 +6137,14 @@ PY
 #   host-sessions      (aliases: host)      → /v1/w/<ws>/host-sessions*
 #   canonical-message  (aliases: canonical, message) → POST /v1/w/<ws>/message
 #   sandboxes          (alias: sandbox)     → /v1/sandboxes* + /v1/w/<ws>/sessions*
+#   db                 (aliases: sql, database) → /v1/w/<ws>/db* (create/migrate/dump)
+# --hire (0.45.6, agent hire through the v1 API): the key may hire agents
+# (POST /v1/agents/hire, one agent or a team) within the limits you set here;
+# what a hired agent gets never exceeds the key. A hire key is hire-only
+# unless --allow names other doors. Minting one asks for the owner confirm
+# (Touch ID / login password, or the vault password) even with the owner
+# token. Keys can't be edited: to change limits, mint a new key and revoke
+# the old one.
 # Defaults for NEW keys: host-sessions ON, canonical-message OFF, sandboxes OFF
 # (the wiki-chat recipe). --allow REPLACES the default set with only the listed
 # doors; --deny turns listed doors OFF on top of the result.
@@ -6150,9 +6172,20 @@ cmd_api_key() {
         create)
             local label="" anthropic="" provider="" base_url="" workspaces="" allow="" deny=""
             local key_stdin=0 key_on_argv=0
+            local hire=0 h_day="" h_live="" h_team="" h_db="" h_link=0 h_targets="" h_retire=0 h_reach="" h_folder=""
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
+                    --hire)         hire=1; shift ;;
+                    --max-per-day)  h_day="${2:-}"; shift 2 ;;
+                    --max-live)     h_live="${2:-}"; shift 2 ;;
+                    --max-per-team) h_team="${2:-}"; shift 2 ;;
+                    --hire-db)      h_db="${2:-}"; shift 2 ;;
+                    --link)         h_link=1; shift ;;
+                    --link-targets) h_targets="${2:-}"; shift 2 ;;
+                    --retire)       h_retire=1; shift ;;
+                    --reach)        h_reach="${2:-}"; shift 2 ;;
+                    --folder)       h_folder="${2:-}"; shift 2 ;;
                     # The LLM credential is read from stdin (hidden prompt on
                     # a terminal, else one line). Never an argument.
                     --key-stdin)    key_stdin=1; shift ;;
@@ -6183,11 +6216,24 @@ cmd_api_key() {
             elif [ "$key_on_argv" = "1" ] && [ -n "$anthropic" ]; then
                 _cli_warn_key_on_argv
             fi
+            if [ "$hire" = "0" ] && { [ -n "$h_day$h_live$h_team$h_db$h_targets$h_reach$h_folder" ] || [ "$h_link$h_retire" != "00" ]; }; then
+                echo "Error: hire limits (--max-*, --hire-db, --link, --retire, --reach, --folder) need --hire." >&2
+                exit 2
+            fi
+            # A hire key needs a fresh owner confirm (Touch ID / login
+            # password, or the vault password) — the daemon refuses without.
+            local hire_confirm=""
+            if [ "$hire" = "1" ]; then
+                hire_confirm="$(_vault_confirm_token hire-key-mint "" "API key that can hire agents")" || exit 3
+            fi
             # Build the JSON body via python3 so the (secret) LLM key is
             # escaped correctly and never interpolated into a shell/URL
             # context. The key reaches python on stdin (printf is a builtin:
             # no argv) and the body reaches curl on stdin.
-            printf '%s' "$anthropic" | K2_AK_LABEL="$label" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" python3 -c 'import json,os,sys
+            printf '%s' "$anthropic" | K2_AK_LABEL="$label" K2_AK_PROVIDER="$provider" K2_AK_BASE_URL="$base_url" K2_AK_WORKSPACES="$workspaces" K2_AK_ALLOW="$allow" K2_AK_DENY="$deny" \
+                K2_AK_HIRE="$hire" K2_AK_HCONF="$hire_confirm" K2_AK_HDAY="$h_day" K2_AK_HLIVE="$h_live" K2_AK_HTEAM="$h_team" K2_AK_HDB="$h_db" \
+                K2_AK_HLINK="$h_link" K2_AK_HTARGETS="$h_targets" K2_AK_HRETIRE="$h_retire" K2_AK_HREACH="$h_reach" K2_AK_HFOLDER="$h_folder" \
+                python3 -c 'import json,os,sys
 b={"label": os.environ.get("K2_AK_LABEL","")}
 k=sys.stdin.read().strip()
 if k: b["anthropicKey"]=k
@@ -6210,20 +6256,47 @@ if a:
 d=os.environ.get("K2_AK_DENY","").strip()
 if d:
     b["deny"]=[s.strip() for s in d.split(",") if s.strip()]
+if os.environ.get("K2_AK_HIRE") == "1":
+    h={}
+    for env,key in (("K2_AK_HDAY","maxMembersPerDay"),("K2_AK_HLIVE","maxLiveMembers"),("K2_AK_HTEAM","maxMembersPerTeam")):
+        v=os.environ.get(env,"").strip()
+        if v:
+            try: h[key]=int(v)
+            except ValueError:
+                print("Error: %s must be a number" % key, file=sys.stderr); sys.exit(2)
+    if os.environ.get("K2_AK_HDB","").strip(): h["db"]=os.environ["K2_AK_HDB"].strip()
+    if os.environ.get("K2_AK_HLINK")=="1": h["link"]=True
+    t=os.environ.get("K2_AK_HTARGETS","").strip()
+    if t: h["linkTargets"]=[s.strip() for s in t.split(",") if s.strip()]
+    if os.environ.get("K2_AK_HRETIRE")=="1": h["retire"]=True
+    if os.environ.get("K2_AK_HREACH","").strip(): h["reach"]=os.environ["K2_AK_HREACH"].strip()
+    if os.environ.get("K2_AK_HFOLDER","").strip(): h["folder"]=os.environ["K2_AK_HFOLDER"].strip()
+    b["hire"]=h
+    b["confirmToken"]=os.environ.get("K2_AK_HCONF","")
 print(json.dumps(b))' \
                 | cli_post_json_stdin "/cli/api-keys/create" \
                 | K2_AK_WORKSPACES="$workspaces" python3 -c 'import json,os,sys
 try:
     d=json.load(sys.stdin)
     if "error" in d:
-        print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+        e=d["error"]
+        if isinstance(e,dict): e="%s: %s" % (e.get("code",""), e.get("hint",""))
+        print("Error: %s" % e, file=sys.stderr); sys.exit(1)
     print("API key created (id: %s)." % d.get("id",""))
     caps=d.get("capabilities") or {}
     if caps:
         on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
                           ("canonical-message",caps.get("canonicalMessage")),
-                          ("sandboxes",caps.get("sandboxes"))) if v]
+                          ("sandboxes",caps.get("sandboxes")),
+                          ("db",caps.get("db")),
+                          ("hire",caps.get("hire"))) if v]
         print("Capabilities: %s" % (", ".join(on) if on else "(none)"))
+    hl=d.get("hireLimits")
+    if hl:
+        print("Hire limits: %s/day, %s live, %s per team, db %s, link %s, retire %s, reach %s%s" % (
+            hl.get("maxMembersPerDay"), hl.get("maxLiveMembers"), hl.get("maxMembersPerTeam"), hl.get("db"),
+            "on" if hl.get("link") else "off", "on" if hl.get("retire") else "off", hl.get("reach"),
+            (", folder %s" % hl["folder"]) if hl.get("folder") else ""))
     print("")
     print("  %s" % d.get("key",""))
     print("")
@@ -6260,8 +6333,11 @@ try:
         caps=k.get("capabilities") or {}
         on=[n for n,v in (("host-sessions",caps.get("hostSessions")),
                           ("canonical-message",caps.get("canonicalMessage")),
-                          ("sandboxes",caps.get("sandboxes"))) if v]
+                          ("sandboxes",caps.get("sandboxes")),
+                          ("db",caps.get("db")),
+                          ("hire",caps.get("hire"))) if v]
         line += "  caps=%s" % (",".join(on) if on else "none")
+        if k.get("legacyNewWorkspace"): line += "  legacy-new-workspace"
         print(line)
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
@@ -6317,8 +6393,11 @@ except Exception as e:
             echo "  create  [--label L] [--key-stdin]   (LLM key read from stdin; never an argument)" >&2
             echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
             echo "          [--workspaces '*'|ws1,ws2,...]" >&2
-            echo "          [--allow host-sessions,canonical-message,sandboxes]" >&2
-            echo "          [--deny  host-sessions,canonical-message,sandboxes]" >&2
+            echo "          [--allow host-sessions,canonical-message,sandboxes,db]" >&2
+            echo "          [--deny  host-sessions,canonical-message,sandboxes,db]" >&2
+            echo "          [--hire [--max-per-day N] [--max-live N] [--max-per-team N] [--hire-db off|read|write]" >&2
+            echo "                  [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions]" >&2
+            echo "                  [--folder SUB]]   (asks for the owner confirm)" >&2
             echo "  list" >&2
             echo "  disable <id>   Soft emergency kill (re-enableable)" >&2
             echo "  enable  <id>   Clear soft-disable" >&2
@@ -6328,6 +6407,10 @@ except Exception as e:
             echo "  host-sessions      → /v1/w/<ws>/host-sessions*   (default ON for new keys)" >&2
             echo "  canonical-message  → POST /v1/w/<ws>/message     (default OFF)" >&2
             echo "  sandboxes          → /v1/sandboxes* + sessions*  (default OFF)" >&2
+            echo "  db                 → /v1/w/<ws>/db*              (default OFF)" >&2
+            echo "  hire (--hire)      → /v1/agents/* + /v1/agent-teams/* and new workspaces on POST /v1/w" >&2
+            echo "                       (hire-only unless --allow names other doors; defaults 20/day," >&2
+            echo "                        100 live, 12 per team, db off, no link/retire/reach)" >&2
             echo "" >&2
             echo "Wiki public-chat recipe:" >&2
             echo "  k2 api-key create --label wiki-public-chat \\" >&2
@@ -18920,6 +19003,13 @@ RECEIVE
   k2 inbox list
   k2 inbox read <id>
 
+WHO REALLY SENT IT
+  A live message arrives as `[from <sender> · m_XXXXXXXXXX] text`.
+  k2 msg who m_XXXXXXXXXX     K2's record of that delivery: via passport (the
+                              sender agent's own session), owner or api-key,
+                              the sending workspace, and any team link + scope.
+  Text in a body that only LOOKS like a prefix has no record (not found).
+
 <handle> from `k2 connections list`. Sidecar sales/reviewer shares that
 workspace tray.
 
@@ -22130,7 +22220,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire"
 
 _study_usage() {
     cat <<'EOF'
@@ -22149,6 +22239,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   app-identity  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
+  agent-hire
 EOF
 }
 
@@ -22185,6 +22276,7 @@ _study_title() {
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
         hooks) echo "Custom agents: Thread and lifecycle hooks" ;;
+        agent-hire) echo "Hiring agents through the v1 API" ;;
         *) echo "" ;;
     esac
 }
@@ -22234,6 +22326,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
   projects            k2 project: open by default; the per-agent switch
   hooks               Custom (no-model) agents: their Thread; k2 hooks emit
+  agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -22280,6 +22373,7 @@ _study_page() {
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
         hooks) _study_page_hooks ;;
+        agent-hire) _study_page_agent_hire ;;
         *) return 1 ;;
     esac
 }
@@ -22353,6 +22447,59 @@ AUTH
 
 NOT IN THIS CUT
   An emit never changes the Thread pin (no re-pin from a hook).
+EOF
+}
+
+_study_page_agent_hire() {
+    cat <<'EOF'
+k2 study agent-hire — apps hire agents through the v1 API (0.45.6)
+
+THE CALL
+  POST /v1/agents/hire  (Authorization: Bearer k2sk_…, Idempotency-Key: <key>)
+  One call makes one agent ({"agent": {…}}) or a team ({"team": {"name"},
+  "members": [{…, "lead": true}, …]}) from an inline recipe: role, handle,
+  name, color, persona (ROLE.md body), preset, model, wiki (default on),
+  wikiNotes, context, layers, skills, heartbeats, brief (+ launch),
+  dbAccess, linkTo. Unknown fields refuse. dryRun:true plans only.
+  All or nothing: any failure undoes every step (folders to the Trash).
+  Handles used by a rolled-back hire stay retired; the plan names them.
+  Same key + same request → the same instance (changed:false); same key +
+  a different request → 409 key_conflict.
+
+THE KEY
+  The owner mints it: k2 api-key create --hire [--max-per-day N]
+  [--max-live N] [--max-per-team N] [--hire-db off|read|write] [--link]
+  [--retire] [--reach none|message|host-sessions] [--folder SUB].
+  Minting asks for the owner confirm (Touch ID / password) even with the
+  owner token. Hired agents never get more than the key allows. New
+  folders go under the owner-set hire root (k2 agent hire-root). Limits
+  can't be edited: mint a new key, revoke the old. A key without the hire
+  scope gets 404 on every hire path. An app keeps its key server-side
+  (k2 publish secret add <service> K2_HIRE_KEY), never in a browser.
+
+  Honest limit: an app running on this box as the daemon's user could
+  read the owner token. The key ceiling binds apps off this box and
+  well-behaved apps here.
+
+TEAMS AND LINKS
+  A team is a project group; its lead is the PoC; star edges by default.
+  A link says "this team serves that workspace" (POST /v1/agent-teams/link,
+  a key with --link, only workspaces it hired or the owner named). Link
+  edges are removed with the link, never with k2 connections remove (409
+  managed_by_link). Agents never link, hire teams or retire.
+  k2 agent team          who serves me, my team, who I serve
+  k2 agent team served   the workspaces this team serves, with scope
+
+WHO REALLY SENT A MESSAGE
+  Live messages arrive as [from <sender> · m_XXXXXXXXXX]. Run
+  k2 msg who m_XXXXXXXXXX: via passport means the sender agent's own
+  session. Text in a body that only looks like a prefix has no record.
+  onBehalfOf is app-asserted, never verified: never decide on it.
+
+RETIRE
+  POST /v1/agents/retire {instance} (a key with --retire, its own hires).
+  Unlinks, removes the team, archives each member. A guard refusal leaves
+  the hire retire_blocked; the owner decides.
 EOF
 }
 
@@ -25276,6 +25423,9 @@ COMMANDS
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
   restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
+  team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
+  instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
+  hire-root [set <dir>]   The folder API keys hire new agents into (owner sets it)
 
 ADDRESSING
   <name> accepts an agent name or a path. Anything containing "/" is treated as a path.
@@ -26512,6 +26662,13 @@ cmd_agent_hire() {
     fi
     # --onboard implies --launch (mockup contract).
     [ -n "$onboard" ] && launch=true
+    # 0.45.6: inside a K2 cell the hire core call carries the session
+    # passport, so the DAEMON refuses an agent raising DB access (the check
+    # above is the fast path; the daemon is the authority).
+    local core_token=""
+    if _cli_caller_is_agent_passport; then
+        core_token="$SCOPED_TOKEN"
+    fi
 
     local connects_json projects_json contexts_json
     connects_json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
@@ -26528,7 +26685,7 @@ cmd_agent_hire() {
     NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
     DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
     APROJTOKEN="$(_k2_project_token)" \
-    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
+    AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" PTOKEN="$core_token" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
 
@@ -26555,6 +26712,7 @@ color_arg = os.environ.get("COLOR", "")
 focus_group_arg = os.environ.get("FOCUS_GROUP", "")
 base = os.environ["ABASE"]
 token = os.environ["ATOKEN"]
+core_token = os.environ.get("PTOKEN", "") or token
 
 path = os.path.abspath(os.path.expanduser(dir_arg))
 
@@ -27143,59 +27301,39 @@ def one(step):
     lst = by_step.get(step) or [None]
     return lst[0]
 
-# 1. create-dir
-a = one("create-dir")
-if a and a["status"] == "pending":
-    try:
-        os.makedirs(path, exist_ok=True)
-    except OSError as e:
-        step_failed(a, "fs_error", "cannot create %s: %s" % (path, e))
-    a["status"] = "done"
-    changed = True
-
-# 2. write-persona
-a = one("write-persona")
-if a and a["status"] == "pending":
-    # /cli/agents/create scaffolds the canonical .k2/agent/ROLE.md
-    # (no-op when it exists); a template/--persona then writes through
-    # /cli/agents/save-agent-md — the same backup-aware door
-    # `k2 agent set --persona` uses.
-    resp = http_post_query("/cli/agents/create",
-                    {"project_path": path, "name": agent_name,
-                     "role": template or ""})
-    if isinstance(resp.get("error"), str) and resp["error"]:
-        step_failed(a, "daemon_error", "persona scaffold failed: %s" % resp["error"])
-    if persona_content is not None:
-        resp = http_post_json("/cli/agents/save-agent-md",
-                              {"project_path": path, "agent_name": agent_name,
-                               "content": persona_content})
-        if resp.get("error") or not resp.get("success"):
-            step_failed(a, "daemon_error",
-                        "persona write failed: %s" % resp.get("error", json.dumps(resp)[:300]))
-    a["status"] = "done"
-    changed = True
-
-# 3. register-workspace
-a = one("register-workspace")
-if a and a["status"] == "pending":
-    open_params = {"path": path}
-    if no_wiki:
-        open_params["no_wiki"] = "1"
-    if no_agents_md:
-        open_params["no_agents_md"] = "1"
-    if fanout:
-        open_params["fanout"] = "1"
-    resp = http_post_query("/cli/workspace/open", open_params)
+# 1-3. create-dir + write-persona + register-workspace (+ DB access) on the
+#      daemon's shared hire core (POST /cli/agents/hire, 0.45.6). Inside a
+#      K2 cell it carries the session passport, so the daemon refuses an
+#      agent raising DB access (the 0.44.4 check, now daemon-side).
+core_steps = ("create-dir", "write-persona", "register-workspace", "set-db-access")
+pending_core = [one(s) for s in core_steps if one(s) and one(s)["status"] == "pending"]
+if pending_core:
+    core_body = {"path": path, "noWiki": no_wiki, "noAgentsMd": no_agents_md,
+                 "fanout": fanout, "role": template or ""}
+    wp = one("write-persona")
+    if persona_content is not None and wp and wp["status"] == "pending":
+        core_body["personaRaw"] = persona_content
+    dba_core = one("set-db-access")
+    if dba_core and dba_core["status"] == "pending":
+        core_body["dbAccess"] = dba_core["access"]
+    resp = http_post_json("/cli/agents/hire", core_body, tok=core_token)
     err = resp.get("error")
-    if isinstance(err, str) and "already registered" in err:
-        a["status"] = "skipped"
-        a["reason"] = "already-registered"
-    elif err or not resp.get("success"):
-        step_failed(a, "daemon_error",
-                    "workspace registration failed: %s" % (err or json.dumps(resp)[:300]))
-    else:
-        a["status"] = "done"
-        changed = True
+    if err or not resp.get("ok"):
+        code = err.get("code") if isinstance(err, dict) else "daemon_error"
+        hint = err.get("hint") if isinstance(err, dict) else (err or json.dumps(resp)[:300])
+        bad = dba_core if (code == "owner_only" and dba_core and dba_core["status"] == "pending") else pending_core[0]
+        step_failed(bad, code or "daemon_error", hint, 3 if code == "owner_only" else None)
+    by_core = {x.get("step"): x for x in resp.get("steps", [])}
+    for name in core_steps:
+        a = one(name)
+        if a and a["status"] == "pending":
+            got = by_core.get(name) or {}
+            a["status"] = got.get("status") or "done"
+            if got.get("reason"):
+                a["reason"] = got["reason"]
+            changed = changed or a["status"] == "done"
+    ra = one("register-workspace")
+    if ra and ra["status"] == "done":
         ga = one("generate-agents-md")
         if ga and ga["status"] == "pending":
             agents_path = os.path.join(path, "AGENTS.md")
@@ -27208,9 +27346,6 @@ if a and a["status"] == "pending":
                     body = ""
             if os.path.islink(agents_path) or "GENERATED by K2" in body:
                 ga["status"] = "done"
-            elif os.path.lexists(agents_path):
-                ga["status"] = "skipped"
-                ga["reason"] = "user AGENTS.md present"
             else:
                 ga["status"] = "skipped"
                 ga["reason"] = "user AGENTS.md present"
@@ -46784,6 +46919,269 @@ print(json.dumps(b))
     esac
 }
 
+# ── Agent hire: teams, instances, hire root, sender check (0.45.6) ────
+# prd-agent-hire-templates-v1 "build A": the v1 API hires from an inline
+# recipe (`POST /v1/agents/hire`, an API key with the hire scope). These
+# verbs are the people's side on this box:
+#   k2 agent team [--workspace <ws>] [--json]      who serves me / my team / who I serve
+#   k2 agent team served [--workspace <ws>]        the workspaces this team serves (+ scope)
+#   k2 agent team link <team> <workspace> [--kind serves|helper_of] [--scope JSON] [--mesh]
+#   k2 agent team unlink <link-id>
+#   k2 agent instances [--key <api-key-id>] [--json]
+#   k2 agent instances show <instance>
+#   k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run] [--json]
+#   k2 agent instances retire <instance> [--force]
+#   k2 agent hire-root [set <dir>]
+#   k2 msg who <m_…>                               who really sent a delivery
+# Inside a K2 terminal `team` and `instances` carry the session passport:
+# an agent reads its own links; it never hires teams, links or retires.
+
+# Print a hire-route JSON answer. $1 = view, $2 = "true" for raw JSON.
+# Exit codes: owner_only/forbidden/exceeds_key/vault_* → 3, not_found → 4,
+# usage → 2, anything else → 1.
+_hire_print() {
+    HIRE_VIEW="$1" HIRE_JSON="${2:-false}" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon answered: %s" % raw[:300], file=sys.stderr); sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err:
+    code = err.get("code", "") if isinstance(err, dict) else ""
+    hint = err.get("hint", "") if isinstance(err, dict) else str(err)
+    print("Error: %s%s" % ((code + ": ") if code else "", hint), file=sys.stderr)
+    if code in ("owner_only", "forbidden", "exceeds_key", "role_required") or "token" in hint.lower():
+        sys.exit(3)
+    sys.exit({"not_found": 4, "usage": 2}.get(code, 1))
+if os.environ.get("HIRE_JSON") == "true":
+    print(json.dumps(d, indent=2)); sys.exit(0)
+view = os.environ.get("HIRE_VIEW", "")
+def link_line(l, side):
+    other = l.get("teamLeadHandle") if side == "out" else l.get("consumerHandle")
+    team = l.get("teamName") or l.get("teamLeadHandle") or "?"
+    scope = json.dumps(l["scope"]) if l.get("scope") is not None else "-"
+    if side == "out":
+        return "  %s  %s %s (lead %s)  scope %s" % (l["id"], "served by" if l["kind"] == "serves" else "helped by", team, other or "?", scope)
+    return "  %s  %s %s  scope %s" % (l["id"], "serves" if l["kind"] == "serves" else "helps", other or "?", scope)
+if view in ("team", "served"):
+    ws = d.get("workspace") or {}
+    print("Workspace: %s" % (ws.get("handle") or ws.get("id")))
+    t = d.get("team")
+    if view == "team":
+        if t:
+            print("Team: %s (%s)" % (t.get("name") or "(single hire)", t.get("instance")))
+            for m in t.get("members") or []:
+                print("  %s%s  %s" % (m["handle"], " (lead)" if m.get("lead") else "", m.get("role", "")))
+        out = d.get("servedBy") or []
+        print("Served by:" if out else "Served by: nobody")
+        for l in out: print(link_line(l, "out"))
+    inn = d.get("serves") or []
+    print("Serves:" if inn else "Serves: nobody")
+    for l in inn: print(link_line(l, "in"))
+elif view == "instances":
+    rows = d.get("instances") or []
+    if not rows:
+        print("No hires yet."); sys.exit(0)
+    for i in rows:
+        members = ",".join(m["handle"] for m in i.get("members") or [])
+        who = i.get("apiKeyId") and ("key " + i["apiKeyId"][:8]) or i.get("actor")
+        print("%s  [%s]  %s  %s  by %s%s" % (i["id"], i["status"], i.get("teamName") or "-", members or "-", who,
+              ("  for %s (app-asserted)" % i["onBehalfOf"]) if i.get("onBehalfOf") else ""))
+elif view == "instance":
+    i = d.get("instance") or {}
+    print("%s  [%s]  %s" % (i.get("id"), i.get("status"), i.get("teamName") or "(single hire)"))
+    if i.get("reason"): print("  reason: %s" % i["reason"])
+    for m in i.get("members") or []:
+        print("  %s%s  %s  [%s]  %s" % (m["handle"], " (lead)" if m.get("lead") else "", m.get("role"), m.get("status"), m.get("path")))
+    for l in d.get("links") or []:
+        print("  link %s  %s → %s" % (l["id"], l.get("teamLeadHandle"), l.get("consumerHandle")))
+    for e in d.get("events") or []:
+        print("  event %s %s %s%s" % (e["at"], e["action"], e["result"], (" — " + e["reason"]) if e.get("reason") else ""))
+elif view == "hire":
+    if d.get("dryRun"):
+        p = d.get("plan") or {}
+        print("Plan (nothing written):")
+        for m in p.get("members") or []:
+            print("  %s%s  %s" % (m["handle"], " (lead)" if m.get("lead") else "", m["path"]))
+        print(p.get("note", "")); sys.exit(0)
+    print("%s %s" % ("Hired" if d.get("changed") else "Already hired (same key):", d.get("instance")))
+    for m in d.get("members") or []:
+        print("  %s%s  %s" % (m["handle"], " (lead)" if m.get("lead") else "", m["path"]))
+    for l in d.get("links") or []:
+        print("  linked %s" % l["id"])
+elif view == "retire":
+    print("%s %s" % (d.get("instance"), d.get("status")))
+    for m in d.get("members") or []:
+        print("  %s %s%s" % (m["handle"], m["status"], (" — " + m["reason"]) if m.get("reason") else ""))
+    if d.get("hint"): print(d["hint"])
+    if d.get("status") == "retire_blocked": sys.exit(3)
+elif view == "link":
+    l = d.get("link") or {}
+    print("%s %s" % ("Linked" if d.get("changed") else "Already linked:", l.get("id")))
+elif view == "unlink":
+    print("Unlinked %s" % d.get("link") if d.get("changed") else "Link %s was already removed" % d.get("link"))
+elif view == "root":
+    print("%s%s" % (d.get("root"), "  (default)" if d.get("default") else ""))
+elif view == "who":
+    s = d.get("sender") or {}
+    print("Delivery %s" % d.get("id"))
+    print("  via:     %s%s" % (d.get("via"), "  (the sender agent'"'"'s own session)" if d.get("via") == "passport" else ""))
+    print("  sender:  %s" % (s.get("handle") or s.get("label") or "-"))
+    print("  actor:   %s" % d.get("actor"))
+    if d.get("onBehalfOf"): print("  for:     %s (app-asserted, not verified)" % d["onBehalfOf"]["value"])
+    print("  linked:  %s" % ("yes " + ", ".join("%s %s" % (l["id"], json.dumps(l.get("scope"))) for l in d.get("links") or []) if d.get("linked") else "no"))
+else:
+    print(json.dumps(d, indent=2))
+'
+}
+
+cmd_agent_team() {
+    local sub="${1:-}"
+    case "$sub" in
+        --help|-h|help)
+            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            return 0 ;;
+        link)
+            shift
+            local team="" ws="" kind="" scope="" topo="" as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --kind) kind="${2:-}"; shift 2 ;;
+                    --scope) scope="${2:-}"; shift 2 ;;
+                    --mesh) topo="mesh"; shift ;;
+                    --json) as_json=true; shift ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) if [ -z "$team" ]; then team="$1"; elif [ -z "$ws" ]; then ws="$1"; else echo "Unexpected: $1" >&2; exit 2; fi; shift ;;
+                esac
+            done
+            [ -n "$team" ] && [ -n "$ws" ] || { echo "Usage: k2 agent team link <team instance|workspace> <workspace it serves> [--kind serves|helper_of] [--scope JSON] [--mesh]" >&2; exit 2; }
+            local body
+            body=$(T="$team" W="$ws" KIND="$kind" SCOPE="$scope" TOPO="$topo" python3 -c '
+import json, os, sys
+b = {"team": os.environ["T"], "workspace": os.environ["W"]}
+if os.environ.get("KIND"): b["kind"] = os.environ["KIND"]
+if os.environ.get("TOPO"): b["topology"] = os.environ["TOPO"]
+s = os.environ.get("SCOPE", "")
+if s:
+    try: b["scope"] = json.loads(s)
+    except ValueError: print("--scope must be JSON", file=sys.stderr); sys.exit(2)
+print(json.dumps(b))') || exit 2
+            cli_post_json "/cli/agent-teams/link" "$body" | _hire_print link "$as_json" ;;
+        unlink)
+            shift
+            local id="${1:-}"
+            [ -n "$id" ] || { echo "Usage: k2 agent team unlink <link-id>" >&2; exit 2; }
+            cli_post_json "/cli/agent-teams/unlink" "$(L="$id" python3 -c 'import json,os; print(json.dumps({"link": os.environ["L"]}))')" \
+                | _hire_print unlink false ;;
+        served|""|--json|--workspace)
+            local view="team" ws="" as_json=false
+            [ "$sub" = "served" ] && { view="served"; shift; }
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --workspace) ws="${2:-}"; shift 2 ;;
+                    --json) as_json=true; shift ;;
+                    *) echo "Unknown argument: $1 (see k2 agent team --help)" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$ws" ] || ws="$PROJECT"
+            cli_request "/cli/agent-teams/links" "workspace=$(urlencode "$ws")" | _hire_print "$view" "$as_json" ;;
+        *)
+            echo "Unknown: k2 agent team $sub (see k2 agent team --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_agent_instances() {
+    local sub="${1:-}"
+    case "$sub" in
+        --help|-h|help)
+            sed -n '/^# ── Agent hire: teams, instances/,/^# Inside a K2 terminal/p' "$0" | sed 's/^# \{0,1\}//'
+            return 0 ;;
+        show)
+            local id="${2:-}" as_json=false
+            [ "${3:-}" = "--json" ] && as_json=true
+            [ -n "$id" ] || { echo "Usage: k2 agent instances show <instance>" >&2; exit 2; }
+            cli_request "/cli/agent-instances" "instance=$(urlencode "$id")" | _hire_print instance "$as_json" ;;
+        retire)
+            shift
+            local id="" force=false as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --force) force=true; shift ;;
+                    --json) as_json=true; shift ;;
+                    -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) id="$1"; shift ;;
+                esac
+            done
+            [ -n "$id" ] || { echo "Usage: k2 agent instances retire <instance> [--force]" >&2; exit 2; }
+            cli_post_json "/cli/agent-instances/retire" "$(I="$id" F="$force" python3 -c 'import json,os; print(json.dumps({"instance": os.environ["I"], "force": os.environ["F"] == "true"}))')" \
+                | _hire_print retire "$as_json" ;;
+        hire)
+            shift
+            local file="" key="" dry=false as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --key) key="${2:-}"; shift 2 ;;
+                    --dry-run) dry=true; shift ;;
+                    --json) as_json=true; shift ;;
+                    -*) [ "$1" = "-" ] && { file="-"; shift; continue; }; echo "Unknown flag: $1" >&2; exit 2 ;;
+                    *) file="$1"; shift ;;
+                esac
+            done
+            [ -n "$file" ] || { echo "Usage: k2 agent instances hire <recipe.json|-> [--key <idempotency-key>] [--dry-run]" >&2; exit 2; }
+            local recipe
+            if [ "$file" = "-" ]; then recipe="$(cat)"; else
+                [ -r "$file" ] || { echo "Error: cannot read $file" >&2; exit 2; }
+                recipe="$(cat "$file")"
+            fi
+            local body
+            body=$(printf '%s' "$recipe" | KEY="$key" DRY="$dry" python3 -c '
+import json, os, sys
+try: b = json.load(sys.stdin)
+except ValueError as e: print("Error: the recipe is not JSON: %s" % e, file=sys.stderr); sys.exit(2)
+if os.environ.get("KEY"): b["key"] = os.environ["KEY"]
+if os.environ.get("DRY") == "true": b["dryRun"] = True
+print(json.dumps(b))') || exit 2
+            printf '%s' "$body" | cli_post_json_stdin "/cli/agent-instances/hire" | _hire_print hire "$as_json" ;;
+        ""|--json|--key)
+            local key="" as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --key) key="${2:-}"; shift 2 ;;
+                    --json) as_json=true; shift ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            if [ -n "$key" ]; then
+                cli_request "/cli/agent-instances" "key=$(urlencode "$key")" | _hire_print instances "$as_json"
+            else
+                cli_request "/cli/agent-instances" | _hire_print instances "$as_json"
+            fi ;;
+        *)
+            echo "Unknown: k2 agent instances $sub (see k2 agent instances --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_agent_hire_root() {
+    case "${1:-}" in
+        set)
+            [ -n "${2:-}" ] || { echo "Usage: k2 agent hire-root set <dir>" >&2; exit 2; }
+            cli_post_json "/cli/agents/hire-root" "$(R="$2" python3 -c 'import json,os; print(json.dumps({"root": os.environ["R"]}))')" \
+                | _hire_print root false ;;
+        ""|--json)
+            cli_request "/cli/agents/hire-root" | _hire_print root "$([ "${1:-}" = "--json" ] && echo true || echo false)" ;;
+        *) echo "Usage: k2 agent hire-root [set <dir>]  — the folder API keys hire agents into (owner sets it)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_msg_who() {
+    local id="${1:-}" as_json=false
+    [ "${2:-}" = "--json" ] && as_json=true
+    [ -n "$id" ] || { echo "Usage: k2 msg who <m_…>  (the id in [from … · m_…])" >&2; exit 2; }
+    cli_request "/cli/msg/who" "id=$(urlencode "$id")" | _hire_print who "$as_json"
+}
+
 # ── Router ───────────────────────────────────────────────────────────
 # Select TCP credential by catalog mode BEFORE any verb handler runs.
 # ID/locked tools in a scoped cell keep SCOPED_TOKEN; Open tools may
@@ -46791,7 +47189,7 @@ print(json.dumps(b))
 # A passport from a shared Codex app-server or a dead session is refused
 # with a clear error first (never an owner fallback).
 _cli_check_session_passport "${1:-help}"
-_cli_apply_auth_for_verb "${1:-help}"
+_cli_apply_auth_for_verb "${1:-help}" "${2:-}"
 
 case "${1:-help}" in
     fed)
@@ -46809,6 +47207,10 @@ case "${1:-help}" in
             get)    shift 2; cmd_agent_get "$@" ;;
             set)    shift 2; cmd_agent_set "$@" ;;
             hire)   shift 2; cmd_agent_hire "$@" ;;
+            # 0.45.6 agent hire: team links, hire instances, the hire root.
+            team|teams) shift 2; cmd_agent_team "$@" ;;
+            instances|instance) shift 2; cmd_agent_instances "$@" ;;
+            hire-root) shift 2; cmd_agent_hire_root "$@" ;;
             # S3 deliberately RECLAIMS the previously-deprecated `list`
             # arm with the real fleet-view semantics (PRD §3).
             list)   shift 2; cmd_agent_list "$@" ;;
@@ -47339,8 +47741,14 @@ EOF
         shift; cmd_whoami "$@"
         ;;
     msg)
-        # Phase 2.1: msg now has --inbox and --signal flag forms.
-        shift; cmd_msg_v2 "$@"
+        # 0.45.6 sender check: `k2 msg who m_…` (only a delivery-id shape, so
+        # a workspace named "who" still gets its messages).
+        if [ "${2:-}" = "who" ] && [[ "${3:-}" =~ ^m_[A-Za-z0-9]{10}$ ]]; then
+            shift 2; cmd_msg_who "$@"
+        else
+            # Phase 2.1: msg now has --inbox and --signal flag forms.
+            shift; cmd_msg_v2 "$@"
+        fi
         ;;
     thread)
         shift; cmd_thread "$@"

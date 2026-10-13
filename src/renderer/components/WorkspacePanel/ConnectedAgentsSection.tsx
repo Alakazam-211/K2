@@ -5,32 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { SectionManageCog } from './SectionManageCog'
 import { scopedKey } from '@/kessel/server-scope'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
-
-/** One row from GET `/cli/connections?action=list` — present edges only. */
-type ConnListRow = {
-  remote?: boolean
-  projectId?: string
-  projectName?: string
-  path?: string
-  reachable?: boolean
-  address?: string
-  host?: string
-  agent?: string
-}
-
-function parseConnectionRows(body: unknown): ConnListRow[] {
-  let value: unknown = body
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value)
-    } catch {
-      return []
-    }
-  }
-  if (!value || typeof value !== 'object') return []
-  const rows = (value as { connections?: unknown }).connections
-  return Array.isArray(rows) ? (rows as ConnListRow[]) : []
-}
+import { parseConnectionRows, remoteConnRowView, type ConnListRow } from './connected-agents-rows'
 
 /** Collapsible Connected Agents — only workspaces with a present connection. */
 export function ConnectedAgentsSection({ projectId }: { projectId: string }): React.JSX.Element {
@@ -149,14 +124,20 @@ export function ConnectedAgentsSection({ projectId }: { projectId: string }): Re
           ) : (
             rows.map((row, i) => {
               if (row.remote) {
-                const title = row.agent || row.address || 'Remote agent'
-                const detail = row.host || row.address || 'federated'
+                const view = remoteConnRowView(row)
                 return (
                   <ConnRow
                     key={row.address || `remote-${i}`}
-                    title={title}
-                    detail={detail}
+                    title={view.title}
+                    detail={view.detail}
                     federated
+                    gone={view.gone}
+                    // Re-add lives in Settings → Connections (owner/admin).
+                    onClick={
+                      view.gone && room.isPrimary
+                        ? () => useSettingsStore.getState().openSettings('projects', projectId, 'connections')
+                        : undefined
+                    }
                   />
                 )
               }
@@ -188,12 +169,14 @@ function ConnRow({
   detail,
   color,
   federated,
+  gone,
   onClick,
 }: {
   title: string
   detail: string
   color?: string | null
   federated?: boolean
+  gone?: boolean
   onClick?: () => void
 }): React.JSX.Element {
   const inner = (
@@ -201,31 +184,44 @@ function ConnRow({
       <span
         className="w-2 h-2 flex-shrink-0"
         style={{
-          backgroundColor: federated
-            ? 'var(--color-accent)'
-            : color || 'var(--color-neutral)',
+          backgroundColor: gone
+            ? 'var(--color-neutral)'
+            : federated
+              ? 'var(--color-accent)'
+              : color || 'var(--color-neutral)',
         }}
       />
-      <span className="min-w-0 flex-1">
-        <span className="block text-[11px] text-[var(--color-text-secondary)] truncate">
+      <span className={`min-w-0 flex-1 ${gone ? 'opacity-60' : ''}`}>
+        <span
+          className={`block text-[11px] truncate ${gone ? 'text-[var(--color-text-muted)] line-through' : 'text-[var(--color-text-secondary)]'}`}
+        >
           {title}
         </span>
-        <span className="block text-[9px] text-[var(--color-text-muted)] truncate">
-          {federated ? `federated · ${detail}` : detail}
+        <span
+          className={`block text-[9px] text-[var(--color-text-muted)] ${gone ? 'leading-relaxed' : 'truncate'}`}
+          title={detail}
+        >
+          {detail}
         </span>
       </span>
     </>
   )
+  const goneAttr = gone ? 'true' : undefined
   if (onClick) {
     return (
       <button
         type="button"
         onClick={onClick}
+        data-gone={goneAttr}
         className="w-full flex items-center gap-2 text-left cursor-pointer no-drag hover:opacity-80"
       >
         {inner}
       </button>
     )
   }
-  return <div className="flex items-center gap-2">{inner}</div>
+  return (
+    <div className="flex items-center gap-2" data-gone={goneAttr}>
+      {inner}
+    </div>
+  )
 }

@@ -738,7 +738,29 @@ describe('listRemoteConnections', () => {
     )
     const out = await listRemoteConnections('/Users/me/ws')
     expect(out).toEqual([
-      { remote: true, address: 'ai::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai' },
+      { remote: true, address: 'ai::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai', gone: false },
+    ])
+  })
+
+  it('carries remoteWorkspaceGone as gone (0159)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            connections: [
+              { remote: true, address: 'ai::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'ai', remoteWorkspaceGone: true },
+              { remote: true, address: 'bo::rpm.k2.dev', host: 'rpm.k2.dev', agent: 'bo', remoteWorkspaceGone: false },
+            ],
+          }),
+      })),
+    )
+    const out = await listRemoteConnections('/Users/me/ws')
+    expect(out.map((r) => [r.address, r.gone])).toEqual([
+      ['ai::rpm.k2.dev', true],
+      ['bo::rpm.k2.dev', false],
     ])
   })
 

@@ -1011,6 +1011,24 @@ export interface RemoteConnectionEntry {
   address: string
   host: string
   agent: string
+  /** 0159 (`remoteWorkspaceGone`): the workspace this connection was bound
+   *  to left its server. Handles are never reused, so sends fail 410
+   *  `remote_workspace_gone` until an owner or admin re-adds it. False on a
+   *  daemon that doesn't send the field. */
+  gone: boolean
+}
+
+export { remoteConnectionGoneNote, canReAddGoneConnection } from './federation-gone'
+
+/** Re-add a gone `agent::host` connection. The daemon's `connections add`
+ *  of an existing gone row clears its old binding, and the add's roster
+ *  fetch binds it by name to the workspace that has that name now. Same
+ *  path (pairing + reverse row) as a fresh add. */
+export async function reAddGoneRemoteConnection(
+  sourceWorkspacePath: string,
+  address: string,
+): Promise<{ reverseWarning: string | null }> {
+  return addRemoteConnection(sourceWorkspacePath, address)
 }
 
 /** A daemon-wide remote connection: a `RemoteConnectionEntry` plus which of
@@ -1075,6 +1093,7 @@ export async function listRemoteConnections(
         address: String(c.address),
         host: typeof c.host === 'string' ? c.host : '',
         agent: typeof c.agent === 'string' ? c.agent : '',
+        gone: c.remoteWorkspaceGone === true,
       }))
   } catch {
     return []

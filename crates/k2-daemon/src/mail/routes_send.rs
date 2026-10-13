@@ -1860,6 +1860,8 @@ mod tests {
     /// note reaches the agent's outbox → re-decide conflicts.
     #[test]
     fn approval_round_trip_queue_outbox_deny_note() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let (name, path) = unique("appr");
         let project_id = insert_project(&name, &path);
         let domain = format!("{name}.example");

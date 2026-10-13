@@ -1271,6 +1271,8 @@ pub(crate) mod tests {
     /// a rotate. Uses the real file store in a temp dir.
     #[test]
     fn mint_vaults_password_under_the_key_readers_resolve() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("mint-key") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-k"));
@@ -1310,6 +1312,8 @@ pub(crate) mod tests {
 
     #[test]
     fn mint_happy_path_creates_account_vaults_password_and_persists() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("mint") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "verified", Some("stw-1"));
@@ -1400,6 +1404,8 @@ pub(crate) mod tests {
 
     #[test]
     fn mint_on_pending_receive_only_creates_the_address() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("pending-mint") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "pending", Some("stw-pending"));
@@ -1436,6 +1442,8 @@ pub(crate) mod tests {
 
     #[test]
     fn mint_uses_workspace_quota_override() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("quota-mint") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-q"));
@@ -1472,6 +1480,8 @@ pub(crate) mod tests {
 
     #[test]
     fn mint_zero_quota_is_unlimited() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("quota-zero") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-z"));
@@ -1508,6 +1518,8 @@ pub(crate) mod tests {
 
     #[test]
     fn mint_at_domain_spelling_and_domain_disagreement() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("atspell") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1561,6 +1573,8 @@ pub(crate) mod tests {
 
     #[test]
     fn cap_counts_active_only_and_retire_frees_the_slot() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("cap") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1601,6 +1615,8 @@ pub(crate) mod tests {
 
     #[test]
     fn idempotent_client_id_returns_existing_active_and_refreshes_after_retire() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("idem") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1650,6 +1666,8 @@ pub(crate) mod tests {
 
     #[test]
     fn collisions_suggest_name2_error_distinctly_under_id_and_name_retention() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("coll") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1688,6 +1706,8 @@ pub(crate) mod tests {
 
     #[test]
     fn engine_refusal_stores_nothing() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("refuse") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1709,6 +1729,8 @@ pub(crate) mod tests {
     /// and the vaulted secret deleted. No orphans.
     #[test]
     fn db_write_failure_destroys_the_stalwart_account() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("comp") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "verified", Some("stw-1"));
@@ -1754,6 +1776,8 @@ pub(crate) mod tests {
     /// A vault failure AFTER the Stalwart create also compensates.
     #[test]
     fn vault_failure_destroys_the_stalwart_account() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("vaultfail") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1772,6 +1796,8 @@ pub(crate) mod tests {
     /// BEFORE any engine call (never a half-mint).
     #[test]
     fn domain_without_stalwart_id_is_an_engine_error() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("noid") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", None);
@@ -1789,6 +1815,8 @@ pub(crate) mod tests {
 
     #[test]
     fn retire_disables_account_sets_retired_at_and_guards_repeats_and_foreign() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("retire") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1834,6 +1862,8 @@ pub(crate) mod tests {
 
     #[test]
     fn retire_fails_closed_without_an_engine_and_on_engine_refusal() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("retfc") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));
@@ -1881,6 +1911,8 @@ pub(crate) mod tests {
 
     #[test]
     fn rotate_pending_active_row_sets_password_once_via_account_id() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("rot-pending") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "pending", Some("stw-pending"));
@@ -1922,6 +1954,8 @@ pub(crate) mod tests {
 
     #[test]
     fn rotate_vault_failure_still_returns_password() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("rot-vault") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "pending", Some("stw-p"));
@@ -1943,6 +1977,8 @@ pub(crate) mod tests {
 
     #[test]
     fn rotate_skips_retired_and_does_not_use_rotate_account_secret_shape() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("rot-miss") + ".example";
         cleanup_domain(&domain);
         let domain_id = seed_domain(&domain, "pending", Some("stw-p"));
@@ -1988,6 +2024,8 @@ pub(crate) mod tests {
 
     #[test]
     fn lists_scope_by_owner_and_the_owner_table_includes_retired() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let domain = unique("list") + ".example";
         cleanup_domain(&domain);
         seed_domain(&domain, "verified", Some("stw-1"));

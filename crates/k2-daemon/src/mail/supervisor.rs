@@ -2341,7 +2341,7 @@ mod tests {
         }
     }
 
-    fn db_guard() -> k2_core::test_env::SerialGuard {
+    fn db_guard() -> crate::mail::MailServerTestGuard {
         crate::mail::mail_server_test_lock()
     }
 

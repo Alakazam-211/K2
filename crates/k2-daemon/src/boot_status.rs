@@ -25,7 +25,7 @@
 //! `release-notes-0.39.5.md`.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{OnceLock, RwLock};
 
 /// daemon↔client API compatibility version. Bump this ONLY when a
 /// change breaks the routes/contract clients depend on — NOT on every
@@ -63,30 +63,86 @@ const MIGRATING: u8 = 1;
 const READY: u8 = 2;
 const ERROR: u8 = 3;
 
-static PHASE: AtomicU8 = AtomicU8::new(STARTING);
-static DETAIL: LazyLock<RwLock<String>> = LazyLock::new(|| RwLock::new(String::new()));
+/// The phase machine behind `/boot-status`. The daemon has exactly one
+/// ([`BOOT`], driven by the free functions below); tests build their own
+/// so they never flip the process-wide readiness gate that every
+/// in-process HTTP test depends on (the test daemon harness calls
+/// [`set_ready`] once and expects it to stay set).
+struct BootState {
+    phase: AtomicU8,
+    detail: RwLock<String>,
+}
+
+impl BootState {
+    const fn new() -> Self {
+        Self { phase: AtomicU8::new(STARTING), detail: RwLock::new(String::new()) }
+    }
+
+    fn set_migrating(&self, detail: &str) {
+        self.set_detail(detail);
+        self.phase.store(MIGRATING, Ordering::SeqCst);
+    }
+
+    fn set_detail(&self, detail: &str) {
+        if let Ok(mut d) = self.detail.write() {
+            *d = detail.to_string();
+        }
+    }
+
+    fn set_ready(&self) {
+        self.set_detail("");
+        self.phase.store(READY, Ordering::SeqCst);
+    }
+
+    fn set_error(&self, detail: &str) {
+        self.set_detail(detail);
+        self.phase.store(ERROR, Ordering::SeqCst);
+    }
+
+    fn is_ready(&self) -> bool {
+        self.phase.load(Ordering::SeqCst) == READY
+    }
+
+    fn phase_str(&self) -> &'static str {
+        match self.phase.load(Ordering::SeqCst) {
+            MIGRATING => "migrating",
+            READY => "ready",
+            ERROR => "error",
+            _ => "starting",
+        }
+    }
+
+    fn detail(&self) -> String {
+        match self.detail.read() {
+            Ok(d) => d.clone(),
+            // Poisoned lock should never happen (no panics under the lock),
+            // but degrade to an empty detail rather than taking the daemon
+            // down over a status string.
+            Err(_) => String::new(),
+        }
+    }
+}
+
+/// This daemon's boot phase.
+static BOOT: BootState = BootState::new();
 
 /// Enter the `migrating` phase with an initial human-readable detail.
 pub fn set_migrating(detail: &str) {
-    set_detail(detail);
-    PHASE.store(MIGRATING, Ordering::SeqCst);
+    BOOT.set_migrating(detail);
 }
 
 /// Update the human-readable detail string. UI-only — clients MUST NOT
 /// parse this for logic; it exists purely so the window can show
 /// "Applying updates… (12/64 workspaces)" while we work.
 pub fn set_detail(detail: &str) {
-    if let Ok(mut d) = DETAIL.write() {
-        *d = detail.to_string();
-    }
+    BOOT.set_detail(detail);
 }
 
 /// Mark the daemon fully booted: migrations done, every provider/sink
 /// registered, real routes safe to serve. Clears the detail. This is
 /// the gate the dispatcher and the renderer both wait on.
 pub fn set_ready() {
-    set_detail("");
-    PHASE.store(READY, Ordering::SeqCst);
+    BOOT.set_ready();
 }
 
 /// Mark a fatal boot/migration error with a human-readable detail.
@@ -94,37 +150,25 @@ pub fn set_ready() {
 /// renderer can surface a real error instead of spinning forever.
 #[allow(dead_code)]
 pub fn set_error(detail: &str) {
-    set_detail(detail);
-    PHASE.store(ERROR, Ordering::SeqCst);
+    BOOT.set_error(detail);
 }
 
 /// True once [`set_ready`] has run. The dispatcher uses this to 503
 /// every non-liveness route until first-boot migrations complete.
 pub fn is_ready() -> bool {
-    PHASE.load(Ordering::SeqCst) == READY
+    BOOT.is_ready()
 }
 
 /// Lowercase phase string for the `/boot-status` JSON. Unknown future
 /// values never appear here, but clients should treat any phase other
 /// than `ready` as "not ready" (forward-compatible).
 pub fn phase_str() -> &'static str {
-    match PHASE.load(Ordering::SeqCst) {
-        MIGRATING => "migrating",
-        READY => "ready",
-        ERROR => "error",
-        _ => "starting",
-    }
+    BOOT.phase_str()
 }
 
 /// Current human-readable detail (cloned). UI-only.
 pub fn detail() -> String {
-    match DETAIL.read() {
-        Ok(d) => d.clone(),
-        // Poisoned lock should never happen (no panics under the lock),
-        // but degrade to an empty detail rather than taking the daemon
-        // down over a status string.
-        Err(_) => String::new(),
-    }
+    BOOT.detail()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -347,28 +391,35 @@ mod tests {
         );
     }
 
-    // These mutate process-global state, so they live in ONE test to
-    // run serially and not race the shared AtomicU8 / RwLock across
-    // cargo's parallel test threads.
+    // A private BootState, never the daemon's: the process-wide one is
+    // shared with every in-process HTTP test (the test daemon harness sets
+    // it ready, and the dispatcher 503s while it is not), so flipping it
+    // here raced them in both directions.
     #[test]
     fn phase_transitions_and_detail_round_trip() {
+        let boot = BootState::new();
         // Default before any boot call.
-        assert_eq!(phase_str(), "starting");
-        assert!(!is_ready());
+        assert_eq!(boot.phase_str(), "starting");
+        assert!(!boot.is_ready());
 
-        set_migrating("Applying updates…");
-        assert_eq!(phase_str(), "migrating");
-        assert!(!is_ready());
-        assert_eq!(detail(), "Applying updates…");
+        boot.set_migrating("Applying updates…");
+        assert_eq!(boot.phase_str(), "migrating");
+        assert!(!boot.is_ready());
+        assert_eq!(boot.detail(), "Applying updates…");
 
-        set_detail("12/64 workspaces");
-        assert_eq!(detail(), "12/64 workspaces");
-        assert!(!is_ready(), "detail update must not flip readiness");
+        boot.set_detail("12/64 workspaces");
+        assert_eq!(boot.detail(), "12/64 workspaces");
+        assert!(!boot.is_ready(), "detail update must not flip readiness");
 
-        set_ready();
-        assert_eq!(phase_str(), "ready");
-        assert!(is_ready());
-        assert_eq!(detail(), "", "set_ready clears the detail");
+        boot.set_ready();
+        assert_eq!(boot.phase_str(), "ready");
+        assert!(boot.is_ready());
+        assert_eq!(boot.detail(), "", "set_ready clears the detail");
+
+        boot.set_error("migration 12 failed");
+        assert_eq!(boot.phase_str(), "error");
+        assert!(!boot.is_ready(), "an error is not ready");
+        assert_eq!(boot.detail(), "migration 12 failed");
     }
 
     #[test]

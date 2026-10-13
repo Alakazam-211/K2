@@ -413,6 +413,8 @@ fn revoke_drops_the_mark() {
 
 #[test]
 fn password_rotate_matrix() {
+    // Reaches the singleton mail_server row: hold the mail lock.
+    let _mail = crate::mail::mail_server_test_lock();
     let mut w = World::new("pw");
     let it_own = w.mailbox("it-bot", &w.it_ws.clone(), "acc-pw-own");
     let other = w.mailbox("other-bot", &w.other_ws.clone(), "acc-pw-other");

@@ -140,6 +140,8 @@ mod tests {
 
     #[test]
     fn get_without_engine_is_not_405() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let r = handle_queue_get(&HashMap::new());
         assert_ne!(r.status, "405 Method Not Allowed");
         assert_ne!(r.status, "404 Not Found");

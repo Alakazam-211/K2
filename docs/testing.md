@@ -75,6 +75,19 @@ on any thread count.
     thread's `fork` can hold your write fd open at the moment you exec.
 13. **Assert exactly.** Prefer an exact expected value over "different and longer"
     (`path_enrichment_tests` asserts the exact PATH from a fake login shell).
+14. **Singleton rows: readers lock too.** A test that reaches the `mail_server`
+    row (any `engine_from_db` handler, even one that expects "not installed")
+    holds `mail::mail_server_test_lock()`; otherwise it picks up a parallel
+    test's row and dials that test's mock Stalwart, eating its scripted replies.
+    `domains::server_info` asserts the guard on test threads, so a missing one
+    fails every run, not one in fifty.
+15. **Never flip process-wide daemon state.** Readiness (`boot_status`), and
+    any static the in-process HTTP harness depends on, stay as the harness set
+    them. Test the state machine on its own instance (`BootState::new()`).
+16. **No wall-clock bounds, no clock-derived fixtures.** Assert what code
+    decided (an outcome enum), not "took < 800 ms". A fixture you rebuild to
+    compare bytes uses a fixed timestamp, not `now() + 30 days` (a second can
+    tick between the two builds).
 
 ## Running locally
 

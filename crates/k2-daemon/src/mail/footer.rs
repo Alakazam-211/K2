@@ -339,6 +339,8 @@ mod tests {
 
     #[test]
     fn footer_get_without_server_is_not_ready() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let r = handle_footer_get(&HashMap::new());
         assert_ne!(r.status, "405 Method Not Allowed");
         assert!(

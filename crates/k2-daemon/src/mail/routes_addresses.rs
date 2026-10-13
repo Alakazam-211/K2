@@ -509,6 +509,8 @@ mod tests {
 
     #[test]
     fn delete_validates_scopes_ownership_and_retires_without_engine_when_possible() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let resp = handle_address_delete(b"{}");
         assert_eq!(resp.status, "400 Bad Request");
 

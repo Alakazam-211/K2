@@ -792,6 +792,77 @@ describe('Settings → Gardens: the section', () => {
     expect(announced()).toBe('Couldn’t move Mornings. That Garden is gone. It may have been deleted somewhere else.')
   })
 
+  it('+ New Garden sits above the search, which sits above the list', async () => {
+    await mountSection()
+    const list = document.querySelector('[data-settings-id="zen-gardens.list"]') as HTMLElement
+    const order = [...list.children].map((el) =>
+      el.hasAttribute('data-zen-settings-new-garden')
+        ? 'new'
+        : el.hasAttribute('data-zen-gardens-search')
+          ? 'search'
+          : el.matches('[data-zen-gardens-list]')
+            ? 'list'
+            : null,
+    )
+    expect(order.filter(Boolean).slice(0, 3)).toEqual(['new', 'search', 'list'])
+  })
+
+  it('search filters by name, case-insensitive substring, live; × and Escape clear it', async () => {
+    await mountSection()
+    const search = screen.getByRole('searchbox', { name: 'Search Gardens' }) as HTMLInputElement
+    fireEvent.change(search, { target: { value: 'GARDEN' } })
+    expect(rowNames()).toEqual(['g-1', 'g-2'])
+    fireEvent.change(search, { target: { value: 'orn' } })
+    expect(rowNames()).toEqual(['g-3'])
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(search.value).toBe('')
+    expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull()
+    fireEvent.change(search, { target: { value: '2' } })
+    expect(rowNames()).toEqual(['g-2'])
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(search.value).toBe('')
+    expect(rowNames()).toEqual(['g-1', 'g-2', 'g-3'])
+    // Nothing posted: search is local.
+    expect(zenPosts()).toEqual([])
+  })
+
+  it('search with no match says so', async () => {
+    await mountSection()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search Gardens' }), { target: { value: 'zzz' } })
+    expect(rowNames()).toEqual([])
+    expect(document.querySelector('[data-zen-gardens-no-match]')?.textContent).toBe('No Gardens match “zzz”')
+  })
+
+  it('while searching, reordering is off (dimmed grips, mouse and keys do nothing); rename still works', async () => {
+    await mountSection()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search Gardens' }), { target: { value: 'garden' } })
+    expect(rowNames()).toEqual(['g-1', 'g-2'])
+    layOutRows()
+    const grip = handle('g-1')
+    expect(grip.getAttribute('title')).toBe('Clear search to reorder')
+    expect(grip.getAttribute('aria-disabled')).toBe('true')
+    expect(grip.className).toContain('opacity-30')
+    expect(grip.className).not.toContain('cursor-grab')
+    fireEvent.mouseDown(grip, { button: 0, clientX: 5, clientY: 20 })
+    fireEvent.mouseMove(document, { clientX: 5, clientY: 75 })
+    fireEvent.mouseUp(document, { clientX: 5, clientY: 75 })
+    fireEvent.keyDown(grip, { key: 'ArrowDown' })
+    fireEvent.keyDown(grip, { key: ' ' })
+    await settle()
+    expect(grip.getAttribute('aria-pressed')).toBe('false')
+    expect(document.querySelector('[data-zen-garden-drop-line]')).toBeNull()
+    expect(zenPosts()).toEqual([])
+    // Rename on a filtered row still works.
+    fireEvent.change(nameField('g-2'), { target: { value: 'Garden Two' } })
+    fireEvent.keyDown(nameField('g-2'), { key: 'Enter' })
+    await waitFor(() => expect(zenPosts()).toEqual([['zen/garden/rename', { garden: 'g-2', name: 'Garden Two' }]]))
+    // Cleared: the grip is live again.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(handle('g-1').getAttribute('title')).toBe('Drag to reorder')
+    expect(handle('g-1').className).toContain('cursor-grab')
+  })
+
   it('Delete opens K2’s confirm dialog (a copy stays in history); Cancel does nothing', async () => {
     await mountSection()
     fireEvent.click(within(row('g-2')).getByRole('button', { name: 'Delete Garden 2' }))

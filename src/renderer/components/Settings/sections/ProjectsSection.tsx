@@ -68,7 +68,6 @@ import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
-import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /

@@ -11159,9 +11159,11 @@ mod tests {
 #[cfg(test)]
 mod keep_alive_consume_ratchet {
     const SOURCE: &str = include_str!("dispatcher.rs");
-    const CONSUMES: [&str; 5] = [
+    const CONSUMES: [&str; 6] = [
         "stream.read(",
         "read_post_body(",
+        // 0.45.5: the upload-chunk arm reads its body with a size cap.
+        "read_post_body_capped(",
         "read_exact(",
         "require_post(",
         // 0.44.4: drains a GET or reads a POST body (Content-Length framed).

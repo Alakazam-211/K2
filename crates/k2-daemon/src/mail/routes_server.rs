@@ -1844,6 +1844,8 @@ mod tests {
     /// sends run everywhere), so it is not stopped by the D3 gate.
     #[test]
     fn always_bcc_owner_sets_and_clears_agent_and_mail_manage_cannot() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let id = uuid::Uuid::new_v4().to_string();
         let short = &id[..12];
         let name = format!("abcc-{short}");
@@ -1950,6 +1952,8 @@ mod tests {
     /// its own sends); an agent without mail-manage never; the owner always.
     #[test]
     fn agent_mail_policy_it_agent_for_others_only_owner_always() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let mk = |tag: &str, mm: i64| {
             let id = uuid::Uuid::new_v4().to_string();
             let path = format!("/tmp/mail-policy-{tag}-{}-{}", std::process::id(), &id[..12]);

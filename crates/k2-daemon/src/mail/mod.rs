@@ -184,10 +184,68 @@ pub mod upgrade;
 /// this guard for its whole body.
 /// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a
 /// test may combine it with `TempHome` / `EnvVar` in either order.
+///
+/// READERS too: a test that reaches [`domains::server_info`] (every
+/// `engine_from_db` handler) without this guard can pick up another
+/// test's row, and with it that test's mock Stalwart, stealing one of its
+/// scripted replies (the `dkim` rotate flake). [`assert_mail_server_reader_locked`]
+/// makes that a deterministic failure instead of an order-dependent one.
+///
+/// Re-entrant on the holding thread (a test that holds it may call a
+/// helper that takes it again).
 #[cfg(test)]
-pub(crate) fn mail_server_test_lock() -> k2_core::test_env::SerialGuard {
+pub(crate) fn mail_server_test_lock() -> MailServerTestGuard {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    k2_core::test_env::serial(&LOCK)
+    let serial = if MAIL_LOCK_DEPTH.with(|d| d.get()) > 0 {
+        None
+    } else {
+        Some(k2_core::test_env::serial(&LOCK))
+    };
+    MAIL_LOCK_DEPTH.with(|d| d.set(d.get() + 1));
+    MailServerTestGuard { _serial: serial, _not_send: std::marker::PhantomData }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many [`MailServerTestGuard`]s THIS thread holds (the guard is
+    /// `!Send`, so it is always released on the thread that took it).
+    static MAIL_LOCK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Guard from [`mail_server_test_lock`]: the env lock + the mail lock, and
+/// a per-thread mark that the singleton row is this test's to read.
+#[cfg(test)]
+#[must_use = "bind the guard for the test's duration"]
+pub(crate) struct MailServerTestGuard {
+    _serial: Option<k2_core::test_env::SerialGuard>,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(test)]
+impl Drop for MailServerTestGuard {
+    fn drop(&mut self) {
+        MAIL_LOCK_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// Test builds only: fail loudly when a libtest test thread reads the
+/// singleton `mail_server` row without [`mail_server_test_lock`].
+/// libtest names each test's thread after the test path (`a::b::test`);
+/// threads a test spawns (unnamed, or `tokio-runtime-worker`) are not
+/// checked: their test holds the guard on its own thread.
+#[cfg(test)]
+pub(crate) fn assert_mail_server_reader_locked() {
+    let me = std::thread::current();
+    let Some(name) = me.name() else { return };
+    if !name.contains("::") {
+        return;
+    }
+    assert!(
+        MAIL_LOCK_DEPTH.with(|d| d.get()) > 0,
+        "test `{name}` reads the singleton mail_server row without \
+         crate::mail::mail_server_test_lock(): a parallel test's row (and its mock \
+         Stalwart) can leak in. Hold the guard for the whole test."
+    );
 }
 
 /// Deletes the singleton `mail_server` row on drop — even when the test

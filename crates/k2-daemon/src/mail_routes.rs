@@ -1058,6 +1058,8 @@ mod tests {
     /// owner-only classifier. POST-only paths answer 405 on GET.
     #[test]
     fn calendar_sharing_routes_are_mail_manage_not_owner_only() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let it_id = uuid::Uuid::new_v4().to_string();
         let plain_id = uuid::Uuid::new_v4().to_string();
         {
@@ -1216,6 +1218,8 @@ mod tests {
     /// as a read and POST as the mutation; other methods 405.
     #[test]
     fn cert_names_route_is_gated_like_cert_renew() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         // `/cli/mail/cert/owner` (the owner command) has the same gate.
         for p in ["/cli/mail/cert/names", "/cli/mail/cert/owner", "/cli/mail/outbound"] {
             cert_route_is_gated_like_cert_renew(p);
@@ -1472,6 +1476,8 @@ mod tests {
     /// claimed.
     #[test]
     fn mail_mutations_405_on_get_and_post_404_unknown() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let params = HashMap::new();
         for route in [
             "/cli/mail/server/enable",
@@ -1801,6 +1807,8 @@ mod tests {
     /// as of S6 nothing 501s any more.
     #[test]
     fn reserved_routes_501_and_real_routes_answer() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let params = HashMap::new();
         // S6 — config + doctor are REAL: the GETs answer 200 (config =
         // effective configuration; doctor = latest persisted run or

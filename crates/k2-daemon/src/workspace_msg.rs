@@ -2107,38 +2107,15 @@ fn deliver_post_wake(
         // `?2004h` flip (fresh spawn / dormant wake). Already-on skips
         // it so live API follow-ups are not taxed. Ceiling without a
         // flip: no extra 1s, best-effort inject.
-        let already_on = live.bracketed_paste_active();
-        if !already_on {
-            let mut saw_flip = false;
-            loop {
-                if !live.is_child_alive() {
-                    return InjectOutcome::PtyDied;
-                }
-                // Ready once the TUI advertises bracketed-paste (claude/grok/
-                // cursor set it once the input box is drawn). This is the same
-                // signal the injector relies on for framing.
-                if live.bracketed_paste_active() {
-                    saw_flip = true;
-                    break;
-                }
-                if start.elapsed() >= wake_timeout {
-                    // Best-effort: timed out waiting for the ready signal —
-                    // inject anyway (bounded, never blocks forever) rather
-                    // than dropping the message.
-                    log_debug!(
-                        "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
-                        live.session_id(),
-                        wake_timeout.as_millis()
-                    );
-                    break;
-                }
-                std::thread::sleep(WAKE_POLL_INTERVAL);
-            }
-            if saw_flip {
-                std::thread::sleep(POST_READY_SETTLE);
-                if !live.is_child_alive() {
-                    return InjectOutcome::PtyDied;
-                }
+        let ready = wait_for_bracketed_paste(live, start, wake_timeout);
+        if ready == PasteReady::PtyDied {
+            return InjectOutcome::PtyDied;
+        }
+        let settle = ready.post_ready_settle();
+        if !settle.is_zero() {
+            std::thread::sleep(settle);
+            if !live.is_child_alive() {
+                return InjectOutcome::PtyDied;
             }
         }
     } else {
@@ -2169,6 +2146,64 @@ fn deliver_post_wake(
     // `inject_and_submit` as live sends, so the just-woken session's
     // injection serializes against a concurrent human composer.
     inject_and_submit(live, payload)
+}
+
+/// How the polling readiness wait in [`deliver_post_wake`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteReady {
+    /// `?2004h` was already on (a live follow-up).
+    AlreadyOn,
+    /// A real 0→1 `?2004h` flip (fresh spawn / dormant wake).
+    Flipped,
+    /// The `wake_timeout` ceiling hit without a flip: best-effort inject.
+    TimedOut,
+    /// The child exited while we waited.
+    PtyDied,
+}
+
+impl PasteReady {
+    /// Extra settle before injecting: [`POST_READY_SETTLE`] only after a
+    /// real flip; never for already-on or a timeout.
+    fn post_ready_settle(self) -> Duration {
+        match self {
+            PasteReady::Flipped => POST_READY_SETTLE,
+            PasteReady::AlreadyOn | PasteReady::TimedOut | PasteReady::PtyDied => Duration::ZERO,
+        }
+    }
+}
+
+/// Poll for the TUI's bracketed-paste ready signal (claude/grok/cursor set
+/// it once the input box is drawn; the same signal the injector relies on
+/// for framing) until it flips, the child dies, or `wake_timeout` (from
+/// `start`) passes.
+fn wait_for_bracketed_paste(
+    live: &session_lookup::LiveSession,
+    start: std::time::Instant,
+    wake_timeout: Duration,
+) -> PasteReady {
+    if live.bracketed_paste_active() {
+        return PasteReady::AlreadyOn;
+    }
+    loop {
+        if !live.is_child_alive() {
+            return PasteReady::PtyDied;
+        }
+        if live.bracketed_paste_active() {
+            return PasteReady::Flipped;
+        }
+        if start.elapsed() >= wake_timeout {
+            // Best-effort: timed out waiting for the ready signal — inject
+            // anyway (bounded, never blocks forever) rather than dropping
+            // the message.
+            log_debug!(
+                "[msg/wake] session={} readiness wait hit {}ms ceiling — injecting best-effort",
+                live.session_id(),
+                wake_timeout.as_millis()
+            );
+            return PasteReady::TimedOut;
+        }
+        std::thread::sleep(WAKE_POLL_INTERVAL);
+    }
 }
 
 /// Block until the just-woken TUI's visible grid stops changing — the
@@ -3892,20 +3927,27 @@ mod tests {
         // `cat` never advertises `?2004h`. A polling profile must hit the
         // short wake_timeout ceiling and inject best-effort WITHOUT the
         // extra POST_READY_SETTLE (1s) that only follows a real 0→1 flip.
+        // Asserted on the wait's outcome, not wall-clock time: a timing
+        // bound flaked on a loaded box (the inject's own sleeps alone are
+        // most of it).
         let live = spawn_cat_live();
-        let t0 = std::time::Instant::now();
+        let ready = wait_for_bracketed_paste(
+            &live,
+            std::time::Instant::now(),
+            Duration::from_millis(150),
+        );
+        assert_eq!(ready, PasteReady::TimedOut, "cat never sets ?2004h");
+        assert_eq!(ready.post_ready_settle(), Duration::ZERO, "no flip → no settle");
+        assert_eq!(PasteReady::AlreadyOn.post_ready_settle(), Duration::ZERO);
+        assert_eq!(PasteReady::Flipped.post_ready_settle(), POST_READY_SETTLE);
+        // The whole path still delivers best-effort after the ceiling.
         let out = deliver_post_wake(
             &live,
             "[from owner] hi",
             Duration::from_millis(150),
             &k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
         );
-        let elapsed = t0.elapsed();
         assert_eq!(out, InjectOutcome::Delivered);
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "timeout without a ?2004h flip must not add POST_READY_SETTLE (took {elapsed:?})"
-        );
         live.0.kill();
     }
 

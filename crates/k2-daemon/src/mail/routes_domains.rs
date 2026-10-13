@@ -325,6 +325,8 @@ mod tests {
 
     #[test]
     fn show_returns_the_full_record_table() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         seed_domain("routes-show.example");
         let mut params = HashMap::new();
         params.insert("domain".to_string(), "ROUTES-SHOW.example.".to_string());
@@ -360,6 +362,8 @@ mod tests {
 
     #[test]
     fn list_owner_table_and_agent_view() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         seed_domain("routes-list.example");
         // Flip it Verified directly (the dns_verify e2e test owns the
         // full transition; here we test the read shapes).
@@ -417,6 +421,8 @@ mod tests {
 
     #[test]
     fn owner_list_includes_pending_domains_check_can_see() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         seed_domain("pending-list.example");
         let resp = handle_domain_list(&HashMap::new());
         assert_eq!(resp.status, "200 OK");

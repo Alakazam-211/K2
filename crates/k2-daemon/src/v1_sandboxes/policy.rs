@@ -879,6 +879,8 @@ mod tests {
     /// host-fixed `claude`, and the cwd is a fresh ephemeral dir (NEVER `$HOME`).
     #[test]
     fn resolve_stages_principal_key_and_drops_caller_inputs() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: "key-uuid-1".to_string(),
             anthropic_key: Some("sk-ant-principal-key".to_string()),
@@ -970,6 +972,8 @@ mod tests {
     /// env is empty, and the cwd is still a fresh ephemeral dir.
     #[test]
     fn resolve_stages_no_key_for_keyless_principal() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let principal = V1Principal::Owner;
         let req = ApiSandboxRequest::default();
         let spawn = resolve_spawn(&principal, &req).expect("resolve must succeed");
@@ -1009,6 +1013,8 @@ mod tests {
     /// A blank Anthropic key is treated as absent (never an empty assignment).
     #[test]
     fn resolve_drops_blank_principal_key() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: "key-uuid-2".to_string(),
             anthropic_key: Some("   ".to_string()),
@@ -1034,6 +1040,8 @@ mod tests {
     /// stages NOTHING (fail-closed) while the recipe defaults survive.
     #[test]
     fn resolve_stages_provider_mapped_key() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let principal = V1Principal::Api(k2_core::api_keys::ApiPrincipal {
             id: "key-uuid-oai".to_string(),
             anthropic_key: Some("sk-oai-cell-key".to_string()),
@@ -1088,6 +1096,8 @@ mod tests {
     /// Two resolves yield DISTINCT ephemeral dirs + distinct host-minted names.
     #[test]
     fn resolve_mints_distinct_workspaces_and_names() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let p = V1Principal::Owner;
         let a = resolve_spawn(&p, &ApiSandboxRequest::default()).expect("a");
         let b = resolve_spawn(&p, &ApiSandboxRequest::default()).expect("b");
@@ -1172,6 +1182,8 @@ mod tests {
     /// an escaping path.
     #[test]
     fn mirror_provisioners_reject_escape_attempts() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         assert!(matches!(
             provision_sandbox_home("../etc", "sid"),
             Err(PolicyError::NoPersistentLayer(_)),
@@ -1194,6 +1206,8 @@ mod tests {
     /// roots. A second call on the same key succeeds (re-provision / resume).
     #[test]
     fn mirror_provisioners_create_0700_dirs_idempotently() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let ws = format!("v1ws-mirror-{}", uuid::Uuid::new_v4());
         let sid = uuid::Uuid::new_v4().to_string();
 
@@ -1231,6 +1245,8 @@ mod tests {
     /// `ephemeral_cwd = None`.
     #[test]
     fn resolve_workspace_session_carries_mirror_spec() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let ws_slug = format!("v1ws-resolve-{}", uuid::Uuid::new_v4());
         // A real workspace path UNDER the in-cell home so cwd is a subdir of HOME.
         let ws_path = incell_home().join(&ws_slug);
@@ -1296,6 +1312,8 @@ mod tests {
     /// injected. Env staging (K2_SESSION_ID / K2_REQUEST_PROMPT) unchanged.
     #[test]
     fn workspace_session_resolves_codex_preset_argv() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let ws_slug = format!("v1ws-codex-{}", uuid::Uuid::new_v4());
         let ws_path = incell_home().join(&ws_slug);
         let ws_path_str = ws_path.to_string_lossy().into_owned();
@@ -1334,6 +1352,8 @@ mod tests {
     /// strips them by default).
     #[test]
     fn workspace_session_resolves_gemini_preset_argv() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         let ws_slug = format!("v1ws-gemini-{}", uuid::Uuid::new_v4());
         let ws_path = incell_home().join(&ws_slug);
         let ws_path_str = ws_path.to_string_lossy().into_owned();
@@ -1363,6 +1383,8 @@ mod tests {
     /// cell wedges on a permission prompt no one can answer.
     #[test]
     fn workspace_session_ensures_claude_skip_permissions() {
+        // The roots derive from $HOME: a temp HOME keeps it stable for the whole test (and off the real ~/.k2).
+        let _home = crate::test_support::TempHome::new();
         k2_core::db::init_for_tests();
         let preset_id = uuid::Uuid::new_v4().to_string();
         {

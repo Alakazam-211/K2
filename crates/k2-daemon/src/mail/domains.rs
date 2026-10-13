@@ -950,6 +950,8 @@ pub struct ServerInfo {
 
 /// Read the `mail_server` singleton; `None` = not installed.
 pub fn server_info(conn: &Connection) -> Option<ServerInfo> {
+    #[cfg(test)]
+    crate::mail::assert_mail_server_reader_locked();
     conn.query_row(
         "SELECT status, hostname, api_url, api_key_ref FROM mail_server WHERE id = 1",
         [],
@@ -1779,6 +1781,8 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
 
     #[test]
     fn remove_domain_requires_confirm_then_retires_addresses() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let engine = FakeEngine::ok();
         cleanup_domain("rm.example");
         // Seed: a domain row + two active addresses + one already
@@ -1882,6 +1886,8 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
 
     #[test]
     fn effective_rows_apply_relay_include_from_the_column() {
+        // Reaches the singleton mail_server row: hold the mail lock.
+        let _mail = crate::mail::mail_server_test_lock();
         cleanup_domain("relayspf.example");
         let zone = ZONE_FIXTURE.replace("acme.dev", "relayspf.example");
         let engine = FakeEngine { zone, ..FakeEngine::ok() };

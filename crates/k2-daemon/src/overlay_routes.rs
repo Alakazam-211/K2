@@ -2724,6 +2724,8 @@ mod tests {
 
     #[test]
     fn ask_returns_immediately_pending_then_tap_injects() {
+        // Reads $HOME (the owner display name) at tap time and again at assert time: hold the env lock so a concurrent temp-HOME test cannot swap it in between.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlask{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         let conv = uuid::Uuid::new_v4().to_string();
@@ -3094,6 +3096,8 @@ mod tests {
     /// is credential-derived too, never the body.
     #[test]
     fn card_answers_inject_and_record_the_real_answerer() {
+        // Reads $HOME (the owner display name) at tap time and again at assert time: hold the env lock so a concurrent temp-HOME test cannot swap it in between.
+        let _home_lock = crate::test_support::lock_home();
         let handle = format!("ovlwho{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
         pin(&project_id, &uuid::Uuid::new_v4().to_string());

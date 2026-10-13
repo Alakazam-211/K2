@@ -9,6 +9,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { ThreadWorkingStrip } from './ThreadWorkingStrip'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
 import {
+  cardExpiryLabel,
   isVoidedHitl,
   type OverlayDoc,
   type OverlayThreadItem,
@@ -343,6 +344,8 @@ export function ThreadItemRow({
               status={item.doc.choice.status}
               answer={item.doc.choice.answer}
               answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
+              expiresAt={item.doc.choice.expiresAt}
+              nowSec={nowSec}
               onPick={(label) => onAnswer?.({ answer: label })}
             />
           ) : kind === 'secret' && item.doc.secret ? (
@@ -381,6 +384,8 @@ export function ChoiceCard({
   status,
   answer,
   answeredBy,
+  expiresAt,
+  nowSec,
   onPick,
 }: {
   options: { label: string }[]
@@ -389,9 +394,18 @@ export function ChoiceCard({
   answer?: string | null
   /** `cardAnswererLabel` of the card's `answeredBy` ("You", a login). */
   answeredBy?: string | null
+  /** The card's time frame (unix seconds); the daemon expires it. */
+  expiresAt?: number | null
+  nowSec?: number
   onPick: (label: string) => void
 }): JSX.Element {
   const pending = status === 'pending'
+  const expiry =
+    status === 'expired'
+      ? 'expired'
+      : pending
+        ? cardExpiryLabel(expiresAt, nowSec ?? Math.floor(Date.now() / 1000))
+        : null
   const [custom, setCustom] = useState('')
   return (
     <div
@@ -432,6 +446,14 @@ export function ChoiceCard({
             </button>
           )
       })}
+      {expiry && (
+        <div
+          data-testid="thread-choice-expiry"
+          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
+        >
+          {expiry}
+        </div>
+      )}
       {status === 'answered' && answeredBy && (
         <div
           data-testid="thread-choice-answered-by"

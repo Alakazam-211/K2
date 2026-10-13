@@ -199,8 +199,15 @@ fn start_ticker(v: Arc<LocalVault>) {
             t.tick().await;
             let v2 = v.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = v2.tick() {
-                    k2_core::log_debug!("[vault] tick: {}", e.code);
+                match v2.tick() {
+                    // Their Thread cards say so (the overlay sweep may
+                    // already have closed them: that is a no-op).
+                    Ok(expired) => {
+                        for r in expired {
+                            crate::overlay_routes::close_expired_card(&r.conversation, &r.card_id);
+                        }
+                    }
+                    Err(e) => k2_core::log_debug!("[vault] tick: {}", e.code),
                 }
                 let live: std::collections::HashSet<String> = crate::v2_session_map::snapshot()
                     .into_iter()

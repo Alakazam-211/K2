@@ -18,7 +18,7 @@
 import { useRef, useState, type JSX } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { SquareRadio } from '@/components/ui'
-import type { OverlaySecret, SecretDelivery, SecretScope, ThreadAnswerPayload } from './overlayThread'
+import { cardExpiryLabel, type OverlaySecret, type SecretDelivery, type SecretScope, type ThreadAnswerPayload } from './overlayThread'
 
 /** The daemon refusals that turn the card red and want a second click. */
 export const SECRET_CARD_WARNINGS = new Set(['card_host_mismatch', 'card_readable_delivery'])
@@ -113,6 +113,8 @@ export function SecretCard({
   const agent = agentIn.trim() || workspaceIn?.trim() || 'the agent'
   const workspace = workspaceIn?.trim() || agent
   const pending = secret.status === 'pending'
+  // The vault request's 7 days; the daemon closes the card (`expired`).
+  const expiry = pending ? cardExpiryLabel(secret.expiresAt, Math.floor(Date.now() / 1000)) : null
 
   const proposedScope = normalScope(secret.scope)
   const proposedSites = (secret.hosts ?? []).filter((h) => h.trim() !== '')
@@ -237,6 +239,11 @@ export function SecretCard({
       <div data-testid="thread-secret-header">
         <div className="font-medium">{agent} asks for a secret</div>
         <div className={`text-[10px] ${muted}`}>{[workspace, server].filter(Boolean).join(' · ')}</div>
+        {expiry && (
+          <div className={`text-[10px] ${muted}`} data-testid="thread-secret-expiry">
+            {expiry}
+          </div>
+        )}
       </div>
       <div className="font-mono text-[11px]" data-testid="thread-secret-name">
         {secret.name}

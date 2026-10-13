@@ -108,6 +108,8 @@ function Bubble({
             status={item.doc.choice.status}
             answer={item.doc.choice.answer}
             answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
+            expiresAt={item.doc.choice.expiresAt}
+            nowSec={nowSec}
             onPick={(label) => {
               onAnswer({ answer: label }).catch((err: unknown) => console.warn('[zen] answer failed:', err))
             }}

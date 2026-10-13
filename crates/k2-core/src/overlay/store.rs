@@ -5,6 +5,7 @@
 //! thread        conv/seq:020        → id
 //! chatter       conv/seq:020        → id
 //! chatterlog    seq:020             → id
+//! card_expiry   expires:020/id      → conv   (cards with an expiresAt)
 //! ```
 //!
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
@@ -20,6 +21,10 @@ const DOCS: TableDefinition<&str, &[u8]> = TableDefinition::new("docs");
 const THREAD: TableDefinition<&str, &str> = TableDefinition::new("thread");
 const CHATTER: TableDefinition<&str, &str> = TableDefinition::new("chatter");
 const CHATTERLOG: TableDefinition<&str, &str> = TableDefinition::new("chatterlog");
+/// Cards that expire, by when: `{expires_at:020}/{card id}` → conversation.
+/// The daemon's sweep walks the due prefix only (never the docs). An entry
+/// whose card closed earlier is dropped when its time comes.
+const CARD_EXPIRY: TableDefinition<&str, &str> = TableDefinition::new("card_expiry");
 
 static DB: OnceLock<Result<Database, String>> = OnceLock::new();
 
@@ -227,6 +232,96 @@ pub fn commit_write(
     }
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
+    Ok(())
+}
+
+fn expiry_key(expires_at: i64, card_id: &str) -> String {
+    format!("{:020}/{card_id}", expires_at.max(0))
+}
+
+/// Index a card that expires at `expires_at` (unix seconds).
+pub fn index_card_expiry(card_id: &str, conversation_id: &str, expires_at: i64) -> Result<(), String> {
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut table = txn.open_table(CARD_EXPIRY).map_err(|e| format!("overlay open card_expiry: {e}"))?;
+        table
+            .insert(expiry_key(expires_at, card_id).as_str(), conversation_id)
+            .map_err(|e| format!("overlay insert card_expiry: {e}"))?;
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+/// One due expiry entry: (index key, card id, conversation).
+pub type DueExpiry = (String, String, String);
+
+/// Every indexed card whose time is `<= now`, oldest first.
+pub fn due_card_expiries(now: i64) -> Result<Vec<DueExpiry>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(CARD_EXPIRY) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(format!("overlay open card_expiry: {e}")),
+    };
+    // Keys sort by time; every key at `now` sorts before `{now + 1}/`.
+    let end = format!("{:020}/", now.max(0) + 1);
+    let mut out = Vec::new();
+    for entry in table.range(..end.as_str()).map_err(|e| format!("overlay card_expiry range: {e}"))? {
+        let (k, v) = entry.map_err(|e| format!("overlay card_expiry iter: {e}"))?;
+        let key = k.value().to_string();
+        let card = key.split_once('/').map(|(_, id)| id.to_string()).unwrap_or_default();
+        out.push((key, card, v.value().to_string()));
+    }
+    Ok(out)
+}
+
+/// Drop expiry entries the sweep handled.
+pub fn remove_card_expiries(keys: &[String]) -> Result<(), String> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut table = txn.open_table(CARD_EXPIRY).map_err(|e| format!("overlay open card_expiry: {e}"))?;
+        for k in keys {
+            table.remove(k.as_str()).map_err(|e| format!("overlay card_expiry remove: {e}"))?;
+        }
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+/// Expiry entries follow their cards to the new conversation key (in the
+/// move's own transaction). `take` limits it to the cards a split moved.
+fn retarget_card_expiry(
+    txn: &redb::WriteTransaction,
+    docs: &redb::Table<&str, &[u8]>,
+    from: &str,
+    to: &str,
+    take: Option<&dyn Fn(&OverlayDoc) -> bool>,
+) -> Result<(), String> {
+    let mut table = txn.open_table(CARD_EXPIRY).map_err(|e| format!("overlay open card_expiry: {e}"))?;
+    let mut hits = Vec::new();
+    for entry in table.iter().map_err(|e| format!("overlay card_expiry iter: {e}"))? {
+        let (k, v) = entry.map_err(|e| format!("overlay card_expiry iter: {e}"))?;
+        if v.value() == from {
+            hits.push(k.value().to_string());
+        }
+    }
+    for key in hits {
+        if let Some(take) = take {
+            let id = key.split_once('/').map(|(_, id)| id).unwrap_or_default();
+            let moved = match docs.get(id).map_err(|e| format!("overlay get doc: {e}"))? {
+                Some(g) => serde_json::from_slice::<OverlayDoc>(g.value()).map(|d| take(&d)).unwrap_or(false),
+                None => false,
+            };
+            if !moved {
+                continue;
+            }
+        }
+        table.insert(key.as_str(), to).map_err(|e| format!("overlay card_expiry retarget: {e}"))?;
+    }
     Ok(())
 }
 
@@ -569,6 +664,7 @@ pub fn move_conversation(
             .map_err(|e| format!("overlay open docs: {e}"))?;
         let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, None)?;
         let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, None)?;
+        retarget_card_expiry(&txn, &docs, from, to, None)?;
         (thread, chatter)
     };
     before_commit(thread, chatter)?;
@@ -599,6 +695,7 @@ pub fn split_conversation(
             .map_err(|e| format!("overlay open docs: {e}"))?;
         let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, Some(take))?;
         let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, Some(take))?;
+        retarget_card_expiry(&txn, &docs, from, to, Some(take))?;
         (thread, chatter)
     };
     before_commit(thread, chatter)?;

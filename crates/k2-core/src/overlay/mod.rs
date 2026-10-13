@@ -228,7 +228,19 @@ pub fn post_thread_with_origin(
     Ok((item, links))
 }
 
+/// How long a choice card stays open by default (Rosson 2026-10-13: a
+/// card is not an open gate forever). Same as a vault secret request.
+pub const DEFAULT_CARD_EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Unix seconds now (card times).
+pub fn now_secs() -> i64 {
+    doc::now_secs()
+}
+
 /// Post a choice card onto Thread. Returns immediately; card is `pending`.
+/// `expires_at` (unix seconds): when the daemon's sweep expires it if it
+/// is still pending; None keeps it open until answered or voided.
+#[allow(clippy::too_many_arguments)]
 pub fn post_choice(
     conn: &Connection,
     conversation_id: &str,
@@ -238,6 +250,7 @@ pub fn post_choice(
     prompt: &str,
     options: Vec<String>,
     allow_custom: bool,
+    expires_at: Option<i64>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -249,7 +262,7 @@ pub fn post_choice(
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let doc = OverlayDoc::choice(
+    let mut doc = OverlayDoc::choice(
         id.clone(),
         from.trim().to_string(),
         to.trim().to_string(),
@@ -257,11 +270,20 @@ pub fn post_choice(
         options,
         allow_custom,
     );
+    if let Some(c) = doc.choice.as_mut() {
+        c.expires_at = expires_at;
+    }
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    if let Some(at) = expires_at {
+        store::index_card_expiry(&id, conversation_id, at)?;
+    }
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
 }
 
 /// Post a secret card onto Thread. Value is not stored in the document.
+/// `expires_at`: the vault request's expiry (7 days), shown on the card
+/// and swept like a choice card's (the vault expires its request too).
+#[allow(clippy::too_many_arguments)]
 pub fn post_secret(
     conn: &Connection,
     conversation_id: &str,
@@ -271,6 +293,7 @@ pub fn post_secret(
     name: &str,
     prompt: Option<&str>,
     proposal: SecretProposal,
+    expires_at: Option<i64>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     vault::validate_name(name)?;
     let _guard = WRITE.lock();
@@ -280,7 +303,7 @@ pub fn post_secret(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let doc = OverlayDoc::secret_card(
+    let mut doc = OverlayDoc::secret_card(
         id.clone(),
         from.trim().to_string(),
         to.trim().to_string(),
@@ -288,7 +311,13 @@ pub fn post_secret(
         prompt,
         proposal,
     );
+    if let Some(s) = doc.secret.as_mut() {
+        s.expires_at = expires_at;
+    }
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    if let Some(at) = expires_at {
+        store::index_card_expiry(&id, conversation_id, at)?;
+    }
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
 }
 
@@ -348,6 +377,10 @@ pub fn answer_card(
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
     let mut doc = item.doc;
+    if doc.is_due(doc::now_secs()) {
+        // Past its time: the sweep (or [`expire_if_due`]) closes it.
+        return Err(CARD_NOT_PENDING.to_string());
+    }
     let inject_line = if doc.is_pending_choice() {
         let answer = choice_answer
             .map(str::trim)
@@ -428,6 +461,9 @@ pub fn void_card(
     let item = thread_item(conversation_id, card_id)?;
     let mut doc = item.doc;
     let at = Some(doc::now_secs());
+    if doc.is_due(doc::now_secs()) {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
     let inject_line = if doc.is_pending_choice() {
         if let Some(c) = doc.choice.as_mut() {
             c.status = "voided".to_string();
@@ -458,6 +494,73 @@ pub fn void_card(
         doc,
         inject_line,
     })
+}
+
+/// Close a pending card as `expired` (its time passed, or its vault
+/// request expired). Not a person's act: `answeredBy` stays empty.
+pub fn expire_card(conversation_id: &str, card_id: &str) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    expire_locked(conversation_id, card_id)
+}
+
+fn expire_locked(conversation_id: &str, card_id: &str) -> Result<CardCallback, String> {
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    let at = Some(doc::now_secs());
+    let inject_line = if doc.is_pending_choice() {
+        let c = doc.choice.as_mut().expect("pending choice");
+        c.status = "expired".to_string();
+        c.answered_at = at;
+        "card expired".to_string()
+    } else if doc.is_pending_secret() {
+        let s = doc.secret.as_mut().expect("pending secret");
+        s.status = "expired".to_string();
+        s.answered_at = at;
+        format!("secret {} request expired", s.name)
+    } else {
+        return Err(CARD_NOT_PENDING.to_string());
+    };
+    store::put_doc(&doc)?;
+    Ok(CardCallback {
+        conversation_id: conversation_id.to_string(),
+        doc_id: doc.id.clone(),
+        seq: item.seq,
+        doc,
+        inject_line,
+    })
+}
+
+/// Check-on-touch: a pending card past its `expiresAt` turns `expired`
+/// now (the sweep may not have run yet). `Some` when it did.
+pub fn expire_if_due(conversation_id: &str, card_id: &str, now: i64) -> Result<Option<CardCallback>, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    if !item.doc.is_due(now) {
+        return Ok(None);
+    }
+    expire_locked(conversation_id, card_id).map(Some)
+}
+
+/// The daemon's sweep: every pending card whose `expiresAt` is `<= now`
+/// turns `expired`. Walks the expiry index only. Entries for
+/// cards that closed earlier, or whose doc is gone, are dropped.
+pub fn expire_due_cards(now: i64) -> Result<Vec<CardCallback>, String> {
+    let _guard = WRITE.lock();
+    let due = store::due_card_expiries(now)?;
+    let mut out = Vec::new();
+    let mut done = Vec::with_capacity(due.len());
+    for (key, card, conversation) in due {
+        match thread_item(&conversation, &card) {
+            Ok(item) if item.doc.is_due(now) => {
+                out.push(expire_locked(&conversation, &card)?);
+            }
+            Ok(_) => {}
+            Err(e) => crate::log_debug!("[overlay] expiry entry for {card} in {conversation}: {e}"),
+        }
+        done.push(key);
+    }
+    store::remove_card_expiries(&done)?;
+    Ok(out)
 }
 
 fn thread_item(conversation_id: &str, card_id: &str) -> Result<OverlayItem, String> {
@@ -779,6 +882,7 @@ mod tests {
             "Ship it?",
             vec!["Go".to_string(), "Stop".to_string()],
             false,
+            None,
         )
         .expect("post_choice");
         assert_eq!(item.doc.kind, "choice", "{item:?}");
@@ -828,6 +932,7 @@ mod tests {
                 delivery: Some("fetch".into()),
                 kind: Some("api_key".into()),
             },
+            None,
         )
         .expect("post_secret");
         assert_eq!(item.doc.kind, "secret");
@@ -870,6 +975,7 @@ mod tests {
             "OTHER_TOKEN",
             None,
             SecretProposal::default(),
+            None,
         )
         .expect("pending");
         let voided = void_card(&conv2, &project_id, &pending.id, Some(PostAuthor::owner())).expect("void");
@@ -892,7 +998,7 @@ mod tests {
         let dbh = conn();
         let c = dbh.lock();
         let (first, _) = post_secret(
-            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(), None,
         )
         .expect("post first");
         assert!(card_is_secret(&conv, &first.id).expect("kind"), "secret card");
@@ -909,12 +1015,12 @@ mod tests {
         assert_eq!(void_after, CARD_NOT_PENDING);
 
         let (second, _) = post_secret(
-            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(), None,
         )
         .expect("post same-name card");
         void_card(&conv, &project_id, &second.id, None).expect("void pending same-name card");
         let (third, _) = post_secret(
-            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(),
+            &c, &conv, &project_id, "k2", "ovl-final", "FINAL_TOKEN", None, SecretProposal::default(), None,
         )
         .expect("post third");
         void_card(&conv, &project_id, &third.id, None).expect("void third");
@@ -923,6 +1029,86 @@ mod tests {
         assert_eq!(sb.status, "set", "the first answer stays set");
         assert_eq!(sb.reference.as_deref(), Some("k2v://ws/ovl-final/FINAL_TOKEN"));
         assert!(!vault::exists(&project_id, "FINAL_TOKEN"), "nothing written to the old folder");
+    }
+
+    /// Rosson 2026-10-13: a card can carry a time frame. The sweep turns a
+    /// due pending card `expired` (index only, never a docs scan), leaves
+    /// a card with time left or no time frame open, refuses answers after
+    /// its time, and follows a conversation move.
+    #[test]
+    fn choice_cards_expire_on_the_sweep_and_refuse_late_answers() {
+        let project_id = seed_project("ovl-exp");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let now = now_secs();
+        let ask = |prompt: &str, exp: Option<i64>| {
+            post_choice(&c, &conv, &project_id, "k2", "ovl-exp", prompt, vec!["Go".into(), "Stop".into()], false, exp)
+                .expect("post_choice")
+                .0
+        };
+        let due = ask("due", Some(now - 5));
+        let later = ask("later", Some(now + 3_600));
+        let open = ask("open", None);
+        assert_eq!(due.doc.choice.as_ref().expect("c").expires_at, Some(now - 5), "stored on the card");
+        assert_eq!(open.doc.choice.as_ref().expect("c").expires_at, None, "--no-expiry stores none");
+
+        // Past its time, the card refuses an answer and a void even before the sweep.
+        assert_eq!(answer_card(&conv, &project_id, &due.id, Some("Go"), None, None).expect_err("late"), CARD_NOT_PENDING);
+        assert_eq!(void_card(&conv, &project_id, &due.id, None).expect_err("late void"), CARD_NOT_PENDING);
+
+        let swept = expire_due_cards(now).expect("sweep");
+        let ids: Vec<&str> = swept.iter().filter(|cb| cb.conversation_id == conv).map(|cb| cb.doc_id.as_str()).collect();
+        assert_eq!(ids, vec![due.id.as_str()], "only the due card: {swept:?}");
+        let cb = swept.iter().find(|cb| cb.doc_id == due.id).expect("due cb");
+        assert_eq!(cb.doc.choice.as_ref().expect("c").status, "expired");
+        assert!(cb.doc.choice.as_ref().expect("c").answered_at.is_some());
+        assert_eq!(cb.doc.choice.as_ref().expect("c").answered_by, None, "expiry is nobody's act");
+        assert_eq!(cb.inject_line, "card expired");
+        assert!(
+            expire_due_cards(now).expect("again").iter().all(|cb| cb.doc_id != due.id),
+            "a swept card is not swept twice"
+        );
+        let status = |id: &str| thread_item(&conv, id).expect("card").doc.choice.expect("c").status;
+        assert_eq!(status(&due.id), "expired");
+        assert_eq!(status(&later.id), "pending", "time left: still open");
+        assert_eq!(status(&open.id), "pending", "no time frame: open");
+
+        // An answered card's entry is dropped quietly when its time comes.
+        answer_card(&conv, &project_id, &later.id, Some("Go"), None, None).expect("answer in time");
+        assert!(expire_due_cards(now + 3_600).expect("later sweep").iter().all(|cb| cb.doc_id != later.id));
+        assert_eq!(status(&later.id), "answered");
+
+        // check-on-touch expires a due card without the sweep.
+        let touch = ask("touch", Some(now - 1));
+        let hit = expire_if_due(&conv, &touch.id, now).expect("touch").expect("expired now");
+        assert_eq!(hit.doc.choice.as_ref().expect("c").status, "expired");
+        assert!(expire_if_due(&conv, &open.id, now).expect("open").is_none());
+
+        // The index follows a conversation move.
+        let moving = ask("moving", Some(now - 2));
+        let to = uuid::Uuid::new_v4().to_string();
+        move_conversation(&c, &conv, &to).expect("move").expect("moved");
+        let moved = expire_due_cards(now).expect("sweep after move");
+        let cb = moved.iter().find(|cb| cb.doc_id == moving.id).expect("moved card swept");
+        assert_eq!(cb.conversation_id, to, "the frame names the new conversation");
+    }
+
+    #[test]
+    fn expire_card_closes_a_pending_secret_card_once() {
+        let project_id = seed_project("ovl-exps");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let (item, _) = post_secret(&c, &conv, &project_id, "k2", "ovl-exps", "OLD_TOKEN", None, SecretProposal::default(), Some(now_secs() + 60))
+            .expect("secret");
+        assert_eq!(item.doc.secret.as_ref().expect("s").expires_at.map(|t| t > 0), Some(true));
+        assert!(expire_if_due(&conv, &item.id, now_secs()).expect("not yet").is_none(), "time left");
+        let cb = expire_card(&conv, &item.id).expect("expire");
+        assert_eq!(cb.doc.secret.as_ref().expect("s").status, "expired");
+        assert_eq!(cb.inject_line, "secret OLD_TOKEN request expired");
+        assert_eq!(expire_card(&conv, &item.id).expect_err("once"), CARD_NOT_PENDING);
+        assert!(mark_secret(&conv, &item.id, "set", None, "late".into(), None).is_err(), "no answer after expiry");
     }
 
     #[test]

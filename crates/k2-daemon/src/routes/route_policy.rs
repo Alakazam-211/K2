@@ -985,6 +985,9 @@ pub const ROUTES: &[Route] = &[
     // token only (403 `owner_only`, UWB3). `lib/*` is B3's zen_lib_routes.
     get("/cli/zen/doctor", Member),
     post("/cli/zen/garden/delete", Member),
+    // Garden Lock (prd-garden-lock-and-sync-v1 §5.2): the person only; the
+    // handler refuses every passport, login and app pass (403 owner_only).
+    post("/cli/zen/garden/lock", Member),
     post("/cli/zen/garden/new", Member),
     post("/cli/zen/garden/rename", Member),
     post("/cli/zen/garden/reorder", Member),

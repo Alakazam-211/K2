@@ -34,6 +34,7 @@ import {
   revokeComputeGrant,
   setComputeGrant,
   setLocalPolicy,
+  setWorkspaceComputeOperate,
   setWorkspaceComputeSwitch,
   validNodeName,
 } from './compute-api'
@@ -108,6 +109,11 @@ describe('controller routes go to the focused server', () => {
   it('workspace switch rides agent-access/set with toggle compute', async () => {
     await setWorkspaceComputeSwitch('ws-id', true)
     expect(post).toHaveBeenLastCalledWith(primaryScope(), 'agent-access/set', { toggle: 'compute', value: true, workspace: 'ws-id' })
+  })
+
+  it('operate switch rides agent-access/set with toggle compute_operate (same as k2 compute operate)', async () => {
+    await setWorkspaceComputeOperate('/w/it', false)
+    expect(post).toHaveBeenLastCalledWith(primaryScope(), 'agent-access/set', { toggle: 'compute_operate', value: false, workspace: '/w/it' })
   })
 })
 

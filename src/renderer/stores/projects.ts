@@ -283,6 +283,11 @@ interface Project {
   // /cli/agent-access/set `toggle: 'compute'` (Admin). Absent on daemons
   // that don't list it yet → Settings → Compute shows it as unknown.
   agentsCanUseCompute?: number
+  // Node admin (0156, Q14) — "Allow this agent to operate compute nodes"
+  // (0/1, default 0): narrow, pause, update, restart without asking; root
+  // actions still wait for the owner. Written via POST
+  // /cli/agent-access/set `toggle: 'compute_operate'` (Admin).
+  agentsCanOperateCompute?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

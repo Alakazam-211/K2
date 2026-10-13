@@ -84,3 +84,26 @@ describe('Agent-tab "Allow compute nodes" toggle', () => {
     expect(toggle).not.toContain('workspace/set')
   })
 })
+
+// Node admin (Q14, 0156): "Allow this agent to operate compute nodes" sits
+// right after "Allow compute nodes" and writes the same Admin route the CLI
+// uses (`k2 compute operate`, toggle `compute_operate`).
+describe('Agent-tab "operate compute nodes" toggle', () => {
+  it('has a manifest id, follows Allow compute nodes, and posts agent-access/set compute_operate', () => {
+    expect(src).toContain("id: 'projects.agents-can-operate-compute'")
+    expect(src).toContain('data-settings-id="projects.agents-can-operate-compute"')
+    expect(src).toContain('<AgentsOperateComputeToggle project={project} />')
+    expect(src.indexOf('<AgentsOperateComputeToggle project={project} />')).toBeGreaterThan(
+      src.indexOf('<AgentsUseComputeToggle project={project} />'),
+    )
+    const start = src.indexOf('function AgentsOperateComputeToggle')
+    expect(start).toBeGreaterThan(0)
+    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    expect(toggle).toContain('setWorkspaceComputeOperate(project.path, next)')
+    expect(toggle).toContain('agentsCanOperateCompute: next ? 1 : 0')
+    expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
+    expect(toggle).toContain('fetchViewerRole()')
+    expect(toggle).not.toContain('fetchProjects(')
+    expect(toggle).not.toContain('workspace/set')
+  })
+})

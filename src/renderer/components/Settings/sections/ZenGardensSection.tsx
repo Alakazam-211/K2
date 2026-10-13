@@ -1,6 +1,7 @@
 // Settings → Gardens (prd-zen-gardens-v1 item 17; prd-garden-lock-and-sync-v1
 // §3, Rosson 2026-10-13). This computer's Zen Gardens, one row each: the
-// name, a ⋯ menu (Rename, Move up, Move down, Delete) and two checkboxes,
+// grip to drag it into place (Rosson 2026-10-13), the name, a ⋯ menu
+// (Rename, Delete) and two checkboxes,
 // "Lock garden" and "Keep in sync with future template updates"
 // (`ZenGardenSyncControls`). + New Garden opens the same modal as Zen's. A
 // collapsed Advanced holds the global theme and the folder. Thin client over
@@ -11,7 +12,7 @@
 // Settings only shows this where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -23,7 +24,7 @@ import {
   createZenSettingsGarden,
   deleteZenSettingsGarden,
   loadZenSettings,
-  moveZenSettingsGarden,
+  reorderZenSettingsGarden,
   renameZenSettingsGarden,
   setZenGlobalTheme,
   setupZenGardens,
@@ -34,6 +35,7 @@ import {
   type ZenSettingsTheme,
 } from '@/lib/zen/zen-settings'
 import { ZenNewGardenModal } from '@/components/Zen/widgets/ZenNewGardenModal'
+import { useToastStore } from '@/stores/toast'
 
 export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
   {
@@ -104,24 +106,16 @@ function themeOptions(themes: readonly ZenSettingsTheme[]): { value: string; lab
   return themes.map((t) => ({ value: t.name, label: t.name }))
 }
 
-/** A row's ⋯ menu: Rename, Move up, Move down, Delete. */
+/** A row's ⋯ menu: Rename, Delete. (Reorder is the row's drag handle.) */
 function RowMenu({
   name,
   busy,
-  canUp,
-  canDown,
   onRename,
-  onUp,
-  onDown,
   onDelete,
 }: {
   name: string
   busy: boolean
-  canUp: boolean
-  canDown: boolean
   onRename(): void
-  onUp(): void
-  onDown(): void
   onDelete(): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -168,12 +162,6 @@ function RowMenu({
           <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onRename)}>
             Rename
           </button>
-          <button type="button" role="menuitem" className={MENU_ITEM} disabled={!canUp} onClick={pick(onUp)}>
-            Move up
-          </button>
-          <button type="button" role="menuitem" className={MENU_ITEM} disabled={!canDown} onClick={pick(onDown)}>
-            Move down
-          </button>
           <button type="button" role="menuitem" className={MENU_ITEM} onClick={pick(onDelete)}>
             Delete
           </button>
@@ -183,12 +171,43 @@ function RowMenu({
   )
 }
 
+/** Where the drop line paints on a row: above it, below it, or nowhere. */
+type DropEdge = 'top' | 'bottom' | null
+
+/** Six-dot grip, drawn in the text colour. */
+function GripIcon(): React.JSX.Element {
+  return (
+    <svg width="8" height="12" viewBox="0 0 8 12" aria-hidden="true" fill="currentColor">
+      <circle cx="2" cy="2" r="1" />
+      <circle cx="6" cy="2" r="1" />
+      <circle cx="2" cy="6" r="1" />
+      <circle cx="6" cy="6" r="1" />
+      <circle cx="2" cy="10" r="1" />
+      <circle cx="6" cy="10" r="1" />
+    </svg>
+  )
+}
+
 function GardenRow({
   garden,
   gardens,
+  dragging,
+  picked,
+  dropEdge,
+  onHandleMouseDown,
+  onHandleKeyDown,
+  onHandleBlur,
 }: {
   garden: ZenSettingsGarden
   gardens: readonly ZenSettingsGarden[]
+  /** This row is the one being dragged (mouse) or carried (keyboard). */
+  dragging: boolean
+  /** Carried with the keyboard (Space picked it up). */
+  picked: boolean
+  dropEdge: DropEdge
+  onHandleMouseDown(e: React.MouseEvent): void
+  onHandleKeyDown(e: React.KeyboardEvent): void
+  onHandleBlur(): void
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(garden.name)
@@ -196,9 +215,6 @@ function GardenRow({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const count = gardens.length
-  const at = garden.index
-
   useEffect(() => {
     if (editing) inputRef.current?.select()
   }, [editing])
@@ -228,8 +244,34 @@ function GardenRow({
   }
 
   return (
-    <li data-zen-garden-row={garden.id} className="py-2 border-b border-[var(--color-border)]">
+    <li
+      data-zen-garden-row={garden.id}
+      className={`relative py-2 border-b border-[var(--color-border)] ${dragging ? 'opacity-30' : ''}`}
+    >
+      {dropEdge === 'top' && (
+        <div data-zen-garden-drop-line="top" className="absolute left-0 right-0 -top-px h-[2px] bg-[var(--color-accent)] z-10" />
+      )}
+      {dropEdge === 'bottom' && (
+        <div data-zen-garden-drop-line="bottom" className="absolute left-0 right-0 -bottom-px h-[2px] bg-[var(--color-accent)] z-10" />
+      )}
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-zen-garden-handle={garden.id}
+          aria-label={`Reorder ${garden.name}`}
+          aria-roledescription="drag handle"
+          aria-pressed={picked}
+          aria-describedby="zen-gardens-reorder-help"
+          title="Drag to reorder"
+          onMouseDown={onHandleMouseDown}
+          onKeyDown={onHandleKeyDown}
+          onBlur={onHandleBlur}
+          className={`w-4 h-6 flex-shrink-0 flex items-center justify-center hover:text-[var(--color-text-primary)] focus:text-[var(--color-text-primary)] no-drag cursor-grab active:cursor-grabbing outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--color-accent)] ${
+            picked ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
+          }`}
+        >
+          <GripIcon />
+        </button>
         <div className="flex-1 min-w-0">
           {editing ? (
             <input
@@ -285,11 +327,7 @@ function GardenRow({
           <RowMenu
             name={garden.name}
             busy={busy}
-            canUp={at > 1}
-            canDown={at < count}
             onRename={startRename}
-            onUp={() => void attempt(() => moveZenSettingsGarden(garden.id, at - 1), setBusy, setError)}
-            onDown={() => void attempt(() => moveZenSettingsGarden(garden.id, at + 1), setBusy, setError)}
             onDelete={() => {
               setError(null)
               setConfirmDelete(true)
@@ -323,6 +361,186 @@ function GardenRow({
       <ZenGardenSyncControls garden={garden} />
       <InlineError text={error} testId={`zen-garden-error-${garden.id}`} />
     </li>
+  )
+}
+
+/** Drop slot `drop` (0..n, before row `drop`) for row `from` as a 1-based
+ *  position, or null when it would land where it already is. */
+function slotToPosition(from: number, drop: number): number | null {
+  if (drop === from || drop === from + 1) return null
+  return (drop > from ? drop - 1 : drop) + 1
+}
+
+/**
+ * The Gardens, in order, reordered by dragging a row's grip (the Agents
+ * presets' mouse drag and accent drop line) or from the keyboard: on the
+ * grip, ArrowUp/ArrowDown moves the Garden one place; Space/Enter picks it
+ * up, the arrows choose a spot, Space/Enter drops it, Escape cancels. One
+ * `zen/garden/reorder` per move with the final position; the list paints
+ * at once and goes back (with a toast) if the daemon refuses.
+ */
+function GardenList({ gardens }: { gardens: readonly ZenSettingsGarden[] }): React.JSX.Element {
+  const listRef = useRef<HTMLOListElement>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropSlot, setDropSlot] = useState<number | null>(null)
+  const [pickedId, setPickedId] = useState<string | null>(null)
+  const [announce, setAnnounce] = useState('')
+  const pending = useRef(false)
+  const refocus = useRef<string | null>(null)
+  const count = gardens.length
+
+  // A moved row's node is re-inserted, which can drop focus: put it back.
+  useLayoutEffect(() => {
+    const id = refocus.current
+    if (!id || !listRef.current) return
+    const handle = [...listRef.current.querySelectorAll<HTMLElement>('[data-zen-garden-handle]')].find(
+      (el) => el.getAttribute('data-zen-garden-handle') === id,
+    )
+    if (handle && document.activeElement !== handle) handle.focus()
+  })
+
+  const move = useCallback(
+    (garden: ZenSettingsGarden, to: number): void => {
+      if (pending.current) return
+      pending.current = true
+      setAnnounce(`${garden.name} moved to position ${to} of ${count}.`)
+      reorderZenSettingsGarden(garden.id, to)
+        .catch((err: unknown) => {
+          const why = zenSettingsErrorText(err)
+          setAnnounce(`Couldn’t move ${garden.name}. ${why}`)
+          useToastStore.getState().addToast(`Couldn’t move “${garden.name}”: ${why}`, 'error')
+        })
+        .finally(() => {
+          pending.current = false
+        })
+    },
+    [count],
+  )
+
+  const onHandleMouseDown = (e: React.MouseEvent, from: number): void => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const garden = gardens[from]
+    const startY = e.clientY
+    let started = false
+    let slot: number | null = null
+    const onMoveEv = (ev: MouseEvent): void => {
+      if (!started && Math.abs(ev.clientY - startY) > 3) {
+        started = true
+        setPickedId(null)
+        setDragId(garden.id)
+        document.body.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
+      if (!started || !listRef.current) return
+      const rows = listRef.current.querySelectorAll('[data-zen-garden-row]')
+      let idx = 0
+      for (let i = 0; i < rows.length; i++) {
+        const rect = rows[i].getBoundingClientRect()
+        if (ev.clientY > rect.top + rect.height / 2) idx = i + 1
+      }
+      slot = idx
+      setDropSlot(idx)
+    }
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMoveEv)
+      document.removeEventListener('mouseup', onUp)
+      if (!started) return
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setDragId(null)
+      setDropSlot(null)
+      const to = slot === null ? null : slotToPosition(from, slot)
+      if (to !== null) move(garden, to)
+    }
+    document.addEventListener('mousemove', onMoveEv)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  const stopCarrying = (): void => {
+    setPickedId(null)
+    setDropSlot(null)
+  }
+
+  const onHandleKeyDown = (e: React.KeyboardEvent, from: number): void => {
+    const garden = gardens[from]
+    const carrying = pickedId === garden.id
+    const key = e.key
+    if (key === ' ' || key === 'Enter') {
+      e.preventDefault()
+      if (!carrying) {
+        setPickedId(garden.id)
+        setDropSlot(from)
+        setAnnounce(
+          `Picked up ${garden.name}, position ${from + 1} of ${count}. Arrow keys move it, Space drops it, Escape cancels.`,
+        )
+        return
+      }
+      const to = slotToPosition(from, dropSlot ?? from)
+      stopCarrying()
+      refocus.current = garden.id
+      if (to === null) setAnnounce(`${garden.name} dropped at position ${from + 1} of ${count}.`)
+      else move(garden, to)
+      return
+    }
+    if (key === 'Escape' && carrying) {
+      e.preventDefault()
+      e.stopPropagation()
+      stopCarrying()
+      setAnnounce(`Move cancelled. ${garden.name} stays at position ${from + 1} of ${count}.`)
+      return
+    }
+    if (key !== 'ArrowUp' && key !== 'ArrowDown') return
+    e.preventDefault()
+    const up = key === 'ArrowUp'
+    if (carrying) {
+      // The drop line walks one spot; the slot just below the row is the
+      // same place as the one above it, so it is skipped.
+      const cur = dropSlot ?? from
+      let next = up ? cur - 1 : cur + 1
+      if (next === from + 1) next = up ? from : from + 2
+      if (next < 0 || next > count) return
+      setDropSlot(next)
+      setAnnounce(`${garden.name}, position ${slotToPosition(from, next) ?? from + 1} of ${count}.`)
+      return
+    }
+    const to = from + 1 + (up ? -1 : 1)
+    if (to < 1 || to > count) return
+    refocus.current = garden.id
+    move(garden, to)
+  }
+
+  const active = dragId ?? pickedId
+  const from = active ? gardens.findIndex((g) => g.id === active) : -1
+  const showLine = from >= 0 && dropSlot !== null && slotToPosition(from, dropSlot) !== null
+
+  return (
+    <>
+      <p id="zen-gardens-reorder-help" className="sr-only">
+        Drag to reorder. From the keyboard, the arrow keys move a Garden; or Space picks it up, the arrows choose a
+        spot, Space drops it and Escape cancels.
+      </p>
+      <ol ref={listRef} className="border-t border-[var(--color-border)]" data-zen-gardens-list="">
+        {gardens.map((g, i) => (
+          <GardenRow
+            key={g.id}
+            garden={g}
+            gardens={gardens}
+            dragging={g.id === active}
+            picked={g.id === pickedId}
+            dropEdge={!showLine ? null : dropSlot === i ? 'top' : dropSlot === count && i === count - 1 ? 'bottom' : null}
+            onHandleMouseDown={(e) => onHandleMouseDown(e, i)}
+            onHandleKeyDown={(e) => onHandleKeyDown(e, i)}
+            onHandleBlur={() => {
+              if (pickedId === g.id) stopCarrying()
+            }}
+          />
+        ))}
+      </ol>
+      <div aria-live="polite" role="status" className="sr-only" data-zen-gardens-announce="">
+        {announce}
+      </div>
+    </>
   )
 }
 
@@ -488,11 +706,7 @@ export function ZenGardensSection(): React.JSX.Element {
         </div>
       ) : (
         <section data-settings-id="zen-gardens.list">
-          <ol className="border-t border-[var(--color-border)]">
-            {st.gardens.map((g) => (
-              <GardenRow key={g.id} garden={g} gardens={st.gardens} />
-            ))}
-          </ol>
+          <GardenList gardens={st.gardens} />
           <NewGarden gardens={st.gardens} />
         </section>
       )}

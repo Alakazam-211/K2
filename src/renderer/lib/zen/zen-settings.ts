@@ -251,6 +251,39 @@ export function moveZenSettingsGarden(id: string, to: number): Promise<void> {
   return post('zen/garden/reorder', { garden: id, to })
 }
 
+/** Pure: `gardens` with Garden `id` moved to 1-based position `to`, every
+ *  `index` renumbered. Unknown `id` = the list unchanged. */
+export function zenGardensMoved(
+  gardens: readonly ZenSettingsGarden[],
+  id: string,
+  to: number,
+): ZenSettingsGarden[] {
+  const from = gardens.findIndex((g) => g.id === id)
+  if (from < 0) return [...gardens]
+  const next = [...gardens]
+  const [moved] = next.splice(from, 1)
+  next.splice(Math.max(0, Math.min(next.length, to - 1)), 0, moved)
+  return next.map((g, i) => (g.index === i + 1 ? g : { ...g, index: i + 1 }))
+}
+
+/**
+ * Drag-and-drop reorder (Rosson 2026-10-13): paint the new order at once,
+ * then post the same `zen/garden/reorder {garden, to}` Move up/down used.
+ * A refusal puts the old order back and rethrows (the caller says why).
+ * The person can reorder a locked Garden; only agents are refused.
+ */
+export async function reorderZenSettingsGarden(id: string, to: number): Promise<void> {
+  const before = useZenSettingsStore.getState().gardens
+  useZenSettingsStore.setState({ gardens: zenGardensMoved(before, id, to) })
+  try {
+    await moveZenSettingsGarden(id, to)
+  } catch (err) {
+    useZenSettingsStore.setState({ gardens: before })
+    void loadZenSettings()
+    throw err
+  }
+}
+
 export function deleteZenSettingsGarden(id: string): Promise<void> {
   return post('zen/garden/delete', { garden: id })
 }

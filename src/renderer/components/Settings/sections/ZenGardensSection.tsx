@@ -4,8 +4,9 @@
 // Delete (asks in K2's confirm dialog) (Rosson 2026-10-13), and two checkboxes,
 // "Lock garden" and "Keep in sync with future template updates"
 // (`ZenGardenSyncControls`). Above the list: + New Garden (the same modal as
-// Zen's) and a search by name. A collapsed Advanced holds the global theme
-// and the folder. Thin client over
+// Zen's) and a search by name. Advanced (always shown, right of the list
+// behind a divider; below it on narrow panes) holds the global theme and the
+// folder. Thin client over
 // `lib/zen/zen-settings.ts`: every request goes to the LOCAL daemon. Re-reads
 // on every local `zen_changed`, like the Garden switcher, so Settings and an
 // open Zen window stay in step.
@@ -48,8 +49,8 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
     keywords: ['zen', 'garden', 'gardens', 'lock', 'unlock', 'sync', 'template', 'rename', 'reorder', 'delete', 'new garden'],
   },
   {
-    // The collapsed Advanced section: a search lands on it (its inner rows
-    // aren't in the page until it opens).
+    // The Advanced section (always shown): a search lands on it, the theme
+    // and folder rows open in front of the person.
     id: 'zen-gardens.advanced',
     section: 'zen-gardens',
     label: 'Zen Theme and Gardens Folder',
@@ -569,7 +570,7 @@ function NewGarden({ gardens }: { gardens: readonly ZenSettingsGarden[] }): Reac
   )
 }
 
-/** Advanced (collapsed until opened): the global theme and the folder. */
+/** Advanced, always shown (Rosson 2026-10-13): the global theme and the folder. */
 function Advanced({
   setUp,
   path,
@@ -581,24 +582,25 @@ function Advanced({
   themes: readonly ZenSettingsTheme[]
   globalTheme: string | null
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [revealError, setRevealError] = useState<string | null>(null)
   return (
-    <section className="mt-8" data-zen-gardens-advanced="" data-settings-id="zen-gardens.advanced">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="zen-gardens-advanced-body"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider no-drag cursor-pointer hover:text-[var(--color-text-primary)]"
+    // Wide: a column on the right behind a vertical divider. Narrow (below
+    // `lg`, as Token Usage stacks): under the list behind a horizontal one.
+    <section
+      aria-labelledby="zen-gardens-advanced-title"
+      className="mt-8 pt-4 border-t border-[var(--color-border)] lg:mt-0 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6 lg:w-80 lg:flex-shrink-0"
+      data-zen-gardens-advanced=""
+      data-settings-id="zen-gardens.advanced"
+    >
+      <h3
+        id="zen-gardens-advanced-title"
+        className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider"
       >
-        <span aria-hidden>{open ? '▾' : '▸'}</span>
         Advanced
-      </button>
-      {open && (
-        <div id="zen-gardens-advanced-body" className="mt-2">
+      </h3>
+        <div className="mt-2">
           {setUp && (
             <div data-settings-id="zen-gardens.theme">
               <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
@@ -640,7 +642,6 @@ function Advanced({
             </div>
           ) : null}
         </div>
-      )}
     </section>
   )
 }
@@ -660,45 +661,51 @@ export function ZenGardensSection(): React.JSX.Element {
   const hasData = st.path !== null || st.setUp || st.gardens.length > 0
 
   return (
-    <div className="max-w-2xl" data-zen-gardens-section="">
+    <div className="max-w-5xl" data-zen-gardens-section="">
       <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Gardens</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-6">Your Zen pages on this computer.</p>
 
-      {st.failure ? (
-        <div className="mb-4">
-          <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
-          <button type="button" onClick={() => void loadZenSettings()} className={`${BTN} mt-2`}>
-            Try again
-          </button>
-        </div>
-      ) : null}
+      {/* Left: New Garden, search, the list. Right (stacked below on narrow
+          panes): Advanced, always shown (Rosson 2026-10-13). */}
+      <div className="flex flex-col lg:flex-row lg:gap-6" data-zen-gardens-columns="">
+        <div className="flex-1 min-w-0 max-w-2xl">
+          {st.failure ? (
+            <div className="mb-4">
+              <InlineError text={zenSettingsErrorText(new Error(st.failure.message))} testId="zen-gardens-load-error" />
+              <button type="button" onClick={() => void loadZenSettings()} className={`${BTN} mt-2`}>
+                Try again
+              </button>
+            </div>
+          ) : null}
 
-      {!hasData ? (
-        st.failure ? null : <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
-      ) : !st.setUp ? (
-        <div data-zen-gardens-setup="">
-          <p className="text-xs text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void attempt(setupZenGardens, setBusy, setError)}
-            className={BTN}
-          >
-            Set up Gardens
-          </button>
-          <InlineError text={error} testId="zen-gardens-setup-error" />
+          {!hasData ? (
+            st.failure ? null : <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
+          ) : !st.setUp ? (
+            <div data-zen-gardens-setup="">
+              <p className="text-xs text-[var(--color-text-secondary)] mb-3">Gardens aren’t set up on this computer yet.</p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void attempt(setupZenGardens, setBusy, setError)}
+                className={BTN}
+              >
+                Set up Gardens
+              </button>
+              <InlineError text={error} testId="zen-gardens-setup-error" />
+            </div>
+          ) : (
+            <section data-settings-id="zen-gardens.list">
+              <NewGarden gardens={st.gardens} />
+              <GardenSearch value={query} onChange={setQuery} />
+              <GardenList gardens={st.gardens} query={query} />
+            </section>
+          )}
         </div>
-      ) : (
-        <section data-settings-id="zen-gardens.list">
-          <NewGarden gardens={st.gardens} />
-          <GardenSearch value={query} onChange={setQuery} />
-          <GardenList gardens={st.gardens} query={query} />
-        </section>
-      )}
 
-      {hasData && (st.setUp || st.path) ? (
-        <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
-      ) : null}
+        {hasData && (st.setUp || st.path) ? (
+          <Advanced setUp={st.setUp} path={st.path} themes={st.themes} globalTheme={st.globalTheme} />
+        ) : null}
+      </div>
     </div>
   )
 }

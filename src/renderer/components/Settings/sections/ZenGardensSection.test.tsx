@@ -25,7 +25,7 @@
 //     each; Lock hidden on a daemon without it; none of the removed
 //     controls or captions;
 //   - + New Garden sends the chosen template (texting / blank);
-//   - Advanced (collapsed): the global theme (names from `theme/list`) and
+//   - Advanced (always shown, beside the list): the global theme (names from `theme/list`) and
 //     the folder;
 //   - a `zen_changed` from the local daemon re-reads the list;
 //   - refusals (409 garden_exists, last_garden) show inline.
@@ -388,11 +388,14 @@ function dialogText(): string | null {
   return st.isOpen ? `${st.title} ${st.message}` : null
 }
 
-function openAdvanced(): void {
-  const btn = screen.getByRole('button', { name: /Advanced/ })
-  expect(btn.getAttribute('aria-expanded')).toBe('false')
-  fireEvent.click(btn)
-  expect(btn.getAttribute('aria-expanded')).toBe('true')
+/** Advanced is always shown now (Rosson 2026-10-13): a labelled section, no
+ *  toggle. Returns it. */
+function advanced(): HTMLElement {
+  const sec = screen.getByRole('region', { name: 'Advanced' })
+  expect(sec.hasAttribute('data-zen-gardens-advanced')).toBe(true)
+  expect(screen.queryByRole('button', { name: /Advanced/ })).toBeNull()
+  expect(sec.querySelector('[aria-expanded]')).toBeNull()
+  return sec
 }
 
 function box(kind: 'lock' | 'sync', id: string): HTMLInputElement {
@@ -570,12 +573,21 @@ describe('Settings → Gardens: the section', () => {
     expect(nameField('g-1').parentElement?.children.length).toBe(1)
     expect(row('g-3').textContent).not.toContain('Empty')
     expect(within(row('g-3')).queryByTitle('Position')).toBeNull()
-    // Advanced starts collapsed: no folder, no global theme.
-    expect(document.querySelector('[data-zen-gardens-path]')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Global Zen theme' })).toBeNull()
-    openAdvanced()
-    expect(document.querySelector('[data-zen-gardens-path]')?.textContent).toBe('/Users/r/.k2/zen')
-    expect(screen.getByRole('button', { name: 'Global Zen theme' })).toBeTruthy()
+    // Advanced is always shown, beside the list (not inside it): the folder
+    // and the global theme with no click.
+    const adv = advanced()
+    expect(adv.querySelector('[data-zen-gardens-path]')?.textContent).toBe('/Users/r/.k2/zen')
+    expect(within(adv).getByRole('button', { name: 'Global Zen theme' })).toBeTruthy()
+    const list = document.querySelector('[data-settings-id="zen-gardens.list"]') as HTMLElement
+    expect(list.contains(adv)).toBe(false)
+    // Two columns from `lg` (vertical divider), stacked with a horizontal one below.
+    const cols = document.querySelector('[data-zen-gardens-columns]') as HTMLElement
+    expect(cols.className).toContain('flex-col')
+    expect(cols.className).toContain('lg:flex-row')
+    expect(adv.parentElement).toBe(cols)
+    expect(adv.className).toContain('border-t')
+    expect(adv.className).toContain('lg:border-l')
+    expect(adv.className).toContain('lg:border-t-0')
     fireEvent.click(screen.getByRole('button', { name: 'Reveal in Finder' }))
     await settle()
     expect(h.reveals).toEqual(['/Users/r/.k2/zen'])
@@ -947,7 +959,7 @@ describe('Settings → Gardens: the section', () => {
     h.global = 'basic'
     await mountSection()
     expect(screen.queryByRole('button', { name: /^Theme for / })).toBeNull()
-    openAdvanced()
+    advanced()
     expect(screen.queryByRole('button', { name: /^Theme for / })).toBeNull()
 
     await pickDropdown('Global Zen theme', 'sunrise')
@@ -959,7 +971,7 @@ describe('Settings → Gardens: the section', () => {
 
   it('a theme refusal shows inline', async () => {
     await mountSection()
-    openAdvanced()
+    advanced()
     h.failNext = 'unknown_theme'
     await pickDropdown('Global Zen theme', 'paper')
     await waitFor(() =>
@@ -1125,7 +1137,7 @@ describe('Settings → Gardens: two checkboxes per Garden (prd-garden-lock-and-s
     h.sync['g-1'] = { page: 'copy', theme: 'copy', locked: false }
     await mountSection()
     await waitFor(() => box('sync', 'g-1'))
-    openAdvanced()
+    advanced()
     const text = document.querySelector('[data-zen-gardens-section]')?.textContent ?? ''
     for (const gone of [
       'Follow global',
@@ -1221,9 +1233,13 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.catalog')
   })
 
-  it('prd-garden-lock-and-sync-v1: every search entry lands on something on the page, Advanced collapsed', async () => {
+  it('prd-garden-lock-and-sync-v1: every search entry lands on something on the page, Advanced shown', async () => {
     await mountSection()
-    expect(document.querySelector('[data-zen-gardens-advanced] button')?.getAttribute('aria-expanded')).toBe('false')
+    advanced()
+    // The Advanced entry lands on the section that holds the theme and folder.
+    const adv = document.querySelector('[data-settings-id="zen-gardens.advanced"]') as HTMLElement
+    expect(adv.querySelector('[data-settings-id="zen-gardens.theme"]')).not.toBeNull()
+    expect(adv.querySelector('[data-settings-id="zen-gardens.folder"]')).not.toBeNull()
     for (const e of ZEN_GARDENS_MANIFEST) {
       expect(document.querySelector(`[data-settings-id="${e.id}"]`), e.id).not.toBeNull()
     }

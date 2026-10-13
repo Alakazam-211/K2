@@ -522,8 +522,13 @@ fn spawn_skin_helper(
     // than serve the App unguarded.
     let frame = FramePolicy::from_stored(&row.frame_ancestors)
         .map_err(|e| format!("frame policy: {e} (k2 publish frame {name} --reset)"))?;
-    let args =
-        crate::skin_gateway::helper_argv(row.port as u16, daemon_port, root.as_deref(), &frame);
+    let args = crate::skin_gateway::helper_argv(
+        row.port as u16,
+        daemon_port,
+        root.as_deref(),
+        &frame,
+        &row.id,
+    );
     spawn_argv(&exe, &args, &cwd, project_id, name)
 }
 
@@ -612,6 +617,9 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         public_url(&row.name, &row.expose)
     };
     let mut json = ServiceJson::from_row(row, status, url, pid);
+    if row.kind == KIND_SKIN && status == STATUS_RUNNING {
+        json.helper_needs_restart = helper_needs_restart(&row.id);
+    }
     if row.kind != KIND_SKIN && status == STATUS_RUNNING {
         json.frame_warning = frame_warning_get(&row.project_id, &row.name);
     }
@@ -1171,6 +1179,17 @@ pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), Publi
         let _ = ps::delete(&conn, project_id, &name);
         ours
     };
+    // S24-20: logins bound to this App end with it. Its grants stay (shown
+    // as "App removed" in Settings) until S26 decides cleanup.
+    if let Some(row) = row.as_ref() {
+        match k2_core::skin::revoke_sessions_for_app(&row.id) {
+            Ok(n) if n > 0 => log_debug!(
+                "[publish] rm {project_id}/{name}: ended {n} App login session(s)"
+            ),
+            Ok(_) => {}
+            Err(e) => log_debug!("[publish] rm {project_id}/{name}: WARN end App sessions: {e}"),
+        }
+    }
     if !keep_hostname && label_is_ours {
         if row.as_ref().is_some_and(|r| r.expose == EXPOSE_TUNNEL) {
             if let Ok(cfg) = tunnel_config::load() {
@@ -1467,7 +1486,12 @@ pub fn boot_desired_running() {
             adopt_reattach(&row.project_id, &row.name, port, pid);
             emit_changed(&row.project_id);
             if row.kind == KIND_SKIN {
-                restart_helper_if_frame_drift(&row);
+                // S24-8: a helper from before per-App logins (macOS keeps
+                // helpers across a daemon update) logs guests in as `host`.
+                // Restart it so the App's own grants apply (Q4).
+                if !restart_helper_if_unbound(&row, pid) {
+                    restart_helper_if_frame_drift(&row);
+                }
             } else {
                 probe_cmd_frame_async(&row.project_id, &row.name, port);
             }
@@ -1507,12 +1531,171 @@ pub fn boot_desired_running() {
     }
 }
 
+/// Q4 default (S24-8): at boot, restart a reattached `--skin` helper whose
+/// argv lacks `--app <its service id>` (an older binary's helper still
+/// logging guests in as `host`). Those guests sign in once more; per-App
+/// enforcement is immediate. `false` = leave it running until its next
+/// restart (Settings shows `helperNeedsRestart`).
+pub const RESTART_UNBOUND_HELPERS_AT_BOOT: bool = true;
+
+/// `--skin` helpers seen at boot without `--app` that were left running
+/// (or failed to restart). Read by [`to_json`] for the Settings badge.
+fn unbound_helpers() -> &'static parking_lot::Mutex<std::collections::HashSet<String>> {
+    static SET: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(|| parking_lot::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// The argv of a live process, or `None` when it can't be read. Linux
+/// reads `/proc/<pid>/cmdline`; macOS asks `ps`.
+fn process_argv(pid: i32) -> Option<Vec<String>> {
+    #[cfg(target_os = "linux")]
+    {
+        let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let parts: Vec<String> = raw
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts)
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        let out = std::process::Command::new("/bin/ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .env_clear()
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if text.is_empty() {
+            None
+        } else {
+            // Service ids are uuids, so whitespace splitting is enough to
+            // find `--app <id>` (paths with spaces only split other args).
+            Some(text.split_whitespace().map(str::to_string).collect())
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// True when this argv binds the helper to `service_id` (`--app ID` or
+/// `--app=ID`).
+pub fn argv_binds_app(argv: &[String], service_id: &str) -> bool {
+    argv.iter().enumerate().any(|(i, a)| {
+        a.strip_prefix("--app=") == Some(service_id)
+            || (a == "--app" && argv.get(i + 1).map(String::as_str) == Some(service_id))
+    })
+}
+
+/// S24-8 boot check for one reattached `--skin` helper. Returns true when it
+/// restarted the helper (the caller then skips the frame check: a fresh
+/// helper has the row's policy). Unreadable argv (Windows): left alone and
+/// logged, since a restart can't be shown to be needed.
+fn restart_helper_if_unbound(row: &ps::PublishedService, pid: i32) -> bool {
+    let Some(argv) = process_argv(pid) else {
+        log_debug!(
+            "[publish] {}/{} could not read helper argv (pid {pid}); per-App login binding unchecked",
+            row.project_id,
+            row.name
+        );
+        return false;
+    };
+    if argv_binds_app(&argv, &row.id) {
+        unbound_helpers().lock().remove(&row.id);
+        return false;
+    }
+    if !RESTART_UNBOUND_HELPERS_AT_BOOT {
+        log_debug!(
+            "[publish] {}/{} helper predates per-App logins; left running (signs guests in as host)",
+            row.project_id,
+            row.name
+        );
+        unbound_helpers().lock().insert(row.id.clone());
+        return false;
+    }
+    log_debug!(
+        "[publish] {}/{} helper predates per-App logins; restarting it with --app",
+        row.project_id,
+        row.name
+    );
+    match restart_skin_helper(&row.project_id, &row.name) {
+        Ok(_) => {
+            unbound_helpers().lock().remove(&row.id);
+            true
+        }
+        Err(e) => {
+            log_debug!(
+                "[publish] {}/{} per-App restart failed: {}",
+                row.project_id,
+                row.name,
+                e.message
+            );
+            unbound_helpers().lock().insert(row.id.clone());
+            false
+        }
+    }
+}
+
+/// True while this App's helper is an older one still signing guests in as
+/// `host` (Settings badge, S24-15).
+pub fn helper_needs_restart(service_id: &str) -> bool {
+    unbound_helpers().lock().contains(service_id)
+}
+
+/// S24-10: once per skin.db, before any helper starts, copy every box login
+/// onto each `--skin` App that exists now, so nobody who can sign in to an
+/// App today is locked out by per-App logins. Failure is loud and retried
+/// at the next boot (the pending mark stays).
+pub fn run_skin_app_backfill_at_boot() {
+    match k2_core::skin::skin_app_backfill_pending() {
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(e) => {
+            log_debug!("[publish] ERROR per-App login backfill: skin.db: {e}");
+            return;
+        }
+    }
+    let ids = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::ids_of_kind(&conn, KIND_SKIN)
+    };
+    let ids = match ids {
+        Ok(ids) => ids,
+        Err(e) => {
+            log_debug!("[publish] ERROR per-App login backfill: published services: {e}");
+            return;
+        }
+    };
+    match k2_core::skin::run_skin_app_backfill(&ids) {
+        Ok(Some(reports)) => log_debug!(
+            "[publish] per-App login backfill: {} --skin App(s), {} login(s) copied",
+            reports.len(),
+            reports.iter().map(|r| r.added.len()).sum::<usize>()
+        ),
+        Ok(None) => {}
+        Err(e) => log_debug!("[publish] ERROR per-App login backfill (retried next boot): {e}"),
+    }
+}
+
 /// Long-lived supervisor thread: boot respawn then idle (child waiters
 /// are per-service threads).
 pub fn spawn() -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("publish-runtime".into())
         .spawn(|| {
+            run_skin_app_backfill_at_boot();
             boot_desired_running();
             let mut ticks: u32 = 0;
             loop {
@@ -1721,6 +1904,48 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomOrd};
     use std::sync::Arc as StdArc;
+
+    /// S24-8: the boot check recognises a helper bound to its App and one
+    /// from before per-App logins (no `--app`, or another App's id).
+    #[test]
+    fn argv_binds_app_reads_both_spellings() {
+        let id = "0f5e7c1a-3b2d-4e6f-8a9b-1c2d3e4f5a6b";
+        let argv = |extra: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = ["k2-daemon", "--skin-gateway", "--listen", "127.0.0.1:9"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            v.extend(extra.iter().map(|s| s.to_string()));
+            v
+        };
+        assert!(argv_binds_app(&argv(&["--app", id]), id));
+        assert!(argv_binds_app(&argv(&[&format!("--app={id}")]), id));
+        assert!(!argv_binds_app(&argv(&[]), id), "pre-0.45.5 helper");
+        assert!(!argv_binds_app(&argv(&["--app", "other"]), id));
+        assert!(!argv_binds_app(&argv(&["--app"]), id), "dangling flag");
+        let real = crate::skin_gateway::helper_argv(
+            9,
+            8,
+            None,
+            &k2_core::frame_policy::FramePolicy::app_default(),
+            id,
+        );
+        assert!(argv_binds_app(&real, id), "{real:?}");
+    }
+
+    /// S24-8 on this platform: the argv reader sees a live process's args.
+    #[cfg(unix)]
+    #[test]
+    fn process_argv_reads_a_live_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let argv = process_argv(child.id() as i32).expect("argv of a live child");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(argv.iter().any(|a| a == "30"), "{argv:?}");
+    }
 
     fn unique(prefix: &str) -> String {
         format!(

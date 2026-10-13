@@ -258,6 +258,7 @@ mod tests {
             rooms: vec![],
             session,
             room_policy: RoomPolicy::new(),
+            app: if session { "host".to_string() } else { String::new() },
         }
     }
 

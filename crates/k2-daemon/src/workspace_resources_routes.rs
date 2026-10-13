@@ -591,6 +591,7 @@ mod tests {
             rooms: vec![project_id.to_string()],
             session: true,
             room_policy,
+            app: "host".to_string(),
         }
     }
 

@@ -145,6 +145,11 @@ pub struct ServiceJson {
     /// service; null otherwise. `env_deprecation` keeps the full notice.
     #[serde(default)]
     pub env_removed_in: Option<String>,
+    /// `--skin` Apps (S24-15): true while the running helper is an older one
+    /// that still signs guests in as `host` (not bound to this App). Only
+    /// sent when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub helper_needs_restart: bool,
 }
 
 impl ServiceJson {
@@ -194,6 +199,7 @@ impl ServiceJson {
             env_deprecation: None,
             env_mode: None,
             env_removed_in: None,
+            helper_needs_restart: false,
         }
     }
 }
@@ -298,6 +304,16 @@ pub fn list_for_project(conn: &Connection, project_id: &str) -> Result<Vec<Publi
         "SELECT {COLS} FROM published_services WHERE project_id = ?1 ORDER BY name"
     ))?;
     let rows = stmt.query_map(params![project_id], map_row)?;
+    rows.collect()
+}
+
+/// Ids of every row of one kind (`skin` | `cmd`), any desired state. The
+/// per-App login backfill (S24-10) copies box logins onto each `skin` id.
+pub fn ids_of_kind(conn: &Connection, kind: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM published_services WHERE kind = ?1 ORDER BY created_at, name",
+    )?;
+    let rows = stmt.query_map(params![kind], |r| r.get::<_, String>(0))?;
     rows.collect()
 }
 

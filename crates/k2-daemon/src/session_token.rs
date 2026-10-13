@@ -1509,6 +1509,10 @@ mod tests {
             "host login grant is owner-only, not an agent verb"
         );
         assert!(
+            !is_agent_verb("/cli/skin/grants/copy-host"),
+            "copying box logins onto an App is owner-only, not an agent verb (S24-11)"
+        );
+        assert!(
             !is_agent_verb("/cli/skin/templates"),
             "access templates are owner-only, not an agent verb"
         );

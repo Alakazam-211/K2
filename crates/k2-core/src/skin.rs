@@ -43,14 +43,35 @@ use sha2::{Digest, Sha256};
 /// Prefix every skin pass carries. Distinct from `k2sk_` (`/v1` API keys).
 pub const SKIN_KEY_PREFIX: &str = "k2skn_";
 
-/// This box's skin login. No apps registry and no per-published-app login
-/// yet. [`create_session_token`] is that login.
+/// The box login: the leftover direct door (`k2_skin_session`), a BFF that
+/// names no App, and the "host" row in Settings → Apps. Every other login
+/// target is a published service id (S24, 0.45.5): a login for App X needs
+/// an enabled `kind=app` grant whose `target_id` is X, and its pass is
+/// bound to X ([`create_app_session_token`]).
 pub const HOST_APP_ID: &str = "host";
 
-/// [`create_session_token`] error when the principal has no `kind=app`
-/// grant for [`HOST_APP_ID`]. The login route returns this text as the
-/// same 401 body as a bad password. No username and no grant detail.
+/// [`create_app_session_token`] error when the principal has no enabled
+/// `kind=app` grant for the App asked for (or the App is unknown). The
+/// login route returns this text as the same 401 body as a bad password.
+/// No username, no App and no grant detail (no App enumeration).
 pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
+
+/// skin.db schema version this binary knows (`PRAGMA user_version`, S24-1).
+/// Steps are additive only: nsi's BFF reads `principals` and
+/// `login_lockouts` directly, so no step renames, drops or rebuilds.
+///   1 = AM1 sync: the host grant is the login truth (role or rooms).
+///   2 = `tokens.app_service_id` (+ index) and `grants.created_by`.
+///   3 = mark the one-time `--skin` App backfill pending (run at boot).
+///   4 = RESERVED for room-scope R3 path scope (RS-A1..A3). Not built here.
+pub const SKIN_SCHEMA_VERSION: i64 = 3;
+
+/// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
+pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
+
+/// Q8 default (S24-6): switching a guest's box login off ends EVERY login
+/// session of that guest, App sessions included — it is the one "turn this
+/// person off" switch in User Access. `false` = only host sessions end.
+pub const HOST_OFF_ENDS_ALL_APP_SESSIONS: bool = true;
 
 /// Overlay Thread read (GET `/cli/thread`, WS `/cli/overlay/events`).
 pub const CAP_THREAD_READ: &str = "thread:read";
@@ -761,6 +782,11 @@ pub struct SkinPass {
     pub session: bool,
     /// Session: `project_id → caps[]`. Platform: empty (use flat `has_cap`).
     pub room_policy: RoomPolicy,
+    /// The App this login is bound to (S24-5): `host` or a published service
+    /// id. A pre-0.45.5 session row (NULL) reads as `host`. Platform passes
+    /// (`session=0`) are not App-bound yet (S14) and carry `""`. For logs and
+    /// later S14/S43 checks; no handler authorizes on it in 0.45.5.
+    pub app: String,
 }
 
 impl SkinPass {
@@ -1002,20 +1028,6 @@ fn ensure_host_grant_backfill(conn: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn principal_has_host_grant(conn: &Connection, principal_id: &str) -> Result<bool, String> {
-    let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM grants
-             WHERE subject_kind = 'principal' AND subject_id = ?1
-               AND kind = 'app' AND target_id = ?2
-               AND enabled != 0",
-            params![principal_id, HOST_APP_ID],
-            |r| r.get(0),
-        )
-        .map_err(|e| format!("skin host grant: {e}"))?;
-    Ok(n > 0)
-}
-
 fn open_db(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
@@ -1170,6 +1182,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
     migrate_room_policy(&conn)?;
+    // S24-1: numbered, additive steps on top of the idempotent block above.
+    run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest
     // password hashes, pass hashes) until a checkpoint.
     if let Err(e) = crate::private_home::restrict_db_files(path) {
@@ -1295,7 +1309,24 @@ fn migrate_room_policy(conn: &Connection) -> Result<(), String> {
                 ],
             )
             .map_err(|e| format!("skin.db room_policy role update: {e}"))?;
-            rewrite_sessions_for_role(conn, &role.id, &policy)?;
+            if column_exists(conn, "tokens", "app_service_id")? {
+                rewrite_sessions_for_role(conn, &role.id, &policy)?;
+            } else {
+                // Before schema step 2 the role column is still the login
+                // truth (and the App column does not exist yet).
+                conn.execute(
+                    "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3
+                     WHERE session = 1 AND revoked_at IS NULL
+                       AND principal_id IN (SELECT id FROM principals WHERE role_id = ?4)",
+                    params![
+                        caps_json(&union_caps(&policy)),
+                        rooms_json(&rooms_from_policy(&policy)),
+                        room_policy_json(&policy),
+                        role.id
+                    ],
+                )
+                .map_err(|e| format!("skin session rewrite: {e}"))?;
+            }
         }
     }
 
@@ -1335,6 +1366,203 @@ fn migrate_room_policy(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("skin.db room_policy session update: {e}"))?;
     }
     Ok(())
+}
+
+// ── Schema version (S24-1) ───────────────────────────────────────────
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("skin.db table_info {table}: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| format!("skin.db table_info {table}: {e}"))?;
+    for row in rows {
+        if row.map_err(|e| format!("skin.db table_info {table} row: {e}"))? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn schema_version(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(|e| format!("skin.db user_version: {e}"))
+}
+
+/// Open refusal when the file was written by a newer K2 (S24-1). Older
+/// daemons never read the version, so this only guards later downgrades.
+pub fn schema_newer_error(found: i64) -> String {
+    format!(
+        "skin.db schema version {found} is newer than this K2 understands ({SKIN_SCHEMA_VERSION}). \
+         Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
+    )
+}
+
+/// One audit line (`~/.k2/auth-audit.jsonl`) for an access change the
+/// daemon made on its own (upgrade sync, App backfill) or an owner copy.
+fn record_access_audit(event: &str, actor: &str, line: &str) {
+    crate::auth_audit::record(&crate::auth_audit::AuditEvent::new(
+        event, actor, line, "-", "-", "daemon",
+    ));
+}
+
+/// Run every schema step above the file's `user_version`, each in its own
+/// IMMEDIATE transaction that also sets the version. Audit lines are
+/// written after the step commits.
+fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
+    let mut v = schema_version(conn)?;
+    if v > SKIN_SCHEMA_VERSION {
+        return Err(schema_newer_error(v));
+    }
+    while v < SKIN_SCHEMA_VERSION {
+        let next = v + 1;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| format!("skin.db step {next} begin: {e}"))?;
+        // Another opener may have run it between our read and the lock.
+        let cur = schema_version(&tx)?;
+        if cur >= next {
+            tx.commit()
+                .map_err(|e| format!("skin.db step {next} commit: {e}"))?;
+            v = cur;
+            continue;
+        }
+        let audit = match next {
+            1 => step1_sync_host_grants(&tx)?,
+            2 => {
+                step2_app_columns(&tx)?;
+                Vec::new()
+            }
+            3 => {
+                step3_mark_app_backfill(&tx)?;
+                Vec::new()
+            }
+            other => return Err(format!("skin.db: no schema step {other}")),
+        };
+        tx.execute_batch(&format!("PRAGMA user_version = {next};"))
+            .map_err(|e| format!("skin.db step {next} version: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("skin.db step {next} commit: {e}"))?;
+        for (user, line) in audit {
+            record_access_audit("app_grant_upgrade", &user, &line);
+        }
+        v = next;
+    }
+    Ok(())
+}
+
+/// Step 1 (AM1, S24-2): the host grant becomes the login truth. Every host
+/// row (enabled or disabled) is synced from what login used before 0.45.5:
+/// an assigned guest's `principals.role_id` (it wins over a different grant
+/// role, D1), else `role_id NULL` + `scope = default_rooms` (`[]` kept).
+/// Principals with no host row (box login off) are left alone. Returns one
+/// `(username, line)` per row whose value changed.
+fn step1_sync_host_grants(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    struct Row {
+        grant_id: String,
+        grant_role: Option<String>,
+        grant_scope: Option<String>,
+        username: String,
+        principal_role: Option<String>,
+        default_rooms: Option<String>,
+    }
+    let rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT g.id, g.role_id, g.scope, p.username, p.role_id, p.default_rooms
+                 FROM grants g JOIN principals p ON p.id = g.subject_id
+                 WHERE g.subject_kind = 'principal' AND g.kind = 'app' AND g.target_id = ?1",
+            )
+            .map_err(|e| format!("skin.db step 1: {e}"))?;
+        let mapped = stmt
+            .query_map(params![HOST_APP_ID], |r| {
+                Ok(Row {
+                    grant_id: r.get(0)?,
+                    grant_role: r.get(1)?,
+                    grant_scope: r.get(2)?,
+                    username: r.get(3)?,
+                    principal_role: r.get(4)?,
+                    default_rooms: r.get(5)?,
+                })
+            })
+            .map_err(|e| format!("skin.db step 1: {e}"))?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("skin.db step 1 row: {e}"))?
+    };
+    let mut audit = Vec::new();
+    for row in rows {
+        let (want_role, want_scope) = match blank_to_none(row.principal_role) {
+            Some(role) => (Some(role), None),
+            None => (
+                None,
+                Some(rooms_json(&rooms_from_json(
+                    row.default_rooms.as_deref().unwrap_or("[]"),
+                ))),
+            ),
+        };
+        let have_role = blank_to_none(row.grant_role);
+        let have_scope = blank_to_none(row.grant_scope);
+        let scope_same = match (&have_scope, &want_scope) {
+            (Some(a), Some(b)) => rooms_from_json(a) == rooms_from_json(b),
+            (None, None) => true,
+            _ => false,
+        };
+        if have_role == want_role && scope_same {
+            continue;
+        }
+        conn.execute(
+            "UPDATE grants SET role_id = ?1, scope = ?2 WHERE id = ?3",
+            params![want_role, want_scope, row.grant_id],
+        )
+        .map_err(|e| format!("skin.db step 1 update: {e}"))?;
+        audit.push((
+            row.username,
+            format!(
+                "host login synced from what login used (0.45.5 AM1): role {} -> {}, rooms {} -> {}",
+                have_role.as_deref().unwrap_or("none"),
+                want_role.as_deref().unwrap_or("none"),
+                have_scope.as_deref().unwrap_or("none"),
+                want_scope.as_deref().unwrap_or("none"),
+            ),
+        ));
+    }
+    Ok(audit)
+}
+
+/// Step 2 (S24-3): the App a login session is bound to, and who wrote a
+/// grant. Both nullable; old session rows (NULL) read as `host`.
+fn step2_app_columns(conn: &Connection) -> Result<(), String> {
+    if !column_exists(conn, "tokens", "app_service_id")? {
+        conn.execute("ALTER TABLE tokens ADD COLUMN app_service_id TEXT", [])
+            .map_err(|e| format!("skin.db step 2 tokens: {e}"))?;
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tokens_principal_app ON tokens(principal_id, app_service_id);",
+    )
+    .map_err(|e| format!("skin.db step 2 index: {e}"))?;
+    if !column_exists(conn, "grants", "created_by")? {
+        conn.execute("ALTER TABLE grants ADD COLUMN created_by TEXT", [])
+            .map_err(|e| format!("skin.db step 2 grants: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Step 3 (S24-10): mark the `--skin` App backfill pending. It needs
+/// `published_services` (k2so.db), so the daemon runs it at boot
+/// ([`run_skin_app_backfill`]) before any helper starts.
+fn step3_mark_app_backfill(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skin_app_backfill (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            pending INTEGER NOT NULL,
+            done_at INTEGER,
+            summary TEXT
+         );
+         INSERT OR IGNORE INTO skin_app_backfill (id, pending) VALUES (1, 1);",
+    )
+    .map_err(|e| format!("skin.db step 3: {e}"))
 }
 
 struct TokenRebuildRow {
@@ -1793,16 +2021,42 @@ pub fn create_token(
     Ok((attach_token_handles(r.0), r.1))
 }
 
-/// Login session mint for [`HOST_APP_ID`]. Denies with [`HOST_LOGIN_DENIED`]
-/// when that principal has no `kind=app` grant for `host` (same text as a
-/// bad password; no username). Assigned guests still snapshot the role
-/// (caps+rooms, including `[]`). Unassigned still copy `default_rooms`
-/// **including []** (Thread `skin_room` 403) with Thread-only caps. The
-/// grant is the allow bit only — rooms are not read from it. Do **not**
-/// call [`create_token`] (empty rooms 400). `session=1`, `expires_at` =
-/// now + [`crate::connect_users::session_ttl_days`].
+/// Box login ([`HOST_APP_ID`]). Same as [`create_app_session_token`] with
+/// `host`; kept for the leftover direct door and existing callers.
 pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), String> {
+    create_app_session_token(username, HOST_APP_ID).map(|s| (s.meta, s.raw))
+}
+
+/// A minted login session (S24-4). `raw` is the `k2skn_` secret, shown once.
+#[derive(Debug, Clone)]
+pub struct SkinAppSession {
+    pub meta: SkinTokenMeta,
+    pub raw: String,
+    /// The App the pass is bound to: `host` or a published service id.
+    pub app: String,
+    /// The role on that App's grant, or `None` (rooms, Thread-only).
+    pub role_name: Option<String>,
+}
+
+/// Empty / missing App → [`HOST_APP_ID`] (a BFF that names no App).
+pub fn normalize_app_target(raw: Option<&str>) -> String {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(HOST_APP_ID)
+        .to_string()
+}
+
+/// Login session mint for one App (S24-4). Needs an **enabled** `kind=app`
+/// grant for `(principal, app)`; otherwise [`HOST_LOGIN_DENIED`] (same text
+/// as a bad password: unknown App, no grant and a disabled grant all look
+/// alike). The policy comes from that grant: its role's `room_policy`
+/// (including `{}`), else its `scope` rooms **including []** with
+/// Thread-only caps. Writes `app_service_id`. Do **not** call
+/// [`create_token`] (empty rooms 400). `session=1`, `expires_at` = now +
+/// [`crate::connect_users::session_ttl_days`].
+pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSession, String> {
     let username = normalize_username(username)?;
+    let app = normalize_app_target(Some(app));
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     debug_assert!(
@@ -1818,25 +2072,18 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        if !principal_has_host_grant(conn, &principal.id)? {
+        let Some(grant) = enabled_app_grant(conn, &principal.id, &app)? else {
             return Err(HOST_LOGIN_DENIED.to_string());
-        }
-        let policy = if let Some(rid) = principal.role_id.as_deref() {
-            let Some(role) = role_by_id_or_name(conn, rid)? else {
-                return Err(format!("unknown skin role '{rid}'"));
-            };
-            role.room_policy
-        } else {
-            thread_only_policy(&principal.default_rooms)
         };
+        let (policy, role_name) = grant_login_policy(conn, &grant)?;
         let caps = union_caps(&policy);
         let rooms = rooms_from_policy(&policy);
         let caps_stored = caps_json(&caps);
         let rooms_stored = rooms_json(&rooms);
         let policy_stored = room_policy_json(&policy);
         conn.execute(
-            "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at, room_policy)
-             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8, ?9)",
+            "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at, room_policy, app_service_id)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, NULL, 1, ?8, ?9, ?10)",
             params![
                 id,
                 principal.id,
@@ -1846,12 +2093,13 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
                 rooms_stored,
                 created_at,
                 expires_at,
-                policy_stored
+                policy_stored,
+                app
             ],
         )
         .map_err(|e| format!("skin session insert: {e}"))?;
-        Ok((
-            SkinTokenMeta {
+        Ok(SkinAppSession {
+            meta: SkinTokenMeta {
                 id,
                 name: principal.username,
                 prefix,
@@ -1863,10 +2111,67 @@ pub fn create_session_token(username: &str) -> Result<(SkinTokenMeta, String), S
                 revoked_at: None,
             },
             raw,
-        ))
+            app: app.clone(),
+            role_name,
+        })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
-    Ok((attach_token_handles(r.0), r.1))
+    Ok(SkinAppSession {
+        meta: attach_token_handles(r.meta),
+        ..r
+    })
+}
+
+/// The enabled `kind=app` grant of one principal for one App, or `None`.
+fn enabled_app_grant(
+    conn: &Connection,
+    principal_id: &str,
+    app: &str,
+) -> Result<Option<SkinGrant>, String> {
+    conn.query_row(
+        &format!(
+            "{GRANT_SELECT} WHERE subject_kind = 'principal' AND subject_id = ?1
+               AND kind = 'app' AND target_id = ?2 AND enabled != 0"
+        ),
+        params![principal_id, app],
+        map_grant_row,
+    )
+    .optional()
+    .map_err(|e| format!("skin app grant lookup: {e}"))
+}
+
+/// One principal's `kind=app` grant for one App (enabled or not).
+fn app_grant(
+    conn: &Connection,
+    principal_id: &str,
+    app: &str,
+) -> Result<Option<SkinGrant>, String> {
+    conn.query_row(
+        &format!(
+            "{GRANT_SELECT} WHERE subject_kind = 'principal' AND subject_id = ?1
+               AND kind = 'app' AND target_id = ?2"
+        ),
+        params![principal_id, app],
+        map_grant_row,
+    )
+    .optional()
+    .map_err(|e| format!("skin app grant lookup: {e}"))
+}
+
+/// What a login through `grant` snapshots: its role's per-room policy, or
+/// its `scope` rooms with Thread-only caps (a role-less grant, S24-7).
+fn grant_login_policy(
+    conn: &Connection,
+    grant: &SkinGrant,
+) -> Result<(RoomPolicy, Option<String>), String> {
+    if let Some(rid) = grant.role_id.as_deref() {
+        let Some(role) = role_by_id_or_name(conn, rid)? else {
+            return Err(format!("unknown skin role '{rid}'"));
+        };
+        return Ok((role.room_policy, Some(role.name)));
+    }
+    let rooms = parse_rooms_json(grant.scope.as_deref());
+    Ok((thread_only_policy(&rooms), None))
 }
 
 /// Login role for the host row. `role_id` is `principals.role_id`.
@@ -2091,6 +2396,40 @@ fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Resul
         params![now_secs(), principal_id],
     )
     .map_err(|e| format!("skin session revoke: {e}"))
+}
+
+/// End one principal's live login sessions bound to one App (S24-6). An old
+/// session row with no App is a `host` session.
+fn revoke_sessions_for_principal_app(
+    conn: &Connection,
+    principal_id: &str,
+    app: &str,
+) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE tokens SET revoked_at = ?1
+         WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL
+           AND COALESCE(app_service_id, ?3) = ?4",
+        params![now_secs(), principal_id, HOST_APP_ID, app],
+    )
+    .map_err(|e| format!("skin session revoke: {e}"))
+}
+
+/// S24-20: a published service went away (`publish rm`). End every live
+/// login session bound to it. Its grants stay (Settings shows "App
+/// removed") until S26 decides cleanup. Returns how many ended.
+pub fn revoke_sessions_for_app(service_id: &str) -> Result<usize, String> {
+    let service_id = service_id.trim();
+    if service_id.is_empty() || service_id == HOST_APP_ID {
+        return Err("revoke sessions: need a published service id".to_string());
+    }
+    with_conn(|conn| {
+        conn.execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE session = 1 AND revoked_at IS NULL AND app_service_id = ?2",
+            params![now_secs(), service_id],
+        )
+        .map_err(|e| format!("skin session revoke: {e}"))
+    })
 }
 
 /// 60s per lowercase/trim username string (even when no user). True = 429.
@@ -2603,13 +2942,22 @@ pub fn set_principal_default_rooms(
             params![stored, p.id],
         )
         .map_err(|e| format!("skin user rooms: {e}"))?;
+        // AM1: the host grant's scope is what box login reads; the column
+        // stays a shadow for one release. No host row (box login off) → 0.
+        conn.execute(
+            "UPDATE grants SET role_id = NULL, scope = ?1
+             WHERE subject_kind = 'principal' AND subject_id = ?2
+               AND kind = 'app' AND target_id = ?3",
+            params![stored, p.id, HOST_APP_ID],
+        )
+        .map_err(|e| format!("skin host grant rooms: {e}"))?;
         if apply_tokens {
             let policy = thread_only_policy(&rooms);
-            rewrite_live_sessions(conn, &p.id, &policy)?;
+            rewrite_live_sessions(conn, &p.id, HOST_APP_ID, &policy)?;
         } else {
             // Without --apply-tokens an added room waits for the next
             // login, but a dropped room must leave live sessions now.
-            narrow_live_sessions(conn, &p.id, &rooms)?;
+            narrow_live_sessions(conn, &p.id, HOST_APP_ID, &rooms)?;
         }
         Ok(SkinPrincipal {
             id: p.id,
@@ -2725,41 +3073,50 @@ fn role_by_id_or_name(conn: &Connection, token: &str) -> Result<Option<SkinRole>
     .map_err(|e| format!("skin role lookup: {e}"))
 }
 
+/// Rewrite one principal's live sessions bound to one App (S24-6). Host
+/// writers (assign, unassign, default rooms) pass [`HOST_APP_ID`]; an old
+/// session row with no App is a host session.
 fn rewrite_live_sessions(
     conn: &Connection,
     principal_id: &str,
+    app: &str,
     policy: &RoomPolicy,
 ) -> Result<(), String> {
     conn.execute(
         "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3
-         WHERE principal_id = ?4 AND session = 1 AND revoked_at IS NULL",
+         WHERE principal_id = ?4 AND session = 1 AND revoked_at IS NULL
+           AND COALESCE(app_service_id, ?5) = ?6",
         params![
             caps_json(&union_caps(policy)),
             rooms_json(&rooms_from_policy(policy)),
             room_policy_json(policy),
-            principal_id
+            principal_id,
+            HOST_APP_ID,
+            app
         ],
     )
     .map_err(|e| format!("skin session rewrite: {e}"))?;
     Ok(())
 }
 
-/// Drop every room not in `keep` from a principal's live sessions. Caps on
-/// the rooms that stay are unchanged; nothing is added.
+/// Drop every room not in `keep` from one principal's live sessions bound
+/// to one App. Caps on the rooms that stay are unchanged; nothing is added.
 fn narrow_live_sessions(
     conn: &Connection,
     principal_id: &str,
+    app: &str,
     keep: &[String],
 ) -> Result<(), String> {
     let rows = {
         let mut stmt = conn
             .prepare(
                 "SELECT id, caps, rooms, room_policy FROM tokens
-                 WHERE principal_id = ?1 AND session = 1 AND revoked_at IS NULL",
+                 WHERE principal_id = ?1 AND session = 1 AND revoked_at IS NULL
+                   AND COALESCE(app_service_id, ?2) = ?3",
             )
             .map_err(|e| format!("skin session narrow: {e}"))?;
         let mapped = stmt
-            .query_map(params![principal_id], |r| {
+            .query_map(params![principal_id, HOST_APP_ID, app], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -2795,6 +3152,9 @@ fn narrow_live_sessions(
     Ok(())
 }
 
+/// R8 rewrite after a role change (S24-6): every live session whose own
+/// `(principal, App)` grant carries this role. A session's App is its
+/// `app_service_id` (NULL = `host`). Never keyed on `principals.role_id`.
 fn rewrite_sessions_for_role(
     conn: &Connection,
     role_id: &str,
@@ -2803,12 +3163,18 @@ fn rewrite_sessions_for_role(
     conn.execute(
         "UPDATE tokens SET caps = ?1, rooms = ?2, room_policy = ?3
          WHERE session = 1 AND revoked_at IS NULL
-           AND principal_id IN (SELECT id FROM principals WHERE role_id = ?4)",
+           AND EXISTS (
+             SELECT 1 FROM grants g
+             WHERE g.subject_kind = 'principal' AND g.subject_id = tokens.principal_id
+               AND g.kind = 'app'
+               AND g.target_id = COALESCE(tokens.app_service_id, ?5)
+               AND g.role_id = ?4)",
         params![
             caps_json(&union_caps(policy)),
             rooms_json(&rooms_from_policy(policy)),
             room_policy_json(policy),
-            role_id
+            role_id,
+            HOST_APP_ID
         ],
     )
     .map_err(|e| format!("skin session rewrite: {e}"))?;
@@ -3060,7 +3426,16 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
             params![role.id, p.id],
         )
         .map_err(|e| format!("skin role assign: {e}"))?;
-        rewrite_live_sessions(conn, &p.id, &role.room_policy)?;
+        // AM1: the host grant is the box-login truth; the column is the
+        // shadow. No host row (box login off) → nothing to write.
+        conn.execute(
+            "UPDATE grants SET role_id = ?1, scope = NULL
+             WHERE subject_kind = 'principal' AND subject_id = ?2
+               AND kind = 'app' AND target_id = ?3",
+            params![role.id, p.id, HOST_APP_ID],
+        )
+        .map_err(|e| format!("skin host grant role: {e}"))?;
+        rewrite_live_sessions(conn, &p.id, HOST_APP_ID, &role.room_policy)?;
         Ok(SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -3091,7 +3466,19 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
             params![p.id],
         )
         .map_err(|e| format!("skin role unassign: {e}"))?;
-        rewrite_live_sessions(conn, &p.id, &thread_only_policy(&p.default_rooms))?;
+        conn.execute(
+            "UPDATE grants SET role_id = NULL, scope = ?1
+             WHERE subject_kind = 'principal' AND subject_id = ?2
+               AND kind = 'app' AND target_id = ?3",
+            params![rooms_json(&p.default_rooms), p.id, HOST_APP_ID],
+        )
+        .map_err(|e| format!("skin host grant role: {e}"))?;
+        rewrite_live_sessions(
+            conn,
+            &p.id,
+            HOST_APP_ID,
+            &thread_only_policy(&p.default_rooms),
+        )?;
         Ok(SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -3112,11 +3499,13 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
 }
 
 // ── Grants ───────────────────────────────────────────────────────────
-// kind=app is membership (role_id set, scope null) except a new host
-// login row, which stores role_id NULL. Other kinds hold a scope and a
-// null role. Login checks the host row exists and `enabled != 0`. It
-// does not read role or scope from the grant. The login role is
-// `principals.role_id`.
+// kind=app is a login: `target_id` is `host` (box login) or a published
+// service id, and a login for that App needs this row enabled (S24-4).
+// It carries EITHER a role (the role's `app_id` is NULL or this App) OR a
+// role-less `scope` that is a rooms list (Thread-only caps, S24-7) — the
+// shape box logins of unassigned guests have. Login reads the policy from
+// the grant (AM1). Other kinds (mailbox, database, cli) hold a scope and
+// no role; they are recorded, not enforced, in 0.45.5.
 
 fn default_grant_enabled() -> bool {
     true
@@ -3136,10 +3525,14 @@ pub struct SkinGrant {
     /// `false` is no grant for any authorization read. The row stays.
     #[serde(default = "default_grant_enabled")]
     pub enabled: bool,
+    /// Who wrote the row (`owner-token`, `user:<name>`, `agent:<handle>`,
+    /// [`UPGRADE_CREATED_BY`]); `None` on rows from before 0.45.5.
+    #[serde(default)]
+    pub created_by: Option<String>,
 }
 
 /// Inputs for one grant. `role` is a role id or name (kind=app only).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SkinGrantWrite {
     pub subject_kind: String,
     pub subject_id: String,
@@ -3147,6 +3540,8 @@ pub struct SkinGrantWrite {
     pub target_id: String,
     pub role: Option<String>,
     pub scope: Option<String>,
+    /// Audit only (`grants.created_by`).
+    pub created_by: Option<String>,
 }
 
 fn grant_subject_kind(raw: &str) -> Result<String, String> {
@@ -3171,6 +3566,7 @@ fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
     let role_id: Option<String> = r.get(5)?;
     let scope: Option<String> = r.get(6)?;
     let enabled: i64 = r.get(8)?;
+    let created_by: Option<String> = r.get(9)?;
     Ok(SkinGrant {
         id: r.get(0)?,
         subject_kind: r.get(1)?,
@@ -3181,11 +3577,12 @@ fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
         scope: blank_to_none(scope),
         created_at: r.get(7)?,
         enabled: enabled != 0,
+        created_by: blank_to_none(created_by),
     })
 }
 
 const GRANT_SELECT: &str =
-    "SELECT id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled FROM grants";
+    "SELECT id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by FROM grants";
 
 fn principal_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
     let n: i64 = conn
@@ -3198,7 +3595,47 @@ fn principal_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
     Ok(n > 0)
 }
 
+/// A kind=app `scope` must be a JSON array of room ids (`[]` allowed).
+/// Stored normalized (trimmed, de-duplicated) like `default_rooms`.
+pub fn normalize_app_scope(raw: &str) -> Result<String, String> {
+    let list: Vec<String> = serde_json::from_str(raw.trim()).map_err(|_| {
+        "kind=app scope must be a JSON array of rooms, e.g. [\"<room id>\"]".to_string()
+    })?;
+    Ok(rooms_json(&normalize_room_ids(&list)))
+}
+
+/// kind=app: exactly one of a role (whose `app_id` is NULL or `target`) or
+/// a rooms scope (S24-7). Returns `(role_id, stored_scope)`.
+fn app_grant_shape(
+    conn: &Connection,
+    target_id: &str,
+    role_token: Option<&str>,
+    scope: Option<&str>,
+) -> Result<(Option<String>, Option<String>), String> {
+    match (role_token, scope) {
+        (Some(_), Some(_)) => Err("kind=app takes roleId or a rooms scope, not both".to_string()),
+        (None, None) => Err("kind=app requires roleId or a rooms scope".to_string()),
+        (None, Some(scope)) => Ok((None, Some(normalize_app_scope(scope)?))),
+        (Some(token), None) => {
+            let Some(role) = role_by_id_or_name(conn, token)? else {
+                return Err(format!("unknown skin role '{token}'"));
+            };
+            if let Some(app_id) = role.app_id.as_deref() {
+                if app_id != target_id {
+                    return Err(format!(
+                        "role '{}' is for app '{app_id}', not '{target_id}'",
+                        role.name
+                    ));
+                }
+            }
+            Ok((Some(role.id), None))
+        }
+    }
+}
+
 /// Insert one grant. Does not mint a principal and does not rewrite sessions.
+/// A `host` app grant also writes the shadow columns (`principals.role_id`
+/// / `default_rooms`) for one release (AM1).
 pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
     let subject_kind = grant_subject_kind(&write.subject_kind)?;
     let subject_id = write.subject_id.trim().to_string();
@@ -3221,30 +3658,19 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let created_by = write
+        .created_by
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     with_conn(|conn| {
         if subject_kind == "principal" && !principal_id_exists(conn, &subject_id)? {
             return Err(format!("unknown principal id '{subject_id}'"));
         }
         let (role_id, stored_scope) = if kind == "app" {
-            if scope.is_some() {
-                return Err("scope is only set when there is no role".to_string());
-            }
-            let Some(token) = role_token else {
-                return Err("kind=app requires roleId".to_string());
-            };
-            let Some(role) = role_by_id_or_name(conn, token)? else {
-                return Err(format!("unknown skin role '{token}'"));
-            };
-            if let Some(app_id) = role.app_id.as_deref() {
-                if app_id != target_id {
-                    return Err(format!(
-                        "role '{}' is for app '{app_id}', not '{target_id}'",
-                        role.name
-                    ));
-                }
-            }
-            (Some(role.id), None)
+            app_grant_shape(conn, &target_id, role_token, scope.as_deref())?
         } else {
             if role_token.is_some() {
                 return Err("roleId is only set for kind=app".to_string());
@@ -3269,10 +3695,13 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
 
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = now_secs();
-        conn.execute(
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        tx.execute(
             "INSERT INTO grants
-             (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+             (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)",
             params![
                 id,
                 subject_kind,
@@ -3281,7 +3710,8 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
                 target_id,
                 role_id,
                 stored_scope,
-                created_at
+                created_at,
+                created_by
             ],
         )
         .map_err(|e| {
@@ -3292,6 +3722,22 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
                 format!("skin grant insert: {e}")
             }
         })?;
+        if kind == "app" && target_id == HOST_APP_ID && subject_kind == "principal" {
+            // Shadow columns (AM1): keep `principals.role_id` /
+            // `default_rooms` equal to the box-login grant for one release.
+            match role_id.as_deref() {
+                Some(rid) => tx.execute(
+                    "UPDATE principals SET role_id = ?1 WHERE id = ?2",
+                    params![rid, subject_id],
+                ),
+                None => tx.execute(
+                    "UPDATE principals SET role_id = NULL, default_rooms = ?1 WHERE id = ?2",
+                    params![stored_scope.as_deref().unwrap_or("[]"), subject_id],
+                ),
+            }
+            .map_err(|e| format!("skin grant shadow: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
         Ok(SkinGrant {
             id,
             subject_kind,
@@ -3302,6 +3748,7 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
             scope: stored_scope,
             created_at,
             enabled: true,
+            created_by,
         })
     })
 }
@@ -3322,24 +3769,34 @@ pub fn list_grants() -> Result<Vec<SkinGrant>, String> {
     })
 }
 
-/// Ends every live login session of a grant's principal subject. Called
-/// when that subject loses a grant (disable or delete). Sessions are
+/// Called when a subject loses a grant (disable or delete). Sessions are
 /// snapshots, so a removed grant must not ride on until `expires_at`.
-/// Workspace subjects hold no `k2skn_` sessions; platform passes
-/// (`session=0`) are owner keys with no principal and are never touched.
-fn revoke_sessions_for_grant_subject(
+/// - a principal's `kind=app` grant: only the sessions bound to that App
+///   end (S24-6). Switching off App X does not log the guest out of App Y.
+/// - a principal's other kinds (recorded, not enforced): every session, as
+///   in 0.45.4 (AM0).
+/// - workspace subjects hold no `k2skn_` sessions; platform passes
+///   (`session=0`) have no principal and are never touched.
+fn revoke_sessions_for_grant(
     conn: &Connection,
     subject_kind: &str,
     subject_id: &str,
+    kind: &str,
+    target_id: &str,
 ) -> Result<usize, String> {
     if subject_kind != "principal" {
         return Ok(0);
     }
-    revoke_sessions_for_principal(conn, subject_id)
+    if kind == "app" {
+        revoke_sessions_for_principal_app(conn, subject_id, target_id)
+    } else {
+        revoke_sessions_for_principal(conn, subject_id)
+    }
 }
 
 /// Delete the grant row. The role bundle stays. A principal subject's live
-/// login sessions are revoked (they log in again against what is left).
+/// login sessions for that App are revoked (they log in again against what
+/// is left).
 pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
     let id = id.trim();
     if id.is_empty() {
@@ -3353,14 +3810,20 @@ pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
             .execute("DELETE FROM grants WHERE id = ?1", params![id])
             .map_err(|e| format!("skin grant delete: {e}"))?;
         if n > 0 {
-            revoke_sessions_for_grant_subject(conn, &grant.subject_kind, &grant.subject_id)?;
+            revoke_sessions_for_grant(
+                conn,
+                &grant.subject_kind,
+                &grant.subject_id,
+                &grant.kind,
+                &grant.target_id,
+            )?;
         }
         Ok(n > 0)
     })
 }
 
 /// Delete by the unique (subject, kind, target) key. The role stays.
-/// A principal subject's live login sessions are revoked.
+/// A principal subject's live login sessions for that App are revoked.
 pub fn delete_grant_by_key(
     subject_kind: &str,
     subject_id: &str,
@@ -3386,7 +3849,7 @@ pub fn delete_grant_by_key(
             )
             .map_err(|e| format!("skin grant delete: {e}"))?;
         if n > 0 {
-            revoke_sessions_for_grant_subject(conn, &subject_kind, subject_id)?;
+            revoke_sessions_for_grant(conn, &subject_kind, subject_id, &kind, target_id)?;
         }
         Ok(n > 0)
     })
@@ -3403,8 +3866,8 @@ fn grant_by_id(conn: &Connection, id: &str) -> Result<Option<SkinGrant>, String>
 }
 
 /// Set `enabled` to 0 or 1. Does not delete the row. Disabling a
-/// principal's grant revokes that principal's live login sessions;
-/// enabling never revives a revoked pass (the guest logs in again).
+/// principal's App grant revokes that principal's live login sessions for
+/// that App; enabling never revives a revoked pass (the guest logs in again).
 pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
     let id = id.trim();
     if id.is_empty() {
@@ -3423,16 +3886,24 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
         }
         let grant = grant_by_id(conn, id)?.ok_or_else(|| "unknown grant".to_string())?;
         if !enabled {
-            revoke_sessions_for_grant_subject(conn, &grant.subject_kind, &grant.subject_id)?;
+            revoke_sessions_for_grant(
+                conn,
+                &grant.subject_kind,
+                &grant.subject_id,
+                &grant.kind,
+                &grant.target_id,
+            )?;
         }
         Ok(grant)
     })
 }
 
-/// Present inserts one host grant with `role_id` NULL (`enabled` 1).
+/// Present inserts one host grant (`enabled` 1) carrying the guest's current
+/// role, or their default rooms when unassigned (AM1) — never a blank row.
 /// Absent deletes that principal+app+host row, does not clear
-/// `principals.role_id`, and revokes that principal's live login sessions.
-/// An existing row is left as the owner wrote it.
+/// `principals.role_id`, and revokes that principal's live login sessions:
+/// all of them while [`HOST_OFF_ENDS_ALL_APP_SESSIONS`] (Q8), else only
+/// host ones. An existing row is left as the owner wrote it.
 pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
     let username = normalize_username(username)?;
     with_conn(|conn| {
@@ -3440,7 +3911,10 @@ pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
             return Err(format!("unknown skin user '{username}'"));
         };
         if present {
-            insert_host_grant(conn, &p.id, None, Some("[]".to_string()))?;
+            match p.role_id.clone() {
+                Some(role) => insert_host_grant(conn, &p.id, Some(role), None)?,
+                None => insert_host_grant(conn, &p.id, None, Some(rooms_json(&p.default_rooms)))?,
+            }
             Ok(true)
         } else {
             let n = conn
@@ -3451,11 +3925,419 @@ pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
                     params![p.id, HOST_APP_ID],
                 )
                 .map_err(|e| format!("skin host grant delete: {e}"))?;
-            revoke_sessions_for_principal(conn, &p.id)?;
+            if HOST_OFF_ENDS_ALL_APP_SESSIONS {
+                revoke_sessions_for_principal(conn, &p.id)?;
+            } else {
+                revoke_sessions_for_principal_app(conn, &p.id, HOST_APP_ID)?;
+            }
             Ok(n > 0)
         }
     })
 }
+
+// ── Per-App logins (S24) ─────────────────────────────────────────────
+
+/// What a copy of box logins onto one App did (S24-10 / S24-11).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyHostReport {
+    pub app: String,
+    pub dry_run: bool,
+    /// Usernames that got a new App grant (or would, on a dry run).
+    pub added: Vec<String>,
+    /// Usernames that already had an App grant for this App; it wins,
+    /// including a disabled one (Q2). `(username, enabled)`.
+    pub kept_existing: Vec<(String, bool)>,
+    /// Usernames whose box-login role is tagged for a different App: not
+    /// copied (Q2).
+    pub skipped_other_app_role: Vec<String>,
+}
+
+/// Copy every ENABLED box login (`host` grant) onto App `app` (S24-10,
+/// S24-11): the host grant's role when that role's `app_id` is NULL or this
+/// App, else its rooms scope role-less (S24-7). A grant the owner already
+/// wrote for this App wins (`ON CONFLICT DO NOTHING`), enabled or not.
+/// A role tagged for another App is skipped. Runs inside the caller's
+/// transaction; `dry_run` writes nothing.
+fn copy_host_to_app_tx(
+    conn: &Connection,
+    app: &str,
+    created_by: &str,
+    dry_run: bool,
+) -> Result<CopyHostReport, String> {
+    if app.is_empty() || app == HOST_APP_ID {
+        return Err("copy host: name a published App, not host".to_string());
+    }
+    let rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.id, p.username, g.role_id, g.scope, r.app_id
+                 FROM grants g
+                 JOIN principals p ON p.id = g.subject_id
+                 LEFT JOIN roles r ON r.id = g.role_id
+                 WHERE g.subject_kind = 'principal' AND g.kind = 'app'
+                   AND g.target_id = ?1 AND g.enabled != 0
+                 ORDER BY p.username",
+            )
+            .map_err(|e| format!("skin copy host: {e}"))?;
+        let mapped = stmt
+            .query_map(params![HOST_APP_ID], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|e| format!("skin copy host: {e}"))?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("skin copy host row: {e}"))?
+    };
+    let mut report = CopyHostReport {
+        app: app.to_string(),
+        dry_run,
+        ..Default::default()
+    };
+    for (pid, username, role_id, scope, role_app) in rows {
+        if let Some(existing) = app_grant(conn, &pid, app)? {
+            report.kept_existing.push((username, existing.enabled));
+            continue;
+        }
+        let role_id = blank_to_none(role_id);
+        if role_id.is_some() {
+            if let Some(other) = blank_to_none(role_app) {
+                if other != app {
+                    report.skipped_other_app_role.push(username);
+                    continue;
+                }
+            }
+        }
+        let scope = if role_id.is_some() {
+            None
+        } else {
+            Some(rooms_json(&rooms_from_json(scope.as_deref().unwrap_or("[]"))))
+        };
+        if !dry_run {
+            conn.execute(
+                "INSERT INTO grants
+                 (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+                 VALUES (?1, 'principal', ?2, 'app', ?3, ?4, ?5, ?6, 1, ?7)
+                 ON CONFLICT(subject_kind, subject_id, kind, target_id) DO NOTHING",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    pid,
+                    app,
+                    role_id,
+                    scope,
+                    now_secs(),
+                    created_by
+                ],
+            )
+            .map_err(|e| format!("skin copy host insert: {e}"))?;
+        }
+        report.added.push(username);
+    }
+    Ok(report)
+}
+
+/// One summary audit line plus one line per skipped or pre-existing row.
+pub fn audit_copy_host_report(event: &str, actor: &str, report: &CopyHostReport) {
+    if report.dry_run {
+        return;
+    }
+    record_access_audit(
+        event,
+        actor,
+        &format!(
+            "app {}: added {} login(s), kept {} existing App grant(s), skipped {} other-App role(s)",
+            report.app,
+            report.added.len(),
+            report.kept_existing.len(),
+            report.skipped_other_app_role.len()
+        ),
+    );
+    for (user, enabled) in &report.kept_existing {
+        record_access_audit(
+            event,
+            user,
+            &format!(
+                "app {}: kept the owner's existing {} App grant (it now applies at login)",
+                report.app,
+                if *enabled { "enabled" } else { "disabled" }
+            ),
+        );
+    }
+    for user in &report.skipped_other_app_role {
+        record_access_audit(
+            event,
+            user,
+            &format!(
+                "app {}: not copied, the box-login role is tagged for another App",
+                report.app
+            ),
+        );
+    }
+}
+
+/// Owner (S24-11, `k2 app grant copy-host`): give everyone who has the box
+/// login the same access on App `app`. `app` is a published service id the
+/// caller already resolved. Writes an audit summary unless `dry_run`.
+pub fn copy_host_grants_to_app(
+    app: &str,
+    created_by: &str,
+    dry_run: bool,
+) -> Result<CopyHostReport, String> {
+    let app = app.trim().to_string();
+    let report = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin copy host begin: {e}"))?;
+        let report = copy_host_to_app_tx(&tx, &app, created_by, dry_run)?;
+        tx.commit()
+            .map_err(|e| format!("skin copy host commit: {e}"))?;
+        Ok(report)
+    })?;
+    audit_copy_host_report("app_grant_copy_host", created_by, &report);
+    Ok(report)
+}
+
+/// True until the one-time `--skin` App backfill (S24-10) has run.
+pub fn skin_app_backfill_pending() -> Result<bool, String> {
+    with_conn(|conn| {
+        let pending: Option<i64> = conn
+            .query_row(
+                "SELECT pending FROM skin_app_backfill WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin app backfill: {e}"))?;
+        Ok(pending.unwrap_or(0) != 0)
+    })
+}
+
+/// S24-10, once per database: copy box logins onto every `--skin` App that
+/// existed at the upgrade (`skin_app_ids`, from `published_services` in
+/// k2so.db — the daemon passes them; this module never reads k2so.db).
+/// Runs at boot before any helper starts. `Ok(None)` = already done. One
+/// transaction for all Apps plus the done mark; audit after commit.
+/// `--cmd` Apps get no backfill: their BFF logs in as `host` until it sends
+/// `app`. Apps published later start with nobody (Q6, fail closed).
+pub fn run_skin_app_backfill(
+    skin_app_ids: &[String],
+) -> Result<Option<Vec<CopyHostReport>>, String> {
+    let reports = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin app backfill begin: {e}"))?;
+        let pending: Option<i64> = tx
+            .query_row(
+                "SELECT pending FROM skin_app_backfill WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin app backfill: {e}"))?;
+        if pending.unwrap_or(0) == 0 {
+            return Ok(None);
+        }
+        let mut reports = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for raw in skin_app_ids {
+            let app = raw.trim();
+            if app.is_empty() || app == HOST_APP_ID || !seen.insert(app.to_string()) {
+                continue;
+            }
+            reports.push(copy_host_to_app_tx(&tx, app, UPGRADE_CREATED_BY, false)?);
+        }
+        let summary = serde_json::to_string(&reports).unwrap_or_else(|_| "[]".to_string());
+        tx.execute(
+            "UPDATE skin_app_backfill SET pending = 0, done_at = ?1, summary = ?2 WHERE id = 1",
+            params![now_secs(), summary],
+        )
+        .map_err(|e| format!("skin app backfill mark: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("skin app backfill commit: {e}"))?;
+        Ok(Some(reports))
+    })?;
+    if let Some(list) = reports.as_ref() {
+        record_access_audit(
+            "app_grant_upgrade",
+            UPGRADE_CREATED_BY,
+            &format!(
+                "--skin App backfill: {} App(s), {} login(s) copied from the box login",
+                list.len(),
+                list.iter().map(|r| r.added.len()).sum::<usize>()
+            ),
+        );
+        for r in list {
+            audit_copy_host_report("app_grant_upgrade", UPGRADE_CREATED_BY, r);
+        }
+    }
+    Ok(reports)
+}
+
+/// S24-12: a new guest for one App. Creates the principal with that App's
+/// grant (the role, or empty rooms `[]`) and **no** host grant, so this
+/// person can't sign in at the box login. `app` must be a published service
+/// id the caller resolved (never `host`; plain `add_principal_with_email`
+/// is the box-login path). The role's `app_id` must be NULL or `app`.
+pub fn add_principal_for_app(
+    username: &str,
+    email: Option<&str>,
+    app: &str,
+    role: Option<&str>,
+    created_by: &str,
+) -> Result<SkinPrincipal, String> {
+    let username = normalize_username(username)?;
+    let email = match email {
+        Some(raw) => normalize_email(raw)?,
+        None => None,
+    };
+    let app = app.trim().to_string();
+    if app.is_empty() || app == HOST_APP_ID {
+        return Err("app must be a published App (use a plain add for the box login)".to_string());
+    }
+    let role = role.map(str::trim).filter(|s| !s.is_empty());
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = now_secs();
+    let r = with_conn(|conn| {
+        let exists: Option<String> = conn
+            .query_row(
+                "SELECT id FROM principals WHERE username = ?1",
+                params![username],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("skin principal lookup: {e}"))?;
+        if exists.is_some() {
+            return Err(format!("skin user '{username}' already exists"));
+        }
+        if let Some(ref em) = email {
+            ensure_email_free(conn, em, None)?;
+        }
+        let (role_id, scope) = match role {
+            Some(token) => app_grant_shape(conn, &app, Some(token), None)?,
+            None => (None, Some("[]".to_string())),
+        };
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin principal begin: {e}"))?;
+        tx.execute(
+            "INSERT INTO principals (id, username, created_at, email) VALUES (?1, ?2, ?3, ?4)",
+            params![id, username, created_at, email],
+        )
+        .map_err(|e| unique_email_err(email.as_deref(), e, "skin principal insert"))?;
+        tx.execute(
+            "INSERT INTO grants
+             (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+             VALUES (?1, 'principal', ?2, 'app', ?3, ?4, ?5, ?6, 1, ?7)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                id,
+                app,
+                role_id,
+                scope,
+                created_at,
+                created_by
+            ],
+        )
+        .map_err(|e| format!("skin app grant insert: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("skin principal commit: {e}"))?;
+        Ok(SkinPrincipal {
+            id,
+            username,
+            created_at,
+            default_rooms: Vec::new(),
+            default_room_handles: Vec::new(),
+            has_password: false,
+            role_id: None,
+            role_name: None,
+            email,
+            full_name: None,
+            agent_workspace: None,
+            agent_handle: None,
+        })
+    })?;
+    crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    Ok(r)
+}
+
+/// S24-15: set the rooms of one guest's role-less grant on App `app`
+/// (`host` included). Creates the grant when there is none (owner route).
+/// A grant that carries a role is refused: change the role's rooms instead.
+/// `apply_tokens` copies onto that App's live sessions; without it a
+/// dropped room still leaves them now. A disabled grant stays disabled.
+pub fn set_app_grant_rooms(
+    username: &str,
+    app: &str,
+    rooms: &[String],
+    apply_tokens: bool,
+    created_by: &str,
+) -> Result<SkinGrant, String> {
+    let username = normalize_username(username)?;
+    let app = normalize_app_target(Some(app));
+    if app == HOST_APP_ID {
+        // Box login keeps the long-standing path (column + host grant).
+        let p = set_principal_default_rooms(&username, rooms, apply_tokens)?;
+        return with_conn(|conn| {
+            app_grant(conn, &p.id, HOST_APP_ID)?
+                .ok_or_else(|| format!("'{username}' has no box login (host grant)"))
+        });
+    }
+    let rooms = normalize_room_ids(rooms);
+    let stored = rooms_json(&rooms);
+    with_conn(|conn| {
+        let Some(p) = principal_by_username(conn, &username)? else {
+            return Err(format!("unknown skin user '{username}'"));
+        };
+        match app_grant(conn, &p.id, &app)? {
+            Some(g) if g.role_id.is_some() => {
+                return Err(format!(
+                    "'{username}' has a role on that App; change the role's rooms (k2 app role room) or remove the grant first"
+                ));
+            }
+            Some(g) => {
+                conn.execute(
+                    "UPDATE grants SET scope = ?1 WHERE id = ?2",
+                    params![stored, g.id],
+                )
+                .map_err(|e| format!("skin app grant rooms: {e}"))?;
+            }
+            None => {
+                conn.execute(
+                    "INSERT INTO grants
+                     (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+                     VALUES (?1, 'principal', ?2, 'app', ?3, NULL, ?4, ?5, 1, ?6)",
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        p.id,
+                        app,
+                        stored,
+                        now_secs(),
+                        created_by
+                    ],
+                )
+                .map_err(|e| format!("skin app grant insert: {e}"))?;
+            }
+        }
+        if apply_tokens {
+            rewrite_live_sessions(conn, &p.id, &app, &thread_only_policy(&rooms))?;
+        } else {
+            narrow_live_sessions(conn, &p.id, &app, &rooms)?;
+        }
+        app_grant(conn, &p.id, &app)?.ok_or_else(|| "app grant vanished".to_string())
+    })
+}
+
+// S24-19 (hire templates S5, 0.45.6) plugs in HERE: an App login a hire key
+// creates must call `add_principal_for_app` (or `create_grant` with an App
+// target) for the App named in the template or the key's `grantCeiling`,
+// never `add_principal_with_email` (which grants the box login). Not built
+// in this slice.
 
 // ── Access templates ─────────────────────────────────────────────────
 // A line is kind + optional role. Apply copies that into real grants
@@ -3832,6 +4714,7 @@ pub fn apply_access_template(
                     target_id: target_id.to_string(),
                     role: None,
                     scope,
+                    created_by: None,
                 });
             } else {
                 let Some(role_id) = line.role_id.clone() else {
@@ -3844,6 +4727,7 @@ pub fn apply_access_template(
                     target_id: target_id.to_string(),
                     role: Some(role_id),
                     scope: None,
+                    created_by: None,
                 });
             }
         }
@@ -3997,8 +4881,9 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 
 /// Resolve a presented raw key. Revoked / expired / unknown / wrong prefix → `None`.
 /// A login session (`session=1`) also needs its principal and an enabled
-/// host grant at the moment of use: a backstop behind the revocations the
-/// grant writers do. Platform passes (`session=0`) skip that check.
+/// `kind=app` grant **for the App the session is bound to** (S24-5; NULL
+/// on a pre-0.45.5 row = `host`) at the moment of use: a backstop behind the
+/// revocations the grant writers do. Platform passes (`session=0`) skip it.
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return None;
@@ -4008,7 +4893,8 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     with_conn(|conn| {
         let row = conn
             .query_row(
-                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy
+                "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy,
+                        t.app_service_id
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
@@ -4016,7 +4902,8 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                    AND (t.session = 0 OR (p.id IS NOT NULL AND EXISTS (
                         SELECT 1 FROM grants g
                         WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
-                          AND g.kind = 'app' AND g.target_id = ?3 AND g.enabled != 0)))",
+                          AND g.kind = 'app' AND g.target_id = COALESCE(t.app_service_id, ?3)
+                          AND g.enabled != 0)))",
                 params![key_hash, now, HOST_APP_ID],
                 |r| {
                     let principal_id: Option<String> = r.get(1)?;
@@ -4031,6 +4918,7 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                     let caps_raw: String = r.get(5)?;
                     let rooms_raw: String = r.get(6)?;
                     let policy_raw: Option<String> = r.get(7)?;
+                    let app_raw: Option<String> = r.get(8)?;
                     let caps = caps_from_json(&caps_raw);
                     let rooms = rooms_from_json(&rooms_raw);
                     let session_b = session != 0;
@@ -4053,6 +4941,11 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                         rooms,
                         session: session_b,
                         room_policy,
+                        app: if session_b {
+                            blank_to_none(app_raw).unwrap_or_else(|| HOST_APP_ID.to_string())
+                        } else {
+                            String::new()
+                        },
                     })
                 },
             )
@@ -4524,6 +5417,7 @@ mod tests {
                 rooms: vec![room.clone()],
                 session: true,
                 room_policy,
+                app: "host".to_string(),
             }
         };
         let ident = pass_with(&[CAP_AGENT_IDENTITY]);
@@ -4564,6 +5458,7 @@ mod tests {
                 rooms: vec![room.clone()],
                 session: true,
                 room_policy,
+                app: "host".to_string(),
             }
         };
         for caps in [
@@ -4593,6 +5488,7 @@ mod tests {
             rooms: vec![room.clone()],
             session: false,
             room_policy: RoomPolicy::new(),
+            app: String::new(),
         };
         assert!(platform.dispatcher_admits_any(&[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
         assert!(!platform.dispatcher_admits_cap(CAP_ACTIVITY_READ));
@@ -5729,9 +6625,13 @@ mod tests {
                 target_id: "booking".into(),
                 role: None,
                 scope: None,
+                created_by: None,
             })
             .unwrap_err();
-            assert!(missing_role.contains("roleId"), "{missing_role}");
+            assert!(
+                missing_role.contains("roleId") && missing_role.contains("rooms scope"),
+                "{missing_role}"
+            );
 
             let with_scope = create_grant(&SkinGrantWrite {
                 subject_kind: "principal".into(),
@@ -5740,6 +6640,7 @@ mod tests {
                 target_id: "booking".into(),
                 role: Some("guest".into()),
                 scope: Some("owner".into()),
+                created_by: None,
             })
             .unwrap_err();
             assert!(with_scope.contains("scope"), "{with_scope}");
@@ -5751,6 +6652,7 @@ mod tests {
                 target_id: "box".into(),
                 role: Some(role.id.clone()),
                 scope: Some("may-read".into()),
+                created_by: None,
             })
             .unwrap_err();
             assert!(mailbox_role.contains("kind=app"), "{mailbox_role}");
@@ -5762,6 +6664,7 @@ mod tests {
                 target_id: "db-1".into(),
                 role: None,
                 scope: None,
+                created_by: None,
             })
             .unwrap_err();
             assert!(mailbox_no_scope.contains("scope"), "{mailbox_no_scope}");
@@ -5773,6 +6676,7 @@ mod tests {
                 target_id: "booking".into(),
                 role: Some("guest".into()),
                 scope: None,
+                created_by: None,
             })
             .unwrap_err();
             assert!(unknown.contains("unknown principal"), "{unknown}");
@@ -5784,6 +6688,7 @@ mod tests {
                 target_id: "tool".into(),
                 role: None,
                 scope: Some("run".into()),
+                created_by: None,
             })
             .unwrap_err();
             assert!(empty_ws.contains("subject"), "{empty_ws}");
@@ -5795,6 +6700,7 @@ mod tests {
                 target_id: "x".into(),
                 role: None,
                 scope: Some("x".into()),
+                created_by: None,
             })
             .unwrap_err();
             assert!(bad_kind.contains("kind"), "{bad_kind}");
@@ -5806,6 +6712,7 @@ mod tests {
                 target_id: "booking".into(),
                 role: Some("guest".into()),
                 scope: None,
+                created_by: None,
             })
             .unwrap();
             assert_eq!(created.subject_kind, "principal");
@@ -5821,6 +6728,7 @@ mod tests {
                 target_id: "inbox".into(),
                 role: None,
                 scope: Some("may-read".into()),
+                created_by: None,
             })
             .unwrap();
             assert_eq!(ws.subject_kind, "workspace");
@@ -5834,6 +6742,7 @@ mod tests {
                 target_id: "booking".into(),
                 role: Some(role.id.clone()),
                 scope: None,
+                created_by: None,
             })
             .unwrap_err();
             assert!(dup.contains("already exists"), "{dup}");
@@ -5869,6 +6778,7 @@ mod tests {
                 target_id: "booking-other".into(),
                 role: Some("guest".into()),
                 scope: None,
+                created_by: None,
             })
             .unwrap_err();
             assert!(
@@ -5882,6 +6792,7 @@ mod tests {
                 target_id: "crm".into(),
                 role: Some("guest".into()),
                 scope: None,
+                created_by: None,
             })
             .unwrap();
             assert_eq!(matched.target_id, "crm");
@@ -5909,13 +6820,23 @@ mod tests {
             }
             let (_meta, raw) = create_session_token("ada").expect("session mint unchanged");
             assert!(resolve_skin_token(&raw).is_some());
+            let crm = create_app_session_token("ada", "crm").expect("crm grant allows crm login");
+            assert_eq!(crm.app, "crm");
             assert!(delete_grant_by_id(&matched.id).unwrap());
             assert!(
-                resolve_skin_token(&raw).is_none(),
-                "a grant delete must end that guest's live session"
+                resolve_skin_token(&crm.raw).is_none(),
+                "a grant delete must end that guest's live session on that App"
+            );
+            assert!(
+                resolve_skin_token(&raw).is_some(),
+                "S24-6: deleting the crm grant must not end the box-login session"
             );
             let (_meta, raw2) = create_session_token("ada").expect("host grant still allows login");
             assert!(resolve_skin_token(&raw2).is_some());
+            assert_eq!(
+                create_app_session_token("ada", "crm").expect_err("crm grant gone").as_str(),
+                HOST_LOGIN_DENIED
+            );
         });
     }
 
@@ -6065,20 +6986,24 @@ mod tests {
             let listed = list_grants().expect("list");
             let host = host_grants(&listed, &ada.id);
             assert_eq!(host.len(), 1);
-            assert!(
-                host[0].role_id.is_none(),
-                "new host grant stores role_id NULL: {host:?}"
+            assert_eq!(
+                host[0].role_id.as_deref(),
+                Some(role.id.as_str()),
+                "AM1: a re-added host grant carries the guest's role, never a blank row: {host:?}"
             );
+            assert!(host[0].scope.is_none(), "{host:?}");
             assert!(host[0].enabled);
             let detail = host_login_detail("ada").expect("detail");
             assert_eq!(detail.role_id.as_deref(), Some(role.id.as_str()));
-            assert!(detail.grant_role_id.is_none(), "{detail:?}");
+            assert_eq!(detail.grant_role_id, detail.role_id, "{detail:?}");
             create_session_token("ada").expect("host row allows mint again");
         });
     }
 
+    /// AM1 (S24-2): the host grant is the login truth from 0.45.5. Writers
+    /// keep it equal to the column; a role written only on the grant wins.
     #[test]
-    fn host_login_role_comes_from_principal_not_grant() {
+    fn host_login_role_comes_from_the_grant() {
         with_temp_home(|| {
             let ada = add_principal("ada").expect("add");
             let room_login = uuid::Uuid::new_v4().to_string();
@@ -6090,6 +7015,14 @@ mod tests {
             let login_role = create_role("login-role", &login_policy).expect("login role");
             let grant_role = create_role("grant-role", &grant_policy).expect("grant role");
             assign_role("ada", &login_role.id).expect("assign");
+            let detail = host_login_detail("ada").expect("detail");
+            assert_eq!(detail.role_id.as_deref(), Some(login_role.id.as_str()));
+            assert_eq!(
+                detail.grant_role_id, detail.role_id,
+                "assign writes the host grant too: {detail:?}"
+            );
+            let (meta, _) = create_session_token("ada").expect("mint");
+            assert_eq!(meta.rooms, vec![room_login.clone()]);
             let host_id = host_grants(&list_grants().expect("list"), &ada.id)[0].id.clone();
             with_conn(|conn| {
                 conn.execute(
@@ -6100,13 +7033,13 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-            let detail = host_login_detail("ada").expect("detail");
-            assert_eq!(detail.role_id.as_deref(), Some(login_role.id.as_str()));
-            assert_eq!(detail.grant_role_id.as_deref(), Some(grant_role.id.as_str()));
-            assert_ne!(detail.role_id, detail.grant_role_id);
-            let (meta, _) = create_session_token("ada").expect("mint uses principal role");
-            assert_eq!(meta.rooms, vec![room_login.clone()]);
-            assert!(!meta.rooms.contains(&room_grant), "{meta:?}");
+            let (meta, _) = create_session_token("ada").expect("mint uses the grant role");
+            assert_eq!(meta.rooms, vec![room_grant.clone()]);
+            assert!(!meta.rooms.contains(&room_login), "{meta:?}");
+            unassign_role("ada").expect("unassign");
+            let host = host_grants(&list_grants().expect("list"), &ada.id)[0].clone();
+            assert!(host.role_id.is_none(), "{host:?}");
+            assert_eq!(host.scope.as_deref(), Some("[]"), "unassign → default rooms");
         });
     }
 
@@ -6180,6 +7113,7 @@ mod tests {
                 target_id: "box".into(),
                 role: None,
                 scope: Some("may-read".into()),
+                created_by: None,
             })
             .expect("mailbox");
             let (_, ada_raw5) = create_session_token("ada").expect("login");
@@ -6195,6 +7129,7 @@ mod tests {
                 target_id: "db".into(),
                 role: None,
                 scope: Some("read".into()),
+                created_by: None,
             })
             .expect("ws grant");
             assert!(delete_grant_by_key("workspace", "ws-1", "database", "db").expect("del"));
@@ -6365,6 +7300,7 @@ mod tests {
                 target_id: "box".into(),
                 role: None,
                 scope: Some("may-read".into()),
+                created_by: None,
             })
             .expect("mailbox");
             let before = list_grants().expect("before");
@@ -6393,6 +7329,7 @@ mod tests {
                 target_id: "svc-9".into(),
                 role: Some(role.id.clone()),
                 scope: None,
+                created_by: None,
             })
             .expect("grant");
             let err = remove_role(&role.id).expect_err("grant holds the role");
@@ -6679,6 +7616,10 @@ mod tests {
                     .as_deref(),
                 Some("role-dentist")
             );
+            // AM1: from 0.45.5 the host grant is the login truth, so the
+            // hand edit above would change ada's login. Put her role back
+            // the supported way (assign writes the grant and the column).
+            assign_role("ada", "dentist").expect("re-assign");
 
             let (ada_meta, ada_raw) = create_session_token("ada").expect("backfilled ada logs in");
             assert_eq!(ada_meta.rooms, vec![sales.clone()]);
@@ -6798,13 +7739,23 @@ mod tests {
             assert_eq!(grants.len(), 4, "{grants:?}");
             let dan = host_grants(&grants, "p-dan");
             assert_eq!(dan.len(), 1, "{grants:?}");
-            assert_eq!(dan[0].id, "g-dan");
-            assert_eq!(
-                dan[0].created_at, 1,
-                "owner row must not be rewritten: {dan:?}"
+            assert_eq!(dan[0].id, "g-dan", "the owner's row is kept, not replaced");
+            assert_eq!(dan[0].created_at, 1, "{dan:?}");
+            // S24-2 step 1 (D1): login used `principals.role_id` before
+            // 0.45.5, so that value wins over the grant's role, and the
+            // overwrite is in the audit log.
+            assert_eq!(dan[0].role_id.as_deref(), Some("role-assigned"));
+            assert!(dan[0].scope.is_none(), "{dan:?}");
+            let audit = crate::auth_audit::tail(100).expect("audit");
+            let line = audit
+                .iter()
+                .map(|l| l.to_string())
+                .find(|l| l.contains("dan") && l.contains("app_grant_upgrade"))
+                .unwrap_or_else(|| panic!("step 1 overwrite must be audited: {audit:?}"));
+            assert!(
+                line.contains("role-other") && line.contains("role-assigned"),
+                "audit names old and new: {line}"
             );
-            assert_eq!(dan[0].role_id.as_deref(), Some("role-other"));
-            assert_eq!(dan[0].scope.as_deref(), Some("owner-scope"));
             let ada = host_grants(&grants, "p-ada");
             assert_eq!(ada.len(), 1, "{grants:?}");
             assert_eq!(ada[0].role_id.as_deref(), Some("role-assigned"));
@@ -6827,8 +7778,8 @@ mod tests {
             let dan_again = host_grants(&again, "p-dan");
             assert_eq!(dan_again[0].id, dan_id);
             assert_eq!(dan_again[0].created_at, 1);
-            assert_eq!(dan_again[0].role_id.as_deref(), Some("role-other"));
-            assert_eq!(dan_again[0].scope.as_deref(), Some("owner-scope"));
+            assert_eq!(dan_again[0].role_id.as_deref(), Some("role-assigned"));
+            assert!(dan_again[0].scope.is_none());
         });
     }
 
@@ -7680,6 +8631,557 @@ mod tests {
             );
             let cleared = clear_role_room("hygienist", &sales).unwrap();
             assert!(cleared.room_policy.is_empty());
+        });
+    }
+
+    // ── S24 per-App logins (prd-s24-per-app-logins-v1-vs-live S24-17) ──
+
+    const APP_A: &str = "0a0a0a0a-1111-4222-8333-444444444444";
+    const APP_B: &str = "0b0b0b0b-1111-4222-8333-444444444444";
+
+    fn one_room_policy(room: &str, caps: &[&str]) -> RoomPolicy {
+        let mut p = RoomPolicy::new();
+        p.insert(room.to_string(), caps.iter().map(|c| (*c).to_string()).collect());
+        p
+    }
+
+    fn grant_for<'a>(grants: &'a [SkinGrant], principal: &str, app: &str) -> Option<&'a SkinGrant> {
+        grants.iter().find(|g| {
+            g.subject_kind == "principal"
+                && g.subject_id == principal
+                && g.kind == "app"
+                && g.target_id == app
+        })
+    }
+
+    fn app_write(principal: &str, app: &str, role: Option<&str>, scope: Option<&str>) -> SkinGrantWrite {
+        SkinGrantWrite {
+            subject_kind: "principal".into(),
+            subject_id: principal.into(),
+            kind: "app".into(),
+            target_id: app.into(),
+            role: role.map(str::to_string),
+            scope: scope.map(str::to_string),
+            created_by: Some("owner-token".into()),
+        }
+    }
+
+    /// S24-17 #1: a guest with only an App A grant logs in for A with A's
+    /// role, and is refused for B and for `host` with the generic error.
+    #[test]
+    fn s24_cross_app_login_fails_closed() {
+        with_temp_home(|| {
+            let room_a = uuid::Uuid::new_v4().to_string();
+            let role_a =
+                create_role_for_app("a-desk", &one_room_policy(&room_a, &[CAP_THREAD_READ, CAP_FILES_READ]), Some(APP_A))
+                    .expect("role");
+            let eve = add_principal_for_app("eve", None, APP_A, Some("a-desk"), "owner-token")
+                .expect("App-only guest");
+            let grants = list_grants().expect("grants");
+            assert!(
+                host_grants(&grants, &eve.id).is_empty(),
+                "S24-12: an App-only guest has no box login: {grants:?}"
+            );
+            let g = grant_for(&grants, &eve.id, APP_A).expect("A grant");
+            assert_eq!(g.role_id.as_deref(), Some(role_a.id.as_str()));
+            assert_eq!(g.created_by.as_deref(), Some("owner-token"));
+
+            let a = create_app_session_token("eve", APP_A).expect("A login");
+            assert_eq!(a.app, APP_A);
+            assert_eq!(a.role_name.as_deref(), Some("a-desk"));
+            assert_eq!(a.meta.rooms, vec![room_a.clone()]);
+            let pass = resolve_skin_token(&a.raw).expect("A pass");
+            assert_eq!(pass.app, APP_A);
+            assert!(pass.has_cap_in_room(&room_a, CAP_FILES_READ));
+
+            for other in [APP_B, HOST_APP_ID, "", "not-an-app"] {
+                let err = create_app_session_token("eve", other).expect_err("cross-App refused");
+                assert_eq!(err, HOST_LOGIN_DENIED, "{other:?}");
+                assert!(!err.contains("eve") && !err.contains(APP_A), "{err}");
+            }
+            let err = create_session_token("eve").expect_err("no box login");
+            assert_eq!(err, HOST_LOGIN_DENIED);
+
+            // A role for another App can't be used on this App.
+            let room_b = uuid::Uuid::new_v4().to_string();
+            create_role_for_app("b-desk", &one_room_policy(&room_b, &[CAP_THREAD_READ]), Some(APP_B))
+                .expect("role b");
+            let err = add_principal_for_app("fay", None, APP_A, Some("b-desk"), "owner-token")
+                .expect_err("other-App role refused");
+            assert!(err.contains("is for app"), "{err}");
+            assert!(
+                !list_principals().unwrap().iter().any(|p| p.username == "fay"),
+                "refused add must not leave a principal behind"
+            );
+            let err = add_principal_for_app("gus", None, HOST_APP_ID, None, "owner-token")
+                .expect_err("host is not an App target here");
+            assert!(err.contains("published App"), "{err}");
+        });
+    }
+
+    /// S24-17 #2 + #3: two Apps, two roles, two passes; the use-time
+    /// backstop is per App (works even when the revocation is skipped).
+    #[test]
+    fn s24_two_apps_two_snapshots_and_per_app_backstop() {
+        with_temp_home(|| {
+            let room_a = uuid::Uuid::new_v4().to_string();
+            let room_b = uuid::Uuid::new_v4().to_string();
+            create_role_for_app("ra", &one_room_policy(&room_a, &[CAP_THREAD_READ]), Some(APP_A)).unwrap();
+            create_role("rb", &one_room_policy(&room_b, &[CAP_TICKETS_READ])).unwrap();
+            let ada = add_principal("ada").unwrap();
+            create_grant(&app_write(&ada.id, APP_A, Some("ra"), None)).expect("A grant");
+            let gb = create_grant(&app_write(&ada.id, APP_B, Some("rb"), None)).expect("B grant");
+
+            let a = create_app_session_token("ada", APP_A).unwrap();
+            let b = create_app_session_token("ada", APP_B).unwrap();
+            let host = create_app_session_token("ada", HOST_APP_ID).unwrap();
+            let pa = resolve_skin_token(&a.raw).unwrap();
+            let pb = resolve_skin_token(&b.raw).unwrap();
+            let ph = resolve_skin_token(&host.raw).unwrap();
+            assert_eq!((pa.app.as_str(), pb.app.as_str(), ph.app.as_str()), (APP_A, APP_B, HOST_APP_ID));
+            assert!(pa.has_room(&room_a) && !pa.has_room(&room_b), "{pa:?}");
+            assert!(pb.has_room(&room_b) && !pb.has_room(&room_a), "{pb:?}");
+            assert!(ph.rooms_empty(), "box login of an unassigned guest: {ph:?}");
+
+            // Backstop alone: drop B's grant behind the writers' backs.
+            with_conn(|c| {
+                c.execute("DELETE FROM grants WHERE id = ?1", params![gb.id])
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert!(resolve_skin_token(&b.raw).is_none(), "B pass dies at the next use");
+            assert!(resolve_skin_token(&a.raw).is_some(), "A pass keeps working");
+            assert!(resolve_skin_token(&host.raw).is_some(), "box pass keeps working");
+
+            // Writer path: disabling A ends only A's sessions.
+            let ga = list_grants()
+                .unwrap()
+                .into_iter()
+                .find(|g| g.target_id == APP_A)
+                .unwrap();
+            set_grant_enabled(&ga.id, false).unwrap();
+            assert!(session_revoked_at(&a.raw).is_some(), "A session revoked");
+            assert!(session_revoked_at(&host.raw).is_none(), "host session untouched");
+            assert_eq!(
+                create_app_session_token("ada", APP_A).expect_err("disabled").as_str(),
+                HOST_LOGIN_DENIED
+            );
+        });
+    }
+
+    /// S24-17 #4: a role change rewrites only sessions whose own App grant
+    /// carries that role; host writers touch only host sessions.
+    #[test]
+    fn s24_role_and_host_writers_touch_only_their_app() {
+        with_temp_home(|| {
+            let r1 = uuid::Uuid::new_v4().to_string();
+            let r2 = uuid::Uuid::new_v4().to_string();
+            let r3 = uuid::Uuid::new_v4().to_string();
+            create_role("host-role", &one_room_policy(&r1, &[CAP_THREAD_READ])).unwrap();
+            create_role_for_app("app-role", &one_room_policy(&r2, &[CAP_THREAD_READ]), Some(APP_A)).unwrap();
+            let ada = add_principal("ada").unwrap();
+            assign_role("ada", "host-role").unwrap();
+            create_grant(&app_write(&ada.id, APP_A, Some("app-role"), None)).unwrap();
+            let host = create_session_token("ada").unwrap().1;
+            let app = create_app_session_token("ada", APP_A).unwrap().raw;
+
+            set_role_room("app-role", &r3, None).unwrap();
+            let ph = resolve_skin_token(&host).unwrap();
+            let pa = resolve_skin_token(&app).unwrap();
+            assert!(pa.has_room(&r3) && pa.has_room(&r2), "App session rewritten: {pa:?}");
+            assert!(!ph.has_room(&r3) && ph.has_room(&r1), "host session untouched: {ph:?}");
+
+            unassign_role("ada").unwrap();
+            let ph = resolve_skin_token(&host).unwrap();
+            let pa = resolve_skin_token(&app).unwrap();
+            assert!(ph.rooms_empty(), "host session follows the box login: {ph:?}");
+            assert!(pa.has_room(&r2), "App session keeps its own role: {pa:?}");
+
+            // Role-less App grant rooms (S24-7 / S24-15) with --apply-tokens.
+            let bob = add_principal("bob").unwrap();
+            let g = create_grant(&app_write(&bob.id, APP_B, None, Some(&rooms_json(&[r1.clone()])))).unwrap();
+            assert!(g.role_id.is_none());
+            assert_eq!(g.scope.as_deref(), Some(rooms_json(&[r1.clone()]).as_str()));
+            let bs = create_app_session_token("bob", APP_B).unwrap();
+            assert!(bs.role_name.is_none());
+            let bp = resolve_skin_token(&bs.raw).unwrap();
+            assert!(bp.has_cap_in_room(&r1, CAP_THREAD_POST));
+            assert!(!bp.has_cap_in_room(&r1, CAP_FILES_READ), "Thread-only: {bp:?}");
+            let bh = create_session_token("bob").unwrap().1;
+            set_app_grant_rooms("bob", APP_B, &[r2.clone()], true, "owner-token").unwrap();
+            let bp = resolve_skin_token(&bs.raw).unwrap();
+            assert!(bp.has_room(&r2) && !bp.has_room(&r1), "{bp:?}");
+            assert!(resolve_skin_token(&bh).unwrap().rooms_empty(), "box session untouched");
+            let err = set_app_grant_rooms("ada", APP_A, &[r1.clone()], false, "owner-token")
+                .expect_err("a role-backed grant refuses rooms");
+            assert!(err.contains("role"), "{err}");
+
+            // Shape rules (S24-7).
+            let both = create_grant(&app_write(&bob.id, "x", Some("host-role"), Some("[]"))).unwrap_err();
+            assert!(both.contains("not both"), "{both}");
+            let junk = create_grant(&app_write(&bob.id, "x", None, Some("owner"))).unwrap_err();
+            assert!(junk.contains("JSON array"), "{junk}");
+        });
+    }
+
+    /// S24-6 + Q8: box login off ends every session (constant default);
+    /// `revoke_sessions_for_app` (publish rm, S24-20) ends one App's.
+    #[test]
+    fn s24_host_off_and_app_removed_revocations() {
+        with_temp_home(|| {
+            let ada = add_principal("ada").unwrap();
+            create_grant(&app_write(&ada.id, APP_A, None, Some("[]"))).unwrap();
+            create_grant(&app_write(&ada.id, APP_B, None, Some("[]"))).unwrap();
+            let a = create_app_session_token("ada", APP_A).unwrap().raw;
+            let b = create_app_session_token("ada", APP_B).unwrap().raw;
+            assert_eq!(revoke_sessions_for_app(APP_A).unwrap(), 1);
+            assert!(resolve_skin_token(&a).is_none());
+            assert!(resolve_skin_token(&b).is_some());
+            assert!(
+                list_grants().unwrap().iter().any(|g| g.target_id == APP_A),
+                "grants stay after the App is removed"
+            );
+            assert!(revoke_sessions_for_app(HOST_APP_ID).is_err());
+            let h = create_session_token("ada").unwrap().1;
+            set_host_login("ada", false).unwrap();
+            assert!(resolve_skin_token(&h).is_none());
+            assert_eq!(
+                resolve_skin_token(&b).is_none(),
+                HOST_OFF_ENDS_ALL_APP_SESSIONS,
+                "Q8 default: box login off ends App sessions too"
+            );
+            // Re-adding the box login copies the current rooms (AM1).
+            set_principal_default_rooms("ada", &[], false).unwrap();
+            set_host_login("ada", true).unwrap();
+            let g = host_grants(&list_grants().unwrap(), &ada.id)[0].clone();
+            assert_eq!(g.scope.as_deref(), Some("[]"));
+        });
+    }
+
+    /// S24-1 + #6: steps run once, the version is recorded, and a file from a
+    /// newer K2 is refused with a clear error.
+    #[test]
+    fn s24_schema_steps_run_once_and_refuse_newer() {
+        with_temp_home(|| {
+            add_principal("ada").unwrap();
+            let v = with_conn(|c| schema_version(c)).unwrap();
+            assert_eq!(v, SKIN_SCHEMA_VERSION);
+            let cols = with_conn(|c| Ok(table_columns(c, "tokens"))).unwrap();
+            assert!(cols.split(',').any(|c| c == "app_service_id"), "{cols}");
+            let gcols = with_conn(|c| Ok(table_columns(c, "grants"))).unwrap();
+            assert!(gcols.split(',').any(|c| c == "created_by"), "{gcols}");
+            assert!(skin_app_backfill_pending().unwrap(), "fresh db: backfill pending");
+            let before = list_grants().unwrap();
+            reopen_skin_db();
+            assert_eq!(list_grants().unwrap(), before, "a reopen changes nothing");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), SKIN_SCHEMA_VERSION);
+
+            with_conn(|c| {
+                c.execute_batch(&format!("PRAGMA user_version = {};", SKIN_SCHEMA_VERSION + 1))
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            let path = store_path();
+            *db().lock() = None;
+            let err = open_db(&path).expect_err("newer schema must refuse");
+            assert_eq!(err, schema_newer_error(SKIN_SCHEMA_VERSION + 1));
+            assert!(err.contains("newer"), "{err}");
+            // Put it back so the temp home tears down cleanly.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {SKIN_SCHEMA_VERSION};"))
+                .unwrap();
+        });
+    }
+
+    /// S24-11: copy-host copies enabled box logins, keeps owner grants,
+    /// skips other-App roles, and a dry run writes nothing.
+    #[test]
+    fn s24_copy_host_rules_and_dry_run() {
+        with_temp_home(|| {
+            let room = uuid::Uuid::new_v4().to_string();
+            create_role("staff", &one_room_policy(&room, &[CAP_THREAD_READ])).unwrap();
+            create_role_for_app("b-only", &RoomPolicy::new(), Some(APP_B)).unwrap();
+            let ada = add_principal("ada").unwrap();
+            assign_role("ada", "staff").unwrap();
+            add_principal("bob").unwrap();
+            add_principal("olga").unwrap();
+            assign_role("olga", "b-only").unwrap();
+            let nina = add_principal("nina").unwrap();
+            let gn = create_grant(&app_write(&nina.id, APP_A, None, Some("[]"))).unwrap();
+            set_grant_enabled(&gn.id, false).unwrap();
+            add_principal("hank").unwrap();
+            set_host_login("hank", false).unwrap();
+
+            let dry = copy_host_grants_to_app(APP_A, "owner-token", true).unwrap();
+            assert!(dry.dry_run);
+            assert_eq!(dry.added, vec!["ada".to_string(), "bob".to_string()]);
+            assert_eq!(dry.kept_existing, vec![("nina".to_string(), false)]);
+            assert_eq!(dry.skipped_other_app_role, vec!["olga".to_string()]);
+            assert!(grant_for(&list_grants().unwrap(), &ada.id, APP_A).is_none(), "dry run wrote");
+
+            let real = copy_host_grants_to_app(APP_A, "owner-token", false).unwrap();
+            assert_eq!(real.added, dry.added);
+            let grants = list_grants().unwrap();
+            let g = grant_for(&grants, &ada.id, APP_A).expect("ada copied");
+            assert!(g.role_id.is_some() && g.created_by.as_deref() == Some("owner-token"));
+            assert_eq!(create_app_session_token("ada", APP_A).unwrap().meta.rooms, vec![room.clone()]);
+            assert!(create_app_session_token("bob", APP_A).unwrap().meta.rooms.is_empty());
+            for refused in ["olga", "nina", "hank"] {
+                assert_eq!(
+                    create_app_session_token(refused, APP_A).expect_err(refused),
+                    HOST_LOGIN_DENIED
+                );
+            }
+            let again = copy_host_grants_to_app(APP_A, "owner-token", false).unwrap();
+            assert!(again.added.is_empty(), "idempotent: {again:?}");
+            assert!(copy_host_grants_to_app(HOST_APP_ID, "owner-token", false).is_err());
+        });
+    }
+
+    /// S24-17 upgrade fixture: a skin.db as 0.45.4 left it (host-grant-only
+    /// guests, a D1 mismatch, owner-written App grants enabled and disabled,
+    /// a role tagged for the BFF App, box login off / disabled, a live
+    /// pre-upgrade session). After open + the boot backfill, everyone who
+    /// could sign in to the `--skin` App before still can, with the same
+    /// rooms — except the owner's disabled grant and the other-App role,
+    /// which are refused and audited. The BFF (`--cmd`) App gets nobody, and
+    /// the box login is unchanged for all.
+    #[test]
+    fn s24_upgrade_fixture_no_lockouts() {
+        const SKIN_X: &str = "5c5c5c5c-aaaa-4bbb-8ccc-dddddddddddd";
+        const BFF_Y: &str = "9e9e9e9e-aaaa-4bbb-8ccc-dddddddddddd";
+        with_temp_home(|| {
+            let path = crate::paths::k2_home().join("skin.db");
+            std::fs::create_dir_all(path.parent().unwrap()).expect("k2 home");
+            let conn = Connection::open(&path).expect("0.45.4 skin.db");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE roles (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, caps TEXT NOT NULL,
+                    rooms TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL,
+                    room_policy TEXT NOT NULL DEFAULT '{}', app_id TEXT);
+                 CREATE UNIQUE INDEX roles_name ON roles(name COLLATE NOCASE);
+                 CREATE TABLE principals (
+                    id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL, default_rooms TEXT NOT NULL DEFAULT '[]',
+                    password_hash TEXT, role_id TEXT REFERENCES roles(id) ON DELETE RESTRICT,
+                    email TEXT, full_name TEXT, agent_workspace TEXT);
+                 CREATE TABLE grants (
+                    id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
+                    kind TEXT NOT NULL, target_id TEXT NOT NULL, role_id TEXT, scope TEXT,
+                    created_at INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(subject_kind, subject_id, kind, target_id));
+                 CREATE TABLE tokens (
+                    id TEXT PRIMARY KEY,
+                    principal_id TEXT REFERENCES principals(id) ON DELETE CASCADE,
+                    name TEXT, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL,
+                    caps TEXT NOT NULL, rooms TEXT NOT NULL DEFAULT '[]',
+                    created_at INTEGER NOT NULL, revoked_at INTEGER,
+                    session INTEGER NOT NULL DEFAULT 0, expires_at INTEGER, room_policy TEXT,
+                    CHECK ((session = 1 AND principal_id IS NOT NULL AND name IS NULL)
+                        OR (session = 0 AND principal_id IS NULL AND name IS NOT NULL)));
+                 CREATE TABLE host_grant_backfill (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), done_at INTEGER NOT NULL);
+                 INSERT INTO host_grant_backfill (id, done_at) VALUES (1, 1);",
+            )
+            .expect("0.45.4 schema");
+            let staff_room = uuid::Uuid::new_v4().to_string();
+            let narrow_room = uuid::Uuid::new_v4().to_string();
+            let bob_room = uuid::Uuid::new_v4().to_string();
+            let olga_room = uuid::Uuid::new_v4().to_string();
+            let staff = one_room_policy(&staff_room, &[CAP_THREAD_READ, CAP_FILES_READ]);
+            let narrow = one_room_policy(&narrow_room, &[CAP_THREAD_READ]);
+            let olga_p = one_room_policy(&olga_room, &[CAP_THREAD_READ]);
+            for (id, name, pol, app) in [
+                ("r-staff", "staff", &staff, None),
+                ("r-narrow", "narrow", &narrow, None),
+                ("r-bff", "bff-only", &olga_p, Some(BFF_Y)),
+            ] {
+                conn.execute(
+                    "INSERT INTO roles (id, name, caps, rooms, created_at, room_policy, app_id)
+                     VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+                    params![
+                        id,
+                        name,
+                        caps_json(&union_caps(pol)),
+                        rooms_json(&rooms_from_policy(pol)),
+                        room_policy_json(pol),
+                        app
+                    ],
+                )
+                .unwrap();
+            }
+            let bob_rooms = rooms_json(std::slice::from_ref(&bob_room));
+            // (id, username, role_id, default_rooms)
+            let people: [(&str, &str, Option<&str>, &str); 8] = [
+                ("p-ada", "ada", Some("r-staff"), "[]"),
+                ("p-bob", "bob", None, bob_rooms.as_str()),
+                ("p-dan", "dan", Some("r-staff"), "[]"),
+                ("p-olga", "olga", Some("r-bff"), "[]"),
+                ("p-nina", "nina", Some("r-staff"), "[]"),
+                ("p-dora", "dora", Some("r-staff"), "[]"),
+                ("p-hank", "hank", Some("r-staff"), "[]"),
+                ("p-lena", "lena", None, bob_rooms.as_str()),
+            ];
+            for (id, user, role, rooms) in people {
+                conn.execute(
+                    "INSERT INTO principals (id, username, created_at, default_rooms, role_id)
+                     VALUES (?1, ?2, 1, ?3, ?4)",
+                    params![id, user, rooms, role],
+                )
+                .unwrap();
+            }
+            // Host grants as 0.45.4 wrote them: the 0.40.150 backfill /
+            // add_principal (role or rooms), set_host_login (role NULL,
+            // "[]"), and a D1 drift (dan's grant role ≠ his column).
+            // (grant id, principal, target, role, scope, enabled)
+            let rows: [(&str, &str, &str, Option<&str>, Option<&str>, i64); 10] = [
+                ("g-ada", "p-ada", "host", Some("r-staff"), None, 1),
+                ("g-bob", "p-bob", "host", None, Some("[]"), 1), // stale scope
+                ("g-dan", "p-dan", "host", Some("r-narrow"), None, 1), // D1
+                ("g-olga", "p-olga", "host", Some("r-bff"), None, 1),
+                ("g-nina", "p-nina", "host", Some("r-staff"), None, 1),
+                ("g-nina-x", "p-nina", SKIN_X, Some("r-narrow"), None, 1), // owner, narrower
+                ("g-dora", "p-dora", "host", Some("r-staff"), None, 1),
+                ("g-dora-x", "p-dora", SKIN_X, Some("r-staff"), None, 0), // owner, disabled
+                // hank: box login switched off (no host row).
+                ("g-lena", "p-lena", "host", None, Some("[]"), 0), // disabled
+                ("g-ws", "ws-1", "mbox", None, Some("may-read"), 1), // workspace subject
+            ];
+            for (id, who, target, role, scope, enabled) in rows {
+                let (subject_kind, kind) =
+                    if who == "ws-1" { ("workspace", "mailbox") } else { ("principal", "app") };
+                conn.execute(
+                    "INSERT INTO grants
+                     (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+                    params![id, subject_kind, who, kind, target, role, scope, enabled],
+                )
+                .unwrap();
+            }
+            // A live host session minted by 0.45.4 (no App column yet).
+            let old_raw = format!("{SKIN_KEY_PREFIX}{}", "A".repeat(KEY_BODY_LEN));
+            conn.execute(
+                "INSERT INTO tokens (id, principal_id, name, key_hash, key_prefix, caps, rooms,
+                                     created_at, revoked_at, session, expires_at, room_policy)
+                 VALUES ('t-ada', 'p-ada', NULL, ?1, 'k2skn_…AAAA', ?2, ?3, 1, NULL, 1, ?4, ?5)",
+                params![
+                    sha256_hex(&old_raw),
+                    caps_json(&union_caps(&staff)),
+                    rooms_json(&rooms_from_policy(&staff)),
+                    now_secs() + 3600,
+                    room_policy_json(&staff)
+                ],
+            )
+            .unwrap();
+            // What each guest could do BEFORE the upgrade at the --skin App
+            // (0.45.4: helper login = box login, policy from the column).
+            let before_rooms: Vec<(&str, Option<Vec<String>>)> = vec![
+                ("ada", Some(vec![staff_room.clone()])),
+                ("bob", Some(vec![bob_room.clone()])),
+                ("dan", Some(vec![staff_room.clone()])),
+                ("olga", Some(vec![olga_room.clone()])),
+                ("nina", Some(vec![staff_room.clone()])),
+                ("dora", Some(vec![staff_room.clone()])),
+                ("hank", None),
+                ("lena", None),
+            ];
+            drop(conn);
+
+            // Open (steps 1–3) then the boot backfill for the --skin App.
+            let old = resolve_skin_token(&old_raw).expect("pre-upgrade host session still resolves");
+            assert_eq!(old.app, HOST_APP_ID, "NULL App = host");
+            assert!(old.has_cap_in_room(&staff_room, CAP_FILES_READ));
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), SKIN_SCHEMA_VERSION);
+            assert!(skin_app_backfill_pending().unwrap());
+            let reports = run_skin_app_backfill(&[SKIN_X.to_string()])
+                .expect("backfill")
+                .expect("ran once");
+            assert_eq!(reports.len(), 1);
+            assert!(run_skin_app_backfill(&[SKIN_X.to_string()]).unwrap().is_none(), "runs once");
+            assert!(!skin_app_backfill_pending().unwrap());
+
+            // Box login: same as before for everyone (incl. olga's App-tagged role).
+            for (user, want) in &before_rooms {
+                match (create_session_token(user), want) {
+                    (Ok((meta, _)), Some(rooms)) => assert_eq!(&meta.rooms, rooms, "{user} host"),
+                    (Err(e), None) => assert_eq!(e, HOST_LOGIN_DENIED, "{user} host"),
+                    (got, want) => panic!("{user} host: got {:?}, want {want:?}", got.map(|m| m.0.rooms)),
+                }
+            }
+            // The --skin App: same rooms, except the two owner/other-App rows.
+            for (user, before) in &before_rooms {
+                let got = create_app_session_token(user, SKIN_X).map(|s| s.meta.rooms);
+                match *user {
+                    "nina" => assert_eq!(
+                        got.expect("nina keeps the App"),
+                        vec![narrow_room.clone()],
+                        "the owner's narrower App grant now applies (Q2)"
+                    ),
+                    "dora" | "olga" => assert_eq!(
+                        got.expect_err(user),
+                        HOST_LOGIN_DENIED,
+                        "{user}: refused (owner-disabled / other-App role)"
+                    ),
+                    _ => match before {
+                        Some(rooms) => assert_eq!(&got.expect(user), rooms, "{user} at the App"),
+                        None => assert_eq!(got.expect_err(user), HOST_LOGIN_DENIED, "{user}"),
+                    },
+                }
+            }
+            // The BFF App starts with nobody until copy-host (Q6 / S24-10).
+            for (user, _) in &before_rooms {
+                assert_eq!(
+                    create_app_session_token(user, BFF_Y).expect_err(user),
+                    HOST_LOGIN_DENIED,
+                    "{user} at the BFF App"
+                );
+            }
+            let report = &reports[0];
+            assert!(report.added.contains(&"ada".to_string()));
+            assert!(report.added.contains(&"bob".to_string()));
+            assert!(report.added.contains(&"dan".to_string()));
+            assert!(!report.added.iter().any(|u| u == "hank" || u == "lena"));
+            assert_eq!(report.skipped_other_app_role, vec!["olga".to_string()]);
+            assert_eq!(
+                report.kept_existing,
+                vec![("dora".to_string(), false), ("nina".to_string(), true)]
+            );
+            let grants = list_grants().unwrap();
+            assert_eq!(
+                grant_for(&grants, "p-ada", SKIN_X).unwrap().created_by.as_deref(),
+                Some(UPGRADE_CREATED_BY)
+            );
+            assert_eq!(
+                grant_for(&grants, "p-dan", HOST_APP_ID).unwrap().role_id.as_deref(),
+                Some("r-staff"),
+                "D1: the column won"
+            );
+            assert_eq!(
+                grant_for(&grants, "p-bob", HOST_APP_ID).unwrap().scope.as_deref(),
+                Some(bob_rooms.as_str()),
+                "stale scope synced to default_rooms"
+            );
+            assert!(grants.iter().any(|g| g.id == "g-ws"), "workspace grants untouched");
+            assert!(
+                resolve_skin_token(&old_raw).is_some(),
+                "the pre-upgrade host session survives the backfill"
+            );
+            let audit: Vec<String> = crate::auth_audit::tail(200)
+                .unwrap()
+                .iter()
+                .map(|v| v.to_string())
+                .collect();
+            for needle in ["dora", "olga", "dan", "bob"] {
+                assert!(
+                    audit.iter().any(|l| l.contains("app_grant_upgrade") && l.contains(needle)),
+                    "{needle} must be in the upgrade audit: {audit:#?}"
+                );
+            }
+            assert!(
+                audit.iter().any(|l| l.contains("--skin App backfill")),
+                "summary line: {audit:#?}"
+            );
         });
     }
 }

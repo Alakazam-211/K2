@@ -229,6 +229,82 @@ fn email_field(v: &serde_json::Value) -> Result<Option<&str>, CliResponse> {
     }
 }
 
+/// Q5 default (S24-12): an agent with "manage Apps" keeps exactly its
+/// 0.45.4 powers in this slice — it may add box-login guests as before, but
+/// naming an `app` (an App-only guest, or App rooms) is owner-only. Flip to
+/// `true` to let agents do it for their own workspace's Apps with that
+/// App's roles (the vs-live recommendation, not built here).
+pub const AGENTS_MAY_NAME_APP: bool = false;
+
+/// Owner-tier actors are `owner-token` / `user:<name>`; a scoped hook that
+/// passed the manage gate is `agent:<handle>` ([`skin_manage_actor_label`]).
+pub fn actor_is_agent(actor: &str) -> bool {
+    actor.starts_with("agent:")
+}
+
+fn app_field(v: &serde_json::Value) -> Option<&str> {
+    str_field(v, &["app", "appId", "app_id"])
+}
+
+fn agent_app_refused() -> CliResponse {
+    owner_only_with_hint(
+        "naming an App (app) on an app user is owner-only — ask your human (k2 app user add <username> --app <app> [--role R], k2 app user rooms <username> --app <app> --agent <room>)",
+    )
+}
+
+/// An App target from an owner/agent body or CLI: `host`, a published
+/// service id, or `<workspace>/<publish name>` (workspace handle, alias or
+/// id). Returns the service id (or `host`). Unknown → Err (400). This is
+/// owner tooling; the public login route never reports which Apps exist.
+pub fn resolve_app_target(raw: &str) -> Result<String, String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err("missing app".to_string());
+    }
+    if t.eq_ignore_ascii_case(skin::HOST_APP_ID) {
+        return Ok(skin::HOST_APP_ID.to_string());
+    }
+    let db = k2_core::db::shared();
+    if let Some((ws, name)) = t.split_once('/') {
+        drop(db);
+        let ids = skin::resolve_room_tokens(&[ws.trim().to_string()])
+            .map_err(|_| format!("unknown app {t:?} (workspace {ws:?})"))?;
+        let Some(project_id) = ids.first() else {
+            return Err(format!("unknown app {t:?}"));
+        };
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        return match k2_core::published_services::get_by_project_name(&conn, project_id, name) {
+            Ok(Some(row)) => Ok(row.id),
+            Ok(None) => Err(format!("unknown app {t:?} (no published service {name:?})")),
+            Err(e) => Err(format!("app lookup: {e}")),
+        };
+    }
+    let conn = db.lock();
+    match k2_core::published_services::get_by_id(&conn, t) {
+        Ok(Some(row)) => Ok(row.id),
+        Ok(None) => Err(format!(
+            "unknown app {t:?} (use host, a published service id, or <workspace>/<name>)"
+        )),
+        Err(e) => Err(format!("app lookup: {e}")),
+    }
+}
+
+/// Login: `host`, or the exact id of a published service that exists now.
+/// Anything else is the same generic 401 as a bad password (no App
+/// enumeration, and a removed App's leftover grants can't mint a pass).
+fn login_app_is_live(app: &str) -> bool {
+    if app == skin::HOST_APP_ID {
+        return true;
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    matches!(
+        k2_core::published_services::get_by_id(&conn, app),
+        Ok(Some(_))
+    )
+}
+
 pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -241,7 +317,34 @@ pub fn handle_users_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(e) => e,
         Err(r) => return r,
     };
-    match skin::add_principal_with_email(username, email) {
+    let role = str_field(&v, &["role", "roleId", "role_id"]);
+    let added = match app_field(&v) {
+        // S24-12: an App-only guest — that App's grant, no box login.
+        Some(raw_app) => {
+            if actor_is_agent(actor) && !AGENTS_MAY_NAME_APP {
+                return agent_app_refused();
+            }
+            let app = match resolve_app_target(raw_app) {
+                Ok(a) if a == skin::HOST_APP_ID => {
+                    return CliResponse::bad_request(
+                        "app host is the box login: add the user without app",
+                    )
+                }
+                Ok(a) => a,
+                Err(e) => return CliResponse::bad_request(e),
+            };
+            skin::add_principal_for_app(username, email, &app, role, actor)
+        }
+        None => {
+            if role.is_some() {
+                return CliResponse::bad_request(
+                    "role on user add needs app (box-login roles: k2 app user role <username> <role>)",
+                );
+            }
+            skin::add_principal_with_email(username, email)
+        }
+    };
+    match added {
         Ok(p) => {
             k2_core::log_debug!("[skin] actor={actor} added principal {}", p.username);
             let password = str_field(&v, &["password"]);
@@ -572,13 +675,53 @@ pub fn handle_grants_post(body: &[u8], actor: &str) -> CliResponse {
     let Some(target_id) = str_field(&v, &["targetId", "target_id", "target"]) else {
         return CliResponse::bad_request("missing target id");
     };
+    let is_app = kind.trim().eq_ignore_ascii_case("app");
+    // S24-11: an App target may be `host`, a service id, or
+    // `<workspace>/<publish name>`; an unknown App is a 400.
+    let target_id = if is_app {
+        match resolve_app_target(target_id) {
+            Ok(id) => id,
+            Err(e) => return CliResponse::bad_request(e),
+        }
+    } else {
+        target_id.to_string()
+    };
+    // S24-7: a role-less App grant is a rooms list (`rooms` array, or a
+    // `scope` JSON array) of handles or ids, stored as room ids.
+    let scope = if is_app {
+        let list: Option<Vec<String>> = match (rooms_field(&v), opt_text_field(&v, &["scope"])) {
+            (Some(_), Some(_)) => {
+                return CliResponse::bad_request("pass rooms or scope, not both")
+            }
+            (Some(list), None) => Some(list),
+            (None, Some(raw)) => match serde_json::from_str::<Vec<String>>(raw) {
+                Ok(list) => Some(list),
+                Err(_) => {
+                    return CliResponse::bad_request(
+                        "kind=app scope must be a JSON array of rooms, e.g. [\"sales\"]",
+                    )
+                }
+            },
+            (None, None) => None,
+        };
+        match list {
+            Some(list) => match resolve_rooms_allow_empty(Some(list)) {
+                Ok(ids) => Some(serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into())),
+                Err(e) => return e,
+            },
+            None => None,
+        }
+    } else {
+        opt_text_field(&v, &["scope"]).map(str::to_string)
+    };
     let write = skin::SkinGrantWrite {
         subject_kind: subject_kind.to_string(),
         subject_id: subject_id.to_string(),
         kind: kind.to_string(),
-        target_id: target_id.to_string(),
+        target_id,
         role: opt_text_field(&v, &["roleId", "role_id", "role"]).map(str::to_string),
-        scope: opt_text_field(&v, &["scope"]).map(str::to_string),
+        scope,
+        created_by: Some(actor.to_string()),
     };
     match skin::create_grant(&write) {
         Ok(grant) => {
@@ -683,6 +826,60 @@ pub fn handle_grants_host(body: &[u8], actor: &str) -> CliResponse {
             );
             CliResponse::ok_json(
                 serde_json::json!({ "success": true, "present": present }).to_string(),
+            )
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// Owner (S24-11): `POST /cli/skin/grants/copy-host {app, dryRun?}` — give
+/// everyone who has the box login the same access on one App (same rules
+/// as the 0.45.5 upgrade backfill). Use it after publishing a new App (it
+/// starts with nobody) or before a BFF starts sending `app`.
+pub fn handle_grants_copy_host(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(raw) = app_field(&v).or_else(|| str_field(&v, &["target", "targetId"])) else {
+        return CliResponse::bad_request("missing app");
+    };
+    let app = match resolve_app_target(raw) {
+        Ok(a) if a == skin::HOST_APP_ID => {
+            return CliResponse::bad_request("copy-host needs a published App, not host")
+        }
+        Ok(a) => a,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    let dry_run = v
+        .get("dryRun")
+        .or_else(|| v.get("dry_run"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    match skin::copy_host_grants_to_app(&app, actor, dry_run) {
+        Ok(report) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} copy-host app={} dry_run={dry_run} added={} kept={} skipped={}",
+                report.app,
+                report.added.len(),
+                report.kept_existing.len(),
+                report.skipped_other_app_role.len()
+            );
+            let kept: Vec<serde_json::Value> = report
+                .kept_existing
+                .iter()
+                .map(|(u, enabled)| serde_json::json!({ "username": u, "enabled": enabled }))
+                .collect();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "ok": true,
+                    "app": report.app,
+                    "dryRun": report.dry_run,
+                    "added": report.added,
+                    "keptExisting": kept,
+                    "skippedOtherAppRole": report.skipped_other_app_role,
+                })
+                .to_string(),
             )
         }
         Err(e) => CliResponse::bad_request(e),
@@ -874,6 +1071,7 @@ pub fn handle_access_post(path: &str, body: &[u8], actor: &str) -> CliResponse {
     match path {
         "/cli/skin/grants/enabled" => handle_grants_enabled(body, actor),
         "/cli/skin/grants/host" => handle_grants_host(body, actor),
+        "/cli/skin/grants/copy-host" => handle_grants_copy_host(body, actor),
         "/cli/skin/templates/update" => handle_templates_update(body, actor),
         "/cli/skin/templates/delete" => handle_templates_delete(body, actor),
         "/cli/skin/templates/lines" => handle_template_lines_post(body, actor),
@@ -907,8 +1105,17 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(None) => RoomPolicy::new(),
         Err(e) => return e,
     };
-    let app_id = opt_text_field(&v, &["appId", "app_id", "app"]);
-    match skin::create_role_for_app(name, &policy, app_id) {
+    // `app` may be a service id or `<workspace>/<name>` (S24-15); `host`
+    // means host-wide (NULL), the same as leaving it out.
+    let app_id = match opt_text_field(&v, &["appId", "app_id", "app"]) {
+        None => None,
+        Some(raw) => match resolve_app_target(raw) {
+            Ok(a) if a == skin::HOST_APP_ID => None,
+            Ok(a) => Some(a),
+            Err(e) => return CliResponse::bad_request(e),
+        },
+    };
+    match skin::create_role_for_app(name, &policy, app_id.as_deref()) {
         Ok(role) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} created role {} name={} app={:?} caps={:?} rooms={:?}",
@@ -1067,6 +1274,35 @@ pub fn handle_users_rooms(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return e,
     };
     let apply = apply_tokens_field(&v);
+    // S24-15: `app` sets that App grant's role-less rooms (owner only).
+    if let Some(raw_app) = app_field(&v) {
+        if actor_is_agent(actor) && !AGENTS_MAY_NAME_APP {
+            return agent_app_refused();
+        }
+        let app = match resolve_app_target(raw_app) {
+            Ok(a) => a,
+            Err(e) => return CliResponse::bad_request(e),
+        };
+        return match skin::set_app_grant_rooms(username, &app, &rooms, apply, actor) {
+            Ok(grant) => {
+                k2_core::log_debug!(
+                    "[skin] actor={actor} user {username} app {app} rooms={rooms:?} apply_tokens={apply}"
+                );
+                let handles = skin::handles_for_project_ids(&rooms);
+                CliResponse::ok_json(
+                    serde_json::json!({
+                        "username": username.to_ascii_lowercase(),
+                        "app": app,
+                        "rooms": rooms,
+                        "roomHandles": handles,
+                        "grant": grant,
+                    })
+                    .to_string(),
+                )
+            }
+            Err(e) => CliResponse::bad_request(e),
+        };
+    }
     match skin::set_principal_default_rooms(username, &rooms, apply) {
         Ok(p) => {
             k2_core::log_debug!(
@@ -1487,7 +1723,8 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         let username = form_field(&pairs, "username").unwrap_or("").to_string();
         let password = form_field(&pairs, "password").unwrap_or("").to_string();
         let next = form_field(&pairs, "next").map(str::to_string);
-        Some((username, password, next))
+        let app = form_field(&pairs, "app").map(str::to_string);
+        Some((username, password, next, app))
     } else {
         match serde_json::from_slice::<serde_json::Value>(body) {
             Ok(v) => {
@@ -1500,12 +1737,13 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
                     .unwrap_or("")
                     .to_string();
                 let next = str_field(&v, &["next"]).map(str::to_string);
-                Some((username, password, next))
+                let app = str_field(&v, &["app", "appId"]).map(str::to_string);
+                Some((username, password, next, app))
             }
             Err(_) => None,
         }
     };
-    let Some((username, password, next)) = parsed else {
+    let Some((username, password, next, app)) = parsed else {
         return SkinLoginReply {
             response: if form {
                 login_failed_html()
@@ -1541,7 +1779,17 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             };
         }
     };
-    let (meta, raw) = match skin::create_session_token(&principal.username) {
+    // S24-9: no `app` = the box login (`host`), exactly as before 0.45.5 —
+    // BFFs that name no App keep working. With `app`, the pass is bound to
+    // that App and needs this person's enabled grant for it. An unknown or
+    // removed App is the same generic 401 as a bad password.
+    let app = skin::normalize_app_target(app.as_deref());
+    let minted = if login_app_is_live(&app) {
+        skin::create_app_session_token(&principal.username, &app)
+    } else {
+        Err(skin::HOST_LOGIN_DENIED.to_string())
+    };
+    let session = match minted {
         Ok(v) => v,
         Err(e) if e == skin::HOST_LOGIN_DENIED => {
             return SkinLoginReply {
@@ -1562,6 +1810,12 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             };
         }
     };
+    let skin::SkinAppSession {
+        meta,
+        raw,
+        app,
+        role_name,
+    } = session;
     if form {
         let location = safe_next(next.as_deref());
         return SkinLoginReply {
@@ -1574,6 +1828,8 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
             location: Some(location),
         };
     }
+    // `role` is the role on the grant this login used (AM1). For a host
+    // login that equals the assigned role, as before 0.45.5. `app` is new.
     let body = serde_json::json!({
         "ok": true,
         "token": raw.clone(),
@@ -1582,8 +1838,9 @@ pub fn handle_login(body: &[u8], content_type: &str) -> SkinLoginReply {
         "rooms": meta.rooms,
         "roomHandles": meta.room_handles,
         "caps": meta.caps,
-        "role": principal.role_name,
+        "role": role_name,
         "roomAccess": meta.room_access,
+        "app": app,
     })
     .to_string();
     debug_assert!(
@@ -1820,6 +2077,26 @@ pub fn handle_password_change(body: &[u8], presented: Option<&str>) -> CliRespon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q5 (S24-12): an agent that may manage Apps keeps exactly its 0.45.4
+    /// powers — naming an App on user add is owner-only. Refused before any
+    /// store is touched.
+    #[test]
+    fn agent_cannot_name_an_app_on_user_add() {
+        assert!(!AGENTS_MAY_NAME_APP, "Q5 default for 0.45.5");
+        assert!(actor_is_agent("agent:sales"));
+        assert!(!actor_is_agent("owner-token"));
+        assert!(!actor_is_agent("user:rosson"));
+        let r = handle_users_post(
+            br#"{"username":"eve","app":"0f5e7c1a-3b2d-4e6f-8a9b-1c2d3e4f5a6b"}"#,
+            "agent:sales",
+        );
+        assert!(r.status.starts_with("403"), "{} {}", r.status, r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only", "{v}");
+        let r = handle_users_post(br#"{"username":"eve","role":"x"}"#, "owner-token");
+        assert!(r.status.starts_with("400"), "role needs app: {}", r.body);
+    }
 
     #[test]
     fn full_name_sanitizer_caps_at_64_and_strips_controls() {

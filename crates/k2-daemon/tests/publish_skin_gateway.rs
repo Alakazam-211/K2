@@ -150,10 +150,15 @@ fn header_value(headers: &str, name: &str) -> Option<String> {
     None
 }
 
+/// The sid from `k2_skin_ui=` (loopback/http) or `__Host-k2_skin_ui=`
+/// (Secure, S24-14).
 fn cookie_k2_skin_ui(set_cookie: &str) -> Option<String> {
     for part in set_cookie.split(';') {
         let part = part.trim();
-        if let Some(v) = part.strip_prefix("k2_skin_ui=") {
+        if let Some(v) = part
+            .strip_prefix("k2_skin_ui=")
+            .or_else(|| part.strip_prefix("__Host-k2_skin_ui="))
+        {
             if !v.is_empty() {
                 return Some(v.to_string());
             }
@@ -490,6 +495,19 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
         assert_eq!(bad.status, 401, "{}", bad.body);
         assert!(!bad.body.contains("k2skn_"), "{}", bad.body);
 
+        // S24 (Q6): a new App starts with nobody. The right password is the
+        // same generic 401 until the owner grants this App.
+        let closed = http(
+            gport,
+            "POST",
+            "/login",
+            Some(r#"{"username":"guest","password":"s3cret-horse"}"#),
+        );
+        assert_eq!(closed.status, 401, "fail closed: {}", closed.body);
+        assert_eq!(closed.body, bad.body, "no difference from a bad password");
+        let copied = copy_host(dport, &format!("{handle}/agents"));
+        assert_eq!(copied["added"], serde_json::json!(["guest"]), "{copied}");
+
         let ok = http(
             gport,
             "POST",
@@ -556,6 +574,30 @@ async fn publish_run_skin_gateway_login_proxy_stop_boot() {
             sc.contains("Secure"),
             "Secure iff X-Forwarded-Proto https: {sc}"
         );
+        // S24-14: a Secure cookie carries the __Host- prefix, and a plain
+        // name on an https request is ignored (planted-cookie defence).
+        assert!(sc.starts_with("__Host-k2_skin_ui="), "{sc}");
+        let https_sid = sc
+            .strip_prefix("__Host-k2_skin_ui=")
+            .and_then(|v| v.split(';').next())
+            .expect("__Host- sid")
+            .to_string();
+        let planted = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/thread?addr={handle}"),
+            None,
+            &format!("X-Forwarded-Proto: https\r\nCookie: k2_skin_ui={https_sid}"),
+        );
+        assert_eq!(planted.status, 401, "unprefixed cookie on https: {}", planted.body);
+        let prefixed = http_ex(
+            gport,
+            "GET",
+            &format!("/cli/thread?addr={handle}"),
+            None,
+            &format!("X-Forwarded-Proto: https\r\nCookie: __Host-k2_skin_ui={https_sid}"),
+        );
+        assert_eq!(prefixed.status, 200, "__Host- cookie on https: {}", prefixed.body);
 
         let cookie = format!("Cookie: k2_skin_ui={sid}");
         let thread = http_ex(
@@ -830,7 +872,7 @@ fn write_skin_ui(ws: &str, login_title: Option<&str>) {
     }
 }
 
-fn publish_skin(dport: u16, path: &str, gport: u16, skin_root: Option<&str>) {
+fn publish_skin(dport: u16, path: &str, gport: u16, skin_root: Option<&str>) -> String {
     let root_json = match skin_root {
         Some(r) => format!(r#","skinRoot":"{r}""#),
         None => String::new(),
@@ -848,6 +890,28 @@ fn publish_skin(dport: u16, path: &str, gport: u16, skin_root: Option<&str>) {
         wait_port(gport, 8000),
         "skin gateway must listen on 127.0.0.1:{gport}"
     );
+    // S24: an App published after 0.45.5 starts with nobody (Q6). These
+    // tests set their guests up on the box login first, so copy them on —
+    // exactly what an owner does with `k2 app grant copy-host`.
+    let id = json(&run.body)["id"]
+        .as_str()
+        .expect("published service id")
+        .to_string();
+    copy_host(dport, &id);
+    id
+}
+
+/// `POST /cli/skin/grants/copy-host` (owner): everyone with the box login
+/// gets the same access on App `app` (a service id or `<workspace>/<name>`).
+fn copy_host(dport: u16, app: &str) -> serde_json::Value {
+    let r = http(
+        dport,
+        "POST",
+        &format!("/cli/skin/grants/copy-host?token={OWNER_TOKEN}"),
+        Some(&format!(r#"{{"app":"{app}"}}"#)),
+    );
+    assert_eq!(r.status, 200, "copy-host; {}", r.body);
+    json(&r.body)
 }
 
 /// One text frame, or `None` when nothing arrives within `wait`.
@@ -3468,10 +3532,12 @@ async fn publish_run_skin_gateway_refuses_cross_origin() {
         let max_age = k2_core::connect_users::session_ttl_days() * 86_400;
         assert_eq!(
             sc,
-            format!("k2_skin_ui={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}; Secure"),
-            "cookie on a non-loopback Host with no X-Forwarded-Proto"
+            format!(
+                "__Host-k2_skin_ui={sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}; Secure"
+            ),
+            "cookie on a non-loopback Host with no X-Forwarded-Proto (S24-14 __Host- prefix)"
         );
-        let cookie = format!("Cookie: k2_skin_ui={sid}");
+        let cookie = format!("Cookie: __Host-k2_skin_ui={sid}");
 
         let read_thread = || {
             let r = http_host(
@@ -3616,8 +3682,10 @@ async fn publish_run_skin_gateway_refuses_cross_origin() {
             gport,
             &ws_path,
             // `ws_upgrade` sends `Host: 127.0.0.1` (no port), so the
-            // page's own origin is exactly `http://127.0.0.1`.
-            &format!("{cookie}\r\nOrigin: http://127.0.0.1"),
+            // page's own origin is exactly `http://127.0.0.1`. That is a
+            // plain-http request, so the sid travels under the unprefixed
+            // name (S24-14: `__Host-` is only read when Secure).
+            &format!("Cookie: k2_skin_ui={sid}\r\nOrigin: http://127.0.0.1"),
         );
         assert_eq!(
             own_ws.status, 101,
@@ -3642,7 +3710,7 @@ async fn publish_run_skin_gateway_refuses_cross_origin() {
         assert_eq!(out.status, 200, "{}", out.body);
         assert_eq!(
             header_value(&out.headers, "set-cookie").expect("clear"),
-            "k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+            "__Host-k2_skin_ui=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
         );
         let gone = http_host(
             gport,
@@ -4392,6 +4460,43 @@ fn host_grant_id(dport: u16, username: &str) -> String {
         .to_string()
 }
 
+fn principal_id(dport: u16, username: &str) -> String {
+    let users = http(
+        dport,
+        "GET",
+        &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+        None,
+    );
+    assert_eq!(users.status, 200, "{}", users.body);
+    json(&users.body)["users"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|u| u["username"] == username))
+        .and_then(|u| u["id"].as_str())
+        .unwrap_or_else(|| panic!("{username} id in {}", users.body))
+        .to_string()
+}
+
+/// The grant id of `username`'s `kind=app` grant for App `app`.
+fn app_grant_id(dport: u16, username: &str, app: &str) -> String {
+    let uid = principal_id(dport, username);
+    let grants = http(
+        dport,
+        "GET",
+        &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+        None,
+    );
+    assert_eq!(grants.status, 200, "{}", grants.body);
+    json(&grants.body)["grants"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|g| g["subjectId"] == uid.as_str() && g["kind"] == "app" && g["targetId"] == app)
+        })
+        .and_then(|g| g["id"].as_str())
+        .unwrap_or_else(|| panic!("{username} grant for {app} in {}", grants.body))
+        .to_string()
+}
+
 fn gateway_login_status(gport: u16, username: &str, password: &str) -> u16 {
     http(
         gport,
@@ -4423,7 +4528,7 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
             set_password(dport, u, "s3cret-horse");
         }
         let gport = free_port();
-        publish_skin(dport, &path, gport, None);
+        let app = publish_skin(dport, &path, gport, None);
 
         let bob = gateway_login_cookie(gport, "bob", "s3cret-horse");
         let bob_ok = |label: &str| {
@@ -4436,7 +4541,8 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
         };
         bob_ok("login");
 
-        // 1. Grant disabled: refused at the gateway and at re-login.
+        // 1. App grant disabled: refused at the gateway and at re-login.
+        //    S24-6: disabling the BOX login grant leaves the App session.
         let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
         assert_eq!(thread_status(gport, &handle, &ada).status, 200);
         let host_id = host_grant_id(dport, "ada");
@@ -4445,22 +4551,38 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
             "/cli/skin/grants/enabled",
             &format!(r#"{{"id":"{host_id}","enabled":false}}"#),
         );
+        assert_eq!(
+            thread_status(gport, &handle, &ada).status,
+            200,
+            "box-login grant off must not end the App session"
+        );
+        owner_post(
+            dport,
+            "/cli/skin/grants/enabled",
+            &format!(r#"{{"id":"{host_id}","enabled":true}}"#),
+        );
+        let app_id = app_grant_id(dport, "ada", &app);
+        owner_post(
+            dport,
+            "/cli/skin/grants/enabled",
+            &format!(r#"{{"id":"{app_id}","enabled":false}}"#),
+        );
         let r = thread_status(gport, &handle, &ada);
         assert_eq!(
             r.status, 401,
-            "disabled grant must end the session; {}",
+            "disabled App grant must end the session; {}",
             r.body
         );
         assert_eq!(
             gateway_login_status(gport, "ada", "s3cret-horse"),
             401,
-            "disabled grant must refuse a fresh login"
+            "disabled App grant must refuse a fresh login"
         );
         bob_ok("grant disable");
         owner_post(
             dport,
             "/cli/skin/grants/enabled",
-            &format!(r#"{{"id":"{host_id}","enabled":true}}"#),
+            &format!(r#"{{"id":"{app_id}","enabled":true}}"#),
         );
         let r = thread_status(gport, &handle, &ada);
         assert_eq!(
@@ -4469,7 +4591,8 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
             r.body
         );
 
-        // 2. Host login switched off (the per-guest off switch).
+        // 2. Box login switched off (the per-guest off switch) ends App
+        //    sessions too (Q8 default).
         let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
         assert_eq!(thread_status(gport, &handle, &ada).status, 200);
         owner_post(
@@ -4483,7 +4606,6 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
             "host switch off must end the session; {}",
             r.body
         );
-        assert_eq!(gateway_login_status(gport, "ada", "s3cret-horse"), 401);
         bob_ok("host switch off");
         owner_post(
             dport,
@@ -4491,7 +4613,8 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
             r#"{"username":"ada","present":true}"#,
         );
 
-        // 3. Role change: a removed room leaves the live session.
+        // 3. Role change on the App grant: a removed room leaves the live
+        //    session (the rewrite follows the grant's role, S24-6).
         owner_post(
             dport,
             "/cli/skin/roles",
@@ -4499,14 +4622,27 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
                 r#"{{"name":"front","roomAccess":[{{"handle":"{other}","caps":["thread:read"]}}]}}"#
             ),
         );
+        let ada_uid = principal_id(dport, "ada");
         owner_post(
             dport,
-            "/cli/skin/roles/assign",
-            r#"{"username":"ada","role":"front"}"#,
+            "/cli/skin/grants/delete",
+            &format!(r#"{{"id":"{}"}}"#, app_grant_id(dport, "ada", &app)),
+        );
+        owner_post(
+            dport,
+            "/cli/skin/grants",
+            &format!(
+                r#"{{"subjectKind":"principal","subjectId":"{ada_uid}","kind":"app","targetId":"{app}","roleId":"front"}}"#
+            ),
         );
         let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
         let r = thread_status(gport, &other, &ada);
         assert_eq!(r.status, 200, "role room before removal; {}", r.body);
+        assert_eq!(
+            thread_status(gport, &handle, &ada).status,
+            403,
+            "the App role, not the box-login rooms"
+        );
         owner_post(
             dport,
             "/cli/skin/roles/room",
@@ -4521,8 +4657,8 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
         assert!(r.body.contains("skin_room"), "{}", r.body);
         bob_ok("role room removal");
 
-        // 4. Role delete: refused while assigned; after unassign the live
-        //    session no longer carries the role's rooms.
+        // 4. Role delete: refused while a grant uses it; after the App grant
+        //    goes to plain rooms the role can go.
         owner_post(
             dport,
             "/cli/skin/roles/room",
@@ -4541,21 +4677,35 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
         );
         assert_eq!(
             refused.status, 400,
-            "assigned role cannot go; {}",
+            "a role a grant uses cannot go; {}",
             refused.body
         );
-        owner_post(dport, "/cli/skin/roles/unassign", r#"{"username":"ada"}"#);
-        owner_post(dport, "/cli/skin/roles/remove", r#"{"name":"front"}"#);
-        let r = thread_status(gport, &other, &ada);
+        owner_post(
+            dport,
+            "/cli/skin/grants/delete",
+            &format!(r#"{{"id":"{}"}}"#, app_grant_id(dport, "ada", &app)),
+        );
         assert_eq!(
-            r.status, 403,
-            "deleted role's room must be gone; {}",
-            r.body
+            thread_status(gport, &other, &ada).status,
+            401,
+            "deleting the App grant ends that App's session"
+        );
+        owner_post(
+            dport,
+            "/cli/skin/users/rooms",
+            &format!(r#"{{"username":"ada","app":"{app}","rooms":["{handle}"]}}"#),
+        );
+        owner_post(dport, "/cli/skin/roles/remove", r#"{"name":"front"}"#);
+        let ada = gateway_login_cookie(gport, "ada", "s3cret-horse");
+        assert_eq!(
+            thread_status(gport, &other, &ada).status,
+            403,
+            "deleted role's room must be gone"
         );
         assert_eq!(
             thread_status(gport, &handle, &ada).status,
             200,
-            "default room stays after unassign"
+            "the App grant's own rooms apply"
         );
         bob_ok("role delete");
 
@@ -4587,5 +4737,247 @@ async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
         stop_skin(dport, &path);
         let _ = std::fs::remove_dir_all(&path);
         let _ = std::fs::remove_dir_all(&other_path);
+    });
+}
+
+/// Publish a second `--skin` App on another name; returns its service id.
+fn publish_named_skin(dport: u16, path: &str, name: &str, gport: u16) -> String {
+    let run = http(
+        dport,
+        "POST",
+        &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+        Some(&format!(
+            r#"{{"name":"{name}","skin":true,"port":{gport},"project":"{path}","noTunnel":true}}"#
+        )),
+    );
+    assert_eq!(run.status, 200, "run skin {name}; {}", run.body);
+    assert!(wait_port(gport, 8000), "{name} helper must listen on {gport}");
+    json(&run.body)["id"]
+        .as_str()
+        .expect("published service id")
+        .to_string()
+}
+
+fn daemon_login(dport: u16, body: &str) -> Resp {
+    http(dport, "POST", "/cli/skin/login", Some(body))
+}
+
+/// S24-17 daemon integration: per-App logins on one daemon.
+/// - a guest granted only App A gets the generic 401 at B's `/login`, and
+///   B's helper never forwards a browser-supplied `app`;
+/// - BFF path: `POST /cli/skin/login` with no `app` is the box login exactly
+///   as before; with `app` it needs that App's grant; an unknown App is the
+///   same 401 body as a bad password;
+/// - `users add --app` creates no box login;
+/// - `publish rm` ends the sessions bound to that App (S24-20).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_per_app_logins_fail_closed() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("s24a{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        let gport_a = free_port();
+        let gport_b = free_port();
+        let app_a = publish_named_skin(dport, &path, "alpha", gport_a);
+        let app_b = publish_named_skin(dport, &path, "beta", gport_b);
+        assert_ne!(app_a, app_b);
+
+        // An App-only guest for A (owner): no box login.
+        let r = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/users?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"username":"aonly","app":"{handle}/alpha"}}"#)),
+        );
+        assert_eq!(r.status, 200, "users add --app; {}", r.body);
+        set_password(dport, "aonly", "s3cret-horse");
+        owner_post(
+            dport,
+            "/cli/skin/users/rooms",
+            &format!(r#"{{"username":"aonly","app":"{app_a}","rooms":["{handle}"]}}"#),
+        );
+        let grants = json(
+            &http(dport, "GET", &format!("/cli/skin/grants?token={OWNER_TOKEN}"), None).body,
+        );
+        let uid = principal_id(dport, "aonly");
+        let mine: Vec<&serde_json::Value> = grants["grants"]
+            .as_array()
+            .expect("grants")
+            .iter()
+            .filter(|g| g["subjectId"] == uid.as_str())
+            .collect();
+        assert_eq!(mine.len(), 1, "only the App A grant: {mine:?}");
+        assert_eq!(mine[0]["targetId"], app_a.as_str());
+        assert_eq!(mine[0]["createdBy"], "owner-token", "{mine:?}");
+
+        // Gateway A: ok. Gateway B: generic 401, even naming A in the body.
+        let a_cookie = gateway_login_cookie(gport_a, "aonly", "s3cret-horse");
+        assert_eq!(thread_status(gport_a, &handle, &a_cookie).status, 200);
+        let bad_pw = http(
+            gport_b,
+            "POST",
+            "/login",
+            Some(r#"{"username":"aonly","password":"wrong-horse"}"#),
+        );
+        assert_eq!(bad_pw.status, 401);
+        for body in [
+            r#"{"username":"aonly","password":"s3cret-horse"}"#.to_string(),
+            format!(r#"{{"username":"aonly","password":"s3cret-horse","app":"{app_a}"}}"#),
+        ] {
+            let r = http(gport_b, "POST", "/login", Some(&body));
+            assert_eq!(r.status, 401, "cross-App at B: {body} → {}", r.body);
+            assert_eq!(r.body, bad_pw.body, "same body as a bad password");
+            assert!(header_value(&r.headers, "set-cookie").is_none());
+        }
+        // A's cookie is per helper: it opens nothing at B.
+        assert_eq!(thread_status(gport_b, &handle, &a_cookie).status, 401);
+
+        // Daemon door (BFF): no app = box login → refused (no host grant).
+        let generic = daemon_login(dport, r#"{"username":"aonly","password":"wrong-horse"}"#);
+        assert_eq!(generic.status, 401);
+        let host = daemon_login(dport, r#"{"username":"aonly","password":"s3cret-horse"}"#);
+        assert_eq!(host.status, 401, "no box login: {}", host.body);
+        assert_eq!(host.body, generic.body);
+        for app in [app_b.as_str(), "no-such-app", "host"] {
+            let r = daemon_login(
+                dport,
+                &format!(r#"{{"username":"aonly","password":"s3cret-horse","app":"{app}"}}"#),
+            );
+            assert_eq!(r.status, 401, "{app}: {}", r.body);
+            assert_eq!(r.body, generic.body, "{app}: no App enumeration");
+        }
+        let ok = daemon_login(
+            dport,
+            &format!(r#"{{"username":"aonly","password":"s3cret-horse","app":"{app_a}"}}"#),
+        );
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        let ov = json(&ok.body);
+        assert_eq!(ov["app"], app_a.as_str(), "{}", ok.body);
+        let a_tok = ov["token"].as_str().expect("token").to_string();
+        // A box-login guest: the daemon door without app is unchanged.
+        add_user(dport, "boxer");
+        set_rooms(dport, "boxer", &handle);
+        set_password(dport, "boxer", "s3cret-horse");
+        let r = daemon_login(dport, r#"{"username":"boxer","password":"s3cret-horse"}"#);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["app"], "host");
+        assert_eq!(v["roomHandles"], serde_json::json!([handle.clone()]), "{v}");
+        let boxer_tok = v["token"].as_str().expect("token").to_string();
+        // ...and can't reach App B until the owner grants it.
+        let r = daemon_login(
+            dport,
+            &format!(r#"{{"username":"boxer","password":"s3cret-horse","app":"{app_b}"}}"#),
+        );
+        assert_eq!(r.status, 401, "{}", r.body);
+        let copied = copy_host(dport, &format!("{handle}/beta"));
+        assert_eq!(copied["added"], serde_json::json!(["boxer"]), "{copied}");
+        assert_eq!(gateway_login_status(gport_b, "boxer", "s3cret-horse"), 200);
+
+        // Agents keep their 0.45.4 powers (Q5): no `app` from a passport is
+        // covered by unit tests; grants/copy-host is owner-only here too.
+        let r = http(
+            dport,
+            "POST",
+            "/cli/skin/grants/copy-host",
+            Some(&format!(r#"{{"app":"{app_b}"}}"#)),
+        );
+        assert!(r.status == 401 || r.status == 403, "copy-host without owner: {}", r.status);
+        let r = http(
+            dport,
+            "GET",
+            &format!("/cli/skin/grants/copy-host?token={OWNER_TOKEN}"),
+            None,
+        );
+        assert_eq!(r.status, 405, "copy-host is POST-only; {}", r.body);
+
+        // S24-20: removing App A ends its sessions; the box session stays.
+        let thread_tok = |tok: &str| {
+            http(
+                dport,
+                "GET",
+                &format!("/cli/thread?addr={handle}&token={tok}"),
+                None,
+            )
+            .status
+        };
+        assert_eq!(thread_tok(&a_tok), 200);
+        assert_eq!(thread_tok(&boxer_tok), 200);
+        let rm = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/rm?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"alpha","project":"{path}"}}"#)),
+        );
+        assert_eq!(rm.status, 200, "{}", rm.body);
+        assert_eq!(thread_tok(&a_tok), 401, "App A's pass ends with the App");
+        assert_eq!(thread_tok(&boxer_tok), 200, "box pass unaffected");
+        let r = daemon_login(
+            dport,
+            &format!(r#"{{"username":"aonly","password":"s3cret-horse","app":"{app_a}"}}"#),
+        );
+        assert_eq!(r.status, 401, "a removed App's leftover grant mints nothing");
+        assert!(
+            json(&http(dport, "GET", &format!("/cli/skin/grants?token={OWNER_TOKEN}"), None).body)
+                ["grants"]
+                .as_array()
+                .expect("grants")
+                .iter()
+                .any(|g| g["targetId"] == app_a.as_str()),
+            "grants stay after publish rm"
+        );
+
+        let _ = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/rm?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"beta","project":"{path}"}}"#)),
+        );
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+/// S24-9: a published `--cmd` service learns its App id and the daemon's
+/// loopback address.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_cmd_service_gets_app_id_env() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("s24c{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        let port = free_port();
+        let cmd = format!(
+            "printf '%s|%s|%s' \"$K2_APP_ID\" \"$K2_HOST\" \"$K2_PORT\" > app_env.txt; exec python3 -m http.server {port} --bind 127.0.0.1"
+        );
+        let body = serde_json::json!({
+            "name": "bff",
+            "cmd": cmd,
+            "port": port,
+            "project": path,
+            "noTunnel": true,
+        })
+        .to_string();
+        let run = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+            Some(&body),
+        );
+        assert_eq!(run.status, 200, "run cmd; {}", run.body);
+        let id = json(&run.body)["id"].as_str().expect("id").to_string();
+        assert!(wait_port(port, 8000), "cmd service must listen");
+        let got = std::fs::read_to_string(format!("{path}/app_env.txt")).expect("env file");
+        assert_eq!(got, format!("{id}|127.0.0.1|{dport}"));
+        let _ = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/rm?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"bff","project":"{path}"}}"#)),
+        );
+        let _ = std::fs::remove_dir_all(&path);
     });
 }

@@ -4078,6 +4078,26 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
         let port = daemon.port;
         let handle = format!("skingrant{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (sales_id, _) = seed_thread_addr(&handle);
+        // S24-11: a kind=app grant target must be `host` or a published
+        // service that exists (an unknown App is a 400).
+        let booking = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::insert(
+                &conn,
+                &sales_id,
+                "booking",
+                k2_core::published_services::CMD_SKIN_SENTINEL,
+                "/tmp",
+                1,
+                k2_core::published_services::EXPOSE_LOCAL,
+                k2_core::published_services::DESIRED_STOPPED,
+                k2_core::published_services::KIND_SKIN,
+                "",
+            )
+            .expect("booking service row")
+            .id
+        };
         add_user(port, "ada");
         add_user(port, "bob");
         set_password(port, "ada", "s3cret-horse");
@@ -4131,13 +4151,30 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
                     "subjectKind": "principal",
                     "subjectId": ada_id,
                     "kind": "app",
-                    "targetId": "booking",
+                    "targetId": booking,
                 })
                 .to_string(),
             ),
         );
         assert_eq!(no_role.status, 400, "{}", no_role.body);
         assert!(no_role.body.contains("roleId"), "{}", no_role.body);
+        let unknown_app = http(
+            port,
+            "POST",
+            &format!("/cli/skin/grants?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({
+                    "subjectKind": "principal",
+                    "subjectId": ada_id,
+                    "kind": "app",
+                    "targetId": "no-such-app",
+                    "roleId": role_id,
+                })
+                .to_string(),
+            ),
+        );
+        assert_eq!(unknown_app.status, 400, "{}", unknown_app.body);
+        assert!(unknown_app.body.contains("unknown app"), "{}", unknown_app.body);
 
         let mailbox_role = http(
             port,
@@ -4171,7 +4208,7 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
                     "subjectKind": "principal",
                     "subjectId": ada_id,
                     "kind": "app",
-                    "targetId": "booking",
+                    "targetId": booking,
                     "roleId": role_id,
                 })
                 .to_string(),
@@ -4193,7 +4230,7 @@ async fn skin_grants_owner_crud_non_owner_rejected_login_without_grant() {
                     "subjectKind": "principal",
                     "subjectId": ada_id,
                     "kind": "app",
-                    "targetId": "booking",
+                    "targetId": booking,
                     "role": "guest",
                 })
                 .to_string(),

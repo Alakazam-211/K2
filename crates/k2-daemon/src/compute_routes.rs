@@ -1071,7 +1071,9 @@ fn needs_from(v: &serde_json::Value) -> R<Vec<String>> {
         }
         Some(_) => return Err(no("need_invalid", 400, "needs is a list like [\"node@22\", \"python@3.12\"]")),
     };
-    let parsed = needs::parse_all(&raw).map_err(|e| no("need_invalid", 400, format!("--needs: {e}")))?;
+    // An unsupported tool is refused here (400 → the CLI exits 2), never
+    // dropped: the job must not start without what it asked for.
+    let parsed = needs::parse_all(&raw).map_err(|e| no(e.code, 400, format!("--needs: {}", e.message)))?;
     Ok(parsed.iter().map(|n| n.token()).collect())
 }
 
@@ -1647,6 +1649,18 @@ fn local_disable(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn needs_are_refused_with_a_code_never_dropped() {
+        let v = serde_json::json!({"needs": ["cmake@3", "node@22"]});
+        assert_eq!(needs_from(&v).unwrap(), vec!["cmake@3".to_string(), "node@22".to_string()]);
+        let e = needs_from(&serde_json::json!({"needs": "node@22, make@4"})).unwrap_err();
+        assert_eq!((e.code, e.status), ("tool_unsupported", 400));
+        assert!(e.hint.contains("make@4") && e.hint.contains("cmake@<v>"), "{}", e.hint);
+        let e = needs_from(&serde_json::json!({"needs": ["node@$(x)"]})).unwrap_err();
+        assert_eq!((e.code, e.status), ("need_invalid", 400));
+        assert!(needs_from(&serde_json::json!({})).unwrap().is_empty());
+    }
 
     #[test]
     fn route_lists_agree() {

@@ -16,10 +16,13 @@
 //! not a 404 oracle). Existing registered paths use handle and/or
 //! basename grants (ungranted → uniform 404).
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
+
+use k2_core::hire::converge::{self, ConvergeAuthority, ConvergeRequest};
+use k2_core::hire::limits::HireLimits;
+use k2_core::hire::HireCaller;
 
 use crate::cli_response::CliResponse;
 use crate::routes::http::V1Principal;
@@ -35,18 +38,6 @@ use k2_core::workspace::context_layers::{self, ContextError};
 fn usage(hint: impl Into<String>) -> CliResponse {
     CliResponse {
         status: "400 Bad Request",
-        content_type: "application/json",
-        body: serde_json::json!({
-            "ok": false,
-            "error": { "code": "usage", "hint": hint.into() },
-        })
-        .to_string(),
-    }
-}
-
-fn usage_forbidden(hint: impl Into<String>) -> CliResponse {
-    CliResponse {
-        status: "403 Forbidden",
         content_type: "application/json",
         body: serde_json::json!({
             "ok": false,
@@ -92,14 +83,6 @@ fn authorize_ws(principal: &V1Principal, ws_raw: &str) -> Result<String, CliResp
     resolve_authorized_workspace(principal, &slug)
 }
 
-/// Wildcard grant: `allowed_workspaces` is `*` or a JSON list containing `*`.
-fn grant_is_star(principal: &V1Principal) -> bool {
-    match principal {
-        V1Principal::Owner => true,
-        V1Principal::Api(p) => p.authorizes_workspace("*"),
-    }
-}
-
 fn authorizes_existing(principal: &V1Principal, handle: Option<&str>, basename: &str) -> bool {
     match principal {
         V1Principal::Owner => true,
@@ -114,95 +97,27 @@ fn authorizes_existing(principal: &V1Principal, handle: Option<&str>, basename: 
 
 // ── Path + project lookup ─────────────────────────────────────────────
 
+#[cfg(test)]
 struct ProjectRow {
-    id: String,
-    name: String,
-    handle: Option<String>,
     default_agent: Option<String>,
     default_model: Option<String>,
 }
 
+#[cfg(test)]
 fn lookup_project(path: &str) -> Option<ProjectRow> {
-    lookup_project_row(path).map(|(_, row)| row)
-}
-
-/// Match a hire path to a registered `projects.path`, including macOS
-/// `/var` ↔ `/private/var` aliasing after canonicalize.
-fn lookup_project_row(path: &str) -> Option<(String, ProjectRow)> {
-    for candidate in path_lookup_candidates(path) {
-        if let Some(row) = lookup_project_exact(&candidate) {
-            return Some((candidate, row));
-        }
-    }
-    None
-}
-
-fn lookup_project_exact(path: &str) -> Option<ProjectRow> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.query_row(
-        "SELECT id, name, handle, default_agent, default_model FROM projects WHERE path = ?1",
+        "SELECT default_agent, default_model FROM projects WHERE path = ?1",
         rusqlite::params![path],
         |r| {
             Ok(ProjectRow {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                handle: r.get(2)?,
-                default_agent: r.get(3)?,
-                default_model: r.get(4)?,
+                default_agent: r.get(0)?,
+                default_model: r.get(1)?,
             })
         },
     )
     .ok()
-}
-
-fn path_lookup_candidates(path: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let push = |out: &mut Vec<String>, p: String| {
-        if !out.iter().any(|e| e == &p) {
-            out.push(p);
-        }
-    };
-    push(&mut out, path.to_string());
-    if let Ok(c) = Path::new(path).canonicalize() {
-        push(&mut out, c.to_string_lossy().into_owned());
-    }
-    if let Some(rest) = path.strip_prefix("/private") {
-        if rest.starts_with('/') {
-            push(&mut out, rest.to_string());
-        }
-    } else if path.starts_with('/') {
-        push(&mut out, format!("/private{path}"));
-    }
-    out
-}
-
-fn expand_hire_path(raw: &str) -> Result<String, String> {
-    let t = raw.trim();
-    if t.is_empty() {
-        return Err("missing path".into());
-    }
-    let expanded = if t == "~" {
-        dirs::home_dir().ok_or_else(|| "cannot resolve ~".to_string())?
-    } else if let Some(rest) = t.strip_prefix("~/") {
-        let home = dirs::home_dir().ok_or_else(|| "cannot resolve ~".to_string())?;
-        home.join(rest)
-    } else {
-        PathBuf::from(t)
-    };
-    if !expanded.is_absolute() {
-        return Err("path must be absolute or ~".into());
-    }
-    if expanded.exists() {
-        if !expanded.is_dir() {
-            return Err(format!("{} exists and is not a directory", expanded.display()));
-        }
-        return expanded
-            .canonicalize()
-            .map(|p| p.to_string_lossy().into_owned())
-            .map_err(|e| format!("canonicalize: {e}"));
-    }
-    Ok(expanded.to_string_lossy().into_owned())
 }
 
 fn basename_of(path: &str) -> String {
@@ -211,24 +126,6 @@ fn basename_of(path: &str) -> String {
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "workspace".into())
-}
-
-fn technical_agent_name(path: &str) -> String {
-    let s: String = basename_of(path)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    if s.is_empty() {
-        "agent".into()
-    } else {
-        s
-    }
 }
 
 fn stack_json(path: &str) -> serde_json::Value {
@@ -250,54 +147,13 @@ fn stack_json(path: &str) -> serde_json::Value {
     }
 }
 
-fn emit_hire_watches() {
+pub(crate) fn emit_hire_watches() {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::ProjectsChanged {});
     crate::fs_live::resync_watches();
     crate::charter_compose_watch::resync_watches();
 }
 
-// ── Hire body ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HireBody {
-    path: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    preset: Option<String>,
-    #[serde(default)]
-    template: Option<String>,
-    #[serde(default)]
-    persona: Option<String>,
-    #[serde(default)]
-    wiki: Option<Vec<WikiNoteIn>>,
-    #[serde(default)]
-    context: Option<Vec<String>>,
-    #[serde(default)]
-    layers: Option<Vec<InlineLayerIn>>,
-    #[serde(default)]
-    default_model: Option<String>,
-    #[serde(default)]
-    no_wiki: Option<bool>,
-    /// Persist create-only `db_agent_access` (`off`/`read`/`write`). Default
-    /// stays off. Does NOT mint a database — hire calls create separately.
-    #[serde(default)]
-    db_access: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WikiNoteIn {
-    id: String,
-    body: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InlineLayerIn {
-    label: String,
-    markdown: String,
-}
+// ── Bodies ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct WikiNotesBody {
@@ -336,320 +192,112 @@ pub(crate) fn handle_v1_w(principal: &V1Principal, is_post: bool, body: &[u8]) -
     handle_v1_hire(principal, body)
 }
 
-/// `POST /v1/w` — create or converge a workspace. Does not spawn a PTY.
+/// What an API key may do on `POST /v1/w` beyond its workspace grant
+/// (T19: new-workspace creation sits under the hire scope).
+pub(crate) struct KeyHireDoor {
+    pub limits: Option<HireLimits>,
+    pub legacy: bool,
+}
+
+pub(crate) fn key_hire_door(p: &k2_core::api_keys::ApiPrincipal) -> KeyHireDoor {
+    let limits = if p.capabilities.hire {
+        HireLimits::parse_stored(k2_core::api_keys::hire_limits_for(&p.id).as_deref())
+    } else {
+        None
+    };
+    let legacy = k2_core::api_keys::legacy_new_workspace(&p.id) && p.authorizes_workspace("*");
+    KeyHireDoor { limits, legacy }
+}
+
+/// `POST /v1/w` — create or converge a workspace on the shared hire core.
+/// Does not spawn a PTY.
+///
+/// API keys: an existing workspace needs the key's workspace grant (else the
+/// uniform 404); a NEW one needs the hire scope (or the pre-0.45.6 `*`
+/// back-compat flag), must sit inside the owner-set hire root, and counts
+/// against the key's quotas. `dbAccess` is capped by the key's DB door.
 pub(crate) fn handle_v1_hire(principal: &V1Principal, body: &[u8]) -> CliResponse {
     if let Err(resp) = require_host_sessions(principal) {
         return resp;
     }
-    let req: HireBody = match serde_json::from_slice(body) {
+    let req: ConvergeRequest = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return usage(format!("invalid JSON body: {e}")),
     };
-    let expanded = match expand_hire_path(&req.path) {
+    let expanded = match converge::expand_hire_path(&req.path) {
         Ok(p) => p,
-        Err(e) => return usage(e),
+        Err(e) => return crate::hire_routes::hire_error_response(&e),
     };
-    let (path, existing) = match lookup_project_row(&expanded) {
-        Some((registered, row)) => (registered, Some(row)),
-        None => (expanded, None),
-    };
-    let template = req
-        .template
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let persona = req
-        .persona
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    if template.is_some() && persona.is_some() {
-        return usage("template and persona are mutually exclusive — pass one or the other");
-    }
-    let template_body = if let Some(t) = template {
-        match hire_template_body(t) {
-            Some(b) => Some(b),
-            None => {
-                return usage(format!(
-                    "unknown template '{t}' — valid: worker, manager, qa, researcher"
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
-    let basename = basename_of(&path);
-    if let Some(row) = existing.as_ref() {
-        let handle = row.handle.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if !authorizes_existing(principal, handle, &basename) {
-            return uniform_ws_404();
-        }
-    } else if !grant_is_star(principal) {
-        return usage_forbidden(
-            "hire of a new workspace needs * grant or owner token",
-        );
-    }
-
-    let no_wiki = req.no_wiki.unwrap_or(false);
-    let mut changed = false;
-    let was_registered = existing.is_some();
-
-    if existing.is_none() {
-        let seed = !no_wiki;
-        let result = if Path::new(&path).exists() {
-            k2_core::workspace::lifecycle::open_workspace_ex(&path, seed, true, false)
-        } else {
-            // create_workspace_ex mkdirs + registers. Call create_dir_all first
-            // only when the parent is missing; create_workspace_ex itself
-            // refuses a path that already exists.
-            if let Some(parent) = Path::new(&path).parent() {
-                if !parent.as_os_str().is_empty() && !parent.exists() {
-                    if let Err(e) = fs::create_dir_all(parent) {
-                        return usage(format!("create parent: {e}"));
-                    }
+    let existing = converge::lookup_project_row(&expanded);
+    let (caller, auth, quota_key) = match principal {
+        V1Principal::Owner => (HireCaller::Owner, ConvergeAuthority::unrestricted(), None),
+        V1Principal::Api(p) => {
+            if let Some((path, row)) = existing.as_ref() {
+                let handle = row.handle.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                if !authorizes_existing(principal, handle, &basename_of(path)) {
+                    return uniform_ws_404();
                 }
             }
-            k2_core::workspace::lifecycle::create_workspace_ex(&path, seed, true, false)
-        };
-        match result {
-            Ok(_) => changed = true,
-            Err(e) => {
-                if k2_core::workspace::lifecycle::is_already_registered(&e) {
-                    // Converge (old "already registered" copy OR C2).
-                } else {
-                    return usage(e);
-                }
-            }
-        }
-    }
-
-    if !no_wiki {
-        match k2_core::wiki::seed_wiki(Path::new(&path)) {
-            Ok(created) => {
-                if !created.is_empty() {
-                    changed = true;
-                }
-            }
-            Err(e) => return usage(format!("seed wiki: {e}")),
-        }
-    }
-
-    let agent_name = technical_agent_name(&path);
-    let persona_dir = k2_core::workspace::agent_identity::workspace_agent_path(&path);
-    let persona_existed =
-        k2_core::workspace::agent_identity::persona_present_in(&persona_dir);
-    if !persona_existed {
-        let (role, agent_type, prompt) = if let Some(body) = template_body {
-            let at = if template == Some("manager") {
-                Some("manager".to_string())
-            } else {
-                Some("agent-template".to_string())
+            let door = key_hire_door(p);
+            let db_door: &'static str = if p.capabilities.db { "write" } else { "off" };
+            let max_db = match door.limits.as_ref() {
+                Some(l) => l.db_ceiling(p.capabilities.db),
+                None => db_door,
             };
-            (
-                template.unwrap_or("agent").to_string(),
-                at,
-                Some(body.to_string()),
-            )
-        } else if let Some(p) = persona {
-            ("custom".to_string(), None, Some(p.to_string()))
-        } else {
-            (agent_name.clone(), None, None)
-        };
-        match k2_core::workspace::agent::create(
-            path.clone(),
-            agent_name,
-            role,
-            prompt,
-            agent_type,
-        ) {
-            Ok(_) => changed = true,
-            Err(e) => return usage(e),
+            let root = match k2_core::hire::root::base_dir(door.limits.as_ref().map(|l| l.folder.as_str())) {
+                Ok(r) => r,
+                Err(e) => return crate::hire_routes::hire_error_response(&e),
+            };
+            let caller = HireCaller::ApiKey {
+                id: p.id.clone(),
+                label: k2_core::api_keys::key_label(&p.id),
+            };
+            let auth = ConvergeAuthority {
+                new_workspace_root: Some(root),
+                may_create: door.limits.is_some() || door.legacy,
+                max_db: Some(max_db),
+                create_refusal: Some(
+                    "hire of a new workspace needs a key with the hire scope (or a pre-0.45.6 * grant) or the owner token"
+                        .into(),
+                ),
+            };
+            (caller, auth, door.limits.map(|l| (p.id.clone(), l)))
         }
-    }
-
-    if let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let current = k2_core::workspace::display::agent_display_name(&path);
-        if current != name {
-            if let Err(e) = k2_core::workspace::display::set_agent_display_name(&path, name) {
-                return usage(e);
-            }
-            changed = true;
-        }
-    }
-
-    let row_now = lookup_project(&path);
-    if let Some(preset) = req.preset.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let already = row_now
-            .as_ref()
-            .and_then(|r| r.default_agent.as_deref())
-            .unwrap_or("");
-        if already != preset {
-            if let Err(e) =
-                k2_core::workspace::settings::update_project_setting(&path, "default_agent", preset)
-            {
-                return usage(e);
-            }
-            changed = true;
-        }
-    }
-    if let Some(model) = req
-        .default_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let already = row_now
-            .as_ref()
-            .and_then(|r| r.default_model.as_deref())
-            .unwrap_or("");
-        if already != model {
-            if let Err(e) =
-                k2_core::workspace::settings::update_project_setting(&path, "default_model", model)
-            {
-                return usage(e);
-            }
-            changed = true;
-        }
-    }
-
-    let mut wiki_notes: Vec<serde_json::Value> = Vec::new();
-    if let Some(notes) = req.wiki.as_ref() {
-        for n in notes {
-            match k2_core::wiki::write_note(Path::new(&path), &n.id, &n.body) {
-                Ok(rel) => {
-                    wiki_notes.push(serde_json::json!({ "id": n.id, "path": rel }));
-                    changed = true;
-                }
-                Err(e) => return usage(e),
+    };
+    if existing.is_none() {
+        if let Some((key_id, l)) = quota_key.as_ref() {
+            if let Err(e) = crate::hire_routes::check_single_quota(key_id, l) {
+                return crate::hire_routes::hire_error_response(&e);
             }
         }
     }
-
-    if let Some(catalogs) = req.context.as_ref() {
-        for id in catalogs {
-            let id = id.trim();
-            if id.is_empty() {
-                return usage("context catalog id must not be empty");
-            }
-            match context_layers::add_layer(&path, None, Some(id), None) {
-                Ok(_) => changed = true,
-                Err(ContextError::DuplicateLayer(_)) => {}
-                Err(e) => return context_err(e),
-            }
-        }
+    let out = match converge::converge(&req, &caller, &auth) {
+        Ok(o) => o,
+        Err(e) => return crate::hire_routes::hire_error_response(&e),
+    };
+    if out.created && caller.api_key_id().is_some() {
+        crate::hire_routes::ledger_single_hire(&caller, &out);
     }
-    if let Some(layers) = req.layers.as_ref() {
-        for layer in layers {
-            match add_inline_layer(&path, &layer.label, &layer.markdown) {
-                Ok(did) => {
-                    if did {
-                        changed = true;
-                    }
-                }
-                Err(resp) => return resp,
-            }
-        }
-    }
-
-    if let Some(access) = req
-        .db_access
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        if !k2_core::workspace::settings::DB_AGENT_ACCESS_MODES.contains(&access) {
-            return usage("dbAccess must be 'off', 'read', or 'write'");
-        }
-        let already = k2_core::workspace::settings::db_agent_access_for_path(&path);
-        if already != access {
-            if let Err(e) = k2_core::workspace::settings::update_project_setting(
-                &path,
-                "db_agent_access",
-                access,
-            ) {
-                return usage(e);
-            }
-            changed = true;
-        }
-    }
-
-    if changed || !was_registered {
+    if out.changed || out.created {
         emit_hire_watches();
     } else {
         crate::charter_compose_watch::resync_watches();
     }
-
-    let row = match lookup_project(&path) {
-        Some(r) => r,
-        None => return usage("workspace did not register"),
-    };
-    let handle = row
-        .handle
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&basename)
-        .to_string();
-    let display = {
-        let d = k2_core::workspace::display::agent_display_name(&path);
-        if d.is_empty() {
-            row.name.clone()
-        } else {
-            d
-        }
-    };
-
     let mut body = serde_json::json!({
         "ok": true,
-        "path": path,
-        "id": row.id,
-        "handle": handle,
-        "name": display,
-        "changed": changed,
+        "path": out.path,
+        "id": out.id,
+        "handle": out.handle,
+        "name": out.name,
+        "changed": out.changed,
     });
-    if !wiki_notes.is_empty() {
-        body["wiki"] = serde_json::json!({ "notes": wiki_notes });
+    if !out.wiki_notes.is_empty() {
+        body["wiki"] = serde_json::json!({ "notes": out.wiki_notes });
     }
     if req.context.is_some() || req.layers.is_some() {
-        body["context"] = stack_json(&path);
+        body["context"] = stack_json(&out.path);
     }
     CliResponse::ok_json(body.to_string())
-}
-
-fn sanitize_layer_label(label: &str) -> Result<String, String> {
-    let t = label.trim();
-    if t.is_empty() {
-        return Err("missing layer label".into());
-    }
-    if !t
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-    {
-        return Err(
-            "layer label must match [a-zA-Z0-9._-]+ (no spaces or other punctuation)".into(),
-        );
-    }
-    Ok(t.to_string())
-}
-
-/// Write `.k2/context/<label>.md` then stack it. Returns whether the stack grew.
-fn add_inline_layer(project_path: &str, label: &str, markdown: &str) -> Result<bool, CliResponse> {
-    let safe = match sanitize_layer_label(label) {
-        Ok(s) => s,
-        Err(e) => return Err(usage(e)),
-    };
-    let rel = format!(".k2/context/{safe}.md");
-    let dest = Path::new(project_path).join(&rel);
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|e| usage(format!("mkdir context: {e}")))?;
-    }
-    fs::write(&dest, markdown).map_err(|e| usage(format!("write context layer: {e}")))?;
-    match context_layers::add_layer(project_path, Some(&rel), None, Some(&safe)) {
-        Ok(_) => Ok(true),
-        Err(ContextError::DuplicateLayer(_)) => Ok(false),
-        Err(e) => Err(context_err(e)),
-    }
 }
 
 // ── Wiki notes ────────────────────────────────────────────────────────
@@ -753,12 +401,12 @@ pub(crate) fn handle_v1_context_add(
             None => return usage("inline layer requires label"),
         };
         let markdown = markdown.unwrap_or("");
-        match add_inline_layer(&ws_path, label, markdown) {
+        match k2_core::hire::steps::add_inline_layer(&ws_path, label, markdown) {
             Ok(_) => {
                 crate::charter_compose_watch::resync_watches();
                 handle_v1_context_list(principal, ws_raw)
             }
-            Err(resp) => resp,
+            Err(e) => crate::hire_routes::hire_error_response(&e),
         }
     }
 }
@@ -841,146 +489,12 @@ pub(crate) fn handle_v1_context_regen(
     }
 }
 
-/// CLI `k2 agent hire --template` archetypes (worker|manager|qa|researcher).
-fn hire_template_body(name: &str) -> Option<&'static str> {
-    match name {
-        "worker" => Some(TEMPLATE_WORKER),
-        "manager" => Some(TEMPLATE_MANAGER),
-        "qa" => Some(TEMPLATE_QA),
-        "researcher" => Some(TEMPLATE_RESEARCHER),
-        _ => None,
-    }
-}
-
-const TEMPLATE_WORKER: &str = r#"## Role
-
-You are a WORKER agent: you execute well-scoped tasks end-to-end and
-report the outcome. You report to: __MANAGER__ (replace with your
-manager agent's name).
-
-## How you work
-
-- Take ONE task at a time; finish it before picking up the next.
-- Verify your own work before reporting done — run it, test it, read
-  it back. "It should work" is not done.
-- Keep a short running work log in your workspace so a re-launched
-  session can pick up your context.
-- If you are blocked for more than ~15 minutes, say so — don't spin.
-
-## Do NOT
-
-- Do NOT take on work outside the task's scope without asking first.
-- Do NOT answer another agent's human-in-the-loop prompt — back off
-  and let its owner handle it.
-- Do NOT push to shared branches, rotate credentials, or touch
-  infrastructure unless the task explicitly says so.
-- Do NOT go silent when blocked or uncertain.
-
-## Escalation
-
-When blocked, uncertain, or the task itself looks wrong: STOP and
-message your escalation contact: __ESCALATION_CONTACT__ (replace with
-a real agent name or your owner on day one).
-"#;
-
-const TEMPLATE_MANAGER: &str = r#"## Role
-
-You are a MANAGER agent: you break goals into tasks, delegate them to
-connected worker agents, track progress, and report upward. You report
-to: __ESCALATION_CONTACT__ (your operator/owner — replace this).
-
-## How you work
-
-- Keep a live task board (a simple markdown file in this workspace):
-  who owns what, current status, next checkpoint.
-- Delegate OUTCOMES, not keystrokes — let workers own their approach;
-  hold them to the result.
-- Follow up on anything you delegated that has gone quiet.
-- Summarize status upward on request in under 10 lines.
-
-## Do NOT
-
-- Do NOT do the workers' tasks yourself — if you keep doing a job,
-  flag that the team needs a hire instead.
-- Do NOT reconfigure or retire agents without your owner's instruction.
-- Do NOT answer a worker's human-in-the-loop prompt you don't have
-  standing over.
-- Do NOT let a task sit unassigned without telling your owner.
-
-## Escalation
-
-Anything outside your delegation authority — hiring, retiring,
-spending, credentials, production changes — goes to:
-__ESCALATION_CONTACT__ (replace on day one).
-"#;
-
-const TEMPLATE_QA: &str = r#"## Role
-
-You are a QA agent: you verify other agents' work against its stated
-intent and report findings. You report to: __MANAGER__ (replace with
-your manager agent's name).
-
-## How you work
-
-- Start from what the change CLAIMS to do; test the claim first, then
-  the edges around it.
-- Reproduce before you report — every finding comes with exact steps.
-- Rate every finding: blocker / bug / nit. Never inflate severity.
-- "Passed" means YOU ran it and watched it work — never mark passed
-  on faith.
-
-## Do NOT
-
-- Do NOT fix the code yourself — report to the owning agent; you
-  verify, they fix.
-- Do NOT approve work you only read but did not run.
-- Do NOT answer another agent's human-in-the-loop prompt.
-- Do NOT soften findings to be agreeable — precise and neutral beats
-  polite and vague.
-
-## Escalation
-
-Blockers the owning agent disputes, or anything that looks like data
-loss / security exposure: escalate immediately to
-__ESCALATION_CONTACT__ (replace on day one).
-"#;
-
-const TEMPLATE_RESEARCHER: &str = r#"## Role
-
-You are a RESEARCHER agent: you investigate questions, compare
-options, and produce short, sourced write-ups. You report to:
-__MANAGER__ (replace with your manager agent's name).
-
-## How you work
-
-- Restate the question AND the decision it feeds before digging.
-- Prefer primary sources; note the retrieval date on anything volatile
-  (pricing, versions, benchmarks).
-- Deliverable shape: a 5–15 line summary up top, details + sources
-  below.
-- Say "unknown" when the evidence is thin — a marked gap is worth
-  more than a confident guess.
-
-## Do NOT
-
-- Do NOT modify code, configs, or infrastructure — you produce
-  knowledge, not changes.
-- Do NOT present speculation as fact; label confidence explicitly.
-- Do NOT pad reports — if it fits in 10 lines, deliver 10 lines.
-- Do NOT answer another agent's human-in-the-loop prompt.
-
-## Escalation
-
-Questions you cannot source, or requests that would need real
-spending/credentials to answer: escalate to __ESCALATION_CONTACT__
-(replace on day one).
-"#;
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::routes::http::V1Principal;
     use std::fs;
+    use std::path::PathBuf;
     use uuid::Uuid;
 
     fn apik(id: &str, grant: Option<&str>) -> V1Principal {
@@ -1075,28 +589,102 @@ mod tests {
         let _ = fs::remove_dir_all(&ws);
     }
 
-    #[test]
-    fn star_grant_hires() {
-        k2_core::db::init_for_tests();
-        let ws = unique_ws("star-hire");
-        let path = ws.to_string_lossy().into_owned();
-        let key = apik("k-hire-star", Some("*"));
-        let r = handle_v1_hire(&key, hire_json(&path).as_bytes());
-        let v = parse_ok(&r);
-        assert_eq!(v["ok"], true);
-        assert!(project_exists(&path));
-        let _ = fs::remove_dir_all(&ws);
+    /// A DB-backed key (so the 0160 columns are real), resolved.
+    fn minted_key(label: &str, grant: &str, caps: k2_core::api_keys::ApiCapabilities, hire: Option<&str>) -> V1Principal {
+        let (_id, raw) = k2_core::api_keys::create_api_key_ex(label, None, Some(grant), None, None, Some(caps), hire)
+            .expect("mint key");
+        V1Principal::Api(k2_core::api_keys::resolve_api_key(&raw).expect("resolve key"))
+    }
+
+    fn host_and_hire() -> k2_core::api_keys::ApiCapabilities {
+        k2_core::api_keys::ApiCapabilities { hire: true, ..k2_core::api_keys::ApiCapabilities::new_key_default() }
     }
 
     #[test]
-    fn star_in_json_list_hires() {
+    fn star_grant_without_hire_scope_cannot_create_t19() {
         k2_core::db::init_for_tests();
-        let ws = unique_ws("star-list");
-        let path = ws.to_string_lossy().into_owned();
-        let key = apik("k-hire-star-list", Some(r#"["*"]"#));
+        let root = crate::hire_routes::test_support::ensure_test_root();
+        let path = root.join(format!("t19-{}", Uuid::new_v4().simple())).to_string_lossy().into_owned();
+        let key = minted_key("t19-star", "*", k2_core::api_keys::ApiCapabilities::new_key_default(), None);
         let r = handle_v1_hire(&key, hire_json(&path).as_bytes());
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        assert!(r.body.contains("hire scope"), "body={}", r.body);
+        assert!(!project_exists(&path), "403 must not register");
+        assert!(!Path::new(&path).exists(), "403 must not mint the folder");
+    }
+
+    #[test]
+    fn legacy_star_key_keeps_creating_but_only_under_the_root() {
+        k2_core::db::init_for_tests();
+        let root = crate::hire_routes::test_support::ensure_test_root();
+        let key = minted_key("legacy-star", r#"["*"]"#, k2_core::api_keys::ApiCapabilities::new_key_default(), None);
+        let V1Principal::Api(p) = &key else { unreachable!() };
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE api_keys SET legacy_new_workspace = 1 WHERE id = ?1", rusqlite::params![p.id])
+                .expect("flag legacy");
+        }
+        let inside = root.join(format!("legacy-{}", Uuid::new_v4().simple())).to_string_lossy().into_owned();
+        let r = handle_v1_hire(&key, hire_json(&inside).as_bytes());
         assert_eq!(r.status, "200 OK", "body={}", r.body);
-        let _ = fs::remove_dir_all(&ws);
+        assert!(project_exists(&inside));
+        // Scout's flow keeps working: the legacy key reaches the workspace it
+        // made through its `*` grant (reach rules are for hire-scoped keys).
+        let handle = parse_ok(&r)["handle"].as_str().expect("handle").to_string();
+        assert!(
+            crate::v1_sandboxes::resolve_authorized_workspace_door(
+                &key,
+                &handle,
+                k2_core::hire::limits::ReachDoor::HostSessions
+            )
+            .is_ok(),
+            "legacy key must still host-session the workspace it created"
+        );
+
+        let outside = unique_ws("legacy-outside");
+        let outside_s = outside.to_string_lossy().into_owned();
+        let r = handle_v1_hire(&key, hire_json(&outside_s).as_bytes());
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "outside_hire_root", "body={}", r.body);
+        assert!(!outside.exists(), "refused path must not be created");
+    }
+
+    #[test]
+    fn hire_scoped_key_creates_under_root_and_is_ledgered() {
+        k2_core::db::init_for_tests();
+        let root = crate::hire_routes::test_support::ensure_test_root();
+        let limits = k2_core::hire::limits::HireLimits::default().to_json();
+        let key = minted_key("hire-v1w", r#"["nothing"]"#, host_and_hire(), Some(&limits));
+        let V1Principal::Api(p) = &key else { unreachable!() };
+        let path = root.join(format!("v1w-{}", Uuid::new_v4().simple())).to_string_lossy().into_owned();
+        let r = handle_v1_hire(&key, hire_json(&path).as_bytes());
+        let v = parse_ok(&r);
+        let ws_id = v["id"].as_str().expect("id").to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(
+            k2_core::hire::ledger::creator_key_of(&conn, &ws_id).as_deref(),
+            Some(p.id.as_str()),
+            "a key-made workspace is ledgered to the key"
+        );
+        assert_eq!(k2_core::hire::ledger::live_members(&conn, &p.id), 1);
+    }
+
+    #[test]
+    fn key_db_access_needs_the_db_door() {
+        k2_core::db::init_for_tests();
+        let root = crate::hire_routes::test_support::ensure_test_root();
+        let limits = k2_core::hire::limits::HireLimits::default().to_json();
+        let key = minted_key("hire-v1w-db", "*", host_and_hire(), Some(&limits));
+        let path = root.join(format!("v1w-db-{}", Uuid::new_v4().simple())).to_string_lossy().into_owned();
+        let body = serde_json::json!({ "path": path, "dbAccess": "write" }).to_string();
+        let r = handle_v1_hire(&key, body.as_bytes());
+        assert_eq!(r.status, "403 Forbidden", "body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "exceeds_key", "body={}", r.body);
+        assert!(!project_exists(&path), "refused before any write");
     }
 
     #[test]
@@ -1131,6 +719,7 @@ mod tests {
                 canonical_message: true,
                 sandboxes: true,
                 db: false,
+                hire: false,
             },
         );
         let r = handle_v1_hire(&key, hire_json(&path).as_bytes());
@@ -1344,6 +933,7 @@ mod tests {
                 canonical_message: true,
                 sandboxes: true,
                 db: false,
+                hire: false,
             },
         );
         let listed = handle_v1_context_list(&no_host, "anything");

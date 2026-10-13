@@ -378,12 +378,32 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     // workspace_not_found reason/hint (stable shape).
                 }
             }
-            let resp = crate::workspace_msg::deliver_live_with_via(
-                &workspace, &text, &from, &command, wake, wake_timeout, &via,
+            // S7 (HT15): every live delivery is recorded with the
+            // credential-derived sender and carries its id in the prefix
+            // (`[from x · m_…]`); `k2 msg who <id>` reads it back.
+            let sender = match principal.as_ref() {
+                Some(p) => crate::hire_routes::Sender {
+                    workspace_id: Some(p.workspace_uuid.clone()),
+                    via: "passport",
+                    actor: crate::routes::http::agent_actor_label(p),
+                    on_behalf_of: None,
+                },
+                None => crate::hire_routes::Sender {
+                    workspace_id: None,
+                    via: "owner",
+                    actor: "owner-token".into(),
+                    on_behalf_of: None,
+                },
+            };
+            let (resp, delivery) = crate::hire_routes::deliver_recorded(
+                &workspace, &text, &from, &command, wake, wake_timeout, &via, &sender,
             );
-            let body = serde_json::to_string(&resp)
-                .unwrap_or_else(|_| "{\"success\":false}".to_string());
-            CliResponse::ok_json(body)
+            let mut body = serde_json::to_value(&resp)
+                .unwrap_or_else(|_| serde_json::json!({ "success": false }));
+            if let Some(id) = delivery {
+                body["deliveryId"] = serde_json::json!(id);
+            }
+            CliResponse::ok_json(body.to_string())
         }
         "/cli/workspace/remove" => {
             // Teardown modes (keep_current / restore_original) still

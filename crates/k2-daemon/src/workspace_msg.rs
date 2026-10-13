@@ -537,6 +537,11 @@ pub fn format_message_user_with_command(
     }
 }
 
+/// The `[from …]` label a sender string renders as (handle for a UUID).
+pub fn humanize_from(from: &str) -> String {
+    humanize_chat_from(from, "external")
+}
+
 /// Last-mile chat attribution: stamp the **handle** (D18), never a
 /// display name or a bare project/passport UUID.
 fn humanize_chat_from(from: &str, empty_fallback: &str) -> String {

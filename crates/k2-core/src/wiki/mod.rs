@@ -818,6 +818,12 @@ pub fn read_note(workspace: &Path, id: &str) -> Result<WikiNoteBody, String> {
 
 /// Jail a wiki-relative note id into a single `.md` path under `.k2/wiki/`.
 /// Rejects empty, NUL, `..`, absolute, and non-`.md` ids.
+/// Check a note id the way [`write_note`] will (no `..`, no absolute
+/// path) without touching the disk. The hire plan uses it before any write.
+pub fn validate_note_id(id: &str) -> Result<(), String> {
+    jail_wiki_id(id).map(|_| ())
+}
+
 fn jail_wiki_id(id: &str) -> Result<String, String> {
     if id.is_empty() || id.contains('\0') {
         return Err("invalid note id".into());

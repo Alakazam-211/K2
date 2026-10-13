@@ -153,6 +153,12 @@ pub struct ApiCapabilities {
     pub sandboxes: bool,
     /// `/v1/w/<ws>/db*` (create / migrate / GET dump). Fail-closed.
     pub db: bool,
+    /// 0160 — `/v1/agents/*` + `/v1/agent-teams/*` (hire, retire, links)
+    /// and new-workspace creation on `POST /v1/w` (T19). Fail-closed
+    /// (DEFAULT 0). Never set by `--allow`/`all()`: a hire key is minted
+    /// only with a limits envelope and the vault owner confirm.
+    #[serde(default)]
+    pub hire: bool,
 }
 
 impl ApiCapabilities {
@@ -163,16 +169,19 @@ impl ApiCapabilities {
             canonical_message: false,
             sandboxes: false,
             db: false,
+            hire: false,
         }
     }
 
-    /// All doors ON (owner principal + explicit `--allow` of every name).
+    /// All `--allow`-able doors ON (owner principal + explicit `--allow` of
+    /// every name). `hire` stays OFF: it needs limits + the owner confirm.
     pub const fn all() -> Self {
         Self {
             host_sessions: true,
             canonical_message: true,
             sandboxes: true,
             db: true,
+            hire: false,
         }
     }
 
@@ -183,6 +192,7 @@ impl ApiCapabilities {
             canonical_message: false,
             sandboxes: false,
             db: false,
+            hire: false,
         }
     }
 
@@ -422,6 +432,13 @@ pub struct ApiKeyMeta {
     pub allowed_workspaces: Option<String>,
     /// Phase 0 — capability flags (NOT a secret; owner audit).
     pub capabilities: ApiCapabilities,
+    /// 0160 — the hire envelope (normalized JSON) when `capabilities.hire`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hire_limits: Option<serde_json::Value>,
+    /// 0160 T19 — this pre-0.45.6 `*` key may still create new workspaces
+    /// on `POST /v1/w` without the hire scope (one-time back-compat flag).
+    #[serde(default)]
+    pub legacy_new_workspace: bool,
 }
 
 /// Hex `SHA-256` of `s`. Used for both the stored `key_hash` and the lookup of
@@ -508,6 +525,30 @@ pub fn create_api_key(
     base_url: Option<&str>,
     capabilities: Option<ApiCapabilities>,
 ) -> Result<(String, String), String> {
+    create_api_key_ex(
+        label,
+        anthropic_key,
+        allowed_workspaces,
+        provider,
+        base_url,
+        capabilities,
+        None,
+    )
+}
+
+/// [`create_api_key`] plus the 0160 hire envelope. `cap_hire` is stored ON
+/// only when `capabilities.hire` AND `hire_limits` is given (a hire door
+/// without limits would be fail-closed anyway; never store a half-key).
+/// The caller (the mint route) has already checked the owner confirm.
+pub fn create_api_key_ex(
+    label: &str,
+    anthropic_key: Option<&str>,
+    allowed_workspaces: Option<&str>,
+    provider: Option<&str>,
+    base_url: Option<&str>,
+    capabilities: Option<ApiCapabilities>,
+    hire_limits: Option<&str>,
+) -> Result<(String, String), String> {
     let id = uuid::Uuid::new_v4().to_string();
     let raw = generate_raw_key();
     let key_hash = sha256_hex(&raw);
@@ -540,6 +581,11 @@ pub fn create_api_key(
     let cap_canon = if caps.canonical_message { 1i64 } else { 0 };
     let cap_sbx = if caps.sandboxes { 1i64 } else { 0 };
     let cap_db = if caps.db { 1i64 } else { 0 };
+    let hire_stored: Option<&str> = match hire_limits {
+        Some(h) if caps.hire && !h.trim().is_empty() => Some(h.trim()),
+        _ => None,
+    };
+    let cap_hire = if hire_stored.is_some() { 1i64 } else { 0 };
 
     // K2 vault (0148): the BYO credential goes into the vault; the row keeps
     // only its reference.
@@ -553,8 +599,9 @@ pub fn create_api_key(
     conn.execute(
         "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
          allowed_workspaces, provider, base_url, \
-         cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref) \
-         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref, \
+         cap_hire, hire_limits) \
+         VALUES (?1, ?2, ?3, ?4, 'owner', ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         // Deliberately keep the raw key + LLM credential OUT of any error string.
         rusqlite::params![
             id,
@@ -570,6 +617,8 @@ pub fn create_api_key(
             cap_sbx,
             cap_db,
             anthropic_ref,
+            cap_hire,
+            hire_stored,
         ],
     )
     .map_err(|e| format!("DB insert failed: {e}"))?;
@@ -634,7 +683,8 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
             "SELECT id, label, scope, created_at, revoked_at, disabled_at, \
                     ((anthropic_api_key IS NOT NULL AND TRIM(anthropic_api_key) <> '') OR anthropic_secret_ref IS NOT NULL), \
                     allowed_workspaces, provider, base_url, \
-                    cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db \
+                    cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, \
+                    cap_hire, hire_limits, legacy_new_workspace \
              FROM api_keys ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
@@ -660,7 +710,12 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                     canonical_message: row.get::<_, i64>(11)? != 0,
                     sandboxes: row.get::<_, i64>(12)? != 0,
                     db: row.get::<_, i64>(13)? != 0,
+                    hire: row.get::<_, i64>(14)? != 0,
                 },
+                hire_limits: row
+                    .get::<_, Option<String>>(15)?
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok()),
+                legacy_new_workspace: row.get::<_, i64>(16)? != 0,
             })
         })
         .map_err(|e| format!("DB query failed: {e}"))?;
@@ -692,7 +747,8 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref, \
+                cap_hire \
          FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![key_hash],
@@ -708,6 +764,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
             let cap_sbx: i64 = row.get(8)?;
             let cap_db: i64 = row.get(9)?;
             let anthropic_ref: Option<String> = row.get(10)?;
+            let cap_hire: i64 = row.get(11)?;
             Ok(ApiPrincipal {
                 id,
                 // Treat a blank stored value as absent (parity with B3a).
@@ -725,6 +782,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
                     canonical_message: cap_canon != 0,
                     sandboxes: cap_sbx != 0,
                     db: cap_db != 0,
+                    hire: cap_hire != 0,
                 },
             })
         },
@@ -747,7 +805,8 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
     let conn = db.lock();
     conn.query_row(
         "SELECT id, anthropic_api_key, scope, allowed_workspaces, provider, base_url, \
-                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref \
+                cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref, \
+                cap_hire \
          FROM api_keys \
          WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
         rusqlite::params![id],
@@ -763,6 +822,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
             let cap_sbx: i64 = row.get(8)?;
             let cap_db: i64 = row.get(9)?;
             let anthropic_ref: Option<String> = row.get(10)?;
+            let cap_hire: i64 = row.get(11)?;
             Ok(ApiPrincipal {
                 id,
                 anthropic_key: crate::secret_refs::read(anthropic, anthropic_ref),
@@ -775,11 +835,56 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
                     canonical_message: cap_canon != 0,
                     sandboxes: cap_sbx != 0,
                     db: cap_db != 0,
+                    hire: cap_hire != 0,
                 },
             })
         },
     )
     .ok()
+}
+
+/// 0160 — the stored hire envelope for a live key (`None` = no hire door,
+/// no limits, revoked/disabled, or unknown id). Raw JSON; the daemon's hire
+/// module parses it and fails closed on anything it can't read.
+pub fn hire_limits_for(id: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT hire_limits FROM api_keys \
+         WHERE id = ?1 AND cap_hire = 1 AND revoked_at IS NULL AND disabled_at IS NULL",
+        rusqlite::params![id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// 0160 T19 — may this live key still create new workspaces on `POST /v1/w`
+/// without the hire scope (pre-0.45.6 `*` keys only)?
+pub fn legacy_new_workspace(id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT legacy_new_workspace FROM api_keys \
+         WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
+        rusqlite::params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .unwrap_or(false)
+}
+
+/// The non-secret label of a key (audit rows). `None` when unset/unknown.
+pub fn key_label(id: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT label FROM api_keys WHERE id = ?1",
+        rusqlite::params![id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
 }
 
 #[cfg(test)]
@@ -1237,6 +1342,7 @@ mod tests {
             canonical_message: false,
             sandboxes: true,
             db: false,
+            hire: false,
         };
         let (id, raw) =
             create_api_key("cap-hs-sbx", None, Some("*"), None, None, Some(caps)).expect("create");

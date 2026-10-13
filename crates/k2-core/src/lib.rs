@@ -159,6 +159,8 @@ pub mod git_identity;
 // post-refactor. Was [`agents::heartbeat`]; the `agents/` back-compat
 // alias remains for one release cycle.
 pub mod heartbeats;
+// Agent hire through the v1 API: one core for every door (0.45.6).
+pub mod hire;
 /// Home avatar cache: `~/.k2/cache/agent-avatars/` (prd-home-picker-and-remote-avatars-v1 S3).
 pub mod home_avatars;
 // Phase 2.5c: workspace lifecycle + state + identity + launch helpers.

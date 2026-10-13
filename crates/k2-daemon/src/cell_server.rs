@@ -678,6 +678,15 @@ mod unix_impl {
             // K2 compute nodes: the agent verbs for THIS cell's session
             // (owner verbs never pass require_hook on this socket). The two
             // node sockets are TCP-only.
+            // Agent hire over the cell socket: the bound session's passport.
+            // Only the agent-verb hire paths pass require_hook here.
+            p if crate::hire_routes::is_route(p) => {
+                if body.len() > crate::hire_routes::MAX_BODY {
+                    return from_cli(crate::hire_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::hire_routes::handle_cli(p, who, is_post, body, params, None))
+            }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

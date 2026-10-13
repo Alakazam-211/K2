@@ -1281,6 +1281,22 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0159_workspace_handle_tombstones",
             include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
         ),
+        // 0160 — agent hire through the v1 API (prd-agent-hire-templates-v1,
+        // "build A only", 0.45.6): api_keys.cap_hire / hire_limits /
+        // legacy_new_workspace, hire_settings (the owner-set root),
+        // agent_instances + agent_instance_members (the ledger) and
+        // hire_events (audit). 0158 stays reserved; the integrator
+        // renumbers on slips.
+        (
+            "0160_agent_hire",
+            include_str!("../../drizzle_sql/0160_agent_hire.sql"),
+        ),
+        // 0161 — team links (workspace_relations.origin_link_id + team_links)
+        // and msg_deliveries for the `k2 msg who` sender check (S6/S7).
+        (
+            "0161_team_links_and_deliveries",
+            include_str!("../../drizzle_sql/0161_team_links_and_deliveries.sql"),
+        ),
         // 0162 — the per-agent "Manage K2 projects" switch
         // (projects.agents_can_manage_projects, DEFAULT 1 = today's
         // behaviour). 0160–0161 belong to the v1 hire API (0.45.6) and 0158
@@ -1291,8 +1307,8 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         ),
         // 0163 — Garden v3 data sources and triggers
         // (prd-garden-v3-external-data-cards-v1, contract-sources-v1 §2).
-        // 0160/0161 (hire API) and 0162 (App key) sit before it when they
-        // land; 0164 is reserved for webhook push. The integrator renames
+        // 0160/0161 (hire API) and 0162 (projects switch) sit before it;
+        // 0164 is reserved for webhook push. The integrator renames
         // this to 0166+ if integ/0.46.0 (0165) lands first.
         ("0163_sources", include_str!("../../drizzle_sql/0163_sources.sql")),
     ];
@@ -1983,6 +1999,8 @@ mod tests {
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
                 "0159_workspace_handle_tombstones",
+                "0160_agent_hire",
+                "0161_team_links_and_deliveries",
                 "0162_agents_manage_projects",
                 "0163_sources",
             ],

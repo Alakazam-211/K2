@@ -468,7 +468,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 _ => err(k, "sources is \"config\" (the placement's config.source names them) or a list of source names".into()),
             },
             "net" | "secrets" => {
-                err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes in a later version"))
+                err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" (k2 study data-sources)"))
             }
             other => {
                 if let Some((_, ty)) = RESERVED_KEYS.iter().find(|(r, _)| *r == other) {

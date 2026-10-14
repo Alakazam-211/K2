@@ -46,9 +46,8 @@ pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 /// The frame script's size cap (UWA5).
 pub const FRAME_MAX_BYTES: usize = 16 * 1024;
 
-/// The guide page's line cap (FC33's 80, plus room for Garden v3's
-/// `sources:read` group: one header and six verb lines).
-pub const GUIDE_MAX_LINES: usize = 90;
+/// The guide page's line cap (FC33).
+pub const GUIDE_MAX_LINES: usize = 80;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -587,35 +586,24 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
     s.push_str(&format!("\nEvery call may also fail with {}.\n\n", ALWAYS_ERRORS.join(", ")));
     for line in [
         "ALSO ON k2",
-        "  k2.call(verb, ...args), k2.subscribe(verb, ...args, cb) (alias k2.on):",
-        "  the same verbs by name. await k2.connected first: K2 connects the frame",
-        "  after your top-level script runs, and until then k2.can is false and",
-        "  k2.config, k2.widget, k2.motion are empty (calls wait on their own).",
-        "  k2.can(verb): advice for drawing; K2 still checks every call.",
-        "  k2.ready() once drawn. k2.asset(name). A refused call rejects with K2Error",
-        "  (.code, .message, .verb, .cap, .room, .feature). Subscribes return the",
-        "  unsubscribe; pass onError after cb (k2.thread.subscribe(addr, cb,",
-        "  onError)) to hear a refused subscription (it ends; without onError K2",
-        "  logs it as a widget error).",
+        "  k2.call(verb, ...args), k2.subscribe(verb, ...args, cb) (alias k2.on).",
+        "  await k2.connected first: until then k2.can is false and k2.config,",
+        "  k2.widget, k2.motion are empty (calls wait on their own). k2.can(verb)",
+        "  is advice; K2 checks every call. k2.ready() once drawn. k2.asset(name).",
+        "  A refused call rejects with K2Error (.code .message .verb .cap .room",
+        "  .feature .last). Pass onError after cb to hear a refused subscription.",
         "",
-        "USING THE WHOLE CANVAS ([layout] canvas = \"full\")",
-        "  K2's top band (about 52 px) drags the window, so clicks there never",
-        "  reach you. k2.canvas.setHitRegions(rects) cuts holes in it: rects are",
-        "  {x, y, width, height} in CSS px of your frame's viewport (pass",
-        "  el.getBoundingClientRect()); each call replaces the last, [] clears,",
-        "  32 at most. K2's controls always win where a rect covers them, and a",
-        "  little drag space always stays. k2.window.startDrag() in a mousedown",
-        "  makes any element of yours drag the window.",
+        "WHOLE CANVAS ([layout] canvas = \"full\"): K2's top band (about 52 px)",
+        "  drags the window. k2.canvas.setHitRegions(rects) cuts holes in it (CSS",
+        "  px rects of your viewport, el.getBoundingClientRect(); [] clears; 32 at",
+        "  most; K2's controls win). k2.window.startDrag() in a mousedown drags it.",
         "",
-        "RULES",
-        "  textContent for anything an agent wrote, never innerHTML. No onclick=:",
-        "  use addEventListener in a script file. Files via k2.asset(). Check with",
-        "  k2 zen validate --widget <name>; it works as soon as it's placed.",
-        "  Posting pauses after 120 posts (or 20 identical ones to one agent) in",
-        "  10 minutes, until the person clicks Resume on the widget (sending_off).",
+        "RULES: textContent for anything an agent wrote, never innerHTML; no",
+        "  onclick= (addEventListener in a script file). Check with k2 zen validate",
+        "  --widget <name>. Posting pauses after 120 posts (or 20 identical ones to",
+        "  one agent) in 10 minutes, until the person clicks Resume (sending_off).",
         "",
-        "Types: sdk/generated/k2.d.ts in the K2 repo. Caps in K2's words: the",
-        "k2-zen skill.",
+        "Types: sdk/generated/k2.d.ts. Caps in K2's words: the k2-zen skill.",
     ] {
         s.push_str(line);
         s.push('\n');

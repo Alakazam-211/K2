@@ -1335,6 +1335,10 @@ mod unix_impl {
         /// agent verb belongs on this socket).
         #[test]
         fn every_agent_get_verb_is_known_on_the_cell_socket() {
+            // The sweep calls the mail GET verbs, which can read the
+            // singleton mail_server row: hold its lock so no parallel
+            // test's row (and mock Stalwart) leaks in (soak 2026-10-14).
+            let _mail = crate::mail::mail_server_test_lock();
             let _home = crate::test_support::TempHome::new();
             let _ = k2_core::db::init_for_tests();
             let p = principal();

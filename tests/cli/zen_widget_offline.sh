@@ -55,7 +55,7 @@ assert_eq "--widget without a name" "$rc" "2"
 echo "== help and the manifest =="
 run zen --help
 assert_eq "zen help exits 0" "$rc" "0"
-assert_contains "help lists widget new" "$out" "k2 zen widget new <name> [--from k2:diary|hello|arcade|board-lite]"
+assert_contains "help lists widget new" "$out" "k2 zen widget new <name> [--from k2:diary|hello|arcade]"
 assert_contains "help lists validate --widget" "$out" "--widget <name>"
 assert_contains "help says widgets need no permissions" "$out" "no permissions, no review"
 case "$out" in *"click Review"*|*"widget revoke"*) bad "help still sends people to a review or a revoke" ;; *) ok "help has no review or revoke" ;; esac

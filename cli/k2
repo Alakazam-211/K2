@@ -45049,7 +45049,7 @@ USAGE
   k2 zen theme set <name> [--garden <name|id>] [--json]
   k2 zen theme set --garden <name|id> --clear
   k2 zen theme new <name> [--from <theme>] [--json]
-  k2 zen widget new <name> [--from k2:diary|hello|arcade|board-lite] [--json]
+  k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
   k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen reload [--json]

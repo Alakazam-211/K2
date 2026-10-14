@@ -137,6 +137,22 @@ fn the_first_signer_of_a_hash_wins_and_only_the_person_claims() {
 }
 
 #[test]
+fn widget_rows_carry_their_maker() {
+    let _d = door(&["store:read", "store:write"]);
+    let made = || -> Value {
+        let (code, v) = zen("/cli/zen/widgets", true, &Caller::Owner, Value::Null);
+        assert_eq!(code, 200, "{v}");
+        let rows = v["widgets"].as_array().expect("rows").clone();
+        rows.into_iter().find(|r| r["name"] == "board").expect("board row")["madeBy"].clone()
+    };
+    assert_eq!(made(), json!({"kind": "unclaimed"}), "nobody signed it yet");
+    zen("/cli/zen/widget/sign", false, &passport("w-builder"), json!({"widget": "board"}));
+    assert_eq!(made()["handle"], "board-builder");
+    zen("/cli/zen/widget/claim", true, &Caller::Owner, json!({"widget": "board"}));
+    assert_eq!(made(), json!({"kind": "owner"}));
+}
+
+#[test]
 fn sign_needs_a_clean_folder_and_new_stamps_its_maker() {
     let d = door(&["store:read", "store:write"]);
     std::fs::write(d.f.widget_dir("board").join("manifest.json"), "{ not json").expect("break");

@@ -907,7 +907,7 @@ pub mod show;
 
 #[cfg(test)]
 #[path = "widget_sources_tests.rs"]
-mod sources_tests;
+mod data_source_card_tests;
 
 #[cfg(test)]
 #[path = "widget_store_tests.rs"]

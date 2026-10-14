@@ -391,6 +391,10 @@ async fn wallet_routes_end_to_end() {
     assert_eq!(js(&r)["login"]["url"], Value::Null, "only the starter sees the URL");
     let r = post(port, "/cli/llm/accounts/login/input", &other, json!({"loginId": login_id, "text": "nope"}));
     assert_eq!(r.status, 403, "{}", r.body);
+    // A token can't become the server default while it signs in.
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": work_id}));
+    assert_eq!(r.status, 409, "switch mid sign-in: {}", r.body);
+    assert_eq!(code(&r), "signing_in");
     // Passports never reach a login terminal.
     let r = get(port, &format!("/cli/llm/accounts/login/status?loginId={login_id}"), &pp);
     assert_eq!(r.status, 403);
@@ -437,6 +441,19 @@ async fn wallet_routes_end_to_end() {
     let default_id = default["id"].as_str().unwrap();
     let default_slot = env.home.join(format!(".k2/llm-accounts/claude/{default_id}/.credentials.json"));
     assert_eq!(std::fs::read_to_string(&default_slot).unwrap(), refreshed, "outgoing saved back");
+    // Claude's `/status` reads oauthAccount from ~/.claude.json: it now
+    // names the new default's account (field bug 2026-10-14).
+    assert_eq!(v["switch"]["fromLabel"], "Default");
+    assert_eq!(v["switch"]["toLabel"], "Work");
+    assert_eq!(v["switch"]["profileSwapped"], true, "{}", r.body);
+    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(env.home.join(".claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["oauthAccount"]["emailAddress"], "second@example.test");
+    let claude_doc = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let t = tool_doc(&claude_doc, "claude");
+    assert_eq!(t["switchedBy"], "login:member1", "who made it the default");
+    assert!(t["switchedAt"].as_i64().is_some_and(|x| x > 0), "since when: {t}");
+    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("claude default Default → Work"), "one audit line per switch: {audit}");
 
     // A Connect login is how a desktop window on ANOTHER computer reads this
     // server (Settings → LLMs per server, 0.45.1): it gets this server's
@@ -493,6 +510,61 @@ async fn wallet_routes_end_to_end() {
     let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
     assert!(!audit.contains(MARKER) && !audit.contains(PASTED), "audit stays clean");
     assert!(audit.contains("llm_accounts.switch"), "switch is audited: {audit}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn switch_refuses_to_save_another_accounts_live_login_and_audits_it() {
+    let env = setup();
+    let d = futures_block(test_harness::start(OWNER));
+    reset_wallet_tables();
+    let port = d.port;
+    let live = env.home.join(".claude/.credentials.json");
+    std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+    let first = format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-1","refreshToken":"{MARKER}-rt-1","expiresAt":4000000000000}}}}"#);
+    std::fs::write(&live, &first).unwrap();
+    std::fs::write(
+        env.home.join(".claude.json"),
+        r#"{"numStartups": 3, "oauthAccount": {"accountUuid": "uuid-first", "emailAddress": "first@example.test"}}"#,
+    )
+    .unwrap();
+    k2_daemon::llm_accounts_runtime::boot_import();
+    let r = post(port, "/cli/llm/accounts/add", OWNER, json!({"tool":"claude","label":"Work","mode":"other_device"}));
+    assert_eq!(r.status, 200, "add: {}", r.body);
+    let v = js(&r);
+    let login_id = v["login"]["loginId"].as_str().unwrap().to_string();
+    let work_id = v["account"]["id"].as_str().unwrap().to_string();
+    poll_login(port, &login_id, |l| l["state"] == "waiting_for_code");
+    post(port, "/cli/llm/accounts/login/input", OWNER, json!({"loginId": login_id, "text": PASTED}));
+    let st = poll_login(port, &login_id, |l| l["done"] == true);
+    assert_eq!(st["state"], "signed_in", "{st}");
+    let default_id = account_by_label(&js(&get(port, "/cli/llm/accounts/list", OWNER)), "claude", "Default")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let default_slot = env.home.join(format!(".k2/llm-accounts/claude/{default_id}/.credentials.json"));
+    let default_before = std::fs::read_to_string(&default_slot).unwrap();
+
+    // Someone ran `/login` as a third account outside K2: Claude rewrote
+    // both the token and ~/.claude.json. K2 still thinks Default is live.
+    let third = format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-3","refreshToken":"{MARKER}-rt-3","expiresAt":4000000000000}}}}"#);
+    std::fs::write(&live, &third).unwrap();
+    std::fs::write(
+        env.home.join(".claude.json"),
+        r#"{"numStartups": 3, "oauthAccount": {"accountUuid": "uuid-third", "emailAddress": "third@example.test"}}"#,
+    )
+    .unwrap();
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": work_id}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(code(&r), "account_mismatch");
+    assert!(r.body.contains("third@example.test") && r.body.contains("first@example.test"), "{}", r.body);
+    assert!(!r.body.contains(MARKER));
+    assert_eq!(std::fs::read_to_string(&default_slot).unwrap(), default_before, "Default's slot never got the third account's token");
+    assert_eq!(std::fs::read_to_string(&live).unwrap(), third, "live untouched");
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    assert_eq!(tool_doc(&list, "claude")["activeId"], default_id.as_str(), "default unchanged");
+    let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("llm_accounts.switch_refused") && audit.contains("account_mismatch"), "refusal audited: {audit}");
+    assert!(!audit.contains(MARKER));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

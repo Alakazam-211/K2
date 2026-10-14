@@ -11283,13 +11283,33 @@ import json, sys
 want = sys.argv[1]
 v = json.load(sys.stdin)
 
-def usage_summary(u):
+import time
+
+def ago(ts):
+    # "checked 12 min ago"; ts is unix seconds.
+    if not ts:
+        return "never checked"
+    d = max(0, int(time.time()) - int(ts))
+    if d < 60:
+        return "checked just now"
+    if d < 3600:
+        return "checked %d min ago" % (d // 60)
+    if d < 86400:
+        return "checked %d h ago" % (d // 3600)
+    return "checked %d d ago" % (d // 86400)
+
+def usage_summary(u, checked):
     if not u:
         return "-"
     wins = u.get("windows") or []
     if wins:
-        return " · ".join("%s %d%%" % (w.get("label", "?"), round(float(w.get("used", 0)) * 100)) for w in wins)
-    return u.get("status") or "-"
+        s = " · ".join("%s %d%%" % (w.get("label", "?"), round(float(w.get("used", 0)) * 100)) for w in wins)
+    else:
+        s = u.get("status") or "-"
+    s += " (%s)" % ago(checked)
+    if u.get("error"):
+        s += " [last check failed: %s]" % u["error"]
+    return s
 
 for t in v.get("tools", []):
     name = t.get("tool")
@@ -11306,7 +11326,12 @@ for t in v.get("tools", []):
         else:
             print("%s: no tokens (add a subscription: k2 llm tokens add %s <label>)" % (disp, name))
         continue
-    print("%s:" % disp)
+    since = ""
+    if t.get("switchedAt"):
+        since = " (server default since %s%s)" % (
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(int(t["switchedAt"]))),
+            (" by %s" % t["switchedBy"]) if t.get("switchedBy") else "")
+    print("%s:%s" % (disp, since))
     for a in accts:
         mark = "*" if a.get("active") else " "
         if a.get("kind") == "api_key":
@@ -11314,7 +11339,8 @@ for t in v.get("tools", []):
                                             "API token · billed per token")
         else:
             line = "  %s %-20s %-12s %-8s %s" % (mark, (a.get("label") or "-")[:20], a.get("state") or "-",
-                                                 (a.get("plan") or "-")[:8], usage_summary(a.get("usage")))
+                                                 (a.get("plan") or "-")[:8],
+                                                 usage_summary(a.get("usage"), a.get("usageCheckedAt")))
         print(line.rstrip())
         pins = a.get("pinnedTo") or []
         if pins:
@@ -11683,10 +11709,16 @@ import json, sys
 v = json.load(sys.stdin)
 s = v.get("switch") or {}
 a = v.get("account") or {}
+tool = s.get("tool") or a.get("tool")
 if s.get("alreadyActive"):
-    print("%s: %s is already the server default" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
+    print("%s: %s is already the server default" % (tool, a.get("label") or s.get("to")))
 else:
-    print("%s: server default is now %s" % (s.get("tool") or a.get("tool"), a.get("label") or s.get("to")))
+    was = (" (was %s)" % s["fromLabel"]) if s.get("fromLabel") else ""
+    print("%s: server default is now %s%s" % (tool, a.get("label") or s.get("toLabel") or s.get("to"), was))
+    for w in v.get("warnings") or []:
+        print("WARN: %s" % w)
+    if tool == "claude" and not s.get("profileSwapped"):
+        print("Note: ~/.claude.json was not updated, so Claude /status may still name the previous account.")
     print("Changing the server default token affects every chat that uses Server default on this server.")
 '
 }

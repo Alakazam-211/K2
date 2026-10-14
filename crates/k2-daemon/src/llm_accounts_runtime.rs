@@ -849,10 +849,78 @@ fn grok_warm(slot: &Path) -> Result<(), String> {
     }
 }
 
+/// May the daemon call a vendor about a login (identity, usage after a
+/// switch)? Never under air-gap, never when usage probes are denied, and
+/// never from tests (agent shim dir or a temp HOME: fake tokens never
+/// leave the machine).
+pub fn vendor_calls_allowed() -> bool {
+    if k2_core::airgap::enabled() {
+        return false;
+    }
+    if std::env::var_os("K2_SUBSCRIPTION_PROBE").as_deref() == Some(std::ffi::OsStr::new("deny")) {
+        return false;
+    }
+    let g = k2_core::terminal::agent_spawn_guard::GuardEnv::from_process();
+    !g.home_is_temp() && g.shim_dirs.is_none()
+}
+
+/// Claude's own account check (Claude Code 2.1.300 `hYe`): the profile
+/// of the account an OAuth access token belongs to.
+const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+
+/// Which account a Claude credential belongs to, asked of Anthropic with
+/// the credential's own access token. The token never leaves this
+/// function except as the bearer header; errors are logged by status
+/// only. `None` when it can't tell (expired token, offline, 4xx).
+fn claude_identify(cred: &[u8]) -> Option<k2_core::llm_accounts::identity::AccountIdentity> {
+    let v: Value = serde_json::from_slice(cred).ok()?;
+    let o = &v["claudeAiOauth"];
+    let token = o["accessToken"].as_str().filter(|s| !s.is_empty())?;
+    if let Some(exp) = o["expiresAt"].as_i64() {
+        let exp_s = if exp > 1_000_000_000_000 { exp / 1000 } else { exp };
+        if exp_s <= chrono::Utc::now().timestamp() + 30 {
+            return None;
+        }
+    }
+    // Short: a switch holds the wallet lock (and the DB) while it asks.
+    // A slow answer means "can't tell", never a refusal.
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(6))
+        .build()
+        .ok()?;
+    let resp = client
+        .get(CLAUDE_PROFILE_URL)
+        .bearer_auth(token)
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("Accept", "application/json")
+        .send();
+    let resp = match resp {
+        Ok(r) => r,
+        Err(_) => {
+            k2_core::log_debug!("[llm-accounts] claude profile check: request failed");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        k2_core::log_debug!("[llm-accounts] claude profile check: status {}", resp.status().as_u16());
+        return None;
+    }
+    let body: Value = serde_json::from_str(&resp.text().ok()?).ok()?;
+    k2_core::llm_accounts::identity::AccountIdentity::from_claude_profile_response(&body)
+}
+
 /// The daemon's refresher for idle wallet slots.
 pub struct DaemonRefresher;
 
 impl wallet::Refresher for DaemonRefresher {
+    fn identify(&self, tool: Tool, cred: &[u8]) -> Option<k2_core::llm_accounts::identity::AccountIdentity> {
+        if tool != Tool::Claude || !vendor_calls_allowed() {
+            return None;
+        }
+        claude_identify(cred)
+    }
+
     fn refresh(&self, tool: Tool, id: &str) -> Result<(), String> {
         if k2_core::airgap::enabled() {
             return Err(k2_core::airgap::TEACHING.to_string());
@@ -895,16 +963,32 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
     } else {
         None
     };
-    let row = crate::subscription_usage::probe_wallet_slot(tool.as_str(), &slot, claude_token);
+    // The slot's own last reading (never another token's): a failed
+    // check keeps it with its old time.
+    let prev: Option<crate::subscription_usage::HarnessUsage> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet_core::get(&conn, &entry.id)
+            .ok()
+            .flatten()
+            .and_then(|e| e.usage_json)
+            .and_then(|s| serde_json::from_str(&s).ok())
+    };
+    let row = crate::subscription_usage::probe_wallet_slot(tool.as_str(), &slot, claude_token, prev.as_ref());
     let text = serde_json::to_string(&row).map_err(|e| e.to_string())?;
     let db = k2_core::db::shared();
     let conn = db.lock();
+    // A switch may have made it live while the check ran: then the shared
+    // probe owns its row.
+    if active_is(tool, &entry.id) {
+        return Ok(());
+    }
     wallet_core::update_meta(
         &conn,
         &entry.id,
         &wallet_core::MetaUpdate {
             usage_json: Some(text),
-            usage_checked_at: Some(chrono::Utc::now().timestamp()),
+            usage_checked_at: if row.error.is_none() { Some(chrono::Utc::now().timestamp()) } else { None },
             ..Default::default()
         },
     )

@@ -201,19 +201,22 @@ prc=$?
 set -e
 info "podman info as k2app (rc $prc): $(echo "$pinfo" | tail -n 2 | tr '\n' ' ')"
 
-echo "== nft: App sockets reach only the gateway/proxy/db ports =="
+echo "== nft: App sockets reach only the proxy/db ports (gateway ports: per-App rules only) =="
 req agent apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply (open)"
 # Capture first: with pipefail, `nft … | grep -q` fails when grep exits
 # early and nft takes SIGPIPE.
 TABLE="$(inns nft list table inet k2app)"
-grep -q "chain k2app_v1" <<<"$TABLE" || fail "chain"
-grep -q "meta skuid $U jump k2app_v1" <<<"$TABLE" || fail "skuid rule: $TABLE"
+grep -q "chain k2app_v2" <<<"$TABLE" || fail "chain"
+grep -q "meta skuid $U jump k2app_v2" <<<"$TABLE" || fail "skuid rule: $TABLE"
+grep -q "chain k2app_apps" <<<"$TABLE" || fail "per-App chain"
 req daemon apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply again (atomic replace)"
 [ "$(inns nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
 inns python3 -m http.server 38650 --bind 127.0.0.1 >/dev/null 2>&1 &
 L1=$!
+inns python3 -m http.server 38910 --bind 127.0.0.1 >/dev/null 2>&1 &
+L4=$!
 inns python3 -m http.server 9999 --bind 127.0.0.1 >/dev/null 2>&1 &
 L2=$!
 inns python3 -m http.server 9998 --bind 0.0.0.0 >/dev/null 2>&1 &
@@ -222,7 +225,8 @@ sleep 1
 MYIP=203.0.113.1
 as_app() { inns runuser -u k2app -- curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true; }
 as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null || true; }
-[ "$(as_app http://127.0.0.1:38650/)" = 200 ] || fail "k2app → gateway port"
+[ "$(as_app http://127.0.0.1:38910/)" = 200 ] || fail "k2app → proxy port"
+[ "$(as_app http://127.0.0.1:38650/)" = 000 ] || fail "k2app outside any App cgroup → a gateway port was allowed"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "k2app → another loopback port was allowed"
 [ "$(as_app "http://$MYIP:9998/")" = 000 ] || fail "k2app → this host's own address was allowed"
 [ "$(as_k2 http://127.0.0.1:9999/)" = 200 ] || fail "the daemon user must be unaffected (loopback)"
@@ -234,8 +238,8 @@ inns nft delete table inet k2app
 req daemon apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft re-apply"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "re-applied table does not drop"
-kill "$L1" "$L2" "$L3"
-ok "k2app: gateway port yes; other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
+kill "$L1" "$L2" "$L3" "$L4"
+ok "k2app: proxy port yes; gateway ports without a per-App rule, other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
 
 echo "== the process exception (system unit, User=k2app) =="
 req daemon apps process-unit on

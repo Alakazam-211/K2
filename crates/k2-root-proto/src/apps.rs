@@ -103,8 +103,14 @@ pub const DB_PORTS: PortRange = PortRange {
 /// The nftables table. Coexists with the old sandbox's `k2sandbox_<uid>`
 /// tables (AR24).
 pub const NFT_TABLE: &str = "k2app";
-/// The chain name doubles as the ruleset version marker.
-pub const NFT_CHAIN: &str = "k2app_v1";
+/// The chain name doubles as the ruleset version marker (v2: gateway
+/// ports only through per-App rules, runtime slice 3).
+pub const NFT_CHAIN: &str = "k2app_v2";
+/// The per-App chain (`apps nft app`): one accept per App for its own
+/// gateway port, matched on the App's cgroup.
+pub const NFT_APPS_CHAIN: &str = "k2app_apps";
+/// `apps nft app` state: which App owns which gateway port.
+pub const NFT_APPS_STATE: &str = "/var/lib/k2-root-helper/apps-nft.json";
 
 /// io.cost lives only at the cgroup v2 root.
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
@@ -115,6 +121,7 @@ pub const LOGINCTL: &str = "/usr/bin/loginctl";
 pub const USERMOD: &str = "/usr/sbin/usermod";
 pub const NFT: &str = "/usr/sbin/nft";
 pub const ENV: &str = "/usr/bin/env";
+pub const SYSTEMD_TMPFILES: &str = "/usr/bin/systemd-tmpfiles";
 pub const APT_GET: &str = "/usr/bin/apt-get";
 pub const DNF: &str = "/usr/bin/dnf";
 pub const PACMAN: &str = "/usr/bin/pacman";
@@ -516,15 +523,54 @@ pub fn containers_conf(rt: OciRuntime) -> String {
     )
 }
 
+/// One per-App accept: sockets in `cgroup` (a path under
+/// `/sys/fs/cgroup`, `level` components deep) may reach `gw_port` on
+/// loopback. nft resolves the path to the cgroup's inode when the rule
+/// loads (W §2.12), so the daemon re-applies after every App start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppRule {
+    pub cgroup: String,
+    pub level: u32,
+    pub gw_port: u16,
+}
+
+/// The cgroup paths an App's sockets can live in: its container slice
+/// inside `user@<k2app>` (pasta and conmon run in the App's unit there),
+/// and its `process`-exception system unit.
+pub fn app_cgroups(uid: u32, id: &AppId) -> [(String, u32); 2] {
+    [
+        (
+            format!(
+                "user.slice/user-{uid}.slice/user@{uid}.service/{APPS_SLICE}/k2apps-{}.slice",
+                id.unit_safe()
+            ),
+            5,
+        ),
+        (format!("{APPS_SLICE}/{}", id.process_unit()), 2),
+    ]
+}
+
+fn app_rule_line(r: &AppRule) -> String {
+    format!(
+        "socket cgroupv2 level {} \"{}\" oifname \"lo\" tcp dport {} accept",
+        r.level, r.cgroup, r.gw_port
+    )
+}
+
 /// The `inet k2app` table (§10.4, W §5.6): for sockets owned by `k2app`
 /// (container Apps reach the host through pasta, which runs as `k2app`;
-/// process Apps run as `k2app`), allow replies, loopback TCP to the three
-/// ranges, and drop everything else: other loopback ports, any address of
+/// process Apps run as `k2app`), allow replies, each App's own gateway
+/// port (per-App cgroup rules, [`NFT_APPS_CHAIN`]), the egress proxy and
+/// the box's Postgres on loopback, and drop everything else: other
+/// loopback ports (other Apps' gateway ports included), any address of
 /// this host (`host.containers.internal` reached a 0.0.0.0 service in W),
 /// DNS, private and link-local nets, and the internet (egress goes through
 /// the proxy on loopback). The leading `table` + `delete table` make
-/// `nft -f` replace it atomically.
-pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange) -> String {
+/// `nft -f` replace it atomically. `gw` is the range per-App ports must
+/// sit in; nothing accepts it as a whole.
+pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
+    let _ = gw;
+    let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r))).collect();
     format!(
         "table inet {t}\n\
          delete table inet {t}\n\
@@ -533,9 +579,12 @@ pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange) -> Str
          \t\ttype filter hook output priority filter; policy accept;\n\
          \t\tmeta skuid {uid} jump {c}\n\
          \t}}\n\
+         \tchain {a} {{\n\
+         {app_lines}\
+         \t}}\n\
          \tchain {c} {{\n\
          \t\tct state established,related accept\n\
-         \t\toifname \"lo\" tcp dport {gw} accept\n\
+         \t\tjump {a}\n\
          \t\toifname \"lo\" tcp dport {px} accept\n\
          \t\toifname \"lo\" tcp dport {db} accept\n\
          \t\tfib daddr type local counter drop\n\
@@ -547,10 +596,19 @@ pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange) -> Str
          }}\n",
         t = NFT_TABLE,
         c = NFT_CHAIN,
-        gw = gw.nft(),
+        a = NFT_APPS_CHAIN,
         px = px.nft(),
         db = db.nft(),
     )
+}
+
+/// Replace only the per-App chain (`apps nft app` / `app-remove`).
+pub fn nft_apps_script(apps: &[AppRule]) -> String {
+    let mut s = format!("flush chain inet {NFT_TABLE} {NFT_APPS_CHAIN}\n");
+    for r in apps {
+        s.push_str(&format!("add rule inet {NFT_TABLE} {NFT_APPS_CHAIN} {}\n", app_rule_line(r)));
+    }
+    s
 }
 
 #[cfg(test)]
@@ -702,16 +760,31 @@ mod tests {
 
     #[test]
     fn nft_ruleset_shape() {
-        let r = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS);
+        let jobs = AppId::parse("nsi-skin").unwrap();
+        let cg = app_cgroups(997, &jobs);
+        assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice");
+        assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
+        let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601 };
+        let r = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
-        assert!(r.contains("meta skuid 997 jump k2app_v1"));
-        assert!(r.contains("oifname \"lo\" tcp dport 38600-38899 accept"));
+        assert!(r.contains("meta skuid 997 jump k2app_v2"));
+        // No App reaches the whole gateway range: only its own port, by cgroup.
+        assert!(!r.contains("38600-38899"), "{r}");
+        assert!(r.contains(
+            "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"
+        ));
+        assert!(r.contains("oifname \"lo\" tcp dport 38900-38949 accept"));
         assert!(r.contains("oifname \"lo\" tcp dport 5432 accept"));
         assert!(r.contains("fib daddr type local counter drop"));
-        // Established first, the catch-all drop last.
+        // Established first, then the per-App chain, the catch-all drop last.
         let est = r.find("ct state established").unwrap();
-        let acc = r.find("tcp dport 38600").unwrap();
-        assert!(est < acc);
+        let jump = r.find("jump k2app_apps").unwrap();
+        let px = r.find("tcp dport 38900").unwrap();
+        assert!(est < jump && jump < px);
         assert!(r.trim_end().ends_with("counter drop\n\t}\n}"));
+        let empty = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        assert!(empty.contains("\tchain k2app_apps {\n\t}\n"));
+        let sc = nft_apps_script(&[rule]);
+        assert!(sc.starts_with("flush chain inet k2app k2app_apps\nadd rule inet k2app k2app_apps socket cgroupv2 level 5 "));
     }
 }

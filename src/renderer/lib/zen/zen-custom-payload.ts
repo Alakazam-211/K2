@@ -35,8 +35,8 @@ export function zenWidgetCaps(raw: unknown): UserWidgetCap[] {
 
 /** The runaway pause (Rust `Pause`), or null. */
 export function parseZenWidgetPause(raw: unknown): ZenWidgetPause | null {
-  if (!isObj(raw) || raw.reason !== 'runaway') return null
-  return { at: str(raw.at) ?? '', reason: 'runaway' }
+  if (!isObj(raw) || (raw.reason !== 'runaway' && raw.reason !== 'writes')) return null
+  return { at: str(raw.at) ?? '', reason: raw.reason }
 }
 
 function parseFindings(raw: unknown): ZenWidgetFinding[] {

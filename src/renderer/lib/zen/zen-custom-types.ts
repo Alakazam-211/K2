@@ -25,10 +25,12 @@ import type { ZenLibRef } from './zen-lib-loader'
 export type ZenWidgetOrigin = 'local' | 'other'
 
 /** The runaway guard's pause (Rust `Pause`): posting is paused until the
- *  person clicks Resume. The widget keeps running. */
+ *  person clicks Resume. The widget keeps running. `writes` = Garden
+ *  data's guard (the same key and value written over and over): its data
+ *  writes are refused (`paused`) until Resume. */
 export interface ZenWidgetPause {
   at: string
-  reason: 'runaway'
+  reason: 'runaway' | 'writes'
 }
 
 // ── The custom widget in a resolved page (UW38) ─────────────────────────

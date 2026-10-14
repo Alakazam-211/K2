@@ -29,14 +29,23 @@ import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
 import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
+import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
+import { gardenCall } from '@/lib/garden-data/garden-data-api'
+import { onGardenDataChanged } from '@/stores/session-events'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
-import { isZenWidgetPostingPaused, pauseZenWidgetPosting, stopZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
+import {
+  isZenWidgetPostingPaused,
+  pauseZenWidgetPosting,
+  reloadZenWidget,
+  stopZenWidget,
+  zenPlacementKey,
+} from '@/lib/zen/zen-custom-run'
 import { ensureZenConversation, zenAgentRows, zenCustomViewFor } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
 import { currentZenGardenId, switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
 import { cycleZenTheme } from '@/lib/zen/zen-theme-switch'
-import { useZenConfigStore } from '@/lib/zen/zen-api'
+import { useZenConfigStore, zenLocalScope } from '@/lib/zen/zen-api'
 import { exitZen } from '@/lib/zen/zen-view'
 import { registerZenCanvasFrame, setZenCanvasRegions, startZenCanvasDrag, zenCanvasPointer } from '@/lib/zen/zen-canvas'
 
@@ -67,7 +76,7 @@ export interface ZenCustomLoadProblem {
 
 /** The `/boot-status` features the widget rows need: this daemon served the
  *  bundle, so it has them (UW36). B1's generated table names each row's. */
-export const ZEN_FRAME_FEATURES: readonly string[] = ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1', 'sources-v1']
+export const ZEN_FRAME_FEATURES: readonly string[] = ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1', 'sources-v1', 'garden-data-v1']
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
  *  variables and scheme (UW39), and reduced motion. */
@@ -210,6 +219,24 @@ export function ZenCustomFrame({
           push,
           pushError,
           sources: zenCustomSourcesFor(gardenId, () => widgetRef.current),
+          // Garden data (contract-garden-data-v1 §7): this computer's daemon,
+          // for the placement and the bundle hash this frame runs.
+          store: createZenCustomStore({
+            call: (verb, args) =>
+              gardenCall({
+                garden: gardenId,
+                placement: widgetRef.current.id,
+                hash: loadedRef.current?.hash ?? widgetRef.current.hash,
+                verb,
+                args,
+              }).then((r) => r.result),
+            onChanged: (cb) => onGardenDataChanged(zenLocalScope(), cb),
+            space: zenDataSpace(widgetRef.current.widget),
+            onStale: () => reloadZenWidget(key),
+            setTimer: (fn, ms) => window.setTimeout(fn, ms),
+            clearTimer: (t) => window.clearTimeout(t as number),
+            now: () => Date.now(),
+          }),
           stop: (reason) => stopZenWidget(key, reason),
           paused: () => widgetRef.current.paused !== null || isZenWidgetPostingPaused(key),
           pauseForRunaway: () => {

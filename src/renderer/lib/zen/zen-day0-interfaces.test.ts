@@ -31,9 +31,10 @@ describe('day-0: catalog mirror', () => {
       ]),
     )
     expect(fromTs).toEqual(fromJson)
-    expect(catalog.caps.filter((c) => c.exposure?.includes('widget')).map((c) => c.name)).toEqual([
-      ...USER_WIDGET_CAPS,
-    ])
+    // Widget caps = exposed to `widget` or `garden-local` (Garden data, contract-garden-data-v1 §7.2).
+    expect(
+      catalog.caps.filter((c) => c.exposure?.includes('widget') || c.exposure?.includes('garden-local')).map((c) => c.name),
+    ).toEqual([...USER_WIDGET_CAPS])
   })
 })
 
@@ -57,6 +58,13 @@ describe('day-0: verb tables', () => {
       // Garden v3: the data sources verbs, answered by the custom layer only.
       if (verb.startsWith('sources.')) {
         expect(row.cap).toBe('sources:read')
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
+      // Garden data: garden-local rows, answered by this computer's daemon.
+      if (verb.startsWith('store.') || verb.startsWith('save.') || verb === 'viewer.get') {
+        expect(row.reach).toBe('local')
+        expect([null, 'store:read', 'store:write']).toContain(row.cap)
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }

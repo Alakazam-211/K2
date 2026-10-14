@@ -53,6 +53,7 @@ import { ZenCanvasError, zenHitRegionsFrom } from './zen-canvas'
 import type { ZenRect } from './zen-controls'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from './zen-sources'
+import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custom-store'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -106,6 +107,10 @@ export interface ZenCustomLayerDeps {
    *  placement names (its config / manifest), the reader, and K2's Ask box.
    *  Without it the `sources.*` verbs answer `verb_unavailable`. */
   sources?: ZenCustomSources
+  /** Garden data (contract-garden-data-v1 §7): the widget's own data on
+   *  this computer (`store.*`, `save.*`, `viewer.get`, and subscribe on
+   *  `store.changes`). Without it those verbs answer `verb_unavailable`. */
+  store?: ZenCustomStore
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
   /** Is posting paused now (the runaway guard, here or in the daemon)? */
@@ -155,6 +160,10 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 /** The cap a card reads data sources with (Garden v3, contract §6). */
 export const SOURCES_READ_CAP = 'sources:read'
+
+/** `k2.store.subscribe` rides a subscription on this `garden-local` call
+ *  row (contract-garden-data-v1 §7.2: subscribe is an SDK helper). */
+export const ZEN_STORE_SUBSCRIBE_VERB = 'store.changes'
 
 /**
  * The caps a placement runs with, intersected again here (UW26 step 2:
@@ -429,6 +438,24 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     },
   }
 
+  // ── Garden data (contract-garden-data-v1 §7): the daemon checks the
+  // placement, hash, caps and the maker's rights on every call ──────────
+
+  const needStore = (verb: string): ZenCustomStore => {
+    if (!deps.store) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    return deps.store!
+  }
+  for (const verb of ZEN_STORE_VERBS) {
+    calls[verb] = async (args) => {
+      const store = needStore(verb)
+      try {
+        return await store.call(verb, args)
+      } catch (err) {
+        throw toRefusal(err)
+      }
+    }
+  }
+
   // ── subscriptions ────────────────────────────────────────────────────────
 
   const subscribers: Record<
@@ -462,6 +489,16 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       }) as () => void
       void deps.ensureConversation(address).catch((err: unknown) => console.warn(`[zen] widget Thread for ${address}:`, err))
       return off
+    },
+    // Garden data: `k2.store.subscribe(prefix, cb)` subscribes on the
+    // `store.changes` row; pushes whole revs from any writer.
+    [ZEN_STORE_SUBSCRIBE_VERB]: (args, push, fail) => {
+      const store = needStore('store.subscribe')
+      try {
+        return store.subscribe(args[0], push, fail)
+      } catch (err) {
+        throw toRefusal(err)
+      }
     },
     // Garden v3: the card view, pushed on every change; an unreachable server
     // pushes the last view greyed (reach "unreachable", phase "stale").
@@ -529,7 +566,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       const { verb, row } = lookup(m.verb)
       if (typeof m.sub === 'number') {
         const sub = m.sub
-        if (row.kind === 'call') refuse('failed', `${verb} is a call: use k2.call.`)
+        if (row.kind === 'call' && verb !== ZEN_STORE_SUBSCRIBE_VERB) refuse('failed', `${verb} is a call: use k2.call.`)
         if (subs.has(sub)) return null
         const budget = verb !== 'theme.changed'
         const thread = verb === 'thread.subscribe'
@@ -588,6 +625,9 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
 /** Any thrown value as the shared error list (UWA10). */
 export function toRefusal(err: unknown): ZenCustomRefusal {
   if (err instanceof ZenCustomRefusal) return err
+  if (err instanceof ZenStoreError) {
+    return new ZenCustomRefusal(err.wire.code, err.wire.message, err.wire.last !== undefined ? { last: err.wire.last } : {})
+  }
   if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
   if (err instanceof ZenBridgeError) {
     if (err.code === 'cap_not_granted') return new ZenCustomRefusal('cap_not_granted', err.message)

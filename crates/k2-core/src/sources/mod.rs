@@ -230,6 +230,58 @@ pub enum WakeOutcome {
 mod tests {
     use super::*;
 
+    /// The C naming rule (PRD §8, §16 "C"): sources are server data that
+    /// Apps will read too, so nothing source-related lives under `zen`:
+    /// no routes, no module, no SQL on the source tables. `zen::lock`'s
+    /// `locked_placement_sources` and the widget/bridge glue name sources
+    /// by address only.
+    #[test]
+    fn nothing_source_related_lives_under_zen() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
+                let p = e.expect("entry").path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(&root.join("src").join("zen"), &mut files);
+        let daemon = root.parent().expect("crates").join("k2-daemon").join("src");
+        for f in std::fs::read_dir(&daemon).expect("daemon src") {
+            let p = f.expect("entry").path();
+            if p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("zen")) && p.is_file() {
+                files.push(p);
+            }
+        }
+        assert!(files.len() > 10, "walk found too few zen files: {}", files.len());
+        let banned = [
+            "\"/cli/sources/",
+            "mod sources",
+            "FROM sources",
+            "INTO sources",
+            "UPDATE sources",
+            "source_state",
+            "source_items",
+            "source_points",
+            "source_triggers",
+            "source_trigger_fires",
+        ];
+        let mut hits = Vec::new();
+        for f in &files {
+            let src = std::fs::read_to_string(f).unwrap_or_else(|e| panic!("read {}: {e}", f.display()));
+            for b in banned {
+                if src.contains(b) {
+                    hits.push(format!("{}: {b}", f.display()));
+                }
+            }
+        }
+        assert!(hits.is_empty(), "source code under zen (keep it in sources/):\n{}", hits.join("\n"));
+    }
+
     #[test]
     fn address_parses_bare_and_hosted_names() {
         assert_eq!(Address::parse("fleet").unwrap(), Address { name: "fleet".into(), host: None });

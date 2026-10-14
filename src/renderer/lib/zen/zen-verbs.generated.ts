@@ -53,14 +53,15 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
 
 /**
  * The custom-widget allowlist (UW16, UWB10): catalog rows whose `exposure`
- * includes `widget`, grouped by cap. Its own table, never `ZEN_VERBS`.
+ * includes `widget` or `garden-local` (this computer's daemon, through
+ * `/cli/zen/call`), grouped by cap. Its own table, never `ZEN_VERBS`.
  */
 export const ZEN_CUSTOM_VERBS = {
   'gardens.list': { cap: null, reach: 'local', kind: 'call' },
@@ -70,6 +71,11 @@ export const ZEN_CUSTOM_VERBS = {
   'theme.changed': { cap: null, reach: 'local', kind: 'event' },
   'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
   'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
+  'save.get': { cap: null, reach: 'local', kind: 'call' },
+  'save.set': { cap: null, reach: 'local', kind: 'call' },
+  'save.remove': { cap: null, reach: 'local', kind: 'call' },
+  'save.keys': { cap: null, reach: 'local', kind: 'call' },
+  'viewer.get': { cap: null, reach: 'local', kind: 'call' },
   'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
   'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
@@ -87,6 +93,16 @@ export const ZEN_CUSTOM_VERBS = {
   'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
   'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
   'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
+  'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
+  'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.batch': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.txBegin': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 
 export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS

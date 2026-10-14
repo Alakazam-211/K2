@@ -83,6 +83,20 @@ export const CATALOG_ERROR_CODES = [
   'removed',
   'no_history',
   'failed',
+  // Garden data (contract-garden-data-v1 §7.2).
+  'conflict',
+  'space_full',
+  'value_too_large',
+  'bad_key',
+  'not_granted',
+  'resync',
+  'author_unknown',
+  'stale_widget',
+  'store_full',
+  'bad_tx',
+  'tx_expired',
+  'busy',
+  'paused',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

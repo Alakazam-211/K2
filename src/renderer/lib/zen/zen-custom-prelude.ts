@@ -22,8 +22,9 @@
 import k2Frame from '../../../../sdk/generated/k2-frame.js?raw'
 import { SEALED_FRAME_GUARD } from '../sealed-frame-guard'
 
-/** TUWA6: the runtime text the frame gets is at most this big. */
-export const K2_FRAME_MAX_BYTES = 16 * 1024
+/** TUWA6: the runtime text the frame gets is at most this big (16 KB
+ *  until Garden data's verbs and SDK helpers, contract-garden-data-v1 §7). */
+export const K2_FRAME_MAX_BYTES = 24 * 1024
 
 /** k2-frame.js: the table, then the runtime. */
 export function k2FrameScript(): string {

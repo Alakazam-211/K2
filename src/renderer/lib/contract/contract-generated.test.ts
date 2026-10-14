@@ -73,8 +73,8 @@ describe('TUWA4 twin: generated files match the catalog', () => {
     }
   })
 
-  it('the frame script stays under 16 KB (UWA5)', () => {
-    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(16 * 1024)
+  it('the frame script stays under 24 KB (UWA5, raised for Garden data)', () => {
+    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(24 * 1024)
   })
 })
 
@@ -131,6 +131,13 @@ describe('TUWA5: the generated tables', () => {
       'theme.changed': { cap: null, reach: 'local', kind: 'event' },
       'canvas.setHitRegions': { cap: null, reach: 'local', kind: 'call' },
       'window.startDrag': { cap: null, reach: 'local', kind: 'call' },
+      // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
+      // daemon answers them through /cli/zen/call.
+      'save.get': { cap: null, reach: 'local', kind: 'call' },
+      'save.set': { cap: null, reach: 'local', kind: 'call' },
+      'save.remove': { cap: null, reach: 'local', kind: 'call' },
+      'save.keys': { cap: null, reach: 'local', kind: 'call' },
+      'viewer.get': { cap: null, reach: 'local', kind: 'call' },
       'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
       'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
       'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
@@ -149,12 +156,24 @@ describe('TUWA5: the generated tables', () => {
       'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
       'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
       'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
+      'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'store.put': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.delete': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.batch': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.txBegin': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
     })
   })
 
-  it('widget caps are bridge caps (or frame-host caps: sources:read), and K2’s own caps never are widget caps (UW69)', () => {
+  it('widget caps are bridge caps (or frame-host caps: sources:read; or Garden data: store:*), and K2’s own caps never are widget caps (UW69)', () => {
     const bridgeCaps = new Set<string>(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
-    for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || c === 'sources:read', c).toBe(true)
+    const extra = ['sources:read', 'store:read', 'store:write']
+    for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
+    expect([...USER_WIDGET_CAPS]).toEqual(['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write'])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
     for (const c of ['gardens:manage', 'gardens:template', 'agents:add', 'app:navigate']) {
       expect((USER_WIDGET_CAPS as readonly string[]).includes(c), c).toBe(false)

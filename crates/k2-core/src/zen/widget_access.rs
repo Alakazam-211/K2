@@ -70,13 +70,20 @@ impl WidgetOrigin {
 /// `sources.ask` still opens the Ask box, with a draft K2 writes. The
 /// renderer applies the same rule (`zen-custom-bridge.ts`), and
 /// `k2 zen validate` warns `sources_drops_thread_post`.
+///
+/// **Garden data taint** (prd-gardens-local-services-v1 §5.6,
+/// contract-garden-data-v1 §7.1 step 4): the same widget never gets
+/// `store:write` either, so it can't copy source values into a keyspace an
+/// agent can read. It keeps `store:read`, `save.*` and `viewer.get`
+/// (`save:` is never granted to anyone). Validate warns
+/// `sources_drops_store_write`.
 pub fn effective_caps(origin: WidgetOrigin, requested: &[String]) -> Vec<String> {
     let reads_sources = requested.iter().any(|r| r == SOURCES_READ);
     match origin {
         WidgetOrigin::Local => USER_WIDGET_CAPS
             .iter()
             .filter(|c| requested.iter().any(|r| r == *c))
-            .filter(|c| !(reads_sources && **c == TAINTED_BY_SOURCES))
+            .filter(|c| !(reads_sources && TAINTED_BY_SOURCES_ALL.contains(*c)))
             .map(|c| c.to_string())
             .collect(),
     }
@@ -88,8 +95,17 @@ pub const SOURCES_READ: &str = crate::sources::SOURCES_READ_CAP;
 /// The cap a `sources:read` widget never runs with (GV48).
 pub const TAINTED_BY_SOURCES: &str = "thread:post";
 
+/// The Garden data cap a `sources:read` widget never runs with.
+pub const STORE_WRITE_TAINTED: &str = "store:write";
+
+/// Every cap a `sources:read` widget loses.
+pub const TAINTED_BY_SOURCES_ALL: &[&str] = &[TAINTED_BY_SOURCES, STORE_WRITE_TAINTED];
+
 /// The `k2 zen validate` warning code for a manifest that asks for both.
 pub const SOURCES_DROPS_THREAD_POST: &str = "sources_drops_thread_post";
+
+/// The `k2 zen validate` warning for `sources:read` + `store:write`.
+pub const SOURCES_DROPS_STORE_WRITE: &str = "sources_drops_store_write";
 
 /// Why posting is paused (R6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +114,10 @@ pub enum PauseReason {
     /// The renderer's runaway guard tripped: more than 120 posts in 10
     /// minutes, or 20 identical texts to one agent in 10 minutes.
     Runaway,
+    /// Garden data's runaway guard tripped (the daemon's, PRD §6.3): the
+    /// same key and value written over and over. Its data writes are
+    /// refused (`paused`) until the person's Resume.
+    Writes,
 }
 
 /// A runaway pause on one placement. While set, the widget keeps running
@@ -182,6 +202,16 @@ mod tests {
         assert_eq!(plain, s(&["thread:post"]), "without sources:read nothing changes");
     }
 
+    /// Garden data: asking for sources:read drops store:write too, and keeps
+    /// store:read (contract-garden-data-v1 §7.1 step 4).
+    #[test]
+    fn sources_read_drops_store_write_and_keeps_store_read() {
+        let caps = effective_caps(WidgetOrigin::Local, &s(&["store:write", "store:read", "sources:read"]));
+        assert_eq!(caps, s(&["sources:read", "store:read"]));
+        let plain = effective_caps(WidgetOrigin::Local, &s(&["store:write", "store:read"]));
+        assert_eq!(plain, s(&["store:read", "store:write"]), "without sources:read a widget keeps both");
+    }
+
     #[test]
     fn effective_caps_never_include_a_non_widget_cap() {
         let caps = effective_caps(WidgetOrigin::Local, &s(&["agents:read", "files:write", "zen:exit", "tickets:read"]));
@@ -226,17 +256,22 @@ mod tests {
     #[test]
     fn user_widget_caps_match_the_catalog() {
         use crate::contract::{catalog, Exposure};
-        assert_eq!(catalog().caps_exposed_to(Exposure::Widget), USER_WIDGET_CAPS);
-        // Every widget cap is a bridge cap, or the cap of verbs only the
-        // custom layer answers (renderer impl "frame": sources:read).
+        assert_eq!(catalog().widget_caps(), USER_WIDGET_CAPS);
+        // Every widget cap is a bridge cap, the cap of verbs only the custom
+        // layer answers (renderer impl "frame": sources:read), or a Garden
+        // data cap the daemon answers (garden-local: store:*).
         let frame_caps: Vec<&str> = catalog()
             .verbs
             .iter()
             .filter(|v| v.bindings.renderer.as_ref().map(|r| r.implementation) == Some(crate::contract::RendererImpl::Frame))
             .filter_map(|v| v.cap.as_deref())
             .collect();
+        let local_caps = catalog().caps_exposed_to(Exposure::GardenLocal);
         for c in USER_WIDGET_CAPS {
-            assert!(super::super::BRIDGE_CAPS.contains(c) || frame_caps.contains(c), "{c} is a bridge or frame cap");
+            assert!(
+                super::super::BRIDGE_CAPS.contains(c) || frame_caps.contains(c) || local_caps.contains(c),
+                "{c} is a bridge, frame or garden-local cap"
+            );
         }
     }
 

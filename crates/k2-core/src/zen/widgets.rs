@@ -537,6 +537,17 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
             ),
         ));
     }
+    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::STORE_WRITE_TAINTED) {
+        let (l, c) = at("caps");
+        warnings.push(d(
+            l,
+            c,
+            format!(
+                "{}: a widget that reads data sources can't save to its shared data (agents could read it), so store:write is dropped; store:read and k2.save.* still work",
+                super::widget_access::SOURCES_DROPS_STORE_WRITE
+            ),
+        ));
+    }
     for cap in reasons.keys() {
         if !caps.contains(cap) {
             let (l, c) = at(&format!("reasons.{cap}"));
@@ -835,6 +846,24 @@ mod tests {
 
     fn with(extra: &str) -> String {
         format!("{BASE},\n  {extra}\n}}\n")
+    }
+
+    /// Garden data (contract-garden-data-v1 §7.2): store caps are widget
+    /// caps; with sources:read, store:write is dropped and validate warns.
+    #[test]
+    fn store_caps_are_widget_caps_and_sources_drop_store_write() {
+        let src = "{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"caps\": [\"store:read\", \"store:write\"]\n}\n";
+        let (m, errs, warns) = manifest(src);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(warns.is_empty(), "{warns:?}");
+        assert_eq!(m.expect("manifest").caps, vec!["store:read".to_string(), "store:write".to_string()]);
+        let src = "{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"caps\": [\"store:write\", \"sources:read\"],\n  \"sources\": \"config\"\n}\n";
+        let (m, errs, warns) = manifest(src);
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(m.is_some());
+        let w: Vec<&str> = warns.iter().map(|d| d.message.as_str()).collect();
+        assert!(w.iter().any(|m| m.starts_with("sources_drops_store_write")), "{w:?}");
+        assert!(!w.iter().any(|m| m.starts_with("sources_drops_thread_post")), "{w:?}");
     }
 
     #[test]

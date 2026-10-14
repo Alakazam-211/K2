@@ -277,7 +277,7 @@ mod tests {
     fn reserved_and_invalid_app_ids() {
         assert_eq!(app_id_problem("jim"), None);
         assert_eq!(app_id_problem("client-status"), None);
-        for r in ["host", "skin", "deploy", "front-door", "tokens", "zen", "publish"] {
+        for r in ["host", "skin", "deploy", "front-door", "tokens", "zen", "publish", "meet", "chat"] {
             assert_eq!(app_id_problem(r).map(|p| p.0), Some(codes::APP_ID_RESERVED), "{r}");
         }
         for bad in ["", "Jim", "a b", "../x", "a.b"] {

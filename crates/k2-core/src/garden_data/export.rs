@@ -79,9 +79,17 @@ const CHUNK: i64 = 1_000;
 /// Per-row overhead counted toward the page bytes (key, rev, times, by).
 const ROW_OVERHEAD: usize = 96;
 
-fn open(file: &Path) -> Result<Connection, DataError> {
-    let c = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+/// Open a store file for reading. A snapshot (out of WAL) opens read-only
+/// and is never written. The live file is in WAL, where a reader may need
+/// to create the `-shm` beside it, so it opens read-write without create
+/// and `query_only`: this connection never writes a row.
+fn open(file: &Path, snapshot: bool) -> Result<Connection, DataError> {
+    let flags = if snapshot { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };
+    let c = Connection::open_with_flags(file, flags | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
+    if !snapshot {
+        c.pragma_update(None, "query_only", true)?;
+    }
     Ok(c)
 }
 
@@ -120,7 +128,7 @@ pub fn export_page_capped(
         // Nothing written yet (a missing space reads empty, contract §4.1).
         return Ok(ExportPage { header, items: Vec::new(), next: None });
     }
-    let mut c = open(file)?;
+    let mut c = open(file, snapshot.is_some())?;
     let tx = c.transaction()?;
     header.rev = tx
         .query_row("SELECT rev FROM spaces WHERE space = ?1", [space.as_str()], |r| r.get(0))
@@ -173,7 +181,7 @@ pub fn live_keys(file: &Path, space: &Space) -> Result<Vec<String>, DataError> {
     if !file.exists() {
         return Ok(Vec::new());
     }
-    let c = open(file)?;
+    let c = open(file, false)?;
     let mut st = c.prepare("SELECT key FROM entries WHERE space = ?1 AND deleted = 0 ORDER BY key")?;
     let keys = st.query_map([space.as_str()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
     Ok(keys)

@@ -43,11 +43,13 @@ pub const CLI_END: &str = "# <<< generated";
 /// What to run when an output is stale.
 pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 
-/// The frame script's size cap (UWA5).
-pub const FRAME_MAX_BYTES: usize = 16 * 1024;
+/// The frame script's size cap (UWA5; 16 KiB until Garden data's 15 rows
+/// and SDK helpers, contract-garden-data-v1 §7.2/§7.4, raised it).
+pub const FRAME_MAX_BYTES: usize = 24 * 1024;
 
-/// The guide page's line cap (FC33).
-pub const GUIDE_MAX_LINES: usize = 80;
+/// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
+/// their two cap groups, contract-garden-data-v1 §7.2).
+pub const GUIDE_MAX_LINES: usize = 104;
 
 /// Error codes every call may answer; the guide states them once.
 pub const ALWAYS_ERRORS: &[&str] = &["cap_not_granted", "verb_unavailable", "failed"];
@@ -177,9 +179,10 @@ pub fn bridge_rows(c: &Catalog) -> Vec<&VerbRow> {
         .collect()
 }
 
-/// Widget rows grouped by cap: no cap first, then the cap table's order.
+/// Widget-callable rows (exposed to `widget` or `garden-local`) grouped by
+/// cap: no cap first, then the cap table's order.
 pub fn widget_groups(c: &Catalog) -> Vec<(Option<&str>, Vec<&VerbRow>)> {
-    let rows = c.verbs_exposed_to(Exposure::Widget);
+    let rows = c.widget_callable_verbs();
     let mut out: Vec<(Option<&str>, Vec<&VerbRow>)> = Vec::new();
     let mut keys: Vec<Option<&str>> = vec![None];
     keys.extend(c.caps.iter().map(|cap| Some(cap.name.as_str())));
@@ -215,13 +218,13 @@ fn zen_verbs_ts(c: &Catalog) -> String {
         s.push_str(&format!("  {}: {cap},\n", ts_str(&v.verb)));
     }
     s.push_str("} as const satisfies Record<string, string | null>\n\n");
-    let caps = c.caps_exposed_to(Exposure::Widget).iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(" | ");
+    let caps = c.widget_caps().iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(" | ");
     s.push_str("/** One custom-widget verb: its cap, portable or local, and how it answers. */\n");
     s.push_str("export interface ZenCustomVerbRow {\n");
     s.push_str(&format!("  readonly cap: {caps} | null\n"));
     s.push_str("  readonly reach: CatalogReach\n  readonly kind: CatalogVerbKind\n}\n\n");
     s.push_str(
-        "/**\n * The custom-widget allowlist (UW16, UWB10): catalog rows whose `exposure`\n * includes `widget`, grouped by cap. Its own table, never `ZEN_VERBS`.\n */\nexport const ZEN_CUSTOM_VERBS = {\n",
+        "/**\n * The custom-widget allowlist (UW16, UWB10): catalog rows whose `exposure`\n * includes `widget` or `garden-local` (this computer's daemon, through\n * `/cli/zen/call`), grouped by cap. Its own table, never `ZEN_VERBS`.\n */\nexport const ZEN_CUSTOM_VERBS = {\n",
     );
     for (_, rows) in widget_groups(c) {
         for v in rows {
@@ -292,7 +295,7 @@ fn caps_ts(c: &Catalog) -> String {
     }
     s.push_str("} as const satisfies Record<string, K2CapInfo>\n\n");
     s.push_str("export type K2Cap = keyof typeof K2_CAPS\n\n");
-    let widget = c.caps_exposed_to(Exposure::Widget).iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(", ");
+    let widget = c.widget_caps().iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(", ");
     s.push_str("/** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */\n");
     s.push_str(&format!("export const USER_WIDGET_CAPS = [{widget}] as const\n\n"));
     s.push_str("export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]\n");
@@ -417,8 +420,31 @@ impl Ts {
 
 fn helper_doc(v: &VerbRow) -> String {
     let cap = v.cap.as_deref().map(|c| format!("cap {c}")).unwrap_or_else(|| "no cap".into());
-    format!("  /** {} {cap} · {} · {}. e.g. `{}` */\n", v.doc, reach_name(v), v.feature, v.example)
+    let here = if v.exposed_to(Exposure::GardenLocal) { " This computer only." } else { "" };
+    format!("  /** {}{here} {cap} · {} · {}. e.g. `{}` */\n", v.doc, reach_name(v), v.feature, v.example)
 }
+
+/// Hand-written frame-runtime helpers (no catalog row; contract-garden-data-v1
+/// §7.2): members added to a generated surface in `k2.d.ts`.
+pub const SDK_SURFACE_EXTRAS: &[(&str, &[&str])] = &[
+    (
+        "store",
+        &[
+            "  /** Live changes under a prefix, from any writer (you, this widget, agents). The first delivery is the whole current state, then one per rev (never half of one). `since` resumes after a rev you have. Counts toward the 16 live subscriptions. This computer only. */",
+            "  subscribe(prefix: string | { prefix?: string; since?: number }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void",
+            "  /** A transaction: add op parts (1,000 ops and 1 MiB in all), then commit them as one rev, or abort. This computer only. */",
+            "  tx(): StoreTxHandle",
+            "  /** Save text over 60 KiB (at most 1 MiB) as parts `<key>/~0`… plus a header at `<key>`, in one transaction. This computer only. */",
+            "  putChunked(key: string, text: string, opts?: { ifRev?: number }): Promise<StoreCommit>",
+            "  /** Read a putChunked value back (null when missing). A part that doesn't match fails with reason chunk_mismatch. This computer only. */",
+            "  getChunked(key: string): Promise<string | null>",
+        ],
+    ),
+    ("viewer", &["  /** Same as `k2.viewer.get()`. */", "  (): Promise<Viewer>"]),
+];
+
+/// The types the hand-written helpers name.
+pub const SDK_EXTRA_TYPES: &str = "/** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */\nexport type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }\n\n/** k2.store.tx(): parts are staged on this computer and invisible until commit. */\nexport interface StoreTxHandle {\n  add(ops: StoreOp[]): Promise<StoreTxStatus>\n  commit(): Promise<StoreCommit>\n  abort(): Promise<StoreTxAborted>\n}\n\n";
 
 fn k2_dts(c: &Catalog) -> Result<String, String> {
     let mut ts = Ts::default();
@@ -465,8 +491,11 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
         s.push_str(&ts.bodies[name]);
         s.push('\n');
     }
-    let caps = c.caps_exposed_to(Exposure::Widget).iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(" | ");
+    let caps = c.widget_caps().iter().map(|x| ts_str(x)).collect::<Vec<_>>().join(" | ");
     s.push_str(&format!("/** A cap a widget may ask for. */\nexport type K2Cap = {caps}\n\n"));
+    if surface_order.iter().any(|x| SDK_SURFACE_EXTRAS.iter().any(|(e, _)| e == x)) {
+        s.push_str(SDK_EXTRA_TYPES);
+    }
     let codes = c.errors.iter().map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(" | ");
     s.push_str(&format!("/** The shared error codes (UWA10). */\nexport type K2ErrorCode = {codes}\n\n"));
     s.push_str(
@@ -482,6 +511,11 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
         s.push_str(&format!("  readonly {surface}: {{\n"));
         for m in &surfaces[surface] {
             for line in m.lines() {
+                s.push_str(&format!("  {line}\n"));
+            }
+        }
+        for (_, lines) in SDK_SURFACE_EXTRAS.iter().filter(|(e, _)| e == surface) {
+            for line in lines.iter() {
                 s.push_str(&format!("  {line}\n"));
             }
         }
@@ -596,6 +630,11 @@ local: Garden only). Each line: helper, reach, feature, example, [errors]\n",
         "  A refused call rejects with K2Error (.code .message .verb .cap .room",
         "  .feature .last). Pass onError after cb to hear a refused subscription.",
         "",
+        "DATA (this computer): k2.store.subscribe(prefix, cb) = the state, then",
+        "  each rev from any writer; k2.store.tx() add/commit = up to 1,000 ops as",
+        "  one rev; putChunked/getChunked to 1 MiB; k2.viewer(). sources:read drops",
+        "  store:write. More: k2 zen guide services.",
+        "",
         "WHOLE CANVAS ([layout] canvas = \"full\"): K2's top band (about 52 px)",
         "  drags the window. k2.canvas.setHitRegions(rects) cuts holes in it (CSS",
         "  px rects of your viewport, el.getBoundingClientRect(); [] clears; 32 at",
@@ -684,12 +723,13 @@ mod tests {
         let rows = bridge_rows(catalog());
         assert_eq!(rows.len(), 37, "today's ZEN_VERBS has 37 entries");
         assert!(!rows.iter().any(|v| v.verb == "theme.changed"), "a frame row is never in ZEN_VERBS");
-        let widget: Vec<&str> = catalog().verbs_exposed_to(Exposure::Widget).iter().map(|v| v.verb.as_str()).collect();
+        let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            24,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs"
+            39,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows"
         );
+        assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 24, "the bridge's own rows");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "thread.markRead", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]
         {
@@ -712,21 +752,21 @@ mod tests {
         let n = page.lines().count();
         assert!(n <= GUIDE_MAX_LINES, "guide api is {n} lines (max {GUIDE_MAX_LINES})");
         assert!(page.starts_with("k2 zen guide api —"));
-        for v in catalog().verbs_exposed_to(Exposure::Widget) {
+        for v in catalog().widget_callable_verbs() {
             let line = page
                 .lines()
                 .find(|l| l.starts_with(&format!("  k2.{} ", signature(v))))
                 .unwrap_or_else(|| panic!("guide api has no line for {}", v.verb));
             assert!(line.contains(reach_name(v)) && line.contains(&v.feature), "{line}");
         }
-        for cap in catalog().caps_exposed_to(Exposure::Widget) {
+        for cap in catalog().widget_caps() {
             assert!(page.lines().any(|l| l.starts_with(cap)), "guide api groups {cap}");
         }
     }
 
     #[test]
     fn guide_examples_use_only_real_helpers() {
-        let widget: Vec<String> = catalog().verbs_exposed_to(Exposure::Widget).iter().map(|v| v.verb.clone()).collect();
+        let widget: Vec<String> = catalog().widget_callable_verbs().iter().map(|v| v.verb.clone()).collect();
         let mut seen = 0;
         for e in GUIDE_EXAMPLES {
             for (i, _) in e.match_indices("k2.") {

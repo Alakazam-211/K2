@@ -42,6 +42,12 @@ export interface HitRegion {
   readonly y: number
 }
 
+export interface Viewer {
+  readonly kind: 'owner'
+  /** Settings' name for you, else You. */
+  readonly name: string
+}
+
 export interface AgentCounts {
   /** The shell commands among them. */
   readonly commands: number
@@ -277,8 +283,94 @@ export interface SourceAsk {
   readonly opened: boolean
 }
 
+export interface StoreEntry {
+  /** you, you via <widget>, or agent:<handle>. */
+  readonly by: string
+  readonly key: string
+  readonly rev: number
+  /** Seconds since the Unix epoch. */
+  readonly updatedAt: number
+  readonly value: unknown
+}
+
+export interface StorePage {
+  readonly items: StoreEntry[]
+  readonly next: string | null
+}
+
+export interface StoreChange {
+  /** Seconds since the Unix epoch. */
+  readonly at: number
+  readonly by: string
+  readonly deleted: boolean
+  readonly key: string
+  readonly rev: number
+  readonly value: unknown
+}
+
+export interface StoreCursor {
+  readonly after?: string
+  readonly since: number
+}
+
+export interface StoreChanges {
+  readonly head: number
+  readonly items: StoreChange[]
+  readonly next: StoreCursor | null
+  /** The page ends inside a rev: fetch next before applying. */
+  readonly partial: boolean
+}
+
+export interface StoreRev {
+  readonly rev: number
+}
+
+export interface StoreDeleted {
+  readonly deleted: boolean
+  readonly rev: number
+}
+
+export interface StoreOp {
+  readonly ifRev?: number
+  readonly key: string
+  readonly op: 'put' | 'delete'
+  readonly value?: unknown
+}
+
+export interface StoreCommit {
+  readonly ops: number
+  readonly rev: number
+}
+
+export interface StoreTx {
+  /** Seconds since the Unix epoch. */
+  readonly expiresAt: number
+  readonly txId: string
+}
+
+export interface StoreTxStatus {
+  readonly bytes: number
+  /** Seconds since the Unix epoch. */
+  readonly expiresAt: number
+  readonly ops: number
+}
+
+export interface StoreTxAborted {
+  readonly aborted: boolean
+}
+
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write'
+
+/** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
+export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
+
+/** k2.store.tx(): parts are staged on this computer and invisible until commit. */
+export interface StoreTxHandle {
+  add(ops: StoreOp[]): Promise<StoreTxStatus>
+  commit(): Promise<StoreCommit>
+  abort(): Promise<StoreTxAborted>
+}
 
 /** The shared error codes (UWA10). */
 export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused'
@@ -313,6 +405,11 @@ export interface K2Verbs {
   'theme.changed': { args: []; value: ThemeInfo }
   'canvas.setHitRegions': { args: [rects: HitRegion[]]; value: null }
   'window.startDrag': { args: []; value: null }
+  'save.get': { args: [key: string]; value: unknown }
+  'save.set': { args: [key: string, value: unknown]; value: null }
+  'save.remove': { args: [key: string]; value: null }
+  'save.keys': { args: [opts?: { prefix?: string }]; value: string[] }
+  'viewer.get': { args: []; value: Viewer }
   'agents.list': { args: []; value: AgentRow[] }
   'agents.subscribe': { args: []; value: AgentRow[] }
   'conversation.open': { args: [address: string]; value: null }
@@ -330,10 +427,20 @@ export interface K2Verbs {
   'sources.subscribe': { args: [address: string]; value: SourceView }
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
+  'store.get': { args: [key: string]; value: StoreEntry | null }
+  'store.list': { args: [opts?: { after?: string; limit?: number; prefix?: string }]; value: StorePage }
+  'store.changes': { args: [opts: { after?: string; prefix?: string; since: number }]; value: StoreChanges }
+  'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
+  'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
+  'store.batch': { args: [ops: StoreOp[]]; value: StoreCommit }
+  'store.txBegin': { args: []; value: StoreTx }
+  'store.txAdd': { args: [txId: string, ops: StoreOp[]]; value: StoreTxStatus }
+  'store.txCommit': { args: [txId: string]; value: StoreCommit }
+  'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
@@ -358,6 +465,22 @@ export interface K2 {
   readonly window: {
     /** Start moving the window, from a mousedown in this widget (only while a button is down here). no cap · local · zen-widgets-v1. e.g. `grip.addEventListener('mousedown', () => k2.window.startDrag())` */
     startDrag(): Promise<null>
+  }
+  readonly save: {
+    /** One of this widget's private saves, or null. This computer only. no cap · local · garden-data-v1. e.g. `const best = await k2.save.get('high-score')` */
+    get(key: string): Promise<unknown>
+    /** Keep a private value for this widget (agents never see saves). This computer only. no cap · local · garden-data-v1. e.g. `await k2.save.set('high-score', 42)` */
+    set(key: string, value: unknown): Promise<null>
+    /** Forget one private save. This computer only. no cap · local · garden-data-v1. e.g. `await k2.save.remove('high-score')` */
+    remove(key: string): Promise<null>
+    /** The keys of this widget's private saves. This computer only. no cap · local · garden-data-v1. e.g. `const keys = await k2.save.keys()` */
+    keys(opts?: { prefix?: string }): Promise<string[]>
+  }
+  readonly viewer: {
+    /** Who is looking: the person on this computer, by name. This computer only. no cap · local · garden-data-v1. e.g. `const {name} = await k2.viewer()` */
+    get(): Promise<Viewer>
+    /** Same as `k2.viewer.get()`. */
+    (): Promise<Viewer>
   }
   readonly agents: {
     /** The agents in the widget's scope, with live status. cap agents:read · portable · zen-v1. e.g. `const rows = await k2.agents.list()` */
@@ -404,6 +527,36 @@ export interface K2 {
     refresh(address: string): Promise<SourceRefresh>
     /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
     ask(address: string, itemKey?: string | null): Promise<SourceAsk>
+  }
+  readonly store: {
+    /** One key of this widget's data, or null. This computer only. cap store:read · local · garden-data-v1. e.g. `const e = await k2.store.get('obj/7')` */
+    get(key: string): Promise<StoreEntry | null>
+    /** Keys in order, a page at a time (at most 500 and 60 KiB). This computer only. cap store:read · local · garden-data-v1. e.g. `const {items, next} = await k2.store.list({prefix: 'obj/'})` */
+    list(opts?: { after?: string; limit?: number; prefix?: string }): Promise<StorePage>
+    /** Changes after a cursor, whole revs at a time (subscribe uses this). This computer only. cap store:read · local · garden-data-v1. e.g. `const page = await k2.store.changes({since: 41})` */
+    changes(opts: { after?: string; prefix?: string; since: number }): Promise<StoreChanges>
+    /** Save one key; with ifRev, only if nobody changed it since. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})` */
+    put(key: string, value: unknown, opts?: { ifRev?: number }): Promise<StoreRev>
+    /** Delete one key (a missing key is not an error). This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.delete('obj/7')` */
+    delete(key: string, opts?: { ifRev?: number }): Promise<StoreDeleted>
+    /** Up to 64 writes, all or nothing, as one rev. This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])` */
+    batch(ops: StoreOp[]): Promise<StoreCommit>
+    /** Open a transaction (k2.store.tx() wraps begin, add and commit). This computer only. cap store:write · local · garden-data-v1. e.g. `const tx = k2.store.tx()` */
+    txBegin(): Promise<StoreTx>
+    /** Stage up to 64 more writes (1,000 and 1 MiB in all); nothing is visible until commit. This computer only. cap store:write · local · garden-data-v1. e.g. `await tx.add(ops)` */
+    txAdd(txId: string, ops: StoreOp[]): Promise<StoreTxStatus>
+    /** Apply every staged write as one rev, or none of them. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await tx.commit()` */
+    txCommit(txId: string): Promise<StoreCommit>
+    /** Drop a transaction's staged writes. This computer only. cap store:write · local · garden-data-v1. e.g. `await tx.abort()` */
+    txAbort(txId: string): Promise<StoreTxAborted>
+    /** Live changes under a prefix, from any writer (you, this widget, agents). The first delivery is the whole current state, then one per rev (never half of one). `since` resumes after a rev you have. Counts toward the 16 live subscriptions. This computer only. */
+    subscribe(prefix: string | { prefix?: string; since?: number }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void
+    /** A transaction: add op parts (1,000 ops and 1 MiB in all), then commit them as one rev, or abort. This computer only. */
+    tx(): StoreTxHandle
+    /** Save text over 60 KiB (at most 1 MiB) as parts `<key>/~0`… plus a header at `<key>`, in one transaction. This computer only. */
+    putChunked(key: string, text: string, opts?: { ifRev?: number }): Promise<StoreCommit>
+    /** Read a putChunked value back (null when missing). A part that doesn't match fails with reason chunk_mismatch. This computer only. */
+    getChunked(key: string): Promise<string | null>
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>

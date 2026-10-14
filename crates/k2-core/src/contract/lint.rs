@@ -50,6 +50,9 @@ pub const SCHEMA_KEYWORDS: &[&str] = &[
 /// §7.2); TypeScript `unknown`.
 pub const SCHEMA_TYPES: &[&str] = &["string", "number", "integer", "boolean", "null", "array", "object", "json"];
 
+/// The widget door every `garden-local` row binds (contract-garden-data-v1 §7.1).
+pub const GARDEN_LOCAL_ROUTE: &str = "/cli/zen/call";
+
 /// Every problem in `c`, in file order. Empty = clean.
 pub fn lint(c: &Catalog) -> Vec<String> {
     let mut out = Vec::new();
@@ -187,6 +190,23 @@ fn lint_row(c: &Catalog, v: &VerbRow, out: &mut Vec<String>) {
     }
     if frame && !v.exposed_to(Exposure::Widget) {
         out.push(format!("{name}: a frame row exists only for custom widgets; expose it to widget"));
+    }
+    // Garden data (contract-garden-data-v1 §7.2): a garden-local row runs
+    // only in this computer's daemon, through the widget door.
+    if v.exposed_to(Exposure::GardenLocal) {
+        let door = v.bindings.http.as_ref().is_some_and(|h| h.method == HttpMethod::Post && h.route == GARDEN_LOCAL_ROUTE);
+        if !door {
+            out.push(format!("{name}: a garden-local row binds http POST {GARDEN_LOCAL_ROUTE}"));
+        }
+        if v.bindings.renderer.is_some() || v.bindings.socket.is_some() {
+            out.push(format!("{name}: a garden-local row has no renderer or socket binding (the daemon answers it)"));
+        }
+        if v.reach != super::Reach::Local {
+            out.push(format!("{name}: a garden-local row is reach local (this computer only)"));
+        }
+        if v.kind != VerbKind::Call {
+            out.push(format!("{name}: a garden-local row is a call (the SDK builds subscribe on store.changes)"));
+        }
     }
     let Some(items) = v.request.as_array() else {
         out.push(format!("{name}: request is an array of argument schemas"));
@@ -463,6 +483,25 @@ mod tests {
     fn an_untitled_argument_fails() {
         let bad = GOOD.replace(r#"{"title":"address","type":"string"}"#, r#"{"type":"string"}"#);
         assert_one(&with_rows(&format!("[{bad}]")), "argument 0 needs a lower camel case title");
+    }
+
+    const LOCAL: &str = r#"{"verb":"seed.local","cap":"store:read","exposure":["garden-local"],"reach":"local","effect":"read",
+        "kind":"call","feature":"garden-data-v1","bindings":{"http":{"method":"POST","route":"/cli/zen/call"}},
+        "request":[{"title":"key","type":"string"}],"response":{"type":"json"},
+        "errors":["failed"],"doc":"d","example":"e"}"#;
+
+    #[test]
+    fn garden_local_rows_reach_only_the_widget_door() {
+        let c = with_rows(&format!("[{LOCAL}]"));
+        assert!(lint(&c).is_empty(), "{:#?}", lint(&c));
+        let bad = LOCAL.replace(r#""route":"/cli/zen/call""#, r#""route":"/cli/zen/data/get""#);
+        assert_one(&with_rows(&format!("[{bad}]")), "binds http POST /cli/zen/call");
+        let bad = LOCAL.replace(r#""bindings":{"#, r#""bindings":{"renderer":{"impl":"registered"},"#);
+        assert_one(&with_rows(&format!("[{bad}]")), "no renderer or socket binding");
+        let bad = LOCAL.replace(r#""reach":"local""#, r#""reach":"portable""#);
+        assert_one(&with_rows(&format!("[{bad}]")), "reach local");
+        let bad = LOCAL.replace(r#""cap":"store:read""#, r#""cap":"files:read""#);
+        assert_one(&with_rows(&format!("[{bad}]")), "its cap 'files:read' isn't");
     }
 
     #[test]

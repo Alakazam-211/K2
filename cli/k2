@@ -45628,6 +45628,11 @@ no cap
   k2.theme.changed(cb)                               local    zen-widgets-v1  k2.theme.changed(({theme}) => paint(theme))
   k2.canvas.setHitRegions(rects)                     local    zen-widgets-v1  await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
   k2.window.startDrag()                              local    zen-widgets-v1  grip.addEventListener('mousedown', () => k2.window.startDrag())
+  k2.save.get(key)                                   local    garden-data-v1  const best = await k2.save.get('high-score')  [bad_key rate_limited]
+  k2.save.set(key, value)                            local    garden-data-v1  await k2.save.set('high-score', 42)  [bad_key value_too_large space_full store_full rate_limited]
+  k2.save.remove(key)                                local    garden-data-v1  await k2.save.remove('high-score')  [bad_key rate_limited]
+  k2.save.keys({prefix})                             local    garden-data-v1  const keys = await k2.save.keys()  [rate_limited]
+  k2.viewer.get()                                    local    garden-data-v1  const {name} = await k2.viewer()
 agents:read (See agents)
   k2.agents.list()                                   portable zen-v1          const rows = await k2.agents.list()
   k2.agents.subscribe(cb)                            portable zen-v1          const off = k2.agents.subscribe((rows) => draw(rows))
@@ -45650,6 +45655,18 @@ sources:read (Read data sources)
   k2.sources.subscribe(address, cb)                  portable sources-v1      const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.refresh(address)                        portable sources-v1      await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.ask(address, itemKey?)                  local    sources-v1      await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
+store:read (Read the workspace store)
+  k2.store.get(key)                                  local    garden-data-v1  const e = await k2.store.get('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.list({after, limit, prefix})              local    garden-data-v1  const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.changes({after, prefix, since})           local    garden-data-v1  const page = await k2.store.changes({since: 41})  [not_granted author_unknown stale_widget rate_limited resync bad_key]
+store:write (Change dump-table rows)
+  k2.store.put(key, value, {ifRev})                  local    garden-data-v1  const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
+  k2.store.delete(key, {ifRev})                      local    garden-data-v1  await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
+  k2.store.batch(ops)                                local    garden-data-v1  await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large too_large space_full store_full paused]
+  k2.store.txBegin()                                 local    garden-data-v1  const tx = k2.store.tx()  [not_granted author_unknown stale_widget rate_limited busy]
+  k2.store.txAdd(txId, ops)                          local    garden-data-v1  await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
+  k2.store.txCommit(txId)                            local    garden-data-v1  const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict space_full store_full paused]
+  k2.store.txAbort(txId)                             local    garden-data-v1  await tx.abort()
 
 Every call may also fail with cap_not_granted, verb_unavailable, failed.
 
@@ -45660,6 +45677,11 @@ ALSO ON k2
   is advice; K2 checks every call. k2.ready() once drawn. k2.asset(name).
   A refused call rejects with K2Error (.code .message .verb .cap .room
   .feature .last). Pass onError after cb to hear a refused subscription.
+
+DATA (this computer): k2.store.subscribe(prefix, cb) = the state, then
+  each rev from any writer; k2.store.tx() add/commit = up to 1,000 ops as
+  one rev; putChunked/getChunked to 1 MiB; k2.viewer(). sources:read drops
+  store:write. More: k2 zen guide services.
 
 WHOLE CANVAS ([layout] canvas = "full"): K2's top band (about 52 px)
   drags the window. k2.canvas.setHitRegions(rects) cuts holes in it (CSS

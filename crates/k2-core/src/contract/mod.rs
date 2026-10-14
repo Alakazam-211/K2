@@ -271,10 +271,27 @@ impl Catalog {
         self.caps.iter().filter(|c| c.exposure.contains(&who)).map(|c| c.name.as_str()).collect()
     }
 
-    /// Verb rows exposed to `who`, in file order (`ZEN_CUSTOM_VERBS` for
-    /// `Widget`).
+    /// Verb rows exposed to `who`, in file order.
     pub fn verbs_exposed_to(&self, who: Exposure) -> Vec<&VerbRow> {
         self.verbs.iter().filter(|v| v.exposed_to(who)).collect()
+    }
+
+    /// Every row a custom widget may call, in file order: rows exposed to
+    /// `widget` (the bridge) or to `garden-local` (this computer's daemon
+    /// through `/cli/zen/call`, contract-garden-data-v1 §7.2). This is
+    /// `ZEN_CUSTOM_VERBS`, the frame's table and the guide's list.
+    pub fn widget_callable_verbs(&self) -> Vec<&VerbRow> {
+        self.verbs.iter().filter(|v| v.exposed_to(Exposure::Widget) || v.exposed_to(Exposure::GardenLocal)).collect()
+    }
+
+    /// Caps a custom widget may ask for, in file order: exposed to
+    /// `widget` or `garden-local`. Equal to `zen::USER_WIDGET_CAPS`.
+    pub fn widget_caps(&self) -> Vec<&str> {
+        self.caps
+            .iter()
+            .filter(|c| c.exposure.contains(&Exposure::Widget) || c.exposure.contains(&Exposure::GardenLocal))
+            .map(|c| c.name.as_str())
+            .collect()
     }
 }
 
@@ -303,7 +320,7 @@ mod tests {
         let mut want: Vec<&str> = crate::zen::BRIDGE_CAPS.to_vec();
         want.sort_unstable();
         assert_eq!(bridge, want, "BRIDGE_CAPS vs the catalog's bridge rows");
-        assert_eq!(c.caps_exposed_to(Exposure::Widget), crate::zen::USER_WIDGET_CAPS);
+        assert_eq!(c.widget_caps(), crate::zen::USER_WIDGET_CAPS);
         for cap in ["gardens:manage", "gardens:template", "agents:add", "app:navigate"] {
             assert!(!crate::zen::USER_WIDGET_CAPS.contains(&cap), "{cap} is K2's own (UW69)");
             assert!(c.cap(cap).is_some_and(|r| r.exposure.is_empty()), "{cap} is exposed to no one");
@@ -322,8 +339,16 @@ mod tests {
         let c = catalog();
         let probs = lint::lint(c);
         assert!(probs.is_empty(), "{}", probs.join("\n"));
-        for v in c.verbs_exposed_to(Exposure::Widget) {
+        for v in c.widget_callable_verbs() {
             assert!(v.cap.as_deref().is_none_or(|cap| crate::zen::USER_WIDGET_CAPS.contains(&cap)), "{}", v.verb);
+        }
+        // Garden data (contract-garden-data-v1 §7.2): every garden-local row
+        // is local, reaches the widget door, and has no renderer binding.
+        let local = c.verbs_exposed_to(Exposure::GardenLocal);
+        assert_eq!(local.len(), 15, "store.* ×10, save.* ×4, viewer.get");
+        for v in local {
+            assert_eq!(v.reach, Reach::Local, "{}", v.verb);
+            assert_eq!(v.feature, crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
         assert!(c.verb("thread.markRead").is_some_and(|v| v.exposure.is_empty()), "UW51: markRead stays none");
@@ -371,17 +396,21 @@ mod tests {
     }
 
     #[test]
-    fn widget_caps_are_the_four_and_each_has_a_sentence() {
+    fn widget_caps_are_the_seven_and_each_has_a_sentence() {
         let c = catalog();
         assert_eq!(
             c.caps_exposed_to(Exposure::Widget),
             ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"]
         );
-        for name in c.caps_exposed_to(Exposure::Widget) {
+        assert_eq!(
+            c.widget_caps(),
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"]
+        );
+        for name in c.widget_caps() {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());
             let s = s.unwrap_or_else(|| panic!("widget cap {name} has no sentence"));
             assert!(
-                s.contains("{where}") || name == "presence:read" || name == "sources:read",
+                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write"].contains(&name),
                 "{name}: sentence names its scope: {s}"
             );
         }

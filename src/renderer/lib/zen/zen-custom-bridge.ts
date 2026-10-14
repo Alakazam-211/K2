@@ -162,13 +162,18 @@ export const SOURCES_READ_CAP = 'sources:read'
  * that asks for `sources:read` never runs with `thread:post`, so no
  * `thread.post`, `thread.answer` or `compose.draft` (the daemon's
  * `effective_caps` drops it too). K2's own `sources.ask` still works.
+ * **Garden data:** it never runs with `store:write` either (it could copy
+ * source values into data an agent can read); `store:read`, `save.*` and
+ * `viewer.get` still work (contract-garden-data-v1 §7.1 step 4).
  */
+export const ZEN_TAINTED_BY_SOURCES: readonly string[] = ['thread:post', 'store:write']
+
 export function zenEffectiveCaps(w: Pick<ZenCustomWidgetPayload, 'caps' | 'requested'>): ReadonlySet<string> {
   const requested = w.requested as readonly string[]
   const readsSources = requested.includes(SOURCES_READ_CAP)
   return new Set(
     (w.caps as readonly string[]).filter(
-      (c) => WIDGET_CAPS.has(c) && requested.includes(c) && !(readsSources && c === 'thread:post'),
+      (c) => WIDGET_CAPS.has(c) && requested.includes(c) && !(readsSources && ZEN_TAINTED_BY_SOURCES.includes(c)),
     ),
   )
 }

@@ -67,6 +67,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

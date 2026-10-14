@@ -241,7 +241,13 @@ pub const BRIDGE_CAPS: &[&str] = &[
 /// custom layer answers them), so it isn't one of [`BRIDGE_CAPS`]. A widget
 /// that asks for it never runs with `thread:post` (GV48,
 /// `widget_access::effective_caps`).
-pub const USER_WIDGET_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"];
+///
+/// `store:read` / `store:write` (Garden data, contract-garden-data-v1
+/// §7.2) are `garden-local`: their verbs run in this computer's daemon
+/// through `/cli/zen/call`, with the widget maker's rights. A widget that
+/// asks for `sources:read` never runs with `store:write` either.
+pub const USER_WIDGET_CAPS: &[&str] =
+    &["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A
 /// Garden file never names caps (G38); these are the only ones.

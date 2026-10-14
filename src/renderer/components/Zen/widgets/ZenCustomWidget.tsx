@@ -20,7 +20,8 @@
 //      is "Reload <name>" in that menu instead (`zen-fill-reload`).
 //      Garden v3: a widget that reads data sources also gets "Ask an agent
 //      about this" there (one row per source it reads; K2's own Ask box,
-//      `ZenSourceAsk`).
+//      `ZenSourceAsk`) and "Open <host>" for a source's link; K2's built-in
+//      data-source cards get the menu too.
 
 import { useContext, useEffect, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
@@ -42,7 +43,26 @@ import {
 import type { ZenWidgetProps } from '../zen-registry'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZenCustomFrame, type ZenCustomLoadProblem } from './ZenCustomFrame'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { zenBoundSourceAddresses, zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
+import { zenSourcesReader } from '@/lib/zen/zen-sources-live'
+
+/** A source's link, when it's a plain https URL (PRD §12.8: opened in the
+ *  system browser by K2, never by the sealed frame). */
+export function zenSourceLinks(addresses: readonly string[]): Array<{ address: string; link: string; host: string }> {
+  const out: Array<{ address: string; link: string; host: string }> = []
+  for (const address of addresses) {
+    const link = zenSourcesReader().cached(address)?.link
+    if (!link) continue
+    try {
+      const u = new URL(link)
+      if (u.protocol === 'https:') out.push({ address, link: u.toString(), host: u.host })
+    } catch {
+      console.warn(`[zen] ${address}: its link isn't a URL`)
+    }
+  }
+  return out
+}
 
 function Card({
   testId,
@@ -124,6 +144,7 @@ function CornerMenu({
   onAsk?(address: string): void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const links = open ? zenSourceLinks(askAbout) : []
   const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 160, align: 'end' })
   return (
     <>
@@ -202,6 +223,23 @@ function CornerMenu({
                   {askAbout.length > 1 ? `Ask an agent about ${address}` : 'Ask an agent about this'}
                 </button>
               ))}
+            {links.map((l) => (
+              <button
+                key={`link:${l.address}`}
+                type="button"
+                role="menuitem"
+                data-zen-custom-menu-item="open-link"
+                data-zen-source-link={l.address}
+                onClick={() => {
+                  setOpen(false)
+                  void openUrl(l.link).catch((err: unknown) => console.warn('[zen] opening the source link failed:', err))
+                }}
+                className="flex w-full items-center text-left cursor-pointer"
+                style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
+              >
+                Open {l.host}
+              </button>
+            ))}
           </div>,
         )}
     </>
@@ -323,7 +361,7 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
       {(widget.paused !== null || pausedHere) && <PausedStrip onResume={resume} busy={busy} error={resumeError} />}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ZenCustomFrame key={`${widget.hash}:${generation}`} widget={widget} gardenId={gid} bridge={bridge} onProblem={setProblem} />
-        {!builtin && !reloadInMenu && (
+        {(!builtin || zenBoundSourceAddresses(widget).length > 0) && !reloadInMenu && (
           <CornerMenu
             name={widget.name}
             onReload={() => reloadZenWidget(key)}

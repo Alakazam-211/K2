@@ -77,6 +77,11 @@ export const CATALOG_ERROR_CODES = [
   'verb_local',
   'not_exposed',
   'sending_off',
+  // Garden v3 data sources (contract-sources-v1 §6).
+  'server_not_saved',
+  'unreachable',
+  'removed',
+  'no_history',
   'failed',
 ] as const
 

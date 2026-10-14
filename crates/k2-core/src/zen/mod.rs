@@ -235,7 +235,13 @@ pub const BRIDGE_CAPS: &[&str] = &[
 /// `widget_access` tests), and a subset
 /// of [`BRIDGE_CAPS`]. `agents:add`, `gardens:manage`, `gardens:template`
 /// and `app:navigate` stay built-in only.
-pub const USER_WIDGET_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post"];
+///
+/// `sources:read` (Garden v3, contract-sources-v1 §6) lets a card read the
+/// data sources its placement names; its verbs are frame-host verbs (the
+/// custom layer answers them), so it isn't one of [`BRIDGE_CAPS`]. A widget
+/// that asks for it never runs with `thread:post` (GV48,
+/// `widget_access::effective_caps`).
+pub const USER_WIDGET_CAPS: &[&str] = &["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A
 /// Garden file never names caps (G38); these are the only ones.

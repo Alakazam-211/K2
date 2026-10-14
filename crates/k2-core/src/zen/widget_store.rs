@@ -490,11 +490,42 @@ impl ZenFiles {
         };
         errors.extend(c.errors.iter().cloned());
         warnings.extend(c.warnings.iter().cloned());
+        // Runtime (decision-k2-runtime-v1 stage 0 (d), (e)): the version on
+        // disk is the one an agent just saved. Its runtime errors fail
+        // validate; "pending" until a Zen window has run it, when it's placed.
+        let mut runtime = J::Null;
+        let mut status = if errors.is_empty() { "ok" } else { "failed" };
+        if let (Ok(WidgetRef::User(name)), true, Some(b)) = (parse_widget_ref(widget), errors.is_empty(), c.bundle.as_ref()) {
+            let s = self.widget_run_summary(&name, &b.hash);
+            let placed = self.widget_is_placed(&name);
+            errors.extend(runtime_diagnostics(&name, &s));
+            status = if s.errors > 0 {
+                "failed"
+            } else if placed && !s.ran {
+                "pending"
+            } else {
+                "ok"
+            };
+            runtime = json!({
+                "hash": b.hash,
+                "errorsSinceSave": s.errors,
+                "ran": s.ran,
+                "placed": placed,
+                "note": match status {
+                    "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors",
+                    "failed" => "these runtime errors happened in the version on disk now; fix, save and validate again",
+                    _ if !placed => "not placed in any Garden: it runs once a Garden places it",
+                    _ => "ran in a Zen window with no runtime errors",
+                },
+            });
+        }
         Ok(json!({
             "ok": errors.is_empty(),
+            "status": status,
             "errors": errors,
             "warnings": warnings,
             "files": [widget_label(widget)],
+            "runtime": runtime,
         }))
     }
 
@@ -505,6 +536,11 @@ impl ZenFiles {
         let mut labels = Vec::new();
         for name in self.widget_names() {
             if let Some((c, e, w, _)) = self.check_now(&name) {
+                if e.is_empty() && c.errors.is_empty() {
+                    if let Some(b) = c.bundle.as_ref() {
+                        errors.extend(runtime_diagnostics(&name, &self.widget_run_summary(&name, &b.hash)));
+                    }
+                }
                 errors.extend(e);
                 errors.extend(c.errors.iter().cloned());
                 warnings.extend(w);
@@ -680,6 +716,12 @@ impl ZenFiles {
             w["origin"] = json!(origin);
             w["caps"] = json!(effective_caps(origin, &requested));
             w["paused"] = json!(pauses.get(garden, &placement));
+            // Garden v3 (contract-sources-v1 §6): the manifest's `sources`
+            // and the addresses this placement binds (`not_bound` otherwise).
+            let sources = m.and_then(|m| m.sources.clone());
+            let config = w["props"].get("config").cloned().unwrap_or_else(|| json!({}));
+            w["sourceAddresses"] = json!(widgets::placement_source_addresses(sources.as_ref(), &config));
+            w["sources"] = sources.unwrap_or(J::Null);
         }
     }
 
@@ -724,6 +766,33 @@ impl ZenFiles {
                     missing_folder_message(widget)
                 };
                 out.push(Diagnostic { file: file.to_string(), line, col, message });
+            }
+            // Garden v3 (contract-sources-v1 §6): every source address in
+            // the config must parse (whether it's reachable is the card's
+            // business, never an error).
+            let st = match garden {
+                Some(g) => self.garden_widget_status(g, widget),
+                None => self.widget_status(widget),
+            };
+            let sources = st.manifest.as_ref().and_then(|m| m.sources.as_ref());
+            if sources.is_some_and(|s| s == "config") {
+                let config = w["props"].get("config").cloned().unwrap_or_else(|| json!({}));
+                for a in widgets::placement_source_addresses(sources, &config) {
+                    if let Err(e) = crate::sources::Address::parse(&a) {
+                        let key = widgets::SOURCE_CONFIG_KEYS
+                            .iter()
+                            .find(|k| config.get(**k).and_then(J::as_str).is_some_and(|v| v.contains(a.as_str())))
+                            .copied()
+                            .unwrap_or("source");
+                        let (line, col) = at(format!("page.widget.{i}.props.config.{key}"));
+                        out.push(Diagnostic {
+                            file: file.to_string(),
+                            line,
+                            col,
+                            message: format!("'{a}' isn't a source address (name or name::host): {}", e.hint),
+                        });
+                    }
+                }
             }
         }
         for w in &widgets {
@@ -802,6 +871,43 @@ impl ZenFiles {
         Ok(json!({ "ok": true, "widgets": out }))
     }
 }
+
+/// "N runtime errors since your last save" as validate errors: one line
+/// per distinct message (newest three), placed at the widget's folder.
+fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
+    if s.errors == 0 {
+        return Vec::new();
+    }
+    // This base's `Diagnostic` has no suggestion line; `k2 zen widget errors`
+    // carries each error's suggestion.
+    let mut out = vec![Diagnostic {
+        file: widget_label(name),
+        line: 1,
+        col: 1,
+        message: format!("{} runtime error(s) since your last save", s.errors),
+    }];
+    for r in &s.last {
+        out.push(Diagnostic {
+            file: widget_label(name),
+            line: 1,
+            col: 1,
+            message: format!("runtime error #{}: {}", r["seq"], runs::run_text(r)),
+        });
+    }
+    out
+}
+
+// Runtime errors from widget frames (decision-k2-runtime-v1 stage 0 (d)).
+#[path = "widget_runs.rs"]
+pub mod runs;
+
+// `k2 zen widget show` (Garden v3, contract-sources-v1 §4.2).
+#[path = "widget_show.rs"]
+pub mod show;
+
+#[cfg(test)]
+#[path = "widget_sources_tests.rs"]
+mod sources_tests;
 
 #[cfg(test)]
 #[path = "widget_store_tests.rs"]

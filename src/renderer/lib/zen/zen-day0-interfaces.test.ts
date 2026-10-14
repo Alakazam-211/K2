@@ -54,6 +54,12 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // Garden v3: the data sources verbs, answered by the custom layer only.
+      if (verb.startsWith('sources.')) {
+        expect(row.cap).toBe('sources:read')
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       expect(verb in ZEN_VERBS, verb).toBe(true)
       expect(ZEN_VERBS[verb as keyof typeof ZEN_VERBS], verb).toBe(row.cap)
       if (row.cap) expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)

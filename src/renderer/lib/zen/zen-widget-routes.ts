@@ -7,6 +7,7 @@
 //   POST /cli/zen/widget/pause                 the runaway guard tripped
 //   POST /cli/zen/widget/resume                the person's Resume click
 //                                              (owner token only)
+//   POST /cli/zen/widget/run                   a frame's ready or uncaught error
 // Every body is parsed here. Errors carry a code the UI words.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -112,6 +113,62 @@ async function post(route: string, body: object): Promise<unknown> {
 /** The runaway guard tripped (R6): posting pauses in every window. */
 export async function pauseZenWidget(req: ZenWidgetPauseRequest): Promise<void> {
   await post('zen/widget/pause', req)
+}
+
+/** One frame's `ready` or uncaught error, for the bundle `hash` it ran
+ *  (decision-k2-runtime-v1 stage 0 (d)): the daemon logs it so an agent
+ *  sees it with `k2 zen widget errors <name>` and `k2 zen validate`.
+ *  User widgets only: K2's built-ins (`k2:…`) aren't logged. */
+export interface ZenWidgetRunReport {
+  widget: string
+  hash: string
+  event: 'ready' | 'error'
+  message?: string
+  stack?: string
+  /** Garden v3 (GV49): fixed fields; all a `sources:read` widget sends. */
+  kind?: 'error' | 'refusal'
+  class?: string
+  code?: string
+  line?: number
+}
+
+/** `TypeError` from `TypeError: x is undefined` (a JS identifier only). */
+export function zenErrorClass(message: string): string | undefined {
+  const m = /^([A-Za-z_$][A-Za-z0-9_$]{0,59}):/.exec(message.trim())
+  return m ? m[1] : undefined
+}
+
+/** The first `:line:col` in a stack. */
+export function zenErrorLine(stack: string | undefined): number | undefined {
+  const m = stack ? /:(\d{1,7}):\d{1,7}/.exec(stack) : null
+  return m ? Number(m[1]) : undefined
+}
+
+/** The body for one frame report. A widget that reads data sources sends
+ *  its class, code and line only, never message text (GV49: a card could
+ *  throw a value into text agents read); the daemon drops it again. */
+export function zenRunReportBody(
+  widget: string,
+  hash: string,
+  r: { event: 'ready' } | { event: 'error'; message: string; stack?: string } | { event: 'refusal'; verb: string; code: string },
+  readsSources: boolean,
+): ZenWidgetRunReport {
+  if (r.event === 'ready') return { widget, hash, event: 'ready' }
+  if (r.event === 'refusal') return { widget, hash, event: 'error', kind: 'refusal', class: r.verb, code: r.code }
+  const cls = zenErrorClass(r.message)
+  const line = zenErrorLine(r.stack)
+  const fixed = { kind: 'error' as const, ...(cls ? { class: cls } : {}), ...(line !== undefined ? { line } : {}) }
+  if (readsSources) return { widget, hash, event: 'error', ...fixed }
+  return { widget, hash, event: 'error', message: r.message, ...(r.stack ? { stack: r.stack } : {}), ...fixed }
+}
+
+export function zenWidgetRunLogged(widget: string): boolean {
+  return !widget.startsWith('k2:')
+}
+
+export async function reportZenWidgetRun(req: ZenWidgetRunReport): Promise<void> {
+  if (!zenWidgetRunLogged(req.widget)) return
+  await post('zen/widget/run', req)
 }
 
 /** "Paused: too many posts. Resume" (owner only). */

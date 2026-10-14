@@ -328,7 +328,8 @@ mod tests {
     fn shared_error_list_is_the_uwa10_list_plus_sending_off() {
         let codes: Vec<&str> = catalog().errors.iter().map(|e| e.code.as_str()).collect();
         // UWA10's list, minus `not_open` (UWB10 drops one-open-conversation),
-        // plus `sending_off` (UWB9).
+        // plus `sending_off` (UWB9), plus the Garden v3 sources codes
+        // (contract-sources-v1 §6).
         assert_eq!(
             codes,
             [
@@ -341,6 +342,10 @@ mod tests {
                 "verb_local",
                 "not_exposed",
                 "sending_off",
+                "server_not_saved",
+                "unreachable",
+                "removed",
+                "no_history",
                 "failed",
             ]
         );
@@ -349,11 +354,17 @@ mod tests {
     #[test]
     fn widget_caps_are_the_four_and_each_has_a_sentence() {
         let c = catalog();
-        assert_eq!(c.caps_exposed_to(Exposure::Widget), ["agents:read", "presence:read", "thread:read", "thread:post"]);
+        assert_eq!(
+            c.caps_exposed_to(Exposure::Widget),
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read"]
+        );
         for name in c.caps_exposed_to(Exposure::Widget) {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());
             let s = s.unwrap_or_else(|| panic!("widget cap {name} has no sentence"));
-            assert!(s.contains("{where}") || name == "presence:read", "{name}: sentence names its scope: {s}");
+            assert!(
+                s.contains("{where}") || name == "presence:read" || name == "sources:read",
+                "{name}: sentence names its scope: {s}"
+            );
         }
     }
 

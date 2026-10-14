@@ -377,14 +377,67 @@ impl ZenFiles {
     }
 }
 
+impl ZenFiles {
+    /// The source names this computer's locked Gardens read (contract-
+    /// sources-v1 §4.1 step 8, GV16): every custom placement on a locked
+    /// Garden whose widget (its frozen copy) names sources, by its
+    /// manifest's fixed names or its placement config. An address counts
+    /// when it's bare (`fleet`, this computer) or names `this_host`
+    /// (`fleet::<this host>`); other servers' sources are theirs to guard
+    /// (pinning, GV65). Bare names come back.
+    pub fn locked_placement_sources_for(&self, this_host: Option<&str>) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let this_host = this_host.map(str::to_ascii_lowercase);
+        for g in self.gardens() {
+            if !self.is_locked(&g.id) {
+                continue;
+            }
+            let f = ZenFile::Garden(g.id.clone());
+            let eff = self.effective(&f, &self.base_for(&f));
+            let page = super::garden_page(&eff.layer, &g.template);
+            for w in page["widgets"].as_array().into_iter().flatten() {
+                if w["kind"] != super::schema::CUSTOM_KIND {
+                    continue;
+                }
+                let widget = w["widget"].as_str().unwrap_or_default();
+                let st = self.garden_widget_status(&g.id, widget);
+                let sources = st.manifest.as_ref().and_then(|m| m.sources.as_ref());
+                let config = w.get("props").and_then(|p| p.get("config")).cloned().unwrap_or_else(|| json!({}));
+                for a in super::widgets::placement_source_addresses(sources, &config) {
+                    let Ok(addr) = crate::sources::Address::parse(&a) else { continue };
+                    match (&addr.host, &this_host) {
+                        (None, _) => {
+                            out.insert(addr.name);
+                        }
+                        (Some(h), Some(me)) if h == me => {
+                            out.insert(addr.name);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// This computer's Connect name (`<sub>.k2.dev`), when it has one.
+fn this_host() -> Option<String> {
+    let cfg = crate::tunnel::config::load().ok()?;
+    let sub = cfg.subdomain.trim().to_ascii_lowercase();
+    (!sub.is_empty()).then(|| format!("{sub}.{}", crate::tunnel::config::SUBDOMAIN_HOST))
+}
+
 /// Garden v3 data sources (contract-sources-v1 §4.1 step 8, GV16): the
 /// source names that locked Gardens on this computer read (bare `name`, or
 /// `name::<this host>`). An agent's edit or remove of one of them is 423
-/// `garden_locked`.
-///
-/// C0 skeleton: an empty set. B3 replaces it.
+/// `garden_locked`. Empty when Zen was never set up here.
 pub fn locked_placement_sources() -> std::collections::BTreeSet<String> {
-    std::collections::BTreeSet::new()
+    let f = ZenFiles::local();
+    if !f.exists() {
+        return std::collections::BTreeSet::new();
+    }
+    f.locked_placement_sources_for(this_host().as_deref())
 }
 
 #[cfg(test)]

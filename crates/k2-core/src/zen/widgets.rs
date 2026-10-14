@@ -76,6 +76,50 @@ pub struct Manifest {
     pub libs: Vec<J>,
     /// `requires.features`.
     pub features: Vec<String>,
+    /// Garden v3 (contract-sources-v1 §6): `"config"` (the placement's
+    /// `config.source` / `config.sources` / `config.latest` name the data
+    /// sources) or a list of source names on this computer (≤ 16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sources: Option<J>,
+}
+
+/// At most this many fixed source names in a manifest.
+pub const MAX_MANIFEST_SOURCES: usize = 16;
+
+/// The placement `config` keys that name source addresses, for a widget
+/// whose manifest says `"sources": "config"`. `sources` is a comma
+/// separated list (config values are text, numbers or true/false).
+pub const SOURCE_CONFIG_KEYS: &[&str] = &["source", "sources", "latest"];
+
+/// The source addresses a placement binds: the manifest's fixed names, or
+/// (with `"sources": "config"`) the addresses in [`SOURCE_CONFIG_KEYS`].
+/// Unparsable entries are returned too (`validate` reports them).
+pub fn placement_source_addresses(sources: Option<&J>, config: &J) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |a: &str| {
+        let a = a.trim();
+        if !a.is_empty() && !out.iter().any(|x| x == a) {
+            out.push(a.to_string());
+        }
+    };
+    match sources {
+        Some(J::String(s)) if s == "config" => {
+            for k in SOURCE_CONFIG_KEYS {
+                if let Some(v) = config.get(*k).and_then(J::as_str) {
+                    for part in v.split(',') {
+                        push(part);
+                    }
+                }
+            }
+        }
+        Some(J::Array(list)) => {
+            for v in list.iter().filter_map(J::as_str) {
+                push(v);
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 impl Manifest {
@@ -98,6 +142,7 @@ impl Manifest {
                 .iter()
                 .map(|c| c.as_str().map(str::to_string))
                 .collect::<Option<_>>()?,
+            sources: v.get("sources").filter(|s| !s.is_null()).cloned(),
         })
     }
 }
@@ -253,6 +298,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     let mut reasons: BTreeMap<String, String> = BTreeMap::new();
     let mut libs: Vec<J> = Vec::new();
     let mut features: Vec<String> = Vec::new();
+    let mut sources: Option<J> = None;
     let mut saw_schema = false;
 
     for (k, val) in obj {
@@ -391,6 +437,36 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 }
                 None => err(k, "requires must be an object: {features?, libs?}".into()),
             },
+            // Garden v3 (contract-sources-v1 §6): which data sources a card reads.
+            "sources" => match val {
+                J::String(s) if s == "config" => sources = Some(val.clone()),
+                J::Array(list) if list.len() <= MAX_MANIFEST_SOURCES => {
+                    let mut ok = true;
+                    for (i, a) in list.iter().enumerate() {
+                        let p = format!("sources.{i}");
+                        match a.as_str().map(crate::sources::Address::parse) {
+                            Some(Ok(addr)) if addr.host.is_none() => {}
+                            Some(Ok(_)) => {
+                                ok = false;
+                                err(&p, "a manifest names sources on this computer only (no ::host); put other servers' addresses in the placement's config.source".into())
+                            }
+                            Some(Err(e)) => {
+                                ok = false;
+                                err(&p, format!("bad source name: {}", e.hint))
+                            }
+                            None => {
+                                ok = false;
+                                err(&p, "each source is a name (a string)".into())
+                            }
+                        }
+                    }
+                    if ok {
+                        sources = Some(val.clone());
+                    }
+                }
+                J::Array(_) => err(k, format!("sources lists at most {MAX_MANIFEST_SOURCES} names")),
+                _ => err(k, "sources is \"config\" (the placement's config.source names them) or a list of source names".into()),
+            },
             "net" | "secrets" => {
                 err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes in a later version"))
             }
@@ -432,7 +508,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                     err(
                         k,
                         format!(
-                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires"
+                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires, sources"
                         ),
                     );
                 }
@@ -444,6 +520,22 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     }
     if name.is_none() && !obj.contains_key("name") {
         errors.push(d(1, 1, "manifest.json needs a \"name\" (shown in K2's review dialog as the widget's own words)".into()));
+    }
+    let reads = crate::sources::SOURCES_READ_CAP;
+    if sources.is_some() && !caps.iter().any(|c| c == reads) {
+        let (l, c) = at("sources");
+        errors.push(d(l, c, format!("sources_needs_cap: a widget that names sources must ask for \"{reads}\" in caps")));
+    }
+    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::TAINTED_BY_SOURCES) {
+        let (l, c) = at("caps");
+        warnings.push(d(
+            l,
+            c,
+            format!(
+                "{}: a widget that reads data sources can't post to the Thread, so thread:post is dropped (use k2.sources.ask to open K2's Ask box)",
+                super::widget_access::SOURCES_DROPS_THREAD_POST
+            ),
+        ));
     }
     for cap in reasons.keys() {
         if !caps.contains(cap) {
@@ -463,6 +555,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         reasons,
         libs,
         features,
+        sources,
     };
     (Some(m), errors, warnings)
 }

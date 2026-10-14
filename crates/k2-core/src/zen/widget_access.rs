@@ -62,15 +62,34 @@ impl WidgetOrigin {
 
 /// The caps a widget runs with: requested ∩ [`USER_WIDGET_CAPS`], in
 /// [`USER_WIDGET_CAPS`] order, for a [`WidgetOrigin::Local`] widget. Pure.
+///
+/// **Static taint (Garden v3, GV48).** A widget that asks for
+/// `sources:read` never gets `thread:post` (so no `thread.post`,
+/// `thread.answer` or `compose.draft`): a card that reads a server's data
+/// could otherwise post it to an agent anywhere on your Homes. K2's own
+/// `sources.ask` still opens the Ask box, with a draft K2 writes. The
+/// renderer applies the same rule (`zen-custom-bridge.ts`), and
+/// `k2 zen validate` warns `sources_drops_thread_post`.
 pub fn effective_caps(origin: WidgetOrigin, requested: &[String]) -> Vec<String> {
+    let reads_sources = requested.iter().any(|r| r == SOURCES_READ);
     match origin {
         WidgetOrigin::Local => USER_WIDGET_CAPS
             .iter()
             .filter(|c| requested.iter().any(|r| r == *c))
+            .filter(|c| !(reads_sources && **c == TAINTED_BY_SOURCES))
             .map(|c| c.to_string())
             .collect(),
     }
 }
+
+/// The cap that lets a card read data sources (contract-sources-v1 §6).
+pub const SOURCES_READ: &str = crate::sources::SOURCES_READ_CAP;
+
+/// The cap a `sources:read` widget never runs with (GV48).
+pub const TAINTED_BY_SOURCES: &str = "thread:post";
+
+/// The `k2 zen validate` warning code for a manifest that asks for both.
+pub const SOURCES_DROPS_THREAD_POST: &str = "sources_drops_thread_post";
 
 /// Why posting is paused (R6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +173,15 @@ mod tests {
         assert_eq!(effective_caps(WidgetOrigin::Local, &[]), Vec::<String>::new(), "asks for nothing, gets nothing");
     }
 
+    /// GV48: asking for sources:read drops thread:post, whatever else is asked.
+    #[test]
+    fn sources_read_drops_thread_post() {
+        let caps = effective_caps(WidgetOrigin::Local, &s(&["thread:post", "sources:read", "thread:read", "agents:read"]));
+        assert_eq!(caps, s(&["agents:read", "thread:read", "sources:read"]));
+        let plain = effective_caps(WidgetOrigin::Local, &s(&["thread:post"]));
+        assert_eq!(plain, s(&["thread:post"]), "without sources:read nothing changes");
+    }
+
     #[test]
     fn effective_caps_never_include_a_non_widget_cap() {
         let caps = effective_caps(WidgetOrigin::Local, &s(&["agents:read", "files:write", "zen:exit", "tickets:read"]));
@@ -199,8 +227,16 @@ mod tests {
     fn user_widget_caps_match_the_catalog() {
         use crate::contract::{catalog, Exposure};
         assert_eq!(catalog().caps_exposed_to(Exposure::Widget), USER_WIDGET_CAPS);
+        // Every widget cap is a bridge cap, or the cap of verbs only the
+        // custom layer answers (renderer impl "frame": sources:read).
+        let frame_caps: Vec<&str> = catalog()
+            .verbs
+            .iter()
+            .filter(|v| v.bindings.renderer.as_ref().map(|r| r.implementation) == Some(crate::contract::RendererImpl::Frame))
+            .filter_map(|v| v.cap.as_deref())
+            .collect();
         for c in USER_WIDGET_CAPS {
-            assert!(super::super::BRIDGE_CAPS.contains(c), "{c} is a bridge cap");
+            assert!(super::super::BRIDGE_CAPS.contains(c) || frame_caps.contains(c), "{c} is a bridge or frame cap");
         }
     }
 

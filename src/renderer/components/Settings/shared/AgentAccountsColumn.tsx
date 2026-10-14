@@ -20,18 +20,25 @@ import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
 import {
   addApiKey,
+  checkedAgoText,
   errorText,
+  exhaustedWarnings,
+  formatWhen,
   isPinned,
+  isSigningIn,
+  nextCandidate,
   PINNED_SWITCH_REASON,
+  refreshLogins,
   removeLogin,
   renameLogin,
   STATE_LABELS,
   switchLogin,
-  switchToNext,
   tokenName,
+  usageCheckedAtSecs,
   useLlmAccountsStore,
   watchLlmAccounts,
   type LlmAccount,
+  type LlmAccountsDoc,
   type LlmTool,
 } from '@/stores/llm-accounts'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -53,6 +60,32 @@ export const SWITCH_NOTE =
 
 export const ACTIVE_REMOVE_REASON = 'This is the server default; make another token the server default first'
 
+/** On the server default's row: why it has no "Sign in again". */
+export const ACTIVE_RELOGIN_HINT = 'To sign this token in again, make another token the server default first.'
+
+export const SIGNING_IN_SWITCH_REASON = 'This token is signing in; finish or cancel that sign-in first'
+
+/** The confirm before a server-default switch: from → to, plus a
+ *  warning (never a refusal) when the target's last reading is used up. */
+export function switchConfirmText(
+  tool: LlmTool,
+  from: LlmAccount | null,
+  to: LlmAccount,
+  nowMs: number = Date.now(),
+): { title: string; message: string; warnings: string[] } {
+  const toName = tokenName(tool.display, to)
+  const fromName = from ? tokenName(tool.display, from) : 'no token'
+  const warnings = exhaustedWarnings(to, nowMs)
+  const lines = [
+    `From: ${fromName}`,
+    `To: ${toName}`,
+    '',
+    `Every chat that uses Server default on this server moves to ${to.label}; running sessions pick it up. Workspaces and chats set to their own token keep it.`,
+  ]
+  if (warnings.length > 0) lines.push('', ...warnings.map((w) => `Warning: ${w}`))
+  return { title: `Switch the ${tool.display} server default?`, message: lines.join('\n'), warnings }
+}
+
 const STATE_COLORS: Record<string, string> = {
   signed_in: '#22c55e',
   needs_login: '#ef4444',
@@ -62,11 +95,33 @@ const STATE_COLORS: Record<string, string> = {
 }
 
 function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | null {
-  const windows = account.usage?.windows ?? []
+  const usage = account.usage
   // API tokens: the row name already says "billed per token".
-  if (windows.length === 0) return null
+  if (!usage || account.kind === 'api_key') return null
+  const windows = usage.windows ?? []
+  // Each token's own last reading, with its age: a failed check keeps the
+  // old time and says so, so old numbers never read as just checked.
+  const age = checkedAgoText(usageCheckedAtSecs(account))
   return (
-    <div className="flex gap-3 mt-1" data-testid={`llm-usage-${account.id}`}>
+    <div className="mt-1" data-testid={`llm-usage-${account.id}`}>
+      {windows.length > 0 && <UsageWindows windows={windows} />}
+      <div className="text-[9px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-usage-age-${account.id}`}>
+        {windows.length === 0 && usage.status ? `${usage.status} · ` : ''}
+        Usage {age}
+        {usage.error && (
+          <span className="text-amber-400" data-testid={`llm-usage-error-${account.id}`}>
+            {' '}
+            · last check failed ({usage.error})
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function UsageWindows({ windows }: { windows: NonNullable<LlmAccount['usage']>['windows'] }): React.JSX.Element {
+  return (
+    <div className="flex gap-3">
       {windows.slice(0, 2).map((w) => {
         const pct = Math.max(0, Math.min(100, Math.round(w.used * 100)))
         return (
@@ -96,11 +151,13 @@ function pinLabel(a: LlmAccount): string {
 function AccountRow({
   account,
   tool,
+  doc,
   onLoginAgain,
   onError,
 }: {
   account: LlmAccount
   tool: LlmTool
+  doc: LlmAccountsDoc
   onLoginAgain: (a: LlmAccount) => void
   onError: (msg: string) => void
 }): React.JSX.Element {
@@ -115,6 +172,10 @@ function AccountRow({
   // places (rotating tokens): it can't become the server default, be
   // removed or be signed in again until those go back to Server default.
   const pinnedBlock = !apiKey && isPinned(account)
+  // A sign-in rewrites the token's slot: it can't become the default
+  // until that finishes.
+  const signingIn = isSigningIn(doc, account)
+  const switchBlocked = pinnedBlock ? PINNED_SWITCH_REASON : signingIn ? SIGNING_IN_SWITCH_REASON : undefined
   const who = [account.email, account.org].filter(Boolean).join(' · ')
   const pinnedTo = pinLabel(account)
 
@@ -124,6 +185,13 @@ function AccountRow({
     },
     [onError],
   )
+
+  const makeDefault = useCallback(async () => {
+    const from = tool.accounts.find((a) => a.id === tool.activeId) ?? null
+    const { title, message } = switchConfirmText(tool, from, account)
+    const ok = await useConfirmDialogStore.getState().confirm({ title, message, confirmLabel: 'Switch' })
+    if (ok) run(switchLogin(scope, account.id))
+  }, [tool, account, run, scope])
 
   const remove = useCallback(async () => {
     const ok = await confirm({
@@ -183,14 +251,16 @@ function AccountRow({
             <button
               type="button"
               className="text-[var(--color-accent)] disabled:opacity-40"
-              disabled={pinnedBlock}
-              title={pinnedBlock ? PINNED_SWITCH_REASON : undefined}
-              onClick={() => run(switchLogin(scope, account.id))}
+              disabled={switchBlocked !== undefined}
+              title={switchBlocked}
+              onClick={() => void makeDefault()}
             >
               Use this token
             </button>
           )}
-          {!account.active && needsLogin && (
+          {/* Any subscription that isn't the server default can be signed
+              in again (same flow as `k2 llm tokens login`). */}
+          {!account.active && !apiKey && (signedIn || needsLogin) && (
             <button
               type="button"
               className="text-[var(--color-accent)] disabled:opacity-40"
@@ -216,6 +286,16 @@ function AccountRow({
         </div>
       </div>
       {who && <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">{who}</div>}
+      {account.active && tool.switchedAt !== null && (
+        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-default-since-${account.id}`}>
+          Server default since {formatWhen(tool.switchedAt)}
+        </div>
+      )}
+      {account.active && !apiKey && (
+        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-relogin-hint-${account.id}`}>
+          {ACTIVE_RELOGIN_HINT}
+        </div>
+      )}
       {pinnedTo && (
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate" data-testid={`llm-pinned-${account.id}`}>
           Used by: {pinnedTo}
@@ -333,12 +413,38 @@ export function AgentAccountsColumn(): React.JSX.Element {
   const [keyDialog, setKeyDialog] = useState<{ tool: string; toolLabel: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+
   useEffect(() => watchLlmAccounts(scope), [scope])
   useEffect(() => {
     setSheet(null)
     setKeyDialog(null)
     setError(null)
   }, [hostKey])
+  // Opening the page re-reads every token's usage on that server (the
+  // daemon runs it at most once a minute); the list reloads when the
+  // daemon says it changed. A failure here is not the page's error: each
+  // row says how old its numbers are.
+  useEffect(() => {
+    refreshLogins(scope, true).catch((e: unknown) => {
+      console.debug('[llm-tokens] usage refresh on open:', errorText(e))
+    })
+  }, [scope, hostKey])
+
+  const switchToNextToken = useCallback(
+    async (tool: LlmTool, docNow: LlmAccountsDoc) => {
+      const to = nextCandidate(docNow, tool)
+      if (!to) {
+        setError('There is no other signed-in subscription for that tool.')
+        return
+      }
+      const from = tool.accounts.find((a) => a.id === tool.activeId) ?? null
+      const { title, message } = switchConfirmText(tool, from, to)
+      if (!(await useConfirmDialogStore.getState().confirm({ title, message, confirmLabel: 'Switch' }))) return
+      // The exact token the dialog named (not the daemon's own "next").
+      switchLogin(scope, to.id).catch((e: unknown) => setError(errorText(e)))
+    },
+    [scope],
+  )
 
   const doc = entry?.doc ?? null
   const byTool = new Map((doc?.tools ?? []).map((t) => [t.tool, t]))
@@ -463,6 +569,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                       key={a.id}
                       account={a}
                       tool={tool}
+                      doc={doc}
                       onError={setError}
                       onLoginAgain={(acc) =>
                         setSheet({ kind: 'relogin', tool: row.id, toolLabel: row.label, accountId: acc.id, label: acc.label })
@@ -477,9 +584,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     <button
                       type="button"
                       className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
-                      onClick={() => {
-                        switchToNext(scope, row.id).catch((e: unknown) => setError(errorText(e)))
-                      }}
+                      onClick={() => void switchToNextToken(tool, doc)}
                     >
                       Use next token
                     </button>

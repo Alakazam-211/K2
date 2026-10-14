@@ -769,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn host_mismatch_refuses_before_any_connection() {
+    fn host_not_allowed_refuses_before_any_connection() {
         let _a = AirgapEnv::set(false);
         let up = Upstream::start(|_| ok("fine"));
         let elsewhere = OriginPattern::parse("api.stripe.com", false).expect("pattern");

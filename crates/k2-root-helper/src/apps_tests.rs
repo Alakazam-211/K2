@@ -1259,3 +1259,26 @@ fn install_engine_refuses_agents_bad_signatures_and_other_binaries() {
     assert_eq!(o.code, exit::STATE);
     assert!(!t.p(ENGINE_PATH).exists());
 }
+
+#[test]
+fn journal_on_makes_it_persistent_once_and_never_removes_it() {
+    let t = box_root();
+    t.as_agent(); // open: converging to persistent is what box prep sets anyway
+    let o = t.call(&["apps", "journal", "on"]);
+    ok(&o);
+    assert_eq!(json(&o)["changed"], true);
+    assert!(t.p(JOURNAL_DIR).is_dir());
+    assert_eq!(std::fs::metadata(t.p(JOURNAL_DIR)).unwrap().permissions().mode() & 0o7777, 0o2755);
+    assert_eq!(calls_of(&t, SYSTEMD_TMPFILES), vec!["--create --prefix /var/log/journal".to_string()]);
+    assert_eq!(calls_of(&t, k2_root_proto::paths::JOURNALCTL), vec!["--flush".to_string()]);
+    let o = t.call(&["apps", "journal", "on"]);
+    ok(&o);
+    assert_eq!(json(&o)["changed"], false);
+    assert_eq!(calls_of(&t, SYSTEMD_TMPFILES).len(), 1, "no second tmpfiles run");
+    assert_eq!(json(&t.call(&["apps", "status"]))["journalPersistent"], true);
+    // A file or link in its place is refused.
+    let t = box_root();
+    write(&t, "/var/log/journal", "x");
+    assert_eq!(t.call(&["apps", "journal", "on"]).code, exit::STATE);
+    assert_eq!(read(&t, "/var/log/journal"), "x");
+}

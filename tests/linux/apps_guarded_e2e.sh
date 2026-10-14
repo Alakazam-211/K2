@@ -23,7 +23,7 @@
 # process and refuses its child (E18), the App pass and granted secrets
 # arrive as Podman secrets (never in the unit or env file), and
 # `pg hba-app` against a real Postgres.
-set -euo pipefail
+set -Eeuo pipefail
 
 IT=/it
 pass=0
@@ -35,6 +35,8 @@ fail() {
 }
 ok() { echo "  ok $*"; pass=$((pass + 1)); }
 info() { echo "  info $*"; }
+# Name the line a `set -e` exit happens on (not inside `set +e` blocks).
+trap 'rc=$?; [[ $- == *e* ]] && fail "line $LINENO: $BASH_COMMAND (exit $rc)"' ERR
 jq_() { python3 -c "import json,sys; v=json.load(open(sys.argv[1])); $1" "$2"; }
 
 ARCH="$(uname -m)"
@@ -172,11 +174,11 @@ except Exception: print("?")')"
 front() { K2 app list --json | python3 -c "import json,sys; print([a for a in json.load(sys.stdin)['apps'] if a['appId']=='$1'][0]['frontPort'])"; }
 
 echo "== guarded deploy (S12) =="
-K2 app install esc-a --memory 256M >/dev/null
+K2 app install esc-a --memory 256M
 t0=$(date +%s)
-K2 app deploy esc-a "$WS/a1" --engine guarded --no-wait >/dev/null
+K2 app deploy esc-a "$WS/a1" --engine guarded --no-wait >/dev/null || true
 r="$(wait_dep esc-a)"
-[ "$r" = live ] || { K2 app logs esc-a 2>&1 | tail -n 30; fail "esc-a first guarded deploy: $r"; }
+[ "$r" = live ] || { K2 app deployment esc-a --json 2>&1 | tail -c 3000; K2 app logs esc-a 2>&1 | tail -n 30; fail "esc-a first guarded deploy: $r"; }
 FA="$(front esc-a)"
 [ "$(curl -s "http://127.0.0.1:$FA/")" = a1 ] || fail "front esc-a"
 ok "esc-a live behind the guarded engine in $(($(date +%s) - t0)) s (incl. the base image fetch + first id mapping)"
@@ -242,8 +244,8 @@ nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo"
 ok "pasta runs in the App's slice; the per-App nft rule admits only its gateway port"
 
 echo "== a second App: its own slot, port and gateway =="
-K2 app install esc-b --memory 256M >/dev/null
-K2 app deploy esc-b "$WS/b1" --engine guarded --no-wait >/dev/null
+K2 app install esc-b --memory 256M
+K2 app deploy esc-b "$WS/b1" --engine guarded --no-wait >/dev/null || true
 r="$(wait_dep esc-b)"
 [ "$r" = live ] || fail "esc-b: $r"
 FB="$(front esc-b)"
@@ -260,7 +262,7 @@ LOG=/tmp/load.txt
 (for _ in $(seq 1 600); do curl -s -o /dev/null -w '%{http_code} ' -m 5 "http://127.0.0.1:$FA/slow?ms=200" >>"$LOG"; sleep 0.05; done) &
 LOADER=$!
 sleep 2
-K2 app deploy esc-a "$WS/a2" --no-wait >/dev/null
+K2 app deploy esc-a "$WS/a2" --no-wait >/dev/null || true
 r="$(wait_dep esc-a)"
 [ "$r" = live ] || fail "esc-a v2: $r"
 wait "$LOADER"

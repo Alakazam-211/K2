@@ -141,6 +141,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/UserTemplatesSection.tsx',
   'components/Settings/sections/WakeSchedulerSection.tsx',
   'components/Settings/sections/access-audit-api.ts',
+  // 0.45.6 Garden v3: Settings → Data Sources lists this server's sources.
+  'components/Settings/sections/DataSourcesSection.tsx',
+  'components/Settings/sections/data-sources-ui.ts',
   'components/Settings/shared/AgentAccountsColumn.tsx',
   'components/Settings/sections/data-api.ts',
   'components/Settings/sections/email-api.ts',

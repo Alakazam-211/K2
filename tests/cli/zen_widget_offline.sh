@@ -51,12 +51,25 @@ assert_eq "--widget and --garden together" "$rc" "2"
 assert_contains "names --widget among the choices" "$out" "--widget"
 run zen validate --widget
 assert_eq "--widget without a name" "$rc" "2"
+# Garden data authorship (contract-garden-data-v1 §8).
+run zen widget sign
+assert_eq "sign without a name" "$rc" "2"
+run zen widget claim a b
+assert_eq "claim with two names" "$rc" "2"
+run zen validate --garden g --no-sign
+assert_eq "--no-sign without --widget" "$rc" "2"
+assert_contains "--no-sign says what it is for" "$out" "--no-sign is for k2 zen validate --widget"
+run zen history --widget w --no-sign
+assert_eq "--no-sign on history" "$rc" "2"
 
 echo "== help and the manifest =="
 run zen --help
 assert_eq "zen help exits 0" "$rc" "0"
 assert_contains "help lists widget new" "$out" "k2 zen widget new <name> [--from k2:diary|hello|arcade]"
 assert_contains "help lists validate --widget" "$out" "--widget <name>"
+assert_contains "help lists widget sign" "$out" "k2 zen widget sign <name>"
+assert_contains "help lists widget claim" "$out" "k2 zen widget claim <name>"
+assert_contains "help lists --no-sign" "$out" "--no-sign"
 assert_contains "help says widgets need no permissions" "$out" "no permissions, no review"
 case "$out" in *"click Review"*|*"widget revoke"*) bad "help still sends people to a review or a revoke" ;; *) ok "help has no review or revoke" ;; esac
 run zen widget --help
@@ -76,8 +89,8 @@ echo "== k2 zen guide api =="
 run zen guide api
 assert_eq "guide api exits 0 with no daemon" "$rc" "0"
 lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
-[ "$lines" -le 80 ] && ok "guide api is $lines lines (max 80)" || bad "guide api is $lines lines (max 80)"
-for v in agents.list agents.subscribe conversation.open thread.read thread.subscribe thread.post thread.answer compose.draft gardens.switch theme.changed presence.get; do
+[ "$lines" -le 104 ] && ok "guide api is $lines lines (max 104)" || bad "guide api is $lines lines (max 104)"
+for v in agents.list agents.subscribe conversation.open thread.read thread.subscribe thread.post thread.answer compose.draft gardens.switch theme.changed presence.get store.get store.put store.txCommit save.set viewer.get; do
     assert_contains "guide api names k2.$v" "$out" "k2.$v("
 done
 assert_contains "guide api groups by cap" "$out" "thread:post (Post to the Thread)"

@@ -44861,7 +44861,9 @@ USAGE
   k2 zen theme new <name> [--from <theme>] [--json]
   k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
   k2 zen widget list [--json]
-  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
+  k2 zen widget sign <name> [--json]      # stamp this version as made by you (or this agent)
+  k2 zen widget claim <name> [--json]     # It's mine: the person only, outside K2
+  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> [--no-sign] | --file <file>] [--json]
   k2 zen reload [--json]
   k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]
   k2 zen history [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
@@ -46542,8 +46544,21 @@ if os.environ.get("ZF"):
     b["from"] = os.environ["ZF"]
 print(json.dumps(b))
 ')
-            raw=$(cli_post_json "/cli/zen/widget/new" "$body")
+            # Garden data (contract-garden-data-v1 §4.3): inside a K2 terminal
+            # the session's passport, so the new folder is stamped as made by
+            # this agent; outside K2, by you.
+            raw=$(_zen_session_post "/cli/zen/widget/new" "$body")
             _zen_print widget-new "$as_json" "$raw"
+            ;;
+        sign|claim)
+            [ "$n" -eq 1 ] || { echo "Error: k2 zen widget $verb needs one widget folder name" >&2; exit 2; }
+            body=$(ZW="${pos[0]}" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')
+            if [ "$verb" = "sign" ]; then
+                raw=$(_zen_session_post "/cli/zen/widget/sign" "$body")
+            else
+                raw=$(_zen_person_post "/cli/zen/widget/claim" "$body")
+            fi
+            _zen_sign_print "$verb" "$as_json" "$raw"
             ;;
         list)
             [ "$n" -eq 0 ] || { echo "Error: k2 zen widget list takes only --json" >&2; exit 2; }
@@ -46558,10 +46573,55 @@ print(json.dumps(b))
             cmd_help_zen
             ;;
         *)
-            echo "Unknown 'k2 zen widget' subcommand: $verb (new, list)" >&2
+            echo "Unknown 'k2 zen widget' subcommand: $verb (new, list, show, errors, sign, claim)" >&2
             exit 2
             ;;
     esac
+}
+
+# Garden data authorship (contract-garden-data-v1 §4.3, §8): print a
+# widget/sign or widget/claim answer. Exit 3 when only the person can
+# (claim from inside a K2 terminal), 4 for no such widget, 1 otherwise.
+_zen_sign_print() {
+    ZEN_VERB="$1" ZEN_JSON="$2" ZEN_RAW="$3" python3 -c '
+import json, os, sys
+verb = os.environ["ZEN_VERB"]
+as_json = os.environ.get("ZEN_JSON") == "true"
+raw = os.environ.get("ZEN_RAW") or ""
+try:
+    d = json.loads(raw) if raw.strip() else None
+except Exception:
+    d = None
+if not isinstance(d, dict):
+    print("Error: no answer from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+err = d.get("error")
+if err is not None:
+    if as_json:
+        print(json.dumps(d, separators=(",", ":")))
+    code = err.get("code") if isinstance(err, dict) else err
+    msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
+    if code in ("owner_only", "zen_local_only"):
+        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
+        sys.exit(3)
+    print("Error: %s" % msg, file=sys.stderr)
+    sys.exit(4 if code in ("unknown_widget", "not_found") else 1)
+if as_json:
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+m = d.get("madeBy") or {}
+kind = m.get("kind")
+who = "you" if kind == "owner" else ("K2" if kind == "k2" else (m.get("handle") or "an agent"))
+whose = "your" if kind in ("owner", "k2") else "its"
+if verb == "claim":
+    print("It\x27s yours: this version of %s now reads and writes data with your rights." % d.get("widget"))
+elif kind == "k2":
+    print("%s is a built-in: it is K2\x27s and needs no signing." % d.get("widget"))
+elif d.get("stamped"):
+    print("Signed as %s: this widget now reads and writes data with %s grants." % (who, whose))
+else:
+    print("Already signed by %s (the first signer of a version keeps it): this widget reads and writes data with %s grants." % (who, whose))
+'
 }
 
 _zen_no_home() {
@@ -46571,9 +46631,10 @@ _zen_no_home() {
 
 # Parse --garden/--file/--theme/--to/--json into ZEN_* globals.
 _zen_args() {
-    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""
+    ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""; ZEN_NO_SIGN=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --no-sign) ZEN_NO_SIGN=true; shift ;;
             --widget)
                 [ -n "${2:-}" ] || { echo "Error: --widget needs a widget folder name (see k2 zen widget list)" >&2; exit 2; }
                 ZEN_WIDGET_SEL="$2"; shift 2 ;;
@@ -46958,13 +47019,43 @@ cmd_zen() {
         validate|history)
             _zen_args "$@"
             [ -z "$ZEN_TO" ] || { echo "Error: --to is for k2 zen reset" >&2; exit 2; }
+            if [ "$ZEN_NO_SIGN" = true ] && { [ "$sub" != "validate" ] || [ -z "$ZEN_WIDGET_SEL" ]; }; then
+                echo "Error: --no-sign is for k2 zen validate --widget" >&2
+                exit 2
+            fi
             local -a q=()
             [ -n "$ZEN_GARDEN_SEL" ] && q+=("garden=$(urlencode "$ZEN_GARDEN_SEL")")
             [ -n "$ZEN_FILE_SEL" ] && q+=("file=$(urlencode "$ZEN_FILE_SEL")")
             [ -n "$ZEN_THEME_SEL" ] && q+=("theme=$(urlencode "$ZEN_THEME_SEL")")
             [ -n "$ZEN_WIDGET_SEL" ] && q+=("widget=$(urlencode "$ZEN_WIDGET_SEL")")
             raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
+            # Garden data (contract-garden-data-v1 §8): a clean
+            # `validate --widget` then signs that version as the caller (a
+            # second call; validate stays a read). --no-sign skips it.
+            local signed=""
+            if [ "$sub" = "validate" ] && [ -n "$ZEN_WIDGET_SEL" ] && [ "$ZEN_NO_SIGN" != true ] \
+                && [ "$(ZEN_RAW="$raw" python3 -c 'import json, os
+try:
+    d = json.loads(os.environ.get("ZEN_RAW") or "")
+except Exception:
+    d = {}
+print("yes" if isinstance(d, dict) and d.get("ok") is True and d.get("error") is None and not d.get("locked") else "no")')" = "yes" ]; then
+                signed=$(_zen_session_post "/cli/zen/widget/sign" \
+                    "$(ZW="$ZEN_WIDGET_SEL" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"]}))')")
+                if [ "$ZEN_AS_JSON" = true ]; then
+                    raw=$(ZEN_RAW="$raw" ZEN_SIGNED="$signed" python3 -c 'import json, os
+d = json.loads(os.environ["ZEN_RAW"])
+try:
+    d["signed"] = json.loads(os.environ.get("ZEN_SIGNED") or "null")
+except Exception:
+    d["signed"] = None
+print(json.dumps(d))')
+                fi
+            fi
             _zen_print "$sub" "$ZEN_AS_JSON" "$raw"
+            if [ -n "$signed" ] && [ "$ZEN_AS_JSON" != true ]; then
+                _zen_sign_print sign false "$signed" || echo "(validate was clean; signing failed, so its data calls keep the version's old maker)" >&2
+            fi
             ;;
         reload)
             _zen_args "$@"

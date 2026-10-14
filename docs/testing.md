@@ -79,8 +79,9 @@ on any thread count.
     row (any `engine_from_db` handler, even one that expects "not installed")
     holds `mail::mail_server_test_lock()`; otherwise it picks up a parallel
     test's row and dials that test's mock Stalwart, eating its scripted replies.
-    `domains::server_info` asserts the guard on test threads, so a missing one
-    fails every run, not one in fifty.
+    `domains::server_info`, `cert_names::hosted_apexes` and
+    `autoconfig::mail_hostname_for_apex` assert the guard on test threads, so a
+    missing one fails every run, not one in fifty.
 15. **Never flip process-wide daemon state.** Readiness (`boot_status`), and
     any static the in-process HTTP harness depends on, stay as the harness set
     them. Test the state machine on its own instance (`BootState::new()`).
@@ -88,6 +89,15 @@ on any thread count.
     decided (an outcome enum), not "took < 800 ms". A fixture you rebuild to
     compare bytes uses a fixed timestamp, not `now() + 30 days` (a second can
     tick between the two builds).
+17. **Process-global hooks and buses are shared.** A stub installed into a
+    global slot (`tunnel::ingress`'s ensure hook) goes through a guard that
+    clears it on drop (`TestIngressHook`); a test that needs no hook says so
+    (`TestIngressHook::none()`). On a process-wide broadcast bus (overlay,
+    session events) find your own frame by id; never assume the first frame
+    or an empty receiver is yours. A count of async events settles every
+    earlier event first (its frame may still be in flight).
+18. **A fresh child's `/proc/<pid>/cmdline` can read empty.** `spawn` returns
+    before the kernel sets the new argv; poll (bounded) before asserting.
 
 ## Running locally
 

@@ -2049,8 +2049,8 @@ mod tests {
         assert!(bad_tomb.is_err(), "status removed needs removed_at");
     }
 
-    /// 0163 on an upgraded database (a 0.45.5 database, last migration
-    /// 0159): it applies once, keeps existing rows, and a second run is a
+    /// 0163 on an upgraded database (last migration before it is 0162):
+    /// it applies once, keeps existing rows, and a second run is a
     /// no-op.
     #[test]
     fn sources_migration_applies_on_an_upgraded_db() {
@@ -2067,7 +2067,9 @@ mod tests {
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(last, "0159_workspace_handle_tombstones", "the file looks like 0.45.5");
+            // The migration just before 0163 (0162, the per-agent projects
+            // switch); the file now looks like it did before 0163 landed.
+            assert_eq!(last, "0162_agents_manage_projects", "the file looks like pre-0163");
             conn.execute(
                 "INSERT INTO projects (id, name, path, handle) VALUES ('w-0163', 'Ops', '/t/ops', 'ops')",
                 [],

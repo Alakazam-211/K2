@@ -598,7 +598,6 @@ impl Verb {
             | Verb::AppsDelegate(true)
             | Verb::AppsIoCost(true)
             | Verb::AppsReservePorts(true)
-            | Verb::AppsNftApply { .. }
             | Verb::AppsPackagesInstall
             | Verb::AppsPackagesInstallYouki
             | Verb::AppsRuntime(OciRuntime::Crun)
@@ -615,6 +614,18 @@ impl Verb {
             | Verb::AppsCoresSlice(_)
             | Verb::AppsBudget(_)
             | Verb::AppsUnprep => Daemon,
+            // Re-applying the canonical ranges is a tightening anyone may
+            // ask for (boot, drift). Other ranges could open more loopback
+            // ports to Apps: the daemon's call.
+            Verb::AppsNftApply { gw, px, db } => {
+                if (*gw, *px, *db)
+                    == (crate::apps::GATEWAY_PORTS, crate::apps::PROXY_PORTS, crate::apps::DB_PORTS)
+                {
+                    Open
+                } else {
+                    Daemon
+                }
+            }
         }
     }
 
@@ -1011,6 +1022,10 @@ mod tests {
             &["apps", "budget", "4096", "4096"],
             &["apps", "budget", "off"],
             &["apps", "unprep"],
+            // Non-canonical ranges could widen what Apps reach.
+            &["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5433"],
         ];
         for a in open {
             assert_eq!(Verb::parse(a).unwrap().class(), Class::Open, "{a:?}");

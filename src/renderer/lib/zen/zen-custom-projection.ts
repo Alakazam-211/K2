@@ -139,12 +139,23 @@ export function projectZenPeople(people: readonly ZenPerson[]): ZenWidgetPerson[
   return people.map(projectPerson)
 }
 
+export interface ZenWidgetCardAnswerer {
+  kind: string
+  login: string
+  /** The owner's display name (owner answers only), else null. */
+  name: string | null
+}
+
 export interface ZenWidgetChoice {
   prompt: string
   options: Array<{ label: string }>
   allow_custom: boolean
   status: string
   answer: string | null
+  /** Who answered or dismissed it; null while pending / an agent's own answer. */
+  answeredBy: ZenWidgetCardAnswerer | null
+  /** Unix seconds a pending card expires; null when it never does. */
+  expiresAt: number | null
 }
 
 export interface ZenWidgetThreadItem {
@@ -172,7 +183,21 @@ function projectChoice(c: OverlayChoice | null | undefined): ZenWidgetChoice | n
     allow_custom: c.allow_custom,
     status: c.status,
     answer: c.answer ?? null,
+    // Re-checked here: the port never trusts the doc's own fields.
+    answeredBy: projectAnswerer(c.answeredBy),
+    expiresAt: typeof c.expiresAt === 'number' && Number.isInteger(c.expiresAt) ? c.expiresAt : null,
   }
+}
+
+function projectAnswerer(raw: unknown): ZenWidgetCardAnswerer | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const kind = str(r.kind)
+  const login = str(r.login)
+  if (!kind || !login) return null
+  const name = kind === 'owner' ? str(r.name) : ''
+  return { kind, login, name: name || null }
 }
 
 /** One Thread item, or null for a kind widgets don't get. */

@@ -391,6 +391,12 @@ server hasn't said) and `image` (its picture as a PNG, JPEG, WebP or GIF `data:`
 URL of at most 256 KiB, else `null`; never SVG). Paint the initials on `color`\n\
 when there is no `image`. Both change live when someone renames, recolors or\n\
 re-pictures the agent.\n\n\
+A Thread choice card (`thread.read` / `thread.subscribe`, `doc.choice`) also\n\
+says `answeredBy`: who answered or dismissed it, `{kind, login, name}` with\n\
+`kind` `owner`, `user` or `guest` and `name` the owner's display name (else\n\
+`null`); `null` while pending or when the agent answered itself. And\n\
+`expiresAt`: Unix seconds when a pending card expires (K2 closes it as\n\
+`expired`), or `null` when it never does.\n\n\
 Built-in widgets get their caps from K2. A custom widget asks for caps in its\n\
 manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
@@ -801,6 +807,29 @@ mod tests {
 
     /// v14 (0.45.5 agent identity): rows carry `color` and `image`, and the
     /// catalog's AgentRow names both, so the skill and the types agree.
+    /// v17: choice cards carry `answeredBy` and `expiresAt`, and the
+    /// catalog's ChoiceCard names both, so the skill and the types agree.
+    #[test]
+    fn skill_documents_choice_card_answered_by_and_expires_at() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 17, "card fields need a new skill version");
+        assert!(contract::catalog().catalog_version >= 7, "card fields need a new catalog version");
+        let body = generate_k2_zen_skill();
+        for must in ["says `answeredBy`: who answered or dismissed it, `{kind, login, name}`", "`expiresAt`: Unix seconds when a pending card expires"] {
+            assert!(body.contains(must), "skill must mention {must:?}");
+        }
+        let c = contract::catalog();
+        for verb in ["thread.read", "thread.subscribe"] {
+            let v = c.verbs.iter().find(|v| v.verb == verb).unwrap_or_else(|| panic!("no {verb}"));
+            let choice = &v.response["properties"]["items"]["items"]["properties"]["doc"]["properties"]["choice"];
+            let by = &choice["properties"]["answeredBy"];
+            assert_eq!(by["title"], "CardAnswerer", "{verb}");
+            assert_eq!(by["type"], serde_json::json!(["object", "null"]), "{verb}");
+            assert_eq!(by["required"], serde_json::json!(["kind", "login", "name"]), "{verb}");
+            assert_eq!(by["properties"]["name"]["type"], serde_json::json!(["string", "null"]), "{verb}");
+            assert_eq!(choice["properties"]["expiresAt"]["type"], serde_json::json!(["integer", "null"]), "{verb}");
+        }
+    }
+
     #[test]
     fn skill_documents_agent_row_color_and_image() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 14, "agent look needs a new skill version");

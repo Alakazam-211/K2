@@ -154,7 +154,9 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
 
     // The App's environment is clean (S1 applied): no daemon K2_* values.
     let envs = body_of(front, "/env");
-    assert!(envs.contains("K2_APP_ID") && envs.contains("PORT"), "{envs}");
+    for name in ["K2_APP_ID", "K2_APP_NAME", "K2_HOST", "K2_PORT", "PORT"] {
+        assert!(envs.lines().any(|l| l == name), "{name} missing from the App's env (AR37): {envs}");
+    }
     assert!(!envs.contains("K2_HOOK_TOKEN"), "daemon env leaked into the App: {envs}");
 
     // Second deploy under load: no dropped requests across the switch.

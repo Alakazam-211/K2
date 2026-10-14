@@ -8,9 +8,11 @@
 //!   on production boxes.
 //! - **Clean environment** (S1 applied): `env_clear()`, then `PATH`
 //!   (login-shell enriched), `LANG`, `LC_*`, `TZ`, `TMPDIR`, `HOME` (the App
-//!   folder's `home/`), `PORT`, `NODE_ENV`, `K2_APP_ID`,
-//!   `K2_APP_DEPLOYMENT`, `K2_APP_DATA`, `K2_APP_CACHE`, the manifest's
-//!   declared variables, then the vault's grants for the App's service id.
+//!   folder's `home/`), `PORT`, `NODE_ENV`, the App identity (S24's
+//!   `K2_APP_ID` = the published service UUID, `K2_HOST`, `K2_PORT`; plus
+//!   `K2_APP_NAME` = the App's slug, AR37), `K2_APP_DEPLOYMENT`,
+//!   `K2_APP_DATA`, `K2_APP_CACHE`, the manifest's declared variables, then
+//!   the vault's grants for the App's service id.
 //!   Never the daemon's `K2_*` (hook socket, scoped token, API flags).
 //! - Per-deployment log (`~/.k2/apps/<id>/logs/<deployment>.log`), rotated
 //!   once at 50 MiB.
@@ -66,8 +68,16 @@ fn run_file(app_id: &str, deployment_id: &str) -> PathBuf {
 /// Variables K2 sets itself; a manifest can't declare these.
 const OWN: &[&str] = &["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ"];
 
+/// The App's slug (its CLI/URL handle). `K2_APP_ID` keeps S24's meaning,
+/// the published service UUID, which existing BFFs send on login (AR37).
+pub const APP_NAME_ENV: &str = "K2_APP_NAME";
+
 /// The clean environment (S1 applied; §4.2 item 9's allowlist).
 pub fn clean_env(spec: &AppSpec, port: u16) -> Vec<(String, String)> {
+    clean_env_with_daemon_port(spec, port, crate::publish_runtime::loopback_port())
+}
+
+fn clean_env_with_daemon_port(spec: &AppSpec, port: u16, daemon_port: u16) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let inherited = std::env::var("PATH").unwrap_or_default();
     out.push(("PATH".into(), k2_core::terminal::login_path::augmented_path(&inherited)));
@@ -85,7 +95,12 @@ pub fn clean_env(spec: &AppSpec, port: u16) -> Vec<(String, String)> {
             out.push((k.clone(), v.clone()));
         }
     }
-    out.push(("K2_APP_ID".into(), spec.app_id.clone()));
+    // Same names and meanings as every published `--cmd` service (S24-9):
+    // K2_APP_ID = service UUID, K2_HOST/K2_PORT = the daemon's loopback.
+    for (k, v) in crate::vault::publish_env::app_identity_env(&spec.service_id, daemon_port) {
+        out.push((k.into(), v));
+    }
+    out.push((APP_NAME_ENV.into(), spec.app_id.clone()));
     out.push(("K2_APP_DEPLOYMENT".into(), spec.deployment_id.clone()));
     out.push(("K2_APP_DATA".into(), spec.data_dir.to_string_lossy().to_string()));
     out.push(("K2_APP_CACHE".into(), spec.cache_dir.to_string_lossy().to_string()));
@@ -394,14 +409,19 @@ mod tests {
         let h = TempHome::new();
         let _tok = k2_core::test_env::EnvVar::set("K2_HOOK_TOKEN", "daemon-secret");
         let s = spec(h.path(), &["true"]);
-        let env: BTreeMap<String, String> = clean_env(&s, 4321).into_iter().collect();
+        let env: BTreeMap<String, String> = clean_env_with_daemon_port(&s, 4321, 7777).into_iter().collect();
         assert_eq!(env.get("PORT").map(String::as_str), Some("4321"));
         assert_eq!(env.get("GREETING").map(String::as_str), Some("hi"));
-        assert_eq!(env.get("K2_APP_ID").map(String::as_str), Some("pe-test"));
+        // AR37: K2_APP_ID is the service UUID (what a BFF sends on login);
+        // the slug is K2_APP_NAME; K2_HOST/K2_PORT point at the daemon.
+        assert_eq!(env.get("K2_APP_ID").map(String::as_str), Some("svc-pe"));
+        assert_eq!(env.get("K2_APP_NAME").map(String::as_str), Some("pe-test"));
+        assert_eq!(env.get("K2_HOST").map(String::as_str), Some("127.0.0.1"));
+        assert_eq!(env.get("K2_PORT").map(String::as_str), Some("7777"));
         assert!(!env.contains_key("K2_HOOK_TOKEN"), "never the daemon's K2_* (nor a declared one)");
         for k in env.keys() {
             assert!(
-                ["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ", "GREETING"].contains(&k.as_str())
+                ["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ", "GREETING", "K2_HOST", "K2_PORT"].contains(&k.as_str())
                     || k.starts_with("LC_")
                     || k.starts_with("K2_APP_"),
                 "unexpected variable {k}"

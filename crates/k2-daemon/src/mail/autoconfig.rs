@@ -60,6 +60,9 @@ fn pin_dav_srv_target(row: &mut RecordRow, host: &str) {
 /// `domain_names.role=mail` on this apex, else `mail_server.hostname`.
 /// Never leave `mail.<connect>.k2.dev` on a custom apex (L2).
 pub(crate) fn mail_hostname_for_apex(apex: &str) -> Option<String> {
+    // Test builds: may fall back to the singleton row; fail on entry.
+    #[cfg(test)]
+    crate::mail::assert_mail_server_reader_locked();
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Ok(names) = k2_core::domains::list_names_for_apex(&conn, apex) {

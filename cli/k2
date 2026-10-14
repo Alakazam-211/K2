@@ -6888,10 +6888,14 @@ Make and ship:
   k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none]
                  [--seed S | --folder F]
                                        Create the App (and its URL with --tunnel).
-  k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types]
+  k2 app deploy <app-id> <folder|seed> [--engine guarded|process]
+                 [--reason TEXT] [--no-wait] [--types]
                                        Health gate, switch, drain; the old version
                                        stays warm for the watch window and K2 rolls
                                        back on its own if the new one crashes.
+                                       --engine guarded runs it walled: rootless
+                                       container as k2app (Linux, engine installed);
+                                       the choice sticks for later deploys.
   k2 app rollback <app-id> [--to SEED] Instant while the previous one is warm.
 
 See and run it:
@@ -6918,6 +6922,11 @@ The box (Linux):
   k2 app box prepare [--runtime crun|youki] [--json]
                                        Owner: run the root helper's box prep
                                        (distro Podman + crun; youki is opt-in).
+  k2 app engine install [--from DIR] [--json]
+                                       Owner: install/update k2-app-engine (the
+                                       guarded engine, signed with the root-helper
+                                       key) for this daemon's version; --from a
+                                       folder holding the release asset + .sig.
 
 Exit codes: 0 live/ok, 1 a failed check or health gate, 2 usage or still
 pending (loop on k2 app deployment), 3 infra or permission (JSON with a code).
@@ -6957,6 +6966,39 @@ cmd_app_doctor() {
         return 0
     fi
     exit 1
+}
+
+# k2 app engine install [--from DIR] [--json] (S11): the owner installs or
+# updates k2-app-engine through the root helper.
+cmd_app_engine() {
+    case "${1:-}" in
+        install)
+            shift
+            local from="" json_out=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --from) from="${2:-}"; shift 2 ;;
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            [ -n "$from" ] && from="$(_app_rt_abs "$from")"
+            local raw
+            raw="$(K2_CP_MAX_TIME=600 _compute_send POST /cli/app/engine/install "$(_compute_json K2_CJ_from="$from")")"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+e = v.get("engine", {})
+print("k2-app-engine %s installed and answering (protocol %s, runtime %s, %s)" % (e.get("version"), e.get("protocol"), e.get("runtime"), e.get("podman")))'
+            fi
+            ;;
+        -h|--help|"") _app_rt_usage ;;
+        *) echo "usage: k2 app engine install [--from DIR] [--json]" >&2; exit 2 ;;
+    esac
 }
 
 # k2 app box [doctor|prepare …]. Prepare installs distro packages: allow
@@ -7185,9 +7227,11 @@ else:
 
 # k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
 cmd_app_deploy() {
-    local app="" target="" reason="" wait=150 types=0 json_out=0
+    local app="" target="" reason="" wait=150 types=0 json_out=0 engine=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --engine) engine="${2:-}"; shift 2 ;;
+            --engine=*) engine="${1#--engine=}"; shift ;;
             --reason) reason="${2:-}"; shift 2 ;;
             --no-wait) wait=0; shift ;;
             --types) types=1; shift ;;
@@ -7197,12 +7241,13 @@ cmd_app_deploy() {
             *) if [ -z "$app" ]; then app="$1"; else target="$1"; fi; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait]" >&2; exit 2; }
+    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--engine guarded|process] [--reason TEXT] [--no-wait]" >&2; exit 2; }
+    case "$engine" in ""|guarded|process) ;; *) echo "--engine is guarded or process" >&2; exit 2 ;; esac
     local body
     if [ -d "$target" ]; then
-        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types")"
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types" K2_CJ_engine="$engine")"
     else
-        body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait")"
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_engine="$engine")"
     fi
     _app_rt_post /cli/app/deploy "$body"
     if [ "$_CP_STATUS" = "422" ]; then
@@ -7593,6 +7638,7 @@ cmd_app() {
         uninstall) shift; cmd_app_uninstall "$@" ;;
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
+        engine) shift; cmd_app_engine "$@" ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"

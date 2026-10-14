@@ -51,6 +51,9 @@ pub struct Facts {
     /// AR43: an owner confirm works headless (vault password or an Owner
     /// Connect login). `None` off Linux (Touch ID / login password).
     pub headless_confirm: Option<bool>,
+    /// The engine's `version` answer, or why it didn't answer (S11).
+    pub engine: Option<Result<J, String>>,
+    pub skopeo: bool,
 }
 
 fn s(v: &Option<String>) -> &str {
@@ -426,15 +429,31 @@ pub fn doctor(f: &Facts) -> J {
                 None,
             )
         });
-        out.push(if hs("/enginePresent").as_bool() == Some(true) {
-            c("engine", "ok", "k2-app-engine installed", None)
-        } else {
-            c(
+        out.push(match (hs("/enginePresent").as_bool() == Some(true), &f.engine) {
+            (true, Some(Ok(v))) if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION")) => c(
+                "engine",
+                "ok",
+                &format!("k2-app-engine {} answering (runtime {})", env!("CARGO_PKG_VERSION"), v["runtime"].as_str().unwrap_or("?")),
+                None,
+            ),
+            (true, Some(Ok(v))) => c(
                 "engine",
                 "warn",
-                "k2-app-engine not installed yet (Apps run on the process engine until it is)",
+                &format!("k2-app-engine {} answers; this daemon is {} (k2 app engine install)", v["version"].as_str().unwrap_or("?"), env!("CARGO_PKG_VERSION")),
                 None,
-            )
+            ),
+            (true, _) => c("engine", "warn", "k2-app-engine installed but not answering (k2 app engine install)", None),
+            (false, _) => c(
+                "engine",
+                "warn",
+                "k2-app-engine not installed yet (Apps run on the process engine until it is: k2 app engine install)",
+                None,
+            ),
+        });
+        out.push(if f.skopeo {
+            c("skopeo", "ok", "skopeo present (fetches the pinned base image)", None)
+        } else {
+            c("skopeo", "warn", "skopeo missing: guarded deploys can't fetch the base image (k2 app box prepare)", None)
         });
     }
 
@@ -623,6 +642,10 @@ pub fn gather() -> Facts {
         .iter()
         .find_map(|p| version_of(p));
     f.headless_confirm = headless_confirm();
+    f.skopeo = std::path::Path::new(super::guarded::SKOPEO).exists();
+    if std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {
+        f.engine = Some(super::guarded::engine_version());
+    }
     f
 }
 

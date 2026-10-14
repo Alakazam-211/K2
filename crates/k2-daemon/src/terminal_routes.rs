@@ -180,7 +180,7 @@ pub(crate) fn resolve_screen_lines(
             Some(p) => p,
             None => {
                 return Err(CliResponse::bad_request(format!(
-                    "unknown workspace '{ws}' (pass a name, path, or id — see `k2so connections list`)"
+                    "unknown workspace '{ws}' (pass a name, path, or id — see `k2 connections list`)"
                 )))
             }
         };
@@ -201,7 +201,7 @@ pub(crate) fn resolve_screen_lines(
             Some(session) => Ok(v2_grid_lines(&session, requested_lines)),
             None => Err(CliResponse::bad_request(format!(
                 "no live session for workspace '{ws}'{} — it may be asleep \
-                 (check with `k2so sessions live {ws}`)",
+                 (check with `k2 sessions live {ws}`)",
                 agent
                     .map(|a| format!(" agent '{a}'"))
                     .unwrap_or_default(),

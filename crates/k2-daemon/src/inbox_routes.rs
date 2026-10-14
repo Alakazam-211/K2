@@ -271,12 +271,13 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
         if let Err(e) = std::fs::write(&tmp, md.as_bytes()) {
             return CliResponse::bad_request(format!("write compose temp: {e}"));
         }
-        let mut fed_params = params.clone();
-        fed_params.insert("wake".into(), "false".into());
-        if let Some(mode) = opt_param(params, "mode") {
-            fed_params.insert("mode".into(), mode);
-        }
-        let resp = deliver_federated_files(&fed_params, &agent, &host, &[tmp.clone()]);
+        // 0.45.6: the caller's wake choice rides the tray (`wake=` /
+        // `mode=wake`), so the PEER wakes its own workspace and answers
+        // with the result. Before, this forced `wake=false` and the CLI
+        // knocked `/cli/workspace/msg` on THIS box with the federated
+        // token, which can never resolve here → `workspace_not_found`
+        // every time (appa, 2026-10-11..13). Default stays silent.
+        let resp = deliver_federated_files(params, &agent, &host, &[tmp.clone()]);
         let _ = std::fs::remove_file(&tmp);
         return resp;
     }

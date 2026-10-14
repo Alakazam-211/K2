@@ -116,7 +116,7 @@ impl MsgReason {
     fn hint(self) -> &'static str {
         match self {
             Self::WorkspaceNotFound => {
-                "Run `k2so connections list` to see available workspaces."
+                "Run `k2 connections list` to see available workspaces."
             }
             Self::NoAgentMode => {
                 "Workspace has no agent. Use `k2 work send` to queue, or `k2 mode custom` to set up an agent."
@@ -878,7 +878,14 @@ pub fn deliver_live_with_via(
                 let conn = db.lock();
                 k2_core::connections::suggest_project_name(&conn, suggest_token)
             };
-            if workspace_token.contains('/') && !workspace_token.starts_with('/') {
+            if workspace_token.contains("::") {
+                // 0.45.6: a federated `agent::host` address never resolves
+                // in this server's workspace list — say so instead of
+                // pointing at the local connections list.
+                resp.hint = Some(format!(
+                    "'{workspace_token}' is an address on another server; this call only reaches workspaces on this server. Use `k2 msg {workspace_token} \"text\"` for a live message, or `k2 msg {workspace_token} --inbox-wake ...` to deliver a package and wake the agent there."
+                ));
+            } else if workspace_token.contains('/') && !workspace_token.starts_with('/') {
                 resp.hint = Some(match explain_unresolved_sidecar(workspace_token) {
                     Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`)."),
                     None => format!(
@@ -887,7 +894,7 @@ pub fn deliver_live_with_via(
                 });
             } else if let Some(s) = suggestion {
                 resp.hint = Some(format!(
-                    "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `k2so connections list` to see available workspaces."
+                    "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `k2 connections list` to see available workspaces."
                 ));
             }
             return resp;
@@ -3545,6 +3552,42 @@ mod tests {
             .hint
             .as_deref()
             .is_some_and(|h| h.contains("connections list")));
+    }
+
+    /// 0.45.6 — hints name the current binary (`k2`), never the retired
+    /// `k2so`, and a federated `agent::host` token says it lives on
+    /// another server (appa saw "Run `k2so connections list`" on a
+    /// federated wake that could never resolve locally).
+    #[test]
+    fn workspace_not_found_hints_use_k2_and_explain_federated_tokens() {
+        let static_hint = MsgReason::WorkspaceNotFound.hint();
+        assert!(static_hint.contains("`k2 connections list`"), "{static_hint}");
+        assert!(!static_hint.contains("k2so"), "{static_hint}");
+
+        let r = deliver_live(
+            "definitely-not-a-real-workspace-name",
+            "hi",
+            "sender",
+            "",
+            false,
+            DEFAULT_WAKE_TIMEOUT,
+        );
+        let hint = r.hint.expect("unknown workspace carries a hint");
+        assert!(!hint.contains("k2so"), "stale binary name in hint: {hint}");
+
+        let r = deliver_live(
+            "chris::claimchaser.k2.dev",
+            "hi",
+            "sender",
+            "",
+            true,
+            DEFAULT_WAKE_TIMEOUT,
+        );
+        assert_eq!(r.reason.as_deref(), Some("workspace_not_found"));
+        let hint = r.hint.expect("federated token carries a hint");
+        assert!(hint.contains("another server"), "{hint}");
+        assert!(hint.contains("--inbox-wake"), "{hint}");
+        assert!(!hint.contains("k2so"), "{hint}");
     }
 
     #[test]

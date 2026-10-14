@@ -3684,6 +3684,173 @@ mod tests {
         }
     }
 
+    // ── 0.45.6: federated `--inbox-wake --title/--body` wakes on the PEER ──
+    //
+    // appa 2026-10-11..13: `k2 msg chris::claimchaser.k2.dev --inbox-wake
+    // --title … --body …` landed the package but the wake always answered
+    // `workspace_not_found`. The compose route forced `wake=false` into the
+    // tray, and the CLI then knocked THIS box's `/cli/workspace/msg` with the
+    // federated token, which can never resolve here. The wake now rides the
+    // tray and the peer answers with its own wake result.
+
+    /// Sender half: the real compose route, a real sealed envelope to a
+    /// peer stub. The tray must ask the peer to wake (`wake: true`), and the
+    /// peer's wake result comes back as `wake` in the compose response.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compose_inbox_wake_to_agent_at_host_asks_the_peer_to_wake() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
+        let w = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let tx = std::sync::Mutex::new(tx);
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[(&w, "chris", "Chris", &[])])),
+            r#"{"delivered":true,"mode":"inbox","ok":true,"id":"pkg-1","title":"Numbers","coverPath":"/home/k2/ai/Chris/.k2/inbox/pkg-1.md","wake":{"success":true,"reason":null,"targetSessionId":"s-1","woke":true,"attempts":1}}"#,
+            move |b| {
+                let _ = tx.lock().unwrap().send(b);
+            },
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let _fp = pin_trusted_peer_for_send("claimchaser");
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("workspace".to_string(), "chris::claimchaser.k2.dev".to_string());
+        params.insert("title".to_string(), "Numbers".to_string());
+        params.insert("body".to_string(), "a to z numbers".to_string());
+        params.insert("wake".to_string(), "true".to_string());
+        params.insert("mode".to_string(), "wake".to_string());
+        params.insert("source".to_string(), "msg-inbox".to_string());
+        let resp = tokio::task::spawn_blocking(move || {
+            crate::inbox_routes::handle_compose_post(&params)
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["status"], "sent", "{}", resp.body);
+        assert_eq!(v["coverPath"], "/home/k2/ai/Chris/.k2/inbox/pkg-1.md", "{}", resp.body);
+        assert_eq!(v["wake"]["success"], true, "the peer's wake result must come back: {}", resp.body);
+
+        let received = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("peer stub received the envelope");
+        let local_pem = k2_core::federation::identity::load_or_create().unwrap().public_key_pem();
+        let signal = federation::open(&received, &local_pem).expect("envelope opens");
+        match signal.kind {
+            SignalKind::Custom { kind, payload } => {
+                assert_eq!(kind, federation::TRAY_SIGNAL_KIND);
+                let spec: federation::TraySpec = serde_json::from_value(payload).unwrap();
+                assert!(spec.wake, "the tray must ask the peer to wake its workspace");
+                assert_eq!(spec.title.as_deref(), Some("Numbers"));
+            }
+            other => panic!("expected an inbox-tray, got {other:?}"),
+        }
+    }
+
+    /// `--inbox-silent` (no wake param) still lands quietly.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn compose_inbox_silent_to_agent_at_host_does_not_ask_for_a_wake() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
+        let w = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let tx = std::sync::Mutex::new(tx);
+        let stub = spawn_peer_stub(
+            Some(roster_json(&[(&w, "chris", "Chris", &[])])),
+            r#"{"delivered":true,"mode":"inbox","ok":true,"id":"pkg-2"}"#,
+            move |b| {
+                let _ = tx.lock().unwrap().send(b);
+            },
+        );
+        let _base = InboundBase::set(&format!("http://127.0.0.1:{}", stub.port));
+        let _fp = pin_trusted_peer_for_send("claimchaser");
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("workspace".to_string(), "chris::claimchaser.k2.dev".to_string());
+        params.insert("title".to_string(), "Quiet".to_string());
+        let resp = tokio::task::spawn_blocking(move || {
+            crate::inbox_routes::handle_compose_post(&params)
+        })
+        .await
+        .unwrap();
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let received = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("peer stub received the envelope");
+        let local_pem = k2_core::federation::identity::load_or_create().unwrap().public_key_pem();
+        let signal = federation::open(&received, &local_pem).expect("envelope opens");
+        match signal.kind {
+            SignalKind::Custom { payload, .. } => {
+                let spec: federation::TraySpec = serde_json::from_value(payload).unwrap();
+                assert!(!spec.wake, "a silent compose must not ask for a wake");
+            }
+            other => panic!("expected an inbox-tray, got {other:?}"),
+        }
+    }
+
+    /// Receiver half: a tray asking for a wake, into an opted-in workspace
+    /// with an agent, wakes it by PATH on the receiving box and answers
+    /// `wake.success == true` (the agent is a `cat` shim, never a real CLI).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inbound_tray_with_wake_wakes_the_receiving_workspace() {
+        let _home = crate::test_support::TempHome::new();
+        {
+            k2_core::db::init_for_tests();
+            crate::v2_session_map::clear_for_tests();
+            let shim_dir = std::env::temp_dir()
+                .join(format!("k2-fed-wake-shim-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&shim_dir).unwrap();
+            let shim = shim_dir.join("cat");
+            std::fs::write(&shim, "#!/bin/sh\nexec cat\n").unwrap();
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let _cmd = k2_core::test_env::EnvVar::set("K2SO_WAKE_HEADLESS_TEST_COMMAND", "cat");
+            let _shim = k2_core::test_env::EnvVar::set("K2_TEST_AGENT_SHIM_DIR", &shim_dir);
+
+            let ws_path = temp_ws_path();
+            std::fs::create_dir_all(&ws_path).unwrap();
+            let ws_id = register_project(&ws_path);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "UPDATE projects SET agent_mode = 'manager', agent_enabled = 1 WHERE id = ?1",
+                    rusqlite::params![ws_id],
+                )
+                .unwrap();
+            }
+            k2_core::workspace::settings::update_project_setting(
+                &ws_path,
+                "allow_remote_instruct",
+                "1",
+            )
+            .expect("opt in");
+
+            let key = pin_trusted_peer("peer");
+            let bytes = seal_tray_to(&ws_id, &key, "peer", brief_tray());
+            let resp = tokio::task::spawn_blocking(move || handle_inbound(&bytes))
+                .await
+                .unwrap();
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "inbox", "{}", resp.body);
+            assert_eq!(v["ok"], true, "{}", resp.body);
+            assert_eq!(v["wake"]["success"], true, "receiver must wake its workspace: {}", resp.body);
+            assert!(
+                v["wake"]["targetSessionId"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+                "wake names the session it reached: {}",
+                resp.body
+            );
+
+            crate::v2_session_map::clear_for_tests();
+            let _ = std::fs::remove_dir_all(&shim_dir);
+        }
+    }
+
     // ── PR1: dual-auth under passports — principal-bound from_workspace ──
     //
     // A5.1 Scoped + trusted peer + connection → send ok/queued

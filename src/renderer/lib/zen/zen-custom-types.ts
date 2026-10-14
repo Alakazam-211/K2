@@ -65,6 +65,12 @@ export interface ZenCustomWidgetPayload {
   origin: ZenWidgetOrigin
   /** Set while the runaway guard has its posting paused. */
   paused: ZenWidgetPause | null
+  /** Garden v3: the manifest's `sources` (`"config"` or fixed names), or
+   *  null / absent (an older daemon). */
+  sources?: 'config' | string[] | null
+  /** Garden v3: the source addresses this placement binds (`not_bound`
+   *  for anything else). Absent from an older daemon. */
+  sourceAddresses?: string[]
 }
 
 /** The v4 seam: only a widget from your own Garden runs today. One that

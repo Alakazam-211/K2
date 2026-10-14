@@ -52,6 +52,7 @@ import type { ZenWidgetStopReason } from './zen-custom-run'
 import { ZenCanvasError, zenHitRegionsFrom } from './zen-canvas'
 import type { ZenRect } from './zen-controls'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from './zen-sources'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -74,7 +75,11 @@ export const ZEN_PAUSED_MESSAGE = 'Paused: too many posts. Resume it on the widg
 
 export class ZenCustomRefusal extends Error {
   readonly wire: CatalogWireError
-  constructor(code: CatalogErrorCode, message: string, extra: Partial<Pick<CatalogWireError, 'cap' | 'room' | 'feature'>> = {}) {
+  constructor(
+    code: CatalogErrorCode,
+    message: string,
+    extra: Partial<Pick<CatalogWireError, 'cap' | 'room' | 'feature' | 'last'>> = {},
+  ) {
     super(message)
     this.name = 'ZenCustomRefusal'
     this.wire = { code, message, ...extra }
@@ -94,6 +99,13 @@ export interface ZenCustomLayerDeps {
   ensureConversation(address: string): Promise<void>
   /** Push a subscription value to the frame. */
   push(sub: number, value: unknown): void
+  /** End a subscription with a refusal after it started (an async failure,
+   *  e.g. a source's server that isn't saved): the frame's onError hears it. */
+  pushError?(sub: number, error: CatalogWireError): void
+  /** Garden v3 data sources (contract-sources-v1 §6): the addresses this
+   *  placement names (its config / manifest), the reader, and K2's Ask box.
+   *  Without it the `sources.*` verbs answer `verb_unavailable`. */
+  sources?: ZenCustomSources
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
   /** Is posting paused now (the runaway guard, here or in the daemon)? */
@@ -113,6 +125,15 @@ export interface ZenCustomLayerDeps {
     startDrag(): void
   }
   now(): number
+}
+
+/** What the custom layer needs for the `sources.*` verbs. */
+export interface ZenCustomSources {
+  /** The placement's bound addresses (`sourceAddresses` from the daemon). */
+  bound(): readonly string[]
+  reader: ZenSourcesReader
+  /** Open K2's Ask an agent box about this source (K2 writes the draft). */
+  ask(address: string, itemKey: string | null): Promise<boolean>
 }
 
 export interface ZenCustomLayer {
@@ -209,6 +230,38 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       refuse('not_bound', `${address} isn’t one of this widget’s agents.`, { room: handleOf(address) })
     }
     return address
+  }
+
+  /** Garden v3: an address this placement names (config / manifest), else `not_bound`. */
+  const needSource = (verb: string, v: unknown): { address: string; src: ZenCustomSources } => {
+    const src = deps.sources
+    if (!src) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    if (typeof v !== 'string' || !v.trim()) refuse('failed', `${verb} needs a source address`)
+    const address = canonicalSourceAddress(v as string)
+    if (!address) refuse('failed', `'${String(v)}' isn’t a source address (name or name::host).`)
+    const bound = new Set(src!.bound().map((a) => canonicalSourceAddress(a)).filter((a): a is string => a !== null))
+    if (!bound.has(address!)) {
+      refuse('not_bound', `${address} isn’t one of this placement’s sources (config.source / config.sources).`, { room: address! })
+    }
+    return { address: address!, src: src! }
+  }
+
+  /** A reader failure as the bridge's refusal (`unreachable` carries `last`). */
+  const sourceRefusal = (address: string, err: unknown): ZenCustomRefusal => {
+    if (!(err instanceof ZenSourceError)) return toRefusal(err)
+    if (err.code === 'rate_limited') noteLimited()
+    const extra: Partial<CatalogWireError> = { room: address }
+    if (err.last) extra.last = err.last
+    const msg = err.code === 'cap_not_granted' && err.role ? `${err.message} (needs ${err.role})` : err.message
+    return new ZenCustomRefusal(err.code, msg, extra)
+  }
+
+  const sourceCall = async <T>(address: string, op: () => Promise<T>): Promise<T> => {
+    try {
+      return await op()
+    } catch (err) {
+      throw sourceRefusal(address, err)
+    }
   }
 
   const needText = (verb: string, v: unknown): string => {
@@ -335,11 +388,48 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       inner('compose.draft', address, needText('compose.draft', args[1]))
       return null
     },
+    // ── Garden v3 data sources (contract-sources-v1 §6) ────────────────
+    'sources.list': () => {
+      if (!deps.sources) refuse('verb_unavailable', 'sources.list isn’t available here.')
+      return deps.sources!.reader.list(deps.sources!.bound(), deps.gardenId())
+    },
+    'sources.read': (args) => {
+      const { address, src } = needSource('sources.read', args[0])
+      return sourceCall(address, () => src.reader.read(address, deps.gardenId()))
+    },
+    'sources.history': (args) => {
+      const { address, src } = needSource('sources.history', args[0])
+      const field = args[1]
+      if (typeof field !== 'string' || !field) refuse('failed', 'sources.history needs a field name')
+      const o = isObj(args[2]) ? args[2] : {}
+      const opts: { fromAt?: number; toAt?: number } = {}
+      if (typeof o.fromAt === 'number' && Number.isFinite(o.fromAt)) opts.fromAt = Math.floor(o.fromAt)
+      if (typeof o.toAt === 'number' && Number.isFinite(o.toAt)) opts.toAt = Math.floor(o.toAt)
+      return sourceCall(address, () => src.reader.history(address, field as string, opts, deps.gardenId()))
+    },
+    'sources.refresh': (args) => {
+      const { address, src } = needSource('sources.refresh', args[0])
+      return sourceCall(address, async () => {
+        const r = await src.reader.refresh(address, deps.gardenId())
+        return { queued: r.queued, nextAt: r.nextAt ?? null }
+      })
+    },
+    // K2's own Ask box: the widget supplies no text (GV48 keeps thread:post away).
+    'sources.ask': async (args) => {
+      const { address, src } = needSource('sources.ask', args[0])
+      const key = args[1]
+      if (key !== undefined && key !== null && typeof key !== 'string') refuse('failed', 'sources.ask takes an item key (text) or nothing')
+      const opened = await src.ask(address, typeof key === 'string' && key ? key.slice(0, 200) : null)
+      return { opened }
+    },
   }
 
   // ── subscriptions ────────────────────────────────────────────────────────
 
-  const subscribers: Record<string, (args: unknown[], push: (v: unknown) => void) => () => void> = {
+  const subscribers: Record<
+    string,
+    (args: unknown[], push: (v: unknown) => void, fail: (error: CatalogWireError) => void) => () => void
+  > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
     'agents.subscribe': (_args, push) => {
       let last = ''
@@ -367,6 +457,27 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       }) as () => void
       void deps.ensureConversation(address).catch((err: unknown) => console.warn(`[zen] widget Thread for ${address}:`, err))
       return off
+    },
+    // Garden v3: the card view, pushed on every change; an unreachable server
+    // pushes the last view greyed (reach "unreachable", phase "stale").
+    'sources.subscribe': (args, push, fail) => {
+      const { address, src } = needSource('sources.subscribe', args[0])
+      let last = ''
+      try {
+        return src.reader.subscribe(
+          address,
+          (view) => {
+            const sig = JSON.stringify(view)
+            if (sig === last) return
+            last = sig
+            push(view)
+          },
+          (err) => fail(sourceRefusal(address, err).wire),
+          deps.gardenId(),
+        )
+      } catch (err) {
+        throw sourceRefusal(address, err)
+      }
     },
   }
 
@@ -428,9 +539,19 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         const entry = { off: (): void => undefined, thread, budget }
         subs.set(sub, entry)
         try {
-          entry.off = subscribers[verb](args, (value) => {
-            if (!stopped && subs.get(sub) === entry) deps.push(sub, zenPlain(value))
-          })
+          entry.off = subscribers[verb](
+            args,
+            (value) => {
+              if (!stopped && subs.get(sub) === entry) deps.push(sub, zenPlain(value))
+            },
+            (error) => {
+              // An async refusal ends the subscription (the runtime calls onError).
+              if (stopped || subs.get(sub) !== entry) return
+              subs.delete(sub)
+              entry.off()
+              deps.pushError?.(sub, zenPlain(error) as CatalogWireError)
+            },
+          )
         } catch (err) {
           subs.delete(sub)
           throw err

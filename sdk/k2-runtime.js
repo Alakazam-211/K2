@@ -23,7 +23,7 @@
   'use strict'
 
   /** @typedef {{cap: string | null, reach: 'portable' | 'local', kind: 'call' | 'subscribe' | 'event', feature?: string}} VerbRow */
-  /** @typedef {{code: string, message: string, cap?: string, room?: string, feature?: string}} WireError */
+  /** @typedef {{code: string, message: string, cap?: string, room?: string, feature?: string, last?: unknown}} WireError */
 
   var g = /** @type {any} */ (self)
   /** @type {Record<string, VerbRow>} */
@@ -44,6 +44,8 @@
       if (wire.cap !== undefined) this.cap = wire.cap
       if (wire.room !== undefined) this.room = wire.room
       if (wire.feature !== undefined) this.feature = wire.feature
+      // Garden v3: `unreachable` carries the last view K2 has (phase stale).
+      if (wire.last !== undefined) this.last = wire.last
     }
   }
 

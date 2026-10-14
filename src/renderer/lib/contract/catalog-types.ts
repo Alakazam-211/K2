@@ -109,4 +109,7 @@ export interface CatalogWireError {
   cap?: string
   room?: string
   feature?: string
+  /** Garden v3: `unreachable` from a sources verb carries the last view K2
+   *  has, with phase `stale` (contract-sources-v1 §6). */
+  last?: unknown
 }

@@ -28,6 +28,7 @@ import {
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
 import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
+import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
 import { isZenWidgetPostingPaused, pauseZenWidgetPosting, stopZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
 import { ensureZenConversation, zenAgentRows, zenCustomViewFor } from '@/lib/zen/zen-data'
@@ -66,7 +67,7 @@ export interface ZenCustomLoadProblem {
 
 /** The `/boot-status` features the widget rows need: this daemon served the
  *  bundle, so it has them (UW36). B1's generated table names each row's. */
-export const ZEN_FRAME_FEATURES: readonly string[] = ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1']
+export const ZEN_FRAME_FEATURES: readonly string[] = ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1', 'sources-v1']
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
  *  variables and scheme (UW39), and reduced motion. */
@@ -199,7 +200,7 @@ export function ZenCustomFrame({
           console.warn('[zen] the widget runtime report failed:', err),
         )
       },
-      makeLayer: (push) =>
+      makeLayer: (push, pushError) =>
         createZenCustomLayer({
           widget: () => widgetRef.current,
           gardenId: () => gardenId,
@@ -207,6 +208,8 @@ export function ZenCustomFrame({
           boundRows: () => zenAgentRows(zenCustomViewFor(gardenId, widgetRef.current)),
           ensureConversation: (address) => ensureZenConversation(zenCustomViewFor(gardenId, widgetRef.current), address),
           push,
+          pushError,
+          sources: zenCustomSourcesFor(gardenId, () => widgetRef.current),
           stop: (reason) => stopZenWidget(key, reason),
           paused: () => widgetRef.current.paused !== null || isZenWidgetPostingPaused(key),
           pauseForRunaway: () => {

@@ -58,6 +58,7 @@
         if (wire.cap !== undefined) this.cap = wire.cap
         if (wire.room !== undefined) this.room = wire.room
         if (wire.feature !== undefined) this.feature = wire.feature
+        if (wire.last !== undefined) this.last = wire.last
       }
     }
 

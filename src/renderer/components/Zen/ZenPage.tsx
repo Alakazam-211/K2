@@ -82,6 +82,7 @@ import { useZenWidgetsRunningMarker } from '@/lib/zen/zen-custom-run'
 import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 import { ZenNewGardenHost } from './widgets/ZenNewGardenModal'
+import { ZenSourceAskHost, ZEN_SOURCE_ASK_CAPS, ZEN_SOURCE_ASK_ID } from './widgets/ZenSourceAsk'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -195,6 +196,8 @@ export function ZenPage({
     () => createZenBridge(host, { id: ZEN_TEMPLATE_CONTROLS_ID, caps: ZEN_TEMPLATE_CONTROL_CAPS }),
     [host],
   )
+  // Garden v3: K2's own Ask box for data-source cards (never a widget's bridge).
+  const sourceAskBridge = useMemo(() => createZenBridge(host, { id: ZEN_SOURCE_ASK_ID, caps: ZEN_SOURCE_ASK_CAPS }), [host])
   // G52: ⌘1–9 / ⌘0 opens row N of this page's first Agents widget.
   useEffect(
     () => registerZenRowSelect((index) => selectZenRowOnPage(pageRef.current, currentZenGardenId() ?? '', index)),
@@ -390,6 +393,7 @@ export function ZenPage({
         </div>
         {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
         <ZenNewGardenHost bridge={controlsBridge} />
+        <ZenSourceAskHost bridge={sourceAskBridge} />
       </div>
     </ZenFillReloadContext.Provider>
   )

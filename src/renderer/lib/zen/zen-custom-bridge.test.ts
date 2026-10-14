@@ -8,7 +8,9 @@ import type { ZenWidgetBridge } from './zen-bridge'
 import { ZenBridgeError } from './zen-bridge'
 import type { ZenCustomWidgetPayload, ZenFrameReply } from './zen-custom-types'
 import type { ZenAgentRow, ZenThreadView } from './zen-data'
-import { createZenCustomLayer, zenPlain, ZEN_RUNAWAY, type ZenCustomLayerDeps } from './zen-custom-bridge'
+import { createZenCustomLayer, zenEffectiveCaps, zenPlain, ZEN_RUNAWAY, type ZenCustomLayerDeps } from './zen-custom-bridge'
+import { createZenSourcesReader } from './zen-sources'
+import { fakeSources, fixtureView, settle } from './zen-sources-fixtures'
 import { projectZenRow, projectZenThreadItem, ZEN_WIDGET_ROW_KEYS } from './zen-custom-projection'
 import { ZenCanvasError } from './zen-canvas'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
@@ -553,5 +555,137 @@ describe('0.45.3: the whole canvas through the layer', () => {
     const layer = createZenCustomLayer(harness().deps)
     expect(code(await call(layer, 'canvas.setHitRegions', []))).toBe('verb_unavailable')
     expect(code(await call(layer, 'window.startDrag'))).toBe('verb_unavailable')
+  })
+})
+
+// ── Garden v3 data sources (contract-sources-v1 §6, §12.3 "Verbs") ──────
+
+function sourcesHarness(bound: string[] = ['fleet', 'deploys::akzm.k2.dev']): {
+  h: Harness
+  f: ReturnType<typeof fakeSources>
+  asks: Array<[string, string | null]>
+  errors: Array<{ sub: number; error: unknown }>
+} {
+  const f = fakeSources(['akzm.k2.dev'])
+  f.servers.get('local').views.set('fleet', fixtureView())
+  f.servers.get('akzm.k2.dev').views.set('deploys', fixtureView({ name: 'deploys', label: 'Deploys' }))
+  const reader = createZenSourcesReader(f.deps)
+  const asks: Array<[string, string | null]> = []
+  const errors: Array<{ sub: number; error: unknown }> = []
+  const h = harness({
+    sources: {
+      bound: () => bound,
+      reader,
+      ask: async (address, key) => {
+        asks.push([address, key])
+        return true
+      },
+    },
+    pushError: (sub, error) => errors.push({ sub, error }),
+  })
+  h.widget.current = payload({
+    caps: ['sources:read'] as never,
+    requested: ['sources:read', 'thread:post'] as never,
+    sourceAddresses: bound,
+  })
+  return { h, f, asks, errors }
+}
+
+describe('Garden v3: sources.* verbs', () => {
+  it('GV48: asking for sources:read drops thread:post, even if the daemon sent it', async () => {
+    const { h } = sourcesHarness()
+    h.widget.current = payload({ caps: ['thread:post', 'sources:read'] as never, requested: ['thread:post', 'sources:read'] as never })
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'thread.post', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    expect(code(await call(layer, 'compose.draft', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    expect(zenEffectiveCaps({ caps: ['thread:post'] as never, requested: ['thread:post'] as never }).has('thread:post')).toBe(true)
+  })
+
+  it('sources.read: a bound address answers its card view; others are not_bound', async () => {
+    const { h } = sourcesHarness()
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'sources.read', 'fleet')
+    expect(r).toMatchObject({ ok: true, value: { address: 'fleet', reach: 'ok', label: 'Fleet boxes', serverNow: 1_760_423_520 } })
+    const remote = await call(layer, 'sources.read', 'deploys::AKZM.k2.dev')
+    expect(remote).toMatchObject({ ok: true, value: { address: 'deploys::akzm.k2.dev' } })
+    const nb = await call(layer, 'sources.read', 'money')
+    expect(nb).toMatchObject({ ok: false, error: { code: 'not_bound', room: 'money' } })
+    expect(code(await call(layer, 'sources.read', 'Not An Address'))).toBe('failed')
+  })
+
+  it('cap_not_granted without sources:read; verb_unavailable without a sources host', async () => {
+    const { h } = sourcesHarness()
+    h.widget.current = payload({ caps: ['agents:read'], requested: ['agents:read'] })
+    expect(code(await call(createZenCustomLayer(h.deps), 'sources.read', 'fleet'))).toBe('cap_not_granted')
+    const bare = harness()
+    bare.widget.current = payload({ caps: ['sources:read'] as never, requested: ['sources:read'] as never })
+    expect(code(await call(createZenCustomLayer(bare.deps), 'sources.read', 'fleet'))).toBe('verb_unavailable')
+  })
+
+  it('unreachable carries the last view greyed; server_not_saved; removed', async () => {
+    const { h, f } = sourcesHarness(['fleet', 'deploys::akzm.k2.dev', 'money::nope.k2.dev'])
+    const layer = createZenCustomLayer(h.deps)
+    await call(layer, 'sources.read', 'deploys::akzm.k2.dev')
+    f.servers.get('akzm.k2.dev').down = true
+    const r = await call(layer, 'sources.read', 'deploys::akzm.k2.dev')
+    expect(r).toMatchObject({ ok: false, error: { code: 'unreachable', last: { phase: 'stale', reach: 'unreachable' } } })
+    expect(code(await call(layer, 'sources.read', 'money::nope.k2.dev'))).toBe('server_not_saved')
+    f.servers.get('local').removed.add('fleet')
+    expect(code(await call(layer, 'sources.read', 'fleet'))).toBe('removed')
+  })
+
+  it('sources.list answers every bound address with its reach', async () => {
+    const { h } = sourcesHarness(['fleet', 'money::nope.k2.dev'])
+    const r = await call(createZenCustomLayer(h.deps), 'sources.list')
+    expect(r).toMatchObject({
+      ok: true,
+      value: [
+        { address: 'fleet', reach: 'ok' },
+        { address: 'money::nope.k2.dev', reach: 'server_not_saved' },
+      ],
+    })
+  })
+
+  it('sources.history and sources.refresh, with no_history and rate_limited', async () => {
+    const { h, f } = sourcesHarness()
+    f.servers.get('local').views.set('fleet', fixtureView({ keep: 'states', fields: {} }))
+    const layer = createZenCustomLayer(h.deps)
+    expect(code(await call(layer, 'sources.history', 'fleet', 'count'))).toBe('no_history')
+    const ok = await call(layer, 'sources.history', 'deploys::akzm.k2.dev', 'count', { fromAt: 10.7 })
+    expect(ok).toMatchObject({ ok: true, value: { res: 'raw', points: [{ t: 1, v: 2 }, { t: 2, v: null }] } })
+    expect(code(await call(layer, 'sources.history', 'fleet'))).toBe('failed')
+    expect(await call(layer, 'sources.refresh', 'fleet')).toMatchObject({ ok: true, value: { queued: true, nextAt: 1_760_423_521 } })
+    expect(code(await call(layer, 'sources.refresh', 'fleet'))).toBe('rate_limited')
+  })
+
+  it('sources.ask opens K2’s box with the address and key only (no text from the widget)', async () => {
+    const { h, asks } = sourcesHarness()
+    const layer = createZenCustomLayer(h.deps)
+    expect(await call(layer, 'sources.ask', 'fleet', 'alpha')).toMatchObject({ ok: true, value: { opened: true } })
+    expect(await call(layer, 'sources.ask', 'fleet')).toMatchObject({ ok: true, value: { opened: true } })
+    expect(code(await call(layer, 'sources.ask', 'fleet', { text: 'post this' }))).toBe('failed')
+    expect(code(await call(layer, 'sources.ask', 'money'))).toBe('not_bound')
+    expect(asks).toEqual([
+      ['fleet', 'alpha'],
+      ['fleet', null],
+    ])
+  })
+
+  it('sources.subscribe pushes the view, counts toward 16, and an async refusal ends it', async () => {
+    const { h, f, errors } = sourcesHarness(['fleet', 'money::akzm.k2.dev'])
+    f.servers.get('akzm.k2.dev').error = { code: 'cap_not_granted', role: 'admin' }
+    const layer = createZenCustomLayer(h.deps)
+    expect(await layer.handle({ sub: 1, verb: 'sources.subscribe', args: ['fleet'] })).toBeNull()
+    expect(await layer.handle({ sub: 2, verb: 'sources.subscribe', args: ['money::akzm.k2.dev'] })).toBeNull()
+    await settle()
+    expect(h.pushes.find((p) => p.sub === 1)?.value).toMatchObject({ address: 'fleet', reach: 'ok' })
+    expect(errors).toEqual([{ sub: 2, error: expect.objectContaining({ code: 'cap_not_granted', room: 'money::akzm.k2.dev' }) }])
+    expect(layer.subscriptions).toBe(1)
+    const nb = await layer.handle({ sub: 3, verb: 'sources.subscribe', args: ['deploys'] })
+    expect(nb).toMatchObject({ sub: 3, error: { code: 'not_bound' } })
+    for (let i = 10; i < 25; i++) await layer.handle({ sub: i, verb: 'sources.subscribe', args: ['fleet'] })
+    expect(layer.subscriptions).toBe(16)
+    const over = await layer.handle({ sub: 99, verb: 'sources.subscribe', args: ['fleet'] })
+    expect(over).toMatchObject({ sub: 99, error: { code: 'rate_limited' } })
   })
 })

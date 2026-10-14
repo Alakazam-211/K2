@@ -96,8 +96,13 @@ fn exposure_counts_are_pinned() {
     // Cut A: widget rows only (UW16 + UWB10). Changing a count is a
     // reviewed change: update this pin in the same commit.
     // 0.45.3: + canvas.setHitRegions and window.startDrag (frame rows).
-    assert_eq!((widget, app), (18, 0), "per-exposure verb counts (widget, app)");
-    assert_eq!(c.verbs.len(), 40, "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag");
+    // Garden v3 (contract-sources-v1 §6): + the six sources.* frame rows.
+    assert_eq!((widget, app), (24, 0), "per-exposure verb counts (widget, app)");
+    assert_eq!(
+        c.verbs.len(),
+        46,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag and sources.*"
+    );
 }
 
 #[test]

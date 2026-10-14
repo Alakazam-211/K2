@@ -113,7 +113,12 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `color` and `image` (0.45.5 agent identity; catalog version 5).
 /// v15 = locked Gardens (prd-garden-lock-and-sync-v1 §6): "A locked Garden:
 /// don't edit it. Ask the person."; `.locks/` joins the never-write list.
-pub const SKILL_VERSION_ZEN: u32 = 15;
+/// v16 = Garden v3 data sources (contract-sources-v1 §6, §11.4): the
+/// `sources` manifest key, `sources:read` (and that it drops `thread:post`),
+/// the `sources.*` verbs, the five built-in cards and their presets,
+/// `k2 zen widget show`, and runtime errors without text for cards that
+/// read sources (catalog version 6).
+pub const SKILL_VERSION_ZEN: u32 = 16;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

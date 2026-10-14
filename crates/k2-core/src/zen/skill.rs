@@ -466,7 +466,7 @@ inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` 
 - `requires.libs`: libraries from K2's standard library (see What's available),\n\
   inlined before your scripts. `id` is optional and must equal the folder name.\n\
 - `version`, `license`, `bindings` are accepted and ignored for now. `net` and `secrets`\n\
-  are errors: outside data comes in a later version.\n\n\
+  are errors: outside data comes from **data sources** (`sources`, below).\n\n\
 ### Placing it\n\n\
 ```toml\n\
 [[widget]]\n\
@@ -582,6 +582,54 @@ the Zen toggle) and hides the window's stoplights (`stoplights = \"hidden\"`).\n
 Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget itself\n\
 never changes.\n\n\
 Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n",
+    );
+    s.push_str(&sources_section());
+    s
+}
+
+/// Garden v3 (contract-sources-v1 §6, §11.4): cards that read data sources.
+fn sources_section() -> String {
+    let mut s = String::from(
+        "### Cards that read data sources\n\n\
+A **data source** is a check a K2 server runs (an HTTP JSON URL polled on a schedule,\n\
+rated ok / warn / crit / unknown, with a short history). A card never fetches; it reads\n\
+the source's **card view** from the server that runs it. Make and inspect sources with\n\
+`k2 sources` (`k2 study data-sources`); a person approves what you propose.\n\n\
+- Ask for `sources:read` and say which sources in the manifest: `\"sources\": \"config\"`\n\
+  (the placement's `config.source`, `config.sources` as a comma-separated list, and\n\
+  `config.latest`) or a fixed list of names on this computer (`\"sources\": [\"fleet\"]`,\n\
+  at most 16). `sources` without the cap is an error (`sources_needs_cap`).\n\
+- An address is `name` (this computer) or `name::host` (another server the human has\n\
+  **saved**; else `server_not_saved`). At most 8 other servers per Garden.\n\
+- **A card that reads sources never posts to the Thread**: asking for `sources:read`\n\
+  drops `thread:post` (validate warns `sources_drops_thread_post`; `k2 zen widget show`\n\
+  says so). Use `k2.sources.ask(address, itemKey?)` to open K2's Ask an agent box: K2\n\
+  writes the question, the human sends it.\n\
+- Its runtime errors reach you as class, code and line only, never message text\n\
+  (`k2 zen widget errors <name>`), so don't put values in thrown errors.\n\
+- Draw from the view: `display` (pending / paused / stale / ok / warn / crit /\n\
+  unknown), `items[]` with `health` and `reason`, `fields`, `counts`, `soft` (\"retrying\n\
+  2/3\"), `gap`, `muted`, `simulated` (a TEST badge). Ages are `serverNow - updatedAt`\n\
+  (seconds), never `Date.now()`. Unknown gets its own colour; never draw a blank card.\n\
+- Refusals: `not_bound` (not in the placement's config), `server_not_saved`,\n\
+  `cap_not_granted` (the human's login there can't read it), `removed`, `no_history`,\n\
+  and `unreachable`, which carries `err.last`: the last view, phase `stale`. Draw it greyed.\n\n\
+```js\n\
+k2.connected.then(() => {\n\
+  k2.sources.subscribe(k2.config.source, draw, (err) => draw(err.last, err.code))\n\
+})\n\
+```\n\n\
+**Built-in cards** (place them with `widget = \"k2:<card>@1\"` and `config.source`):\n\n",
+    );
+    for (id, presets) in super::builtin_widgets::SOURCE_CARDS {
+        s.push_str(&format!("- `{id}` with {}\n", presets.iter().map(|p| format!("`--preset {p}`")).collect::<Vec<_>>().join(" or ")));
+    }
+    s.push_str(
+        "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,luzz --name fleet --label Fleet`\n\
+makes the fleet source; `config.source = \"fleet::<that server>\"` shows it on a Mac's Garden.\n\
+`k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card\n\
+keeps working when the source switches. `k2:version-spread@1` takes `config.latest` (a\n\
+`github-latest-release` source); `k2:money-alerts@1` shows states only by default.\n\n",
     );
     s
 }
@@ -779,6 +827,17 @@ mod tests {
     }
 
     /// TUW5.2 (UWB2): skill v12 documents custom widgets from the catalog.
+    #[test]
+    fn skill_documents_data_source_cards() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 16, "Garden v3 sources need a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_drops_thread_post",
+            "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@1", "k2:money-alerts@1", "--preset k2-fleet"]
+        {
+            assert!(s.contains(needle), "the k2-zen skill lost {needle}");
+        }
+    }
+
     #[test]
     fn skill_documents_every_custom_verb_with_its_cap() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN > 11, "custom widgets need a new skill version");

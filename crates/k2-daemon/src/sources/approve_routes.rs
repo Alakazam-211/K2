@@ -839,6 +839,13 @@ pub(crate) mod tests {
         Env { _db: db }
     }
 
+    /// The renderer's `batchHash` pins the same vector.
+    #[test]
+    fn batch_hash_sorts_lines_and_matches_the_renderer() {
+        let h = batch_hash(&[("b".into(), "Y".into()), ("a".into(), "X".into())]);
+        assert_eq!(h, "6976188b7ee15f6eef1614e1c09a81e74d9915020a7b0801b2b276e368652074");
+    }
+
     #[test]
     fn agents_and_shells_are_person_only_on_every_approval_route() {
         let _e = env();

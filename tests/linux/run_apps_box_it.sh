@@ -118,13 +118,16 @@ echo "== images =="
 "${SSH[@]}" "set -e; podman build -q -t localhost/k2rh-it:rts2 -f $R/it/tests/Containerfile.root-helper-it $R/it/tests >/dev/null; podman build -q -t localhost/k2-apps-box-it:rts2 -f $R/it/tests/Containerfile.apps-box-it $R/it/tests >/dev/null; echo built"
 
 # Own user namespace (8M ids at 2^31: no host user or other container
-# lives there), so every capability below is held in THAT namespace only:
-# /proc/sys unmasked (host-wide sysctls stay owned by real root and are
-# refused; the tests' own netns, made inside the container by
-# apps_box_netns.sh, is the container's), NET_ADMIN/SYS_ADMIN for that
-# netns and systemd's unit sandboxing, /dev/net/tun for slirp4netns/pasta.
-USERNS=(--uidmap 0:2147483648:8388608 --gidmap 0:2147483648:8388608 --security-opt unmask=/proc/sys
-	--cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun)
+# lives there), so every capability is held in THAT namespace only.
+# --network=none: the runtime makes the netns inside that user namespace,
+# so nft and the net sysctls box prep sets are the container's own.
+# /proc/sys unmasked and AppArmor off (Podman's profile denies every
+# /proc/sys write): host-wide sysctls stay owned by the host's root
+# ("nobody" in here) and the kernel refuses them — checked in the probes
+# and by host-before/after below.
+USERNS=(--network=none --uidmap 0:2147483648:8388608 --gidmap 0:2147483648:8388608
+	--security-opt unmask=/proc/sys --security-opt apparmor=unconfined
+	--cap-add NET_ADMIN --cap-add SYS_PTRACE)
 
 rc=0
 echo "== existing helper IT (protocol 6) in Ubuntu 24.04 =="

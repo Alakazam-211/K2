@@ -426,10 +426,10 @@ ok "legacy-retire (daemon-only, visudo ok); audit lines in the journal, no secre
 
 echo "== real minisign -t round trip through the same check (S0 #5) =="
 minisign -G -W -p /tmp/t.pub -s /tmp/t.key >/dev/null
-minisign -S -s /tmp/t.key -m "$NEXT" -x /tmp/real.sig -t "file:k2-root-helper-linux-x86_64 version:$NEXT_V protocol:4" >/dev/null
-"$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 | grep -q "ok version=$NEXT_V protocol=4" \
+minisign -S -s /tmp/t.key -m "$NEXT" -x /tmp/real.sig -t "file:k2-root-helper-linux-x86_64 version:$NEXT_V protocol:$NEXT_P" >/dev/null
+"$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 | grep -q "ok version=$NEXT_V protocol=$NEXT_P" \
 	|| fail "real minisign signature not accepted"
-sed -i 's/protocol:4/protocol:5/' /tmp/real.sig
+sed -i "s/protocol:$NEXT_P/protocol:$((NEXT_P + 1))/" /tmp/real.sig
 if "$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 >/dev/null 2>&1; then fail "tampered real comment accepted"; fi
 ok "a real 'minisign -S -t' signature verifies; a tampered comment does not"
 

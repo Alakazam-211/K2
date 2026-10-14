@@ -210,6 +210,11 @@ pub enum Verb {
     /// Install (or update) `k2-app-engine` from a signed payload on stdin,
     /// its user unit for `k2app` and the socket dir (slice 3, S11).
     AppsInstallEngine,
+    /// `apps journal on`: a persistent journal (`/var/log/journal`), so
+    /// k2app can read its own units' journal (`journalctl --user`): the
+    /// guarded Apps' output, rate limited per unit. Volatile journals
+    /// keep one root-only file.
+    AppsJournalOn,
     AppsPackagesInstall,
     AppsPackagesInstallYouki,
     AppsRuntime(OciRuntime),
@@ -433,6 +438,7 @@ impl Verb {
             }
             ["apps", "nft", "app-remove", id] => Verb::AppsNftAppRemove(AppId::parse(id).ok_or(REFUSED)?),
             ["apps", "install-engine"] => Verb::AppsInstallEngine,
+            ["apps", "journal", "on"] => Verb::AppsJournalOn,
             ["apps", "packages", "install"] => Verb::AppsPackagesInstall,
             ["apps", "packages", "install-youki"] => Verb::AppsPackagesInstallYouki,
             ["apps", "runtime", r] => Verb::AppsRuntime(OciRuntime::parse(r).ok_or(REFUSED)?),
@@ -569,6 +575,7 @@ impl Verb {
             Verb::AppsNftApp { id, gw } => s(&["apps", "nft", "app", id.as_str(), &gw.to_string()]),
             Verb::AppsNftAppRemove(id) => s(&["apps", "nft", "app-remove", id.as_str()]),
             Verb::AppsInstallEngine => s(&["apps", "install-engine"]),
+            Verb::AppsJournalOn => s(&["apps", "journal", "on"]),
             Verb::AppsPackagesInstall => s(&["apps", "packages", "install"]),
             Verb::AppsPackagesInstallYouki => s(&["apps", "packages", "install-youki"]),
             Verb::AppsRuntime(r) => s(&["apps", "runtime", r.as_str()]),
@@ -643,6 +650,7 @@ impl Verb {
             | Verb::AppsReservePorts(true)
             | Verb::AppsPackagesInstall
             | Verb::AppsPackagesInstallYouki
+            | Verb::AppsJournalOn
             | Verb::AppsRuntime(OciRuntime::Crun)
             | Verb::AppsProcessUnit(true) => Open,
             Verb::AppsLinger(false)
@@ -813,6 +821,7 @@ pub fn catalog() -> Vec<Verb> {
         },
         Verb::AppsNftAppRemove(AppId::parse("nsi-skin").expect("id")),
         Verb::AppsInstallEngine,
+        Verb::AppsJournalOn,
         Verb::AppsPackagesInstall,
         Verb::AppsPackagesInstallYouki,
         Verb::AppsRuntime(OciRuntime::Crun),
@@ -1082,6 +1091,7 @@ mod tests {
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
             &["apps", "process-unit", "on"],
+            &["apps", "journal", "on"],
         ];
         let daemon: &[&[&str]] = &[
             &["apps", "linger", "off"],
@@ -1213,6 +1223,8 @@ mod tests {
             // install-engine: never a path or a version.
             &["apps", "install-engine", "/tmp/k2-app-engine"],
             &["apps", "install-engine", "0.46.1"],
+            &["apps", "journal", "off"],
+            &["apps", "journal", "on", "/var/log/journal"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

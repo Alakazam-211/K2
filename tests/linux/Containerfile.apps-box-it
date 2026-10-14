@@ -1,0 +1,14 @@
+# Throwaway systemd box for the App runtime box-prep tests
+# (tests/linux/apps_box_in_container.sh, apps_box_daemon_e2e.sh).
+# Debian 13: the distro whose own Podman (5.4.2) and passt meet the App
+# floor. Podman itself is NOT preinstalled: `apps packages install` must
+# install it. nftables, iproute2 and curl are for the network checks.
+FROM docker.io/library/debian:trixie
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus libpam-systemd sudo passwd \
+      curl ca-certificates util-linux procps python3 nftables iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

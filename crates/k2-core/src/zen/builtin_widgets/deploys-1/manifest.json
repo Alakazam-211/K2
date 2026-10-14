@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Deploys",
+  "description": "The newest production deployments: ready, building or failed, and when.",
+  "entry": "index.html",
+  "caps": [
+    "sources:read"
+  ],
+  "reasons": {
+    "sources:read": "to show the deployments source this card's config.source names"
+  },
+  "sources": "config"
+}

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Money alerts",
+  "description": "Red when there are past-due subscriptions, green when there are none. States only by default: no amounts.",
+  "entry": "index.html",
+  "caps": [
+    "sources:read"
+  ],
+  "reasons": {
+    "sources:read": "to show the past-due source this card's config.source names"
+  },
+  "sources": "config"
+}

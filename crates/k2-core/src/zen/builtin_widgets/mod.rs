@@ -76,6 +76,74 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("diary.js", include_str!("diary-2/diary.js")),
         ],
     },
+    // Garden v3 data-source cards (contract-sources-v1 §11.4). Each card is
+    // its own files plus K2's card kit (`sources-kit/`), included byte for
+    // byte so every version stays one flat, immutable file set.
+    BuiltinWidget {
+        name: "fleet-grid",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("fleet-grid-1/manifest.json")),
+            ("index.html", include_str!("fleet-grid-1/index.html")),
+            ("kit.css", include_str!("sources-kit/kit.css")),
+            ("kit.js", include_str!("sources-kit/kit.js")),
+            ("card.js", include_str!("fleet-grid-1/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "version-spread",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("version-spread-1/manifest.json")),
+            ("index.html", include_str!("version-spread-1/index.html")),
+            ("kit.css", include_str!("sources-kit/kit.css")),
+            ("kit.js", include_str!("sources-kit/kit.js")),
+            ("card.js", include_str!("version-spread-1/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "relays-dns",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("relays-dns-1/manifest.json")),
+            ("index.html", include_str!("relays-dns-1/index.html")),
+            ("kit.css", include_str!("sources-kit/kit.css")),
+            ("kit.js", include_str!("sources-kit/kit.js")),
+            ("card.js", include_str!("relays-dns-1/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "deploys",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("deploys-1/manifest.json")),
+            ("index.html", include_str!("deploys-1/index.html")),
+            ("kit.css", include_str!("sources-kit/kit.css")),
+            ("kit.js", include_str!("sources-kit/kit.js")),
+            ("card.js", include_str!("deploys-1/card.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "money-alerts",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("money-alerts-1/manifest.json")),
+            ("index.html", include_str!("money-alerts-1/index.html")),
+            ("kit.css", include_str!("sources-kit/kit.css")),
+            ("kit.js", include_str!("sources-kit/kit.js")),
+            ("card.js", include_str!("money-alerts-1/card.js")),
+        ],
+    },
+];
+
+/// The data-source cards and the presets each pairs with (contract
+/// §11.4): `k2 sources propose --preset <preset>` makes the source.
+pub const SOURCE_CARDS: &[(&str, &[&str])] = &[
+    ("k2:fleet-grid@1", &["k2-fleet", "k2-fleet-summary"]),
+    ("k2:version-spread@1", &["k2-fleet", "k2-fleet-summary", "github-latest-release"]),
+    ("k2:relays-dns@1", &["k2-fleet-summary", "gatus"]),
+    ("k2:deploys@1", &["vercel-deployments"]),
+    ("k2:money-alerts@1", &["stripe-past-due"]),
 ];
 
 /// The sha256 of each released built-in's files, `name\0bytes\0` in list
@@ -84,6 +152,11 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
 pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:diary@1", "d1b03245b1dbed5d01c6498be2b5c8626084fa8b594f8a3f5d3a4ae69348166d"),
     ("k2:diary@2", "a38b8bb61324f22d6803d3dc4de38138f913337e90082bcf2b4a9fa3269ec07f"),
+    ("k2:fleet-grid@1", "fc758ce7eaac8aaa4e79aef4251aa3682ede3430f185b6d426a65f1f4c56d2c1"),
+    ("k2:version-spread@1", "051f4b389a0fef87f2a5895abb43f7b2c58048986989c7d0d458a4176efe505b"),
+    ("k2:relays-dns@1", "8b54362a6ef697f6575008790b975a0d793d08aa14c5974f2447a3a54715062e"),
+    ("k2:deploys@1", "7b0f85cc0e7035fa62cb2d8df96653ed2b293be8a5b8d4a46ffec6f00090dfdf"),
+    ("k2:money-alerts@1", "52d89d4d821428d496e38b133f4849c1c697abc5c7d3acce21f54e8fdd1cf4a7"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -405,6 +478,39 @@ mod tests {
                 assert!(!words.contains(&t), "the ghost asks for something real ({t}): {l}");
             }
         }
+    }
+
+    /// Garden v3 (contract-sources-v1 §11.4, §12.3): each data-source card
+    /// is a clean custom widget that reads sources from its placement config
+    /// (never posts), bundles with no findings, and pairs with presets K2 has.
+    #[test]
+    fn source_cards_are_clean_and_pair_with_presets() {
+        let ids: Vec<String> = SOURCE_CARDS.iter().map(|(id, _)| id.to_string()).collect();
+        assert_eq!(ids, ["k2:fleet-grid@1", "k2:version-spread@1", "k2:relays-dns@1", "k2:deploys@1", "k2:money-alerts@1"]);
+        for (id, presets) in SOURCE_CARDS {
+            let w = builtin_widget(&parse_widget_ref(id).expect("parses")).unwrap_or_else(|| panic!("{id} is a built-in"));
+            let files: std::collections::BTreeMap<String, Vec<u8>> =
+                w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+            let c = crate::zen::widgets::check_files("k2", &format!("{}-{}", w.name, w.version), &files);
+            assert!(c.errors.is_empty(), "{id}: {:?}", c.errors);
+            let m = c.manifest.as_ref().unwrap_or_else(|| panic!("{id} has a manifest"));
+            assert_eq!(m.caps, ["sources:read"], "{id}: reads sources, never posts");
+            assert_eq!(m.sources, Some(serde_json::json!("config")), "{id}");
+            assert!(c.bundle.is_some(), "{id} bundles");
+            for f in ["kit.js", "kit.css", "card.js"] {
+                assert!(w.files.iter().any(|(n, _)| *n == f), "{id} has {f}");
+            }
+            let js = file(w, "card.js");
+            assert!(!js.contains("innerHTML") && !js.contains("thread.") && !js.contains("compose."), "{id}: textContent only, no Thread");
+            for p in *presets {
+                assert!(
+                    crate::sources::presets_cards::NAMES.contains(p) || crate::sources::presets::BASE.contains(p),
+                    "{id} pairs with unknown preset {p}"
+                );
+            }
+        }
+        let kit = include_str!("sources-kit/kit.js");
+        assert!(!kit.contains("innerHTML") && !kit.contains("fetch(") && !kit.contains("localStorage"), "the kit is sealed-frame clean");
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

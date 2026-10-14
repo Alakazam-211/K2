@@ -1334,7 +1334,7 @@ mod tests {
         let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
         let https_port = tls_listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            accept_loop(tls_listener, shared, daemon_port).await;
+            accept_loop(Arc::new(tls_listener), shared, daemon_port).await;
         });
 
         let before = tls_client_get(&cert_pem, https_port, "ovr.example.k2.dev", "/").await;

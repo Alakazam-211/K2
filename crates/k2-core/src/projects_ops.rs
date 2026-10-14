@@ -469,6 +469,12 @@ pub fn projects_delete(id: &str) -> Result<(), String> {
         rusqlite::params![id],
     )
     .map_err(|e| e.to_string())?;
+    // Garden data (contract-garden-data-v1 §2.1, GL33): no FK, so the
+    // workspace's grants (and every grant made under its delegations) and
+    // its widget-author stamps go explicitly; its widgets become unclaimed.
+    crate::garden_data::grants::delete_for_workspace(&conn, id).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM zen_widget_authors WHERE author_project_id = ?1", rusqlite::params![id])
+        .map_err(|e| e.to_string())?;
     Project::delete(&conn, id).map_err(|e| e.to_string())?;
     for gid in &member_groups {
         crate::agent_hooks::emit(
@@ -1386,6 +1392,48 @@ mod tests {
             .expect("run git init");
         assert!(status.success(), "git init must succeed for {label}");
         dir
+    }
+
+    /// Garden data (contract-garden-data-v1 §2.1): deleting a workspace
+    /// removes its grants, the grants made under its delegations and its
+    /// widget-author stamps; other workspaces' rows stay.
+    #[test]
+    fn projects_delete_removes_garden_data_grants_and_stamps() {
+        let _home = crate::test_env::TempHome::new();
+        let _scoped_db = db::scoped_for_test();
+        {
+            let h = db::shared();
+            let conn = h.lock();
+            for (id, handle) in [("w-gd-builder", "gd-builder"), ("w-gd-other", "gd-other")] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+                    rusqlite::params![id, handle, format!("/t/{handle}")],
+                )
+                .unwrap();
+            }
+            conn.execute_batch(
+                "INSERT INTO zen_data_grants (id, space, prefix, subject_kind, subject_id, level, admin, via_grant, granted_by, granted_at)
+                   VALUES (1, 'data:board', '', 'workspace', 'w-gd-builder', 'write', 1, NULL, 'owner', 1),
+                          (2, 'data:board', 'p/', 'workspace', 'w-gd-other', 'read', 0, 1, 'agent:w-gd-builder', 1),
+                          (3, 'data:board', 'q/', 'workspace', 'w-gd-other', 'read', 0, NULL, 'owner', 1);
+                 INSERT INTO zen_widget_authors (widget, hash, author_kind, author_project_id, source, caller_kind, signed_at)
+                   VALUES ('board', printf('%064d', 1), 'agent', 'w-gd-builder', 'sign', 'agent', 1);",
+            )
+            .unwrap();
+        }
+        projects_delete("w-gd-builder").expect("delete");
+        let h = db::shared();
+        let conn = h.lock();
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM zen_data_grants ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(ids, vec![3], "the delegation and what it made are gone; the person's grant stays");
+        let stamps: i64 = conn.query_row("SELECT COUNT(*) FROM zen_widget_authors", [], |r| r.get(0)).unwrap();
+        assert_eq!(stamps, 0);
     }
 
     #[test]

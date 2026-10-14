@@ -1248,6 +1248,10 @@ async fn async_main() {
     // restart are marked first [GV57].
     crate::sources::start();
 
+    // Garden data (contract-garden-data-v1): idle close, audit counts and
+    // the hourly tombstone reaper / orphan pass. The store opens lazily.
+    crate::garden_data::start();
+
     // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored
     // next_fire_at + wait_reason at boot, then runs the overdue
     // watchdog every 60 s. Its own task — it must keep reporting even

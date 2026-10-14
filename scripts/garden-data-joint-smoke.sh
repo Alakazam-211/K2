@@ -260,8 +260,10 @@ step_10b() {
 
 step_11() {
     need person
-    run k2 zen data unadmin "$W" --agent board-builder
-    expect_has "the cascade is named" "goes with it"
+    OUT="$(printf 'n\n' | k2 zen data unadmin "$W" --agent board-builder 2>&1)"
+    RC=$?
+    expect_has "the cascade is named (dry run, answered no)" "it made go with it"
+    expect_rc "no changes on 'n'" 1
     run k2 zen data unadmin "$W" --agent board-builder --yes
     expect_rc "unadmin board-builder" 0
     echo "  In board-keeper's tab: k2 store changes --widget $W --since 0 --wait 30 → not_granted (exit 3)"
@@ -292,7 +294,9 @@ step_13() {
     local today g
     today="$(date +%Y-%m-%d)"
     g="$(load garden)"
-    echo "  The daemon under test must run with K2_GARDEN_DATA_SNAPSHOT_NOW=1 (dev build)."
+    echo "  The daemon under test must be a DEBUG build (cargo build -p k2-daemon; the hook is"
+    echo "  cfg!(debug_assertions) only, and scripts/dev-build.sh builds release) started with"
+    echo "  K2_GARDEN_DATA_SNAPSHOT_NOW=1. On a release build, wait for the next day's snapshot."
     run k2 zen data export "$W"
     expect_rc "live export" 0
     printf '%s\n' "$OUT" | tail -n +2 | python3 -c 'import json,sys; print("\n".join(sorted(json.loads(l)["key"] for l in sys.stdin if l.strip())))' > "$STATE/live.keys"

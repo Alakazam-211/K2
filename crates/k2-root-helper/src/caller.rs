@@ -19,60 +19,12 @@
 //!
 //! Any doubt is a refusal (exit 77), never an allow.
 
-use serde::Deserialize;
+use k2_root_proto::caller::{match_main_pid, parse_daemon_toml, SystemdQuery, DAEMON_TOML_MAX};
+use k2_root_proto::paths::{DAEMON_TOML, SUDO_EXES};
 
-use k2_root_proto::paths::{DAEMON_TOML, RUNUSER, SUDO_EXES, SYSTEMCTL};
+pub use k2_root_proto::caller::DaemonEntry;
 
 use crate::ctx::{Ctx, Fail, HResult, ProcHandle};
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DaemonEntry {
-    pub user: String,
-    pub unit: String,
-    pub scope: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DaemonToml {
-    daemon: Vec<DaemonEntry>,
-}
-
-fn user_ok(u: &str) -> bool {
-    let b = u.as_bytes();
-    !b.is_empty()
-        && b.len() <= 32
-        && (b[0].is_ascii_lowercase() || b[0] == b'_')
-        && b.iter()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_' || *c == b'-')
-}
-
-fn unit_ok(u: &str) -> bool {
-    let Some(stem) = u.strip_suffix(".service") else {
-        return false;
-    };
-    !stem.is_empty()
-        && stem.len() <= 64
-        && stem
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'@' | b'.' | b'_' | b'-'))
-}
-
-/// Parse + validate `daemon.toml` text.
-pub fn parse_daemon_toml(text: &str) -> Result<Vec<DaemonEntry>, &'static str> {
-    let t: DaemonToml = toml::from_str(text).map_err(|_| "daemon.toml unreadable")?;
-    if t.daemon.is_empty() || t.daemon.len() > 8 {
-        return Err("daemon.toml lists no daemon");
-    }
-    for d in &t.daemon {
-        if !user_ok(&d.user) || !unit_ok(&d.unit) || !matches!(d.scope.as_str(), "system" | "user")
-        {
-            return Err("daemon.toml entry invalid");
-        }
-    }
-    Ok(t.daemon)
-}
 
 /// Read the config: a regular file, never through a link, and (in
 /// production) root-owned and not writable by group or other.
@@ -95,7 +47,7 @@ pub fn load_daemons(ctx: &Ctx) -> Result<Vec<DaemonEntry>, &'static str> {
         return Err("daemon.toml is not root-owned");
     }
     let bytes = dir
-        .read_file(name, 16 * 1024)
+        .read_file(name, DAEMON_TOML_MAX)
         .map_err(|_| "daemon.toml unreadable")?
         .ok_or("daemon.toml missing")?;
     let text = std::str::from_utf8(&bytes).map_err(|_| "daemon.toml unreadable")?;
@@ -148,46 +100,27 @@ fn walk(ctx: &Ctx) -> (i32, Option<i32>, Vec<Box<dyn ProcHandle>>) {
     (p, below, held)
 }
 
-/// The unit's main pid in its scope, through `systemctl show` (env cleared,
-/// `LC_ALL=C`). `None` when systemd doesn't know it or it isn't running.
-///
-/// User scope asks `systemctl --user -M <user>@` first (needs the user's
-/// D-Bus session bus, `dbus-user-session`), then falls back to the user
-/// manager's private socket: `runuser -u <user> -- env
-/// XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user show …` (server images
-/// often have no user bus). Both ask the same manager — which the daemon
-/// user itself controls, so user scope is weaker than system scope (any
-/// process of that user can change what the unit runs).
+/// The helper's view of systemd for the shared check: its `Exec`
+/// (absolute programs, env cleared) and process table; runs as root, so
+/// the `runuser` fallback for user-scope daemons is available.
+struct HelperQuery<'a>(&'a Ctx);
+
+impl SystemdQuery for HelperQuery<'_> {
+    fn run(&self, prog: &str, args: &[String]) -> Option<(i32, Vec<u8>)> {
+        let out = self.0.exec.run(prog, args, None).ok()?;
+        Some((out.status, out.stdout))
+    }
+    fn uid_of_user(&self, user: &str) -> Option<u32> {
+        self.0.procs.uid_of_user(user)
+    }
+    fn can_runuser(&self) -> bool {
+        true
+    }
+}
+
+/// The unit's main pid in its scope (`k2_root_proto::caller::main_pid`).
 pub fn main_pid(ctx: &Ctx, d: &DaemonEntry) -> Option<i32> {
-    let show = ["show", "-p", "MainPID", "--value", d.unit.as_str()];
-    let parse = |out: crate::ctx::ExecOut| -> Option<i32> {
-        if out.status != 0 {
-            return None;
-        }
-        let pid: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
-        (pid > 0).then_some(pid)
-    };
-    if d.scope != "user" {
-        let args: Vec<String> = show.iter().map(|s| s.to_string()).collect();
-        return parse(ctx.exec.run(SYSTEMCTL, &args, None).ok()?);
-    }
-    let mut args: Vec<String> = vec!["--user".into(), "-M".into(), format!("{}@", d.user)];
-    args.extend(show.iter().map(|s| s.to_string()));
-    if let Some(pid) = ctx.exec.run(SYSTEMCTL, &args, None).ok().and_then(parse) {
-        return Some(pid);
-    }
-    let uid = ctx.procs.uid_of_user(&d.user)?;
-    let mut args: Vec<String> = vec![
-        "-u".into(),
-        d.user.clone(),
-        "--".into(),
-        "/usr/bin/env".into(),
-        format!("XDG_RUNTIME_DIR=/run/user/{uid}"),
-        SYSTEMCTL.into(),
-        "--user".into(),
-    ];
-    args.extend(show.iter().map(|s| s.to_string()));
-    parse(ctx.exec.run(RUNUSER, &args, None).ok()?)
+    k2_root_proto::caller::main_pid(&HelperQuery(ctx), d)
 }
 
 /// Identify the caller. `full` runs the MainPID check (only `daemon` verbs
@@ -226,34 +159,34 @@ pub fn identify(ctx: &Ctx, full: bool) -> Caller {
     if !full {
         return c;
     }
-    for d in &mine {
-        if main_pid(ctx, d) == Some(pid) {
-            // The process that the daemon spawned (the outermost sudo, or
-            // the helper itself when sudo exec'd it) must still be in the
-            // daemon's session. systemd makes every service's main process
-            // a session leader; the daemon's own `sudo` calls inherit that
-            // session, while terminals and published services `setsid()`.
-            // Without this, a K2 shell tab (a direct child of the daemon)
-            // that `exec sudo …` would be "the daemon's child sudo".
-            let sid = match below {
-                Some(s) => ctx.procs.sid_of(s),
-                None => ctx.procs.own_sid(),
-            };
-            if sid != Some(pid) {
-                c.why_not =
-                    Some("caller is not in the daemon's session (setsid child of the daemon)");
-                return c;
-            }
-            if held.is_empty() || !held.iter().all(|h| h.alive()) {
-                c.why_not = Some("caller process changed during the check");
-                return c;
-            }
-            c.user = Some(d.user.clone());
-            c.is_daemon = true;
+    let d = match match_main_pid(&HelperQuery(ctx), &daemons, pid, uid) {
+        Ok(d) => d,
+        Err(why) => {
+            c.why_not = Some(why);
             return c;
         }
+    };
+    // The process that the daemon spawned (the outermost sudo, or the
+    // helper itself when sudo exec'd it) must still be in the daemon's
+    // session. systemd makes every service's main process a session
+    // leader; the daemon's own `sudo` calls inherit that session, while
+    // terminals and published services `setsid()`. Without this, a K2
+    // shell tab (a direct child of the daemon) that `exec sudo …` would be
+    // "the daemon's child sudo".
+    let sid = match below {
+        Some(s) => ctx.procs.sid_of(s),
+        None => ctx.procs.own_sid(),
+    };
+    if sid != Some(pid) {
+        c.why_not = Some("caller is not in the daemon's session (setsid child of the daemon)");
+        return c;
     }
-    c.why_not = Some("caller is not the daemon unit's main process");
+    if held.is_empty() || !held.iter().all(|h| h.alive()) {
+        c.why_not = Some("caller process changed during the check");
+        return c;
+    }
+    c.user = Some(d.user.clone());
+    c.is_daemon = true;
     c
 }
 
@@ -267,25 +200,10 @@ pub fn require_daemon(c: &Caller) -> HResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn daemon_toml_rules() {
+    fn daemon_toml_rules_are_the_shared_ones() {
         let ok = "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n";
-        assert_eq!(parse_daemon_toml(ok).unwrap()[0].user, "k2");
-        let two = format!("{ok}[[daemon]]\nuser = \"k2std\"\nunit = \"k2-daemon-std.service\"\nscope = \"user\"\n");
-        assert_eq!(parse_daemon_toml(&two).unwrap().len(), 2);
-        for bad in [
-            "",
-            "[[daemon]]\nuser = \"root;x\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n",
-            "[[daemon]]\nuser = \"K2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n",
-            "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon\"\nscope = \"system\"\n",
-            "[[daemon]]\nuser = \"k2\"\nunit = \"../x.service\"\nscope = \"system\"\n",
-            "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"global\"\n",
-            "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\nextra = 1\n",
-            "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\n",
-        ] {
-            assert!(parse_daemon_toml(bad).is_err(), "{bad:?}");
-        }
+        assert_eq!(super::parse_daemon_toml(ok).unwrap()[0].user, "k2");
+        assert!(super::parse_daemon_toml("[[daemon]]\nuser = \"K2\"\nunit = \"x.service\"\nscope = \"system\"\n").is_err());
     }
 }

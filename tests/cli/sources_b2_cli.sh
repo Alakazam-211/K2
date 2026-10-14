@@ -142,6 +142,24 @@ expect_has "pin" "$(cat "$SANDBOX/out")" "fleet: pinned"
 expect_eq "pinned in the DB" "$(sql "SELECT pinned || ':' || pinned_by FROM sources WHERE name='fleet'")" "1:owner"
 run sources unpin fleet
 expect_has "unpin" "$(cat "$SANDBOX/out")" "fleet: not pinned"
+run sources simulate fleet crit --for 10m
+expect_eq "simulate exit 0" "$rc" "0"
+expect_has "simulate says TEST" "$(cat "$SANDBOX/out")" "fleet: TEST crit until"
+expect_eq "simulate stored" "$(sql "SELECT simulate_state || ':' || simulate_by FROM sources WHERE name='fleet'")" "crit:owner"
+run sources simulate fleet off
+expect_has "simulate off" "$(cat "$SANDBOX/out")" "simulate off"
+expect_eq "simulate cleared" "$(sql "SELECT IFNULL(simulate_state, '-') FROM sources WHERE name='fleet'")" "-"
+
+echo "== try (air-gapped sandbox: no request leaves) =="
+run sources try --url https://example.com/status.json --items /list
+expect_eq "try exit 0" "$rc" "0"
+expect_has "try reports the air-gap" "$(cat "$SANDBOX/out")" "failed: airgap"
+expect_has "try saves nothing" "$(cat "$SANDBOX/out")" "Nothing was saved"
+run sources try --url http://example.com/x
+expect_eq "try of plain http exits 1 (bad_spec)" "$rc" "1"
+expect_has "https_only" "$(cat "$SANDBOX/err")" "bad_spec"
+run sources try --name fleet --json
+expect_has "try a saved source" "$(cat "$SANDBOX/out")" "\"name\": \"fleet\""
 
 echo "== triggers =="
 run sources trigger propose --source fleet --on item_went_crit --agent "$PID" --note "check the relay"
@@ -181,7 +199,7 @@ expect_eq "an unknown source exits 4" "$rc" "4"
 echo "== audit =="
 expect_has "approvals and trigger changes are audited" \
     "$(sql "SELECT group_concat(action, ',') FROM (SELECT action FROM source_audit ORDER BY id)")" \
-    "approve,batch_approve,pin,unpin,trigger_propose,trigger_approve,trigger_edit,trigger_add,trigger_pause,trigger_remove"
+    "approve,batch_approve,pin,unpin,simulate,simulate_off,trigger_propose,trigger_approve,trigger_edit,trigger_add,trigger_pause,trigger_remove"
 
 echo
 echo "Results: $pass passed, $fail failed"

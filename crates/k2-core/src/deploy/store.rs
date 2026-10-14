@@ -297,6 +297,16 @@ pub fn set_memory_limit(conn: &Connection, app_id: &str, bytes: Option<i64>) -> 
     Ok(())
 }
 
+/// `container` (the guarded engine) or `process` (stage 1). The column's
+/// CHECK holds the rest out.
+pub fn set_isolation(conn: &Connection, app_id: &str, isolation: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE apps SET isolation = ?2, updated_at = ?3 WHERE app_id = ?1",
+        params![app_id, isolation, super::now()],
+    )?;
+    Ok(())
+}
+
 pub fn delete_app(conn: &Connection, app_id: &str) -> rusqlite::Result<bool> {
     conn.execute("DELETE FROM deployments WHERE app_id = ?1", params![app_id])?;
     Ok(conn.execute("DELETE FROM apps WHERE app_id = ?1", params![app_id])? > 0)

@@ -36,6 +36,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/config",
     "/cli/app/deploy",
     "/cli/app/deployment",
+    "/cli/app/engine/install",
     "/cli/app/errors",
     "/cli/app/history",
     "/cli/app/inspect",
@@ -56,6 +57,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/build",
     "/cli/app/config",
     "/cli/app/deploy",
+    "/cli/app/engine/install",
     "/cli/app/install",
     "/cli/app/restart",
     "/cli/app/rollback",
@@ -319,6 +321,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         // for the owner only.
         "/cli/app/box" => super::box_prep::box_route(&who),
         "/cli/app/box/prepare" => json_body(body).and_then(|v| super::box_prep::prepare_route(&who, &v)),
+        // The guarded engine (S11): the owner installs or updates it.
+        "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
         "/cli/app/build" => build(&who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
@@ -590,8 +594,43 @@ fn wait_secs(v: &J) -> u64 {
     v.get("wait").and_then(|x| x.as_u64()).unwrap_or(0)
 }
 
+/// `engine`: `guarded` (the container floor, S12) or `process` (stage 1).
+/// Absent: the App's current engine. A change is recorded and audited.
+fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
+    let Some(e) = s(v, "engine") else { return Ok(app) };
+    let iso = match e {
+        "guarded" | "container" => "container",
+        "process" => "process",
+        other => return Err(no(codes::BAD_REQUEST, 400, format!("engine is guarded or process, not '{other}'"))),
+    };
+    if iso == app.isolation {
+        return Ok(app);
+    }
+    if iso == "container" {
+        if !cfg!(target_os = "linux") {
+            return Err(no(codes::ENGINE_UNAVAILABLE, 409, "the guarded engine runs on Linux boxes only"));
+        }
+        if k2_root_proto::apps::AppId::parse(&app.app_id).is_none() {
+            return Err(no(
+                codes::APP_ID_INVALID,
+                409,
+                format!("App id '{}' doesn't fit the guarded engine (at most 32 characters, no '--')", app.app_id),
+            ));
+        }
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_isolation(&conn, &app.app_id, iso).map_err(db_err)?;
+    }
+    audit_human(&app.app_id, "engine", who, json!({ "isolation": iso, "was": app.isolation }));
+    mirror(&app.app_id);
+    app_for(who, Some(&app.app_id))
+}
+
 fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
+    let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, v)?;
     let dep = super::supervisor::begin(&app, &seed, store::KIND_DEPLOY, &actor(who), s(v, "reason"))?;
     deployment_answer(&dep, wait_secs(v))
@@ -711,6 +750,7 @@ const LOG_CAP: usize = 256 * 1024;
 fn label(app: &AppRow) -> &'static str {
     match app.isolation.as_str() {
         "process" => "Preview, unwalled (process)",
+        "container" => "Guarded (container)",
         "none" => "Dev (no wall)",
         _ => "Preview",
     }
@@ -874,6 +914,19 @@ fn read_log(app_id: &str, deployment: &str) -> String {
     let p = deploy::deployment_log_path(app_id, deployment);
     let mut text = std::fs::read_to_string(p.with_extension("log.1")).unwrap_or_default();
     text.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
+    // A guarded instance's own output is in its unit's journal (rate
+    // limited per unit, W §5.3); the file holds K2's lines about it.
+    let guarded = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_app(&conn, app_id).ok().flatten().is_some_and(|a| a.isolation == "container")
+    };
+    if guarded && k2_root_proto::apps::AppId::parse(app_id).is_some() {
+        match super::guarded::logs(app_id, deployment, 5000) {
+            Ok(j) => text.push_str(&j),
+            Err(e) => text.push_str(&format!("[k2] the engine's journal for this deployment isn't readable: {}\n", e.message)),
+        }
+    }
     text
 }
 
@@ -988,6 +1041,13 @@ fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     }
     super::supervisor::stop_app(&app, &actor(who))?;
     super::supervisor::forget(&app.app_id);
+    if cfg!(target_os = "linux") && k2_root_proto::apps::AppId::parse(&app.app_id).is_some() && std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {
+        // Guarded leftovers (stopped units, the id slot on purge, the
+        // gateway rule). Best effort: a process-only App has none.
+        if let Err(e) = super::guarded::remove_app(&app.app_id, purge) {
+            k2_core::log_debug!("[apps] uninstall {}: engine: {}", app.app_id, e.message);
+        }
+    }
     let svc = {
         let db = k2_core::db::shared();
         let conn = db.lock();

@@ -213,6 +213,38 @@ k2 app box prepare --runtime runc > "$SANDBOX/out" 2>&1; rc=$?
 set -e
 expect_eq "prepare refuses an unknown runtime (exit 2)" "$rc" "2"
 
+echo "== guarded engine (S11/S12) =="
+# Same rule: a sandbox never has a protocol-6 helper, so the engine install
+# refuses before any download or root call, and a guarded deploy without an
+# engine fails its pipeline (never falls back to the process engine).
+if [ "$proto" -lt 6 ]; then
+    set +e
+    k2 app engine install > "$SANDBOX/out" 2>&1; rc=$?
+    set -e
+    expect_eq "engine install without a protocol-6 helper exits 3" "$rc" "3"
+    case "$(cat "$SANDBOX/out")" in
+        *linux_only*|*helper_needed*) ok "engine install names why (linux_only / helper_needed)" ;;
+        *) bad "engine install names why: $(cat "$SANDBOX/out")" ;;
+    esac
+fi
+expect_has "a second App for the engine checks" "$(k2 app install walled --memory none)" "App walled installed"
+set +e
+k2 app deploy walled "$WS/v1" --engine vm > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "deploy refuses an unknown engine (exit 2)" "$rc" "2"
+set +e
+k2 app deploy walled "$WS/v1" --engine guarded --json > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+case "$(cat "$SANDBOX/out")" in
+    *engine_unavailable*) ok "a guarded deploy without an engine is refused, not run unwalled (rc $rc)" ;;
+    *) bad "guarded deploy without an engine: rc $rc $(cat "$SANDBOX/out")" ;;
+esac
+[ "$rc" != 0 ] && ok "and it does not exit 0" || bad "guarded deploy without an engine exited 0"
+if [ "$(uname -s)" = Linux ]; then
+    expect_has "the guarded choice is recorded on the App" "$(k2 app list)" "Guarded (container)"
+fi
+expect_has "uninstall the engine-check App" "$(k2 app uninstall walled)" "App walled uninstalled"
+
 echo
 echo "app_runtime_cli_smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

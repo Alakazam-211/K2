@@ -6,6 +6,8 @@
 
 pub mod alerts;
 pub mod box_prep;
+pub mod engine_install;
+pub mod guarded;
 pub mod process_engine;
 pub mod router;
 pub mod routes;

@@ -336,6 +336,224 @@
     )
   }
 
+  // ── Garden data: transactions and chunked values ───────────────────────
+
+  // One transaction part: at most 64 ops and 60 KiB of values (UTF-8).
+  var PART_OPS = 64
+  var PART_BYTES = 60 * 1024
+  // A chunk's text, as JSON, stays under this (one part per chunk).
+  var CHUNK_BYTES = 48 * 1024
+  var CHUNKED_MAX = 1024 * 1024
+
+  /** @param {string} verb @param {string} message */
+  function fail(verb, message) {
+    return new K2Error({ code: 'too_large', message: message }, verb)
+  }
+
+  /** UTF-8 bytes of a string. @param {string} s */
+  function utf8Len(s) {
+    var n = 0
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i)
+      if (c < 0x80) n += 1
+      else if (c < 0x800) n += 2
+      else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+        n += 4
+        i++
+      } else n += 3
+    }
+    return n
+  }
+
+  /** UTF-8 bytes of a value as JSON (`undefined` counts as null). @param {unknown} v */
+  function jsonBytes(v) {
+    var s = JSON.stringify(v)
+    return utf8Len(s === undefined ? 'null' : s)
+  }
+
+  /** Ops in parts of ≤ 64 ops and ≤ 60 KiB of values. @param {any[]} ops */
+  function parts(ops) {
+    /** @type {any[][]} */
+    var out = []
+    var cur = []
+    var bytes = 0
+    for (var i = 0; i < ops.length; i++) {
+      var b = ops[i] && ops[i].op === 'put' ? jsonBytes(ops[i].value) : 0
+      if (cur.length && (cur.length >= PART_OPS || bytes + b > PART_BYTES)) {
+        out.push(cur)
+        cur = []
+        bytes = 0
+      }
+      cur.push(ops[i])
+      bytes += b
+    }
+    if (cur.length) out.push(cur)
+    return out
+  }
+
+  // k2.store.tx(): begins on the first add; parts go in order.
+  function makeTx() {
+    /** @type {Promise<string> | null} */
+    var id = null
+    /** @type {Promise<unknown>} */
+    var q = Promise.resolve()
+    function begin() {
+      if (!id) id = call('store.txBegin', []).then(function (r) { return /** @type {any} */ (r).txId })
+      return id
+    }
+    /** @param {() => Promise<unknown>} f */
+    function next(f) {
+      var p = q.then(f)
+      q = p.catch(function () {})
+      return p
+    }
+    return Object.freeze({
+      add: function (/** @type {any[]} */ ops) {
+        if (!Array.isArray(ops) || !ops.length) return Promise.reject(new K2Error({ code: 'failed', message: 'tx.add takes a list of ops' }, 'store.txAdd'))
+        return next(function () {
+          return begin().then(function (t) {
+            /** @type {Promise<unknown>} */
+            var p = Promise.resolve(null)
+            parts(ops).forEach(function (part) {
+              p = p.then(function () { return call('store.txAdd', [t, part]) })
+            })
+            return p
+          })
+        })
+      },
+      commit: function () {
+        return next(function () {
+          return begin().then(function (t) { return call('store.txCommit', [t]) })
+        })
+      },
+      abort: function () {
+        return next(function () {
+          return id ? id.then(function (t) { return call('store.txAbort', [t]) }) : Promise.resolve({ aborted: false })
+        })
+      },
+    })
+  }
+
+  /** @param {string} key */
+  function partKey(key, i) {
+    return key + '/~' + i
+  }
+
+  // putChunked(key, text, {ifRev}): parts <key>/~0… and the header <key>
+  // {chunks, bytes, sha256}, plus deletes of old parts past the new end, in
+  // one transaction.
+  /** @param {string} key @param {string} text @param {{ifRev?: number}} [opts] */
+  function putChunked(key, text, opts) {
+    var verb = 'store.putChunked'
+    if (typeof key !== 'string' || typeof text !== 'string') return Promise.reject(new K2Error({ code: 'failed', message: 'putChunked(key, text)' }, verb))
+    var total = utf8Len(text)
+    if (total > CHUNKED_MAX) return Promise.reject(fail(verb, 'putChunked holds at most 1 MiB of text'))
+    /** @type {string[]} */
+    var chunks = []
+    var start = 0
+    var size = 0
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i)
+      var pair = c >= 0xd800 && c <= 0xdbff && i + 1 < text.length
+      var b = c >= 0x20 && c < 0x7f && c !== 0x22 && c !== 0x5c ? 1 : jsonBytes(pair ? text.slice(i, i + 2) : text[i]) - 2
+      if (size + b > CHUNK_BYTES) {
+        chunks.push(text.slice(start, i))
+        start = i
+        size = 0
+      }
+      size += b
+      if (pair) i++
+    }
+    if (start < text.length || !chunks.length) chunks.push(text.slice(start))
+    var header
+    try {
+      header = { chunks: chunks.length, bytes: total, sha256: sha256Hex(text) }
+    } catch (e) {
+      return Promise.reject(new K2Error({ code: 'failed', message: 'putChunked takes well-formed text' }, verb))
+    }
+    /** @type {any[]} */
+    var ops = chunks.map(function (t, n) {
+      return { op: 'put', key: partKey(key, n), value: { part: n, text: t } }
+    })
+    var head = { op: 'put', key: key, value: header }
+    if (opts && typeof opts.ifRev === 'number') /** @type {any} */ (head).ifRev = opts.ifRev
+    ops.push(head)
+    return call('store.list', [{ prefix: key + '/~', limit: 500 }]).then(function (page) {
+      var items = /** @type {any} */ (page).items || []
+      items.forEach(function (/** @type {any} */ e) {
+        var n = Number(String(e.key).slice(key.length + 2))
+        if (!(n < chunks.length)) ops.push({ op: 'delete', key: e.key })
+      })
+      var tx = makeTx()
+      return tx.add(ops).then(function () { return tx.commit() }, function (err) {
+        tx.abort().catch(function () {})
+        throw err
+      })
+    })
+  }
+
+  /** @param {string} key */
+  function getChunked(key) {
+    var verb = 'store.getChunked'
+    return call('store.get', [key]).then(function (h) {
+      var head = /** @type {any} */ (h)
+      if (!head) return null
+      var v = head.value
+      if (!v || typeof v.chunks !== 'number' || typeof v.sha256 !== 'string') throw mismatch(verb, key + ' isn’t a putChunked header')
+      /** @type {Promise<unknown>[]} */
+      var reads = []
+      for (var n = 0; n < v.chunks; n++) reads.push(call('store.get', [partKey(key, n)]))
+      return Promise.all(reads).then(function (got) {
+        var text = got
+          .map(function (e, n) {
+            var p = /** @type {any} */ (e)
+            if (!p || !p.value || p.value.part !== n || typeof p.value.text !== 'string') throw mismatch(verb, 'part ' + n + ' of ' + key + ' is missing or wrong')
+            return p.value.text
+          })
+          .join('')
+        if (utf8Len(text) !== v.bytes || sha256Hex(text) !== v.sha256) throw mismatch(verb, key + '’s parts don’t match its header')
+        return text
+      })
+    })
+  }
+
+  /** @param {string} verb @param {string} message */
+  function mismatch(verb, message) {
+    var e = /** @type {any} */ (new K2Error({ code: 'failed', message: message }, verb))
+    e.reason = 'chunk_mismatch'
+    return e
+  }
+
+  /** SHA-256 of a string's UTF-8 bytes, hex. @param {string} s */
+  function sha256Hex(s) {
+    var bytes = unescape(encodeURIComponent(s))
+    var K = [], H = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]
+    for (var p = 2, found = 0; found < 64; p++) {
+      for (var d = 2; d * d <= p && p % d; d++);
+      if (d * d > p) K[found++] = (Math.pow(p, 1 / 3) * 4294967296) | 0
+    }
+    var l = bytes.length
+    var words = []
+    for (var i = 0; i < l; i++) words[i >> 2] |= bytes.charCodeAt(i) << (24 - (i % 4) * 8)
+    words[l >> 2] |= 0x80 << (24 - (l % 4) * 8)
+    words[(((l + 8) >> 6) << 4) + 15] = l * 8
+    for (var j = 0; j < words.length; j += 16) {
+      var w = [], h = H.slice(0)
+      for (var t = 0; t < 64; t++) {
+        var x = w[t - 15], y = w[t - 2]
+        w[t] = t < 16 ? words[j + t] | 0 : (w[t - 16] + ((x >>> 7 | x << 25) ^ (x >>> 18 | x << 14) ^ (x >>> 3)) + w[t - 7] + ((y >>> 17 | y << 15) ^ (y >>> 19 | y << 13) ^ (y >>> 10))) | 0
+        var a = h[0], e = h[4]
+        var t1 = h[7] + ((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) + ((e & h[5]) ^ (~e & h[6])) + K[t] + w[t]
+        var t2 = ((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) + ((a & h[1]) ^ (a & h[2]) ^ (h[1] & h[2]))
+        h = [(t1 + t2) | 0].concat(h)
+        h[4] = (h[4] + t1) | 0
+        h.length = 8
+      }
+      for (var k = 0; k < 8; k++) H[k] = (H[k] + h[k]) | 0
+    }
+    return H.map(function (v) { return ('00000000' + (v >>> 0).toString(16)).slice(-8) }).join('')
+  }
+
   // ── The k2 object ───────────────────────────────────────────────────────
 
   /**
@@ -409,6 +627,27 @@
             return subscribe(verb, Array.prototype.slice.call(arguments))
           }
   })
+  // ── Garden data helpers (contract-garden-data-v1 §7.2, §7.4) ────────────
+
+  if (groups.store) {
+    var store = groups.store
+    // k2.store.subscribe(prefix | {prefix, since}, cb, onError?): whole revs
+    // from any writer; K2 pages store.changes on each change.
+    store.subscribe = function () {
+      return subscribe('store.changes', Array.prototype.slice.call(arguments))
+    }
+    store.tx = makeTx
+    store.putChunked = putChunked
+    store.getChunked = getChunked
+  }
+  if (groups.viewer) {
+    var viewerGet = groups.viewer.get
+    var viewer = function () {
+      return viewerGet()
+    }
+    groups.viewer = Object.assign(viewer, groups.viewer)
+  }
+
   Object.keys(groups).forEach(function (surface) {
     k2[surface] = Object.freeze(groups[surface])
   })

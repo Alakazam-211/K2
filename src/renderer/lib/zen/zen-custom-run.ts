@@ -147,6 +147,9 @@ export function zenWidgetStopText(reason: ZenWidgetStopReason): string {
 /** The small inline notice while the runaway guard has posting paused. */
 export const ZEN_WIDGET_PAUSED_POSTING_TEXT = 'Paused: too many posts.'
 
+/** Garden data's runaway guard (the daemon's, `PauseReason::Writes`). */
+export const ZEN_WIDGET_PAUSED_WRITES_TEXT = 'Paused: too many writes.'
+
 export const ZEN_WIDGETS_PAUSED_TEXT = 'K2 restarted while this Garden’s widgets were running. They’re paused.'
 
 /** Tests only. */

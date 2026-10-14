@@ -38,6 +38,7 @@ import {
   zenPlacementKey,
   zenWidgetStopText,
   ZEN_WIDGET_PAUSED_POSTING_TEXT,
+  ZEN_WIDGET_PAUSED_WRITES_TEXT,
   ZEN_WIDGETS_PAUSED_TEXT,
 } from '@/lib/zen/zen-custom-run'
 import type { ZenWidgetProps } from '../zen-registry'
@@ -358,7 +359,13 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
   const builtin = zenIsBuiltinCustomWidget(widget.widget)
   return wrap(
     <>
-      {(widget.paused !== null || pausedHere) && <PausedStrip onResume={resume} busy={busy} error={resumeError} />}
+      {(widget.paused !== null || pausedHere) && (
+        <PausedStrip
+          onResume={resume}
+          busy={busy}
+          error={resumeError ?? (widget.paused?.reason === 'writes' ? ZEN_WIDGET_PAUSED_WRITES_TEXT : null)}
+        />
+      )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ZenCustomFrame key={`${widget.hash}:${generation}`} widget={widget} gardenId={gid} bridge={bridge} onProblem={setProblem} />
         {(!builtin || zenBoundSourceAddresses(widget).length > 0) && !reloadInMenu && (

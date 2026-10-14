@@ -52,360 +52,572 @@
     }),
   })
   // ---- sdk/k2-runtime.js (its comments are in that file) ----
-  ;(function () {
-    'use strict'
+;(function () {
+'use strict'
 
 
-    var g = /** @type {any} */ (self)
-    var TABLE = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.verbs ? K2_CONTRACT.verbs : {}
-    if (g.k2) return
+var g = /** @type {any} */ (self)
+var TABLE = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.verbs ? K2_CONTRACT.verbs : {}
+if (g.k2) return
 
-    class K2Error extends Error {
-      /**
-       * @param {WireError} wire
-       * @param {string} verb
-       */
-      constructor(wire, verb) {
-        super(wire.message || wire.code)
-        this.name = 'K2Error'
-        this.code = wire.code
-        this.verb = verb
-        if (wire.cap !== undefined) this.cap = wire.cap
-        if (wire.room !== undefined) this.room = wire.room
-        if (wire.feature !== undefined) this.feature = wire.feature
-        if (wire.last !== undefined) this.last = wire.last
-      }
-    }
+class K2Error extends Error {
+/**
+* @param {WireError} wire
+* @param {string} verb
+*/
+constructor(wire, verb) {
+super(wire.message || wire.code)
+this.name = 'K2Error'
+this.code = wire.code
+this.verb = verb
+if (wire.cap !== undefined) this.cap = wire.cap
+if (wire.room !== undefined) this.room = wire.room
+if (wire.feature !== undefined) this.feature = wire.feature
+if (wire.last !== undefined) this.last = wire.last
+}
+}
 
-    var port = null
-    var hello = null
-    var nextId = 1
-    var pending = new Map()
-    var subs = new Map()
+var port = null
+var hello = null
+var nextId = 1
+var pending = new Map()
+var subs = new Map()
 
-    var CONNECT_MS = 10000
-    var early = []
-    var helloed = function () {}
-    var unhelloed = helloed
-    var connected = new Promise(function (res, rej) {
-      helloed = res
-      unhelloed = rej
-    })
-    connected.catch(function () {})
+var CONNECT_MS = 10000
+var early = []
+var helloed = function () {}
+var unhelloed = helloed
+var connected = new Promise(function (res, rej) {
+helloed = res
+unhelloed = rej
+})
+connected.catch(function () {})
 
-    function send(msg) {
-      if (port) port.postMessage(msg)
-      else if (early && early.length < 1000) early.push(msg)
-    }
+function send(msg) {
+if (port) port.postMessage(msg)
+else if (early && early.length < 1000) early.push(msg)
+}
 
-    function notConnected(verb) {
-      return new K2Error({ code: 'failed', message: 'not connected' }, verb)
-    }
+function notConnected(verb) {
+return new K2Error({ code: 'failed', message: 'not connected' }, verb)
+}
 
-    g.setTimeout(function () {
-      if (port) return
-      early = null
-      unhelloed(notConnected('connected'))
-      pending.forEach(function (p) {
-        p.reject(notConnected(p.verb))
-      })
-      pending.clear()
-      var waiting = Array.from(subs.values())
-      subs.clear()
-      waiting.forEach(function (s) {
-        refused(s, notConnected(s.verb))
-      })
-    }, CONNECT_MS)
+g.setTimeout(function () {
+if (port) return
+early = null
+unhelloed(notConnected('connected'))
+pending.forEach(function (p) {
+p.reject(notConnected(p.verb))
+})
+pending.clear()
+var waiting = Array.from(subs.values())
+subs.clear()
+waiting.forEach(function (s) {
+refused(s, notConnected(s.verb))
+})
+}, CONNECT_MS)
 
-    function report(r) {
-      send({ error: { message: String(r && r.message ? r.message : r), stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined } })
-    }
+function report(r) {
+send({ error: { message: String(r && r.message ? r.message : r), stack: r && r.stack ? String(r.stack).slice(0, 2000) : undefined } })
+}
 
-    /**
-     * @param {Sub} s
-     * @param {K2Error} err
-     */
-    function refused(s, err) {
-      if (!s.onError) return send({ error: { message: 'k2: ' + s.verb + ' refused (' + err.code + '): ' + err.message } })
-      try {
-        s.onError(err)
-      } catch (e) {
-        report(e)
-      }
-    }
+/**
+* @param {Sub} s
+* @param {K2Error} err
+*/
+function refused(s, err) {
+if (!s.onError) return send({ error: { message: 'k2: ' + s.verb + ' refused (' + err.code + '): ' + err.message } })
+try {
+s.onError(err)
+} catch (e) {
+report(e)
+}
+}
 
-    /**
-     * One adapter: the hello's MessagePort.
-     * @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
-     */
-    var transport = {
-      call: function (verb, args) {
-        if (!port && !early) return Promise.reject(notConnected(verb))
-        var id = nextId++
-        return new Promise(function (resolve, reject) {
-          pending.set(id, { resolve: resolve, reject: reject, verb: verb })
-          send({ id: id, verb: verb, args: args })
-        })
-      },
-      subscribe: function (verb, args, cb, onError) {
-        if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
-        if (!port && !early) throw notConnected(verb)
-        var sub = nextId++
-        subs.set(sub, { cb: cb, onError: onError, verb: verb })
-        send({ sub: sub, verb: verb, args: args })
-        var live = true
-        return function unsubscribe() {
-          if (!live) return
-          live = false
-          subs.delete(sub)
-          send({ unsub: sub })
-        }
-      },
-      info: function () {
-        return { caps: hello ? hello.caps.slice() : [], features: hello ? hello.features.slice() : [], mode: 'frame' }
-      },
-    }
+/**
+* One adapter: the hello's MessagePort.
+* @type {{call(verb: string, args: unknown[]): Promise<unknown>, subscribe(verb: string, args: unknown[], cb: (v: unknown) => void, onError: ((e: K2Error) => void) | null): () => void, info(): {caps: string[], features: string[], mode: 'frame'}}}
+*/
+var transport = {
+call: function (verb, args) {
+if (!port && !early) return Promise.reject(notConnected(verb))
+var id = nextId++
+return new Promise(function (resolve, reject) {
+pending.set(id, { resolve: resolve, reject: reject, verb: verb })
+send({ id: id, verb: verb, args: args })
+})
+},
+subscribe: function (verb, args, cb, onError) {
+if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
+if (!port && !early) throw notConnected(verb)
+var sub = nextId++
+subs.set(sub, { cb: cb, onError: onError, verb: verb })
+send({ sub: sub, verb: verb, args: args })
+var live = true
+return function unsubscribe() {
+if (!live) return
+live = false
+subs.delete(sub)
+send({ unsub: sub })
+}
+},
+info: function () {
+return { caps: hello ? hello.caps.slice() : [], features: hello ? hello.features.slice() : [], mode: 'frame' }
+},
+}
 
-    function onPortMessage(e) {
-      var m = e.data
-      if (!m || typeof m !== 'object') return
-      if (typeof m.ping === 'number') {
-        send({ pong: m.ping })
-        return
-      }
-      if (typeof m.sub === 'number' && 'value' in m) {
-        var s = subs.get(m.sub)
-        if (s) s.cb(m.value)
-        return
-      }
-      if (typeof m.sub === 'number') {
-        var gone = subs.get(m.sub)
-        if (!gone) return
-        subs.delete(m.sub)
-        refused(gone, new K2Error(m.error || { code: 'failed', message: 'refused' }, gone.verb))
-        return
-      }
-      if (typeof m.id === 'number') {
-        var p = pending.get(m.id)
-        if (!p) return
-        pending.delete(m.id)
-        if (m.ok === true) p.resolve(m.value)
-        else p.reject(new K2Error(m.error || { code: 'failed', message: 'refused' }, p.verb))
-      }
-    }
+function onPortMessage(e) {
+var m = e.data
+if (!m || typeof m !== 'object') return
+if (typeof m.ping === 'number') {
+send({ pong: m.ping })
+return
+}
+if (typeof m.sub === 'number' && 'value' in m) {
+var s = subs.get(m.sub)
+if (s) s.cb(m.value)
+return
+}
+if (typeof m.sub === 'number') {
+var gone = subs.get(m.sub)
+if (!gone) return
+subs.delete(m.sub)
+refused(gone, new K2Error(m.error || { code: 'failed', message: 'refused' }, gone.verb))
+return
+}
+if (typeof m.id === 'number') {
+var p = pending.get(m.id)
+if (!p) return
+pending.delete(m.id)
+if (m.ok === true) p.resolve(m.value)
+else p.reject(new K2Error(m.error || { code: 'failed', message: 'refused' }, p.verb))
+}
+}
 
-    function applyTheme(v) {
-      if (!v || typeof v !== 'object') return
-      var info = /** @type {{theme?: {vars?: Record<string, string>, scheme?: string}}} */ (v)
-      var t = info.theme
-      if (!t || typeof t !== 'object') return
-      var root = document.documentElement
-      if (t.vars) {
-        for (var k in t.vars) {
-          if (k.indexOf('--zen-') === 0 && typeof t.vars[k] === 'string') root.style.setProperty(k, t.vars[k])
-        }
-      }
-      if (t.scheme === 'light' || t.scheme === 'dark') root.setAttribute('data-zen-scheme', t.scheme)
-    }
+function applyTheme(v) {
+if (!v || typeof v !== 'object') return
+var info = /** @type {{theme?: {vars?: Record<string, string>, scheme?: string}}} */ (v)
+var t = info.theme
+if (!t || typeof t !== 'object') return
+var root = document.documentElement
+if (t.vars) {
+for (var k in t.vars) {
+if (k.indexOf('--zen-') === 0 && typeof t.vars[k] === 'string') root.style.setProperty(k, t.vars[k])
+}
+}
+if (t.scheme === 'light' || t.scheme === 'dark') root.setAttribute('data-zen-scheme', t.scheme)
+}
 
-    function onHello(e) {
-      if (port) return
-      if (e.source !== g.parent) return
-      var m = e.data
-      if (!m || m.k2 !== 'hello' || m.v !== 1 || !e.ports || !e.ports[0]) return
-      port = e.ports[0]
-      hello = {
-        caps: Array.isArray(m.caps) ? m.caps.slice() : [],
-        features: Array.isArray(m.features) ? m.features.slice() : [],
-        widget: m.widget && typeof m.widget === 'object' ? Object.freeze(Object.assign({}, m.widget)) : { id: '', name: '', garden: '' },
-        config: Object.freeze(Object.assign({}, m.config || {})),
-        motion: Object.freeze({ reduced: !!(m.motion && m.motion.reduced) }),
-      }
-      port.onmessage = onPortMessage
-      g.removeEventListener('message', onHello)
-      transport.subscribe('theme.changed', [], applyTheme, null)
-      var waiting = early || []
-      early = null
-      for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
-      helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
-    }
-    g.addEventListener('message', onHello)
-
-
-    g.addEventListener('error', function (/** @type {ErrorEvent} */ e) {
-      report({ message: e.message || 'error', stack: e.error && e.error.stack })
-    })
-    g.addEventListener('unhandledrejection', function (/** @type {PromiseRejectionEvent} */ e) {
-      report(e.reason)
-    })
-
-    var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
-    function chordOf(e) {
-      if (e.isTrusted === false || e.repeat) return null
-      var altGr = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')
-      if (!MAC && e.code === 'KeyZ' && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey && !altGr) return 'zen-exit'
-      var digit = /^Digit([1-9])$/.exec(e.code)
-      if (digit && e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey) return 'garden-' + digit[1]
-      if (e.code === 'Period') {
-        var mods = MAC ? e.ctrlKey && e.metaKey && !e.altKey : e.ctrlKey && e.altKey && !e.metaKey && !altGr
-        if (mods) return e.shiftKey ? 'theme-prev' : 'theme-next'
-      }
-      return null
-    }
-    g.addEventListener(
-      'keydown',
-      function (/** @type {KeyboardEvent} */ e) {
-        var chord = chordOf(e)
-        if (!chord) return
-        e.preventDefault()
-        send({ chord: chord })
-      },
-      true,
-    )
+function onHello(e) {
+if (port) return
+if (e.source !== g.parent) return
+var m = e.data
+if (!m || m.k2 !== 'hello' || m.v !== 1 || !e.ports || !e.ports[0]) return
+port = e.ports[0]
+hello = {
+caps: Array.isArray(m.caps) ? m.caps.slice() : [],
+features: Array.isArray(m.features) ? m.features.slice() : [],
+widget: m.widget && typeof m.widget === 'object' ? Object.freeze(Object.assign({}, m.widget)) : { id: '', name: '', garden: '' },
+config: Object.freeze(Object.assign({}, m.config || {})),
+motion: Object.freeze({ reduced: !!(m.motion && m.motion.reduced) }),
+}
+port.onmessage = onPortMessage
+g.removeEventListener('message', onHello)
+transport.subscribe('theme.changed', [], applyTheme, null)
+var waiting = early || []
+early = null
+for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i])
+helloed(Object.freeze({ caps: hello.caps.slice(), features: hello.features.slice(), widget: hello.widget, config: hello.config, motion: hello.motion }))
+}
+g.addEventListener('message', onHello)
 
 
-    var down = false
-    g.addEventListener(
-      'pointerdown',
-      function (/** @type {PointerEvent} */ e) {
-        if (e.isTrusted === false || e.button !== 0) return
-        down = true
-        send({ pointer: 'down' })
-      },
-      true,
-    )
-    function up() {
-      if (!down) return
-      down = false
-      send({ pointer: 'up' })
-    }
-    g.addEventListener('pointerup', up, true)
-    g.addEventListener('pointercancel', up, true)
-    g.addEventListener('blur', up)
+g.addEventListener('error', function (/** @type {ErrorEvent} */ e) {
+report({ message: e.message || 'error', stack: e.error && e.error.stack })
+})
+g.addEventListener('unhandledrejection', function (/** @type {PromiseRejectionEvent} */ e) {
+report(e.reason)
+})
 
-    function startDrag() {
-      if (!down) return Promise.reject(new K2Error({ code: 'failed', message: 'window.startDrag needs a mouse button down in this widget' }, 'window.startDrag'))
-      down = false
-      return transport.call('window.startDrag', [])
-    }
-
-    var REGION_MS = 100
-    var regionsAt = 0
-    var regionsSent = ''
-    var regionsQ = null
-    function setHitRegions(rects) {
-      var list = Array.isArray(rects)
-        ? rects.map(function (r) {
-            return r && typeof r === 'object' ? { x: r.x, y: r.y, width: r.width, height: r.height } : r
-          })
-        : rects
-      var key = JSON.stringify(list === undefined ? null : list)
-      if (!regionsQ && key === regionsSent) return Promise.resolve(null)
-      if (!regionsQ) {
-        regionsQ = { list: list, key: key, waiters: [] }
-        g.setTimeout(flushRegions, Math.max(0, regionsAt + REGION_MS - Date.now()))
-      }
-      var q = regionsQ
-      q.list = list
-      q.key = key
-      return new Promise(function (res, rej) {
-        q.waiters.push([res, rej])
-      })
-    }
-    function flushRegions() {
-      var q = regionsQ
-      if (!q) return
-      regionsQ = null
-      regionsAt = Date.now()
-      transport.call('canvas.setHitRegions', [q.list]).then(
-        function (v) {
-          regionsSent = q.key
-          q.waiters.forEach(function (w) {
-            w[0](v)
-          })
-        },
-        function (e) {
-          regionsSent = ''
-          q.waiters.forEach(function (w) {
-            w[1](e)
-          })
-        },
-      )
-    }
+var MAC = /Mac/.test(String(g.navigator && g.navigator.platform))
+function chordOf(e) {
+if (e.isTrusted === false || e.repeat) return null
+var altGr = typeof e.getModifierState === 'function' && e.getModifierState('AltGraph')
+if (!MAC && e.code === 'KeyZ' && e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey && !altGr) return 'zen-exit'
+var digit = /^Digit([1-9])$/.exec(e.code)
+if (digit && e.metaKey && e.altKey && !e.ctrlKey && !e.shiftKey) return 'garden-' + digit[1]
+if (e.code === 'Period') {
+var mods = MAC ? e.ctrlKey && e.metaKey && !e.altKey : e.ctrlKey && e.altKey && !e.metaKey && !altGr
+if (mods) return e.shiftKey ? 'theme-prev' : 'theme-next'
+}
+return null
+}
+g.addEventListener(
+'keydown',
+function (/** @type {KeyboardEvent} */ e) {
+var chord = chordOf(e)
+if (!chord) return
+e.preventDefault()
+send({ chord: chord })
+},
+true,
+)
 
 
-    /**
-     * @param {string} verb
-     * @param {unknown[]} args
-     */
-    function call(verb, args) {
-      if (verb === 'canvas.setHitRegions') return setHitRegions(args[0])
-      if (verb === 'window.startDrag') return startDrag()
-      return transport.call(verb, args)
-    }
+var down = false
+g.addEventListener(
+'pointerdown',
+function (/** @type {PointerEvent} */ e) {
+if (e.isTrusted === false || e.button !== 0) return
+down = true
+send({ pointer: 'down' })
+},
+true,
+)
+function up() {
+if (!down) return
+down = false
+send({ pointer: 'up' })
+}
+g.addEventListener('pointerup', up, true)
+g.addEventListener('pointercancel', up, true)
+g.addEventListener('blur', up)
 
-    /**
-     * Trailing function args are cb, onError?.
-     * @param {string} verb
-     * @param {unknown[]} rest
-     */
-    function subscribe(verb, rest) {
-      var n = rest.length
-      var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
-      var cb = two ? rest[n - 2] : rest[n - 1]
-      var onError = two ? /** @type {(e: K2Error) => void} */ (rest[n - 1]) : null
-      return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
-    }
+function startDrag() {
+if (!down) return Promise.reject(new K2Error({ code: 'failed', message: 'window.startDrag needs a mouse button down in this widget' }, 'window.startDrag'))
+down = false
+return transport.call('window.startDrag', [])
+}
 
-    var k2 = {}
-    k2.call = function (/** @type {string} */ verb) {
-      return call(verb, Array.prototype.slice.call(arguments, 1))
-    }
-    k2.subscribe = function (/** @type {string} */ verb) {
-      return subscribe(verb, Array.prototype.slice.call(arguments, 1))
-    }
-    k2.on = k2.subscribe
-    k2.can = function (/** @type {string} */ verb) {
-      var row = TABLE[verb]
-      if (!row || !hello) return false
-      if (row.cap !== null && hello.caps.indexOf(row.cap) < 0) return false
-      if (row.feature && hello.features.indexOf(row.feature) < 0) return false
-      return true
-    }
-    k2.connected = connected
-    k2.ready = function () {
-      send({ ready: true })
-    }
-    k2.asset = function (/** @type {string} */ name) {
-      var assets = g.K2_ASSETS
-      return assets && typeof assets[name] === 'string' ? assets[name] : null
-    }
-    Object.defineProperty(k2, 'config', { enumerable: true, get: function () { return hello ? hello.config : Object.freeze({}) } })
-    Object.defineProperty(k2, 'widget', { enumerable: true, get: function () { return hello ? hello.widget : null } })
-    Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
+var REGION_MS = 100
+var regionsAt = 0
+var regionsSent = ''
+var regionsQ = null
+function setHitRegions(rects) {
+var list = Array.isArray(rects)
+? rects.map(function (r) {
+return r && typeof r === 'object' ? { x: r.x, y: r.y, width: r.width, height: r.height } : r
+})
+: rects
+var key = JSON.stringify(list === undefined ? null : list)
+if (!regionsQ && key === regionsSent) return Promise.resolve(null)
+if (!regionsQ) {
+regionsQ = { list: list, key: key, waiters: [] }
+g.setTimeout(flushRegions, Math.max(0, regionsAt + REGION_MS - Date.now()))
+}
+var q = regionsQ
+q.list = list
+q.key = key
+return new Promise(function (res, rej) {
+q.waiters.push([res, rej])
+})
+}
+function flushRegions() {
+var q = regionsQ
+if (!q) return
+regionsQ = null
+regionsAt = Date.now()
+transport.call('canvas.setHitRegions', [q.list]).then(
+function (v) {
+regionsSent = q.key
+q.waiters.forEach(function (w) {
+w[0](v)
+})
+},
+function (e) {
+regionsSent = ''
+q.waiters.forEach(function (w) {
+w[1](e)
+})
+},
+)
+}
 
-    var groups = {}
-    Object.keys(TABLE).forEach(function (verb) {
-      var dot = verb.indexOf('.')
-      if (dot <= 0) return
-      var surface = verb.slice(0, dot)
-      var action = verb.slice(dot + 1)
-      if (surface in k2 && !(surface in groups)) return
-      var row = TABLE[verb]
-      var group = groups[surface] || (groups[surface] = {})
-      group[action] =
-        row.kind === 'call'
-          ? function () {
-              return call(verb, Array.prototype.slice.call(arguments))
-            }
-          : function () {
-              return subscribe(verb, Array.prototype.slice.call(arguments))
-            }
-    })
-    Object.keys(groups).forEach(function (surface) {
-      k2[surface] = Object.freeze(groups[surface])
-    })
 
-    Object.defineProperty(g, 'k2', { value: Object.freeze(k2), writable: false, configurable: false, enumerable: true })
-  })()
+var PART_OPS = 64
+var PART_BYTES = 60 * 1024
+var CHUNK_BYTES = 48 * 1024
+var CHUNKED_MAX = 1024 * 1024
+
+function fail(verb, message) {
+return new K2Error({ code: 'too_large', message: message }, verb)
+}
+
+function utf8Len(s) {
+var n = 0
+for (var i = 0; i < s.length; i++) {
+var c = s.charCodeAt(i)
+if (c < 0x80) n += 1
+else if (c < 0x800) n += 2
+else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+n += 4
+i++
+} else n += 3
+}
+return n
+}
+
+function jsonBytes(v) {
+var s = JSON.stringify(v)
+return utf8Len(s === undefined ? 'null' : s)
+}
+
+function parts(ops) {
+var out = []
+var cur = []
+var bytes = 0
+for (var i = 0; i < ops.length; i++) {
+var b = ops[i] && ops[i].op === 'put' ? jsonBytes(ops[i].value) : 0
+if (cur.length && (cur.length >= PART_OPS || bytes + b > PART_BYTES)) {
+out.push(cur)
+cur = []
+bytes = 0
+}
+cur.push(ops[i])
+bytes += b
+}
+if (cur.length) out.push(cur)
+return out
+}
+
+function makeTx() {
+var id = null
+var q = Promise.resolve()
+function begin() {
+if (!id) id = call('store.txBegin', []).then(function (r) { return /** @type {any} */ (r).txId })
+return id
+}
+function next(f) {
+var p = q.then(f)
+q = p.catch(function () {})
+return p
+}
+return Object.freeze({
+add: function (/** @type {any[]} */ ops) {
+if (!Array.isArray(ops) || !ops.length) return Promise.reject(new K2Error({ code: 'failed', message: 'tx.add takes a list of ops' }, 'store.txAdd'))
+return next(function () {
+return begin().then(function (t) {
+var p = Promise.resolve(null)
+parts(ops).forEach(function (part) {
+p = p.then(function () { return call('store.txAdd', [t, part]) })
+})
+return p
+})
+})
+},
+commit: function () {
+return next(function () {
+return begin().then(function (t) { return call('store.txCommit', [t]) })
+})
+},
+abort: function () {
+return next(function () {
+return id ? id.then(function (t) { return call('store.txAbort', [t]) }) : Promise.resolve({ aborted: false })
+})
+},
+})
+}
+
+function partKey(key, i) {
+return key + '/~' + i
+}
+
+function putChunked(key, text, opts) {
+var verb = 'store.putChunked'
+if (typeof key !== 'string' || typeof text !== 'string') return Promise.reject(new K2Error({ code: 'failed', message: 'putChunked(key, text)' }, verb))
+var total = utf8Len(text)
+if (total > CHUNKED_MAX) return Promise.reject(fail(verb, 'putChunked holds at most 1 MiB of text'))
+var chunks = []
+var start = 0
+var size = 0
+for (var i = 0; i < text.length; i++) {
+var c = text.charCodeAt(i)
+var pair = c >= 0xd800 && c <= 0xdbff && i + 1 < text.length
+var b = c >= 0x20 && c < 0x7f && c !== 0x22 && c !== 0x5c ? 1 : jsonBytes(pair ? text.slice(i, i + 2) : text[i]) - 2
+if (size + b > CHUNK_BYTES) {
+chunks.push(text.slice(start, i))
+start = i
+size = 0
+}
+size += b
+if (pair) i++
+}
+if (start < text.length || !chunks.length) chunks.push(text.slice(start))
+var header
+try {
+header = { chunks: chunks.length, bytes: total, sha256: sha256Hex(text) }
+} catch (e) {
+return Promise.reject(new K2Error({ code: 'failed', message: 'putChunked takes well-formed text' }, verb))
+}
+var ops = chunks.map(function (t, n) {
+return { op: 'put', key: partKey(key, n), value: { part: n, text: t } }
+})
+var head = { op: 'put', key: key, value: header }
+if (opts && typeof opts.ifRev === 'number') /** @type {any} */ (head).ifRev = opts.ifRev
+ops.push(head)
+return call('store.list', [{ prefix: key + '/~', limit: 500 }]).then(function (page) {
+var items = /** @type {any} */ (page).items || []
+items.forEach(function (/** @type {any} */ e) {
+var n = Number(String(e.key).slice(key.length + 2))
+if (!(n < chunks.length)) ops.push({ op: 'delete', key: e.key })
+})
+var tx = makeTx()
+return tx.add(ops).then(function () { return tx.commit() }, function (err) {
+tx.abort().catch(function () {})
+throw err
+})
+})
+}
+
+function getChunked(key) {
+var verb = 'store.getChunked'
+return call('store.get', [key]).then(function (h) {
+var head = /** @type {any} */ (h)
+if (!head) return null
+var v = head.value
+if (!v || typeof v.chunks !== 'number' || typeof v.sha256 !== 'string') throw mismatch(verb, key + ' isn’t a putChunked header')
+var reads = []
+for (var n = 0; n < v.chunks; n++) reads.push(call('store.get', [partKey(key, n)]))
+return Promise.all(reads).then(function (got) {
+var text = got
+.map(function (e, n) {
+var p = /** @type {any} */ (e)
+if (!p || !p.value || p.value.part !== n || typeof p.value.text !== 'string') throw mismatch(verb, 'part ' + n + ' of ' + key + ' is missing or wrong')
+return p.value.text
+})
+.join('')
+if (utf8Len(text) !== v.bytes || sha256Hex(text) !== v.sha256) throw mismatch(verb, key + '’s parts don’t match its header')
+return text
+})
+})
+}
+
+function mismatch(verb, message) {
+var e = /** @type {any} */ (new K2Error({ code: 'failed', message: message }, verb))
+e.reason = 'chunk_mismatch'
+return e
+}
+
+function sha256Hex(s) {
+var bytes = unescape(encodeURIComponent(s))
+var K = [], H = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225]
+for (var p = 2, found = 0; found < 64; p++) {
+for (var d = 2; d * d <= p && p % d; d++);
+if (d * d > p) K[found++] = (Math.pow(p, 1 / 3) * 4294967296) | 0
+}
+var l = bytes.length
+var words = []
+for (var i = 0; i < l; i++) words[i >> 2] |= bytes.charCodeAt(i) << (24 - (i % 4) * 8)
+words[l >> 2] |= 0x80 << (24 - (l % 4) * 8)
+words[(((l + 8) >> 6) << 4) + 15] = l * 8
+for (var j = 0; j < words.length; j += 16) {
+var w = [], h = H.slice(0)
+for (var t = 0; t < 64; t++) {
+var x = w[t - 15], y = w[t - 2]
+w[t] = t < 16 ? words[j + t] | 0 : (w[t - 16] + ((x >>> 7 | x << 25) ^ (x >>> 18 | x << 14) ^ (x >>> 3)) + w[t - 7] + ((y >>> 17 | y << 15) ^ (y >>> 19 | y << 13) ^ (y >>> 10))) | 0
+var a = h[0], e = h[4]
+var t1 = h[7] + ((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) + ((e & h[5]) ^ (~e & h[6])) + K[t] + w[t]
+var t2 = ((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) + ((a & h[1]) ^ (a & h[2]) ^ (h[1] & h[2]))
+h = [(t1 + t2) | 0].concat(h)
+h[4] = (h[4] + t1) | 0
+h.length = 8
+}
+for (var k = 0; k < 8; k++) H[k] = (H[k] + h[k]) | 0
+}
+return H.map(function (v) { return ('00000000' + (v >>> 0).toString(16)).slice(-8) }).join('')
+}
+
+
+/**
+* @param {string} verb
+* @param {unknown[]} args
+*/
+function call(verb, args) {
+if (verb === 'canvas.setHitRegions') return setHitRegions(args[0])
+if (verb === 'window.startDrag') return startDrag()
+return transport.call(verb, args)
+}
+
+/**
+* Trailing function args are cb, onError?.
+* @param {string} verb
+* @param {unknown[]} rest
+*/
+function subscribe(verb, rest) {
+var n = rest.length
+var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
+var cb = two ? rest[n - 2] : rest[n - 1]
+var onError = two ? /** @type {(e: K2Error) => void} */ (rest[n - 1]) : null
+return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
+}
+
+var k2 = {}
+k2.call = function (/** @type {string} */ verb) {
+return call(verb, Array.prototype.slice.call(arguments, 1))
+}
+k2.subscribe = function (/** @type {string} */ verb) {
+return subscribe(verb, Array.prototype.slice.call(arguments, 1))
+}
+k2.on = k2.subscribe
+k2.can = function (/** @type {string} */ verb) {
+var row = TABLE[verb]
+if (!row || !hello) return false
+if (row.cap !== null && hello.caps.indexOf(row.cap) < 0) return false
+if (row.feature && hello.features.indexOf(row.feature) < 0) return false
+return true
+}
+k2.connected = connected
+k2.ready = function () {
+send({ ready: true })
+}
+k2.asset = function (/** @type {string} */ name) {
+var assets = g.K2_ASSETS
+return assets && typeof assets[name] === 'string' ? assets[name] : null
+}
+Object.defineProperty(k2, 'config', { enumerable: true, get: function () { return hello ? hello.config : Object.freeze({}) } })
+Object.defineProperty(k2, 'widget', { enumerable: true, get: function () { return hello ? hello.widget : null } })
+Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
+
+var groups = {}
+Object.keys(TABLE).forEach(function (verb) {
+var dot = verb.indexOf('.')
+if (dot <= 0) return
+var surface = verb.slice(0, dot)
+var action = verb.slice(dot + 1)
+if (surface in k2 && !(surface in groups)) return
+var row = TABLE[verb]
+var group = groups[surface] || (groups[surface] = {})
+group[action] =
+row.kind === 'call'
+? function () {
+return call(verb, Array.prototype.slice.call(arguments))
+}
+: function () {
+return subscribe(verb, Array.prototype.slice.call(arguments))
+}
+})
+
+if (groups.store) {
+var store = groups.store
+store.subscribe = function () {
+return subscribe('store.changes', Array.prototype.slice.call(arguments))
+}
+store.tx = makeTx
+store.putChunked = putChunked
+store.getChunked = getChunked
+}
+if (groups.viewer) {
+var viewerGet = groups.viewer.get
+var viewer = function () {
+return viewerGet()
+}
+groups.viewer = Object.assign(viewer, groups.viewer)
+}
+
+Object.keys(groups).forEach(function (surface) {
+k2[surface] = Object.freeze(groups[surface])
+})
+
+Object.defineProperty(g, 'k2', { value: Object.freeze(k2), writable: false, configurable: false, enumerable: true })
+})()
 })()

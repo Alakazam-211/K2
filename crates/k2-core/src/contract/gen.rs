@@ -559,10 +559,14 @@ fn frame_js(c: &Catalog, runtime: Option<&str>) -> String {
                 if is_comment_line(line) {
                     continue;
                 }
+                // Indentation is dropped: the frame script has a byte budget
+                // (UWA5) and the runtime holds no multi-line strings.
+                let line = line.trim_start();
                 if line.is_empty() {
                     s.push('\n');
                 } else {
-                    s.push_str(&format!("  {line}\n"));
+                    s.push_str(line);
+                    s.push('\n');
                 }
             }
         }

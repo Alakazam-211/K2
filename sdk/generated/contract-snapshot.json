@@ -3,10 +3,10 @@
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 7,
   "catalogSha256": "debc8d0b650e1c73869b172b26b5992037a3581fc29ba817ee51d442239b0f69",
-  "runtimeSha256": "d5fa62bb787869dff7c50aee666f90e9212bb2b5537279e726f472336e2fe5dc",
+  "runtimeSha256": "3a4b6a97a1b29b52f8dcb05d0fddba5b482bbb71cb077fe2ca6d14b577842a5a",
   "files": {
     "cli/k2": "0c186b2d603e72b5139de381ddf2d0ce8ef31f10c2aacafbfb6a4368cd7a1c38",
-    "sdk/generated/k2-frame.js": "8f00dd016747b6f939ea5484687709fcc509080104ab828e9149139a482bdf05",
+    "sdk/generated/k2-frame.js": "27d87ad8e4650e002fef316ea2ae9d381c3c2244c1ec773306ed6672d675d180",
     "sdk/generated/k2.d.ts": "20757daca0e611f1564243c2bc422950066fefac9090e29334b3f0aeb663479c",
     "src/renderer/lib/k2-caps.generated.ts": "f74208af10958ef4b5c0bcb8710e1b468da3302b1dfd9092e1d3b38ed43f27c1",
     "src/renderer/lib/zen/zen-verbs.generated.ts": "e999e098b5d04ec4dba2d76e83f21c5d3bf35eb374bf84fba043a44a48f65b36"

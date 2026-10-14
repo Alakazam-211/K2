@@ -132,6 +132,26 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
 }
 
+/** The cap a card reads data sources with (Garden v3, contract §6). */
+export const SOURCES_READ_CAP = 'sources:read'
+
+/**
+ * The caps a placement runs with, intersected again here (UW26 step 2:
+ * `source: user` whatever the body said). **Static taint (GV48):** a widget
+ * that asks for `sources:read` never runs with `thread:post`, so no
+ * `thread.post`, `thread.answer` or `compose.draft` (the daemon's
+ * `effective_caps` drops it too). K2's own `sources.ask` still works.
+ */
+export function zenEffectiveCaps(w: Pick<ZenCustomWidgetPayload, 'caps' | 'requested'>): ReadonlySet<string> {
+  const requested = w.requested as readonly string[]
+  const readsSources = requested.includes(SOURCES_READ_CAP)
+  return new Set(
+    (w.caps as readonly string[]).filter(
+      (c) => WIDGET_CAPS.has(c) && requested.includes(c) && !(readsSources && c === 'thread:post'),
+    ),
+  )
+}
+
 /** Values cross as plain JSON: functions, prototypes and cycles never do. */
 export function zenPlain(value: unknown): unknown {
   if (value === undefined) return null
@@ -153,11 +173,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   let stopped = false
   const subs = new Map<number, { off: () => void; thread: boolean; budget: boolean }>()
 
-  const caps = (): ReadonlySet<string> => {
-    const w = deps.widget()
-    // UW26 step 2: intersect again; `source: user` whatever the body said.
-    return new Set(w.caps.filter((c) => WIDGET_CAPS.has(c) && w.requested.includes(c)))
-  }
+  const caps = (): ReadonlySet<string> => zenEffectiveCaps(deps.widget())
 
   const stop = (reason: ZenWidgetStopReason): void => {
     if (stopped) return

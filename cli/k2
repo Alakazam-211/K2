@@ -21129,10 +21129,10 @@ cmd_schema() {
     {
       "name": "zen validate",
       "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
-      "description": "Validate what is on disk now; prints file:line:col: message per error and exits 1 on errors. Never changes what Zen shows.",
+      "description": "Validate what is on disk now; prints file:line:col: message per finding. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
       "args": [],
       "flags": [
-        {"name": "--json", "arg": null, "description": "{ok, errors, warnings, files}."}
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime}."}
       ]
     },
     {
@@ -21185,8 +21185,8 @@ cmd_schema() {
     },
     {
       "name": "zen widget",
-      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list> [--json]",
-      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list|show <name>|errors <name>> [--json]",
+      "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting); show <name> adds the caps it runs with, the taint note (a widget asking for sources:read never posts to the Thread) and the source addresses each placement reads; errors <name> [--since <seq>] [--follow] lists its runtime errors (class, code and line only for a widget that reads data sources). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
       "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
       "flags": [
         {"name": "--from", "arg": "k2:diary|hello|arcade", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
@@ -44200,7 +44200,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 5.
+for at once (no review). From K2's verb catalog, version 6.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -44217,28 +44217,35 @@ TEN EXAMPLES
 EVERY HELPER, BY CAP (portable: the same call works in an App later;
 local: Garden only). Each line: helper, reach, feature, example, [errors]
 no cap
-  k2.gardens.list()                           local    zen-gardens-v1  const gardens = await k2.gardens.list()
-  k2.gardens.current()                        local    zen-gardens-v1  const here = await k2.gardens.current()
-  k2.gardens.switch(id)                       local    zen-gardens-v1  await k2.gardens.switch(gardens[1].id)  [rate_limited]
-  k2.theme.get()                              local    zen-v1          const {theme, motion} = await k2.theme.get()
-  k2.theme.changed(cb)                        local    zen-widgets-v1  k2.theme.changed(({theme}) => paint(theme))
-  k2.canvas.setHitRegions(rects)              local    zen-widgets-v1  await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
-  k2.window.startDrag()                       local    zen-widgets-v1  grip.addEventListener('mousedown', () => k2.window.startDrag())
+  k2.gardens.list()                                  local    zen-gardens-v1  const gardens = await k2.gardens.list()
+  k2.gardens.current()                               local    zen-gardens-v1  const here = await k2.gardens.current()
+  k2.gardens.switch(id)                              local    zen-gardens-v1  await k2.gardens.switch(gardens[1].id)  [rate_limited]
+  k2.theme.get()                                     local    zen-v1          const {theme, motion} = await k2.theme.get()
+  k2.theme.changed(cb)                               local    zen-widgets-v1  k2.theme.changed(({theme}) => paint(theme))
+  k2.canvas.setHitRegions(rects)                     local    zen-widgets-v1  await k2.canvas.setHitRegions([bar.getBoundingClientRect()])  [too_large]
+  k2.window.startDrag()                              local    zen-widgets-v1  grip.addEventListener('mousedown', () => k2.window.startDrag())
 agents:read (See agents)
-  k2.agents.list()                            portable zen-v1          const rows = await k2.agents.list()
-  k2.agents.subscribe(cb)                     portable zen-v1          const off = k2.agents.subscribe((rows) => draw(rows))
-  k2.conversation.open(address)               local    zen-v1          await k2.conversation.open(row.address)  [not_bound]
-  k2.conversation.close()                     local    zen-v1          await k2.conversation.close()
+  k2.agents.list()                                   portable zen-v1          const rows = await k2.agents.list()
+  k2.agents.subscribe(cb)                            portable zen-v1          const off = k2.agents.subscribe((rows) => draw(rows))
+  k2.conversation.open(address)                      local    zen-v1          await k2.conversation.open(row.address)  [not_bound]
+  k2.conversation.close()                            local    zen-v1          await k2.conversation.close()
 presence:read (See who is looking)
-  k2.presence.get(address)                    local    zen-v1          const people = await k2.presence.get(row.address)  [not_bound]
-  k2.presence.subscribe(address, cb)          local    zen-v1          const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
+  k2.presence.get(address)                           local    zen-v1          const people = await k2.presence.get(row.address)  [not_bound]
+  k2.presence.subscribe(address, cb)                 local    zen-v1          const off = k2.presence.subscribe(row.address, (people) => draw(people))  [not_bound]
 thread:read (Read the Thread)
-  k2.thread.read(address, {beforeSeq, limit}) portable zen-v1          const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
-  k2.thread.subscribe(address, cb)            portable zen-v1          const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
+  k2.thread.read(address, {beforeSeq, limit})        portable zen-v1          const page = await k2.thread.read(row.address, {limit: 50})  [not_bound]
+  k2.thread.subscribe(address, cb)                   portable zen-v1          const off = k2.thread.subscribe(row.address, (view) => draw(view))  [not_bound rate_limited]
 thread:post (Post to the Thread)
-  k2.thread.post(address, text)               portable zen-v1          await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large]
-  k2.thread.answer(address, cardId, choice)   portable zen-v1          await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
-  k2.compose.draft(address, text)             local    zen-v1          await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+  k2.thread.post(address, text)                      portable zen-v1          await k2.thread.post(row.address, 'How is it going?')  [not_bound sending_off rate_limited too_large]
+  k2.thread.answer(address, cardId, choice)          portable zen-v1          await k2.thread.answer(row.address, card.id, 'Yes')  [not_bound sending_off rate_limited]
+  k2.compose.draft(address, text)                    local    zen-v1          await k2.compose.draft(row.address, 'Ask for a status')  [not_bound]
+sources:read (Read data sources)
+  k2.sources.list()                                  portable sources-v1      const rows = await k2.sources.list()
+  k2.sources.read(address)                           portable sources-v1      const v = await k2.sources.read(k2.config.source)  [not_bound server_not_saved unreachable removed]
+  k2.sources.history(address, field, {fromAt, toAt}) portable sources-v1      const h = await k2.sources.history(k2.config.source, 'count')  [not_bound server_not_saved unreachable removed no_history]
+  k2.sources.subscribe(address, cb)                  portable sources-v1      const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.refresh(address)                        portable sources-v1      await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
+  k2.sources.ask(address, itemKey?)                  local    sources-v1      await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
 
 Every call may also fail with cap_not_granted, verb_unavailable, failed.
 
@@ -44700,6 +44707,9 @@ if as_json:
     print(json.dumps(d, indent=2))
     if verb == "validate" and d.get("ok") is False:
         sys.exit(1)
+    # Loopable (decision-k2-runtime-v1 stage 0 (e)): 2 = saved, not run yet.
+    if verb == "validate" and d.get("status") == "pending":
+        sys.exit(2)
     sys.exit(0)
 
 def diag(e, warn=False):
@@ -44774,7 +44784,13 @@ if verb in ("validate", "reload"):
         sys.exit(1)
     if verb == "validate":
         files = d.get("files") or []
+        rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else None
+        if d.get("status") == "pending":
+            print("pending: %s parses; %s" % (", ".join(files), rt.get("note") if rt else "it hasn\x27t run yet"))
+            sys.exit(2)
         print("ok: %s" % (", ".join(files) if files else "no files"))
+        if rt and rt.get("note"):
+            print("runtime: %s" % rt["note"])
 elif verb == "reset":
     print("reset %s to %s" % (d.get("file"), d.get("restored")))
     if d.get("snapshot"):
@@ -44930,9 +44946,150 @@ elif verb == "widget-list":
 # k2 zen widget <new|list> (prd-zen-user-widgets-v2 UW41). Custom widgets
 # are folders under ~/.k2/zen/widgets/. They need no permissions (Rosson
 # 2026-10-08): `grant` and `revoke` only say so.
+# `k2 zen widget errors <name> [--since <seq>] [--follow] [--json]` — the
+# runtime errors a widget hit in Zen windows (decision-k2-runtime-v1 stage 0
+# (d)). Each has a suggestion; `current` marks errors of the version on disk.
+cmd_zen_widget_errors() {
+    local name="" since="" follow=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since) since="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
+            --since=*) since="${1#*=}"; shift ;;
+            --follow|-f) follow=true; shift ;;
+            --json) as_json=true; shift ;;
+            -h|--help)
+                echo "Usage: k2 zen widget errors <name> [--since <seq>] [--follow] [--json]"
+                echo "Runtime errors your widget hit in a Zen window, oldest first, each with a suggestion."
+                echo "--since <seq> shows only newer ones; --follow keeps printing new ones (Ctrl+C stops)."
+                echo "Exit 0 none for the version on disk now, 1 some (or the widget is unknown)."
+                exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget errors --help)" >&2; exit 2 ;;
+            *) [ -z "$name" ] && name="$1" || { echo "Error: one widget name" >&2; exit 2; }; shift ;;
+        esac
+    done
+    [ -n "$name" ] || { echo "Error: k2 zen widget errors needs a widget name" >&2; exit 2; }
+    case "$since" in ''|*[!0-9]*) [ -z "$since" ] || { echo "Error: --since is a sequence number" >&2; exit 2; } ;; esac
+    local raw code
+    while :; do
+        local -a q=("widget=$(urlencode "$name")")
+        [ -n "$since" ] && q+=("since=$since")
+        raw=$(cli_request "/cli/zen/widget/errors" "${q[@]}") || raw=""
+        code=0
+        ZE_RAW="$raw" ZE_JSON="$as_json" ZE_FOLLOW="$follow" python3 -c '
+import json, os, sys
+raw = os.environ.get("ZE_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: no usable answer from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(3)
+if not isinstance(d, dict) or d.get("error") is not None:
+    print("Error: %s" % ((d.get("message") if isinstance(d, dict) else None) or raw[:200]), file=sys.stderr)
+    sys.exit(3)
+errs = d.get("errors") or []
+if os.environ.get("ZE_JSON") == "true":
+    print(json.dumps(d, indent=None if os.environ.get("ZE_FOLLOW") == "true" else 2))
+else:
+    def text(e):
+        if e.get("message") is not None:
+            return e["message"]
+        # Garden v3 (GV49): a widget that reads data sources logs fixed fields only.
+        t = "refused %s" % (e.get("class") or "") if e.get("kind") == "refusal" else (e.get("class") or "error")
+        if e.get("code"):
+            t += " (%s)" % e["code"]
+        if e.get("line") is not None:
+            t += " at line %s" % e["line"]
+        if e.get("redacted"):
+            t += " [text withheld: this widget reads data sources]"
+        return t
+    for e in errs:
+        print("#%s %s%s %s" % (e.get("seq"), e.get("at"), "" if e.get("current") else " (older version)", text(e)))
+        for line in (e.get("stack") or "").splitlines()[:6]:
+            print("    %s" % line)
+        if e.get("suggestion"):
+            print("  suggestion: %s" % e["suggestion"])
+    if not errs and os.environ.get("ZE_FOLLOW") != "true":
+        print("no runtime errors%s" % (" since that one" if d.get("last") else ""))
+sys.exit(1 if any(e.get("current") for e in errs) else 0)
+' || code=$?
+        [ "$code" -eq 3 ] && exit 1
+        if [ "$follow" != true ]; then exit "$code"; fi
+        since=$(ZE_RAW="$raw" python3 -c 'import json,os; print(json.loads(os.environ["ZE_RAW"]).get("last", 0))' 2>/dev/null || echo "$since")
+        sleep 2
+    done
+}
+
+# `k2 zen widget show <name> [--json]` (Garden v3, contract-sources-v1 §7):
+# each placement (Garden, locked, paused, the source addresses it reads),
+# the caps it asked for and runs with, and the taint note when sources:read
+# dropped thread:post.
+cmd_zen_widget_show() {
+    local name="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -h|--help)
+                echo "Usage: k2 zen widget show <name> [--json]"
+                echo "Where a widget is placed, the caps it runs with, the source addresses it reads, and its runtime record."
+                exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget show --help)" >&2; exit 2 ;;
+            *) [ -z "$name" ] && name="$1" || { echo "Error: one widget name" >&2; exit 2; }; shift ;;
+        esac
+    done
+    [ -n "$name" ] || { echo "Error: k2 zen widget show needs a widget name" >&2; exit 2; }
+    local raw
+    raw=$(cli_request "/cli/zen/widget/show" "widget=$(urlencode "$name")") || raw=""
+    ZS_RAW="$raw" ZS_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = os.environ.get("ZS_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: no usable answer from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("error") is not None:
+    print("Error: %s" % ((d.get("message") if isinstance(d, dict) else None) or raw[:200]), file=sys.stderr)
+    sys.exit(4 if isinstance(d, dict) and d.get("error") == "not_found" else 1)
+if os.environ.get("ZS_JSON") == "true":
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+print("%s (%s): %s" % (d.get("widget"), d.get("name"), d.get("state")))
+print("  asks for: %s" % (", ".join(d.get("requested") or []) or "nothing"))
+print("  runs with: %s" % (", ".join(d.get("caps") or []) or "nothing"))
+if d.get("taint"):
+    print("  note: %s" % d["taint"])
+src = d.get("sources")
+if src is not None:
+    print("  sources: %s" % (src if isinstance(src, str) else ", ".join(src)))
+rt = d.get("runtime")
+if isinstance(rt, dict):
+    print("  this version: %s, %s runtime error(s) since saved" % ("has run" if rt.get("ran") else "not run yet", rt.get("errorsSinceSave", 0)))
+pl = d.get("placements") or []
+if not pl:
+    print("  not placed in any Garden")
+for p in pl:
+    flags = []
+    if p.get("locked"):
+        flags.append("locked")
+    if p.get("paused"):
+        flags.append("posting paused")
+    print("  - %s / %s%s: %s" % (p.get("gardenName"), p.get("placement"), (" [" + ", ".join(flags) + "]") if flags else "", p.get("note")))
+    if p.get("sources"):
+        print("      reads: %s" % ", ".join(p["sources"]))
+'
+}
+
 cmd_zen_widget() {
     local verb="${1:-}"
     shift || true
+    if [ "$verb" = "errors" ]; then
+        cmd_zen_widget_errors "$@"
+        return
+    fi
+    if [ "$verb" = "show" ]; then
+        cmd_zen_widget_show "$@"
+        return
+    fi
     local as_json=false from="" widget="" raw body
     local -a pos=()
     while [ $# -gt 0 ]; do

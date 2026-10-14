@@ -148,11 +148,140 @@ export interface Posted {
   readonly seq: number | null
 }
 
+export interface SourceListRow {
+  readonly address: string
+  readonly display: 'pending' | 'paused' | 'stale' | 'ok' | 'warn' | 'crit' | 'unknown' | null
+  readonly health: 'ok' | 'warn' | 'crit' | 'unknown' | null
+  /** Null until the source's server answered. */
+  readonly label: string | null
+  readonly phase: 'pending' | 'live' | 'stale' | 'paused' | null
+  readonly reach: 'ok' | 'unreachable' | 'server_not_saved' | 'cap_not_granted' | 'removed'
+}
+
+export interface SourceCounts {
+  readonly crit: number
+  readonly ok: number
+  readonly unknown: number
+  readonly warn: number
+}
+
+export interface SourceGap {
+  /** Seconds since the Unix epoch when the gap began. */
+  readonly from: number
+  readonly kind: 'host_slept' | 'daemon_restarted'
+  /** Seconds since the Unix epoch when the gap ended. */
+  readonly to: number
+}
+
+export interface SourceSoft {
+  readonly count: number
+  readonly of: number
+}
+
+export interface SourceItem {
+  /** Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents. */
+  readonly fields: Record<string, string | number | boolean | null>
+  readonly health: 'ok' | 'warn' | 'crit' | 'unknown'
+  readonly key: string
+  readonly reason: 'http_auth' | 'http_404' | 'http_4xx' | 'http_5xx' | 'timeout' | 'connect' | 'dns' | 'tls' | 'blocked_address' | 'airgap' | 'host_slept' | 'daemon_restarted' | 'too_large' | 'not_json' | 'rate_limited' | 'secret_missing' | 'secret_disabled' | 'vault_unavailable' | 'redirect_other_origin' | 'budget' | 'paused_by_person' | null
+  /** Seconds since the Unix epoch (source server's clock) when this item went hard; null when it hasn't. */
+  readonly since: number | null
+  /** Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of. */
+  readonly soft: SourceSoft
+}
+
+export interface SourceMuted {
+  readonly by: string
+  readonly reason: string | null
+  /** Seconds since the Unix epoch when the mute ends. */
+  readonly until: number
+}
+
+export interface SourceSimulated {
+  readonly by: string | null
+  readonly state: 'ok' | 'warn' | 'crit' | 'stale' | 'unknown' | 'slow'
+  /** Seconds since the Unix epoch when the test state ends. */
+  readonly until: number
+}
+
+export interface SourceView {
+  /** name, or name::host for another server. */
+  readonly address: string
+  /** Seconds since the Unix epoch (source server's clock) of the last check. */
+  readonly checkedAt: number | null
+  readonly counts: SourceCounts
+  /** What to paint: pending, paused, stale, or the health. */
+  readonly display: 'pending' | 'paused' | 'stale' | 'ok' | 'warn' | 'crit' | 'unknown'
+  /** Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents. */
+  readonly fields: Record<string, string | number | boolean | null>
+  /** Checks didn't run (the server slept or restarted). */
+  readonly gap: SourceGap | null
+  /** Seconds since the Unix epoch (source server's clock) when the current state turned hard. */
+  readonly hardSince: number | null
+  readonly health: 'ok' | 'warn' | 'crit' | 'unknown'
+  readonly httpStatus: number | null
+  /** At most 200. */
+  readonly items: SourceItem[]
+  /** states: no values are ever stored or shown, only states. */
+  readonly keep: 'values' | 'states'
+  readonly kind: 'http-json'
+  readonly label: string
+  /** Where 'open' goes (K2 opens it in the browser). */
+  readonly link: string | null
+  readonly masked: boolean
+  readonly muted: SourceMuted | null
+  readonly name: string
+  /** Seconds since the Unix epoch (source server's clock) of the next check. */
+  readonly nextAt: number | null
+  readonly phase: 'pending' | 'live' | 'stale' | 'paused'
+  readonly pinned: boolean
+  /** ok, or why this is the last view K2 has (greyed). */
+  readonly reach: 'ok' | 'unreachable' | 'server_not_saved' | 'cap_not_granted' | 'removed'
+  readonly reason: 'http_auth' | 'http_404' | 'http_4xx' | 'http_5xx' | 'timeout' | 'connect' | 'dns' | 'tls' | 'blocked_address' | 'airgap' | 'host_slept' | 'daemon_restarted' | 'too_large' | 'not_json' | 'rate_limited' | 'secret_missing' | 'secret_disabled' | 'vault_unavailable' | 'redirect_other_origin' | 'budget' | 'paused_by_person' | null
+  /** K2's sentence for the reason. */
+  readonly reasonText: string | null
+  /** Seconds since the Unix epoch (source server's clock) of the last recovery; show 'recovered' for an hour. */
+  readonly recoveredAt: number | null
+  readonly rev: number
+  /** Seconds since the Unix epoch on the source's server when it answered. Ages are serverNow minus updatedAt, never the viewer's clock. */
+  readonly serverNow: number
+  /** A test state is on: draw a TEST badge. */
+  readonly simulated: SourceSimulated | null
+  /** Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of. */
+  readonly soft: SourceSoft
+  readonly status: 'proposed' | 'active' | 'paused' | 'removed'
+  /** Seconds since the Unix epoch (source server's clock) of the last good check; null before the first. */
+  readonly updatedAt: number | null
+}
+
+export interface SourcePoint {
+  /** Seconds since the Unix epoch. */
+  readonly t: number
+  readonly v: number | null
+}
+
+export interface SourceHistory {
+  readonly field: string
+  /** At most 500; v null is a gap. */
+  readonly points: SourcePoint[]
+  readonly res: 'raw' | 'hour'
+}
+
+export interface SourceRefresh {
+  /** Seconds since the Unix epoch (source server's clock) of the next check. */
+  readonly nextAt: number | null
+  readonly queued: boolean
+}
+
+export interface SourceAsk {
+  readonly opened: boolean
+}
+
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read'
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'failed'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed'
 
 /** What `k2.connected` resolves with: the hello K2 sent this frame. */
 export interface K2Hello {
@@ -193,11 +322,17 @@ export interface K2Verbs {
   'thread.post': { args: [address: string, text: string]; value: Posted }
   'thread.answer': { args: [address: string, cardId: string, choice: string]; value: null }
   'compose.draft': { args: [address: string, text: string]; value: null }
+  'sources.list': { args: []; value: SourceListRow[] }
+  'sources.read': { args: [address: string]; value: SourceView }
+  'sources.history': { args: [address: string, field: string, opts?: { fromAt?: number; toAt?: number }]; value: SourceHistory }
+  'sources.subscribe': { args: [address: string]; value: SourceView }
+  'sources.refresh': { args: [address: string]; value: SourceRefresh }
+  'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft'
-export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask'
+export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
   readonly gardens: {
@@ -253,6 +388,20 @@ export interface K2 {
   readonly compose: {
     /** Set K2's message box for that agent; never sends. cap thread:post · local · zen-v1. e.g. `await k2.compose.draft(row.address, 'Ask for a status')` */
     draft(address: string, text: string): Promise<null>
+  }
+  readonly sources: {
+    /** The sources this placement names, with their state and whether K2 can reach them. cap sources:read · portable · sources-v1. e.g. `const rows = await k2.sources.list()` */
+    list(): Promise<SourceListRow[]>
+    /** One source's card view; ages come from serverNow minus updatedAt. cap sources:read · portable · sources-v1. e.g. `const v = await k2.sources.read(k2.config.source)` */
+    read(address: string): Promise<SourceView>
+    /** A field's trend points (gaps as null). cap sources:read · portable · sources-v1. e.g. `const h = await k2.sources.history(k2.config.source, 'count')` */
+    history(address: string, field: string, opts?: { fromAt?: number; toAt?: number }): Promise<SourceHistory>
+    /** The card view, pushed on every change (counts toward the 16 subscriptions). cap sources:read · portable · sources-v1. e.g. `const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))` */
+    subscribe(address: string, cb: (value: SourceView) => void, onError?: (error: K2Error) => void): () => void
+    /** Ask the source's server to check now (at most once every 15 seconds). cap sources:read · portable · sources-v1. e.g. `await k2.sources.refresh(k2.config.source)` */
+    refresh(address: string): Promise<SourceRefresh>
+    /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
+    ask(address: string, itemKey?: string | null): Promise<SourceAsk>
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>

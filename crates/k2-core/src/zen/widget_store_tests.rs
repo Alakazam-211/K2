@@ -331,3 +331,72 @@ fn the_diary_shows_the_creepier_study_and_the_first_one_still_ships() {
     let diary = gid(&f, "Diary");
     assert_eq!(served(&f.resolve(Some(&diary)).expect("resolve")), now.bytes, "a new Diary shows the new study");
 }
+
+/// decision-k2-runtime-v1 stage 0 (d)/(e): runtime errors reach agents and
+/// validate loops: pending until a window runs the saved version, failed
+/// with its runtime errors, ok once it ran clean; a new save starts over.
+#[test]
+fn runtime_errors_are_logged_per_version_and_validate_loops_on_them() {
+    let (_t, f) = set_up("runs");
+    f.new_widget("agent-arcade", Some("hello")).expect("new widget");
+    let unplaced = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!(unplaced["status"], "ok", "not placed: nothing to wait for: {unplaced}");
+    assert_eq!(unplaced["runtime"]["placed"], false);
+    write_garden(&f, &gid(&f, "Garden 2"), ARCADE_PAGE);
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!(v["status"], "pending", "{v}");
+    assert_eq!(v["ok"], true, "pending is not an error: {v}");
+    let hash = v["runtime"]["hash"].as_str().expect("hash").to_string();
+
+    let r = f.record_widget_run("agent-arcade", &hash, "ready", None, None).expect("ready");
+    assert_eq!(r["logged"], true);
+    let again = f.record_widget_run("agent-arcade", &hash, "ready", None, None).expect("ready again");
+    assert_eq!(again["logged"], false, "one ready per version");
+    assert_eq!(f.validate_widget("agent-arcade").expect("validate")["status"], "ok");
+
+    f.record_widget_run("agent-arcade", &hash, "error", Some("ReferenceError: draw is not defined"), Some("at about:srcdoc:3:1"))
+        .expect("error");
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["ok"].as_bool()), (Some("failed"), Some(false)), "{v}");
+    let msgs: Vec<&str> = v["errors"].as_array().expect("errors").iter().map(|e| e["message"].as_str().unwrap_or("")).collect();
+    assert_eq!(msgs[0], "1 runtime error(s) since your last save", "{v}");
+    assert!(msgs[1].starts_with("runtime error #2: ReferenceError"), "{v}");
+    let logged = f.widget_errors("agent-arcade", None).expect("errors");
+    assert!(logged["errors"][0]["suggestion"].as_str().is_some_and(|s| s.contains("<script src> order")), "{logged}");
+    let (all_errors, _, _) = f.validate_all_widgets();
+    assert!(all_errors.iter().any(|d| d.message.contains("runtime error")), "{all_errors:?}");
+
+    let e = f.widget_errors("agent-arcade", None).expect("errors");
+    assert_eq!(e["errors"].as_array().map(Vec::len), Some(1), "{e}");
+    assert_eq!(e["errors"][0]["current"], true);
+    assert_eq!(e["errors"][0]["stack"], "at about:srcdoc:3:1");
+    assert_eq!(e["last"], 2);
+    let none = f.widget_errors("agent-arcade", Some(2)).expect("since");
+    assert_eq!(none["errors"].as_array().map(Vec::len), Some(0), "{none}");
+
+    // A new save is a new version: its errors start at zero and it waits to run.
+    let js = f.widget_dir("agent-arcade").join("hello.js");
+    let text = fs::read_to_string(&js).expect("read js") + "\n// saved again\n";
+    fs::write(&js, text).expect("write js");
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!(v["status"], "pending", "{v}");
+    assert_ne!(v["runtime"]["hash"].as_str(), Some(hash.as_str()));
+    let e = f.widget_errors("agent-arcade", None).expect("errors");
+    assert_eq!(e["errors"][0]["current"], false, "the old version's error: {e}");
+}
+
+#[test]
+fn run_reports_refuse_builtins_bad_hashes_and_unknown_events() {
+    let (_t, f) = set_up("runs-bad");
+    f.new_widget("w", Some("hello")).expect("new widget");
+    let h = "a".repeat(64);
+    assert!(matches!(f.record_widget_run("k2:diary@2", &h, "ready", None, None), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.record_widget_run("w", "abc", "ready", None, None), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.record_widget_run("w", &h, "crash", None, None), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.record_widget_run("nope", &h, "ready", None, None), Err(ZenError::NotFound(_))));
+    let long = "x".repeat(5000);
+    f.record_widget_run("w", &h, "error", Some(&long), Some(&long)).expect("long error");
+    let e = f.widget_errors("w", None).expect("errors");
+    assert_eq!(e["errors"][0]["message"].as_str().map(|m| m.chars().count()), Some(runs::MAX_MESSAGE + 1));
+    assert_eq!(e["errors"][0]["stack"].as_str().map(|m| m.chars().count()), Some(runs::MAX_STACK + 1));
+}

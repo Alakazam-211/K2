@@ -33,6 +33,11 @@ export const K2_CAPS = {
     sentence: 'Send messages to the agents in {where} as you (text only).',
     exposure: ['widget', 'app'],
   },
+  'sources:read': {
+    label: 'Read data sources',
+    sentence: "Read the data sources this card names, on the servers you're signed in to. Cards with this can't post to the Thread.",
+    exposure: ['widget'],
+  },
   'agents:add': { label: 'Open Add agent', exposure: [] },
   'gardens:manage': { label: 'Create, rename and delete Gardens', exposure: [] },
   'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
@@ -54,6 +59,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

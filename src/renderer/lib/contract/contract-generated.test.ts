@@ -142,12 +142,20 @@ describe('TUWA5: the generated tables', () => {
       'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
       'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },
+      // Garden v3 data sources (contract-sources-v1 §6): frame-host verbs.
+      'sources.list': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+      'sources.read': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+      'sources.history': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+      'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
+      'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+      'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
     })
   })
 
-  it('widget caps are bridge caps, and K2’s own caps never are widget caps (UW69)', () => {
-    const bridgeCaps = new Set(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
-    for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c), c).toBe(true)
+  it('widget caps are bridge caps (or frame-host caps: sources:read), and K2’s own caps never are widget caps (UW69)', () => {
+    const bridgeCaps = new Set<string>(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
+    for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || c === 'sources:read', c).toBe(true)
+    expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
     for (const c of ['gardens:manage', 'gardens:template', 'agents:add', 'app:navigate']) {
       expect((USER_WIDGET_CAPS as readonly string[]).includes(c), c).toBe(false)
     }

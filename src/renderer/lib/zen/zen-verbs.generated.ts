@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 5
+export const ZEN_CATALOG_VERSION = 6
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -53,7 +53,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -81,6 +81,12 @@ export const ZEN_CUSTOM_VERBS = {
   'thread.post': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'thread.answer': { cap: 'thread:post', reach: 'portable', kind: 'call' },
   'compose.draft': { cap: 'thread:post', reach: 'local', kind: 'call' },
+  'sources.list': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+  'sources.read': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+  'sources.history': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+  'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
+  'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
+  'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 
 export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS

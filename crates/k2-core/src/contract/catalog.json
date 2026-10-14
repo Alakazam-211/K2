@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 5,
+  "catalogVersion": 6,
   "caps": [
     {
       "name": "agents:read",
@@ -24,6 +24,12 @@
       "exposure": ["widget", "app"],
       "label": "Post to the Thread",
       "sentence": "Send messages to the agents in {where} as you (text only)."
+    },
+    {
+      "name": "sources:read",
+      "exposure": ["widget"],
+      "label": "Read data sources",
+      "sentence": "Read the data sources this card names, on the servers you're signed in to. Cards with this can't post to the Thread."
     },
     {"name": "agents:add", "label": "Open Add agent"},
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
@@ -74,6 +80,10 @@
       "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)."
     },
     {"code": "sending_off", "doc": "Posting is paused: the runaway guard tripped (too many posts). The person resumes it on the widget."},
+    {"code": "server_not_saved", "doc": "The source's server isn't one of your saved servers (Settings → K2 Server → Connected Servers)."},
+    {"code": "unreachable", "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
+    {"code": "removed", "doc": "The source was removed on its server (its name is held for 7 days)."},
+    {"code": "no_history", "doc": "The source keeps states only, so it has no history."},
     {"code": "failed", "doc": "The call failed; the message says why."}
   ],
   "bannedFields": [
@@ -1211,6 +1221,1289 @@
       "errors": ["failed"],
       "doc": "Start moving the window, from a mousedown in this widget (only while a button is down here).",
       "example": "grip.addEventListener('mousedown', () => k2.window.startDrag())"
+    },
+    {
+      "verb": "sources.list",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "SourceListRow",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Null until the source's server answered."
+            },
+            "health": {
+              "enum": [
+                "ok",
+                "warn",
+                "crit",
+                "unknown",
+                null
+              ]
+            },
+            "phase": {
+              "enum": [
+                "pending",
+                "live",
+                "stale",
+                "paused",
+                null
+              ]
+            },
+            "display": {
+              "enum": [
+                "pending",
+                "paused",
+                "stale",
+                "ok",
+                "warn",
+                "crit",
+                "unknown",
+                null
+              ]
+            },
+            "reach": {
+              "enum": [
+                "ok",
+                "unreachable",
+                "server_not_saved",
+                "cap_not_granted",
+                "removed"
+              ]
+            }
+          },
+          "required": [
+            "address",
+            "label",
+            "health",
+            "phase",
+            "display",
+            "reach"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "cap_not_granted",
+        "failed"
+      ],
+      "doc": "The sources this placement names, with their state and whether K2 can reach them.",
+      "example": "const rows = await k2.sources.list()"
+    },
+    {
+      "verb": "sources.read",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        },
+        "http": {
+          "method": "GET",
+          "route": "/cli/sources/read",
+          "params": {
+            "address": "name"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "address",
+          "type": "string",
+          "description": "A source address: name (this computer) or name::host. It must be in the placement's config."
+        }
+      ],
+      "response": {
+        "title": "SourceView",
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "name, or name::host for another server."
+          },
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "http-json"
+            ]
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "active",
+              "paused",
+              "removed"
+            ]
+          },
+          "health": {
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "pending",
+              "live",
+              "stale",
+              "paused"
+            ]
+          },
+          "display": {
+            "enum": [
+              "pending",
+              "paused",
+              "stale",
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ],
+            "description": "What to paint: pending, paused, stale, or the health."
+          },
+          "reason": {
+            "enum": [
+              "http_auth",
+              "http_404",
+              "http_4xx",
+              "http_5xx",
+              "timeout",
+              "connect",
+              "dns",
+              "tls",
+              "blocked_address",
+              "airgap",
+              "host_slept",
+              "daemon_restarted",
+              "too_large",
+              "not_json",
+              "rate_limited",
+              "secret_missing",
+              "secret_disabled",
+              "vault_unavailable",
+              "redirect_other_origin",
+              "budget",
+              "paused_by_person",
+              null
+            ]
+          },
+          "reasonText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "K2's sentence for the reason."
+          },
+          "httpStatus": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "soft": {
+            "title": "SourceSoft",
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "of": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "count",
+              "of"
+            ],
+            "additionalProperties": false,
+            "description": "Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of."
+          },
+          "serverNow": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch on the source's server when it answered. Ages are serverNow minus updatedAt, never the viewer's clock."
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last good check; null before the first."
+          },
+          "checkedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last check."
+          },
+          "nextAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the next check."
+          },
+          "hardSince": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) when the current state turned hard."
+          },
+          "recoveredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last recovery; show 'recovered' for an hour."
+          },
+          "gap": {
+            "title": "SourceGap",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "host_slept",
+                  "daemon_restarted"
+                ]
+              },
+              "from": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the gap began."
+              },
+              "to": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the gap ended."
+              }
+            },
+            "required": [
+              "kind",
+              "from",
+              "to"
+            ],
+            "additionalProperties": false,
+            "description": "Checks didn't run (the server slept or restarted)."
+          },
+          "muted": {
+            "title": "SourceMuted",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "until": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the mute ends."
+              },
+              "by": {
+                "type": "string"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "until",
+              "by",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "simulated": {
+            "title": "SourceSimulated",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "stale",
+                  "unknown",
+                  "slow"
+                ]
+              },
+              "until": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the test state ends."
+              },
+              "by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "until",
+              "by"
+            ],
+            "additionalProperties": false,
+            "description": "A test state is on: draw a TEST badge."
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "keep": {
+            "enum": [
+              "values",
+              "states"
+            ],
+            "description": "states: no values are ever stored or shown, only states."
+          },
+          "masked": {
+            "type": "boolean"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where 'open' goes (K2 opens it in the browser)."
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "description": "Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "SourceItem",
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "health": {
+                  "enum": [
+                    "ok",
+                    "warn",
+                    "crit",
+                    "unknown"
+                  ]
+                },
+                "reason": {
+                  "enum": [
+                    "http_auth",
+                    "http_404",
+                    "http_4xx",
+                    "http_5xx",
+                    "timeout",
+                    "connect",
+                    "dns",
+                    "tls",
+                    "blocked_address",
+                    "airgap",
+                    "host_slept",
+                    "daemon_restarted",
+                    "too_large",
+                    "not_json",
+                    "rate_limited",
+                    "secret_missing",
+                    "secret_disabled",
+                    "vault_unavailable",
+                    "redirect_other_origin",
+                    "budget",
+                    "paused_by_person",
+                    null
+                  ]
+                },
+                "since": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the Unix epoch (source server's clock) when this item went hard; null when it hasn't."
+                },
+                "soft": {
+                  "title": "SourceSoft",
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "of": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "count",
+                    "of"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of."
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "description": "Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents."
+                }
+              },
+              "required": [
+                "key",
+                "health",
+                "reason",
+                "since",
+                "soft",
+                "fields"
+              ],
+              "additionalProperties": false
+            },
+            "description": "At most 200."
+          },
+          "counts": {
+            "title": "SourceCounts",
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "warn": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "crit": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unknown": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ],
+            "additionalProperties": false
+          },
+          "rev": {
+            "type": "integer"
+          },
+          "reach": {
+            "enum": [
+              "ok",
+              "unreachable",
+              "server_not_saved",
+              "cap_not_granted",
+              "removed"
+            ],
+            "description": "ok, or why this is the last view K2 has (greyed)."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "name",
+          "label",
+          "kind",
+          "status",
+          "health",
+          "phase",
+          "display",
+          "reason",
+          "reasonText",
+          "httpStatus",
+          "soft",
+          "serverNow",
+          "updatedAt",
+          "checkedAt",
+          "nextAt",
+          "hardSince",
+          "recoveredAt",
+          "gap",
+          "muted",
+          "simulated",
+          "pinned",
+          "keep",
+          "masked",
+          "link",
+          "fields",
+          "items",
+          "counts",
+          "rev",
+          "reach"
+        ]
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "server_not_saved",
+        "unreachable",
+        "removed",
+        "failed"
+      ],
+      "doc": "One source's card view; ages come from serverNow minus updatedAt.",
+      "example": "const v = await k2.sources.read(k2.config.source)"
+    },
+    {
+      "verb": "sources.history",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        },
+        "http": {
+          "method": "GET",
+          "route": "/cli/sources/history",
+          "params": {
+            "address": "name",
+            "field": "field",
+            "fromAt": "from",
+            "toAt": "to"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "address",
+          "type": "string",
+          "description": "A source address: name (this computer) or name::host. It must be in the placement's config."
+        },
+        {
+          "title": "field",
+          "type": "string"
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "fromAt": {
+              "type": "integer",
+              "description": "Seconds since the Unix epoch; default 48 hours ago."
+            },
+            "toAt": {
+              "type": "integer",
+              "description": "Seconds since the Unix epoch; default now."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "SourceHistory",
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "res": {
+            "enum": [
+              "raw",
+              "hour"
+            ]
+          },
+          "points": {
+            "type": "array",
+            "description": "At most 500; v null is a gap.",
+            "items": {
+              "title": "SourcePoint",
+              "type": "object",
+              "properties": {
+                "t": {
+                  "type": "integer",
+                  "description": "Seconds since the Unix epoch."
+                },
+                "v": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "t",
+                "v"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "field",
+          "res",
+          "points"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "server_not_saved",
+        "unreachable",
+        "removed",
+        "no_history",
+        "failed"
+      ],
+      "doc": "A field's trend points (gaps as null).",
+      "example": "const h = await k2.sources.history(k2.config.source, 'count')"
+    },
+    {
+      "verb": "sources.subscribe",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "address",
+          "type": "string",
+          "description": "A source address: name (this computer) or name::host. It must be in the placement's config."
+        }
+      ],
+      "response": {
+        "title": "SourceView",
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "name, or name::host for another server."
+          },
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "http-json"
+            ]
+          },
+          "status": {
+            "enum": [
+              "proposed",
+              "active",
+              "paused",
+              "removed"
+            ]
+          },
+          "health": {
+            "enum": [
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ]
+          },
+          "phase": {
+            "enum": [
+              "pending",
+              "live",
+              "stale",
+              "paused"
+            ]
+          },
+          "display": {
+            "enum": [
+              "pending",
+              "paused",
+              "stale",
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ],
+            "description": "What to paint: pending, paused, stale, or the health."
+          },
+          "reason": {
+            "enum": [
+              "http_auth",
+              "http_404",
+              "http_4xx",
+              "http_5xx",
+              "timeout",
+              "connect",
+              "dns",
+              "tls",
+              "blocked_address",
+              "airgap",
+              "host_slept",
+              "daemon_restarted",
+              "too_large",
+              "not_json",
+              "rate_limited",
+              "secret_missing",
+              "secret_disabled",
+              "vault_unavailable",
+              "redirect_other_origin",
+              "budget",
+              "paused_by_person",
+              null
+            ]
+          },
+          "reasonText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "K2's sentence for the reason."
+          },
+          "httpStatus": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "soft": {
+            "title": "SourceSoft",
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "of": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "count",
+              "of"
+            ],
+            "additionalProperties": false,
+            "description": "Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of."
+          },
+          "serverNow": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch on the source's server when it answered. Ages are serverNow minus updatedAt, never the viewer's clock."
+          },
+          "updatedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last good check; null before the first."
+          },
+          "checkedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last check."
+          },
+          "nextAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the next check."
+          },
+          "hardSince": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) when the current state turned hard."
+          },
+          "recoveredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the last recovery; show 'recovered' for an hour."
+          },
+          "gap": {
+            "title": "SourceGap",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "host_slept",
+                  "daemon_restarted"
+                ]
+              },
+              "from": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the gap began."
+              },
+              "to": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the gap ended."
+              }
+            },
+            "required": [
+              "kind",
+              "from",
+              "to"
+            ],
+            "additionalProperties": false,
+            "description": "Checks didn't run (the server slept or restarted)."
+          },
+          "muted": {
+            "title": "SourceMuted",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "until": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the mute ends."
+              },
+              "by": {
+                "type": "string"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "until",
+              "by",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "simulated": {
+            "title": "SourceSimulated",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "state": {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "crit",
+                  "stale",
+                  "unknown",
+                  "slow"
+                ]
+              },
+              "until": {
+                "type": "integer",
+                "description": "Seconds since the Unix epoch when the test state ends."
+              },
+              "by": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "until",
+              "by"
+            ],
+            "additionalProperties": false,
+            "description": "A test state is on: draw a TEST badge."
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "keep": {
+            "enum": [
+              "values",
+              "states"
+            ],
+            "description": "states: no values are ever stored or shown, only states."
+          },
+          "masked": {
+            "type": "boolean"
+          },
+          "link": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where 'open' goes (K2 opens it in the browser)."
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "description": "Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "SourceItem",
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "health": {
+                  "enum": [
+                    "ok",
+                    "warn",
+                    "crit",
+                    "unknown"
+                  ]
+                },
+                "reason": {
+                  "enum": [
+                    "http_auth",
+                    "http_404",
+                    "http_4xx",
+                    "http_5xx",
+                    "timeout",
+                    "connect",
+                    "dns",
+                    "tls",
+                    "blocked_address",
+                    "airgap",
+                    "host_slept",
+                    "daemon_restarted",
+                    "too_large",
+                    "not_json",
+                    "rate_limited",
+                    "secret_missing",
+                    "secret_disabled",
+                    "vault_unavailable",
+                    "redirect_other_origin",
+                    "budget",
+                    "paused_by_person",
+                    null
+                  ]
+                },
+                "since": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the Unix epoch (source server's clock) when this item went hard; null when it hasn't."
+                },
+                "soft": {
+                  "title": "SourceSoft",
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "of": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "count",
+                    "of"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Failed checks in a row before it turns hard: draw 'retrying count/of' while count is above 0 and below of."
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "description": "Field name to value. A value that isn't a string, number, true/false or null arrives as its JSON text. Empty when the source keeps states only, or masked values for agents."
+                }
+              },
+              "required": [
+                "key",
+                "health",
+                "reason",
+                "since",
+                "soft",
+                "fields"
+              ],
+              "additionalProperties": false
+            },
+            "description": "At most 200."
+          },
+          "counts": {
+            "title": "SourceCounts",
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "warn": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "crit": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unknown": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "ok",
+              "warn",
+              "crit",
+              "unknown"
+            ],
+            "additionalProperties": false
+          },
+          "rev": {
+            "type": "integer"
+          },
+          "reach": {
+            "enum": [
+              "ok",
+              "unreachable",
+              "server_not_saved",
+              "cap_not_granted",
+              "removed"
+            ],
+            "description": "ok, or why this is the last view K2 has (greyed)."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "name",
+          "label",
+          "kind",
+          "status",
+          "health",
+          "phase",
+          "display",
+          "reason",
+          "reasonText",
+          "httpStatus",
+          "soft",
+          "serverNow",
+          "updatedAt",
+          "checkedAt",
+          "nextAt",
+          "hardSince",
+          "recoveredAt",
+          "gap",
+          "muted",
+          "simulated",
+          "pinned",
+          "keep",
+          "masked",
+          "link",
+          "fields",
+          "items",
+          "counts",
+          "rev",
+          "reach"
+        ]
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "server_not_saved",
+        "unreachable",
+        "removed",
+        "failed",
+        "rate_limited"
+      ],
+      "doc": "The card view, pushed on every change (counts toward the 16 subscriptions).",
+      "example": "const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))"
+    },
+    {
+      "verb": "sources.refresh",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "address",
+          "type": "string",
+          "description": "A source address: name (this computer) or name::host. It must be in the placement's config."
+        }
+      ],
+      "response": {
+        "title": "SourceRefresh",
+        "type": "object",
+        "properties": {
+          "queued": {
+            "type": "boolean"
+          },
+          "nextAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch (source server's clock) of the next check."
+          }
+        },
+        "required": [
+          "queued",
+          "nextAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "server_not_saved",
+        "unreachable",
+        "removed",
+        "failed",
+        "rate_limited"
+      ],
+      "doc": "Ask the source's server to check now (at most once every 15 seconds).",
+      "example": "await k2.sources.refresh(k2.config.source)"
+    },
+    {
+      "verb": "sources.ask",
+      "cap": "sources:read",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "sources-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "address",
+          "type": "string",
+          "description": "A source address: name (this computer) or name::host. It must be in the placement's config."
+        },
+        {
+          "title": "itemKey",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      ],
+      "response": {
+        "title": "SourceAsk",
+        "type": "object",
+        "properties": {
+          "opened": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "failed"
+      ],
+      "doc": "Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent).",
+      "example": "await k2.sources.ask(k2.config.source, tile.key)"
     }
   ]
 }

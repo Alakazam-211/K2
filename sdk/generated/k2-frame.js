@@ -7,8 +7,8 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 5,
-    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'failed']),
+    catalogVersion: 6,
+    errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed']),
     verbs: Object.freeze({
       'gardens.list': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
       'gardens.current': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),
@@ -28,6 +28,12 @@
       'thread.post': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'thread.answer': Object.freeze({ cap: 'thread:post', reach: 'portable', kind: 'call', feature: 'zen-v1' }),
       'compose.draft': Object.freeze({ cap: 'thread:post', reach: 'local', kind: 'call', feature: 'zen-v1' }),
+      'sources.list': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
+      'sources.read': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
+      'sources.history': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
+      'sources.subscribe': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'subscribe', feature: 'sources-v1' }),
+      'sources.refresh': Object.freeze({ cap: 'sources:read', reach: 'portable', kind: 'call', feature: 'sources-v1' }),
+      'sources.ask': Object.freeze({ cap: 'sources:read', reach: 'local', kind: 'call', feature: 'sources-v1' }),
     }),
   })
   // ---- sdk/k2-runtime.js (its comments are in that file) ----

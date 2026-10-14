@@ -352,6 +352,18 @@ else
     echo "Step 0.55: k2-node signing preflight (root-helper key)..."
     bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --preflight
 fi
+# k2-app-engine (prd-k2-app-runtime-v1 §10.6, S11) is signed with the SAME
+# root-helper key at Step 10.5: the root helper installs only builds signed
+# by it. Escape (no engine signature this release; `apps install-engine`
+# and the daemon's download refuse the unsigned assets, guarded Apps stay
+# on the installed engine): K2_SKIP_APP_ENGINE_SIGN=1.
+if [ "${K2_SKIP_APP_ENGINE_SIGN:-0}" = "1" ]; then
+    echo "  WARNING: K2_SKIP_APP_ENGINE_SIGN=1 — this release's k2-app-engine assets will NOT be signed;" >&2
+    echo "  WARNING: boxes can't install or update the App engine from it." >&2
+else
+    echo "Step 0.55: k2-app-engine signing preflight (root-helper key)..."
+    bash "$PROJECT_DIR/scripts/sign-app-engine.sh" --preflight
+fi
 
 # ── Step 0.6: Linux build gate (k2-ci@40.160.54.133) ──
 # Shared with scripts/build-app.sh — full rationale + designated-box details
@@ -1099,6 +1111,17 @@ if [ "${K2_SKIP_K2_NODE_SIGN:-0}" != "1" ]; then
         echo "  ✗ k2-node NOT signed — re-run: bash scripts/sign-k2-node.sh ${VERSION}" >&2
     fi
 fi
+# k2-app-engine (prd-k2-app-runtime-v1 S11): same key, after k2-node. Waits
+# for daemon-binaries.yml's two Linux assets.
+APP_ENGINE_SIGN_FAILED=""
+if [ "${K2_SKIP_APP_ENGINE_SIGN:-0}" != "1" ]; then
+    echo ""
+    echo "Step 10.5: Signing k2-app-engine assets with the root-helper key..."
+    if ! bash "$PROJECT_DIR/scripts/sign-app-engine.sh" "${VERSION}"; then
+        APP_ENGINE_SIGN_FAILED=1
+        echo "  ✗ k2-app-engine NOT signed — re-run: bash scripts/sign-app-engine.sh ${VERSION}" >&2
+    fi
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════"
@@ -1107,5 +1130,6 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$VERIFY_FAILED" ] && echo "  ⚠  UPDATER MANIFEST CHECK FAILED — see Step 10 above (updater may 'Could not fetch a valid release JSON' until it clears)"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"
+[ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
 echo "═══════════════════════════════════════════════════"
-[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] || exit 1
+[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] || exit 1

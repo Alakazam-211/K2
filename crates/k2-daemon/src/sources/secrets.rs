@@ -17,6 +17,21 @@ pub struct RootKeyHint {
     pub hint: &'static str,
 }
 
+/// The injections, redactor and (for `urlSecret`) URL one plan needs.
+/// Secretless plans need nothing. A plan that names a secret resolves it
+/// as `Requester::Source` (A1); until then it reads `secret_missing`.
+pub fn resolve_plan(plan: &k2_core::sources::FetchPlan) -> Result<super::fetch::Resolved, k2_core::sources::Reason> {
+    let secretless = plan.secret.is_none() && matches!(plan.url, k2_core::sources::UrlRef::Plain(_));
+    if secretless {
+        return Ok(super::fetch::Resolved {
+            injections: Vec::new(),
+            redactor: k2_vault::redact::Redactor::empty(),
+            url: None,
+        });
+    }
+    Err(k2_core::sources::Reason::SecretMissing)
+}
+
 /// Grant `secret_name` to source `source_id` for exactly `origin`
 /// (`ConsumerKind::Daemon`, consumer `source:<id>`, delivery `fetch`).
 ///

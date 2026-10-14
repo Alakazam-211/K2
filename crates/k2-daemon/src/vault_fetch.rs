@@ -3,8 +3,12 @@
 //! injection, header rules, redirect rule, error templates) lives in
 //! `k2_vault::fetch`; this module makes the call through [`crate::egress`].
 //!
-//! - Every secret's allowed sites must match the URL's origin before any
+//! - The caller's [`Allowlist`] is checked first, on every path (zero
+//!   injections included) and again on every redirect hop [GV39]. Every
+//!   secret's allowed sites must also match the URL's origin, before any
 //!   lookup or connection.
+//! - An IP literal reaches a private/loopback address only when the
+//!   allowlist itself holds that exact IP (never from the URL alone).
 //! - Each value goes only where its sealed `dst`/`fmt` say. An agent header
 //!   with the same name as an injected one is refused.
 //! - The host is resolved once, vetted and pinned (egress). Redirects are
@@ -51,6 +55,71 @@ pub struct FetchSpec {
     pub timeout: Duration,
     /// Return every (redacted) response header, not just the allowlist.
     pub include_headers: bool,
+    /// Who is asking (egress label; `Source` may run with no secret).
+    pub purpose: Purpose,
+}
+
+/// The origins one fetch may reach. Never empty when used. Checked FIRST,
+/// on every hop [GV39].
+#[derive(Debug, Clone, Default)]
+pub struct Allowlist {
+    patterns: Vec<OriginPattern>,
+}
+
+impl Allowlist {
+    /// Vault fetch: the union of the injections' (already narrowed) sites.
+    /// The per-injection check still runs, so the effective rule stays the
+    /// intersection.
+    pub fn from_injections(injections: &[Injection]) -> Allowlist {
+        let mut patterns: Vec<OriginPattern> = Vec::new();
+        for p in injections.iter().flat_map(|i| i.allowed.iter()) {
+            if !patterns.contains(p) {
+                patterns.push(p.clone());
+            }
+        }
+        Allowlist { patterns }
+    }
+
+    /// Sources: exactly the source's own origins (`scheme://host:port`).
+    /// An IP-literal origin becomes an exact-IP pattern only when
+    /// `lan_exact_ip` is true (the row has `lan = 1`: an Owner typed it);
+    /// otherwise 400 `lan_owner_only`.
+    pub fn for_source(origins: &[String], lan_exact_ip: bool) -> Result<Allowlist, VaultError> {
+        let mut patterns = Vec::with_capacity(origins.len());
+        for o in origins {
+            let p = OriginPattern::parse(o, false)?;
+            if p.is_exact_ip() && !lan_exact_ip {
+                return Err(VaultError::bad_request(
+                    "lan_owner_only",
+                    "an IP address source can only be added by the server's owner",
+                ));
+            }
+            patterns.push(p);
+        }
+        Ok(Allowlist { patterns })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    /// The URL's origin is on the list.
+    pub fn check(&self, origin: &Origin) -> Result<(), VaultError> {
+        if self.patterns.is_empty() {
+            return Err(VaultError::bad_request("no_allowlist", "this fetch names no allowed site"));
+        }
+        if self.patterns.iter().any(|p| p.matches(origin)) {
+            Ok(())
+        } else {
+            Err(VaultError::forbidden("host_not_allowed", format!("{} isn't one of this fetch's sites", origin.render())))
+        }
+    }
+
+    /// May an IP-literal origin reach a blocked range? Only when an entry
+    /// is itself that exact IP.
+    pub fn exact_ip(&self, origin: &Origin) -> bool {
+        matches!(origin.host, HostKind::Ip(_)) && self.patterns.iter().any(|p| p.is_exact_ip() && p.matches(origin))
+    }
 }
 
 /// One secret to add to the request, with its sealed policy.
@@ -77,7 +146,12 @@ pub struct FetchResult {
 }
 
 /// Run one fetch. Every refusal happens before the first connection.
-pub fn execute(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor) -> Result<FetchResult, VaultError> {
+pub fn execute(
+    spec: FetchSpec,
+    allow: &Allowlist,
+    injections: Vec<Injection>,
+    redactor: &Redactor,
+) -> Result<FetchResult, VaultError> {
     let mut method = reqwest::Method::from_bytes(validate_method(&spec.method)?.as_bytes())
         .map_err(|_| VaultError::bad_request("bad_method", "method isn't supported"))?;
     let max_bytes = match spec.max_bytes {
@@ -94,7 +168,9 @@ pub fn execute(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor)
     let deadline = Instant::now() + timeout;
 
     let (mut url, origin) = Origin::parse_url(&spec.url)?;
-    if injections.is_empty() {
+    // The allowlist first, before anything else about the request.
+    allow.check(&origin)?;
+    if injections.is_empty() && spec.purpose != Purpose::Source {
         return Err(VaultError::bad_request("no_secret", "name the secret to use"));
     }
     for inj in &injections {
@@ -173,7 +249,7 @@ pub fn execute(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor)
     }
     let own = Redactor::new(entries);
 
-    let exact_ip = matches!(origin.host, HostKind::Ip(_));
+    let exact_ip = allow.exact_ip(&origin);
     let mut redirected = false;
     let mut hops = 0usize;
     loop {
@@ -182,7 +258,7 @@ pub fn execute(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor)
         }
         let dest = Destination::vet(&url, exact_ip)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let client = egress::client(Purpose::VaultFetch, &dest, remaining)?;
+        let client = egress::client(spec.purpose, &dest, remaining)?;
 
         let mut headers = HeaderMap::new();
         for (n, v) in &agent_headers {
@@ -201,7 +277,9 @@ pub fn execute(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor)
         let status = resp.status();
 
         if status.is_redirection() && hops < MAX_REDIRECTS {
-            if let Some(next) = follow_target(&url, &resp, &origin) {
+            if let Some(next) = follow_target(&url, &resp, &origin).filter(|n| {
+                Origin::from_url(n).is_ok_and(|o| allow.check(&o).is_ok())
+            }) {
                 drop(resp);
                 hops += 1;
                 redirected = true;
@@ -253,11 +331,29 @@ fn set_query_param(url: &mut url::Url, param: &str, value: &str) {
 fn send_kind(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {
         "timed out"
+    } else if is_tls(e) {
+        "TLS failed"
     } else if e.is_connect() {
         "couldn't connect"
     } else {
         "request failed"
     }
+}
+
+/// A certificate or handshake failure somewhere in the error chain.
+fn is_tls(e: &reqwest::Error) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(x) = cur {
+        if x.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        let s = x.to_string().to_ascii_lowercase();
+        if s.contains("certificate") || s.contains("handshake") || s.contains("tls") {
+            return true;
+        }
+        cur = x.source();
+    }
+    false
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -564,7 +660,14 @@ mod tests {
             max_bytes: 0,
             timeout: Duration::from_secs(10),
             include_headers: false,
+            purpose: Purpose::VaultFetch,
         }
+    }
+
+    /// The vault route's call: the injections' sites are the allowlist.
+    fn run(spec: FetchSpec, injections: Vec<Injection>, redactor: &Redactor) -> Result<FetchResult, VaultError> {
+        let allow = Allowlist::from_injections(&injections);
+        execute(spec, &allow, injections, redactor)
     }
 
     fn bearer(allowed: Vec<OriginPattern>) -> Injection {
@@ -592,7 +695,7 @@ mod tests {
         let up = Upstream::start(|_| ok("fine"));
         let mut s = spec(&format!("{}/v1/charges?limit=3", up.base()));
         s.headers = vec![("X-Trace".into(), "abc".into())];
-        let r = execute(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
+        let r = run(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"fine");
         assert!(!r.redirected && !r.truncated);
@@ -613,7 +716,7 @@ mod tests {
         let up = Upstream::start(|_| ok("fine"));
         let inj = Injection { dst: Dst::Query("api_key".into()), fmt: "{}".into(), ..bearer(vec![up.pattern()]) };
         let s = spec(&format!("{}/q?api_key=agent-chosen&x=1", up.base()));
-        execute(s, vec![inj], &Redactor::empty()).expect("fetch");
+        run(s, vec![inj], &Redactor::empty()).expect("fetch");
         let head = &up.seen()[0].head;
         let line = head.lines().next().expect("request line");
         assert!(line.contains(&format!("api_key={KEY}")), "{line}");
@@ -631,7 +734,7 @@ mod tests {
         s.method = "POST".into();
         s.headers = vec![("Content-Type".into(), "application/x-www-form-urlencoded".into())];
         s.body = Some(b"grant_type=client_credentials&client_secret={{secret}}".to_vec());
-        execute(s, vec![inj], &Redactor::empty()).expect("fetch");
+        run(s, vec![inj], &Redactor::empty()).expect("fetch");
         let seen = &up.seen()[0];
         assert_eq!(seen.body, format!("grant_type=client_credentials&client_secret={KEY}").into_bytes());
         assert_eq!(count(seen.head.as_bytes(), KEY.as_bytes()), 0, "not in headers");
@@ -639,7 +742,7 @@ mod tests {
         let inj = Injection { dst: Dst::Body, fmt: "{}".into(), ..bearer(vec![up.pattern()]) };
         let mut s = spec(&format!("{}/token", up.base()));
         s.method = "POST".into();
-        let e = execute(s, vec![inj], &Redactor::empty()).expect_err("no body");
+        let e = run(s, vec![inj], &Redactor::empty()).expect_err("no body");
         assert_eq!(e.code, "body_marker_missing");
     }
 
@@ -659,7 +762,7 @@ mod tests {
         ] {
             let mut s = spec(&format!("{}/", up.base()));
             s.headers = vec![(n.into(), v.into())];
-            let e = execute(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect_err(n);
+            let e = run(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect_err(n);
             assert_eq!(e.code, "header_not_allowed", "{n}");
         }
         assert_eq!(up.conns(), 0, "no connection for a refused request");
@@ -670,7 +773,7 @@ mod tests {
         let _a = AirgapEnv::set(false);
         let up = Upstream::start(|_| ok("fine"));
         let elsewhere = OriginPattern::parse("api.stripe.com", false).expect("pattern");
-        let e = execute(spec(&format!("{}/", up.base())), vec![bearer(vec![elsewhere])], &Redactor::empty())
+        let e = run(spec(&format!("{}/", up.base())), vec![bearer(vec![elsewhere])], &Redactor::empty())
             .expect_err("mismatch");
         assert_eq!(e.code, "host_not_allowed");
         // Two secrets: both must allow the origin.
@@ -681,11 +784,11 @@ mod tests {
             fmt: "{}".into(),
             allowed: vec![OriginPattern::parse("http://127.0.0.1:1", false).expect("pattern")],
         };
-        let e = execute(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()]), other], &Redactor::empty())
+        let e = run(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()]), other], &Redactor::empty())
             .expect_err("second secret not allowed");
         assert_eq!(e.code, "host_not_allowed");
-        let e = execute(spec(&format!("{}/", up.base())), vec![], &Redactor::empty()).expect_err("no secret");
-        assert_eq!(e.code, "no_secret");
+        let e = run(spec(&format!("{}/", up.base())), vec![], &Redactor::empty()).expect_err("no secret");
+        assert_eq!(e.code, "no_allowlist", "zero injections = an empty allowlist, refused first");
         assert_eq!(up.conns(), 0);
     }
 
@@ -695,7 +798,7 @@ mod tests {
         let up = Upstream::start(|_| ok("fine"));
         let pat = OriginPattern::parse(&format!("http://localhost:{}", up.port), false).expect("pattern");
         assert!(!pat.is_exact_ip());
-        let e = execute(spec(&format!("http://localhost:{}/", up.port)), vec![bearer(vec![pat])], &Redactor::empty())
+        let e = run(spec(&format!("http://localhost:{}/", up.port)), vec![bearer(vec![pat])], &Redactor::empty())
             .expect_err("loopback by name");
         assert_eq!(e.code, "address_not_allowed");
         assert_eq!(up.conns(), 0);
@@ -711,7 +814,7 @@ mod tests {
                 ok("arrived")
             }
         });
-        let r = execute(spec(&format!("{}/start", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
+        let r = run(spec(&format!("{}/start", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
             .expect("fetch");
         assert_eq!(r.status, 200);
         assert_eq!(r.body, b"arrived");
@@ -730,7 +833,7 @@ mod tests {
         let up = Upstream::start(move |_| vec![resp("302 Found", &[("Location", &target)], b"moved")]);
         // Even with the other origin also allowed, a redirect to it isn't
         // followed.
-        let r = execute(
+        let r = run(
             spec(&format!("{}/start", up.base())),
             vec![bearer(vec![up.pattern(), other.pattern()])],
             &Redactor::empty(),
@@ -757,7 +860,7 @@ mod tests {
         let (tls_port, rx) = test_util::serve(cert, key, resp_bytes);
         let _roots = Roots::set(test_util::root(&ca));
         let tls_pat = OriginPattern::parse(&format!("https://127.0.0.1:{tls_port}"), false).expect("pattern");
-        let r = execute(
+        let r = run(
             spec(&format!("https://127.0.0.1:{tls_port}/start")),
             vec![bearer(vec![tls_pat, plain.pattern()])],
             &Redactor::empty(),
@@ -808,7 +911,7 @@ mod tests {
         let caller = Redactor::new([("OTHER", b"hunter2-other-value".as_slice())]);
         let mut s = spec(&format!("{}/", up.base()));
         s.include_headers = true;
-        let r = execute(s, vec![bearer(vec![up.pattern()]), special], &caller).expect("fetch");
+        let r = run(s, vec![bearer(vec![up.pattern()]), special], &caller).expect("fetch");
         let text = String::from_utf8(r.body.clone()).expect("utf8");
         let b64_key = b64(KEY.as_bytes());
         for leaked in [KEY, b64_key.as_str(), SPECIAL, special_pct] {
@@ -830,7 +933,7 @@ mod tests {
         assert_eq!(get("location"), "/x?k=[k2v:STRIPE_KEY]");
 
         // Without --include-headers only the allowlist comes back.
-        let r = execute(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()])], &caller).expect("fetch");
+        let r = run(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()])], &caller).expect("fetch");
         let names: Vec<&str> = r.headers.iter().map(|(n, _)| n.as_str()).collect();
         assert!(names.contains(&"content-type") && names.contains(&"location"), "{names:?}");
         assert!(!names.contains(&"x-echo") && !names.contains(&"set-cookie"), "{names:?}");
@@ -851,14 +954,14 @@ mod tests {
         });
         let mut s = spec(&format!("{}/gz", up.base()));
         s.include_headers = true;
-        let r = execute(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
+        let r = run(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
         assert_eq!(String::from_utf8(r.body.clone()).expect("utf8"), "{\"key\":\"[k2v:STRIPE_KEY]\"}");
         assert!(r.headers.iter().all(|(n, _)| n != "content-encoding"), "{:?}", r.headers);
         let len = r.headers.iter().find(|(n, _)| n == "content-length").expect("length").1.clone();
         assert_eq!(len, r.body.len().to_string());
         assert!(up.seen()[0].head.contains("accept-encoding: identity\r\n"));
 
-        let e = execute(spec(&format!("{}/br", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
+        let e = run(spec(&format!("{}/br", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
             .expect_err("unreadable encoding");
         assert_eq!(e.code, "upstream_error");
     }
@@ -881,14 +984,14 @@ mod tests {
                 vec![resp("200 OK", &[], &body)]
             }
         });
-        let r = execute(spec(&format!("{}/split", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
+        let r = run(spec(&format!("{}/split", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
             .expect("fetch");
         assert_eq!(String::from_utf8(r.body).expect("utf8"), "hello [k2v:STRIPE_KEY] end");
         assert!(!r.truncated);
 
         let mut s = spec(&format!("{}/big", up.base()));
         s.max_bytes = 1000;
-        let r = execute(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
+        let r = run(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect("fetch");
         assert!(r.truncated);
         assert_eq!(r.body.len(), 1000);
         assert!(r.body[..995].iter().all(|&c| c == b'x'));
@@ -897,7 +1000,7 @@ mod tests {
         let mut s = spec(&format!("{}/big", up.base()));
         s.max_bytes = MAX_RESPONSE + 1;
         assert_eq!(
-            execute(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect_err("too big").code,
+            run(s, vec![bearer(vec![up.pattern()])], &Redactor::empty()).expect_err("too big").code,
             "bad_max_bytes"
         );
     }
@@ -911,7 +1014,7 @@ mod tests {
         drop(dead);
         let pat = OriginPattern::parse(&format!("http://127.0.0.1:{dead_port}"), false).expect("pattern");
         let inj = Injection { dst: Dst::Query("key".into()), fmt: "{}".into(), ..bearer(vec![pat]) };
-        let e = execute(
+        let e = run(
             spec(&format!("http://127.0.0.1:{dead_port}/private/path?marker=query-marker-123")),
             vec![inj],
             &Redactor::empty(),
@@ -934,7 +1037,7 @@ mod tests {
         let pat = OriginPattern::parse(&format!("http://127.0.0.1:{silent_port}"), false).expect("pattern");
         let mut s = spec(&format!("http://127.0.0.1:{silent_port}/p?marker=query-marker-456"));
         s.timeout = Duration::from_secs(1);
-        let e = execute(s, vec![bearer(vec![pat])], &Redactor::empty()).expect_err("timeout");
+        let e = run(s, vec![bearer(vec![pat])], &Redactor::empty()).expect_err("timeout");
         assert_eq!(e.code, "upstream_error");
         assert!(e.hint.contains("timed out"), "{}", e.hint);
         let shown = format!("{e} {e:?}");
@@ -946,13 +1049,13 @@ mod tests {
     fn airgap_refuses_external_hosts_but_reaches_exact_lan_ips() {
         let _a = AirgapEnv::set(true);
         let stripe = OriginPattern::parse("api.stripe.com", false).expect("pattern");
-        let e = execute(spec("https://api.stripe.com/v1/charges"), vec![bearer(vec![stripe])], &Redactor::empty())
+        let e = run(spec("https://api.stripe.com/v1/charges"), vec![bearer(vec![stripe])], &Redactor::empty())
             .expect_err("external under air-gap");
         assert_eq!(e.code, "airgap");
         assert_eq!(e.status, 403);
 
         let up = Upstream::start(|_| ok("lan"));
-        let r = execute(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
+        let r = run(spec(&format!("{}/", up.base())), vec![bearer(vec![up.pattern()])], &Redactor::empty())
             .expect("exact LAN ip under air-gap");
         assert_eq!(r.body, b"lan");
     }
@@ -978,3 +1081,7 @@ mod tests {
         rl.check_at("s1", t0 + Duration::from_secs(61)).expect("window moved on");
     }
 }
+
+#[cfg(test)]
+#[path = "vault_fetch_ssrf_tests.rs"]
+mod ssrf_tests;

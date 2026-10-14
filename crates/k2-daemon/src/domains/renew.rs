@@ -1547,6 +1547,9 @@ mod tests {
     #[test]
     fn live_doctor_compares_the_served_mail_leaf_with_the_planted_one() {
         use crate::domains::status::{pem_leaf_sha256, set_test_served, Served};
+        // The live doctor lists every hosted mail domain (shared with the
+        // mail tests) and may read the singleton mail_server row.
+        let _mail = crate::mail::mail_server_test_lock();
         let _home = crate::test_support::TempHome::new();
         let _ = k2_core::db::init_for_tests();
         let host = "mail.served-live.test";

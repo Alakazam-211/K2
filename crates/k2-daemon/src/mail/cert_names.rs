@@ -630,6 +630,12 @@ pub fn cert_state(
 
 /// Every hosted apex with its mail host and extra names.
 fn hosted_apexes() -> Vec<(String, Option<String>, Vec<String>)> {
+    // Test builds: every caller may reach the singleton row (an apex with
+    // no mail name falls back to it), and the domain list is shared with
+    // parallel mail tests. Fail on entry, not only when a parallel test's
+    // domain happens to be listed (soak 2026-10-14).
+    #[cfg(test)]
+    crate::mail::assert_mail_server_reader_locked();
     let domains: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -699,6 +705,8 @@ fn err_json(status: &'static str, code: &str, hint: String) -> CliResponse {
 }
 
 fn mail_hostname() -> Option<String> {
+    #[cfg(test)]
+    crate::mail::assert_mail_server_reader_locked();
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.query_row("SELECT hostname FROM mail_server WHERE id = 1", [], |r| {

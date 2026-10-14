@@ -6054,8 +6054,18 @@ mod concurrency_tests {
         (dir, db_path)
     }
 
+    /// A production-configured connection, with a longer busy wait. These
+    /// tests prove the CAS (winner counts) and that contenders queue on
+    /// BEGIN IMMEDIATE instead of failing at once; up to 20 serialized
+    /// WAL commits (an fsync each) can take longer than the production
+    /// 500 ms under soak load (2026-10-14: 2 of 50 loops hit
+    /// `database is locked` with the build box's disks busy). A real
+    /// regression (BUSY without waiting, a lost CAS) still fails.
     fn open_conn(path: &std::path::Path) -> Connection {
-        crate::db::open_with_resilience(path).expect("open connection")
+        let conn = crate::db::open_with_resilience(path).expect("open connection");
+        conn.busy_timeout(std::time::Duration::from_secs(30))
+            .expect("busy_timeout");
+        conn
     }
 
     fn make_project(conn: &Connection, project_path: &str) -> String {

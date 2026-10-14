@@ -22334,7 +22334,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data"
 
 _study_usage() {
     cat <<'EOF'
@@ -22353,7 +22353,7 @@ Topics:
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   app-identity  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
-  agent-hire
+  agent-hire  garden-data
 EOF
 }
 
@@ -22391,6 +22391,7 @@ _study_title() {
         projects) echo "K2 projects and who may change them" ;;
         hooks) echo "Custom agents: Thread and lifecycle hooks" ;;
         agent-hire) echo "Hiring agents through the v1 API" ;;
+        garden-data) echo "Garden data: a widget's keyspace and grants" ;;
         *) echo "" ;;
     esac
 }
@@ -22441,6 +22442,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   projects            k2 project: open by default; the per-agent switch
   hooks               Custom (no-model) agents: their Thread; k2 hooks emit
   agent-hire          Apps hire agents/teams with a hire key; links; k2 msg who
+  garden-data         A widget's data: k2 store --widget, grants, revs, export
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -22483,6 +22485,7 @@ _study_page() {
         publish-framing) _study_page_publish_framing ;;
         compute) _study_page_compute ;;
         data-sources) _study_page_data_sources ;;
+        garden-data) _study_page_garden_data ;;
         vault) _study_page_vault ;;
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
@@ -45334,7 +45337,127 @@ cmd_store_widget_revoke() {
 # END_GARDEN_DATA_B1
 
 # BEGIN_GARDEN_DATA_B3
-cmd_store_widget_export() { _gd_not_built "store export --widget"; }
+# Export (contract §4.5, §8): page GET /cli/zen/data/export until `next` is
+# null and write JSONL to stdout, the header line first. A person gets every
+# key; an agent only keys under its current read prefixes (also for --at,
+# which reads the newest daily snapshot on or before that date).
+_gd_export_jsonl() {
+    local widget="$1" at="$2" after="" first=1 q nextf
+    nextf="$(mktemp "${TMPDIR:-/tmp}/k2-gd-next.XXXXXX")" || { echo "Error: can't make a temp file" >&2; exit 1; }
+    while :; do
+        q="$(GD_W="$widget" GD_AT="$at" GD_AFTER="$after" python3 -c '
+import os, urllib.parse
+pairs = [("widget", os.environ["GD_W"]), ("at", os.environ["GD_AT"]), ("after", os.environ["GD_AFTER"])]
+print(urllib.parse.urlencode([(k, v) for k, v in pairs if v]))
+')"
+        _gd_call GET /cli/zen/data/export "$q"
+        printf '%s' "$_GD_BODY" | GD_FIRST="$first" GD_NEXT="$nextf" python3 -c '
+import json, os, sys
+page = json.loads(sys.stdin.read())
+out = sys.stdout
+if os.environ["GD_FIRST"] == "1":
+    out.write(json.dumps(page["header"], separators=(",", ":"), ensure_ascii=False) + "\n")
+for it in page["items"]:
+    row = {"key": it["key"], "rev": it["rev"], "value": it["value"], "updatedAt": it["updatedAt"], "by": it["by"]}
+    out.write(json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n")
+with open(os.environ["GD_NEXT"], "w") as f:
+    f.write(page.get("next") or "")
+' || { rm -f "$nextf"; echo "Error: the export page wasn't readable JSON" >&2; exit 1; }
+        first=0
+        after="$(cat "$nextf")"
+        [ -n "$after" ] || break
+    done
+    rm -f "$nextf"
+}
+
+# _gd_take_at ARGS… → sets _GD_AT; refuses anything else (usage $1).
+_gd_take_at() {
+    local usage="$1"
+    shift
+    _GD_AT=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --at)
+                _GD_AT="${2:-}"
+                [ -n "$_GD_AT" ] || { echo "Error: --at takes a date like 2026-10-13" >&2; exit 2; }
+                shift 2 ;;
+            --json) shift ;;
+            *) echo "Error: unexpected '$1' ($usage)" >&2; exit 2 ;;
+        esac
+    done
+    if [ -n "$_GD_AT" ] && ! [[ "$_GD_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo "Error: --at takes a date like 2026-10-13 (YYYY-MM-DD, this computer's time zone)" >&2
+        exit 2
+    fi
+}
+
+cmd_store_widget_export() {
+    _gd_take_at "k2 store export --widget <w> [--at YYYY-MM-DD] > data.jsonl" "$@"
+    _gd_export_jsonl "$_GD_WIDGET" "$_GD_AT"
+}
+
+# `k2 study garden-data` (contract-garden-data-v1 §8): bounded, daemon-optional.
+_study_page_garden_data() {
+    cat <<'EOF'
+k2 study garden-data — a widget's data on this computer, and your part in it
+
+WHAT
+  Each custom Garden widget has its own keyspace, data:<widget>, in a file
+  the daemon owns on THIS computer. The widget reads and writes it with
+  k2.store (and keeps private saves with k2.save). You reach the same data
+  with `k2 store … --widget <name>`, inside the grants the person sets. It
+  never leaves this computer and no Connect login can reach it.
+
+KEYS AND REVS
+  A key is 1–256 chars of letters, digits and . _ ~ : @ + / - (no leading
+  /, no .. or empty segment). One key per object: obj/<id>, or under a
+  project: project/<pid>/board/<bid>/obj/<id>. A value is JSON, ≤ 60 KiB.
+  Every write moves the space's rev. --if-rev <n> writes only if the key is
+  still at rev n (0 = only if missing); a miss is `conflict`, exit 5: read
+  it again and retry. `k2 store changes --since <rev> --wait 30` waits for
+  the next change; --follow keeps printing (on `resync`, list again).
+
+GRANTS (you need one; the person gives it)
+  k2 store grants --widget <w>     what you can read and write, and why.
+  An agent grant is a wall: only that agent gets it. A grant for a K2
+  project is a convenience, NOT a wall: any agent can join a project, so
+  never rely on one to keep data private. Never add yourself to a project
+  to get data; ask the person (k2 feedback or the Thread).
+  A grant admin (named by the person) may grant others inside its own
+  prefix, up to its own level, never itself (self_grant), and revoke only
+  the grants it made (not_own). Grants are re-read on every call.
+
+WIDGETS YOU MAKE
+  After editing a widget, run `k2 zen validate --widget <w>`: when clean it
+  signs that version as you, and the widget then reads and writes data with
+  YOUR grants. An unsigned version gets no data (author_unknown) until
+  someone signs it or the person clicks It's mine. Never edit a widget the
+  person made unless asked; an edit is a new version signed by its editor.
+
+BIG WRITES
+  k2 store batch --widget <w> < ops.json   ≤ 64 ops in one call, or up to
+  1,000 ops / 1 MiB as one transaction: all or nothing, one rev, one push.
+  Write through the widget's own script when it has one (Board: bin/board
+  checks the shape; a raw put skips it). Widgets must tolerate bad values.
+
+HISTORY AND EXPORT
+  k2 store export --widget <w> > data.jsonl   header line, then one row per
+  key (only keys you can read). --at YYYY-MM-DD reads that day's snapshot
+  (7 daily + 4 weekly kept), still only keys you can read TODAY. Import,
+  restore, delete and move are the person's (k2 zen data …, exit 3 for you).
+
+LOCK AND SOURCES
+  Lock freezes how a Garden works, not what's in it: a locked Garden's data
+  still changes. A widget that asks for sources:read can't write data
+  (store:write is dropped); it can still read and save.
+
+LIMITS
+  20 MiB / 100,000 keys per widget; 60 writes/s (burst 120) per agent per
+  space (429 rate_limited, retryAfterSecs). Exits: 3 not_granted,
+  person_only, self_grant, level_too_high, not_own, author_unknown;
+  4 not found (no_snapshot too); 5 conflict.
+EOF
+}
 # END_GARDEN_DATA_B3
 
 # BEGIN_ZEN_DATA_B1
@@ -45438,8 +45561,74 @@ cmd_zen_data_move() {
 # END_ZEN_DATA_B1
 
 # BEGIN_ZEN_DATA_B3
-cmd_zen_data_export() { _gd_not_built "zen data export"; }
-cmd_zen_data_import() { _gd_not_built "zen data import"; }
+cmd_zen_data_export() {
+    local widget="${1:-}"
+    case "$widget" in ""|-*) echo "Error: k2 zen data export <widget> [--at YYYY-MM-DD] > data.jsonl" >&2; exit 2 ;; esac
+    shift
+    _gd_take_at "k2 zen data export <widget> [--at YYYY-MM-DD]" "$@"
+    _gd_export_jsonl "$widget" "$_GD_AT"
+}
+
+# k2 zen data import <widget> [--replace] < data.jsonl: the person only. A
+# snapshot first, then one write at one new rev. Reads the JSONL an export
+# writes (the header line is skipped) or a JSON array of {key, value}.
+cmd_zen_data_import() {
+    local widget="${1:-}" mode="merge" body
+    case "$widget" in ""|-*) echo "Error: k2 zen data import <widget> [--replace] < data.jsonl" >&2; exit 2 ;; esac
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --replace) mode="replace"; shift ;;
+            --merge) mode="merge"; shift ;;
+            --json) shift ;;
+            *) echo "Error: unexpected '$1' (k2 zen data import <widget> [--replace] < data.jsonl)" >&2; exit 2 ;;
+        esac
+    done
+    if [ -t 0 ]; then
+        echo "Error: pipe the data in: k2 zen data import $widget < data.jsonl" >&2
+        exit 2
+    fi
+    body="$(GD_W="$widget" GD_MODE="$mode" python3 -c '
+import json, os, sys
+text = sys.stdin.read()
+items = []
+s = text.lstrip()
+if s.startswith("["):
+    rows = json.loads(s)
+else:
+    rows = []
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            sys.stderr.write("Error: line %d is not JSON\n" % n)
+            sys.exit(2)
+for n, r in enumerate(rows, 1):
+    if not isinstance(r, dict):
+        sys.stderr.write("Error: row %d is not a JSON object\n" % n)
+        sys.exit(2)
+    if "space" in r and "key" not in r:
+        continue
+    if "key" not in r or "value" not in r:
+        sys.stderr.write("Error: row %d needs \"key\" and \"value\"\n" % n)
+        sys.exit(2)
+    items.append({"key": r["key"], "value": r["value"]})
+print(json.dumps({"widget": os.environ["GD_W"], "mode": os.environ["GD_MODE"], "items": items}, separators=(",", ":"), ensure_ascii=False))
+')" || exit $?
+    _gd_call POST /cli/zen/data/import "$body"
+    if [ "$_GD_JSON" = "1" ]; then
+        printf '%s\n' "$_GD_BODY"
+        return 0
+    fi
+    printf '%s' "$_GD_BODY" | GD_W="$widget" python3 -c '
+import json, os, sys
+r = json.loads(sys.stdin.read())
+print("Imported %d key(s) into %s at rev %d; %d deleted. A snapshot was taken first." % (r["written"], os.environ["GD_W"], r["rev"], r["deleted"]))
+'
+}
 # END_ZEN_DATA_B3
 
 cmd_store() {

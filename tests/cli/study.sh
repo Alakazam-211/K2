@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -605,6 +605,23 @@ assert_contains "project help: switch section" "$pj_help" "WHO MAY CHANGE PROJEC
 assert_contains "project help: open by default" "$pj_help" "Projects are open by default"
 assert_contains "project help: access verb" "$pj_help" "access on|off [--workspace <ws>]"
 assert_contains "project access help" "$(K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2" project access --help)" "an agent can never flip its own switch"
+echo "== k2 study garden-data (contract-garden-data-v1 §8) =="
+gd_out="$("$K2" study garden-data)"
+assert_contains "title" "$gd_out" "k2 study garden-data"
+assert_contains "agent verb" "$gd_out" "k2 store … --widget <name>"
+assert_contains "project grants are a convenience" "$gd_out" "NOT a wall: any agent can join a project"
+assert_contains "never self-join" "$gd_out" "Never add yourself to a project"
+assert_contains "grant admin bounds" "$gd_out" "never itself (self_grant)"
+assert_contains "validate signs" "$gd_out" "k2 zen validate --widget <w>"
+assert_contains "transactions" "$gd_out" "1,000 ops / 1 MiB"
+assert_contains "export at" "$gd_out" "--at YYYY-MM-DD"
+assert_contains "lock" "$gd_out" "Lock freezes how a Garden works, not what's in it"
+assert_contains "sources taint" "$gd_out" "store:write is dropped"
+assert_contains "conflict exit" "$gd_out" "5 conflict"
+gd_json="$("$K2" study garden-data --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="garden-data" and "data:<widget>" in d["body"], d["id"]' "$gd_json"
+echo "  PASS: garden-data --json id+body"
+pass=$((pass + 1))
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

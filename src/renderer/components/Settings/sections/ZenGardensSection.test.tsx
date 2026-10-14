@@ -73,6 +73,12 @@ vi.mock('@tauri-apps/api/window', () => ({
     onFocusChanged: async () => () => undefined,
   }),
 }))
+// The Widget data block (contract-garden-data-v1, B3) has its own test
+// (ZenWidgetData.test.tsx) and its own daemon routes; here it's a marker,
+// so this file's fake daemon and call counts stay about Gardens.
+vi.mock('./ZenWidgetData', () => ({
+  ZenWidgetData: () => <div data-garden-data-stub="" data-settings-id="zen-gardens.data" />,
+}))
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: vi.fn(async () => undefined),
   openPath: vi.fn(async () => undefined),
@@ -1297,8 +1303,14 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     const text = document.querySelector('[data-zen-gardens-section]')?.textContent ?? ''
     expect(text).not.toMatch(/permission|sending on|sending off|turn off|grant/i)
     expect(h.calls.some((c) => String(c.route).startsWith('zen/widget/'))).toBe(false)
-    // The search manifest has no widget-permissions entry either.
+    // The search manifest has no widget-permissions entry either. Garden
+    // data grants (prd-gardens-local-services-v1 rev 3, Rosson 2026-10-14)
+    // are which AGENTS may read a widget's data, not widget permissions;
+    // they live in the Widget data block (its own entry and test).
+    expect(document.querySelector('[data-garden-data-stub]')).not.toBeNull()
     expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.widgets')
-    expect(JSON.stringify(ZEN_GARDENS_MANIFEST)).not.toMatch(/permission|grant|sending/i)
+    expect(
+      JSON.stringify(ZEN_GARDENS_MANIFEST.filter((e) => e.id !== 'zen-gardens.data')),
+    ).not.toMatch(/permission|grant|sending/i)
   })
 })

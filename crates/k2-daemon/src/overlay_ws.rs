@@ -467,24 +467,36 @@ mod tests {
             conversation_id: Some(conv),
         });
 
-        let a = overlay_a
-            .try_recv()
-            .expect("window A must receive overlay frame");
-        let b = overlay_b
-            .try_recv()
-            .expect("window B must receive overlay frame");
-        assert_eq!(a.collection, "thread");
-        assert_eq!(a.id, id);
-        assert_eq!(b.id, id);
-        assert_eq!(a.seq, 1);
-
-        match session_rx.try_recv() {
-            Err(broadcast::error::TryRecvError::Empty) => {}
-            Ok(_leftover) => {
-                // Other tests share the process-wide session_events bus.
-                // Overlay publish itself never calls session_events::emit.
+        // The overlay bus is process-wide: a parallel test may publish
+        // between our drain and our publish (soak 2026-10-14, seed 7). Skip
+        // other tests' frames; ours must be on each receiver, published
+        // synchronously above, so an empty receiver fails at once.
+        let own_frame = |rx: &mut broadcast::Receiver<OverlayFrame>, window: &str| loop {
+            match rx.try_recv() {
+                Ok(f) if f.id == id => break f,
+                Ok(_other_test) => continue,
+                Err(e) => panic!("window {window} must receive the overlay frame: {e}"),
             }
-            Err(e) => panic!("session_events try_recv failed: {e}"),
+        };
+        let a = own_frame(&mut overlay_a, "A");
+        let b = own_frame(&mut overlay_b, "B");
+        assert_eq!(a.collection, "thread");
+        assert_eq!(b.collection, "thread");
+        assert_eq!(a.seq, 1);
+        assert_eq!(b.seq, 1);
+
+        // Other tests share the process-wide session_events bus, so leftovers
+        // may be there; none of them may carry our overlay doc.
+        loop {
+            match session_rx.try_recv() {
+                Ok(ev) => {
+                    let wire = serde_json::to_string(&ev).expect("session event serializes");
+                    assert!(!wire.contains(&id), "overlay publish leaked onto session_events: {wire}");
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(e) => panic!("session_events try_recv failed: {e}"),
+            }
         }
     }
 

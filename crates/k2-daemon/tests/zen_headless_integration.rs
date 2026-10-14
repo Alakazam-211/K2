@@ -438,6 +438,7 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
         assert_eq!(w["page"]["widgets"][0]["kind"], "agents", "the page's widgets replace the empty one: {w}");
         assert_eq!(w["page"]["widgets"][0]["props"]["mode"], "home", "{w}");
         let good = w["version"].clone();
+        let before = n();
         std::fs::write(
             &page,
             "schema = 1\n[[widget]]\nid = \"work\"\nkind = \"agents\"\ncolumn = 0\n[widget.props]\nhom = \"Work\"\n",
@@ -447,6 +448,11 @@ async fn tg1_1_headless_gardens_round_trip_and_one_event_each() {
             let (_, g) = call(port, "GET", &format!("/cli/zen/get?token={tok}&garden={notes}"), None);
             g["errors"].as_array().is_some_and(|e| !e.is_empty()).then_some(g)
         });
+        // The broken save is announced once too (by `get`'s refresh or the
+        // watcher). Count it before sampling for the delete: its frame can
+        // still be in flight when `get` answers (soak 2026-10-14: it landed
+        // in the delete's window, 6 vs 5).
+        expect_one_event(&events, before, "a broken Garden page save");
         assert_eq!(broken["version"], good, "a broken page keeps the last good version: {broken}");
         assert_eq!(broken["errors"][0]["file"], format!("gardens/{notes}.toml"), "{broken}");
         assert_eq!(broken["errors"][0]["line"], 7, "{broken}");

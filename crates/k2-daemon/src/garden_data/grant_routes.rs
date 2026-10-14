@@ -20,13 +20,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use k2_core::garden_data::grants::{self, GrantRow, NewGrant, SubjectKind};
-use k2_core::garden_data::snapshots::{self, PreOp};
+use k2_core::garden_data::snapshots::PreOp;
 use k2_core::garden_data::{keys, DataError, Level, Space, StoreBackend, PROJECT_GRANT_WARNING};
 
 use super::agent_routes::{data_space, param, parse};
 use super::audit;
 use super::budget::{self, BudgetKey, Spend};
-use super::{notify_changed, refused, store, stores_dir};
+use super::{notify_changed, refused, store};
 use crate::zen_data_routes::DataWho;
 
 #[derive(Deserialize)]
@@ -434,15 +434,11 @@ fn show(params: &HashMap<String, String>) -> Result<Value, DataError> {
     }))
 }
 
-/// A pre-op snapshot. Until B3's snapshots land (`not_built`) the answer
-/// carries `snapshot: null`; any other failure stops the operation.
+/// A pre-op snapshot (B3's `export_routes::pre_op_snapshot`): its file
+/// name, or null when no store file exists yet. A failure stops the
+/// operation.
 fn pre_op(op: PreOp) -> Result<Value, DataError> {
-    let stamp = chrono::Local::now().format("%Y-%m-%dT%H%M%S").to_string();
-    match snapshots::take_pre_op(store().path(), &stores_dir().join(snapshots::DIR_NAME), op, &stamp) {
-        Ok(name) => Ok(json!(name)),
-        Err(DataError::NotBuilt) => Ok(Value::Null),
-        Err(e) => Err(e),
-    }
+    Ok(json!(super::export_routes::pre_op_snapshot(op)?))
 }
 
 fn space_delete(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {

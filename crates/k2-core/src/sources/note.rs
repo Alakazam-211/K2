@@ -18,6 +18,8 @@ pub struct NoteEvent<'a> {
     pub state: &'a SourceState,
     pub projection: Option<&'a Projection>,
     pub at: i64,
+    /// The trigger's owner note.
+    pub owner_note: Option<&'a str>,
 }
 
 pub struct NoteInput<'a> {
@@ -25,8 +27,6 @@ pub struct NoteInput<'a> {
     pub events: Vec<NoteEvent<'a>>,
     /// The server this check runs on (`Runs on <host>`).
     pub host: &'a str,
-    /// The trigger's owner note.
-    pub owner_note: Option<&'a str>,
 }
 
 /// Longest field value shown in an items line.
@@ -146,7 +146,7 @@ fn bad_items(ev: &NoteEvent, health: Health) -> Vec<String> {
 }
 
 /// One event block, showing at most `limit` items (red first, then amber).
-fn block(ev: &NoteEvent, host: &str, owner_note: Option<&str>, limit: usize) -> (String, usize) {
+fn block(ev: &NoteEvent, host: &str, limit: usize) -> (String, usize) {
     let row = ev.source;
     let tr = ev.transition;
     let mut lines: Vec<String> = Vec::new();
@@ -197,7 +197,7 @@ fn block(ev: &NoteEvent, host: &str, owner_note: Option<&str>, limit: usize) -> 
     if let Some(link) = row.link.as_deref().map(strip_query).filter(|l| !l.is_empty()) {
         lines.push(format!("Link: {link}"));
     }
-    if let Some(n) = owner_note.map(str::trim).filter(|n| !n.is_empty()) {
+    if let Some(n) = ev.owner_note.map(str::trim).filter(|n| !n.is_empty()) {
         let n: String = n.chars().filter(|c| !c.is_control()).take(super::triggers::MAX_TRIGGER_NOTE).collect();
         lines.push(format!("Owner's note: {n}"));
     }
@@ -210,7 +210,7 @@ fn assemble(input: &NoteInput, limits: &[usize]) -> String {
         .events
         .iter()
         .zip(limits)
-        .map(|(ev, &lim)| block(ev, input.host, input.owner_note, lim).0)
+        .map(|(ev, &lim)| block(ev, input.host, lim).0)
         .collect();
     blocks.join("\n\n")
 }
@@ -233,7 +233,7 @@ fn cut(s: &str, max: usize) -> String {
 pub fn build(input: &NoteInput) -> String {
     let max = super::NOTE_MAX_BYTES;
     let mut limits: Vec<usize> =
-        input.events.iter().map(|ev| block(ev, input.host, input.owner_note, usize::MAX).1).collect();
+        input.events.iter().map(|ev| block(ev, input.host, usize::MAX).1).collect();
     loop {
         let text = crate::redaction::redact(&assemble(input, &limits));
         if text.len() <= max {
@@ -333,9 +333,8 @@ mod tests {
         let (r, st, proj) = fixture();
         let t = crit(Some("ohana"));
         let note = build(&NoteInput {
-            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: Some(&proj), at: 11_520 }],
+            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: Some(&proj), at: 11_520, owner_note: Some("check the relay first") }],
             host: "akzm.k2.dev",
-            owner_note: Some("check the relay first"),
         });
         let lines: Vec<&str> = note.lines().collect();
         assert_eq!(lines[0], "[source:fleet] ohana went red at 03:12 UTC (hard after 3 checks). Runs on akzm.k2.dev.");
@@ -356,9 +355,8 @@ mod tests {
             r.keep = keep;
             let t = crit(Some("luzz"));
             let note = build(&NoteInput {
-                events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: Some(&proj), at: 11_520 }],
+                events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: Some(&proj), at: 11_520, owner_note: None }],
                 host: "akzm.k2.dev",
-                owner_note: None,
             });
             assert!(!note.contains("0.44.4"), "{aa:?}/{keep:?}: {note}");
             assert!(!note.contains("version"), "{note}");
@@ -376,9 +374,8 @@ mod tests {
         }
         let t = crit(None);
         let note = build(&NoteInput {
-            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 11_520 }],
+            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 11_520, owner_note: Some(&"n".repeat(500)) }],
             host: "akzm.k2.dev",
-            owner_note: Some(&"n".repeat(500)),
         });
         assert!(note.len() <= crate::sources::NOTE_MAX_BYTES, "{} bytes", note.len());
         assert!(note.contains("more; run `k2 sources show fleet`"), "{note}");
@@ -393,11 +390,10 @@ mod tests {
         b.kind = TransitionKind::Recovered;
         let note = build(&NoteInput {
             events: vec![
-                NoteEvent { source: &r, transition: &a, state: &st, projection: None, at: 11_520 },
-                NoteEvent { source: &r, transition: &b, state: &st, projection: None, at: 12_000 },
+                NoteEvent { source: &r, transition: &a, state: &st, projection: None, at: 11_520, owner_note: None },
+                NoteEvent { source: &r, transition: &b, state: &st, projection: None, at: 12_000, owner_note: None },
             ],
             host: "h",
-            owner_note: None,
         });
         let blocks: Vec<&str> = note.split("\n\n").collect();
         assert_eq!(blocks.len(), 2);
@@ -414,9 +410,8 @@ mod tests {
         t.kind = TransitionKind::WentStale;
         t.reason = None;
         let note = build(&NoteInput {
-            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 100 }],
+            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 100, owner_note: None }],
             host: "h",
-            owner_note: None,
         });
         assert_eq!(note, "[source:fleet] has had no good check yet at 00:01 UTC. Runs on h.\nRead it: k2 sources show fleet");
         let mut st2 = st.clone();
@@ -436,9 +431,8 @@ mod tests {
         let (r, st, _) = fixture();
         let t = crit(None);
         let note = build(&NoteInput {
-            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 11_520 }],
+            events: vec![NoteEvent { source: &r, transition: &t, state: &st, projection: None, at: 11_520, owner_note: Some(secret) }],
             host: "h",
-            owner_note: Some(secret),
         });
         assert!(!note.contains(secret), "{note}");
     }

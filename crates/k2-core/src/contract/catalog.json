@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 6,
+  "catalogVersion": 7,
   "caps": [
     {
       "name": "agents:read",
@@ -40,8 +40,18 @@
     {"name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates"},
     {"name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets"},
     {"name": "wiki:read", "exposure": ["app"], "label": "Read the wiki"},
-    {"name": "store:read", "exposure": ["app"], "label": "Read the workspace store"},
-    {"name": "store:write", "exposure": ["app"], "label": "Change dump-table rows"},
+    {
+      "name": "store:read",
+      "exposure": ["app", "garden-local"],
+      "label": "Read the workspace store",
+      "sentence": "Read this widget's own data on this computer."
+    },
+    {
+      "name": "store:write",
+      "exposure": ["app", "garden-local"],
+      "label": "Change dump-table rows",
+      "sentence": "Save this widget's own data on this computer. Agents you allow can read and change it too."
+    },
     {"name": "activity:read", "exposure": ["app"], "label": "See when the agent is working"},
     {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
     {
@@ -84,7 +94,20 @@
     {"code": "unreachable", "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
     {"code": "removed", "doc": "The source was removed on its server (its name is held for 7 days)."},
     {"code": "no_history", "doc": "The source keeps states only, so it has no history."},
-    {"code": "failed", "doc": "The call failed; the message says why."}
+    {"code": "failed", "doc": "The call failed; the message says why."},
+    {"code": "conflict", "doc": "The key changed since you read it (ifRev didn't match); read it again and retry."},
+    {"code": "space_full", "doc": "This widget's data is full (20 MiB or 100,000 keys; saves 5 MiB or 10,000)."},
+    {"code": "value_too_large", "doc": "A value is at most 60 KiB of JSON; use putChunked for bigger text."},
+    {"code": "bad_key", "doc": "A key is 1-256 bytes of letters, digits and . _ ~ : @ + / -, with no leading /, .. or empty segment."},
+    {"code": "not_granted", "doc": "The widget's maker has no grant for this key (an agent-made widget uses its maker's grants)."},
+    {"code": "resync", "doc": "The change cursor is older than kept history; list again."},
+    {"code": "author_unknown", "doc": "Nobody signed this widget version: run k2 zen validate --widget <name>, or click It's mine."},
+    {"code": "stale_widget", "doc": "The widget's code changed under it; the frame reloads."},
+    {"code": "store_full", "doc": "Garden data on this computer is full (512 MiB)."},
+    {"code": "bad_tx", "doc": "No such transaction for this widget."},
+    {"code": "tx_expired", "doc": "The transaction expired (30 s idle, or the daemon restarted); start again."},
+    {"code": "busy", "doc": "Too many open transactions; finish or abort one."},
+    {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."}
   ],
   "bannedFields": [
     "projectPath",
@@ -2504,6 +2527,990 @@
       ],
       "doc": "Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent).",
       "example": "await k2.sources.ask(k2.config.source, tile.key)"
+    },
+    {
+      "verb": "store.get",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's data, like obj/7."
+        }
+      ],
+      "response": {
+        "title": "StoreEntry",
+        "type": [
+          "object",
+          "null"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "value": {
+            "type": "json"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch."
+          },
+          "by": {
+            "type": "string",
+            "description": "you, you via <widget>, or agent:<handle>."
+          }
+        },
+        "required": [
+          "key",
+          "rev",
+          "value",
+          "updatedAt",
+          "by"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key"
+      ],
+      "doc": "One key of this widget's data, or null.",
+      "example": "const e = await k2.store.get('obj/7')"
+    },
+    {
+      "verb": "store.put",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's data, like obj/7."
+        },
+        {
+          "title": "value",
+          "type": "json",
+          "description": "Any JSON value, at most 60 KiB."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "ifRev": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Write only if the key's rev is this (0 = only if it doesn't exist)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StoreRev",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "rev"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key",
+        "conflict",
+        "value_too_large",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Save one key; with ifRev, only if nobody changed it since.",
+      "example": "const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})"
+    },
+    {
+      "verb": "store.delete",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's data, like obj/7."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "ifRev": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Write only if the key's rev is this (0 = only if it doesn't exist)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StoreDeleted",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rev",
+          "deleted"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key",
+        "conflict",
+        "paused"
+      ],
+      "doc": "Delete one key (a missing key is not an error).",
+      "example": "await k2.store.delete('obj/7')"
+    },
+    {
+      "verb": "store.list",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string"
+            },
+            "after": {
+              "type": "string",
+              "description": "The last key of the previous page."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StorePage",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "StoreEntry",
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "value": {
+                  "type": "json"
+                },
+                "updatedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the Unix epoch."
+                },
+                "by": {
+                  "type": "string",
+                  "description": "you, you via <widget>, or agent:<handle>."
+                }
+              },
+              "required": [
+                "key",
+                "rev",
+                "value",
+                "updatedAt",
+                "by"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key"
+      ],
+      "doc": "Keys in order, a page at a time (at most 500 and 60 KiB).",
+      "example": "const {items, next} = await k2.store.list({prefix: 'obj/'})"
+    },
+    {
+      "verb": "store.changes",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "since": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "after": {
+              "type": "string"
+            },
+            "prefix": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "since"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "StoreChanges",
+        "type": "object",
+        "properties": {
+          "head": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "StoreChange",
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "deleted": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "type": "json"
+                },
+                "by": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "integer",
+                  "description": "Seconds since the Unix epoch."
+                }
+              },
+              "required": [
+                "key",
+                "rev",
+                "deleted",
+                "value",
+                "by",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "title": "StoreCursor",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "since": {
+                "type": "integer"
+              },
+              "after": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "since"
+            ],
+            "additionalProperties": false
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "The page ends inside a rev: fetch next before applying."
+          }
+        },
+        "required": [
+          "head",
+          "items",
+          "next",
+          "partial"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "resync",
+        "bad_key"
+      ],
+      "doc": "Changes after a cursor, whole revs at a time (subscribe uses this).",
+      "example": "const page = await k2.store.changes({since: 41})"
+    },
+    {
+      "verb": "store.batch",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "ops",
+          "type": "array",
+          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?} or {op: 'delete', key, ifRev?}.",
+          "items": {
+            "title": "StoreOp",
+            "type": "object",
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete"
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "json"
+              },
+              "ifRev": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "op",
+              "key"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "response": {
+        "title": "StoreCommit",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ops": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "rev",
+          "ops"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key",
+        "conflict",
+        "value_too_large",
+        "too_large",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Up to 64 writes, all or nothing, as one rev.",
+      "example": "await k2.store.batch([{op: 'put', key: 'obj/1', value: a}, {op: 'delete', key: 'obj/2'}])"
+    },
+    {
+      "verb": "store.txBegin",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "StoreTx",
+        "type": "object",
+        "properties": {
+          "txId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch."
+          }
+        },
+        "required": [
+          "txId",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "busy"
+      ],
+      "doc": "Open a transaction (k2.store.tx() wraps begin, add and commit).",
+      "example": "const tx = k2.store.tx()"
+    },
+    {
+      "verb": "store.txAdd",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "txId",
+          "type": "string",
+          "description": "From store.txBegin."
+        },
+        {
+          "title": "ops",
+          "type": "array",
+          "description": "At most 64 ops, 60 KiB of values: {op: 'put', key, value, ifRev?} or {op: 'delete', key, ifRev?}.",
+          "items": {
+            "title": "StoreOp",
+            "type": "object",
+            "properties": {
+              "op": {
+                "enum": [
+                  "put",
+                  "delete"
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "json"
+              },
+              "ifRev": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "op",
+              "key"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "response": {
+        "title": "StoreTxStatus",
+        "type": "object",
+        "properties": {
+          "ops": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "description": "Seconds since the Unix epoch."
+          }
+        },
+        "required": [
+          "ops",
+          "bytes",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_tx",
+        "tx_expired",
+        "bad_key",
+        "value_too_large",
+        "too_large"
+      ],
+      "doc": "Stage up to 64 more writes (1,000 and 1 MiB in all); nothing is visible until commit.",
+      "example": "await tx.add(ops)"
+    },
+    {
+      "verb": "store.txCommit",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "txId",
+          "type": "string",
+          "description": "From store.txBegin."
+        }
+      ],
+      "response": {
+        "title": "StoreCommit",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ops": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "rev",
+          "ops"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_tx",
+        "tx_expired",
+        "conflict",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Apply every staged write as one rev, or none of them.",
+      "example": "const {rev} = await tx.commit()"
+    },
+    {
+      "verb": "store.txAbort",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "txId",
+          "type": "string",
+          "description": "From store.txBegin."
+        }
+      ],
+      "response": {
+        "title": "StoreTxAborted",
+        "type": "object",
+        "properties": {
+          "aborted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "aborted"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Drop a transaction's staged writes.",
+      "example": "await tx.abort()"
+    },
+    {
+      "verb": "save.get",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's private saves."
+        }
+      ],
+      "response": {
+        "type": "json"
+      },
+      "errors": [
+        "bad_key",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "One of this widget's private saves, or null.",
+      "example": "const best = await k2.save.get('high-score')"
+    },
+    {
+      "verb": "save.set",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's private saves."
+        },
+        {
+          "title": "value",
+          "type": "json",
+          "description": "Any JSON value, at most 60 KiB."
+        }
+      ],
+      "response": {
+        "type": "null"
+      },
+      "errors": [
+        "bad_key",
+        "value_too_large",
+        "space_full",
+        "store_full",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Keep a private value for this widget (agents never see saves).",
+      "example": "await k2.save.set('high-score', 42)"
+    },
+    {
+      "verb": "save.remove",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "key",
+          "type": "string",
+          "description": "A key in this widget's private saves."
+        }
+      ],
+      "response": {
+        "type": "null"
+      },
+      "errors": [
+        "bad_key",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Forget one private save.",
+      "example": "await k2.save.remove('high-score')"
+    },
+    {
+      "verb": "save.keys",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "errors": [
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "The keys of this widget's private saves.",
+      "example": "const keys = await k2.save.keys()"
+    },
+    {
+      "verb": "viewer.get",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-data-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "Viewer",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "owner"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Settings' name for you, else You."
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Who is looking: the person on this computer, by name.",
+      "example": "const {name} = await k2.viewer()"
     }
   ]
 }

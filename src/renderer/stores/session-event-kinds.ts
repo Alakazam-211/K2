@@ -121,6 +121,9 @@ export const SESSION_EVENT_ROUTES = {
   zen_changed: { class: 'app', app: true },
   // Garden v3 data sources (contract-sources-v1 §5): the counter only.
   sources_changed: { class: 'app', app: true },
+  // Garden data (contract-garden-data-v1 §6): the space and its rev only.
+  // Gardens read only this computer's daemon, so it isn't carried.
+  garden_data_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

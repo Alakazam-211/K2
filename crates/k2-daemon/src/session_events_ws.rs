@@ -386,6 +386,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::ZenChanged {} => None,
         // Garden v3 — a source changed: app-level, payload-free but `rev`.
         SessionEvent::SourcesChanged { .. } => None,
+        // Garden data — a widget keyspace changed: app-level, space + rev only.
+        SessionEvent::GardenDataChanged { .. } => None,
         // A11 — hook install problems: daemon-global, every client may toast.
         SessionEvent::HooksInstallFailed { .. } => None,
         // S4 (RL2) — activity rows: app-level like the compat events below;
@@ -791,6 +793,7 @@ mod tests {
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
             SessionEvent::ZenChanged {},
             SessionEvent::SourcesChanged { rev: 1 },
+            SessionEvent::GardenDataChanged { space: "data:board".into(), rev: 1 },
             SessionEvent::HooksInstallFailed { failures: vec![] },
             SessionEvent::ActivityChanged {
                 seq: 1,

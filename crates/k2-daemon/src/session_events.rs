@@ -591,6 +591,13 @@ pub enum SessionEvent {
     /// (contract-sources-v1 §5, GV12).
     SourcesChanged { rev: i64 },
 
+    /// Garden data: a widget keyspace changed on this computer.
+    /// Wire: `{ "kind": "garden_data_changed", "space": "data:board", "rev": 57 }`.
+    /// App-level: reaches every subscriber, so it carries the space name and
+    /// the counter only, never keys or values. Never emitted for `save:`
+    /// spaces (contract-garden-data-v1 §6).
+    GardenDataChanged { space: String, rev: i64 },
+
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
     /// deregistered). `grantedEdit` is retired and always false.
@@ -803,6 +810,7 @@ impl SessionEvent {
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::SourcesChanged { .. } => "sources_changed",
+            SessionEvent::GardenDataChanged { .. } => "garden_data_changed",
             SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
             SessionEvent::ActivityChanged { .. } => "activity_changed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",

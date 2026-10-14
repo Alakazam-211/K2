@@ -703,6 +703,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         // `/cli/sources/*` path is served on the cell socket for the bound
         // session; handlers refuse person steps with 403 person_only.
         "/cli/sources/",
+        // Garden data (contract-garden-data-v1 §4.7): every
+        // `/cli/zen/data/*` path is served on the cell socket for the bound
+        // session; grants apply per call, person routes answer 403
+        // person_only. `/cli/zen/call` (the widget door) is NOT here.
+        "/cli/zen/data/",
         // Wave 0: agent mail verbs (messages/read/send/draft/inboxes/…).
         // Owner surfaces are DENY_PREFIXES above. Identity is forced from
         // HookPrincipal via stamp_principal + resolve_caller_workspace —

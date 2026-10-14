@@ -47,8 +47,16 @@ export const K2_CAPS = {
   'tickets:read': { label: 'Read tickets and get live ticket updates', exposure: ['app'] },
   'tickets:post': { label: 'Open, answer, assign and set status on tickets', exposure: ['app'] },
   'wiki:read': { label: 'Read the wiki', exposure: ['app'] },
-  'store:read': { label: 'Read the workspace store', exposure: ['app'] },
-  'store:write': { label: 'Change dump-table rows', exposure: ['app'] },
+  'store:read': {
+    label: 'Read the workspace store',
+    sentence: "Read this widget's own data on this computer.",
+    exposure: ['app', 'garden-local'],
+  },
+  'store:write': {
+    label: 'Change dump-table rows',
+    sentence: "Save this widget's own data on this computer. Agents you allow can read and change it too.",
+    exposure: ['app', 'garden-local'],
+  },
   'activity:read': { label: 'See when the agent is working', exposure: ['app'] },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },

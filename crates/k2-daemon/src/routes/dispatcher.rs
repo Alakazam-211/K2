@@ -5980,6 +5980,38 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Garden data (contract-garden-data-v1 §4.1): the widget door
+        // `/cli/zen/call` and the agent/person door `/cli/zen/data/*`, ahead
+        // of the generic Zen arm. NoLogin rows already turned Connect logins
+        // away at role_gate; the handler classifies everyone else.
+        p if crate::zen_data_routes::is_route(p) => {
+            if crate::zen_data_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_data_routes::max_body(p)).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::zen_data_routes::too_large(p);
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::zen_data_routes::who_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let head = headers_blob.clone();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::zen_data_routes::handle(&p_owned, who, &body_bytes, &params, &head)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p.starts_with("/cli/zen/") => {
             let is_post_row = crate::zen_routes::POST_ROUTES.contains(&p);
             if is_post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

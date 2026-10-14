@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications hooks"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -499,6 +499,37 @@ else
     echo "  PASS: no raw k2skn_ secret material"
     pass=$((pass + 1))
 fi
+
+echo "== k2 study hooks (GL44/GL45 custom agents) =="
+hk_out="$("$K2" study hooks)"
+for needle in "k2 thread <agent>" "[from <who>] [thread:<agent>] <text>" "k2 hooks emit SessionStart" \
+    "k2 hooks emit Stop" "k2 hooks emit SessionEnd" "never the owner token" "descend from this PTY"; do
+    assert_contains "hooks page names $needle" "$hk_out" "$needle"
+done
+hk_json="$("$K2" study hooks --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="hooks" and "hooks emit" in d["body"], d["id"]' "$hk_json"
+echo "  PASS: hooks --json id+body"
+pass=$((pass + 1))
+
+echo "== k2 hooks emit: refuses without a session passport (never the owner token) =="
+mkdir -p "$SANDBOX/.k2"
+printf '1\n' > "$SANDBOX/.k2/heartbeat.port"
+printf 'owner-token-must-not-be-used\n' > "$SANDBOX/.k2/heartbeat.token"
+set +e
+emit_err="$("$K2" hooks emit Stop 2>&1)"
+emit_rc=$?
+bad_ev="$(K2_HOOK_TOKEN=x K2_PANE_ID=p "$K2" hooks emit Bogus 2>&1)"
+bad_rc=$?
+bad_json="$(K2_HOOK_TOKEN=x K2_PANE_ID=p "$K2" hooks emit Stop --json '[1]' 2>&1)"
+bad_json_rc=$?
+set -e
+rm -f "$SANDBOX/.k2/heartbeat.port" "$SANDBOX/.k2/heartbeat.token"
+assert_eq "emit without passport exits 3" "$emit_rc" "3"
+assert_contains "emit says why" "$emit_err" "no session passport"
+assert_eq "unknown event exits 2" "$bad_rc" "2"
+assert_contains "unknown event lists events" "$bad_ev" "SessionStart UserPromptSubmit"
+assert_eq "non-object --json exits 2" "$bad_json_rc" "2"
+assert_contains "non-object --json says why" "$bad_json" "must be a JSON object"
 
 echo "== k2 study publish-framing (prd-app-frame-ancestors-v1 FA21) =="
 pf_out="$("$K2" study publish-framing)"

@@ -89,7 +89,7 @@ pub enum IngestVerdict {
 }
 
 impl IngestVerdict {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
             Self::Foreign => "foreign",
@@ -214,6 +214,27 @@ pub fn ingest_with(
     };
 
     let mut env = env;
+    // GL45: a custom-preset program reports through `k2 hooks emit`,
+    // whose own pid is a short-lived child of the program (or of a shell
+    // it ran). The program is the PTY child itself, so a sender whose
+    // real parent chain reaches the PTY child speaks for it: claim and
+    // check as the PTY child. Only the OS process table decides; env and
+    // headers are never trusted for this. A sender outside the pane stays
+    // foreign below.
+    if env.source == envelope::HookSource::Custom && mode == OwnerCheckMode::Ancestry {
+        if let (Some(pid), Some(child)) = (env.agent_pid, pane_facts.child_pid) {
+            if pid != child {
+                let reaches_child = procs.info(pid).is_some_and(|info| {
+                    owner::ancestry(procs, info, owner::MAX_ANCESTRY_DEPTH)
+                        .iter()
+                        .any(|p| p.pid == child)
+                });
+                if reaches_child {
+                    env.agent_pid = Some(child);
+                }
+            }
+        }
+    }
     let mut st = state().lock();
     let entry = st.panes.entry(env.pane.clone()).or_default();
     let out = owner::check(&mut entry.owner, Some(&pane_facts), &Sender::of(&env), procs, mode, now);
@@ -555,6 +576,48 @@ mod tests {
         // A pane that is no longer live is dropped from the registry.
         sweep(&dead, &|_| false);
         assert!(state().lock().panes.get(pane).is_none());
+    }
+
+    /// GL45: `k2 hooks emit` from inside a custom program. The emitting
+    /// process is a child (or grandchild) of the PTY child; it claims and
+    /// keeps the pane AS the PTY child, so short-lived emitters never
+    /// release each other. A process outside the pane stays foreign, and
+    /// the normalization is only for `custom`: a Claude hook from a
+    /// grandchild keeps Claude's rules.
+    #[test]
+    fn custom_emit_speaks_as_the_pty_child() {
+        let _g = LOCK.lock();
+        let pane = "33333333-3333-4333-8333-333333333333";
+        let procs = Procs::default();
+        // 100 = PTY child (the custom program); 110 = `sh -c`; 120 = the
+        // `k2` CLI the program ran; 130 = a later emit; 500 = outsider.
+        procs.add(10, 1, 1).add(100, 10, 2).add(110, 100, 3).add(120, 110, 4).add(130, 100, 5).add(500, 1, 6);
+        let facts = |p: &str| (p == pane).then(|| PaneFacts { child_pid: Some(100), known_conversation_id: None });
+        let a = OwnerCheckMode::Ancestry;
+        let custom = |pid: i32| HookHeaders { source: HookSource::Custom, cli_version: None, ..headers(pane, pid) };
+
+        let (v, env) = ingest_with(&custom(120), br#"{"hook_event_name":"SessionStart"}"#, &procs, &facts, a, 1);
+        assert_eq!(v, IngestVerdict::Accepted);
+        let env = env.expect("owner envelope");
+        assert_eq!(env.agent_pid, Some(100), "claimed as the PTY child");
+        assert!(!env.from_descendant);
+        assert_eq!(status_json()["sessions"][pane]["owner"]["via"], "pty_child");
+
+        // The first emitter is gone; the next one is still the owner.
+        let (v, env) = ingest_with(&custom(130), br#"{"hook_event_name":"Stop"}"#, &procs, &facts, a, 2);
+        assert_eq!(v, IngestVerdict::Accepted);
+        assert!(!env.expect("owner").from_descendant);
+
+        let (v, _) = ingest_with(&custom(500), br#"{"hook_event_name":"Stop"}"#, &procs, &facts, a, 3);
+        assert_eq!(v, IngestVerdict::Foreign, "outside the pane stays foreign");
+        assert_eq!(status_json()["sessions"][pane]["source"], "custom");
+
+        // Same tree, Claude source: a grandchild is not normalized.
+        let pane2 = "44444444-4444-4444-8444-444444444444";
+        let facts2 = |p: &str| (p == pane2).then(|| PaneFacts { child_pid: Some(100), known_conversation_id: None });
+        let (v, env) = ingest_with(&headers(pane2, 120), br#"{"hook_event_name":"Stop"}"#, &procs, &facts2, a, 4);
+        assert_eq!(v, IngestVerdict::Accepted);
+        assert_eq!(env.expect("first sender").agent_pid, Some(120));
     }
 
     /// A41: a release build without a `K2_TEST_*` env never captures.

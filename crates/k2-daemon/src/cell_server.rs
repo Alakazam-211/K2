@@ -512,8 +512,19 @@ mod unix_impl {
             let hook_headers = k2_core::agent_hooks::envelope::HookHeaders::from_lookup(|n| {
                 crate::routes::http::extract_header(&head, n)
             });
-            let _ = tokio::task::spawn_blocking(move || crate::hook_ingest::ingest(&hook_headers, &body)).await;
-            write_response(&mut stream, "204 No Content", "application/json", "").await;
+            let report = k2_core::agent_hooks::envelope::wants_report(|n| {
+                crate::routes::http::extract_header(&head, n)
+            });
+            let verdict =
+                tokio::task::spawn_blocking(move || crate::hook_ingest::ingest(&hook_headers, &body)).await;
+            match (report, verdict) {
+                // `k2 hooks emit` (GL45) asks for the verdict.
+                (true, Ok(v)) => {
+                    let body = serde_json::json!({ "verdict": v.as_str() }).to_string();
+                    write_response(&mut stream, "200 OK", "application/json", &body).await;
+                }
+                _ => write_response(&mut stream, "204 No Content", "application/json", "").await,
+            }
             return;
         }
 

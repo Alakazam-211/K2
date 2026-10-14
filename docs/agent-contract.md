@@ -84,6 +84,8 @@ Every K2-spawned PTY gets, for free:
 |---|---|
 | `K2_PORT` | Loopback port of the daemon's CLI API |
 | `K2_HOOK_TOKEN` | Auth token for the `k2` CLI. By default (`K2_HOOK_SCOPED` on, opt out with `0`/`false`/`off`) every agent session gets a **per-session scoped token** here — it identifies *your session*, and is what `k2 respond` authenticates with. Never the daemon owner token. |
+| `K2_HOOK_SOCK` | This session's own cell socket (the `k2` CLI's first door; `k2 hooks emit` uses it) |
+| `K2_PANE_ID` | This session's pane id (what `k2 hooks emit` reports for) |
 | `K2_PROJECT_PATH` | The workspace root |
 
 So any process inside the PTY can already run `k2 respond`, `k2 tickets ask`,
@@ -314,9 +316,21 @@ Notes:
 
 ## 10. Honest degrades (custom agents today)
 
-- **No resume/continuity**: session-id premint/resume grammar is a static
-  table for the known providers; a custom agent is fresh-per-spawn (pinned-chat
-  continuity and `{"session": id}` API resume degrade gracefully).
+- **No program resume**: session-id premint/resume grammar is a static
+  table for the known providers; a custom agent's *process* is
+  fresh-per-spawn (`{"session": id}` API resume degrades gracefully).
+- **Thread continuity is K2's** (0.45.6+): K2 mints and keeps a pinned Thread
+  conversation id for a custom preset at launch (the program never sees it;
+  it survives wakes and restarts; New chat mints a new one). `k2 thread
+  <agent>` reads and posts; a post reaches the program's stdin as
+  `[from <who>] [thread:<agent>] <text>` (§3), and the program answers with
+  `k2 thread <agent> "…"`.
+- **Lifecycle hooks are opt-in**: a custom program reports working / idle with
+  `k2 hooks emit <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse|Notification|Stop|SessionEnd> [--json '<object>']`,
+  run from inside its own PTY. It authenticates with the session's own
+  passport (`K2_HOOK_TOKEN` over `K2_HOOK_SOCK`, then loopback TCP), never the
+  owner token, and the daemon checks that the `k2` process descends from the
+  PTY's program. An emit never changes the Thread pin. `k2 study hooks`.
 - **Undeclared readiness** on a custom command falls to the default injection
   profile (§4) — safe but slower than a truthful declaration.
 - **Sandbox cells** are host-fixed to headless claude; custom agents run as

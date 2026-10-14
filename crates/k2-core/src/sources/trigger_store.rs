@@ -428,9 +428,11 @@ pub fn incident_fired(conn: &Connection, trigger_id: &str, incident_id: &str, it
     .map(|n| n != 0)
 }
 
-/// `pending` fires written before `before` (oldest first): `(fire, trigger,
-/// incident, item)`.
-pub fn pending_before(conn: &Connection, before: i64) -> rusqlite::Result<Vec<(String, String, String, Option<String>)>> {
+/// A `pending` fire: `(fire, trigger, incident, item)`.
+pub type PendingFire = (String, String, String, Option<String>);
+
+/// `pending` fires written before `before` (oldest first).
+pub fn pending_before(conn: &Connection, before: i64) -> rusqlite::Result<Vec<PendingFire>> {
     let mut stmt = conn.prepare(
         "SELECT id, trigger_id, incident_id, item_key FROM source_trigger_fires \
          WHERE outcome = 'pending' AND at < ?1 ORDER BY at, rowid",

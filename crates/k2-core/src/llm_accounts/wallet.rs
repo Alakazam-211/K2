@@ -7,6 +7,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 use serde::Serialize;
 
+use super::identity::{self, AccountIdentity, Source};
 use super::pins;
 use super::store::{self, CredMeta};
 use super::{
@@ -36,11 +37,92 @@ fn save_unknown_live(conn: &Connection, tool: Tool, bytes: &[u8], by: Option<&st
 
 const LOCK_WAIT: Duration = Duration::from_secs(20);
 
-/// Refreshes an IDLE wallet slot in place (never the active one). The
-/// daemon implements it: Claude through the OAuth refresh grant, Codex
-/// and Grok through their own CLI run in the slot.
+/// The daemon's vendor client. `refresh` refreshes an IDLE wallet slot
+/// in place (never the active one): Claude through the OAuth refresh
+/// grant, Codex and Grok through their own CLI run in the slot.
+/// `identify` asks the vendor which account a credential belongs to
+/// (Claude: `/api/oauth/profile`); `None` when it can't tell (offline,
+/// air-gap, an expired access token, tests).
 pub trait Refresher {
     fn refresh(&self, tool: Tool, id: &str) -> Result<(), String>;
+    fn identify(&self, _tool: Tool, _cred: &[u8]) -> Option<AccountIdentity> {
+        None
+    }
+}
+
+/// The refusal when a credential is not the account K2 expected. Never
+/// names a token; says where each identity came from.
+fn account_mismatch(what: &str, label: &str, expected: &(AccountIdentity, Source), actual: &(AccountIdentity, Source)) -> WalletError {
+    crate::log_debug!(
+        "[llm-accounts] WARN account mismatch ({what}): token {label:?} expected {} ({}), found {} ({})",
+        expected.0.describe(),
+        expected.1.describe(),
+        actual.0.describe(),
+        actual.1.describe()
+    );
+    let hint = if what == "capture" {
+        format!(
+            "K2 stopped the switch: the sign-in live on this server belongs to {} ({}), but K2's record says \"{label}\" ({}) is live. Saving it would put another account's sign-in into \"{label}\". Nothing changed.{}",
+            actual.0.describe(),
+            actual.1.describe(),
+            expected.0.describe(),
+            if actual.1 == Source::ClaudeConfig {
+                format!(
+                    " If ~/.claude.json is just out of date, run /login as {} once in a Claude tab, then try again.",
+                    expected.0.describe()
+                )
+            } else {
+                " If someone signed in outside K2, add that sign-in on Settings → LLMs, or sign this token in again.".to_string()
+            }
+        )
+    } else {
+        format!(
+            "K2 stopped the switch: the saved sign-in for \"{label}\" belongs to {} ({}), not {} ({}). The server default is unchanged. Sign \"{label}\" in again on Settings → LLMs.",
+            actual.0.describe(),
+            actual.1.describe(),
+            expected.0.describe(),
+            expected.1.describe()
+        )
+    };
+    WalletError::Conflict("account_mismatch", hint)
+}
+
+/// Refuse when both identities are known and name different accounts.
+fn check_same(
+    what: &str,
+    label: &str,
+    expected: &Option<(AccountIdentity, Source)>,
+    actual: &Option<(AccountIdentity, Source)>,
+) -> Result<(), WalletError> {
+    if let (Some(e), Some(a)) = (expected, actual) {
+        if e.0.same_account(&a.0) == Some(false) {
+            return Err(account_mismatch(what, label, e, a));
+        }
+    }
+    Ok(())
+}
+
+/// Claude only: make the token's profile the live `oauthAccount`, so
+/// `/status` names the account that is live. Best effort: the token swap
+/// already happened; a failure is logged. Returns whether it was written.
+fn swap_in_profile(tool: Tool, id: &str, vendor: Option<&AccountIdentity>) -> bool {
+    if tool != Tool::Claude {
+        return false;
+    }
+    let profile = identity::slot_profile(id).map(|(p, _)| p).or_else(|| vendor.map(AccountIdentity::to_oauth_account));
+    let Some(p) = profile else {
+        crate::log_debug!("[llm-accounts] claude: no profile on record for {id}; /status may still name the previous account");
+        return false;
+    };
+    match identity::set_live_profile(&p) {
+        Ok(written) => written,
+        Err(err) => {
+            crate::log_debug!(
+                "[llm-accounts] WARN claude: could not update .claude.json oauthAccount ({err}); /status may name the previous account"
+            );
+            false
+        }
+    }
 }
 
 fn meta_update_from(m: &CredMeta, st: &str) -> MetaUpdate {
@@ -91,6 +173,15 @@ fn import_live_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &s
     let label = unique_label(conn, tool, label)?;
     let e = super::create(conn, tool, &label, by)?;
     store::write_slot(tool, &e.id, &bytes)?;
+    if tool == Tool::Claude {
+        // The live profile names the account at import (the moment K2
+        // first sees this login); later switches compare against it.
+        if let Some(p) = identity::live_profile() {
+            if let Err(err) = identity::save_slot_profile(&e.id, &p) {
+                crate::log_debug!("[llm-accounts] claude: profile not recorded at import ({err})");
+            }
+        }
+    }
     let mut m = store::parse_meta(tool, &bytes);
     let live = store::live_meta(tool).unwrap_or_default();
     m.email = m.email.or(live.email);
@@ -157,6 +248,29 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
         return Err(WalletError::NotSignedIn(e.id));
     }
     let _ = store::set_mode(&cred, 0o600);
+    if tool == Tool::Claude {
+        // A fresh sign-in may be another account than the slot held
+        // before: K2's record follows the sign-in's own profile.
+        let record = identity::slot_profile_path(&e.id);
+        let fresh = std::fs::read(dir.join(".claude.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .map(|v| v["oauthAccount"].clone())
+            .filter(|v| v.is_object());
+        let saved = match fresh {
+            Some(p) => match identity::save_slot_profile(&e.id, &p) {
+                Ok(()) => true,
+                Err(err) => {
+                    crate::log_debug!("[llm-accounts] claude: profile not recorded at sign-in ({err})");
+                    false
+                }
+            },
+            None => false,
+        };
+        if !saved {
+            let _ = std::fs::remove_file(&record);
+        }
+    }
     let m = store::slot_meta(tool, &e.id);
     let mut u = meta_update_from(&m, state::SIGNED_IN);
     u.detail = Some(None);
@@ -166,6 +280,7 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
         let bytes = store::read_slot(tool, &e.id)?.ok_or_else(|| WalletError::NotSignedIn(e.id.clone()))?;
         store::write_live(tool, &bytes)?;
         set_active(conn, tool, &e.id, by)?;
+        swap_in_profile(tool, &e.id, None);
     }
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id))
 }
@@ -177,6 +292,14 @@ pub struct SwitchOutcome {
     pub tool: String,
     pub from: Option<String>,
     pub to: String,
+    /// Labels (for the audit line and the CLI).
+    pub from_label: Option<String>,
+    pub to_label: String,
+    /// Claude: `oauthAccount` in `.claude.json` now names the new login.
+    pub profile_swapped: bool,
+    /// How the incoming login's account was confirmed (`vendor`,
+    /// `credential`), when it was.
+    pub verified_by: Option<Source>,
     /// The outgoing live login was saved back to its slot.
     pub saved_outgoing: bool,
     /// The incoming slot was refreshed before the swap.
@@ -199,15 +322,31 @@ pub fn switch(
     let target = lookup(conn, Some(tool), target_key)?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
     let current = active_id(conn, tool)?;
+    let from_label = match current.as_deref() {
+        Some(c) => get(conn, c)?.map(|e| e.label),
+        None => None,
+    };
+    let outcome = |saved: bool, refreshed: bool, already: bool, profile: bool, verified: Option<Source>| SwitchOutcome {
+        tool: tool.as_str().into(),
+        from: current.clone(),
+        to: target.id.clone(),
+        from_label: from_label.clone(),
+        to_label: target.label.clone(),
+        profile_swapped: profile,
+        verified_by: verified,
+        saved_outgoing: saved,
+        refreshed,
+        already_active: already,
+    };
     if current.as_deref() == Some(target.id.as_str()) {
-        return Ok(SwitchOutcome {
-            tool: tool.as_str().into(),
-            from: current,
-            to: target.id,
-            saved_outgoing: false,
-            refreshed: false,
-            already_active: true,
-        });
+        return Ok(outcome(false, false, true, false, None));
+    }
+    if target.state == state::SIGNING_IN {
+        // Its slot may be rewritten under it at any moment.
+        return Err(WalletError::Conflict(
+            "signing_in",
+            format!("\"{}\" is signing in right now; finish or cancel that sign-in first", target.label),
+        ));
     }
     if !store::slot_has_cred(tool, &target.id) {
         return Err(WalletError::NotSignedIn(target.id));
@@ -221,27 +360,15 @@ pub fn switch(
         // An API key is env-injected into new sessions; the live store is
         // left as it is and remembered as the subscription in it.
         set_active_with_live(conn, tool, &target.id, owner.as_deref(), by)?;
-        return Ok(SwitchOutcome {
-            tool: tool.as_str().into(),
-            from: current,
-            to: target.id,
-            saved_outgoing: false,
-            refreshed: false,
-            already_active: false,
-        });
+        return Ok(outcome(false, false, false, false, None));
     }
     if owner.as_deref() == Some(target.id.as_str()) {
         // Back from an API key to the login already in the live store.
         set_active(conn, tool, &target.id, by)?;
-        return Ok(SwitchOutcome {
-            tool: tool.as_str().into(),
-            from: current,
-            to: target.id,
-            saved_outgoing: false,
-            refreshed: false,
-            already_active: false,
-        });
+        return Ok(outcome(false, false, false, false, None));
     }
+    let ident = |t: Tool, b: &[u8]| refresher.and_then(|r| r.identify(t, b));
+    let ident: &dyn Fn(Tool, &[u8]) -> Option<AccountIdentity> = &ident;
     let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
     // 0. The incoming login must be whole before anything moves.
     let incoming = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
@@ -258,6 +385,18 @@ pub fn switch(
             false
         }
     });
+    //    The live bytes go into the owner's slot only when they are the
+    //    owner's account: a `/login` outside K2, or a CLI writing an old
+    //    token back, can leave another account live. Never cross logins.
+    let owner_entry = match owner.as_deref() {
+        Some(o) => get(conn, o)?,
+        None => None,
+    };
+    let owner_expected = owner_entry.as_ref().and_then(|e| identity::expected_identity(tool, e));
+    let live_actual = live.as_deref().and_then(|b| identity::actual_identity(tool, b, Some(ident), true));
+    if let (Some(oe), Some(_)) = (&owner_entry, &live) {
+        check_same("capture", &oe.label, &owner_expected, &live_actual)?;
+    }
     let mut saved = false;
     match (&owner, &live) {
         (Some(o), Some(bytes)) => {
@@ -295,19 +434,46 @@ pub fn switch(
             }
         }
     }
-    // 3. Swap in.
+    // 3. The incoming sign-in must be the account K2 has on record for it.
     let bytes = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
+    let target_expected = identity::expected_identity(tool, &target);
+    let incoming_actual = identity::actual_identity(tool, &bytes, Some(ident), false);
+    check_same("restore", &target.label, &target_expected, &incoming_actual)?;
+    // 4. Swap in.
     store::write_live(tool, &bytes)?;
     set_active(conn, tool, &target.id, by)?;
     update_meta(conn, &target.id, &MetaUpdate { state: Some(state::SIGNED_IN.into()), ..Default::default() })?;
-    Ok(SwitchOutcome {
-        tool: tool.as_str().into(),
-        from: current,
-        to: target.id,
-        saved_outgoing: saved,
-        refreshed,
-        already_active: false,
-    })
+    // 5. Claude's profile follows the token (`/status` reads it).
+    let mut profile_swapped = false;
+    if tool == Tool::Claude {
+        // Keep the outgoing profile with its token, but only when it
+        // names the outgoing account (the live file may be stale).
+        if let (Some(o), true) = (&owner, saved) {
+            if let Some(lp) = identity::live_profile() {
+                let lid = AccountIdentity::from_oauth_account(&lp);
+                let same = match (&lid, &owner_expected, &live_actual) {
+                    (Some(l), Some((exp, _)), _) => l.same_account(exp) == Some(true),
+                    (Some(l), None, Some((act, Source::Vendor))) => l.same_account(act) == Some(true),
+                    _ => false,
+                };
+                if same {
+                    if let Err(err) = identity::save_slot_profile(o, &lp) {
+                        crate::log_debug!("[llm-accounts] claude: outgoing profile not kept ({err})");
+                    }
+                }
+            }
+        }
+        // An incoming slot K2 had no record for, now confirmed by Anthropic.
+        if let Some((id, Source::Vendor)) = &incoming_actual {
+            if identity::slot_profile(&target.id).is_none() {
+                let _ = identity::save_slot_profile(&target.id, &id.to_oauth_account());
+            }
+        }
+        let vendor = incoming_actual.as_ref().filter(|(_, s)| *s == Source::Vendor).map(|(id, _)| id);
+        profile_swapped = swap_in_profile(tool, &target.id, vendor);
+    }
+    let verified = incoming_actual.as_ref().map(|(_, s)| *s).filter(|s| matches!(s, Source::Vendor | Source::Credential));
+    Ok(outcome(saved, refreshed, false, profile_swapped, verified))
 }
 
 // ── Login methods ───────────────────────────────────────────────────
@@ -385,7 +551,16 @@ pub fn begin_live_swap(conn: &Connection, tool: Tool, new_id: &str, by: Option<&
     // never copied into a slot.
     if let Some(bytes) = live.as_ref().filter(|b| store::validate_cred(tool, b).is_ok()) {
         match active_id(conn, tool)? {
-            Some(cur) => store::write_slot(tool, &cur, bytes)?,
+            Some(cur) => {
+                // Same rule as a switch: never save another account's
+                // sign-in into the active token's slot.
+                if let Some(e) = get(conn, &cur)? {
+                    let expected = identity::expected_identity(tool, &e);
+                    let actual = identity::actual_identity(tool, bytes, None, true);
+                    check_same("capture", &e.label, &expected, &actual)?;
+                }
+                store::write_slot(tool, &cur, bytes)?
+            }
             None => {
                 import_live_locked(conn, tool, by, "Default")?;
             }
@@ -419,6 +594,14 @@ pub fn live_swap_complete(conn: &Connection, ticket: &LiveSwapTicket, new_bytes:
     let tool = ticket.tool;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
     store::write_slot(tool, &ticket.new_id, new_bytes)?;
+    if tool == Tool::Claude {
+        // The tool's own login just wrote the new account's profile.
+        if let Some(p) = identity::live_profile() {
+            if let Err(err) = identity::save_slot_profile(&ticket.new_id, &p) {
+                crate::log_debug!("[llm-accounts] claude: profile not recorded at sign-in ({err})");
+            }
+        }
+    }
     let mut m = store::parse_meta(tool, new_bytes);
     if tool == Tool::Claude {
         let (e, o) = store::claude_account_labels(&store::claude_live_global_config());
@@ -433,6 +616,7 @@ pub fn live_swap_complete(conn: &Connection, ticket: &LiveSwapTicket, new_bytes:
         Some(prev) => {
             let bytes = store::read_slot(tool, prev)?.ok_or_else(|| WalletError::NotSignedIn(prev.clone()))?;
             store::write_live(tool, &bytes)?;
+            swap_in_profile(tool, prev, None);
         }
         None => set_active(conn, tool, &ticket.new_id, by)?,
     }
@@ -448,6 +632,7 @@ pub fn live_swap_abort(conn: &Connection, ticket: &LiveSwapTicket) -> Result<(),
         if let Some(prev) = &ticket.previous_id {
             if let Some(bytes) = store::read_slot(tool, prev)? {
                 store::write_live(tool, &bytes)?;
+                swap_in_profile(tool, prev, None);
             }
         }
     }

@@ -56,8 +56,11 @@ fn claude_cred(tag: &str, expires_ms: i64) -> Vec<u8> {
     .unwrap()
 }
 
+/// A fixed far-future expiry (2100-01-01). It used to be `now() + 30 d`,
+/// so a test that built the same credential twice across a second
+/// boundary compared bytes 1 s apart and failed (the live_swap flakes).
 fn far_future_ms() -> i64 {
-    (now() + 30 * 24 * 3600) * 1000
+    4_102_444_800_000
 }
 
 fn write_live_claude(h: &Home, bytes: &[u8]) {

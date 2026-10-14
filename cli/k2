@@ -18033,6 +18033,16 @@ cmd_schema() {
       ]
     },
     {
+      "name": "agent restart",
+      "usage": "k2 agent restart <name> [--dry-run] [--json]",
+      "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Show which session would restart; change nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (ok, oldSessionId, sessionId, conversationId)."}
+      ]
+    },
+    {
       "name": "agent context",
       "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
       "description": "Day-2 management of the always-on AGENTS.md context management stack: pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
@@ -23589,6 +23599,7 @@ COMMANDS
   set <name> [flags]      Change one or more settings (hire's settings flags)
   list                    List every agent on this server with mode + live status
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
+  restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
 
 ADDRESSING
@@ -24429,6 +24440,25 @@ FLAGS
   --force                 Override the safety guards
   --dry-run               Show what would happen; change nothing
   --json                  JSON output
+EOF
+}
+
+cmd_help_agent_restart() {
+    cat <<'EOF'
+Restart an agent's pinned chat session. The running CLI process is stopped
+and started again on the SAME conversation (resume), so it re-reads its
+charter (AGENTS.md / CLAUDE.md) and workspace config (.mcp.json) without
+losing history. Use it after editing a charter or adding an MCP server.
+
+Only the pinned chat is restarted; sidecar tabs keep running. If the agent
+has no live session, restart starts one.
+
+USAGE
+  k2 agent restart <name> [flags]
+
+FLAGS
+  --dry-run               Show which session would restart; change nothing
+  --json                  JSON output (old + new session ids)
 EOF
 }
 
@@ -25937,6 +25967,110 @@ if not d.get("dryRun"):
         print("%s retired — folder archived to %s (nothing was deleted)." % (label, dest))
     else:
         print("%s retired." % label)
+PYEOF
+}
+
+# `k2 agent restart <name>` (GH #17) — bounce the agent's pinned chat
+# so it reloads its charter / .mcp.json. One daemon door: POST
+# /cli/workspace/ensure-pinned-chat with forceRespawn, which kills the
+# live canonical PTY and respawns it on the same provider conversation.
+# The old session id comes from `agent conf` (live.sessionId).
+cmd_agent_restart() {
+    if _wants_help "$@"; then cmd_help_agent_restart; exit 0; fi
+    local name="" dry_run=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            --json) as_json=true; shift ;;
+            -*)
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent restart <name> [--dry-run] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; else
+                    _agent_err "bad_usage" "unexpected extra argument '$1' — usage: k2 agent restart <name> [flags]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        _agent_err "bad_usage" "missing <name> — usage: k2 agent restart <name> [flags]"
+        exit 2
+    fi
+    local conf rc=0
+    conf=$(_agent_conf_fetch "$name") || rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    CONF="$conf" DRY_RUN="$dry_run" AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" \
+        python3 - <<'PYEOF'
+import json, os, sys
+import urllib.error, urllib.parse, urllib.request
+
+conf = json.loads(os.environ["CONF"])
+dry_run = os.environ.get("DRY_RUN") == "true"
+as_json = os.environ.get("AS_JSON") == "true"
+path = conf["path"]
+label = conf.get("name") or os.path.basename(path)
+live = conf.get("live") or {}
+old_id = live.get("sessionId") if live.get("active") else None
+
+if dry_run:
+    out = {"ok": True, "dryRun": True, "name": label, "path": path,
+           "oldSessionId": old_id,
+           "actions": [{"step": "restart-session", "status": "pending",
+                        "sessionId": old_id}]}
+    if as_json:
+        print(json.dumps(out))
+    elif old_id:
+        print("DRY RUN — would restart %s (session %s) on the same conversation." % (label, old_id))
+    else:
+        print("DRY RUN — %s has no live session; restart would start one." % label)
+    sys.exit(0)
+
+url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat?token=" + \
+    urllib.parse.quote(os.environ["ATOKEN"], safe="")
+body = json.dumps({"project": path, "forceRespawn": True}).encode()
+req = urllib.request.Request(url, data=body,
+                             headers={"Content-Type": "application/json"}, method="POST")
+try:
+    with urllib.request.urlopen(req, timeout=120) as r:
+        d = json.loads(r.read().decode("utf-8", "replace"))
+except urllib.error.HTTPError as e:
+    raw = e.read().decode("utf-8", "replace")
+    try:
+        msg = json.loads(raw).get("error")
+    except Exception:
+        msg = None
+    if isinstance(msg, dict):
+        msg = msg.get("hint") or msg.get("message")
+    sys.stderr.write(json.dumps({"error": {"code": "daemon_error",
+        "hint": "restart failed (HTTP %s): %s" % (e.code, msg or raw[:300])}}) + "\n")
+    sys.exit(1)
+except Exception as e:
+    sys.stderr.write(json.dumps({"error": {"code": "daemon_unreachable",
+        "hint": "no response from the K2 daemon: %s" % e}}) + "\n")
+    sys.exit(1)
+
+new_id = d.get("sessionId")
+if not new_id:
+    sys.stderr.write(json.dumps({"error": {"code": "daemon_error",
+        "hint": "unexpected response: %s" % json.dumps(d)[:300]}}) + "\n")
+    sys.exit(1)
+conversation = d.get("claudeSessionId") or None
+out = {"ok": True, "changed": True, "name": label, "path": path,
+       "oldSessionId": old_id, "sessionId": new_id,
+       "conversationId": conversation,
+       "resumedExisting": bool(d.get("resumedExisting")),
+       "provider": d.get("provider")}
+if as_json:
+    print(json.dumps(out))
+    sys.exit(0)
+if old_id:
+    print("%s restarted: session %s → %s." % (label, old_id, new_id))
+else:
+    print("%s had no live session; started %s." % (label, new_id))
+if conversation:
+    how = "resumed" if out["resumedExisting"] else "new"
+    print("Conversation %s (%s)." % (conversation, how))
 PYEOF
 }
 
@@ -44762,6 +44896,7 @@ case "${1:-help}" in
             # arm with the real fleet-view semantics (PRD §3).
             list)   shift 2; cmd_agent_list "$@" ;;
             retire) shift 2; cmd_agent_retire "$@" ;;
+            restart) shift 2; cmd_agent_restart "$@" ;;
             # Context management stack — day-2 AGENTS.md layer stack
             # (prd-context-hamburger-v1).
             context) shift 2; cmd_agent_context "$@" ;;

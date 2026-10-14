@@ -24,7 +24,7 @@ use crate::fsx::Kind;
 
 /// The caller's own `daemon.toml` entry (the one whose unit's main
 /// process it is).
-fn caller_entry(ctx: &Ctx, who: &Caller) -> HResult<DaemonEntry> {
+pub(crate) fn caller_entry(ctx: &Ctx, who: &Caller) -> HResult<DaemonEntry> {
     let user = caller::require_daemon(who)?;
     let daemons = caller::load_daemons(ctx).map_err(Fail::state)?;
     daemons

@@ -6,8 +6,11 @@
 //! - 3 = self-update + backup + `harden-store` + the `pg` namespace;
 //! - 4 = `keep`;
 //! - 5 = `daemon handoff-dropin install|remove` (runtime stage H, 0.46.0).
-//! - 6 = reserved: the App runtime's `apps` namespace + `pg hba-app` (0.46.1,
-//!   vs-live 2 AR38). Not served yet; Sew's `engine sew` takes 7 or later.
+//! - 6 = the App runtime's `apps` namespace (box prep, runtime slice 2) +
+//!   `pg hba-app` (0.46.1, vs-live 2 AR38). `pg hba-app` (S21) must join
+//!   protocol 6 before any 6 build ships (both are in 0.46.1, behind the
+//!   preview); after that it would need 7. Sew's `engine sew` takes 7 or
+//!   later.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -16,7 +19,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -35,9 +38,9 @@ pub const PG_MIN_PROTOCOL: u32 = 3;
 pub const KEEP_MIN_PROTOCOL: u32 = 4;
 /// The daemon unit's hand-off drop-in (`daemon handoff-dropin …`).
 pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
-/// The App runtime's `apps` namespace and `pg hba-app` (0.46.1, AR38).
-/// Reserved: no build answers 6 until those verbs land, so the daemon
-/// treats every helper on the fleet as "no App verbs" (`PROTOCOL` < this).
+/// The App runtime's `apps` namespace (box prep) and `pg hba-app` (0.46.1,
+/// AR38). Helpers on the fleet answer ≤ 5, so the daemon treats them as
+/// "no App verbs" until they self-update.
 pub const APPS_MIN_PROTOCOL: u32 = 6;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
@@ -184,14 +187,34 @@ mod tests {
     use super::*;
 
     /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace.
-    /// Nothing may answer 6 before its verbs exist, so this build stays
-    /// below it (bump PROTOCOL in the commit that adds the `apps` verbs).
+    /// This build answers 6 because the `apps` verbs exist: every one of
+    /// them is in the catalog. Sew's `engine sew` takes 7 or later, so
+    /// nothing here may answer 7 yet.
     #[test]
     fn protocol_numbers_follow_ar38() {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
-        assert!(PROTOCOL >= HANDOFF_MIN_PROTOCOL);
-        assert!(PROTOCOL < APPS_MIN_PROTOCOL, "no apps verbs yet; PROTOCOL {PROTOCOL} must stay below 6");
+        assert_eq!(PROTOCOL, APPS_MIN_PROTOCOL, "protocol 6 = the apps namespace; 7 is Sew's");
+        let apps: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| v.namespace() == "apps")
+            .collect();
+        for needed in [
+            &["apps", "status"][..],
+            &["apps", "ensure-user"],
+            &["apps", "subid"],
+            &["apps", "linger", "on"],
+            &["apps", "delegate", "on"],
+            &["apps", "io-cost", "on"],
+            &["apps", "reserve-ports", "on"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"],
+            &["apps", "process-unit", "on"],
+            &["apps", "packages", "install"],
+            &["apps", "unprep"],
+        ] {
+            let v = crate::verbs::Verb::parse(needed).expect("apps verb parses");
+            assert!(apps.contains(&v), "{needed:?} missing from the catalog");
+        }
     }
 
     #[test]

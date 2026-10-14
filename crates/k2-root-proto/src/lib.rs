@@ -19,9 +19,13 @@
 //! - [`sig`]: the trusted-comment format and the one signed-build check
 //!   both sides run (the helper before installing, the daemon before
 //!   spending a root call).
+//! - [`apps`]: the App runtime's box prep (protocol 6): the `k2app` user,
+//!   its subordinate ids, slice names, port ranges, and the canned unit,
+//!   drop-in, sysctl and nftables bytes the helper renders.
 //! - [`node_build`]: the same key and check for signed `k2-node` builds
 //!   (prd-k2-node-admin-v1 §8.1: node updates are root-class code).
 
+pub mod apps;
 pub mod keys;
 pub mod node_build;
 pub mod paths;

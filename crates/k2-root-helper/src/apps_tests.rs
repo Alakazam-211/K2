@@ -977,3 +977,102 @@ fn every_apps_verb_is_audited_with_its_class() {
         .iter()
         .any(|l| l.contains("\"verb\":\"apps status\"") && l.contains("\"class\":\"open\"")));
 }
+
+// ── pg hba-app (protocol 6, AR38) ───────────────────────────────────────
+
+const HBA_BASE: &str = "# PostgreSQL Client Authentication\n\nlocal all postgres peer\nhost all all 127.0.0.1/32 scram-sha-256\n";
+
+fn with_clusters(t: &T, vers: &[&str]) {
+    for v in vers {
+        write(t, &format!("/etc/postgresql/{v}/main/pg_hba.conf"), HBA_BASE);
+        std::fs::set_permissions(
+            t.p(&format!("/etc/postgresql/{v}/main/pg_hba.conf")),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn hba_app_adds_and_removes_the_canned_line_in_every_cluster() {
+    let t = box_root();
+    with_clusters(&t, &["16", "17"]);
+    rule(&t, SYSTEMCTL, "is-active", 0, "");
+    let o = t.call(&["pg", "hba-app", "add", "nsi-skin"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["role"], "app_nsi_skin");
+    assert_eq!(v["changed"], serde_json::json!(["16", "17"]));
+    assert_eq!(v["reloaded"], true);
+    for ver in ["16", "17"] {
+        let p = format!("/etc/postgresql/{ver}/main/pg_hba.conf");
+        let text = read(&t, &p);
+        assert!(text.contains("\nhost app_nsi_skin app_nsi_skin 127.0.0.1/32 scram-sha-256\n"), "{text}");
+        assert!(text.find("app_nsi_skin").unwrap() < text.find("local all postgres").unwrap(), "above every rule");
+        let mode = std::fs::metadata(t.p(&p)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "the file keeps its mode");
+    }
+    assert_eq!(calls_of(&t, SYSTEMCTL).iter().filter(|c| *c == "reload postgresql.service").count(), 1);
+    // Idempotent: no write, no reload.
+    let o = t.call(&["pg", "hba-app", "add", "nsi-skin"]);
+    ok(&o);
+    assert_eq!(json(&o)["changed"], serde_json::json!([]));
+    assert_eq!(calls_of(&t, SYSTEMCTL).iter().filter(|c| *c == "reload postgresql.service").count(), 1);
+    let o = t.call(&["pg", "hba-app", "remove", "nsi-skin"]);
+    ok(&o);
+    assert_eq!(read(&t, "/etc/postgresql/16/main/pg_hba.conf"), HBA_BASE);
+}
+
+#[test]
+fn hba_app_is_daemon_only_and_refuses_links_and_damage_before_writing() {
+    let t = box_root();
+    with_clusters(&t, &["16"]);
+    t.as_agent();
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    assert_eq!(o.code, exit::NOT_DAEMON);
+    assert_eq!(read(&t, "/etc/postgresql/16/main/pg_hba.conf"), HBA_BASE);
+
+    // A second cluster with a damaged block: neither file is written.
+    let t = box_root();
+    with_clusters(&t, &["16"]);
+    write(
+        &t,
+        "/etc/postgresql/17/main/pg_hba.conf",
+        &format!("{HBA_BEGIN}\nhost all all 0.0.0.0/0 trust\n{HBA_END}\n"),
+    );
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("line K2 didn't write"), "{}", o.stderr);
+    assert_eq!(read(&t, "/etc/postgresql/16/main/pg_hba.conf"), HBA_BASE);
+
+    // A linked pg_hba.conf is refused.
+    let t = box_root();
+    with_clusters(&t, &["16"]);
+    std::fs::remove_file(t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap();
+    write(&t, "/etc/shadow-copy", "x\n");
+    symlink(t.p("/etc/shadow-copy"), t.p("/etc/postgresql/16/main/pg_hba.conf")).unwrap();
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert_eq!(read(&t, "/etc/shadow-copy"), "x\n");
+
+    // A linked cluster dir is refused.
+    let t = box_root();
+    with_clusters(&t, &["16"]);
+    std::fs::create_dir_all(t.p("/srv/evil/main")).unwrap();
+    write(&t, "/srv/evil/main/pg_hba.conf", HBA_BASE);
+    symlink(t.p("/srv/evil"), t.p("/etc/postgresql/15")).unwrap();
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert_eq!(read(&t, "/srv/evil/main/pg_hba.conf"), HBA_BASE);
+
+    // No cluster at all; and Postgres not running = written, not reloaded.
+    let t = box_root();
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    assert_eq!(o.code, exit::STATE);
+    with_clusters(&t, &["16"]);
+    rule(&t, SYSTEMCTL, "is-active", 3, "");
+    let o = t.call(&["pg", "hba-app", "add", "jobs"]);
+    ok(&o);
+    assert_eq!(json(&o)["reloaded"], false);
+    assert!(calls_of(&t, SYSTEMCTL).iter().all(|c| !c.starts_with("reload")));
+}

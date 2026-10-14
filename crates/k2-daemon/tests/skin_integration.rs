@@ -768,6 +768,209 @@ async fn reserved_nested_label_skin_is_400_loud() {
     });
 }
 
+/// `meet` / `chat` (Sew box doors): a NEW claim on either claim route is a
+/// loud 400, with or without `transfer`, any case. Near misses stay
+/// claimable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reserved_nested_labels_meet_and_chat_are_400_loud() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let pid = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'sewws', '/tmp/sew-rsv', 'sewws')",
+            params![pid],
+        )
+        .expect("project");
+        drop(conn);
+
+        for (label, purpose) in [
+            ("meet", "K2 Meet (meet.<box>.k2.dev)"),
+            ("chat", "K2 chat (chat.<box>.k2.dev)"),
+            ("MEET", "K2 Meet (meet.<box>.k2.dev)"),
+            ("Chat", "K2 chat (chat.<box>.k2.dev)"),
+        ] {
+            for route in ["/cli/tunnel/subdomains/claim", "/cli/publish/subdomain/claim"] {
+                for extra in ["", "&transfer=1", "&check=1"] {
+                    let r = http(
+                        port,
+                        "POST",
+                        &format!("{route}?token={OWNER_TOKEN}&label={label}&project={pid}{extra}"),
+                        Some(""),
+                    );
+                    assert_eq!(r.status, 400, "{route} {label}{extra}; {}", r.body);
+                    assert!(
+                        r.body.contains("reserved_label"),
+                        "{route} {label}{extra} must fail loud: {}",
+                        r.body
+                    );
+                    assert!(
+                        r.body.contains(purpose) && r.body.contains("Pick another nested label"),
+                        "{route} {label}{extra} must name the door: {}",
+                        r.body
+                    );
+                }
+                // GET stays 405 on the mutating claim route.
+                if route == "/cli/publish/subdomain/claim" {
+                    let g = http(
+                        port,
+                        "GET",
+                        &format!("{route}?token={OWNER_TOKEN}&label={label}&project={pid}"),
+                        None,
+                    );
+                    assert_eq!(g.status, 405, "{route} GET; {}", g.body);
+                }
+            }
+        }
+        // Nothing was written for a refused label.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for label in ["meet", "chat"] {
+                let owner = k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label)
+                    .expect("owner_of");
+                assert_eq!(owner, None, "{label} must not be attributed");
+            }
+        }
+
+        // The ownership check before a REMOVE (`k2 publish subdomain rm`)
+        // still answers for an old meet/chat label; it writes nothing.
+        // `skin` keeps its strict 400 (the CLI never asks for it).
+        for label in ["meet", "chat"] {
+            let r = http(
+                port,
+                "POST",
+                &format!(
+                    "/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label={label}&project={pid}&check=1&release=1"
+                ),
+                Some(""),
+            );
+            assert_eq!(r.status, 200, "release check {label}; {}", r.body);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let owner = k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label)
+                .expect("owner_of");
+            assert_eq!(owner, None, "a release check must not claim {label}");
+        }
+        let skin_release = http(
+            port,
+            "POST",
+            &format!(
+                "/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label=skin&project={pid}&check=1&release=1"
+            ),
+            Some(""),
+        );
+        assert_eq!(skin_release.status, 400, "{}", skin_release.body);
+        // `release` without `check` is still a claim: refused.
+        let sneaky = http(
+            port,
+            "POST",
+            &format!(
+                "/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label=chat&project={pid}&release=1"
+            ),
+            Some(""),
+        );
+        assert_eq!(sneaky.status, 400, "{}", sneaky.body);
+        assert!(sneaky.body.contains("reserved_label"), "{}", sneaky.body);
+
+        for label in ["meeting", "chats"] {
+            let r = http(
+                port,
+                "POST",
+                &format!(
+                    "/cli/tunnel/subdomains/claim?token={OWNER_TOKEN}&label={label}&project={pid}"
+                ),
+                Some(""),
+            );
+            assert_eq!(r.status, 200, "{label} is an ordinary label; {}", r.body);
+        }
+
+        for label in ["meet", "chat"] {
+            let err = k2_core::published_services::normalize_name(label).unwrap_err();
+            assert!(err.contains("reserved_label"), "{err}");
+        }
+    });
+}
+
+/// A `chat` label this workspace already held before the reservation can
+/// be re-stamped (idempotent) and released; another workspace still
+/// cannot take it, not even by transfer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preexisting_chat_label_attribution_keeps_working() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let ours = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'oldchat', '/tmp/old-chat', 'oldchat')",
+            params![ours],
+        )
+        .expect("project");
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'otherws', '/tmp/other-chat', 'otherws')",
+            params![other],
+        )
+        .expect("project");
+        // Written before `chat` was reserved.
+        conn.execute(
+            "INSERT INTO subdomain_workspaces (label, project_id) VALUES ('chat', ?1)",
+            params![ours],
+        )
+        .expect("old attribution");
+        drop(conn);
+
+        let restamp = http(
+            port,
+            "POST",
+            &format!("/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label=chat&project={ours}"),
+            Some(""),
+        );
+        assert_eq!(restamp.status, 200, "same-workspace re-stamp; {}", restamp.body);
+
+        let take = http(
+            port,
+            "POST",
+            &format!(
+                "/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label=chat&project={other}&transfer=1"
+            ),
+            Some(""),
+        );
+        assert_eq!(take.status, 400, "transfer of a reserved label; {}", take.body);
+        assert!(take.body.contains("reserved_label"), "{}", take.body);
+
+        let release = http(
+            port,
+            "POST",
+            &format!("/cli/publish/subdomain/unclaim?token={OWNER_TOKEN}&label=chat&project={ours}"),
+            Some(""),
+        );
+        assert_eq!(release.status, 200, "unclaim of the old label; {}", release.body);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let owner =
+            k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, "chat").expect("owner_of");
+        assert_eq!(owner, None, "unclaim removed the old attribution");
+        drop(conn);
+
+        // Once released it is a NEW claim again: refused.
+        let again = http(
+            port,
+            "POST",
+            &format!("/cli/publish/subdomain/claim?token={OWNER_TOKEN}&label=chat&project={ours}"),
+            Some(""),
+        );
+        assert_eq!(again.status, 400, "{}", again.body);
+        assert!(again.body.contains("reserved_label"), "{}", again.body);
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skin_front_door_persists_connect_url_from_tunnel() {
     let _g = lock();

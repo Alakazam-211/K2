@@ -43,14 +43,29 @@ pub fn is_valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Normalize a name for a NEW claim (create / run of a new row): charset
+/// check plus the reserved nested labels (`skin`, `meet`, `chat`).
 pub fn normalize_name(name: &str) -> Result<String, String> {
+    let s = normalize_existing_name(name)?;
+    if crate::skin::is_reserved_nested_label(&s) {
+        return Err(crate::skin::reserved_nested_label_error(&s));
+    }
+    Ok(s)
+}
+
+/// Normalize a name that addresses a row that may already exist (start,
+/// stop, rm, frame, re-run): charset only. A `meet` / `chat` row created
+/// before those labels were reserved keeps working; `skin` is still
+/// refused because it was reserved before any row could hold it.
+pub fn normalize_existing_name(name: &str) -> Result<String, String> {
     let s = name.trim().to_ascii_lowercase();
     if !is_valid_name(&s) {
         return Err(
             "bad_label: Invalid label (use lowercase letters, digits, and dashes).".into(),
         );
     }
-    if crate::skin::is_reserved_nested_label(&s) {
+    if crate::skin::is_reserved_nested_label(&s) && !crate::skin::is_grandfathered_reserved_label(&s)
+    {
         return Err(crate::skin::reserved_nested_label_error(&s));
     }
     Ok(s)
@@ -150,6 +165,11 @@ pub struct ServiceJson {
     /// sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub helper_needs_restart: bool,
+    /// True when this row's name is a reserved nested label (`meet`,
+    /// `chat`) it held before the reservation. It keeps working; a new
+    /// claim of that name is refused. Only sent when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reserved_label: bool,
 }
 
 impl ServiceJson {
@@ -200,6 +220,7 @@ impl ServiceJson {
             env_mode: None,
             env_removed_in: None,
             helper_needs_restart: false,
+            reserved_label: crate::skin::is_reserved_nested_label(&row.name),
         }
     }
 }
@@ -733,6 +754,51 @@ mod tests {
         );
         assert!(normalize_name("Skin").is_err());
         assert!(normalize_name("staging").is_ok());
+        assert!(normalize_existing_name("skin").is_err(), "skin stays strict");
+    }
+
+    #[test]
+    fn reserved_nested_labels_meet_and_chat_refuse_new_claims() {
+        for name in ["meet", "Meet", " chat ", "CHAT"] {
+            let err = normalize_name(name).expect_err("meet/chat are reserved");
+            assert!(err.starts_with("reserved_label: '"), "{err}");
+            assert!(err.contains("Pick another nested label"), "{err}");
+        }
+        assert!(normalize_name("meeting").is_ok());
+        assert!(normalize_name("chats").is_ok());
+        // A row made before the reservation is still addressable.
+        assert_eq!(normalize_existing_name(" Chat ").unwrap(), "chat");
+        assert_eq!(normalize_existing_name("meet").unwrap(), "meet");
+        assert!(normalize_existing_name("Bad_Name").is_err());
+    }
+
+    #[test]
+    fn preexisting_chat_row_lists_and_deletes() {
+        let conn = fresh();
+        let pid = project(&conn, "/tmp/pub-chat-old");
+        insert(
+            &conn,
+            &pid,
+            "chat",
+            "python3 -m http.server 4100",
+            "/tmp",
+            4100,
+            EXPOSE_TUNNEL,
+            DESIRED_RUNNING,
+            KIND_CMD,
+            "",
+        )
+        .expect("rows written before the reservation still load");
+        let rows = list_for_project(&conn, &pid).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "chat");
+        assert!(
+            list_desired_running(&conn).unwrap().iter().any(|r| r.name == "chat"),
+            "boot still resurrects it"
+        );
+        let name = normalize_existing_name("chat").unwrap();
+        assert!(delete(&conn, &pid, &name).unwrap(), "rm of the old row works");
+        assert!(list_for_project(&conn, &pid).unwrap().is_empty());
     }
 
     #[test]

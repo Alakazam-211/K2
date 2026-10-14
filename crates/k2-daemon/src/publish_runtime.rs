@@ -881,7 +881,14 @@ pub struct RunSpec {
 }
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
-    let name = ps::normalize_name(&spec.name).map_err(PublishError::bad)?;
+    let name = ps::normalize_existing_name(&spec.name).map_err(PublishError::bad)?;
+    // Reserved nested labels (`meet`, `chat`): only a re-run of a row this
+    // workspace already had before the reservation goes through. A new
+    // row under a reserved name is refused before anything changes.
+    if k2_core::skin::is_reserved_nested_label(&name) && load_row(&spec.project_id, &name).is_none()
+    {
+        return Err(PublishError::bad(k2_core::skin::reserved_nested_label_error(&name)));
+    }
     if spec.skin && spec.cwd_explicit {
         return Err(PublishError::bad(
             "--cwd and --skin are mutually exclusive",
@@ -997,7 +1004,7 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
 }
 
 pub fn start(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
-    let name = ps::normalize_name(name).map_err(PublishError::bad)?;
+    let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
     if is_running_now(project_id, &name, &row) {
         return Ok(to_json(&row));
@@ -1115,7 +1122,7 @@ fn rollback_hostname_fail(project_id: &str, name: &str, entry: &LiveChild, error
 }
 
 pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
-    let name = ps::normalize_name(name).map_err(PublishError::bad)?;
+    let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
     if let Some(entry) = live_remove(project_id, &name) {
         kill_tree(&entry);
@@ -1164,7 +1171,7 @@ fn kill_pid_tree(pid: i32) {
 }
 
 pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), PublishError> {
-    let name = ps::normalize_name(name).map_err(PublishError::bad)?;
+    let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name);
     let _ = stop(project_id, &name);
     // Only ever release THIS workspace's label: a label another workspace
@@ -1423,7 +1430,7 @@ pub fn set_frame(
     name: &str,
     change: FrameChange,
 ) -> Result<(ServiceJson, bool), FrameSetError> {
-    let name = ps::normalize_name(name).map_err(|e| FrameSetError::Publish(PublishError::bad(e)))?;
+    let name = ps::normalize_existing_name(name).map_err(|e| FrameSetError::Publish(PublishError::bad(e)))?;
     let row = load_row(project_id, &name).ok_or_else(|| {
         FrameSetError::Publish(PublishError::bad("no such published service"))
     })?;

@@ -622,18 +622,85 @@ fn normalize_room_ids(rooms: &[String]) -> Vec<String> {
     out
 }
 
-/// Nested label reserved for U7 (`https://skin.<sub>.k2.dev`).
+/// Nested label of the App (Skin) front door (`https://skin.<sub>.k2.dev`).
+/// The skin door registers it itself (`skin_door::register_nested`); it
+/// is in [`RESERVED_NESTED_LABELS`] so no workspace can claim it.
 pub const RESERVED_NESTED_LABEL: &str = "skin";
 
+/// Nested label of the future K2 Meet portal (`https://meet.<sub>.k2.dev`).
+pub const MEET_NESTED_LABEL: &str = "meet";
+
+/// Nested label of the future Sew chat web client (`https://chat.<sub>.k2.dev`).
+pub const CHAT_NESTED_LABEL: &str = "chat";
+
+/// One box-level nested label that no workspace, user or agent may claim
+/// as a publish / subdomain target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReservedNestedLabel {
+    pub label: &'static str,
+    /// Short purpose, used in the refusal (`reserved for K2 Meet ...`).
+    pub purpose: &'static str,
+    /// `true` = a row that already used this name before it was reserved
+    /// keeps working (start / stop / rm / re-run of that same row). Only
+    /// NEW claims and points are refused. `skin` was reserved before any
+    /// row could hold it, so it stays strict.
+    pub grandfathered: bool,
+}
+
+/// Every reserved nested label. Box-level front doors register these
+/// themselves through the same path the skin door uses
+/// (`skin_door::register_nested`: control-plane create/point with the
+/// box's tunnel token), never through the user publish / subdomain
+/// routes. A future Sew door registers `meet` and `chat` that way.
+pub const RESERVED_NESTED_LABELS: &[ReservedNestedLabel] = &[
+    ReservedNestedLabel {
+        label: RESERVED_NESTED_LABEL,
+        purpose: "the App front door",
+        grandfathered: false,
+    },
+    ReservedNestedLabel {
+        label: MEET_NESTED_LABEL,
+        purpose: "K2 Meet (meet.<box>.k2.dev)",
+        grandfathered: true,
+    },
+    ReservedNestedLabel {
+        label: CHAT_NESTED_LABEL,
+        purpose: "K2 chat (chat.<box>.k2.dev)",
+        grandfathered: true,
+    },
+];
+
+/// The reserved entry for `name` (trimmed, case-insensitive), if any.
+/// Exact match only: `meeting`, `chats`, `skins` are ordinary labels.
+pub fn reserved_nested_label(name: &str) -> Option<&'static ReservedNestedLabel> {
+    let n = name.trim();
+    RESERVED_NESTED_LABELS
+        .iter()
+        .find(|r| n.eq_ignore_ascii_case(r.label))
+}
+
 pub fn is_reserved_nested_label(name: &str) -> bool {
-    name.trim().eq_ignore_ascii_case(RESERVED_NESTED_LABEL)
+    reserved_nested_label(name).is_some()
+}
+
+/// A reserved label whose pre-existing rows keep working (see
+/// [`ReservedNestedLabel::grandfathered`]).
+pub fn is_grandfathered_reserved_label(name: &str) -> bool {
+    reserved_nested_label(name).is_some_and(|r| r.grandfathered)
 }
 
 pub fn reserved_nested_label_error(label: &str) -> String {
     let label = label.trim().to_ascii_lowercase();
-    format!(
-        "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)."
-    )
+    match reserved_nested_label(&label) {
+        Some(r) if r.label != RESERVED_NESTED_LABEL => format!(
+            "reserved_label: '{label}' is reserved for {}. Pick another nested label.",
+            r.purpose
+        ),
+        // `skin` (and any non-reserved caller misuse) keeps the original text.
+        _ => format!(
+            "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)."
+        ),
+    }
 }
 
 /// `https://rosson.k2.dev` → `https://skin.rosson.k2.dev`. Idempotent if
@@ -5180,6 +5247,38 @@ mod tests {
             !err.contains("38472"),
             "must not teach 38472 as a publish target: {err}"
         );
+        assert_eq!(
+            err,
+            "reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins).",
+            "skin text is unchanged"
+        );
+        assert!(!is_grandfathered_reserved_label("skin"), "skin stays strict");
+    }
+
+    #[test]
+    fn reserved_nested_labels_meet_and_chat_are_loud() {
+        for name in ["meet", "MEET", " Meet ", "chat", "Chat", "\tchat\n", "skin", " SKIN"] {
+            assert!(is_reserved_nested_label(name), "{name:?} must be reserved");
+        }
+        for name in ["meeting", "chats", "skins", "meet-1", "chat2", "mee", "cha", "", "app"] {
+            assert!(!is_reserved_nested_label(name), "{name:?} must stay claimable");
+        }
+        let labels: Vec<&str> = RESERVED_NESTED_LABELS.iter().map(|r| r.label).collect();
+        assert_eq!(labels, vec!["skin", "meet", "chat"]);
+
+        let meet = reserved_nested_label_error(" MEET ");
+        assert_eq!(
+            meet,
+            "reserved_label: 'meet' is reserved for K2 Meet (meet.<box>.k2.dev). Pick another nested label."
+        );
+        let chat = reserved_nested_label_error("Chat");
+        assert_eq!(
+            chat,
+            "reserved_label: 'chat' is reserved for K2 chat (chat.<box>.k2.dev). Pick another nested label."
+        );
+        assert!(is_grandfathered_reserved_label("meet"));
+        assert!(is_grandfathered_reserved_label(" Chat "));
+        assert!(!is_grandfathered_reserved_label("meeting"));
     }
 
     #[test]

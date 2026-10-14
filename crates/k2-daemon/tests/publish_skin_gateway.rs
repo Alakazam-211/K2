@@ -428,6 +428,164 @@ async fn publish_run_skin_xor_reserved_skin_root() {
     });
 }
 
+/// `meet` / `chat` are reserved for Sew box doors: a NEW publish under
+/// either name is a loud 400. A `chat` row made before the reservation
+/// keeps working: it lists (flagged `reservedLabel`), stops, re-runs
+/// without a reservation error, and can be removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_reserved_meet_chat_new_refused_old_row_keeps_working() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("psgrsv{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (id, _conv, path) = seed_workspace(&handle);
+
+        for name in ["meet", "chat", "Meet", "CHAT"] {
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+                Some(&format!(
+                    r#"{{"name":"{name}","cmd":"echo hi","port":9,"project":"{path}","noTunnel":true}}"#
+                )),
+            );
+            assert_eq!(r.status, 400, "new {name}; {}", r.body);
+            assert!(r.body.contains("reserved_label"), "new {name}: {}", r.body);
+            assert!(r.body.contains("Pick another nested label"), "{}", r.body);
+        }
+        let skin_run = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"skin","cmd":"echo hi","port":9,"project":"{path}","noTunnel":true}}"#
+            )),
+        );
+        assert_eq!(skin_run.status, 400, "{}", skin_run.body);
+        assert!(
+            skin_run.body.contains(
+                "reserved_label: 'skin' is reserved. Pick another nested label for your UI"
+            ),
+            "skin text unchanged: {}",
+            skin_run.body
+        );
+
+        // A `chat` row from before the reservation. Its port is held by a
+        // listener so a re-run stops at the bind check, never spawning.
+        let held = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let held_port = held.local_addr().expect("addr").port();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            ps::insert(
+                &conn,
+                &id,
+                "chat",
+                "echo old",
+                &path,
+                held_port,
+                ps::EXPOSE_LOCAL,
+                ps::DESIRED_STOPPED,
+                ps::KIND_CMD,
+                "",
+            )
+            .expect("old chat row");
+        }
+
+        let list = http(
+            dport,
+            "GET",
+            &format!("/cli/publish/list?token={OWNER_TOKEN}&project={path}"),
+            None,
+        );
+        assert_eq!(list.status, 200, "{}", list.body);
+        let v = json(&list.body);
+        let services = v["services"].as_array().expect("services array");
+        assert_eq!(services.len(), 1, "only the old chat row: {}", list.body);
+        assert_eq!(services[0]["name"], "chat");
+        assert_eq!(services[0]["reservedLabel"], true, "{}", list.body);
+
+        let stop = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/stop?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"chat","project":"{path}"}}"#)),
+        );
+        assert_eq!(stop.status, 200, "stop old chat; {}", stop.body);
+
+        for (verb, body) in [
+            ("start", format!(r#"{{"name":"chat","project":"{path}"}}"#)),
+            (
+                "run",
+                format!(
+                    r#"{{"name":"chat","cmd":"echo again","port":{held_port},"project":"{path}","noTunnel":true}}"#
+                ),
+            ),
+        ] {
+            let r = http(
+                dport,
+                "POST",
+                &format!("/cli/publish/{verb}?token={OWNER_TOKEN}"),
+                Some(&body),
+            );
+            assert!(
+                !r.body.contains("reserved_label"),
+                "{verb} of the old chat row must not hit the reservation: {}",
+                r.body
+            );
+            assert!(
+                r.body.contains("bind clash"),
+                "{verb} reached the bind check (row still addressable): {} {}",
+                r.status,
+                r.body
+            );
+        }
+
+        let rm = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/rm?token={OWNER_TOKEN}"),
+            Some(&format!(r#"{{"name":"chat","project":"{path}"}}"#)),
+        );
+        assert_eq!(rm.status, 200, "rm old chat; {}", rm.body);
+        let after = http(
+            dport,
+            "GET",
+            &format!("/cli/publish/list?token={OWNER_TOKEN}&project={path}"),
+            None,
+        );
+        assert_eq!(after.status, 200, "{}", after.body);
+        let v = json(&after.body);
+        assert!(
+            v["services"].as_array().expect("services").is_empty(),
+            "rm removed the old row: {}",
+            after.body
+        );
+
+        // Gone now, so `chat` is a new claim again: refused.
+        let again = http(
+            dport,
+            "POST",
+            &format!("/cli/publish/run?token={OWNER_TOKEN}"),
+            Some(&format!(
+                r#"{{"name":"chat","cmd":"echo hi","port":9,"project":"{path}","noTunnel":true}}"#
+            )),
+        );
+        assert_eq!(again.status, 400, "{}", again.body);
+        assert!(again.body.contains("reserved_label"), "{}", again.body);
+
+        let get_run = http(
+            dport,
+            "GET",
+            &format!("/cli/publish/run?token={OWNER_TOKEN}&name=chat&project={path}"),
+            None,
+        );
+        assert_eq!(get_run.status, 405, "{}", get_run.body);
+        drop(held);
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publish_run_skin_gateway_login_proxy_stop_boot() {
     let _g = lock();

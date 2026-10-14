@@ -1,7 +1,11 @@
 // prd-zen-user-widgets-v2 UW13, UW39, UW46, UWA5, UWB13 — what K2 puts at
 // the top of a sealed widget frame, before any of the widget's own HTML:
 //
-//   <meta CSP>                      (frame-csp, the `widget` profile)
+//   <meta x-dns-prefetch-control off> <meta CSP>   (frame-csp, `widget`)
+//   <script nonce> the sealed-frame guard: no WebRTC, link resource hints
+//                  or <a ping> (src/shared/sealed-frame-guard.js). Best
+//                  effort for the web client; the desktop app also runs it
+//                  as an all-frames init script.
 //   <style>  --zen-* variables, transparent background   (UW39)
 //   <script nonce> k2-frame.js: the verb table + K2's runtime   (UWA5)
 //   <script nonce> each `requires.libs` library, in order       (UWB13)
@@ -16,6 +20,7 @@
 // script. Never edited by hand; the freshness tests check it.
 
 import k2Frame from '../../../../sdk/generated/k2-frame.js?raw'
+import { SEALED_FRAME_GUARD } from '../sealed-frame-guard'
 
 /** TUWA6: the runtime text the frame gets is at most this big. */
 export const K2_FRAME_MAX_BYTES = 16 * 1024
@@ -62,6 +67,7 @@ export function zenFrameThemeCss(theme: ZenFrameTheme): string {
 export function zenFramePrelude(opts: { nonce: string; theme: ZenFrameTheme; libs: readonly string[] }): string {
   const scheme = `document.documentElement.setAttribute('data-zen-scheme', ${JSON.stringify(opts.theme.scheme)});`
   return [
+    nonced(opts.nonce, SEALED_FRAME_GUARD),
     zenFrameThemeCss(opts.theme),
     nonced(opts.nonce, scheme),
     nonced(opts.nonce, k2FrameScript()),

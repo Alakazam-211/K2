@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { frameCsp, frameSrcDoc } from '@/lib/frame-csp'
+import { DNS_PREFETCH_OFF_META, frameCsp, frameSrcDoc } from '@/lib/frame-csp'
 import { BriefFrame, BRIEF_LINKS_MAX_HEIGHT_CLASS, briefOverlayStoplightInset } from './BriefFrame'
 import { desktopChromeFor, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
 import { buildBriefSrcDoc, briefStylesheet, fallbackBriefTokens } from './brief-srcdoc'
@@ -105,7 +105,7 @@ describe('buildBriefSrcDoc (T10)', () => {
     const { frameHtml } = buildBriefSrcDoc(CLEANED, tokens)
     const wrapped = frameSrcDoc(frameHtml, 'inert')
     expect(wrapped.startsWith(
-      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${frameCsp('inert')}"><html>`,
+      `<!doctype html>${DNS_PREFETCH_OFF_META}<meta http-equiv="Content-Security-Policy" content="${frameCsp('inert')}"><html>`,
     )).toBe(true)
     expect(frameCsp('inert')).toContain("script-src 'none'")
   })

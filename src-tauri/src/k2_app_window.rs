@@ -182,6 +182,17 @@ pub fn k2_app_webview_url<R: Runtime>(app: &AppHandle<R>, fragment: Option<&str>
     WebviewUrl::App(path.into())
 }
 
+/// Sealed-frame guard: in every SUBFRAME of a K2 window, remove WebRTC,
+/// link resource hints and `<a ping>`. K2's subframes are the sandboxed
+/// `<iframe srcdoc>` frames that show HTML K2 did not author (see
+/// `src/renderer/lib/frame-csp.ts`); they never need these features, and
+/// not every engine governs them by CSP `connect-src`. The script returns at
+/// once in the top frame, so K2's own UI keeps WebRTC. Registered for all
+/// frames so it also reaches a child frame a page creates for itself. The
+/// renderer puts the same file inside each frame too, as a best-effort copy
+/// for the web client.
+pub const SEALED_FRAME_GUARD_JS: &str = include_str!("../../src/shared/sealed-frame-guard.js");
+
 fn attach_k2_app_window_guards<'a, R: Runtime, M: Manager<R>>(
     builder: WebviewWindowBuilder<'a, R, M>,
     app: &AppHandle<R>,
@@ -193,11 +204,51 @@ fn attach_k2_app_window_guards<'a, R: Runtime, M: Manager<R>>(
     } else {
         "http://tauri.localhost".parse().ok()
     };
-    builder
+    let builder = builder
         .on_navigation(move |url| {
             allow_k2_app_navigation(url, app_url.as_ref(), dev_url.as_ref(), is_dev)
         })
         .on_new_window(|_url, _features| NewWindowResponse::Deny)
+        .initialization_script_for_all_frames(SEALED_FRAME_GUARD_JS);
+    attach_engine_settings(builder)
+}
+
+/// WebKitGTK: hyperlink auditing (`<a ping>`) off for the whole K2 window.
+/// K2's own UI never uses ping; WebKit's default is on. (`enable-webrtc` is
+/// left alone: wry never turns it on and WebKitGTK's default is off.)
+/// WKWebView has no public or private hyperlink-auditing switch on
+/// WKPreferences, so macOS relies on the sealed-frame guard.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn attach_engine_settings<'a, R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    builder.on_page_load(|window, _payload| {
+        let _ = window.with_webview(|platform| {
+            use webkit2gtk::{SettingsExt, WebViewExt};
+            if let Some(settings) = WebViewExt::settings(&platform.inner()) {
+                settings.set_enable_hyperlink_auditing(false);
+            }
+        });
+    })
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+fn attach_engine_settings<'a, R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    builder
 }
 
 /// Extra K2 UI windows (`window-*`, `focus-*`). Attaches C1 + C15.
@@ -525,6 +576,67 @@ mod tests {
                 "dev watchdog must fall back to devUrl for {raw}, got {devc}"
             );
         }
+    }
+
+    /// The sealed-frame guard is registered on every K2 window for ALL
+    /// frames (not main-frame only), from the shared file the renderer uses.
+    #[test]
+    fn sealed_frame_guard_is_an_all_frames_init_script() {
+        let src = include_str!("k2_app_window.rs");
+        let start = src
+            .find("fn attach_k2_app_window_guards")
+            .expect("attach_k2_app_window_guards must exist");
+        let end = start
+            + src[start..]
+                .find("\n}\n")
+                .expect("attach_k2_app_window_guards must end");
+        let body = &src[start..end];
+        assert!(
+            body.contains(".initialization_script_for_all_frames(SEALED_FRAME_GUARD_JS)"),
+            "attach_k2_app_window_guards must register the guard for all frames:\n{body}"
+        );
+        assert!(
+            !body.contains(".initialization_script(SEALED_FRAME_GUARD_JS)"),
+            "the guard must not be main-frame only"
+        );
+        for builder in [
+            "fn k2_app_window_builder",
+            "fn k2_app_window_from_config",
+        ] {
+            let at = src.find(builder).expect(builder);
+            let tail = &src[at..];
+            let fn_end = tail.find("\n}\n").expect("fn end");
+            assert!(
+                tail[..fn_end].contains("attach_k2_app_window_guards("),
+                "{builder} must attach the window guards"
+            );
+        }
+
+        let shared = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../src/shared/sealed-frame-guard.js"
+        ))
+        .expect("src/shared/sealed-frame-guard.js must exist");
+        assert_eq!(SEALED_FRAME_GUARD_JS, shared);
+        assert!(SEALED_FRAME_GUARD_JS.contains("if (w.top === w.self) return"));
+        for name in [
+            "'RTCPeerConnection'",
+            "'webkitRTCPeerConnection'",
+            "'RTCDataChannel'",
+            "preconnect",
+            "dns-prefetch",
+            "modulepreload",
+            "'ping'",
+        ] {
+            assert!(
+                SEALED_FRAME_GUARD_JS.contains(name),
+                "guard must handle {name}"
+            );
+        }
+        assert!(
+            !SEALED_FRAME_GUARD_JS.to_ascii_lowercase().contains("</script"),
+            "guard text is also inlined in <script> elements"
+        );
     }
 
     #[test]

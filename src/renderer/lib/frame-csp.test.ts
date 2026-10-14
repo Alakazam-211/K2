@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DNS_PREFETCH_OFF_META,
   frameCsp,
   frameCspMeta,
   frameSandbox,
   frameSrcDoc,
   type FrameProfile,
 } from './frame-csp'
+import { SEALED_FRAME_GUARD } from './sealed-frame-guard'
 
 const PROFILES: readonly FrameProfile[] = ['scripted', 'inert']
 
@@ -184,28 +186,65 @@ describe('frameSrcDoc — always emits the CSP first', () => {
 
   for (const profile of PROFILES) {
     for (const [name, html] of Object.entries(cases)) {
-      it(`${profile} / ${name}: meta present, before any markup the document supplies`, () => {
+      it(`${profile} / ${name}: dns-prefetch-off meta, then the CSP meta, before any markup the document supplies`, () => {
         const out = frameSrcDoc(html, profile)
         const m = META_RE.exec(out)
         expect(m, `no CSP meta in ${JSON.stringify(out)}`).not.toBeNull()
         expect(m![1]).toBe(frameCsp(profile))
         const before = out.slice(0, m!.index)
-        // Only an optional BOM/whitespace + one doctype may precede the meta.
-        expect(before).toMatch(/^(﻿?[\t\n\f\r ]*<!doctype\b[^>]*>)?$/i)
-        // The original document follows the meta unchanged.
-        expect(before + out.slice(m!.index + m![0].length)).toBe(html)
+        // Only an optional BOM/whitespace + one doctype, then the
+        // dns-prefetch-off meta, may precede the CSP meta.
+        expect(before.endsWith(DNS_PREFETCH_OFF_META), JSON.stringify(before)).toBe(true)
+        const lead = before.slice(0, before.length - DNS_PREFETCH_OFF_META.length)
+        expect(lead).toMatch(/^(﻿?[\t\n\f\r ]*<!doctype\b[^>]*>)?$/i)
+        // `scripted` runs the sealed-frame guard right after the CSP meta.
+        const guard = profile === 'scripted' ? `<script>${SEALED_FRAME_GUARD}</script>` : ''
+        const after = out.slice(m!.index + m![0].length)
+        expect(after.startsWith(guard)).toBe(true)
+        // The original document follows unchanged.
+        expect(lead + after.slice(guard.length)).toBe(html)
       })
     }
   }
 
   it('keeps a leading doctype first so standards-mode docs stay standards-mode', () => {
     const out = frameSrcDoc('<!DOCTYPE html><p>x</p>', 'scripted')
-    expect(out.startsWith('<!DOCTYPE html><meta http-equiv="Content-Security-Policy"')).toBe(true)
+    expect(
+      out.startsWith(
+        '<!DOCTYPE html><meta http-equiv="x-dns-prefetch-control" content="off"><meta http-equiv="Content-Security-Policy"',
+      ),
+    ).toBe(true)
   })
 
-  it('a comment before the doctype gets the meta prepended (never after attacker markup)', () => {
+  it('a comment before the doctype gets the metas prepended (never after attacker markup)', () => {
     const out = frameSrcDoc(cases.abruptComment, 'scripted')
-    expect(out.startsWith(frameCspMeta('scripted'))).toBe(true)
+    expect(out.startsWith(DNS_PREFETCH_OFF_META + frameCspMeta('scripted'))).toBe(true)
+  })
+
+  it('every profile: the dns-prefetch-off meta is the very first element', () => {
+    const nonce = 'q83vFzPq1N3V0aZ8k2LmTw'
+    const all: Array<[FrameProfile, { nonce?: string }]> = [
+      ['scripted', {}],
+      ['inert', {}],
+      ['widget', { nonce }],
+    ]
+    expect(DNS_PREFETCH_OFF_META).toBe('<meta http-equiv="x-dns-prefetch-control" content="off">')
+    for (const [profile, opts] of all) {
+      for (const html of ['<p>x</p>', '<!doctype html><head><link rel="dns-prefetch" href="//example.test"></head>']) {
+        const out = frameSrcDoc(html, profile, opts)
+        const firstTag = /<(?!!)[^>]*>/.exec(out)
+        expect(firstTag?.[0], `${profile}: ${out.slice(0, 120)}`).toBe(DNS_PREFETCH_OFF_META)
+        expect(out.indexOf(DNS_PREFETCH_OFF_META)).toBeLessThan(out.indexOf('Content-Security-Policy'))
+        expect(out.split(DNS_PREFETCH_OFF_META)).toHaveLength(2)
+      }
+    }
+  })
+
+  it('only scripted carries the in-frame guard (inert runs no script; widget gets it nonced in its prelude)', () => {
+    expect(frameSrcDoc('<p>x</p>', 'scripted')).toContain(SEALED_FRAME_GUARD)
+    expect(frameSrcDoc('<p>x</p>', 'inert')).not.toContain('k2SealedFrameGuard')
+    expect(frameSrcDoc('<p>x</p>', 'widget', { nonce: 'q83vFzPq1N3V0aZ8k2LmTw' })).not.toContain('k2SealedFrameGuard')
+    expect(SEALED_FRAME_GUARD.toLowerCase()).not.toContain('</script')
   })
 
   it('roadmap-board style page keeps its inline script and styles under the scripted policy', () => {
@@ -277,6 +316,10 @@ describe('frameCsp — widget profile', () => {
       nonce: NONCE,
       prelude: '<script nonce="P">k2()</script>',
     })
-    expect(out.startsWith(`<!doctype html>${frameCspMeta('widget', { nonce: NONCE })}<script nonce="P">k2()</script><html>`)).toBe(true)
+    expect(
+      out.startsWith(
+        `<!doctype html>${DNS_PREFETCH_OFF_META}${frameCspMeta('widget', { nonce: NONCE })}<script nonce="P">k2()</script><html>`,
+      ),
+    ).toBe(true)
   })
 })

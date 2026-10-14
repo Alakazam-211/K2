@@ -912,6 +912,48 @@ pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
     Ok(json!({"app": id.as_str(), "changed": changed, "rules": n}))
 }
 
+// ── the persistent journal (slice 3) ────────────────────────────────────
+
+fn journal_persistent(ctx: &Ctx) -> bool {
+    ctx.dir(JOURNAL_DIR).is_ok()
+}
+
+/// `apps journal on` (open): create `/var/log/journal` (root,
+/// `systemd-journal` group, 2755) when it is missing, let systemd-tmpfiles
+/// set its canonical modes and ACLs, and flush the volatile journal into
+/// it. journald then writes per-user files k2app can read. Never removes
+/// a journal (no `off`).
+pub fn journal_on(ctx: &Ctx) -> HResult<J> {
+    let (parent, name) = split(JOURNAL_DIR);
+    let base = ctx.dir(parent).map_err(|e| Fail::io_err("open /var/log", e))?;
+    let n = OsStr::new(name);
+    let changed = match base.kind(n).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Dir => false,
+        Kind::Missing => {
+            base.mkdir(n, 0o2755).map_err(|e| Fail::io_err("mkdir /var/log/journal", e))?;
+            let d = base.sub(n).map_err(|e| Fail::io_err("open /var/log/journal", e))?;
+            if ctx.real_owners {
+                let gid = read_cfg_text(ctx, GROUP_FILE)?
+                    .lines()
+                    .find_map(|l| {
+                        let f: Vec<&str> = l.split(':').collect();
+                        (f.len() >= 3 && f[0] == "systemd-journal").then(|| f[2].parse::<u32>().ok()).flatten()
+                    })
+                    .unwrap_or(0);
+                d.fchown(0, gid).map_err(|e| Fail::io_err("chown /var/log/journal", e))?;
+            }
+            d.fchmod(0o2755).map_err(|e| Fail::io_err("chmod /var/log/journal", e))?;
+            true
+        }
+        _ => return Err(Fail::state("refused: /var/log/journal is not a directory")),
+    };
+    if changed {
+        ctx.run_ok(SYSTEMD_TMPFILES, &["--create", "--prefix", JOURNAL_DIR], None)?;
+        ctx.run_ok(k2_root_proto::paths::JOURNALCTL, &["--flush"], None)?;
+    }
+    Ok(json!({"journal": "persistent", "changed": changed}))
+}
+
 // ── the engine (S11) ────────────────────────────────────────────────────
 
 /// `runuser -u k2app -- env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user …`.
@@ -1613,6 +1655,7 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "enginePresent": exists(ctx, ENGINE_PATH),
         "engineUnit": engine_unit_state(ctx),
         "engineTmpfiles": exists(ctx, TMPFILES_FILE),
+        "journalPersistent": journal_persistent(ctx),
         "nftApps": load_nft_apps(ctx).map(|s| json!(s.apps)).unwrap_or(json!(null)),
     }))
 }

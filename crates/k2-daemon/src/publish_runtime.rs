@@ -1998,7 +1998,19 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        let argv = process_argv(child.id() as i32).expect("argv of a live child");
+        // Right after spawn, Linux can show an empty /proc/<pid>/cmdline
+        // for a moment while the exec settles (flaky ~1 in 3 on the build
+        // box). Poll briefly; a reader that never sees the args still fails.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let argv = loop {
+            match process_argv(child.id() as i32) {
+                Some(a) => break a,
+                None if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                None => panic!("argv of a live child: still unreadable after 2 s"),
+            }
+        };
         let _ = child.kill();
         let _ = child.wait();
         assert!(argv.iter().any(|a| a == "30"), "{argv:?}");

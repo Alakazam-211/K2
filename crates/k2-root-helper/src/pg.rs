@@ -14,6 +14,7 @@
 
 use std::ffi::{OsStr, OsString};
 
+use k2_root_proto::apps::{hba_edit, AppId, HBA_MAX_BYTES};
 use k2_root_proto::paths::*;
 use k2_root_proto::templates::{pg_guc_conf, pg_ram_dropin};
 use k2_root_proto::verbs::{DbName, PgOp, PgUnit, PsqlFlags};
@@ -204,6 +205,99 @@ pub fn install_ram_fence(ctx: &Ctx) -> HResult<serde_json::Value> {
         clusters.push(ver.to_string_lossy().to_string());
     }
     Ok(serde_json::json!({ "dropins": 2, "clusters": clusters }))
+}
+
+/// Every `/etc/postgresql/<n>/main` (no link anywhere in the chain: a
+/// link is a refusal, never a skip; that tree is normally postgres-owned).
+fn cluster_mains(ctx: &Ctx) -> HResult<Vec<(OsString, Dir)>> {
+    let (parent, name) = split(PG_ETC);
+    let etc = ctx.dir(parent).map_err(|e| Fail::io_err("open /etc", e))?;
+    let pg_name = OsStr::new(name);
+    match etc.kind(pg_name).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Missing => return Ok(Vec::new()),
+        Kind::Dir => {}
+        _ => return Err(Fail::state("hba-app refused: /etc/postgresql is not a plain directory")),
+    }
+    let pg = etc.sub(pg_name).map_err(|e| Fail::io_err("open /etc/postgresql", e))?;
+    let refuse = || Fail::state("hba-app refused: a cluster config path is a symlink");
+    let mut out = Vec::new();
+    for ver in pg.entries().map_err(|e| Fail::io_err("read /etc/postgresql", e))? {
+        if !version_dir_ok(&ver) {
+            continue;
+        }
+        match pg.kind(&ver).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Dir => {}
+            Kind::Symlink => return Err(refuse()),
+            _ => continue,
+        }
+        let vd = pg.sub(&ver).map_err(|e| Fail::io_err("open cluster", e))?;
+        match vd.kind(OsStr::new("main")).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Dir => {}
+            Kind::Symlink => return Err(refuse()),
+            _ => continue,
+        }
+        out.push((ver, vd.sub(OsStr::new("main")).map_err(|e| Fail::io_err("open main", e))?));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// `pg hba-app add|remove <id>` (protocol 6): the App's canned line in
+/// the K2 block of every cluster's `pg_hba.conf` (owner and mode kept),
+/// then a reload of a running Postgres. Every file is checked before any
+/// is written; a link, a damaged block or a foreign line in the block
+/// refuses the whole call.
+pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
+    let mains = cluster_mains(ctx)?;
+    if mains.is_empty() {
+        return Err(Fail::state("no Postgres cluster here (/etc/postgresql/<n>/main)"));
+    }
+    let hba = OsStr::new("pg_hba.conf");
+    let mut plan: Vec<(String, &Dir, Option<String>, u32, Option<(u32, u32)>)> = Vec::new();
+    for (ver, main) in &mains {
+        let st = match main.lstat(hba).map_err(|e| Fail::io_err("stat pg_hba.conf", e))? {
+            None => return Err(Fail::state("hba-app refused: a cluster has no pg_hba.conf")),
+            Some(st) => st,
+        };
+        if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+            return Err(Fail::state("hba-app refused: pg_hba.conf is not a regular file"));
+        }
+        let bytes = main
+            .read_file(hba, HBA_MAX_BYTES)
+            .map_err(|e| Fail::io_err("read pg_hba.conf", e))?
+            .ok_or_else(|| Fail::state("hba-app refused: pg_hba.conf vanished"))?;
+        let text = std::str::from_utf8(&bytes).map_err(|_| Fail::state("hba-app refused: pg_hba.conf is not UTF-8"))?;
+        let next = hba_edit(text, add, id).map_err(Fail::state)?;
+        let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
+        plan.push((ver.to_string_lossy().to_string(), main, next, (st.st_mode as u32) & 0o7777, owner));
+    }
+    let mut changed = Vec::new();
+    for (ver, main, next, mode, owner) in &plan {
+        if let Some(text) = next {
+            main.write_atomic(hba, text.as_bytes(), *mode, *owner)
+                .map_err(|e| Fail::io_err("write pg_hba.conf", e))?;
+            changed.push(ver.clone());
+        }
+    }
+    let mut reloaded = false;
+    if !changed.is_empty() {
+        let active = ctx
+            .exec
+            .run(SYSTEMCTL, &["is-active".into(), "--quiet".into(), "postgresql.service".into()], None)
+            .is_ok_and(|o| o.status == 0);
+        if active {
+            ctx.run_ok(SYSTEMCTL, &["reload", "postgresql.service"], None)?;
+            reloaded = true;
+        }
+    }
+    Ok(serde_json::json!({
+        "app": id.as_str(),
+        "role": id.pg_name(),
+        "line": add,
+        "clusters": plan.iter().map(|p| p.0.clone()).collect::<Vec<_>>(),
+        "changed": changed,
+        "reloaded": reloaded,
+    }))
 }
 
 /// `runuser -u postgres -- /usr/bin/psql -X -d <db> …`, SQL on stdin.

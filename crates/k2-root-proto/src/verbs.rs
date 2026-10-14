@@ -170,6 +170,11 @@ pub enum Verb {
     PgDaemonReload,
     PgInstallRamFence,
     PgPsql { db: DbName, flags: PsqlFlags },
+    /// `pg hba-app add|remove <app-id>` (protocol 6, AR17/AR38): one canned
+    /// `host app_<id> app_<id> 127.0.0.1/32 scram-sha-256` line in a
+    /// K2-owned block at the top of each cluster's `pg_hba.conf`, then a
+    /// reload. The App's own database and role only; nothing else.
+    PgHbaApp { add: bool, id: AppId },
     // keep
     KeepStatus,
     KeepKekInit,
@@ -375,6 +380,14 @@ impl Verb {
             }
             ["pg", "install-ram-fence"] => Verb::PgInstallRamFence,
             ["pg", "psql", rest @ ..] => parse_psql(rest).ok_or(REFUSED)?,
+            ["pg", "hba-app", op, id] => Verb::PgHbaApp {
+                add: match *op {
+                    "add" => true,
+                    "remove" => false,
+                    _ => return Err(REFUSED),
+                },
+                id: AppId::parse(id).ok_or(REFUSED)?,
+            },
 
             ["keep", "status"] => Verb::KeepStatus,
             ["keep", "kek", "init"] => Verb::KeepKekInit,
@@ -507,6 +520,12 @@ impl Verb {
                 }
                 v
             }
+            Verb::PgHbaApp { add, id } => s(&[
+                "pg",
+                "hba-app",
+                if *add { "add" } else { "remove" },
+                id.as_str(),
+            ]),
             Verb::KeepStatus => s(&["keep", "status"]),
             Verb::KeepKekInit => s(&["keep", "kek", "init"]),
             Verb::KeepKekGet => s(&["keep", "kek", "get"]),
@@ -572,6 +591,8 @@ impl Verb {
                 PgOp::Stop | PgOp::Disable => Daemon,
             },
             Verb::PgPsql { .. } => Daemon,
+            // Changes who may log in to Postgres: the daemon's call only.
+            Verb::PgHbaApp { .. } => Daemon,
 
             Verb::KeepStatus | Verb::KeepGenGet => Open,
             Verb::KeepKekInit
@@ -731,6 +752,14 @@ pub fn catalog() -> Vec<Verb> {
                 unaligned: true,
             },
         },
+        Verb::PgHbaApp {
+            add: true,
+            id: AppId::parse("jobs").expect("id"),
+        },
+        Verb::PgHbaApp {
+            add: false,
+            id: AppId::parse("nsi-skin").expect("id"),
+        },
         Verb::KeepStatus,
         Verb::KeepKekInit,
         Verb::KeepKekGet,
@@ -859,6 +888,8 @@ mod tests {
             &["pg", "systemctl", "disable", "--now", "postgresql"],
             &["pg", "systemctl", "disable", "postgresql"],
             &["pg", "psql", "-d", "postgres"],
+            &["pg", "hba-app", "add", "jobs"],
+            &["pg", "hba-app", "remove", "jobs"],
             &["keep", "kek", "init"],
             &["keep", "kek", "get"],
             &["keep", "kek", "stage"],
@@ -968,6 +999,17 @@ mod tests {
             &["pg", "psql", "-d", "a b"],
             &["pg", "psql", "-d", "a;b"],
             &["pg", "psql", "-d", "postgres", "-tA", "-t"],
+            // hba-app: an App id, never a db, role, address or method.
+            &["pg", "hba-app"],
+            &["pg", "hba-app", "add"],
+            &["pg", "hba-app", "add", "app_jobs"],
+            &["pg", "hba-app", "add", "jobs", "0.0.0.0/0"],
+            &["pg", "hba-app", "add", "jobs", "trust"],
+            &["pg", "hba-app", "add", "Jobs"],
+            &["pg", "hba-app", "add", "a--b"],
+            &["pg", "hba-app", "add", "jobs\nhost"],
+            &["pg", "hba-app", "replace", "jobs"],
+            &["pg", "hba-app", "add", "../pg_hba.conf"],
             // keep never takes a user, a path or a value.
             &["keep", "kek", "get", "k2"],
             &["keep", "kek", "rewrap"],

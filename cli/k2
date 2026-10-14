@@ -44329,15 +44329,335 @@ EOF
 # END_GARDEN_DATA_C0
 
 # BEGIN_GARDEN_DATA_B1
-cmd_store_widget_get() { _gd_not_built "store get --widget"; }
-cmd_store_widget_put() { _gd_not_built "store put --widget"; }
-cmd_store_widget_rm() { _gd_not_built "store rm --widget"; }
-cmd_store_widget_list() { _gd_not_built "store list --widget"; }
-cmd_store_widget_changes() { _gd_not_built "store changes --widget"; }
-cmd_store_widget_batch() { _gd_not_built "store batch --widget"; }
-cmd_store_widget_grants() { _gd_not_built "store grants --widget"; }
-cmd_store_widget_grant() { _gd_not_built "store grant --widget"; }
-cmd_store_widget_revoke() { _gd_not_built "store revoke --widget"; }
+# Flags for k2 store --widget and k2 zen data (bash 3.2: no empty arrays).
+_gd_args() {
+    _GD_POS="" _GD_POS2="" _GD_VALUE="" _GD_HAS_VALUE=0 _GD_FILE="" _GD_IFREV="" _GD_PREFIX="" _GD_AFTER=""
+    _GD_LIMIT="" _GD_ALL=0 _GD_SINCE="" _GD_WAIT="" _GD_FOLLOW=0 _GD_AGENT="" _GD_PROJECT="" _GD_LEVEL="" _GD_YES=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --value) _GD_VALUE="${2-}"; _GD_HAS_VALUE=1; shift 2 || { echo "Error: --value takes JSON" >&2; exit 2; } ;;
+            --file) _GD_FILE="${2:-}"; shift 2 || { echo "Error: --file takes a path" >&2; exit 2; } ;;
+            --if-rev) _GD_IFREV="${2:-}"; shift 2 || { echo "Error: --if-rev takes a number" >&2; exit 2; } ;;
+            --prefix) _GD_PREFIX="${2-}"; shift 2 || { echo "Error: --prefix takes a prefix" >&2; exit 2; } ;;
+            --after) _GD_AFTER="${2-}"; shift 2 || { echo "Error: --after takes a key" >&2; exit 2; } ;;
+            --limit) _GD_LIMIT="${2:-}"; shift 2 || { echo "Error: --limit takes a number" >&2; exit 2; } ;;
+            --since) _GD_SINCE="${2:-}"; shift 2 || { echo "Error: --since takes a rev" >&2; exit 2; } ;;
+            --wait) _GD_WAIT="${2:-}"; shift 2 || { echo "Error: --wait takes seconds" >&2; exit 2; } ;;
+            --agent) _GD_AGENT="${2:-}"; shift 2 || { echo "Error: --agent takes a handle" >&2; exit 2; } ;;
+            --project) _GD_PROJECT="${2:-}"; shift 2 || { echo "Error: --project takes a name" >&2; exit 2; } ;;
+            --level) _GD_LEVEL="${2:-}"; shift 2 || { echo "Error: --level takes read or write" >&2; exit 2; } ;;
+            --all) _GD_ALL=1; shift ;;
+            --follow) _GD_FOLLOW=1; shift ;;
+            --yes|-y) _GD_YES=1; shift ;;
+            --json) _GD_JSON=1; shift ;;
+            --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
+            *) if [ -z "$_GD_POS" ]; then _GD_POS="$1"; elif [ -z "$_GD_POS2" ]; then _GD_POS2="$1"; else echo "Error: unexpected '$1'" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    case "$_GD_IFREV$_GD_LIMIT$_GD_SINCE$_GD_WAIT" in
+        *[!0-9]*) echo "Error: --if-rev, --limit, --since and --wait take whole numbers" >&2; exit 2 ;;
+    esac
+}
+
+# A JSON body from the parsed flags. $1 = kind (put|rm|grant|revoke|admin|unadmin).
+_gd_body() {
+    K2_GD_KIND="$1" K2_GD_WIDGET="${_GD_WIDGET:-}" K2_GD_KEY="$_GD_POS" K2_GD_VALUE="$_GD_VALUE" \
+    K2_GD_HAS_VALUE="$_GD_HAS_VALUE" K2_GD_FILE="$_GD_FILE" K2_GD_IFREV="$_GD_IFREV" K2_GD_AGENT="$_GD_AGENT" \
+    K2_GD_PROJECT="$_GD_PROJECT" K2_GD_LEVEL="$_GD_LEVEL" K2_GD_PREFIX="$_GD_PREFIX" K2_GD_DRY="${2:-}" python3 -c '
+import json, os, sys
+e = os.environ.get
+kind = e("K2_GD_KIND")
+b = {"widget": e("K2_GD_WIDGET")}
+def die(m):
+    sys.stderr.write("Error: %s\n" % m)
+    sys.exit(2)
+if kind in ("put", "rm"):
+    if not e("K2_GD_KEY"):
+        die("a key is required (k2 store %s --widget <w> <key>)" % kind)
+    b["key"] = e("K2_GD_KEY")
+    if e("K2_GD_IFREV"):
+        b["ifRev"] = int(e("K2_GD_IFREV"))
+if kind == "put":
+    if e("K2_GD_FILE"):
+        text = open(e("K2_GD_FILE")).read()
+    elif e("K2_GD_HAS_VALUE") == "1":
+        text = e("K2_GD_VALUE")
+    else:
+        die("put takes --value <json> or --file <path>")
+    try:
+        b["value"] = json.loads(text)
+    except Exception as x:
+        die("the value is not JSON: %s" % x)
+if kind in ("grant", "revoke", "admin", "unadmin"):
+    if kind in ("admin", "unadmin") and e("K2_GD_PROJECT"):
+        die("a grant admin is one agent (--agent)")
+    if bool(e("K2_GD_AGENT")) == bool(e("K2_GD_PROJECT")):
+        die("name exactly one of --agent or --project")
+    if e("K2_GD_AGENT"):
+        b["agent"] = e("K2_GD_AGENT")
+    if e("K2_GD_PROJECT"):
+        b["project"] = e("K2_GD_PROJECT")
+    b["prefix"] = e("K2_GD_PREFIX") or ""
+    if kind in ("grant", "admin"):
+        if e("K2_GD_LEVEL") not in ("read", "write"):
+            die("--level is read or write")
+        b["level"] = e("K2_GD_LEVEL")
+    if kind == "unadmin" and e("K2_GD_DRY") == "dry":
+        b["dryRun"] = True
+print(json.dumps(b))
+'
+}
+
+# Print the answer: raw with --json, else what the python snippet $1 makes of it.
+_gd_out() {
+    if [ "${_GD_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_GD_BODY"
+        return 0
+    fi
+    printf '%s' "$_GD_BODY" | python3 -c "$1"
+}
+
+_gd_q() {
+    local q="widget=$(urlencode "$_GD_WIDGET")" pair
+    for pair in "$@"; do
+        [ -n "${pair#*=}" ] && q="$q&${pair%%=*}=$(urlencode "${pair#*=}")"
+    done
+    printf '%s' "$q"
+}
+
+cmd_store_widget_get() {
+    _gd_args "$@"
+    [ -n "$_GD_POS" ] || { echo "Error: usage: k2 store get --widget <w> <key>" >&2; exit 2; }
+    _gd_call GET /cli/zen/data/get "$(_gd_q "key=$_GD_POS")"
+    if [ "${_GD_JSON:-0}" = "1" ]; then printf '%s\n' "$_GD_BODY"; return 0; fi
+    printf '%s' "$_GD_BODY" | python3 -c '
+import json, sys
+e = json.loads(sys.stdin.read())["entry"]
+if e is None:
+    sys.stderr.write("No such key.\n")
+    sys.exit(4)
+print(json.dumps(e["value"], indent=2, ensure_ascii=False))
+sys.stderr.write("rev %s by %s\n" % (e["rev"], e["by"]))
+'
+}
+
+cmd_store_widget_put() {
+    _gd_args "$@"
+    local body; body="$(_gd_body put)" || exit 2
+    _gd_call POST /cli/zen/data/put "$body"
+    _gd_out 'import json, sys; print("rev %s" % json.loads(sys.stdin.read())["rev"])'
+}
+
+cmd_store_widget_rm() {
+    _gd_args "$@"
+    local body; body="$(_gd_body rm)" || exit 2
+    _gd_call POST /cli/zen/data/delete "$body"
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+print("rev %s" % v["rev"] if v["deleted"] else "No such key (nothing changed).")'
+}
+
+cmd_store_widget_list() {
+    _gd_args "$@"
+    local after="$_GD_AFTER" all_items="" page_json
+    while :; do
+        _gd_call GET /cli/zen/data/list "$(_gd_q "prefix=$_GD_PREFIX" "after=$after" "limit=$_GD_LIMIT")"
+        if [ "$_GD_ALL" = "1" ]; then
+            all_items="$all_items$(printf '%s' "$_GD_BODY" | python3 -c 'import json,sys; [print(json.dumps(i, ensure_ascii=False)) for i in json.loads(sys.stdin.read())["items"]]')
+"
+            after="$(printf '%s' "$_GD_BODY" | python3 -c 'import json,sys; n=json.loads(sys.stdin.read())["next"]; print(n or "")')"
+            [ -n "$after" ] || break
+        else
+            break
+        fi
+    done
+    if [ "$_GD_ALL" = "1" ]; then
+        page_json="$(printf '%s' "$all_items" | python3 -c '
+import json, sys
+print(json.dumps({"items": [json.loads(l) for l in sys.stdin if l.strip()], "next": None}, ensure_ascii=False))')"
+        _GD_BODY="$page_json"
+    fi
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+for i in v["items"]:
+    print("%s\trev %s\t%s" % (i["key"], i["rev"], json.dumps(i["value"], ensure_ascii=False)[:200]))
+if v.get("next"):
+    sys.stderr.write("more: --after %s\n" % v["next"])'
+}
+
+# One changes page from (since, after); prints one JSON line per change and
+# sets _GD_NEXT_SINCE / _GD_NEXT_AFTER (empty = caught up). Exit 9 = resync.
+_gd_changes_page() {
+    local since="$1" after="$2" wait="$3" raw status body
+    raw="$(_compute_send GET /cli/zen/data/changes "$(_gd_q "since=$since" "after=$after" "prefix=$_GD_PREFIX" "wait=$wait")")"
+    status="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    [ "$status" = "$raw" ] && body=""
+    if [ "$status" = "409" ] && printf '%s' "$body" | grep -q '"resync"'; then
+        _GD_NEXT_SINCE="$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["error"].get("reapedRev", 0))')"
+        _GD_NEXT_AFTER=""
+        return 9
+    fi
+    [ "$status" = "200" ] || _gd_fail "$status" "$body"
+    local out
+    out="$(K2_GD_SINCE="$since" K2_GD_AFTER="$after" python3 -c '
+import json, os, sys
+v = json.loads(sys.stdin.read())
+for c in v["items"]:
+    print(json.dumps(c, ensure_ascii=False))
+n = v.get("next")
+if n:
+    print("#NEXT %s %s" % (n["since"], n.get("after") or ""))
+elif v["items"]:
+    print("#NEXT %s " % v["items"][-1]["rev"])
+else:
+    print("#NEXT %s %s" % (os.environ["K2_GD_SINCE"], os.environ["K2_GD_AFTER"]))
+print("#MORE %s" % ("1" if n else "0"))
+' <<<"$body")"
+    printf '%s\n' "$out" | grep -v '^#'
+    local nl; nl="$(printf '%s\n' "$out" | grep '^#NEXT ')"
+    nl="${nl#\#NEXT }"
+    _GD_NEXT_SINCE="${nl%% *}"
+    _GD_NEXT_AFTER="${nl#* }"
+    _GD_MORE="$(printf '%s\n' "$out" | grep '^#MORE ' | cut -d' ' -f2)"
+    return 0
+}
+
+# Every key under --prefix now, one JSON line each (after a resync).
+_gd_dump_all() {
+    local after="" next
+    while :; do
+        _gd_call GET /cli/zen/data/list "$(_gd_q "prefix=$_GD_PREFIX" "after=$after" "limit=500")"
+        next="$(printf '%s' "$_GD_BODY" | python3 -c '
+import json, sys
+v = json.loads(sys.stdin.read())
+for i in v["items"]:
+    print(json.dumps(i, ensure_ascii=False))
+print("#NEXT " + (v["next"] or ""))')"
+        printf '%s\n' "$next" | grep -v '^#NEXT'
+        after="$(printf '%s\n' "$next" | grep '^#NEXT' | cut -c7-)"
+        [ -n "$after" ] || break
+    done
+}
+
+cmd_store_widget_changes() {
+    _gd_args "$@"
+    local since="${_GD_SINCE:-0}" after="" wait="${_GD_WAIT:-0}" rc
+    if [ "${_GD_JSON:-0}" = "1" ] && [ "$_GD_FOLLOW" = "0" ]; then
+        _gd_call GET /cli/zen/data/changes "$(_gd_q "since=$since" "prefix=$_GD_PREFIX" "wait=$wait")"
+        printf '%s\n' "$_GD_BODY"
+        return 0
+    fi
+    [ "$_GD_FOLLOW" = "1" ] && wait=30
+    while :; do
+        _gd_changes_page "$since" "$after" "$wait"; rc=$?
+        if [ "$rc" = "9" ]; then
+            # The cursor is older than kept history: say so, print every
+            # key as it is now, and go on from the reaped rev.
+            echo '{"resync": true}'
+            _gd_dump_all
+            since="$_GD_NEXT_SINCE"; after=""
+            [ "$_GD_FOLLOW" = "1" ] || exit 1
+            continue
+        fi
+        since="$_GD_NEXT_SINCE"; after="$_GD_NEXT_AFTER"
+        if [ "$_GD_MORE" = "1" ]; then continue; fi
+        [ "$_GD_FOLLOW" = "1" ] || break
+    done
+}
+
+# Read ops (a JSON array or JSONL) on stdin. ≤ 64 ops and ≤ 60 KiB: one
+# batch; otherwise a transaction in parts of ≤ 64 ops / 60 KiB (≤ 1,000 ops
+# and 1 MiB in all), one rev either way.
+cmd_store_widget_batch() {
+    _gd_args "$@"
+    local plan
+    plan="$(python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.stderr.write("Error: k2 store batch reads ops on stdin (a JSON array or one op per line)\n"); sys.exit(2)
+try:
+    ops = json.loads(raw) if raw.startswith("[") else [json.loads(l) for l in raw.splitlines() if l.strip()]
+except Exception as e:
+    sys.stderr.write("Error: the ops are not JSON: %s\n" % e); sys.exit(2)
+if not isinstance(ops, list) or not ops:
+    sys.stderr.write("Error: no ops\n"); sys.exit(2)
+if len(ops) > 1000:
+    sys.stderr.write("Error: at most 1,000 ops in one batch\n"); sys.exit(2)
+parts, cur, size = [], [], 0
+for op in ops:
+    b = len(json.dumps(op.get("value"), separators=(",", ":"))) if "value" in op else 0
+    if cur and (len(cur) == 64 or size + b > 60 * 1024):
+        parts.append(cur); cur, size = [], 0
+    cur.append(op); size += b
+parts.append(cur)
+for p in parts:
+    print(json.dumps(p, separators=(",", ":")))
+')" || exit 2
+    local nparts; nparts="$(printf '%s\n' "$plan" | grep -c .)"
+    local wjson; wjson="$(K2_GD_WIDGET="$_GD_WIDGET" python3 -c 'import json,os; print(json.dumps(os.environ["K2_GD_WIDGET"]))')"
+    if [ "$nparts" = "1" ]; then
+        _gd_call POST /cli/zen/data/batch "{\"widget\":$wjson,\"ops\":$plan}"
+        _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("rev %s (%s ops)" % (v["rev"], v["ops"]))'
+        return 0
+    fi
+    _gd_call POST /cli/zen/data/tx/begin "{\"widget\":$wjson}"
+    local tx; tx="$(printf '%s' "$_GD_BODY" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["txId"])')"
+    local part raw status body
+    while IFS= read -r part; do
+        [ -n "$part" ] || continue
+        raw="$(_compute_send POST /cli/zen/data/tx/add "{\"txId\":\"$tx\",\"ops\":$part}")"
+        status="${raw##*$'\n'}"; body="${raw%$'\n'*}"
+        if [ "$status" != "200" ]; then
+            _compute_send POST /cli/zen/data/tx/abort "{\"txId\":\"$tx\"}" >/dev/null 2>&1 || true
+            _gd_fail "$status" "$body"
+        fi
+    done <<<"$plan"
+    _gd_call POST /cli/zen/data/tx/commit "{\"txId\":\"$tx\"}"
+    _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("rev %s (%s ops)" % (v["rev"], v["ops"]))'
+}
+
+cmd_store_widget_grants() {
+    _gd_args "$@"
+    _gd_call GET /cli/zen/data/grants "$(_gd_q)"
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+if not v["grants"]:
+    print("No access to %s. Ask the person (k2 feedback or the Thread)." % v["space"])
+for g in v["grants"]:
+    f = g.get("from") or {}
+    src = {"agent": "you", "delegation": "grant admin"}.get(f.get("kind"), "project %s" % f.get("name", "?"))
+    if "from" not in g:
+        src = "%s %s" % (g["subjectKind"], g["subjectId"])
+    print("%-24s %-5s %s%s" % (g["prefix"] or "(everything)", g["level"], src, " (admin)" if g.get("admin") else ""))
+for g in v.get("made") or []:
+    print("made: %-18s %-5s -> %s %s" % (g["prefix"] or "(everything)", g["level"], g["subjectKind"], g["subjectId"]))'
+}
+
+_gd_project_note() {
+    if printf '%s' "$_GD_BODY" | grep -q 'project_grant_convenience'; then
+        echo "Note: any agent can join project \"$_GD_PROJECT\", so this grant is a convenience, not a wall. For a wall, grant agents one by one or name a grant admin." >&2
+    fi
+}
+
+cmd_store_widget_grant() {
+    _gd_args "$@"
+    local body; body="$(_gd_body grant)" || exit 2
+    _gd_call POST /cli/zen/data/grant "$body"
+    _gd_project_note
+    _gd_out 'import json, sys; g = json.loads(sys.stdin.read())["grant"]; print("Granted %s on %s to %s %s" % (g["level"], g["prefix"] or "everything", g["subjectKind"], g["subjectId"]))'
+}
+
+cmd_store_widget_revoke() {
+    _gd_args "$@"
+    local body; body="$(_gd_body revoke)" || exit 2
+    _gd_call POST /cli/zen/data/revoke "$body"
+    _gd_out 'print("Revoked.")'
+}
 # END_GARDEN_DATA_B1
 
 # BEGIN_GARDEN_DATA_B3
@@ -44345,14 +44665,103 @@ cmd_store_widget_export() { _gd_not_built "store export --widget"; }
 # END_GARDEN_DATA_B3
 
 # BEGIN_ZEN_DATA_B1
-cmd_zen_data_list() { _gd_not_built "zen data list"; }
-cmd_zen_data_show() { _gd_not_built "zen data show"; }
-cmd_zen_data_grant() { _gd_not_built "zen data grant"; }
-cmd_zen_data_revoke() { _gd_not_built "zen data revoke"; }
-cmd_zen_data_admin() { _gd_not_built "zen data admin"; }
-cmd_zen_data_unadmin() { _gd_not_built "zen data unadmin"; }
-cmd_zen_data_delete() { _gd_not_built "zen data delete"; }
-cmd_zen_data_move() { _gd_not_built "zen data move"; }
+# `k2 zen data <verb> <widget> …`: the widget is the first positional.
+_gd_zen_widget() {
+    _GD_WIDGET="$_GD_POS"
+    [ -n "$_GD_WIDGET" ] || { echo "Error: usage: k2 zen data $1 <widget> …" >&2; exit 2; }
+}
+
+cmd_zen_data_list() {
+    _gd_args "$@"
+    _gd_call GET /cli/zen/data/spaces ""
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+if not v["spaces"] and not v["saves"]:
+    print("No widget data on this computer yet.")
+def size(n):
+    return "%d B" % n if n < 1024 else ("%.1f KB" % (n / 1024) if n < 1048576 else "%.1f MB" % (n / 1048576))
+for s in v["spaces"]:
+    m = s.get("madeBy") or {}
+    made = {"owner": "you", "k2": "K2", "unclaimed": "unsigned"}.get(m.get("kind"), m.get("handle") or "-")
+    flags = " (no widget)" if s.get("orphanedAt") else ""
+    admins = (" admins: " + ", ".join(s["admins"])) if s["admins"] else ""
+    print("%-24s %8s %6d keys  %d grants  made by %s%s%s" % (s["widget"], size(s["bytes"]), s["keys"], s["grants"], made, admins, flags))
+for s in v["saves"]:
+    print("%-24s %8s %6d saved keys (private)" % (s["widget"], size(s["bytes"]), s["keys"]))'
+}
+
+cmd_zen_data_show() {
+    _gd_args "$@"; _gd_zen_widget show
+    _gd_call GET /cli/zen/data/show "$(_gd_q)"
+    _gd_out '
+import json, sys
+v = json.loads(sys.stdin.read())
+s = v["space"]
+print("%s: %d keys, %d bytes, rev %d%s" % (s["widget"], s["keys"], s["bytes"], s["rev"], " (no widget folder)" if s.get("orphanedAt") else ""))
+m = v.get("madeBy") or {}
+print("made by: %s" % ({"owner": "you", "k2": "K2", "unclaimed": "unsigned"}.get(m.get("kind"), m.get("handle") or "-")))
+for g in v["grants"]:
+    by = "" if g["grantedBy"] == "owner" else " (by %s)" % g["grantedBy"]
+    print("  %-8s %-24s %-5s %s%s%s" % (g["subjectKind"], g["subjectName"], g["level"], g["prefix"] or "(everything)", " ADMIN" if g["admin"] else "", by))'
+}
+
+cmd_zen_data_grant() {
+    _gd_args "$@"; _gd_zen_widget grant
+    local body; body="$(_gd_body grant)" || exit 2
+    _gd_call POST /cli/zen/data/grant "$body"
+    _gd_project_note
+    _gd_out 'import json, sys; g = json.loads(sys.stdin.read())["grant"]; print("Granted %s on %s to %s %s" % (g["level"], g["prefix"] or "everything", g["subjectKind"], g["subjectId"]))'
+}
+
+cmd_zen_data_revoke() {
+    _gd_args "$@"; _gd_zen_widget revoke
+    local body; body="$(_gd_body revoke)" || exit 2
+    _gd_call POST /cli/zen/data/revoke "$body"
+    _gd_out 'print("Revoked.")'
+}
+
+cmd_zen_data_admin() {
+    _gd_args "$@"; _gd_zen_widget admin
+    local body; body="$(_gd_body admin)" || exit 2
+    _gd_call POST /cli/zen/data/admin "$body"
+    _gd_out 'import json, sys; g = json.loads(sys.stdin.read())["grant"]; print("%s is now grant admin (%s) on %s. It can grant others inside that, up to %s, never itself." % (g["subjectId"], g["level"], g["prefix"] or "everything", g["level"]))'
+}
+
+cmd_zen_data_unadmin() {
+    _gd_args "$@"; _gd_zen_widget unadmin
+    local body; body="$(_gd_body unadmin dry)" || exit 2
+    _gd_call POST /cli/zen/data/admin/revoke "$body"
+    local n; n="$(printf '%s' "$_GD_BODY" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["cascaded"])')"
+    if [ "$_GD_YES" != "1" ]; then
+        printf '%s grant(s) it made go with it. Go ahead? [y/N] ' "$n" >&2
+        local answer=""; read -r answer || true
+        case "$answer" in y|Y|yes) ;; *) echo "Nothing changed." >&2; exit 1 ;; esac
+    fi
+    body="$(_gd_body unadmin)" || exit 2
+    _gd_call POST /cli/zen/data/admin/revoke "$body"
+    _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("Grant admin ended; %s grant(s) it made went with it." % v["cascaded"])'
+}
+
+cmd_zen_data_delete() {
+    _gd_args "$@"; _gd_zen_widget delete
+    if [ "$_GD_YES" != "1" ]; then
+        printf 'Delete all of %s'"'"'s data and its grants (a snapshot is kept)? Type the widget name: ' "$_GD_WIDGET" >&2
+        local answer=""; read -r answer || true
+        [ "$answer" = "$_GD_WIDGET" ] || { echo "Nothing changed." >&2; exit 1; }
+    fi
+    local body; body="$(K2_GD_W="$_GD_WIDGET" python3 -c 'import json,os; w=os.environ["K2_GD_W"]; print(json.dumps({"widget": w, "confirm": w}))')"
+    _gd_call POST /cli/zen/data/space/delete "$body"
+    _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("Deleted %s (%s grants)%s" % (v["deleted"], v["grantsRemoved"], "; snapshot " + v["snapshot"] if v.get("snapshot") else ""))'
+}
+
+cmd_zen_data_move() {
+    _gd_args "$@"
+    [ -n "$_GD_POS" ] && [ -n "$_GD_POS2" ] || { echo "Error: usage: k2 zen data move <old> <new>" >&2; exit 2; }
+    local body; body="$(K2_GD_A="$_GD_POS" K2_GD_B="$_GD_POS2" python3 -c 'import json,os; print(json.dumps({"from": os.environ["K2_GD_A"], "to": os.environ["K2_GD_B"]}))')"
+    _gd_call POST /cli/zen/data/space/move "$body"
+    _gd_out 'import json, sys; v = json.loads(sys.stdin.read()); print("Moved, with %s grant(s)." % v["grantsMoved"])'
+}
 # END_ZEN_DATA_B1
 
 # BEGIN_ZEN_DATA_B3

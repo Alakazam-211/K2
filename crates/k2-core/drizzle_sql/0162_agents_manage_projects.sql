@@ -1,0 +1,13 @@
+-- 0162: K2 projects (`k2 project`) — the per-agent "Manage K2 projects"
+-- switch (Rosson 2026-10-14, 0.45.6).
+--
+-- `projects.agents_can_manage_projects` — DEFAULT 1 (on), so every
+-- workspace keeps today's behaviour: its agent may create, rename and
+-- delete projects and add or remove members. Off: that workspace's agent
+-- sessions get 403 `agent_permission_off` on every project mutation;
+-- reading projects and posting in its project chat stay allowed.
+-- Written only by POST /cli/agent-access/set {toggle: "projects_manage"}
+-- (Owner/Admin), never by workspace/set. 0160–0161 are the v1 hire API's
+-- and 0158 is reserved, so this takes 0162; the integrator renumbers on
+-- slips.
+ALTER TABLE projects ADD COLUMN agents_can_manage_projects INTEGER NOT NULL DEFAULT 1;

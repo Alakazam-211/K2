@@ -288,6 +288,12 @@ interface Project {
   // actions still wait for the owner. Written via POST
   // /cli/agent-access/set `toggle: 'compute_operate'` (Admin).
   agentsCanOperateCompute?: number
+  // K2 projects (0162) — "Manage K2 projects" (0/1, DEFAULT 1 = on). Off:
+  // this workspace's agent can't create, rename or delete projects or
+  // change their members or settings; reads and its project chat stay
+  // open. Written via POST /cli/agent-access/set `toggle:
+  // 'projects_manage'` (Admin). Absent on older daemons → treated as on.
+  agentsCanManageProjects?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

@@ -50,7 +50,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -542,6 +542,27 @@ assert_contains "human page: void your own obsolete card" "$human_out" "k2 threa
 assert_contains "human page: cards have a time frame" "$human_out" "--expires 2h|3d"
 assert_contains "schema: --expires flag" "$(grep -F '"name": "thread",' -A20 "$K2_CLI")" '"name": "--expires"'
 assert_contains "thread schema mentions pushes" "$(grep -F '"name": "thread",' -A2 "$K2_CLI")" "k2 study notifications"
+
+echo "== k2 study projects (0.45.6 Manage K2 projects) =="
+pj_out="$("$K2" study projects)"
+assert_contains "projects title" "$pj_out" "k2 study projects"
+assert_contains "projects open by default" "$pj_out" "OPEN BY DEFAULT, WITH A PER-AGENT SWITCH"
+assert_contains "projects switch name" "$pj_out" "\"Manage K2 projects\""
+assert_contains "projects refusal code" "$pj_out" "agent_permission_off"
+assert_contains "projects reads + chat stay" "$pj_out" "list, show, read and msg still work"
+assert_contains "projects agent never flips" "$pj_out" "An agent never can"
+assert_contains "projects audit" "$pj_out" "is logged with who did it"
+pj_json="$("$K2" study projects --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="projects" and "Manage K2 projects" in d["body"], d["id"]' "$pj_json"
+echo "  PASS: projects --json id+body"
+pass=$((pass + 1))
+# `k2 project` is not daemon-optional: a dead port + a dummy token is enough
+# for --help (it never dials).
+pj_help="$(K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2" project --help)"
+assert_contains "project help: switch section" "$pj_help" "WHO MAY CHANGE PROJECTS"
+assert_contains "project help: open by default" "$pj_help" "Projects are open by default"
+assert_contains "project help: access verb" "$pj_help" "access on|off [--workspace <ws>]"
+assert_contains "project access help" "$(K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2" project access --help)" "an agent can never flip its own switch"
 
 echo "== --help exit 0; bad flag exit 2 =="
 set +e

@@ -102,6 +102,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1607,6 +1608,7 @@ function ProjectDetail({
               <AgentsManageVaultToggle project={project} />
               <AgentsUseComputeToggle project={project} />
               <AgentsOperateComputeToggle project={project} />
+              <AgentsManageProjectsToggle project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -2477,6 +2479,94 @@ export function AgentsOperateComputeToggle({
               {error}
             </div>
           ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// K2 projects (0162, Rosson 2026-10-14) — "Manage K2 projects". DEFAULTS
+// ON (projects are open by default). Off: this workspace's agent gets 403
+// `agent_permission_off` on every project mutation (create, rename, delete,
+// members, settings); reading projects and posting in its project chat
+// stay allowed. Same single writer as the rows above: POST
+// /cli/agent-access/set `{workspace, toggle: 'projects_manage', value}`
+// (Owner/Admin; an agent can never flip it). Optimistic store patch; no
+// projects refetch here.
+export function AgentsManageProjectsToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  // Absent (an older daemon) reads as on: that is the column default.
+  const enabled = (project.agentsCanManageProjects ?? 1) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanManageProjects
+    setBusy(true)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanManageProjects: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await daemonCliPost(primaryScope(), 'agent-access/set', {
+        workspace: project.path,
+        toggle: 'projects_manage',
+        value: next,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanManageProjects: before } : p,
+        ),
+      }))
+      console.error('[agent-access] projects_manage write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Manage K2 projects"
+          disabled={busy}
+          data-settings-id="projects.agents-can-manage-projects"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            enabled
+              ? 'This workspace\'s agent may create and change K2 projects and their members'
+              : 'This workspace\'s agent can read projects and post in its project chat, but not change them'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Manage K2 projects
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Lets this workspace&rsquo;s agent create, rename and delete K2 projects and add or remove
+            their members (k2 project). On by default. Off: it can still read projects and post in
+            its project chat. Every project created or deleted and every member change is logged.
+            You (the owner) always can.
+          </div>
         </div>
       </div>
     </div>

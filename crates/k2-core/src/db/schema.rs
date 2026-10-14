@@ -184,6 +184,17 @@ pub struct Project {
     /// only by `POST /cli/agent-access/set {toggle: "compute_operate"}`.
     #[serde(default)]
     pub agents_can_operate_compute: i64,
+    /// K2 projects (migration 0162) — "Manage K2 projects". DEFAULT 1
+    /// (on): the workspace's agent may create/rename/delete projects and
+    /// add/remove members. Read-only here (the Agent tab shows it);
+    /// written only by `POST /cli/agent-access/set {toggle:
+    /// "projects_manage"}` (Owner/Admin).
+    #[serde(default = "project_switch_default_on")]
+    pub agents_can_manage_projects: i64,
+}
+
+fn project_switch_default_on() -> i64 {
+    1
 }
 
 impl Project {
@@ -199,7 +210,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -248,6 +259,7 @@ impl Project {
                 agents_can_manage_vault: row.get(33).unwrap_or(0),
                 agents_can_use_compute: row.get(34).unwrap_or(0),
                 agents_can_operate_compute: row.get(35).unwrap_or(0),
+                agents_can_manage_projects: row.get(36).unwrap_or(1),
             })
         })?;
         rows.collect()
@@ -258,7 +270,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -307,6 +319,7 @@ impl Project {
                 agents_can_manage_vault: row.get(33).unwrap_or(0),
                 agents_can_use_compute: row.get(34).unwrap_or(0),
                 agents_can_operate_compute: row.get(35).unwrap_or(0),
+                agents_can_manage_projects: row.get(36).unwrap_or(1),
                 })
             },
         )
@@ -5026,6 +5039,25 @@ mod unit_tests {
             serde_json::to_value(&written).unwrap()["mailManageEnabled"],
             1
         );
+    }
+
+    #[test]
+    fn project_agents_can_manage_projects_defaults_on_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-manage-projects");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_projects, 1, "0162 default is ON (today's behaviour)");
+        let listed = Project::list(&conn).unwrap();
+        let listed_p = listed.iter().find(|x| x.id == id).expect("listed");
+        assert_eq!(listed_p.agents_can_manage_projects, 1);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["agentsCanManageProjects"], 1, "{json}");
+        conn.execute(
+            "UPDATE projects SET agents_can_manage_projects = 0 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        assert_eq!(Project::get(&conn, &id).unwrap().agents_can_manage_projects, 0);
     }
 
     #[test]

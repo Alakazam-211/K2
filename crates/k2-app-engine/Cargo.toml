@@ -1,0 +1,31 @@
+[package]
+name = "k2-app-engine"
+# Not the product version: the engine reports the daemon's, read from
+# crates/k2-daemon/Cargo.toml by build.rs (release.sh bumps that one), and
+# speaks k2_root_proto::engine::ENGINE_PROTOCOL on its socket.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "/usr/local/libexec/k2-app-engine: runs as k2app and drives rootless Podman/Quadlet for guarded K2 Apps on the daemon's orders only (caller = the daemon's main process). Links nothing from k2-daemon or k2-core."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-app-engine"
+path = "src/main.rs"
+
+[features]
+# TEST ONLY: marks the binary so release signing refuses it
+# (K2_APP_ENGINE_TEST_KEYS_ENABLED), like the helper and k2-node.
+test-keys = []
+
+[dependencies]
+k2-root-proto = { path = "../k2-root-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+tar = "0.4.45"
+
+[dev-dependencies]
+tempfile = "3"

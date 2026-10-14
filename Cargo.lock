@@ -3969,6 +3969,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-app-engine"
+version = "0.1.0"
+dependencies = [
+ "k2-root-proto",
+ "libc",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "k2-core"
 version = "0.45.5"
 dependencies = [

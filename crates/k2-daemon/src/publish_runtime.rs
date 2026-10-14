@@ -1554,7 +1554,10 @@ fn unbound_helpers() -> &'static parking_lot::Mutex<std::collections::HashSet<St
 }
 
 /// The argv of a live process, or `None` when it can't be read. Linux
-/// reads `/proc/<pid>/cmdline`; macOS asks `ps`.
+/// reads `/proc/<pid>/cmdline`; macOS asks `ps`. Not for a child spawned a
+/// moment ago: on Linux its cmdline reads empty for a few ms after `spawn`
+/// returns (the kernel sets the argv bounds after releasing the parent).
+/// The one caller reads helpers reattached from an earlier daemon life.
 fn process_argv(pid: i32) -> Option<Vec<String>> {
     #[cfg(target_os = "linux")]
     {
@@ -1948,9 +1951,24 @@ mod tests {
             .arg("30")
             .spawn()
             .expect("spawn sleep");
-        let argv = process_argv(child.id() as i32).expect("argv of a live child");
+        // `spawn` returns as soon as the child's exec has swapped its memory
+        // (the vfork release), before the kernel has set the new argv
+        // bounds: `/proc/<pid>/cmdline` reads empty for a few ms (seen on
+        // every Linux soak run, 2026-10-14). Production only reads helpers
+        // reattached from an earlier daemon life, long past that window.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let argv = loop {
+            if let Some(argv) = process_argv(child.id() as i32) {
+                break Some(argv);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         let _ = child.kill();
         let _ = child.wait();
+        let argv = argv.expect("argv of a live child within 2 s");
         assert!(argv.iter().any(|a| a == "30"), "{argv:?}");
     }
 

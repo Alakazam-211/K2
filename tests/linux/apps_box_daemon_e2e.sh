@@ -61,7 +61,11 @@ v = json.load(open(sys.argv[1]))
 st = {c["id"]: c["status"] for c in v["checks"]}
 assert v["helperProtocol"] == 6 and st["helper"] == "ok", (v["helperProtocol"], st)
 assert st["platform"] == "ok" and st["cgroupV2"] == "ok", st
-assert st["appUser"] == "fail" and st["podman"] == "fail", st
+# The image bakes the distro packages (offline container), so Podman is
+# already there; the box itself is not prepared.
+for k in ("appUser", "subid", "linger", "reservedPorts", "nft", "processUnit"):
+    assert st[k] == "fail", (k, st)
+assert v["ready"] is False, v
 print("    before:", {k: st[k] for k in ("helper", "podman", "appUser", "nft", "ioCost")})
 PY
 human="$(K2 app doctor 2>&1 || true)"

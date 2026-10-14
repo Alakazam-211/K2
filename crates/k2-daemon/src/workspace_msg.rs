@@ -1287,6 +1287,38 @@ fn inject_and_submit(live: &session_lookup::LiveSession, payload: &str) -> Injec
     inject_and_submit_with_timeout(live, payload, INJECT_LOCK_TIMEOUT)
 }
 
+/// 0.45.6 — heartbeat wake delivery through the SAME guarded path `k2 msg`
+/// uses, replacing the heartbeat's old raw `write(body)` + fixed sleep.
+///
+/// - `after_spawn = Some((profile, ceiling))` — a just-spawned/resumed
+///   session: wait for the provider's readiness signal and for the screen
+///   to settle ([`deliver_post_wake`]) before pasting. Writing during the
+///   TUI's startup render is how a wake body lost its head: the composer
+///   repaints and drops what was already typed, and only the tail that
+///   arrives after the repaint survives.
+/// - `None` — an already-live session: the locked, framed inject only.
+///
+/// `Ok(())` means the payload + submit were written into a live child
+/// ([`InjectOutcome::Delivered`]); `Err` carries the canonical reason
+/// code (`pty_died` / `pty_stalled` / `hitl_gate_open`) so the heartbeat
+/// can record a failure instead of `fired` (GH #61).
+pub(crate) fn deliver_heartbeat_wake(
+    live: &session_lookup::LiveSession,
+    payload: &str,
+    after_spawn: Option<(&k2_core::workspace::provider_resume::InjectionProfile, Duration)>,
+) -> Result<(), &'static str> {
+    let outcome = match after_spawn {
+        Some((profile, ceiling)) => deliver_post_wake(live, payload, ceiling, profile),
+        None => inject_and_submit(live, payload),
+    };
+    match outcome {
+        InjectOutcome::Delivered => Ok(()),
+        InjectOutcome::PtyDied => Err(MsgReason::PtyDied.code()),
+        InjectOutcome::Stalled => Err(MsgReason::PtyStalled.code()),
+        InjectOutcome::GateHold => Err(MsgReason::HitlGateOpen.code()),
+    }
+}
+
 /// A daemon notice (`via=notice`, TR8) into an already-live session: the
 /// same serialized inject + submit as a `k2 msg` live delivery. Never
 /// wakes, records no Chatter, starts no Thread turn, is not stored.

@@ -8,9 +8,14 @@
 //! Decision tree (matches Rosson's spec in the heartbeats PRD):
 //!
 //! 1. `agent_heartbeats.last_session_id` is None
-//!    → Fresh fire. Spawns a PTY whose `--append-system-prompt` is
-//!      the WAKEUP.md body. Post-spawn deferred-save thread writes
-//!      the new Claude session id back to the row.
+//!    → Fresh fire. Spawns an interactive PTY and delivers the wake
+//!      prompt into it through the guarded `k2 msg` path.
+//!
+//! Wake prompt (0.45.6): bodies over
+//! `wake_prompts::WAKE_PROMPT_INLINE_MAX_BYTES` go as a one-line pointer
+//! to WAKEUP.md, never pasted where a TUI could keep only the tail.
+//! Every PTY branch records `fired` only after the prompt was written
+//! into a live agent; otherwise the fire is a recorded failure (GH #61).
 //!
 //! 2. `last_session_id` is Some + a live PTY in `session_lookup`
 //!    has `--resume <session_id>` in its args
@@ -588,9 +593,10 @@ fn run_fresh_fire(
     wakeup_abs: &Path,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
+    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
+    let prompt = delivery.prompt.clone();
 
     // 0.37.0: every daemon-driven heartbeat fresh-fire goes through
     // v2 via `wake_headless::spawn_wake_headless`. The
@@ -600,7 +606,11 @@ fn run_fresh_fire(
     // wakes. The `--print` semantics, `--session-id` pinning, DB
     // writes (workspace_sessions lock, heartbeat last_session_id +
     // active_terminal_id), and HookEvent emission are unchanged.
-    let result = crate::wake_headless::spawn_wake_headless(
+    //
+    // 0.45.6 (GH #61): the confirmed variant returns only once the wake
+    // prompt was written into the live agent through the guarded `k2 msg`
+    // path; `fired` is recorded only then.
+    let result = crate::wake_headless::spawn_wake_headless_confirmed(
         agent_name,
         project_path,
         &prompt,
@@ -612,7 +622,9 @@ fn run_fresh_fire(
             crate::active_reaper::note_workspace_need(project_id);
             stamp_fired_and_release(project_id, &hb.name);
             let decision = write_fired_audit(project_id, agent_name, hb,
-                "smart_launch: no saved session — fresh fire", catchup_of);
+                &format!("smart_launch: no saved session — fresh fire; {}",
+                    delivery.audit_note()),
+                catchup_of);
             serde_json::json!({
                 "success": true,
                 "decision": decision,
@@ -620,10 +632,15 @@ fn run_fresh_fire(
                 "name": hb.name,
                 "agent": agent_name,
                 "terminalId": terminal_id,
+                "wakePrompt": delivery.to_json(),
             })
         }
-        Err(e) => record_fire_failure(
+        Err(crate::wake_headless::WakeFireError::SpawnFailed(e)) => record_fire_failure(
             project_id, agent_name, hb, &format!("fresh fire spawn failed: {e}"),
+        ),
+        Err(e @ crate::wake_headless::WakeFireError::NotDelivered { .. }) => record_fire_failure(
+            project_id, agent_name, hb,
+            &format!("fresh fire: {e}; {}", delivery.audit_note()),
         ),
     }
 }
@@ -644,7 +661,7 @@ fn run_workspace_session_delivery(
     wakeup_abs: &Path,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
+    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
@@ -660,7 +677,7 @@ fn run_workspace_session_delivery(
     // readiness timeout.
     let result = crate::workspace_msg::deliver_live(
         project_path,
-        &prompt,
+        &delivery.prompt,
         "heartbeat",
         "",
         true,
@@ -679,7 +696,8 @@ fn run_workspace_session_delivery(
             .unwrap_or_default();
         stamp_fired_and_release(project_id, &hb.name);
         let decision = write_fired_audit(project_id, agent_name, hb,
-            &format!("smart_launch (use_workspace_session): {branch} → {target_id}"),
+            &format!("smart_launch (use_workspace_session): {branch} → {target_id}; {}",
+                delivery.audit_note()),
             catchup_of);
         serde_json::json!({
             "success": true,
@@ -688,6 +706,7 @@ fn run_workspace_session_delivery(
             "name": hb.name,
             "agent": agent_name,
             "targetSessionId": target_id,
+            "wakePrompt": delivery.to_json(),
         })
     } else {
         // Compose a single audit string from the canonical reason +
@@ -734,16 +753,25 @@ fn run_inject(
         // `wakeup_empty` without disabling.
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     }
+    // 0.45.6: a long body goes as a pointer to the file, never pasted
+    // where the TUI could keep only its tail.
+    let delivery = wake::wake_delivery_for_body(body_trimmed.to_string(), wakeup_abs, &hb.name);
 
-    if let Err(e) = live.write(body_trimmed.as_bytes()) {
+    // 0.45.6: the same locked, framed inject `k2 msg` uses (was a raw
+    // write + 150ms + CR that raced a human composer and could not tell
+    // a dead child from a delivered prompt). Not delivered → a recorded
+    // failure, never `fired` (GH #61).
+    if let Err(reason) = crate::workspace_msg::deliver_heartbeat_wake(&live, &delivery.prompt, None)
+    {
         return record_fire_failure(
-            project_id, agent_name, hb, &format!("inject write to live PTY failed: {e}"),
+            project_id, agent_name, hb,
+            &format!(
+                "inject into live session {}: wake prompt not delivered ({reason}); {}",
+                live.session_id(),
+                delivery.audit_note()
+            ),
         );
     }
-    // Two-phase: paste body, send Enter after a brief settle. Same
-    // pattern the awareness-bus inject uses.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let _ = live.write(b"\r");
 
     crate::active_reaper::note_workspace_need(project_id);
     stamp_fired_and_release(project_id, &hb.name);
@@ -766,7 +794,9 @@ fn run_inject(
     crate::session_events::emit_heartbeat_live(project_path, project_id, &hb.name, true);
 
     let decision = write_fired_audit(project_id, agent_name, hb,
-        &format!("smart_launch: injected into live session {target_id}"), catchup_of);
+        &format!("smart_launch: injected into live session {target_id}; {}",
+            delivery.audit_note()),
+        catchup_of);
     serde_json::json!({
         "success": true,
         "decision": decision,
@@ -775,6 +805,7 @@ fn run_inject(
         "agent": agent_name,
         "claudeSessionId": session_id,
         "targetSessionId": target_id,
+        "wakePrompt": delivery.to_json(),
     })
 }
 
@@ -850,7 +881,7 @@ fn run_resume_and_fire(
     resolved: &k2_core::workspace::agent_resolve::ResolvedAgentCommand,
     catchup_of: Option<&str>,
 ) -> serde_json::Value {
-    let Some(prompt) = wake::compose_wake_prompt_from_path(wakeup_abs) else {
+    let Some(delivery) = wake::compose_wake_delivery_from_path(wakeup_abs, &hb.name) else {
         return auto_disable_missing_wakeup(project_id, agent_name, hb, wakeup_abs);
     };
 
@@ -859,7 +890,8 @@ fn run_resume_and_fire(
     // resume interactively in their own grammar). A resolved default
     // with NO adapter (hermes, custom commands) can't resume the saved
     // session — degrade to a fresh fire, exactly the Slice-2 gate.
-    let Some((args, delivery)) = plan_resume_fire(resolved, session_id, &prompt) else {
+    let Some((args, prompt_delivery)) = plan_resume_fire(resolved, session_id, &delivery.prompt)
+    else {
         return run_fresh_fire(project_path, project_id, agent_name, hb, wakeup_abs, catchup_of);
     };
 
@@ -892,29 +924,6 @@ fn run_resume_and_fire(
 
     match outcome {
         Ok(out) => {
-            // Slice 3b — non-claude resume is interactive; deliver the
-            // wakeup into the freshly-resumed PTY with the same
-            // two-phase settle write `wake_headless` uses (body →
-            // 150ms → CR after a startup beat). Claude's --print path
-            // carried the prompt positionally and skips this.
-            if let ResumePromptDelivery::PtyWrite(prompt) = delivery {
-                if let Some(session) =
-                    crate::v2_session_map::lookup_by_session_id(&out.session_id)
-                {
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(1500));
-                        session.write(prompt.into_bytes());
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                        session.write(b"\r".to_vec());
-                    });
-                } else {
-                    k2_core::log_debug!(
-                        "[heartbeat] post-resume lookup miss for session={} — wakeup body not delivered",
-                        out.session_id
-                    );
-                }
-            }
-
             // 0.37.8 — heartbeat fires don't touch workspace_sessions;
             // that row is the chat tab's lane. The pre-fix
             // `k2so_agents_lock` call stamped the chat tab's
@@ -952,10 +961,52 @@ fn run_resume_and_fire(
                     "heartbeatName": hb.name,
                 }),
             );
+            // Slice 3b — non-claude resume is interactive; deliver the
+            // wakeup into the freshly-resumed PTY. 0.45.6: through the
+            // guarded `k2 msg` path (readiness + quiescence + locked
+            // inject), synchronously, and `fired` only once it landed
+            // (GH #61). Claude's --print path carried the prompt
+            // positionally (argv) and skips this.
+            if let ResumePromptDelivery::PtyWrite(prompt) = prompt_delivery {
+                let delivered = match crate::v2_session_map::lookup_by_session_id(&out.session_id)
+                {
+                    Some(session) => {
+                        let provider =
+                            k2_core::workspace::provider_resume::provider_resume_for_command(
+                                &resolved.command,
+                            )
+                            .map(|p| p.provider)
+                            .unwrap_or("");
+                        let profile =
+                            k2_core::workspace::provider_resume::resolve_injection_profile(
+                                resolved.readiness.as_deref(),
+                                provider,
+                            );
+                        crate::workspace_msg::deliver_heartbeat_wake(
+                            &session_lookup::LiveSession(session),
+                            &prompt,
+                            Some((&profile, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT)),
+                        )
+                    }
+                    None => Err("session_lookup_miss"),
+                };
+                if let Err(reason) = delivered {
+                    return record_fire_failure(
+                        project_id, agent_name, hb,
+                        &format!(
+                            "resume: wake prompt not delivered to session {} ({reason}); {}",
+                            out.session_id,
+                            delivery.audit_note()
+                        ),
+                    );
+                }
+            }
             crate::active_reaper::note_workspace_need(project_id);
             stamp_fired_and_release(&project_id, &hb.name);
             let decision = write_fired_audit(project_id, agent_name, hb,
-                "smart_launch: resumed session, fired wakeup", catchup_of);
+                &format!("smart_launch: resumed session, fired wakeup; {}",
+                    delivery.audit_note()),
+                catchup_of);
             serde_json::json!({
                 "success": true,
                 "decision": decision,
@@ -964,6 +1015,7 @@ fn run_resume_and_fire(
                 "agent": agent_name,
                 "claudeSessionId": session_id,
                 "targetSessionId": out.session_id.to_string(),
+                "wakePrompt": delivery.to_json(),
             })
         }
         Err(e) => record_fire_failure(

@@ -192,29 +192,12 @@ pub fn resolve_resume_chat_args_ex(
     // Identity snapshot + the workspace's resolved default agent
     // (levels 2–4: projects.default_agent → global → claude). One
     // scoped lock; the adapter's fs probes below run unlocked.
-    let (project_id, saved_session, saved_harness, default_cmd) = {
-        let db = crate::db::shared();
-        let conn = db.lock();
-        let project_id: Option<String> = conn
-            .query_row(
-                "SELECT id FROM projects WHERE path = ?1",
-                params![project_path],
-                |row| row.get(0),
-            )
-            .ok();
-        let row = project_id.as_ref().and_then(|pid| {
-            crate::db::schema::WorkspaceSession::get(&conn, pid)
-                .ok()
-                .flatten()
-        });
-        let saved_session = row
-            .as_ref()
-            .and_then(|r| r.session_id.clone())
-            .filter(|s| !s.is_empty());
-        let saved_harness = row.map(|r| r.harness);
-        let default_cmd = resolve_agent_command(&conn, project_path);
-        (project_id, saved_session, saved_harness, default_cmd)
-    };
+    let (project_id, saved_session, saved_harness, default_cmd) = identity_snapshot(project_path);
+
+    // GL44: the id a custom preset's pinned Thread lived on, when the
+    // workspace has since moved to a known provider. Its Thread follows
+    // the new conversation (below) instead of being orphaned.
+    let mut prior_custom_id: Option<String> = None;
 
     // ── Case 1: saved session id — the stored HARNESS picks the
     // adapter (the canonical session's agent wins over the workspace
@@ -269,23 +252,35 @@ pub fn resolve_resume_chat_args_ex(
                 );
             }
             None => {
-                // Unknown harness (a custom command's token, or corrupt
-                // data). We cannot verify or resume it. Explicit pick →
-                // loud error; auto path → fall through and let the
-                // workspace default govern (below).
-                if explicit_selection {
-                    return Err(format!(
-                        "selected chat session {sid} belongs to unknown provider '{harness}'; \
-                         cannot resume it"
-                    ));
+                // Unknown harness: a custom preset's K2-owned Thread id
+                // (GL44), another custom command's token, or corrupt
+                // data. The custom preset that is still the workspace
+                // default keeps its id in the unknown-provider branch
+                // below, explicit pick or not.
+                let default_is_this_custom = provider_resume_for_command(&default_cmd.command)
+                    .is_none()
+                    && custom_provider_key(&default_cmd.command) == harness;
+                if !default_is_this_custom {
+                    // We cannot verify or resume it. Explicit pick → loud
+                    // error; auto path → fall through and let the
+                    // workspace default govern (below).
+                    if explicit_selection {
+                        return Err(format!(
+                            "selected chat session {sid} belongs to unknown provider '{harness}'; \
+                             cannot resume it"
+                        ));
+                    }
+                    crate::log_debug!(
+                        "[core/resume-chat] saved session {} for {} has unknown harness {:?}; \
+                         falling through to the workspace default agent",
+                        sid,
+                        project_path,
+                        harness
+                    );
+                    if !is_known_provider_conversation(sid, project_path) {
+                        prior_custom_id = Some(sid.clone());
+                    }
                 }
-                crate::log_debug!(
-                    "[core/resume-chat] saved session {} for {} has unknown harness {:?}; \
-                     falling through to the workspace default agent",
-                    sid,
-                    project_path,
-                    harness
-                );
             }
         }
     }
@@ -294,25 +289,35 @@ pub fn resolve_resume_chat_args_ex(
     // agent governs.
     match provider_resume_for_command(&default_cmd.command) {
         Some(adapter) => {
-            converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path)
+            let out = converge_or_mint(adapter, &default_cmd, project_id.as_deref(), project_path)?;
+            if let (Some(old), Some(pid)) = (prior_custom_id, project_id.as_deref()) {
+                follow_custom_thread(pid, &old, &out.resume_session);
+            }
+            Ok(out)
         }
         None => {
-            // Unknown provider: fresh bare spawn, no resume, no premint —
-            // the Slice-2 degraded behavior, now with a truthful harness
+            // Unknown provider (any custom preset): fresh bare spawn, no
+            // resume grammar, no premint flag, and a truthful harness
             // stamp (the command's first token) so the row never lies
-            // 'claude' about some custom agent's spawn.
-            let provider = default_cmd
-                .command
-                .rsplit('/')
-                .next()
-                .unwrap_or(&default_cmd.command)
-                .to_string();
-            persist_session_identity(project_id.as_deref(), None, &provider);
+            // 'claude' about some custom agent's spawn. GL44: the
+            // pinned Thread still needs a conversation id, so K2 mints
+            // and keeps one (the program never sees it).
+            let provider = custom_provider_key(&default_cmd.command);
+            let resume_session = match project_id.as_deref() {
+                Some(pid) => pin_custom_conversation(
+                    pid,
+                    saved_session.as_deref(),
+                    saved_harness.as_deref(),
+                    &provider,
+                    project_path,
+                ),
+                None => String::new(),
+            };
             Ok(ResumeChatArgs {
                 command: default_cmd.command.clone(),
                 args: default_cmd.args.clone(),
                 cwd: project_path.to_string(),
-                resume_session: String::new(),
+                resume_session,
                 resumed_existing: false,
                 provider,
                 pending_session_discovery: false,
@@ -321,6 +326,158 @@ pub fn resolve_resume_chat_args_ex(
             })
         }
     }
+}
+
+/// Project id, saved pinned id (non-empty), saved harness and the
+/// resolved default agent, under one DB lock.
+fn identity_snapshot(
+    project_path: &str,
+) -> (Option<String>, Option<String>, Option<String>, ResolvedAgentCommand) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let project_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM projects WHERE path = ?1",
+            params![project_path],
+            |row| row.get(0),
+        )
+        .ok();
+    let row = project_id.as_ref().and_then(|pid| {
+        crate::db::schema::WorkspaceSession::get(&conn, pid)
+            .ok()
+            .flatten()
+    });
+    let saved_session = row
+        .as_ref()
+        .and_then(|r| r.session_id.clone())
+        .filter(|s| !s.trim().is_empty());
+    let saved_harness = row.map(|r| r.harness);
+    let default_cmd = resolve_agent_command(&conn, project_path);
+    (project_id, saved_session, saved_harness, default_cmd)
+}
+
+/// The harness key for a command no adapter knows: the program's
+/// basename (`/opt/bin/board-keeper` → `board-keeper`). `command` is the
+/// already-parsed program (a path may hold spaces), as before GL44.
+fn custom_provider_key(command: &str) -> String {
+    command.rsplit('/').next().unwrap_or(command).to_string()
+}
+
+/// True when `sid` is a conversation a known provider has on disk for
+/// this workspace, i.e. not a K2-owned id. Only the providers whose check
+/// is a file probe (claude, grok, cursor): this runs on custom agents'
+/// Thread lookups, and the parse-the-history providers (codex, pi,
+/// gemini) would make every read walk their stores. Those ids keep their
+/// own harness stamp, so they never reach the custom keep path anyway.
+fn is_known_provider_conversation(sid: &str, project_path: &str) -> bool {
+    crate::workspace::provider_resume::known_providers()
+        .iter()
+        .filter(|p| matches!(p.provider, "claude" | "grok" | "cursor"))
+        .any(|p| p.session_file_exists(sid, project_path))
+}
+
+/// GL44: the pinned Thread conversation id for a custom-preset agent.
+///
+/// Keeps the saved id when it was minted for THIS custom command (same
+/// harness, and not some known provider's conversation on disk), so the
+/// Thread survives wakes, restarts and `k2 agent restart`. Otherwise
+/// (no id yet, a switch from Claude or from another custom command)
+/// mints a fresh v4 id and stamps it with `harness = provider`. The
+/// stale-id side bug: a workspace that moved Claude → custom used to
+/// keep the Claude id, so Thread showed the old conversation while
+/// delivery reached the new program.
+fn pin_custom_conversation(
+    project_id: &str,
+    saved_session: Option<&str>,
+    saved_harness: Option<&str>,
+    provider: &str,
+    project_path: &str,
+) -> String {
+    if let Some(sid) = saved_session.map(str::trim).filter(|s| !s.is_empty()) {
+        if saved_harness == Some(provider) && !is_known_provider_conversation(sid, project_path) {
+            return sid.to_string();
+        }
+    }
+    let new_sid = uuid::Uuid::new_v4().to_string();
+    persist_session_identity(Some(project_id), Some(&new_sid), provider);
+    crate::log_debug!(
+        "[core/resume-chat] minted Thread conversation {} for custom preset {:?} at {}",
+        new_sid,
+        provider,
+        project_path
+    );
+    new_sid
+}
+
+/// GL44 (custom → known provider): move the custom preset's Thread onto
+/// the conversation that now holds the pin, as
+/// `follow_adopted_conversation` does for adopted tab ids. When the new
+/// provider mints its own id later (codex, pi, …), the move waits for
+/// that adoption ([`take_pending_custom_thread_move`]).
+fn follow_custom_thread(project_id: &str, old: &str, new: &str) {
+    if new.trim().is_empty() {
+        pending_custom_moves()
+            .lock()
+            .insert(project_id.to_string(), old.to_string());
+        return;
+    }
+    move_thread(old, new);
+}
+
+fn move_thread(old: &str, new: &str) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    if let Err(e) = crate::overlay::move_conversation(&conn, old, new) {
+        crate::log_debug!("[core/resume-chat] move custom Thread {old} -> {new} failed: {e}");
+    }
+}
+
+fn pending_custom_moves() -> &'static parking_lot::Mutex<std::collections::HashMap<String, String>> {
+    static MOVES: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    MOVES.get_or_init(Default::default)
+}
+
+/// Called by the post-hoc adoption helper once a self-minting provider's
+/// id is stamped: a custom preset's Thread that was waiting for it
+/// moves onto `new` now. No-op when nothing waits.
+pub(crate) fn take_pending_custom_thread_move(project_id: &str, new: &str) {
+    let old = pending_custom_moves().lock().remove(project_id);
+    if let Some(old) = old {
+        move_thread(&old, new);
+    }
+}
+
+/// GL44 for spawn sites that bypass the resolver for a custom preset
+/// (canonical profile spawn, `/cli/agents/launch`, the Thread address
+/// lookup): make sure the workspace's custom agent has its pinned
+/// Thread conversation. Returns the pinned id when the governing agent
+/// is a custom preset; `None` for known providers (their own resolver
+/// paths pin them) and unregistered paths.
+pub fn ensure_custom_thread_pin(project_path: &str) -> Option<String> {
+    let (project_id, saved_session, saved_harness, default_cmd) = identity_snapshot(project_path);
+    let project_id = project_id?;
+    if provider_resume_for_command(&default_cmd.command).is_some() {
+        return None;
+    }
+    // A saved known-provider conversation still governs the pinned Chat
+    // (case 1 of the resolver); don't pin over it.
+    if saved_session.is_some()
+        && saved_harness
+            .as_deref()
+            .and_then(provider_resume_for_provider)
+            .is_some()
+    {
+        return None;
+    }
+    let provider = custom_provider_key(&default_cmd.command);
+    Some(pin_custom_conversation(
+        &project_id,
+        saved_session.as_deref(),
+        saved_harness.as_deref(),
+        &provider,
+        project_path,
+    ))
 }
 
 /// Cases 2 (GH#24 converge-to-newest) and 3 (brand-new premint /
@@ -558,8 +715,9 @@ pub fn resolve_never_chatted_chat_args(
     if provider.is_empty() {
         return Err("target provider required".to_string());
     }
-    let adapter = provider_resume_for_provider(provider)
-        .ok_or_else(|| format!("unknown harness: {provider}"))?;
+    let Some(adapter) = provider_resume_for_provider(provider) else {
+        return never_chatted_custom_args(project_path, provider);
+    };
 
     let (project_id, default_cmd) = {
         let db = crate::db::shared();
@@ -615,6 +773,36 @@ pub fn resolve_never_chatted_chat_args(
             })
         }
     }
+}
+
+/// New chat for a custom preset (GL44): only the workspace's own custom
+/// default qualifies (`provider` = its command's basename). Mints a new
+/// Thread conversation id and returns the preset's argv verbatim (a
+/// custom program's flags mean nothing to K2, so none are stripped). Any
+/// other unknown harness stays an error.
+fn never_chatted_custom_args(project_path: &str, provider: &str) -> Result<ResumeChatArgs, String> {
+    let (project_id, _, _, default_cmd) = identity_snapshot(project_path);
+    if provider_resume_for_command(&default_cmd.command).is_some()
+        || custom_provider_key(&default_cmd.command) != provider
+    {
+        return Err(format!("unknown harness: {provider}"));
+    }
+    let Some(project_id) = project_id else {
+        return Err(format!("project not registered: {project_path}"));
+    };
+    let new_sid = uuid::Uuid::new_v4().to_string();
+    persist_session_identity(Some(&project_id), Some(&new_sid), provider);
+    Ok(ResumeChatArgs {
+        command: default_cmd.command.clone(),
+        args: default_cmd.args.clone(),
+        cwd: project_path.to_string(),
+        resume_session: new_sid,
+        resumed_existing: false,
+        provider: provider.to_string(),
+        pending_session_discovery: false,
+        env: default_cmd.env.clone(),
+        readiness: default_cmd.readiness.clone(),
+    })
 }
 
 /// Stamp harness and clear `session_id`. [`persist_session_identity`]
@@ -1052,17 +1240,191 @@ mod tests {
             vec!["--chat".to_string()],
             "preset args pass through verbatim"
         );
-        assert!(out.resume_session.is_empty());
+        assert!(
+            !out.args.iter().any(|a| a == &out.resume_session),
+            "the K2 Thread id never reaches a custom program's argv"
+        );
         assert!(!out.resumed_existing);
         assert!(
             !out.pending_session_discovery,
             "no adapter → nothing to discover"
         );
         assert_eq!(out.provider, "aider");
+        assert!(
+            uuid::Uuid::parse_str(&out.resume_session).is_ok(),
+            "GL44: a custom preset gets a K2-minted v4 Thread id, got {:?}",
+            out.resume_session
+        );
         assert_eq!(
             saved_row(&project_id),
-            Some((None, "aider".to_string())),
+            Some((Some(out.resume_session.clone()), "aider".to_string())),
             "harness records the actual command token, never a fake 'claude'"
+        );
+    }
+
+    // ── GL44: custom presets get a pinned Thread conversation ─────────
+
+    #[test]
+    fn custom_preset_thread_id_is_kept_across_wakes_and_explicit_picks() {
+        let _guard = HomeGuard::new("custom-keep");
+        crate::db::init_for_tests();
+        let preset = insert_preset("board-keeper --board main", 956);
+        let path = format!("/fixture/custom-keep-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&preset));
+
+        let first = resolve_resume_chat_args_ex(&path, false).expect("first launch");
+        assert_eq!(first.command, "board-keeper");
+        assert_eq!(first.args, vec!["--board".to_string(), "main".to_string()]);
+        assert_eq!(first.provider, "board-keeper");
+        let pin = first.resume_session.clone();
+        assert!(uuid::Uuid::parse_str(&pin).is_ok(), "minted id: {pin:?}");
+
+        // A wake / restart resolves again: same id, same argv.
+        let again = resolve_resume_chat_args_ex(&path, false).expect("wake");
+        assert_eq!(again.resume_session, pin, "the Thread id survives a wake");
+        assert_eq!(again.args, first.args);
+        // The pinned-tab explicit path (canonical respawn) keeps it too,
+        // instead of erroring on an "unknown provider".
+        let explicit = resolve_resume_chat_args_ex(&path, true).expect("explicit");
+        assert_eq!(explicit.resume_session, pin);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(pin.clone()), "board-keeper".to_string()))
+        );
+        // Spawn sites that bypass the resolver see the same id.
+        assert_eq!(ensure_custom_thread_pin(&path).as_deref(), Some(pin.as_str()));
+
+        // New chat mints a different id and keeps the preset argv.
+        let fresh = resolve_never_chatted_chat_args(&path, "board-keeper").expect("new chat");
+        assert_ne!(fresh.resume_session, pin, "New chat starts a new Thread");
+        assert_eq!(fresh.args, first.args);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(fresh.resume_session.clone()), "board-keeper".to_string()))
+        );
+        assert_eq!(
+            resolve_resume_chat_args_ex(&path, false).expect("after new chat").resume_session,
+            fresh.resume_session
+        );
+    }
+
+    #[test]
+    fn claude_to_custom_switch_mints_a_fresh_thread_id() {
+        let guard = HomeGuard::new("claude-to-custom");
+        crate::db::init_for_tests();
+        let preset = insert_preset("board-keeper", 957);
+        let path = format!("/fixture/claude-to-custom-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&preset));
+        // The field shape: the old Claude conversation is still the saved
+        // id (its JSONL on disk) while the harness already names the
+        // custom preset.
+        let claude_sid = "01920000-abcd-7000-8000-00000000c1a0";
+        write_claude_session(&guard.home, &path, claude_sid);
+        set_saved_session(&project_id, claude_sid, "board-keeper");
+
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_eq!(out.command, "board-keeper");
+        assert_ne!(out.resume_session, claude_sid, "must not reuse the stale Claude id");
+        assert!(uuid::Uuid::parse_str(&out.resume_session).is_ok());
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(out.resume_session.clone()), "board-keeper".to_string()))
+        );
+        assert_eq!(ensure_custom_thread_pin(&path), Some(out.resume_session));
+    }
+
+    #[test]
+    fn another_custom_commands_id_is_not_reused() {
+        let _guard = HomeGuard::new("custom-to-custom");
+        crate::db::init_for_tests();
+        let preset = insert_preset("board-keeper", 958);
+        let path = format!("/fixture/custom-to-custom-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&preset));
+        let old = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &old, "notes-keeper");
+
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_ne!(out.resume_session, old);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(out.resume_session), "board-keeper".to_string()))
+        );
+    }
+
+    #[test]
+    fn custom_to_claude_switch_moves_the_thread_onto_the_new_conversation() {
+        let _guard = HomeGuard::new("custom-to-claude");
+        crate::db::init_for_tests();
+        let path = format!("/fixture/custom-to-claude-{}", uuid::Uuid::new_v4());
+        // Default agent is claude now; the saved id is the custom preset's.
+        let project_id = insert_project(&path, None);
+        let k2_id = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &k2_id, "board-keeper");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::overlay::post_thread(&conn, &k2_id, &project_id, "rosson", "ws", "board saved", "compose")
+                .expect("seed custom Thread");
+        }
+
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_eq!(out.command, "claude");
+        assert_ne!(out.resume_session, k2_id);
+        let moved = crate::overlay::read_thread(&out.resume_session, 0).expect("read new");
+        let bodies: Vec<String> = moved.iter().filter_map(|i| i.doc.body.clone()).collect();
+        assert_eq!(bodies, vec!["board saved".to_string()], "the custom Thread follows the switch");
+        assert!(
+            crate::overlay::read_thread(&k2_id, 0).expect("read old").is_empty(),
+            "nothing is left behind under the old id"
+        );
+        // The custom preset is no longer the default: nothing to pin.
+        assert_eq!(ensure_custom_thread_pin(&path), None);
+    }
+
+    #[test]
+    fn custom_to_self_minting_provider_moves_the_thread_on_adoption() {
+        let _guard = HomeGuard::new("custom-to-pi");
+        crate::db::init_for_tests();
+        let pi = insert_preset("pi", 959);
+        let path = format!("/fixture/custom-to-pi-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&pi));
+        let k2_id = uuid::Uuid::new_v4().to_string();
+        set_saved_session(&project_id, &k2_id, "board-keeper");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::overlay::post_thread(&conn, &k2_id, &project_id, "rosson", "ws", "keep me", "compose")
+                .expect("seed custom Thread");
+        }
+        let out = resolve_resume_chat_args_ex(&path, false).expect("resolve");
+        assert_eq!(out.command, "pi");
+        assert!(out.pending_session_discovery);
+        // Adoption stamps pi's own id; the waiting Thread moves onto it.
+        let pi_id = uuid::Uuid::new_v4().to_string();
+        take_pending_custom_thread_move(&project_id, &pi_id);
+        let moved = crate::overlay::read_thread(&pi_id, 0).expect("read pi");
+        assert_eq!(moved.len(), 1, "{moved:?}");
+        // Consumed once.
+        take_pending_custom_thread_move(&project_id, "other");
+        assert!(crate::overlay::read_thread("other", 0).expect("read other").is_empty());
+    }
+
+    #[test]
+    fn known_provider_saved_chat_is_not_pinned_over_by_the_custom_helper() {
+        let guard = HomeGuard::new("custom-helper-known");
+        crate::db::init_for_tests();
+        let preset = insert_preset("board-keeper", 960);
+        let path = format!("/fixture/custom-helper-known-{}", uuid::Uuid::new_v4());
+        let project_id = insert_project(&path, Some(&preset));
+        let claude_sid = "01920000-abcd-7000-8000-00000000c1a1";
+        write_claude_session(&guard.home, &path, claude_sid);
+        set_saved_session(&project_id, claude_sid, "claude");
+        // The resolver still resumes that Claude chat (stored harness
+        // wins), so the helper leaves it alone.
+        assert_eq!(ensure_custom_thread_pin(&path), None);
+        assert_eq!(
+            saved_row(&project_id),
+            Some((Some(claude_sid.to_string()), "claude".to_string()))
         );
     }
 

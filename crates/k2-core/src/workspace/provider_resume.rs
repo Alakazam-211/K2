@@ -160,6 +160,12 @@ pub fn provider_resume_for_command(command: &str) -> Option<&'static ProviderRes
     PROVIDERS.iter().find(|p| p.command == name)
 }
 
+/// Every known provider adapter (the static table), for callers that
+/// must ask "is this id any known provider's conversation?".
+pub fn known_providers() -> &'static [ProviderResume] {
+    PROVIDERS
+}
+
 /// Resolve an adapter from a stored PROVIDER string (the
 /// `workspace_sessions.harness` value / `detect_active_session` key).
 pub fn provider_resume_for_provider(provider: &str) -> Option<&'static ProviderResume> {
@@ -637,6 +643,10 @@ pub fn adopt_discovered_session(provider: &str, project_path: &str) -> Option<St
                 session_id,
                 project_path
             );
+            // GL44: a custom preset's Thread waiting for this id moves
+            // onto it now (outside the DB lock; the move takes it).
+            drop(conn);
+            crate::workspace::resume_chat::take_pending_custom_thread_move(&project_id, &session_id);
             Some(session_id)
         }
         Err(e) => {

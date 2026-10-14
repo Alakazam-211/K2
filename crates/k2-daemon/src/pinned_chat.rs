@@ -234,12 +234,14 @@ fn ensure_pinned_chat_inner(
     //    only. Snapshot exclude ids BEFORE that resolve clears the saved
     //    source id.
     let (resolved, adopt, fresh_spawn) = if let Some(provider) = fresh_provider {
-        let adapter = provider_resume_for_provider(provider)
-            .ok_or_else(|| format!("unknown harness: {provider}"))?;
-        let adopt = if adapter.premint.is_none() {
-            PinnedAdopt::Exclude(fresh_exclude_ids(adapter.provider, project_path))
-        } else {
-            PinnedAdopt::Skip
+        // A custom preset (no adapter) is accepted only as the
+        // workspace's own default: the resolver mints its new Thread id
+        // (GL44) and refuses any other unknown harness.
+        let adopt = match provider_resume_for_provider(provider) {
+            Some(adapter) if adapter.premint.is_none() => {
+                PinnedAdopt::Exclude(fresh_exclude_ids(adapter.provider, project_path))
+            }
+            _ => PinnedAdopt::Skip,
         };
         let resolved = resolve_never_chatted_chat_args(project_path, provider)?;
         (resolved, adopt, true)

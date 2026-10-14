@@ -2191,6 +2191,17 @@ fn run_workspace_legacy_migrations_sweep() {
         workspace::repair_mismigrated_heartbeats(&project.path);
         let _ = workspace::archive_orphan_top_tier_agents(&project.path);
         ensure_all_skills_up_to_date(&project.path);
+        // GH #40: say so loudly when the regen above could not leave the
+        // agent a readable charter (foreign dangling link, write failure).
+        for p in k2_core::workspace::onboarding::root_charter_problems(&project.path) {
+            log_debug!(
+                "[charter-health] {}: {} {}{}",
+                project.path,
+                p.file,
+                p.problem,
+                p.target.map(|t| format!(" → {t}")).unwrap_or_default(),
+            );
+        }
 
         // 0.39.0f Phase 2.1b: relocate .k2so/work → .k2so/inbox. Marker
         // file (`.k2so/.work-to-inbox-migration-v1-done`) gates re-runs;

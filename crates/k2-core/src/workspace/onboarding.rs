@@ -299,6 +299,26 @@ pub fn heal_agents_md_generate_marker(project_path: &str) -> bool {
 /// | Symlink elsewhere | Unmanaged — same skip |
 pub fn plant_root_agents_md(project_path: &str, composed_body: &str) -> PlantResult {
     let target = Path::new(project_path).join("AGENTS.md");
+    // GH #40: a K2 leftover link into `.k2/` whose target is gone (the
+    // 06-29 generation pointed at `.k2/skills/k2so/SKILL.md`) gave agents
+    // no charter at all. It is ours and useless: replace it with the file.
+    if is_dangling_k2_link(project_path, &target) {
+        if let Err(e) = fs::remove_file(&target) {
+            return PlantResult::Skipped {
+                reason: format!("remove dangling K2 link failed: {e}"),
+            };
+        }
+        if let Err(e) = atomic_write_str(&target, composed_body) {
+            return PlantResult::Skipped {
+                reason: format!("write failed: {e}"),
+            };
+        }
+        crate::log_debug!(
+            "[agents-md-generate] replaced dangling K2 link at {}",
+            target.display()
+        );
+        return PlantResult::Written;
+    }
     match fs::symlink_metadata(&target) {
         Ok(meta) if meta.file_type().is_symlink() => {
             if is_our_agents_md_symlink(project_path, &target) {
@@ -354,6 +374,114 @@ pub fn plant_root_agents_md(project_path: &str, composed_body: &str) -> PlantRes
             PlantResult::Written
         }
     }
+}
+
+/// Absolute target of a symlink (relative targets resolve against the
+/// link's directory), or None when `link` is not a symlink.
+fn symlink_target_abs(link: &Path) -> Option<PathBuf> {
+    let meta = fs::symlink_metadata(link).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    let target = fs::read_link(link).ok()?;
+    Some(if target.is_absolute() {
+        target
+    } else {
+        link.parent().unwrap_or_else(|| Path::new("")).join(target)
+    })
+}
+
+/// True when `link` is a symlink whose target does not exist and points
+/// inside this workspace's `.k2/` (or legacy `.k2so/`) tree — a K2-made
+/// link left dangling by a layout change, safe to replace.
+pub fn is_dangling_k2_link(project_path: &str, link: &Path) -> bool {
+    let Some(target) = symlink_target_abs(link) else {
+        return false;
+    };
+    if target.exists() {
+        return false;
+    }
+    let root = Path::new(project_path);
+    let lexical = |p: &Path| -> PathBuf {
+        let mut out = PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => out.push(other),
+            }
+        }
+        out
+    };
+    let target = lexical(&target);
+    [".k2", ".k2so"]
+        .iter()
+        .any(|d| target.starts_with(lexical(&root.join(d))))
+}
+
+/// Root instruction files K2 can plant (generate or leftover fan-out).
+pub const ROOT_CHARTER_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md", "GEMINI.md", "AGENT.md", ".goosehints"];
+
+/// One problem with a workspace's charter files (GH #40 health check).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharterProblem {
+    /// Workspace-relative file (`AGENTS.md`, `.k2/AGENTS.md`, …).
+    pub file: String,
+    /// `missing` or `dangling`.
+    pub problem: String,
+    /// Where a dangling link points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// Health check for the files an agent reads its charter from (GH #40):
+/// the canonical `.k2/AGENTS.md`, root `AGENTS.md` when generate is on,
+/// root `CLAUDE.md` when leftover fan-out is on, and any root charter
+/// link whose target is gone. Empty = healthy. Read-only.
+pub fn root_charter_problems(project_path: &str) -> Vec<CharterProblem> {
+    let root = Path::new(project_path);
+    let mut out = Vec::new();
+    let dot = crate::workspace_dot_dir(project_path);
+    let dot_name = dot
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".k2".to_string());
+    if !dot.join("AGENTS.md").is_file() {
+        out.push(CharterProblem {
+            file: format!("{dot_name}/AGENTS.md"),
+            problem: "missing".to_string(),
+            target: None,
+        });
+    }
+    for name in ROOT_CHARTER_FILES {
+        let path = root.join(name);
+        if let Some(target) = symlink_target_abs(&path) {
+            if !target.exists() {
+                out.push(CharterProblem {
+                    file: (*name).to_string(),
+                    problem: "dangling".to_string(),
+                    target: Some(target.to_string_lossy().into_owned()),
+                });
+            }
+            continue;
+        }
+        let expected = match *name {
+            "AGENTS.md" => agents_md_generate_enabled(project_path),
+            "CLAUDE.md" => harness_fanout_enabled(project_path),
+            _ => false,
+        };
+        if expected && fs::symlink_metadata(&path).is_err() {
+            out.push(CharterProblem {
+                file: (*name).to_string(),
+                problem: "missing".to_string(),
+                target: None,
+            });
+        }
+    }
+    out
 }
 
 /// Classify cwd `AGENTS.md` after a compose that already planted.

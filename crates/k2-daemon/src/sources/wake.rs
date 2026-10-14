@@ -84,7 +84,7 @@ pub fn deliver_with(req: &WakeRequest, live: &LiveFn, ws_path: &PathFn, inbox: &
     let Some(path) = ws_path(&req.project_id) else {
         return WakeOutcome::Undeliverable { code: "workspace_not_found".into() };
     };
-    let r = live(&req.project_id, &req.note, &req.from);
+    let r = live(&req.project_id, &live_text(&req.note, &req.from), &req.from);
     if r.success {
         return WakeOutcome::Delivered { session_id: r.session_id, woke: r.woke };
     }
@@ -95,6 +95,26 @@ pub fn deliver_with(req: &WakeRequest, live: &LiveFn, ws_path: &PathFn, inbox: &
         Ok(()) => WakeOutcome::Inbox,
         Err(_) => WakeOutcome::Undeliverable { code: "inbox_failed".into() },
     }
+}
+
+/// The live path frames the note as `[from source:<name>] …`, so the
+/// note's own leading `[source:<name>]` tag would say the same thing twice
+/// (`[from source:fleet] [source:fleet] …`). Drop that first tag for the
+/// live text only; a `[TEST]` marker stays in front. The inbox body keeps
+/// the tag (the inbox shows `from` apart from the body), and later
+/// coalesced blocks keep theirs.
+pub fn live_text(note: &str, from: &str) -> String {
+    if !from.starts_with("source:") {
+        return note.to_string();
+    }
+    let tag = format!("[{from}] ");
+    if let Some(rest) = note.strip_prefix(&tag) {
+        return rest.to_string();
+    }
+    if let Some(rest) = note.strip_prefix("[TEST] ").and_then(|r| r.strip_prefix(&tag)) {
+        return format!("[TEST] {rest}");
+    }
+    note.to_string()
 }
 
 // ── the queue ────────────────────────────────────────────────────────
@@ -1144,6 +1164,40 @@ mod tests {
         assert_eq!(DaemonWaker.deliver(&req), WakeOutcome::Delivered { session_id: None, woke: false });
         test_seams::set(None);
         assert_eq!(seen.take(), vec!["seam p1 source:fleet".to_string()]);
+    }
+
+    /// The live text carries one source tag: the msg prefix's
+    /// `[from source:<name>]`, never a second `[source:<name>]` after it.
+    #[test]
+    fn live_note_has_a_single_source_tag() {
+        use std::rc::Rc;
+        let note = "[source:fleet] ohana went red at 03:12 UTC. Runs on h.\n\n[source:fleet] recovered at 03:20 UTC.";
+        let req = WakeRequest { project_id: "p1".into(), note: note.into(), from: "source:fleet".into(), title: "t".into() };
+        let seen: Rc<RefCellLog> = Rc::new(RefCellLog::default());
+        let s1 = seen.clone();
+        let live = move |_: &str, text: &str, from: &str| {
+            s1.push(crate::workspace_msg::format_message(from, text, ""));
+            LiveResult { success: true, session_id: None, woke: true, reason: None }
+        };
+        deliver_with(&req, &live, &|_| Some("/w".into()), &|_, _, _, _| Ok(()));
+        let wire = seen.take().remove(0);
+        assert!(wire.starts_with("[from source:fleet] ohana went red at 03:12"), "{wire}");
+        assert_eq!(wire.matches("[source:fleet]").count(), 1, "only the coalesced second block keeps its tag: {wire}");
+        assert!(!wire.contains("[from source:fleet] [source:fleet]"), "{wire}");
+        // The inbox body keeps the full note (its `from` is shown apart).
+        let s2 = seen.clone();
+        let fail = |_: &str, _: &str, _: &str| LiveResult { success: false, session_id: None, woke: false, reason: Some("pty_stalled".into()) };
+        let inbox = move |_: &str, _: &str, body: &str, _: &str| {
+            s2.push(body.to_string());
+            Ok(())
+        };
+        deliver_with(&req, &fail, &|_| Some("/w".into()), &inbox);
+        assert_eq!(seen.take(), vec![note.to_string()]);
+        // A test wake keeps [TEST] in front, with one tag.
+        assert_eq!(live_text("[TEST] [source:fleet] This is a test.", "source:fleet"), "[TEST] This is a test.");
+        // Another source's tag, or a non-source sender, is left alone.
+        assert_eq!(live_text("[source:other] x", "source:fleet"), "[source:other] x");
+        assert_eq!(live_text("[source:fleet] x", "k2"), "[source:fleet] x");
     }
 
     #[derive(Default)]

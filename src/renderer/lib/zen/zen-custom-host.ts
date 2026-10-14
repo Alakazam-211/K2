@@ -22,6 +22,7 @@
 // Stopping removes only that frame; the rest of the Garden keeps running.
 
 import type { ZenFrameHello, ZenFrameReply } from './zen-custom-types'
+import type { CatalogWireError } from '../contract/catalog-types'
 import type { ZenCustomLayer } from './zen-custom-bridge'
 import type { ZenWidgetStopReason } from './zen-custom-run'
 
@@ -37,7 +38,7 @@ export interface ZenFrameWindow {
 export interface ZenFrameHostOptions {
   hello: ZenFrameHello
   /** The custom layer, given the function that pushes to this frame. */
-  makeLayer(push: (sub: number, value: unknown) => void): ZenCustomLayer
+  makeLayer(push: (sub: number, value: unknown) => void, pushError: (sub: number, error: CatalogWireError) => void): ZenCustomLayer
   stop(reason: ZenWidgetStopReason): void
   /** Does this frame have keyboard focus now? */
   focused(): boolean
@@ -96,7 +97,10 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
   const post = (msg: ZenFrameReply): void => {
     if (!disposed) port.postMessage(msg)
   }
-  const layer = opts.makeLayer((sub, value) => post({ sub, value }))
+  const layer = opts.makeLayer(
+    (sub, value) => post({ sub, value }),
+    (sub, error) => post({ sub, error }),
+  )
   const report = (r: ZenFrameReport): void => {
     try {
       opts.onReport?.(r)

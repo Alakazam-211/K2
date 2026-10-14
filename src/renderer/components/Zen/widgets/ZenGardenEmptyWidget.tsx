@@ -158,12 +158,20 @@ export function ZenAskMyAgent({
   intro,
   draft,
   autoAsk,
+  preferred,
+  onPicked,
 }: ZenWidgetProps & {
   kind: string
   intro: ZenAskIntro
   draft(garden: { id: string; name: string }): string
   /** Checked once when the panel mounts: true opens the chooser by itself. */
   autoAsk?(): boolean
+  /** Garden v3 Ask (PRD §9.4): an agent to pick without the chooser when it
+   *  is among this computer's agents (the source's maker, or the one last
+   *  chosen). Resolved after `agents.local` answers. */
+  preferred?(): Promise<string | null>
+  /** The person (or `preferred`) picked this agent. */
+  onPicked?(address: string): void
 }): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>({ kind: 'empty' })
   const rows = useZenRows(bridge)
@@ -197,11 +205,23 @@ export function ZenAskMyAgent({
     bridge.call('compose.draft', row.address, draftRef.current(garden))
   }, [bridge, row])
 
+  const preferredRef = useRef(preferred)
+  preferredRef.current = preferred
+  const onPickedRef = useRef(onPicked)
+  onPickedRef.current = onPicked
   const ask = (): void => {
     setPhase({ kind: 'choosing', rows: null, error: null })
     void Promise.resolve()
       .then(() => bridge.call('agents.local') as Promise<ZenAgentRow[]>)
-      .then((list) => setPhase((p) => (p.kind === 'choosing' ? { kind: 'choosing', rows: list, error: null } : p)))
+      .then(async (list) => {
+        const want = preferredRef.current ? await preferredRef.current() : null
+        const hit = want ? list.find((r) => r.address === want) : undefined
+        if (hit) {
+          pickRef.current(hit)
+          return
+        }
+        setPhase((p) => (p.kind === 'choosing' ? { kind: 'choosing', rows: list, error: null } : p))
+      })
       .catch((err: unknown) =>
         setPhase((p) =>
           p.kind === 'choosing'
@@ -219,11 +239,14 @@ export function ZenAskMyAgent({
   }, [])
 
   const pick = (r: ZenAgentRow): void => {
+    onPickedRef.current?.(r.address)
     setPhase({ kind: 'talking', address: r.address })
     void Promise.resolve()
       .then(() => bridge.call('conversation.open', r.address))
       .catch((err: unknown) => console.warn('[zen] Ask my agent: open failed:', err))
   }
+  const pickRef = useRef(pick)
+  pickRef.current = pick
 
   if (row) {
     return (

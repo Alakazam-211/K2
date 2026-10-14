@@ -300,6 +300,8 @@ export interface K2Error extends Error {
   readonly cap?: string
   readonly room?: string
   readonly feature?: string
+  /** `unreachable` from a sources verb: the last view K2 has (phase stale). */
+  readonly last?: unknown
 }
 
 /** Every widget verb: its arguments and what it answers (or pushes). */

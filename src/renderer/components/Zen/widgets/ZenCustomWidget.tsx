@@ -18,6 +18,9 @@
 //      frame; K2's own built-ins (the Diary) draw edge to edge with none.
 //      When the widget fills a full-canvas Garden that has a menu, Reload
 //      is "Reload <name>" in that menu instead (`zen-fill-reload`).
+//      Garden v3: a widget that reads data sources also gets "Ask an agent
+//      about this" there (one row per source it reads; K2's own Ask box,
+//      `ZenSourceAsk`).
 
 import { useContext, useEffect, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
@@ -39,6 +42,7 @@ import {
 import type { ZenWidgetProps } from '../zen-registry'
 import { zenButtonStyle } from './ZenOverlay'
 import { ZenCustomFrame, type ZenCustomLoadProblem } from './ZenCustomFrame'
+import { zenBoundSourceAddresses, zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 
 function Card({
   testId,
@@ -106,8 +110,19 @@ function PausedStrip({ onResume, busy, error }: { onResume(): void; busy: boolea
   )
 }
 
-/** K2's ⋯ menu at the box's top right, outside the frame (UW25): Reload. */
-function CornerMenu({ name, onReload }: { name: string; onReload(): void }): React.JSX.Element {
+/** K2's ⋯ menu at the box's top right, outside the frame (UW25): Reload,
+ *  and for a card reading data sources, Ask an agent about each source. */
+function CornerMenu({
+  name,
+  onReload,
+  askAbout = [],
+  onAsk,
+}: {
+  name: string
+  onReload(): void
+  askAbout?: readonly string[]
+  onAsk?(address: string): void
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min', minWidth: 160, align: 'end' })
   return (
@@ -169,6 +184,24 @@ function CornerMenu({ name, onReload }: { name: string; onReload(): void }): Rea
             >
               Reload
             </button>
+            {onAsk &&
+              askAbout.map((address) => (
+                <button
+                  key={address}
+                  type="button"
+                  role="menuitem"
+                  data-zen-custom-menu-item="ask"
+                  data-zen-ask-source={address}
+                  onClick={() => {
+                    setOpen(false)
+                    onAsk(address)
+                  }}
+                  className="flex w-full items-center text-left cursor-pointer"
+                  style={{ padding: '6px 10px', borderRadius: 'calc(var(--zen-radius) - 4px)', color: 'var(--zen-text)' }}
+                >
+                  {askAbout.length > 1 ? `Ask an agent about ${address}` : 'Ask an agent about this'}
+                </button>
+              ))}
           </div>,
         )}
     </>
@@ -290,7 +323,14 @@ export function ZenCustomWidget({ decl, bridge }: ZenWidgetProps): React.JSX.Ele
       {(widget.paused !== null || pausedHere) && <PausedStrip onResume={resume} busy={busy} error={resumeError} />}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <ZenCustomFrame key={`${widget.hash}:${generation}`} widget={widget} gardenId={gid} bridge={bridge} onProblem={setProblem} />
-        {!builtin && !reloadInMenu && <CornerMenu name={widget.name} onReload={() => reloadZenWidget(key)} />}
+        {!builtin && !reloadInMenu && (
+          <CornerMenu
+            name={widget.name}
+            onReload={() => reloadZenWidget(key)}
+            askAbout={zenBoundSourceAddresses(widget)}
+            onAsk={(address) => void zenCustomSourcesFor(gid, () => widget).ask(address, null)}
+          />
+        )}
       </div>
     </>,
   )

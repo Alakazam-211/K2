@@ -264,6 +264,11 @@ pub const FEATURE_THREAD_ADDRESS_STABLE: &str = "thread-address-stable";
 /// reachable (`GET /cli/notify/prefs` `push` says that).
 pub const FEATURE_THREAD_PUSH: &str = "thread-push-v1";
 
+/// Garden v3 data sources (contract-sources-v1 §6): the `sources.*` widget
+/// verbs' catalog feature. `k2.can('sources.read')` reads it from this
+/// computer's daemon.
+pub const FEATURE_SOURCES: &str = "sources-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -292,6 +297,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_HOME_AVATARS);
     out.push(FEATURE_DAEMON_ACTIVITY);
     out.push(FEATURE_THREAD_ADDRESS_STABLE);
+    out.push(FEATURE_SOURCES);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -335,6 +341,7 @@ mod tests {
                 "home-avatars-v1",
                 "daemon-activity",
                 "thread-address-stable",
+                "sources-v1",
                 "thread-push-v1"
             ]
         );

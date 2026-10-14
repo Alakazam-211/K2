@@ -136,6 +136,9 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
                 if !enum_ok(k, &s) {
                     return Err(format!("{k} can't be '{v}'"));
                 }
+                if k == "network" && s == "none" {
+                    return Err(network_none_refusal());
+                }
                 toml::Value::String(s)
             }
         };
@@ -144,6 +147,13 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
     let body = toml::to_string(&t).map_err(|e| e.to_string())?;
     write_atomic(&p, &body)?;
     Ok(t)
+}
+
+/// The refusal for `network = none`: `<code>: <sentence>`, so a caller can
+/// read the stable code off the front.
+pub fn network_none_refusal() -> String {
+    use super::proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
+    format!("{NETWORK_NONE_NOT_ENFORCED}: {NETWORK_NONE_MESSAGE}")
 }
 
 /// `linux` | `macos`.
@@ -279,6 +289,11 @@ mod tests {
             assert!(set_policy(&[("foreign_locks".into(), "x".into())]).is_err(), "only listed keys");
             assert!(set_policy(&[("cpu_cap_percent".into(), "0".into())]).is_err());
             assert!(set_policy(&[("availability".into(), "sometimes".into())]).is_err());
+            let before = std::fs::read_to_string(cfg.join("policy.toml")).unwrap();
+            let e = set_policy(&[("cpu_cap_percent".into(), "50".into()), ("network".into(), "none".into())]).unwrap_err();
+            assert!(e.starts_with("network_none_not_enforced_yet: network = none isn't enforced"), "{e}");
+            assert_eq!(std::fs::read_to_string(cfg.join("policy.toml")).unwrap(), before, "nothing written");
+            set_policy(&[("network".into(), "full".into())]).unwrap();
             let s = status();
             assert_eq!(s["installed"], true);
             assert_eq!(s["node"]["state"], "online");

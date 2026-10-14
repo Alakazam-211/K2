@@ -584,6 +584,10 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
                 return Err(bad("name at least one key=value".into()));
             }
             only_keys(a, POLICY_KEYS).map_err(bad)?;
+            if a.get("network").and_then(Value::as_str) == Some("none") {
+                use super::proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
+                return Err((NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE.to_string()));
+            }
         }
         "policy.narrow" => {
             only_keys(a, &["cpu_millis", "mem_bytes", "max_parallel"]).map_err(bad)?;
@@ -1092,6 +1096,10 @@ mod tests {
         assert_eq!(validate_step("unit.restart", &json!({"unit": "k2-node"})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("policy.set", &json!({"mem_cap_gb": 10})).unwrap(), Class::Privileged, "a proposed policy.set carries the owner signature");
         assert_eq!(validate_step("gc", &json!({"older_days": 3})).unwrap(), Class::Operate);
+        let (code, hint) = validate_step("policy.set", &json!({"network": "none", "mem_cap_gb": 4})).unwrap_err();
+        assert_eq!(code, "network_none_not_enforced_yet", "network = none isn't enforced yet");
+        assert!(hint.contains("0.46.3"), "{hint}");
+        assert_eq!(validate_step("policy.set", &json!({"network": "full"})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("control.pause", &json!({})).unwrap(), Class::Operate);
         for v in ["sudo", "script", "power.set", "pkg.install"] {
             assert_eq!(validate_step(v, &json!({})).unwrap_err().0, codes::VERB_NOT_ALLOWED, "{v} isn't in the node's v1 catalog");

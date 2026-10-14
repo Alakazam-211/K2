@@ -24,6 +24,14 @@ pub const TOOL_MISSING: &str = "tool_missing";
 pub const PARALLEL_FULL: &str = "parallel_full";
 pub const EXCLUSIVE_RUNNING: &str = "exclusive_running";
 pub const WAITING_FOR_IDLE: &str = "waiting_for_idle";
+/// The node's policy says `network = "none"`, which nothing enforces yet
+/// (no per-job network wall until the runtime's guarded tier). Rather than
+/// run jobs with full network under a policy that says none, the node
+/// takes no jobs, and new `none` settings are refused.
+pub const NETWORK_NONE_NOT_ENFORCED: &str = "network_none_not_enforced_yet";
+/// The one sentence every side shows for [`NETWORK_NONE_NOT_ENFORCED`].
+pub const NETWORK_NONE_MESSAGE: &str =
+    "network = none isn't enforced on this node yet; it arrives with the runtime's guarded tier (0.46.3)";
 
 /// Every code above, for docs and tests.
 pub const ALL_CODES: &[&str] = &[
@@ -42,6 +50,7 @@ pub const ALL_CODES: &[&str] = &[
     PARALLEL_FULL,
     EXCLUSIVE_RUNNING,
     WAITING_FOR_IDLE,
+    NETWORK_NONE_NOT_ENFORCED,
 ];
 
 /// The node's live state, as the node sees it.
@@ -62,6 +71,8 @@ pub struct NodeView<'a> {
     pub exclusive_running: bool,
     pub free_cpu_millis: u64,
     pub free_mem_bytes: u64,
+    /// The policy says `network = "none"` (not enforced yet: no jobs).
+    pub network_none: bool,
 }
 
 /// What a job asks for.
@@ -100,6 +111,9 @@ fn availability_refusal(reasons: &[String]) -> Option<Refusal> {
 pub fn node_refusal(v: &NodeView<'_>) -> Option<Refusal> {
     if let Some(r) = control_refusal(v.control) {
         return Some(r);
+    }
+    if v.network_none {
+        return Some(Refusal::new(NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE));
     }
     if let Some(r) = availability_refusal(v.unavailable) {
         return Some(r);
@@ -175,6 +189,8 @@ pub fn offer_refusal(o: &Offer, running: u32, exclusive_running: bool, ask: &Job
         exclusive_running,
         free_cpu_millis: o.free.cpu_millis,
         free_mem_bytes: o.free.mem_bytes,
+        // The node puts this in `o.refusal` (checked above).
+        network_none: false,
     };
     refusal(&v, ask)
 }
@@ -202,6 +218,7 @@ mod tests {
             exclusive_running: false,
             free_cpu_millis: 8000,
             free_mem_bytes: 16 << 30,
+            network_none: false,
         }
     }
 
@@ -233,6 +250,24 @@ mod tests {
         assert_eq!(code(refusal(&v, &ask())).as_deref(), Some(ON_BATTERY));
         v.unavailable = &[];
         assert_eq!(code(refusal(&v, &ask())).as_deref(), Some(FOREIGN_LOCK));
+    }
+
+    /// `network = "none"` isn't enforced, so a node set to it takes no
+    /// job (never full network under a policy that says none); only the
+    /// owner's own control refusals come first.
+    #[test]
+    fn network_none_refuses_every_job_until_enforced() {
+        let t = tools();
+        let mut v = view(&t, &[], &[]);
+        v.network_none = true;
+        let r = refusal(&v, &ask()).expect("refused");
+        assert_eq!(r.code, NETWORK_NONE_NOT_ENFORCED);
+        assert_eq!(r.code, "network_none_not_enforced_yet");
+        assert!(r.message.contains("0.46.3"), "{}", r.message);
+        assert_eq!(code(node_refusal(&v)).as_deref(), Some(NETWORK_NONE_NOT_ENFORCED), "the offer carries it too");
+        v.control = Control::Paused;
+        assert_eq!(code(refusal(&v, &ask())).as_deref(), Some(LOCAL_PAUSED));
+        assert!(ALL_CODES.contains(&NETWORK_NONE_NOT_ENFORCED));
     }
 
     #[test]

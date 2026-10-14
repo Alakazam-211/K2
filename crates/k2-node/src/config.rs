@@ -309,7 +309,9 @@ pub fn default_policy_toml() -> String {
 # workspaces = []               # empty = whatever the controller grants
 # foreign_locks = ["/home/sew-ci/sew-build/.job.lock"]
 # write_smoke_lock = "/var/tmp/k2-smoke.lock"
-# network = "full"              # full | none
+# network = "full"              # full only for now: "none" isn't enforced yet (it arrives
+#                               # with the runtime's guarded tier, 0.46.3); a node set to
+#                               # "none" takes no jobs (network_none_not_enforced_yet)
 # repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
 #                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
 #

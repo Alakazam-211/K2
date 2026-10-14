@@ -94,6 +94,12 @@ fn edit(l: &Layout, args: &Value, m: &MachineFacts) -> Result<Edit, AdminRefusal
     let new_text = toml::to_string(&table).map_err(|e| bad(format!("encode: {e}")))?;
     let new_file: PolicyFile = toml::from_str(&new_text).map_err(|e| bad(format!("policy not valid: {e}")))?;
     let new = Policy::resolve(&new_file, m).map_err(bad)?;
+    // Nothing enforces `network = "none"` yet: refuse to set it rather
+    // than let the policy claim a wall jobs don't have.
+    if changes.get("network").and_then(Value::as_str) == Some("none") {
+        use k2_node_proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
+        return Err(AdminRefusal::new(NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE));
+    }
     Ok(Edit { table, old, new })
 }
 
@@ -266,17 +272,34 @@ mod tests {
         assert_eq!(class(&l, &m, json!({"cpu_cap_percent": 50, "max_parallel": 1})), Class::Operate);
         assert_eq!(class(&l, &m, json!({"cpu_cap_percent": 50, "max_parallel": 3})), Class::Privileged, "one widening field is enough");
         assert_eq!(class(&l, &m, json!({"disk_floor_gb": 10})), Class::Privileged, "a lower floor lets jobs fill more");
-        assert_eq!(class(&l, &m, json!({"network": "none"})), Class::Operate);
         assert_eq!(class(&l, &m, json!({"workspaces": ["k2"]})), Class::Operate, "any list narrows 'all'");
         assert_eq!(class(&l, &m, json!({"availability": "plugged_in"})), Class::Operate);
         assert_eq!(class(&l, &m, json!({"foreign_locks": []})), Class::Privileged, "dropping a lock widens");
         // Writing a narrowed file, then widening back from it.
-        apply_set_with(&l, &json!({"mem_cap_gb": 6, "workspaces": ["k2", "sew"], "network": "none"}), &m).unwrap();
+        apply_set_with(&l, &json!({"mem_cap_gb": 6, "workspaces": ["k2", "sew"]}), &m).unwrap();
         assert_eq!(class(&l, &m, json!({"mem_cap_gb": null})), Class::Privileged, "reset to the default widens 6 → 12");
         assert_eq!(class(&l, &m, json!({"workspaces": ["k2"]})), Class::Operate);
         assert_eq!(class(&l, &m, json!({"workspaces": ["k2", "other"]})), Class::Privileged);
         assert_eq!(class(&l, &m, json!({"workspaces": null})), Class::Privileged);
+    }
+
+    /// `network = "none"` isn't enforced yet: policy.set refuses it with
+    /// the stable code and leaves the file alone. A node whose file
+    /// already says none (hand-edited) may still go back to full, and
+    /// that counts as a widening.
+    #[test]
+    fn network_none_is_refused_until_enforced() {
+        let (l, m) = rig();
+        apply_set_with(&l, &json!({"mem_cap_gb": 6}), &m).unwrap();
+        let before = std::fs::read_to_string(l.policy()).unwrap();
+        let e = apply_set_with(&l, &json!({"network": "none"}), &m).unwrap_err();
+        assert_eq!(e.code, "network_none_not_enforced_yet");
+        assert!(e.message.contains("isn't enforced on this node yet"), "{}", e.message);
+        assert!(classify_set(&l, &json!({"network": "none"})).is_err());
+        assert_eq!(std::fs::read_to_string(l.policy()).unwrap(), before);
+        std::fs::write(l.policy(), "network = \"none\"\n").unwrap();
         assert_eq!(class(&l, &m, json!({"network": "full"})), Class::Privileged);
+        assert_eq!(class(&l, &m, json!({"mem_cap_gb": 6})), Class::Operate, "other edits still work on a none file");
     }
 
     #[test]

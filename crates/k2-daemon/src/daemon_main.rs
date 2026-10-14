@@ -1243,6 +1243,11 @@ async fn async_main() {
     // readiness gate so the scan runs against fully-migrated state.
     let _heartbeat_monitor_handle = heartbeat_monitor::spawn();
 
+    // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the
+    // poller runs on its own threads, with no window open. Gaps from the
+    // restart are marked first [GV57].
+    crate::sources::start();
+
     // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored
     // next_fire_at + wait_reason at boot, then runs the overdue
     // watchdog every 60 s. Its own task — it must keep reporting even

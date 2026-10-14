@@ -64,8 +64,7 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
         crate::power::boot().await;
         let mut pass = Some(spawn_pass("boot overdue scan"));
 
-        let mut last_mono = Instant::now();
-        let mut last_wall = chrono::Utc::now();
+        let mut wall_jump = crate::wall_jump::Detector::new(WALL_JUMP_THRESHOLD_SECS);
         let mut last_tick = Instant::now();
         let mut last_transport_check = Instant::now();
         loop {
@@ -73,11 +72,10 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
 
             // Sleep/wake: on suspend the monotonic clock (and this task)
             // pauses with the machine, so wall delta >> mono delta.
-            let mono_delta = last_mono.elapsed().as_secs() as i64;
-            let wall_delta = (chrono::Utc::now() - last_wall).num_seconds();
-            last_mono = Instant::now();
-            last_wall = chrono::Utc::now();
-            let woke = wall_delta - mono_delta > WALL_JUMP_THRESHOLD_SECS;
+            // The shared detector (GV38): wall delta minus monotonic delta.
+            let jump = wall_jump.observe();
+            let woke = jump.is_some();
+            let (wall_delta, mono_delta) = jump.map_or((0, 0), |j| (j.wall_delta, j.mono_delta));
 
             if woke {
                 log_debug!(

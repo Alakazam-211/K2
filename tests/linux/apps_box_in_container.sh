@@ -28,6 +28,7 @@ info() { echo "  info $*"; }
 
 echo "== facts =="
 . /etc/os-release
+. /it/tests/apps_box_netns.sh
 echo "  os: $PRETTY_NAME; kernel $(uname -r); $(systemctl --version | head -n1)"
 echo "  cgroup controllers: $(cat /sys/fs/cgroup/cgroup.controllers)"
 echo "  uid_map: $(tr -s ' ' </proc/self/uid_map)"
@@ -55,13 +56,15 @@ while true; do
 done
 SH
 chmod 0755 /opt/fake-daemon.sh
-cat >/etc/systemd/system/k2-daemon.service <<'UNIT'
+k2it_netns_up
+cat >/etc/systemd/system/k2-daemon.service <<UNIT
 [Unit]
 Description=fake K2 daemon (apps box prep integration test)
 [Service]
 Type=simple
 User=k2
 ExecStart=/opt/fake-daemon.sh
+NetworkNamespacePath=$K2IT_NS
 UNIT
 systemctl daemon-reload
 systemctl start k2-daemon.service
@@ -167,14 +170,14 @@ fi
 ok "Delegate drop-in canned; linger on"
 
 echo "== reserved ports (this container's netns) =="
-cat /proc/sys/net/ipv4/ip_local_reserved_ports >/tmp/rp.before
+inns cat /proc/sys/net/ipv4/ip_local_reserved_ports >/tmp/rp.before
 req daemon apps reserve-ports on
 expect_rc 0 "reserve-ports on"
-grep -q '38600-38999' /proc/sys/net/ipv4/ip_local_reserved_ports || fail "runtime: $(cat /proc/sys/net/ipv4/ip_local_reserved_ports)"
+inns grep -q '38600-38999' /proc/sys/net/ipv4/ip_local_reserved_ports || fail "runtime: $(cat /proc/sys/net/ipv4/ip_local_reserved_ports)"
 grep -q '^net.ipv4.ip_local_reserved_ports = 38600-38999$' /etc/sysctl.d/90-k2-apps.conf || fail "sysctl file"
 req daemon apps reserve-ports off
 expect_rc 0 "reserve-ports off"
-[ "$(cat /proc/sys/net/ipv4/ip_local_reserved_ports)" = "$(cat /tmp/rp.before)" ] || fail "off did not restore"
+[ "$(inns cat /proc/sys/net/ipv4/ip_local_reserved_ports)" = "$(cat /tmp/rp.before)" ] || fail "off did not restore"
 [ ! -e /etc/sysctl.d/90-k2-apps.conf ] || fail "off left the file"
 req agent apps reserve-ports on
 expect_rc 0 "reserve-ports on (agent: tightening)"
@@ -201,21 +204,21 @@ info "podman info as k2app (rc $prc): $(echo "$pinfo" | tail -n 2 | tr '\n' ' ')
 echo "== nft: App sockets reach only the gateway/proxy/db ports =="
 req agent apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply (open)"
-nft list table inet k2app | grep -q "chain k2app_v1" || fail "chain"
-nft list table inet k2app | grep -q "meta skuid $U jump k2app_v1" || fail "skuid rule: $(nft list table inet k2app)"
+inns nft list table inet k2app | grep -q "chain k2app_v1" || fail "chain"
+inns nft list table inet k2app | grep -q "meta skuid $U jump k2app_v1" || fail "skuid rule: $(nft list table inet k2app)"
 req daemon apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply again (atomic replace)"
-[ "$(nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
-python3 -m http.server 38650 --bind 127.0.0.1 >/dev/null 2>&1 &
+[ "$(inns nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
+inns python3 -m http.server 38650 --bind 127.0.0.1 >/dev/null 2>&1 &
 L1=$!
-python3 -m http.server 9999 --bind 127.0.0.1 >/dev/null 2>&1 &
+inns python3 -m http.server 9999 --bind 127.0.0.1 >/dev/null 2>&1 &
 L2=$!
-python3 -m http.server 9998 --bind 0.0.0.0 >/dev/null 2>&1 &
+inns python3 -m http.server 9998 --bind 0.0.0.0 >/dev/null 2>&1 &
 L3=$!
 sleep 1
-MYIP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
-as_app() { runuser -u k2app -- curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true; }
-as_k2() { runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null || true; }
+MYIP=203.0.113.1
+as_app() { inns runuser -u k2app -- curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true; }
+as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null || true; }
 [ "$(as_app http://127.0.0.1:38650/)" = 200 ] || fail "k2app → gateway port"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "k2app → another loopback port was allowed"
 [ "$(as_app "http://$MYIP:9998/")" = 000 ] || fail "k2app → this host's own address was allowed"
@@ -342,8 +345,8 @@ for f in /etc/systemd/system/k2app-process@.service /etc/sysctl.d/90-k2-apps.con
 	/var/lib/systemd/linger/k2app; do
 	[ ! -e "$f" ] || fail "unprep left $f"
 done
-nft list table inet k2app >/dev/null 2>&1 && fail "unprep left the nft table"
-grep -q 38600-38999 /proc/sys/net/ipv4/ip_local_reserved_ports && fail "unprep left the reserved range"
+inns nft list table inet k2app >/dev/null 2>&1 && fail "unprep left the nft table"
+inns grep -q 38600-38999 /proc/sys/net/ipv4/ip_local_reserved_ports && fail "unprep left the reserved range"
 id k2app >/dev/null || fail "unprep must keep the user"
 grep -q '^k2app:' /etc/subuid || fail "unprep must keep the subids"
 ok "unprep reversed every setting, kept k2app, its ids and /var/lib/k2app"

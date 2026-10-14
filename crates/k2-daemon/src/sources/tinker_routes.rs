@@ -216,6 +216,16 @@ fn take_budget(origins: &[String]) -> Result<(), SourceErr> {
     Ok(())
 }
 
+/// Air-gap (a per-thread override in tests: other tests flip the process
+/// flag).
+fn airgap() -> bool {
+    #[cfg(test)]
+    if let Some(on) = test_seams::airgap() {
+        return on;
+    }
+    k2_core::airgap::enabled()
+}
+
 fn fetch(plan: &FetchPlan) -> FetchOutcome {
     #[cfg(test)]
     if let Some(f) = test_seams::fetcher() {
@@ -239,7 +249,7 @@ fn try_route(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         return Err(SourceErr::new("lan_owner_only", 403, "LAN addresses and plain http are the owner's"));
     }
     let plans = plans(&s)?;
-    let airgapped = k2_core::airgap::enabled() && !s.row.lan;
+    let airgapped = airgap() && !s.row.lan;
     let mut outcomes: Vec<(Option<String>, FetchOutcome)> = Vec::new();
     let mut targets = Vec::new();
     let mut elapsed_total: u32 = 0;
@@ -403,6 +413,15 @@ pub mod test_seams {
     thread_local! {
         static FETCH: RefCell<Option<Fetch>> = const { RefCell::new(None) };
         static NO_BUDGET: Cell<bool> = const { Cell::new(false) };
+        static AIRGAP: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    pub fn set_airgap(on: Option<bool>) {
+        AIRGAP.with(|c| c.set(on));
+    }
+
+    pub(super) fn airgap() -> Option<bool> {
+        AIRGAP.with(|c| c.get())
     }
 
     pub fn set_fetcher(f: Option<Fetch>) {
@@ -456,12 +475,14 @@ mod tests {
         fn drop(&mut self) {
             test_seams::set_fetcher(None);
             test_seams::set_no_budget(false);
+            test_seams::set_airgap(None);
         }
     }
     fn setup() -> Guard {
         let e = env();
         test_seams::set_fetcher(Some(deployments));
         test_seams::set_no_budget(true);
+        test_seams::set_airgap(Some(false));
         Guard(e)
     }
 

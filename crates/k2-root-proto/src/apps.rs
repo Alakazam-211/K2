@@ -112,9 +112,6 @@ pub const NFT_APPS_CHAIN: &str = "k2app_apps";
 /// `apps nft app` state: which App owns which gateway port.
 pub const NFT_APPS_STATE: &str = "/var/lib/k2-root-helper/apps-nft.json";
 
-/// The persistent journal directory (`apps journal on`).
-pub const JOURNAL_DIR: &str = "/var/log/journal";
-
 /// io.cost lives only at the cgroup v2 root.
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 pub const IO_COST_QOS: &str = "/sys/fs/cgroup/io.cost.qos";

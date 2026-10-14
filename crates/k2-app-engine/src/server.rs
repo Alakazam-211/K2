@@ -27,7 +27,6 @@ use crate::sys::{self, Out};
 
 pub const PODMAN: &str = "/usr/bin/podman";
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
-pub const JOURNALCTL: &str = "/usr/bin/journalctl";
 
 type R<T> = Result<T, (&'static str, String)>;
 
@@ -182,7 +181,6 @@ impl Engine {
             Request::Stop { app, deployment } => self.stop(&app, &deployment),
             Request::Liveness { app, deployment } => self.liveness(&app, &deployment),
             Request::Stats { app, deployment } => self.stats(&app, &deployment),
-            Request::Logs { app, deployment, lines } => self.logs(&app, &deployment, lines),
             Request::Exec { app, deployment, argv } => self.exec(&app, &deployment, &argv),
             Request::Adopt => self.adopt(),
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
@@ -448,20 +446,12 @@ impl Engine {
         // container running (the daemon's HTTP probe decides health).
         let r = self.systemctl(&["start", &unit], 360)?;
         if !r.ok() {
-            let tail = self.journal_tail(&unit, 30);
             let _ = self.systemctl(&["stop", &unit], 120);
             undo(self);
-            return Err((codes::SYSTEMD, format!("start {unit}: {}; last log lines: {tail}", r.why())));
+            return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: k2 app logs)", r.why())));
         }
         let pid = self.show(&unit, "MainPID").and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 0);
         Ok(json!({ "unit": unit, "gwPort": gw, "slot": slot, "pid": pid, "slice": app_slice(&app) }))
-    }
-
-    fn journal_tail(&self, unit: &str, n: u32) -> String {
-        let lines = n.to_string();
-        self.run(JOURNALCTL, &["--user", "-u", unit, "-n", &lines, "-o", "cat", "--no-pager"], None, 30)
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().chars().rev().take(2000).collect::<Vec<_>>().into_iter().rev().collect())
-            .unwrap_or_default()
     }
 
     fn show(&self, unit: &str, prop: &str) -> Option<String> {
@@ -521,16 +511,6 @@ impl Engine {
         }
         let read = |f: &str| std::fs::read_to_string(format!("/sys/fs/cgroup{cg}/{f}")).ok().and_then(|s| s.trim().parse::<u64>().ok());
         Ok(json!({ "memCurrent": read("memory.current"), "pids": read("pids.current"), "memMax": read("memory.max"), "cgroup": cg }))
-    }
-
-    fn logs(&self, app: &str, dep: &str, lines: u32) -> R<Value> {
-        let (_, unit) = Self::ids(app, dep)?;
-        let n = lines.clamp(1, 5000).to_string();
-        let o = self.run(JOURNALCTL, &["--user", "-u", &unit, "-n", &n, "-o", "cat", "--no-pager"], None, 60)?;
-        if !o.ok() {
-            return Err((codes::IO, format!("journalctl: {}", o.why())));
-        }
-        Ok(json!({ "text": String::from_utf8_lossy(&o.stdout), "truncated": o.stdout.len() >= MAX_OUTPUT }))
     }
 
     fn exec(&self, app: &str, dep: &str, argv: &[String]) -> R<Value> {
@@ -633,7 +613,6 @@ fn verb_name(r: &Request) -> &'static str {
         Request::Stop { .. } => "stop",
         Request::Liveness { .. } => "liveness",
         Request::Stats { .. } => "stats",
-        Request::Logs { .. } => "logs",
         Request::Exec { .. } => "exec",
         Request::Adopt => "adopt",
         Request::RemoveApp { .. } => "remove-app",

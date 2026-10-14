@@ -210,11 +210,12 @@ pub enum Verb {
     /// Install (or update) `k2-app-engine` from a signed payload on stdin,
     /// its user unit for `k2app` and the socket dir (slice 3, S11).
     AppsInstallEngine,
-    /// `apps journal on`: a persistent journal (`/var/log/journal`), so
-    /// k2app can read its own units' journal (`journalctl --user`): the
-    /// guarded Apps' output, rate limited per unit. Volatile journals
-    /// keep one root-only file.
-    AppsJournalOn,
+    /// `apps logs <id> <deployment> <lines>` (daemon): the last lines of a
+    /// guarded App's output from the journal. The engine sends it there
+    /// (rate limited per unit, W §5.3), but k2app is a system user, so
+    /// journald keeps its lines in the system journal, which only root
+    /// (or the systemd-journal group, which k2app never gets) reads.
+    AppsLogs { id: AppId, deployment: String, lines: u32 },
     AppsPackagesInstall,
     AppsPackagesInstallYouki,
     AppsRuntime(OciRuntime),
@@ -438,7 +439,16 @@ impl Verb {
             }
             ["apps", "nft", "app-remove", id] => Verb::AppsNftAppRemove(AppId::parse(id).ok_or(REFUSED)?),
             ["apps", "install-engine"] => Verb::AppsInstallEngine,
-            ["apps", "journal", "on"] => Verb::AppsJournalOn,
+            ["apps", "logs", id, dep, n] => {
+                if !crate::engine::deployment_ok(dep) {
+                    return Err(REFUSED);
+                }
+                Verb::AppsLogs {
+                    id: AppId::parse(id).ok_or(REFUSED)?,
+                    deployment: dep.to_string(),
+                    lines: bounded(n, (1, 5000)).ok_or(REFUSED)? as u32,
+                }
+            }
             ["apps", "packages", "install"] => Verb::AppsPackagesInstall,
             ["apps", "packages", "install-youki"] => Verb::AppsPackagesInstallYouki,
             ["apps", "runtime", r] => Verb::AppsRuntime(OciRuntime::parse(r).ok_or(REFUSED)?),
@@ -575,7 +585,9 @@ impl Verb {
             Verb::AppsNftApp { id, gw } => s(&["apps", "nft", "app", id.as_str(), &gw.to_string()]),
             Verb::AppsNftAppRemove(id) => s(&["apps", "nft", "app-remove", id.as_str()]),
             Verb::AppsInstallEngine => s(&["apps", "install-engine"]),
-            Verb::AppsJournalOn => s(&["apps", "journal", "on"]),
+            Verb::AppsLogs { id, deployment, lines } => {
+                s(&["apps", "logs", id.as_str(), deployment, &lines.to_string()])
+            }
             Verb::AppsPackagesInstall => s(&["apps", "packages", "install"]),
             Verb::AppsPackagesInstallYouki => s(&["apps", "packages", "install-youki"]),
             Verb::AppsRuntime(r) => s(&["apps", "runtime", r.as_str()]),
@@ -650,7 +662,6 @@ impl Verb {
             | Verb::AppsReservePorts(true)
             | Verb::AppsPackagesInstall
             | Verb::AppsPackagesInstallYouki
-            | Verb::AppsJournalOn
             | Verb::AppsRuntime(OciRuntime::Crun)
             | Verb::AppsProcessUnit(true) => Open,
             Verb::AppsLinger(false)
@@ -663,6 +674,8 @@ impl Verb {
             | Verb::AppsNftApp { .. }
             | Verb::AppsNftAppRemove(_)
             | Verb::AppsInstallEngine
+            // An App's output is its owner's: the daemon decides who sees it.
+            | Verb::AppsLogs { .. }
             | Verb::AppsRuntime(OciRuntime::Youki)
             | Verb::AppsProcessUnit(false)
             | Verb::AppsProcessStart(_)
@@ -716,6 +729,7 @@ impl Verb {
                 | Verb::KeepKekGet
                 | Verb::KeepGenGet
                 | Verb::AppsStatus
+                | Verb::AppsLogs { .. }
         )
     }
 
@@ -821,7 +835,11 @@ pub fn catalog() -> Vec<Verb> {
         },
         Verb::AppsNftAppRemove(AppId::parse("nsi-skin").expect("id")),
         Verb::AppsInstallEngine,
-        Verb::AppsJournalOn,
+        Verb::AppsLogs {
+            id: AppId::parse("jobs").expect("id"),
+            deployment: "d-0123456789ab".into(),
+            lines: 200,
+        },
         Verb::AppsPackagesInstall,
         Verb::AppsPackagesInstallYouki,
         Verb::AppsRuntime(OciRuntime::Crun),
@@ -1091,7 +1109,6 @@ mod tests {
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
             &["apps", "process-unit", "on"],
-            &["apps", "journal", "on"],
         ];
         let daemon: &[&[&str]] = &[
             &["apps", "linger", "off"],
@@ -1111,6 +1128,7 @@ mod tests {
             &["apps", "nft", "app", "jobs", "38600"],
             &["apps", "nft", "app-remove", "jobs"],
             &["apps", "install-engine"],
+            &["apps", "logs", "jobs", "d-0123456789ab", "200"],
             // Non-canonical ranges could widen what Apps reach.
             &["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
@@ -1131,7 +1149,7 @@ mod tests {
                 continue;
             }
             assert_eq!(v.stdin_cap(), None, "{v:?}: apps verbs read no stdin");
-            if v != Verb::AppsStatus {
+            if v != Verb::AppsStatus && !matches!(v, Verb::AppsLogs { .. }) {
                 assert!(v.takes_lock(), "{v:?}");
             }
         }
@@ -1223,8 +1241,15 @@ mod tests {
             // install-engine: never a path or a version.
             &["apps", "install-engine", "/tmp/k2-app-engine"],
             &["apps", "install-engine", "0.46.1"],
-            &["apps", "journal", "off"],
-            &["apps", "journal", "on", "/var/log/journal"],
+            // logs: an App id, a deployment id, a bounded count.
+            &["apps", "logs", "jobs", "d-0123456789ab"],
+            &["apps", "logs", "jobs", "d-0123456789ab", "0"],
+            &["apps", "logs", "jobs", "d-0123456789ab", "5001"],
+            &["apps", "logs", "jobs", "d-0123456789AB", "10"],
+            &["apps", "logs", "jobs", "_UID=0", "10"],
+            &["apps", "logs", "jobs", "k2-daemon.service", "10"],
+            &["apps", "logs", "../x", "d-0123456789ab", "10"],
+            &["apps", "logs", "jobs", "d-0123456789ab", "10", "--all"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

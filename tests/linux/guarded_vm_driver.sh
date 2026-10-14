@@ -19,7 +19,7 @@ if [ ! -s "$IMG" ]; then
 fi
 RUN=/vm/run
 PREREQS="sudo python3 curl git postgresql nftables iproute2 procps"
-CONTAINER_PKGS="podman crun passt uidmap dbus-user-session skopeo"
+CONTAINER_PKGS="podman crun passt uidmap dbus-user-session skopeo catatonit"
 
 boot() { # <backing image>
 	rm -rf "$RUN" && mkdir -p "$RUN"

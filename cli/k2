@@ -22311,6 +22311,9 @@ THE LOG
   Every project created or deleted and every member added or removed
   is logged with who did it (owner, a person's login, or agent:<ws>),
   what, and when; refused changes are logged too.
+EOF
+}
+
 _study_page_hooks() {
     cat <<'EOF'
 k2 study hooks — custom (no-model) agents: their Thread and lifecycle

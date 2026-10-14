@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 6,
+  "catalogVersion": 7,
   "caps": [
     {
       "name": "agents:read",
@@ -537,7 +537,23 @@
                         },
                         "allow_custom": {"type": "boolean"},
                         "status": {"type": "string"},
-                        "answer": {"type": ["string", "null"]}
+                        "answer": {"type": ["string", "null"]},
+                        "answeredBy": {
+                          "title": "CardAnswerer",
+                          "type": ["object", "null"],
+                          "properties": {
+                            "kind": {"type": "string", "description": "owner, user (a Connect login) or guest (an app pass)."},
+                            "login": {"type": "string"},
+                            "name": {"type": ["string", "null"], "description": "The owner's display name when the owner answered and one is set, else null."}
+                          },
+                          "required": ["kind", "login", "name"],
+                          "additionalProperties": false,
+                          "description": "Who answered or dismissed the card; null while pending, for an agent's own answer and on older cards."
+                        },
+                        "expiresAt": {
+                          "type": ["integer", "null"],
+                          "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                        }
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],
                       "additionalProperties": false
@@ -616,7 +632,23 @@
                         },
                         "allow_custom": {"type": "boolean"},
                         "status": {"type": "string"},
-                        "answer": {"type": ["string", "null"]}
+                        "answer": {"type": ["string", "null"]},
+                        "answeredBy": {
+                          "title": "CardAnswerer",
+                          "type": ["object", "null"],
+                          "properties": {
+                            "kind": {"type": "string", "description": "owner, user (a Connect login) or guest (an app pass)."},
+                            "login": {"type": "string"},
+                            "name": {"type": ["string", "null"], "description": "The owner's display name when the owner answered and one is set, else null."}
+                          },
+                          "required": ["kind", "login", "name"],
+                          "additionalProperties": false,
+                          "description": "Who answered or dismissed the card; null while pending, for an agent's own answer and on older cards."
+                        },
+                        "expiresAt": {
+                          "type": ["integer", "null"],
+                          "description": "Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does."
+                        }
                       },
                       "required": ["prompt", "options", "allow_custom", "status"],
                       "additionalProperties": false

@@ -93,6 +93,14 @@ export interface AgentRow {
   readonly working: boolean
 }
 
+export interface CardAnswerer {
+  /** owner, user (a Connect login) or guest (an app pass). */
+  readonly kind: string
+  readonly login: string
+  /** The owner's display name when the owner answered and one is set, else null. */
+  readonly name: string | null
+}
+
 export interface ChoiceOption {
   readonly label: string
 }
@@ -100,6 +108,10 @@ export interface ChoiceOption {
 export interface ChoiceCard {
   readonly allow_custom: boolean
   readonly answer?: string | null
+  /** Who answered or dismissed the card; null while pending, for an agent's own answer and on older cards. */
+  readonly answeredBy?: CardAnswerer | null
+  /** Unix seconds when a still-pending card expires (K2 closes it as expired); null when it never does. */
+  readonly expiresAt?: number | null
   readonly options: ChoiceOption[]
   readonly prompt: string
   readonly status: string

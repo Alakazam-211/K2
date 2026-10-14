@@ -460,6 +460,37 @@ describe('TUW3.4 / TUWA7: the guest projection', () => {
     expect(projectZenThreadItem({ ...base, doc: { ...base.doc, kind: 'tool' } })).toBeNull()
   })
 
+  it('choice cards carry answeredBy and expiresAt (catalog v7), null when absent', () => {
+    const card = (choice: Record<string, unknown>): OverlayThreadItem => ({
+      collection: 'thread',
+      seq: 9,
+      id: 'c9',
+      conversation_id: 'session-123',
+      doc: {
+        id: 'c9',
+        kind: 'choice',
+        from: 'alice',
+        choice: { prompt: 'Ship?', options: [{ label: 'Go' }], allow_custom: false, ...choice } as never,
+      },
+    })
+    const answered = projectZenThreadItem(
+      card({ status: 'answered', answer: 'Go', answeredBy: { kind: 'owner', login: 'owner', name: 'Rosson' }, answeredAt: 40, expiresAt: 99 }),
+    )
+    expect(answered?.doc).toMatchObject({
+      choice: { status: 'answered', answer: 'Go', answeredBy: { kind: 'owner', login: 'owner', name: 'Rosson' }, expiresAt: 99 },
+    })
+    // answeredAt is not part of the widget shape (closed: only catalog fields cross).
+    const c = (answered?.doc as unknown as { choice: Record<string, unknown> }).choice
+    expect(Object.keys(c).sort()).toEqual(['allow_custom', 'answer', 'answeredBy', 'expiresAt', 'options', 'prompt', 'status'])
+    expect(projectZenThreadItem(card({ status: 'answered', answeredBy: { kind: 'guest', login: 'patty', name: 'Spoof' } }))?.doc).toMatchObject({
+      choice: { answeredBy: { kind: 'guest', login: 'patty', name: null } },
+    })
+    expect(projectZenThreadItem(card({ status: 'pending' }))?.doc).toMatchObject({ choice: { answer: null, answeredBy: null, expiresAt: null } })
+    expect(projectZenThreadItem(card({ status: 'pending', expiresAt: 1.5, answeredBy: { kind: '', login: 'x' } }))?.doc).toMatchObject({
+      choice: { answeredBy: null, expiresAt: null },
+    })
+  })
+
   it('subscriptions push projected, de-duplicated values as plain JSON', async () => {
     let feed: ((v: ZenThreadView) => void) | null = null
     const h = harness({}, {

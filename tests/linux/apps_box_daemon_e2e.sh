@@ -12,6 +12,7 @@
 # `k2 app doctor` and `k2 app box prepare`; the daemon drives the helper
 # through sudo from its own main process.
 set -euo pipefail
+. /it/tests/apps_box_netns.sh
 
 pass=0
 fail() { echo "FAIL: $*" >&2; journalctl -u k2-daemon.service --no-pager 2>/dev/null | tail -n 20 >&2 || true; exit 1; }
@@ -20,12 +21,13 @@ info() { echo "  info $*"; }
 
 useradd -m -s /bin/bash k2
 K2HOME=/home/k2
-K2() { runuser -u k2 -- env HOME="$K2HOME" PATH=/usr/bin:/bin /it/cli/k2 "$@"; }
+K2() { inns runuser -u k2 -- env HOME="$K2HOME" PATH=/usr/bin:/bin /it/cli/k2 "$@"; }
 
 echo "== helper + the real daemon =="
 K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file /it/bin/k2-root-helper-cur >/tmp/irh.log 2>&1 \
 	|| { cat /tmp/irh.log; fail "install-root-helper.sh"; }
 install -m 0755 /it/bin/k2-daemon /usr/local/bin/k2-daemon
+k2it_netns_up
 cat >/etc/systemd/system/k2-daemon.service <<UNIT
 [Unit]
 Description=K2 daemon (apps box prep e2e)
@@ -34,12 +36,13 @@ Type=simple
 User=k2
 Environment=HOME=$K2HOME K2_APPS=1 K2_AIRGAP=1
 ExecStart=/usr/local/bin/k2-daemon
+NetworkNamespacePath=$K2IT_NS
 UNIT
 systemctl daemon-reload
 systemctl start k2-daemon.service
 wait_daemon() {
 	for _ in $(seq 1 300); do
-		[ -s "$K2HOME/.k2/heartbeat.port" ] && curl -sf "http://127.0.0.1:$(cat "$K2HOME/.k2/heartbeat.port")/boot-status" 2>/dev/null | grep -q '"ready"' && return 0
+		[ -s "$K2HOME/.k2/heartbeat.port" ] && inns curl -sf "http://127.0.0.1:$(cat "$K2HOME/.k2/heartbeat.port")/boot-status" 2>/dev/null | grep -q '"ready"' && return 0
 		sleep 0.2
 	done
 	fail "daemon not ready"
@@ -61,7 +64,8 @@ assert st["platform"] == "ok" and st["cgroupV2"] == "ok", st
 assert st["appUser"] == "fail" and st["podman"] == "fail", st
 print("    before:", {k: st[k] for k in ("helper", "podman", "appUser", "nft", "ioCost")})
 PY
-K2 app doctor 2>&1 | head -n 1 | grep -q "App box: NOT READY" || fail "human doctor"
+human="$(K2 app doctor 2>&1 || true)"
+printf '%s\n' "$human" | head -n 1 | grep -q "App box: NOT READY" || fail "human doctor: $human"
 ok "doctor: helper protocol 6 ok, box not prepared (exit 1)"
 
 echo "== k2 app box prepare (owner) =="
@@ -95,11 +99,11 @@ PY
 ok "a second prepare changes nothing"
 
 echo "== boot re-apply: the nft table comes back after a daemon restart =="
-nft delete table inet k2app
+inns nft delete table inet k2app
 systemctl restart k2-daemon.service
 wait_daemon
-for _ in $(seq 1 100); do nft list table inet k2app >/dev/null 2>&1 && break; sleep 0.2; done
-nft list table inet k2app | grep -q "chain k2app_v1" || fail "the daemon did not re-apply the nft table at boot"
+for _ in $(seq 1 100); do inns nft list table inet k2app >/dev/null 2>&1 && break; sleep 0.2; done
+inns nft list table inet k2app | grep -q "chain k2app_v1" || fail "the daemon did not re-apply the nft table at boot"
 ok "daemon boot re-applied inet k2app"
 
 echo "== youki (opt-in) =="

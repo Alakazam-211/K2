@@ -32,10 +32,19 @@ SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 "$HOST"
 LOGS="$ROOT/target-it-logs/apps-box-$STAMP"
 mkdir -p "$LOGS"
 
-"${SSH[@]}" "df -h / | tail -n 1; test ! -e $R || { echo 'refusing: $R exists'; exit 1; }"
+# K2_IT_KEEP=1 keeps <dir> (and its target) for another run; a dir this
+# runner didn't make is never reused.
+KEEP="${K2_IT_KEEP:-0}"
+"${SSH[@]}" "df -h / | tail -n 1; if [ -e $R ]; then [ -f $R/.k2-apps-box-it ] || { echo 'refusing: $R exists and is not ours'; exit 1; }; fi"
+
+finish() {
+	echo "== cleanup on $HOST =="
+	"${SSH[@]}" "podman rm -f k2rh-it-$STAMP k2apps-it-$STAMP k2apps-e2e-$STAMP >/dev/null 2>&1 || true; podman rmi -f localhost/k2rh-it:rts2 localhost/k2-apps-box-it:rts2 >/dev/null 2>&1 || true; if [ '$KEEP' = 1 ]; then echo 'kept $R'; else rm -rf $R; fi; df -h / | tail -n 1" || true
+}
+trap finish EXIT
 
 echo "== ship this checkout to $HOST:$R/src =="
-git -C "$ROOT" archive --format=tar HEAD | "${SSH[@]}" "mkdir -p $R/src $R/it/bin $R/it/scripts $R/it/tests $R/it/cli && tar -xf - -C $R/src"
+git -C "$ROOT" archive --format=tar HEAD | "${SSH[@]}" "rm -rf $R/src $R/it && mkdir -p $R/src $R/it/bin $R/it/scripts $R/it/tests $R/it/cli && touch $R/.k2-apps-box-it && tar -xf - -C $R/src"
 
 echo "== build on $HOST (target $R/target) =="
 "${SSH[@]}" bash -s -- "$R" <<'REMOTE' 2>&1 | tee "$LOGS/build.log"
@@ -126,7 +135,5 @@ mkdir -p /t/debug && cp /bin-it/k2-daemon /t/debug/k2-daemon
 CARGO_TARGET_DIR=/t bash /src/tests/cli/app_runtime_cli_smoke.sh'
 REMOTE
 
-echo "== cleanup on $HOST =="
-"${SSH[@]}" "podman rmi -f localhost/k2rh-it:rts2 localhost/k2-apps-box-it:rts2 >/dev/null 2>&1 || true; rm -rf $R; podman ps -a --format '{{.Names}}' | grep -E 'k2(rh|apps)-(it|e2e)-$STAMP' || echo 'no containers left'; df -h / | tail -n 1"
 echo "== logs: $LOGS (rc $rc) =="
 exit "$rc"

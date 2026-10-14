@@ -273,6 +273,119 @@ mod tests {
         assert!(find("stripe-past-due", &args(&[("secret", "sk_live abc")])).expect("preset").is_err(), "a name, not a value");
     }
 
+    /// The engine meets the card (B1 x B3): the k2-fleet preset polled by
+    /// the real engine (`apply_poll`, `view::build`) with one box timing
+    /// out gives a card view whose keys are exactly the catalog's
+    /// `SourceView` (minus the reader's `address` and `reach`), and the
+    /// down box is a red item with its reason while the source stays live
+    /// (GV55): what `k2:fleet-grid@1` draws as a red tile.
+    #[test]
+    fn the_engine_view_of_a_fleet_matches_the_catalog_card_view() {
+        use crate::sources::state::{apply_poll, FetchOutcome, Health, Phase, PollInput, Reason, SourceState};
+        use crate::sources::view::{build, Viewer};
+        use crate::sources::{AgentAccess, SourceKind, SourceRow, SourceStatus, Viewers};
+        let mut spec = built("k2-fleet", &[("boxes", "ohana,luzz,acv")]);
+        spec.name = "fleet".into();
+        spec.label = "Fleet boxes".into();
+        let v = spec.validate(false).expect("validates");
+        let ok = |ver: &str| FetchOutcome::Ok {
+            status: 200,
+            body: json!({"version": ver, "phase": "ready"}),
+            not_modified: false,
+            etag: None,
+            last_modified: None,
+            elapsed_ms: 40,
+        };
+        let mut st = SourceState::new("s1");
+        let mut proj = None;
+        for i in 0..3 {
+            let out = apply_poll(&st, PollInput {
+                spec: &v.spec,
+                outcomes: vec![
+                    (Some("ohana".into()), FetchOutcome::Err { reason: Reason::Timeout, http_status: None, retry_after_secs: None }),
+                    (Some("luzz".into()), ok("0.45.6")),
+                    (Some("acv".into()), ok("0.45.5")),
+                ],
+                now: 1_000 + i * 60,
+                simulated: false,
+                prev_projection: proj.as_ref(),
+            });
+            st = out.state;
+            if out.projection.is_some() {
+                proj = out.projection;
+            }
+        }
+        let row = SourceRow {
+            id: "s1".into(),
+            name: "fleet".into(),
+            label: "Fleet boxes".into(),
+            kind: SourceKind::HttpJson,
+            preset: Some("k2-fleet".into()),
+            spec_json: v.spec.canonical_json(),
+            spec_hash: v.spec.hash(),
+            origins: v.origins.clone(),
+            lan: false,
+            secret_name: None,
+            url_secret_name: None,
+            secret_bound: false,
+            every_secs: v.spec.every_secs,
+            timeout_secs: v.spec.timeout_secs,
+            max_bytes: v.spec.max_bytes,
+            fail_after: v.spec.fail_after,
+            on_target_error: v.spec.on_target_error,
+            link: None,
+            viewers: Viewers::Member,
+            agent_access: AgentAccess::Values,
+            keep: v.spec.keep,
+            pinned: false,
+            pinned_by: None,
+            pinned_at: None,
+            status: SourceStatus::Active,
+            pause_reason: None,
+            made_by: "owner".into(),
+            made_by_project: None,
+            approved_by: None,
+            approved_at: None,
+            approved_spec_hash: None,
+            simulate_state: None,
+            simulate_until: None,
+            simulate_by: None,
+            mute_until: None,
+            mute_by: None,
+            mute_reason: None,
+            rev: 3,
+            created_at: 0,
+            updated_at: 0,
+            removed_at: None,
+        };
+        let view = build(&row, &st, proj.as_ref(), Viewer::Person, 1_200);
+        assert_eq!(view.phase, Phase::Live, "one box down never stales the source (GV55)");
+        let j = serde_json::to_value(&view).expect("view to JSON");
+
+        let cat = crate::contract::catalog().verb("sources.read").expect("sources.read row");
+        let want: std::collections::BTreeSet<String> = cat.response["properties"]
+            .as_object()
+            .expect("SourceView properties")
+            .keys()
+            .filter(|k| *k != "address" && *k != "reach")
+            .cloned()
+            .collect();
+        let got: std::collections::BTreeSet<String> = j.as_object().expect("object").keys().cloned().collect();
+        assert_eq!(got, want, "the engine's card view and the catalog's SourceView drift");
+        let item_want: std::collections::BTreeSet<String> =
+            cat.response["properties"]["items"]["items"]["properties"].as_object().expect("SourceItem").keys().cloned().collect();
+        for it in j["items"].as_array().expect("items") {
+            let keys: std::collections::BTreeSet<String> = it.as_object().expect("item").keys().cloned().collect();
+            assert_eq!(keys, item_want, "item {it}");
+        }
+        let ohana = j["items"].as_array().and_then(|a| a.iter().find(|i| i["key"] == "ohana")).cloned().expect("ohana tile");
+        assert_eq!((ohana["health"].as_str(), ohana["reason"].as_str()), (Some("crit"), Some("timeout")), "{ohana}");
+        let luzz = j["items"].as_array().and_then(|a| a.iter().find(|i| i["key"] == "luzz")).cloned().expect("luzz tile");
+        assert_eq!(luzz["fields"]["version"], "0.45.6");
+        assert_eq!(view.server_now, 1_200);
+        assert!(st.items.get("ohana").is_some_and(|i| i.health == Health::Crit));
+    }
+
     #[test]
     fn deploys_and_release_shapes() {
         let s = built("vercel-deployments", &[("team", "team_x"), ("secret", "V"), ("limit", "20")]);

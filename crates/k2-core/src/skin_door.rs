@@ -26,6 +26,13 @@ use crate::tunnel::config::SUBDOMAIN_HOST;
 pub const LOOPBACK_PORT: u16 = 38472;
 
 /// Nested label reserved for the Skin door (`https://skin.<sub>.k2.dev`).
+///
+/// This is the door's OWN label: `register_nested` creates/points it on
+/// the control plane directly with the box's tunnel token, so the user
+/// publish/subdomain refusal (`skin::RESERVED_NESTED_LABELS`) never applies
+/// to it. A future Sew door registers `skin::MEET_NESTED_LABEL` /
+/// `skin::CHAT_NESTED_LABEL` the same box-level way, never through the
+/// user publish routes.
 pub const NESTED_LABEL: &str = skin::RESERVED_NESTED_LABEL;
 
 /// Shown when Connect has no public URL yet.

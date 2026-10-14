@@ -191,12 +191,18 @@ fn handle_leftovers(params: &HashMap<String, String>) -> CliResponse {
 ///   control-plane create/point/rm so a foreign label is never touched.
 /// - `transfer=1`: owner/admin only — move the label to this workspace
 ///   (audited). Agents and members get 403 `transfer_owner_only`.
+/// - `check=1&release=1`: the same ownership answer for a remove; skips the
+///   `meet`/`chat` reservation (nothing is claimed). `skin` stays refused.
 fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let label = str_param(params, "label");
     if label.trim().is_empty() {
         return CliResponse::bad_request("Missing label");
     }
-    if k2_core::skin::is_reserved_nested_label(&label) {
+    // `skin` first so its 400 is unchanged; `meet`/`chat` after the
+    // project resolves (an old same-workspace row may re-stamp).
+    if k2_core::skin::is_reserved_nested_label(&label)
+        && !k2_core::skin::is_grandfathered_reserved_label(&label)
+    {
         return CliResponse::bad_request(k2_core::skin::reserved_nested_label_error(&label));
     }
     let project = match need_project(params) {
@@ -207,6 +213,17 @@ fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(e) => return CliResponse::bad_request(e),
     };
+    // `check=1&release=1` is the ownership question before a REMOVE
+    // (`k2 publish subdomain rm`): it writes nothing, so an old `meet` /
+    // `chat` label can still be deleted by the workspace that may own it.
+    let release_check = boolish(params, &["check"]) && boolish(params, &["release"]);
+    if !release_check {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(resp) = label_owner::refuse_reserved_claim(&conn, &label, &project_id) {
+            return resp;
+        }
+    }
     let target = opt_param(params, "target");
     let transfer = boolish(params, &["transfer"]);
     let label_lc = label.trim().to_ascii_lowercase();

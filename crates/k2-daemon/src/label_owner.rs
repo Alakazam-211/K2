@@ -279,6 +279,34 @@ fn audit_transfer(label: &str, from: &str, to: &str, caller: &Caller) {
     k2_core::log_debug!("[publish] label transfer label={label} from={from} to={to} by={}", caller.actor());
 }
 
+/// Reserved nested labels (`skin`, `meet`, `chat`) on the claim routes.
+///
+/// Run this AFTER the strict `skin` check (which stays first so its 400
+/// is unchanged) and after the project id is resolved. A NEW claim of
+/// `meet` / `chat` (unattributed, or held by another workspace, with or
+/// without `transfer`) is a 400 `reserved_label`. The one thing that
+/// still goes through is an idempotent re-stamp by the workspace that
+/// already held the label before it was reserved, so an old row keeps
+/// working. Box-level doors never come through here.
+pub fn refuse_reserved_claim(
+    conn: &Connection,
+    label: &str,
+    project_id: &str,
+) -> Result<(), CliResponse> {
+    if !k2_core::skin::is_reserved_nested_label(label) {
+        return Ok(());
+    }
+    let refuse = || CliResponse::bad_request(k2_core::skin::reserved_nested_label_error(label));
+    if !k2_core::skin::is_grandfathered_reserved_label(label) {
+        return Err(refuse());
+    }
+    match SubdomainWorkspace::owner_of(conn, label) {
+        Ok(Some(owner)) if owner == project_id.trim() => Ok(()),
+        Ok(_) => Err(refuse()),
+        Err(e) => Err(CliResponse::internal_error(e.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1974,7 +1974,11 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     if label.trim().is_empty() {
         return CliResponse::bad_request("Missing label parameter".to_string());
     }
-    if k2_core::skin::is_reserved_nested_label(&label) {
+    // `skin` first so its 400 is unchanged; `meet`/`chat` after the
+    // project resolves (an old same-workspace row may re-stamp).
+    if k2_core::skin::is_reserved_nested_label(&label)
+        && !k2_core::skin::is_grandfathered_reserved_label(&label)
+    {
         return CliResponse::bad_request(k2_core::skin::reserved_nested_label_error(&label));
     }
     let project = match need_project(params) {
@@ -1984,10 +1988,14 @@ pub fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let project_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        match resolve_project_id(&conn, &project) {
+        let id = match resolve_project_id(&conn, &project) {
             Ok(id) => id,
             Err(e) => return CliResponse::bad_request(e),
+        };
+        if let Err(resp) = crate::label_owner::refuse_reserved_claim(&conn, &label, &id) {
+            return resp;
         }
+        id
     };
     // One owner per label: a label another workspace holds is refused
     // (409), unless an owner/admin asks for an explicit, audited transfer.

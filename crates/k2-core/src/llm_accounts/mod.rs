@@ -24,6 +24,7 @@
 //! Nothing in this module returns a token to a caller outside it: the
 //! public shapes ([`Entry`], [`store::CredMeta`]) carry metadata only.
 
+pub mod identity;
 pub mod pins;
 pub mod store;
 pub mod wallet;
@@ -613,6 +614,34 @@ pub(crate) fn set_active_with_live(
     Ok(())
 }
 
+/// The tool's active row: who is the server default, since when, set by
+/// whom.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveInfo {
+    pub account_id: String,
+    pub live_account_id: Option<String>,
+    pub switched_at: i64,
+    pub switched_by: Option<String>,
+}
+
+pub fn active_info(conn: &Connection, tool: Tool) -> Result<Option<ActiveInfo>, WalletError> {
+    Ok(conn
+        .query_row(
+            "SELECT account_id, live_account_id, switched_at, switched_by FROM llm_active WHERE tool = ?1",
+            params![tool.as_str()],
+            |r| {
+                Ok(ActiveInfo {
+                    account_id: r.get(0)?,
+                    live_account_id: r.get(1)?,
+                    switched_at: r.get(2)?,
+                    switched_by: r.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 /// The subscription login whose credential is in the tool's live store
 /// right now (the CLI owns its refresh): the pool's active login, or,
 /// while an API key is active, the login left behind in the live store.
@@ -662,6 +691,7 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
         // two places).
         if Some(e.id.as_str()) != active.as_deref()
             && !e.is_api_key()
+            && e.state != state::SIGNING_IN
             && store::slot_has_cred(tool, &e.id)
             && !pins::is_pinned(conn, &e.id)?
         {
@@ -675,3 +705,5 @@ pub fn next_signed_in(conn: &Connection, tool: Tool) -> Result<Option<Entry>, Wa
 mod tests;
 #[cfg(test)]
 mod pins_tests;
+#[cfg(test)]
+mod identity_tests;

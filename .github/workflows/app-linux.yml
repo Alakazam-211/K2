@@ -97,6 +97,18 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # The runner keeps CARGO_TARGET_DIR (and the workspace) between runs,
+      # so the bundle folders still hold every earlier version's .deb/.rpm/
+      # .AppImage. Empty them first; the collect step below also matches
+      # this build's exact version, so a leftover can never ride along.
+      - name: Clean old bundle outputs
+        run: |
+          TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+          rm -rf "$TARGET_DIR/release/bundle/deb" \
+                 "$TARGET_DIR/release/bundle/rpm" \
+                 "$TARGET_DIR/release/bundle/appimage" \
+                 dist-linux
+
       # beforeBuildCommand handles vite:build + fetch-frpc (sidecar).
       - name: Build Linux bundles (deb, rpm, AppImage)
         env:
@@ -105,17 +117,48 @@ jobs:
 
       - name: Collect + checksum artifacts
         run: |
-          mkdir -p dist-linux
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          # The tag and the app's own version must agree, or the names
+          # below would pick nothing (or the wrong build).
+          CONF_VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$CONF_VERSION" != "$VERSION" ]; then
+            echo "tag $TAG but tauri.conf.json says $CONF_VERSION" >&2
+            exit 1
+          fi
           # Runner .env sets CARGO_TARGET_DIR=/home/k2-ci/cargo-target
           TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-          cp "$TARGET_DIR/release/bundle/deb/"*.deb dist-linux/
-          cp "$TARGET_DIR/release/bundle/rpm/"*.rpm dist-linux/
-          cp "$TARGET_DIR/release/bundle/appimage/"*.AppImage dist-linux/
-          (cd dist-linux && sha256sum * | tee SHA256SUMS-linux-x86_64.txt)
+          B="$TARGET_DIR/release/bundle"
+          rm -rf dist-linux
+          mkdir -p dist-linux
+          # Exactly this build's three files, by exact name (tauri's naming:
+          # productName K2). A missing one fails the job instead of
+          # uploading a partial or stale set.
+          for f in "$B/deb/K2_${VERSION}_amd64.deb" \
+                   "$B/rpm/K2-${VERSION}-1.x86_64.rpm" \
+                   "$B/appimage/K2_${VERSION}_amd64.AppImage"; do
+            if [ ! -f "$f" ]; then
+              echo "missing bundle: $f" >&2
+              ls -la "$B"/deb "$B"/rpm "$B"/appimage >&2 || true
+              exit 1
+            fi
+            cp "$f" dist-linux/
+          done
+          (cd dist-linux && sha256sum K2_* K2-* | tee SHA256SUMS-linux-x86_64.txt)
+          ls -la dist-linux
 
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release upload "$TAG" dist-linux/* --clobber
+          VERSION="${TAG#v}"
+          # Name every file: never a glob over a folder that could hold
+          # another build's output.
+          gh release upload "$TAG" --clobber \
+            "dist-linux/K2_${VERSION}_amd64.deb" \
+            "dist-linux/K2-${VERSION}-1.x86_64.rpm" \
+            "dist-linux/K2_${VERSION}_amd64.AppImage" \
+            "dist-linux/SHA256SUMS-linux-x86_64.txt"

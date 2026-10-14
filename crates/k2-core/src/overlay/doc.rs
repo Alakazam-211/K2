@@ -133,6 +133,12 @@ pub struct PostAuthor {
     /// `owner` for the owner token, else the Connect username or the app
     /// guest's pass username.
     pub login: String,
+    /// The owner's display name, on a card the owner token answered or
+    /// dismissed (`answeredBy`), when one is set: the same name an owner's
+    /// post carries in `from`, stamped at answer time. None otherwise (and
+    /// for every other kind), so viewers fall back to "the owner".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// [`PostAuthor::kind`] for the owner daemon token.
@@ -144,15 +150,23 @@ pub const AUTHOR_GUEST: &str = "guest";
 
 impl PostAuthor {
     pub fn owner() -> Self {
-        Self { kind: AUTHOR_OWNER.to_string(), login: "owner".to_string() }
+        Self { kind: AUTHOR_OWNER.to_string(), login: "owner".to_string(), name: None }
+    }
+
+    /// The owner, carrying `display_name` (the resolved owner display
+    /// name). The bare default `owner` (no name set) carries none.
+    pub fn owner_named(display_name: &str) -> Self {
+        let n = display_name.trim();
+        let name = (!n.is_empty() && !n.eq_ignore_ascii_case("owner")).then(|| n.to_string());
+        Self { name, ..Self::owner() }
     }
 
     pub fn user(username: &str) -> Self {
-        Self { kind: AUTHOR_USER.to_string(), login: username.trim().to_string() }
+        Self { kind: AUTHOR_USER.to_string(), login: username.trim().to_string(), name: None }
     }
 
     pub fn guest(username: &str) -> Self {
-        Self { kind: AUTHOR_GUEST.to_string(), login: username.trim().to_string() }
+        Self { kind: AUTHOR_GUEST.to_string(), login: username.trim().to_string(), name: None }
     }
 }
 
@@ -394,10 +408,30 @@ mod tests {
         let later = r#"{"id":"i","kind":"text","from":"x","created_at":1,"author":{"kind":"robot","login":"x"}}"#;
         assert_eq!(
             serde_json::from_str::<OverlayDoc>(later).expect("later kind").author,
-            Some(PostAuthor { kind: "robot".into(), login: "x".into() })
+            Some(PostAuthor { kind: "robot".into(), login: "x".into(), name: None })
         );
-        assert_eq!(PostAuthor::owner(), PostAuthor { kind: "owner".into(), login: "owner".into() });
-        assert_eq!(PostAuthor::guest("g1"), PostAuthor { kind: "guest".into(), login: "g1".into() });
+        assert_eq!(PostAuthor::owner(), PostAuthor { kind: "owner".into(), login: "owner".into(), name: None });
+        assert_eq!(PostAuthor::guest("g1"), PostAuthor { kind: "guest".into(), login: "g1".into(), name: None });
+        // A post's author never carries a name (its `from` already does).
+        assert!(!serde_json::to_string(&PostAuthor::owner()).unwrap().contains("name"));
+    }
+
+    /// The owner's display name rides an owner `answeredBy`, so viewers can
+    /// say "Rosson" instead of "owner"; the unset default carries none.
+    #[test]
+    fn owner_answered_by_carries_the_display_name() {
+        let a = PostAuthor::owner_named("  Rosson Long ");
+        assert_eq!((a.kind.as_str(), a.login.as_str(), a.name.as_deref()), ("owner", "owner", Some("Rosson Long")));
+        assert_eq!(
+            serde_json::to_value(&a).unwrap(),
+            serde_json::json!({"kind": "owner", "login": "owner", "name": "Rosson Long"})
+        );
+        assert_eq!(PostAuthor::owner_named("owner"), PostAuthor::owner(), "the unset default names nobody");
+        assert_eq!(PostAuthor::owner_named("  "), PostAuthor::owner());
+        let back: PostAuthor = serde_json::from_str(r#"{"kind":"owner","login":"owner","name":"Rosson"}"#).unwrap();
+        assert_eq!(back.name.as_deref(), Some("Rosson"));
+        let old: PostAuthor = serde_json::from_str(r#"{"kind":"owner","login":"owner"}"#).unwrap();
+        assert_eq!(old, PostAuthor::owner(), "older cards still parse");
     }
 
     #[test]

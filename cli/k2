@@ -28427,6 +28427,20 @@ _cmd_msg_inbox_form_inner() {
     [[ -n "$priority" ]] && params="${params}&priority=$(urlencode "$priority")"
     [[ -n "$from" ]] && params="${params}&from=$(urlencode "$from")"
     local response
+
+    # Federated agent::host (or legacy agent@host): the wake rides the
+    # tray and the PEER wakes its own workspace, answering with `wake`.
+    # Never knock /cli/workspace/msg on this box with a federated token —
+    # it can't resolve here and always answered workspace_not_found
+    # (0.45.6, appa 2026-10-11..13).
+    _split_remote_target "$target"
+    if [[ -n "${_REMOTE_HOST:-}" ]]; then
+        params="${params}&wake=$(urlencode "$wake_flag")&mode=$(urlencode "$mode")"
+        response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
+        _msg_inbox_map_response "$response" "$wake_flag"
+        return $?
+    fi
+
     response=$(cli_send cli_post_form "/cli/inbox/compose" "$params")
 
     # Compose-only for silent. For wake: after compose success, deliver_live

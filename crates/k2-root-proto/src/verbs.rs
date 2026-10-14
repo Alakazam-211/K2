@@ -28,6 +28,8 @@ pub const CAP_TEMPLATE: usize = 64 * 1024;
 pub const CAP_SQL: usize = 64 * 1024;
 pub const CAP_INSTALL_BIN: usize = 256 * 1024 * 1024;
 pub const CAP_SELF_UPDATE: usize = 8 * 1024 * 1024;
+/// `apps install-engine`: `<u32 BE sig len><sig><ELF>` of k2-app-engine.
+pub const CAP_ENGINE: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -200,6 +202,14 @@ pub enum Verb {
     AppsReservePorts(bool),
     AppsNftApply { gw: PortRange, px: PortRange, db: PortRange },
     AppsNftRemove,
+    /// `apps nft app <id> <gw-port>`: the App's own gateway port, matched
+    /// on its cgroups (slice 3). Re-run after each App start (nft resolves
+    /// a cgroup path to an inode when the rule loads).
+    AppsNftApp { id: AppId, gw: u16 },
+    AppsNftAppRemove(AppId),
+    /// Install (or update) `k2-app-engine` from a signed payload on stdin,
+    /// its user unit for `k2app` and the socket dir (slice 3, S11).
+    AppsInstallEngine,
     AppsPackagesInstall,
     AppsPackagesInstallYouki,
     AppsRuntime(OciRuntime),
@@ -414,6 +424,15 @@ impl Verb {
                 db: PortRange::parse(db).ok_or(REFUSED)?,
             },
             ["apps", "nft", "remove"] => Verb::AppsNftRemove,
+            ["apps", "nft", "app", id, port] => {
+                let gw = PortRange::parse(port).filter(|r| r.lo == r.hi).ok_or(REFUSED)?.lo;
+                if !(crate::apps::GATEWAY_PORTS.lo..=crate::apps::GATEWAY_PORTS.hi).contains(&gw) {
+                    return Err(REFUSED);
+                }
+                Verb::AppsNftApp { id: AppId::parse(id).ok_or(REFUSED)?, gw }
+            }
+            ["apps", "nft", "app-remove", id] => Verb::AppsNftAppRemove(AppId::parse(id).ok_or(REFUSED)?),
+            ["apps", "install-engine"] => Verb::AppsInstallEngine,
             ["apps", "packages", "install"] => Verb::AppsPackagesInstall,
             ["apps", "packages", "install-youki"] => Verb::AppsPackagesInstallYouki,
             ["apps", "runtime", r] => Verb::AppsRuntime(OciRuntime::parse(r).ok_or(REFUSED)?),
@@ -547,6 +566,9 @@ impl Verb {
                 s(&["apps", "nft", "apply", &gw.token(), &px.token(), &db.token()])
             }
             Verb::AppsNftRemove => s(&["apps", "nft", "remove"]),
+            Verb::AppsNftApp { id, gw } => s(&["apps", "nft", "app", id.as_str(), &gw.to_string()]),
+            Verb::AppsNftAppRemove(id) => s(&["apps", "nft", "app-remove", id.as_str()]),
+            Verb::AppsInstallEngine => s(&["apps", "install-engine"]),
             Verb::AppsPackagesInstall => s(&["apps", "packages", "install"]),
             Verb::AppsPackagesInstallYouki => s(&["apps", "packages", "install-youki"]),
             Verb::AppsRuntime(r) => s(&["apps", "runtime", r.as_str()]),
@@ -628,6 +650,11 @@ impl Verb {
             | Verb::AppsIoCost(false)
             | Verb::AppsReservePorts(false)
             | Verb::AppsNftRemove
+            // Which App reaches which gateway port, and which engine binary
+            // runs as k2app: the daemon's call (signature-gated as well).
+            | Verb::AppsNftApp { .. }
+            | Verb::AppsNftAppRemove(_)
+            | Verb::AppsInstallEngine
             | Verb::AppsRuntime(OciRuntime::Youki)
             | Verb::AppsProcessUnit(false)
             | Verb::AppsProcessStart(_)
@@ -657,6 +684,7 @@ impl Verb {
             Verb::HelperSelfUpdate => Some(CAP_SELF_UPDATE),
             Verb::MailRenderUnit => Some(CAP_TEMPLATE),
             Verb::MailInstallBin => Some(CAP_INSTALL_BIN),
+            Verb::AppsInstallEngine => Some(CAP_ENGINE),
             Verb::PgPsql { .. } => Some(CAP_SQL),
             _ => None,
         }
@@ -779,6 +807,12 @@ pub fn catalog() -> Vec<Verb> {
             db: crate::apps::DB_PORTS,
         },
         Verb::AppsNftRemove,
+        Verb::AppsNftApp {
+            id: AppId::parse("nsi-skin").expect("id"),
+            gw: 38_601,
+        },
+        Verb::AppsNftAppRemove(AppId::parse("nsi-skin").expect("id")),
+        Verb::AppsInstallEngine,
         Verb::AppsPackagesInstall,
         Verb::AppsPackagesInstallYouki,
         Verb::AppsRuntime(OciRuntime::Crun),
@@ -1064,6 +1098,9 @@ mod tests {
             &["apps", "budget", "4096", "4096"],
             &["apps", "budget", "off"],
             &["apps", "unprep"],
+            &["apps", "nft", "app", "jobs", "38600"],
+            &["apps", "nft", "app-remove", "jobs"],
+            &["apps", "install-engine"],
             // Non-canonical ranges could widen what Apps reach.
             &["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
@@ -1079,6 +1116,10 @@ mod tests {
         assert!(!Verb::AppsStatus.takes_lock());
         assert!(Verb::AppsStatus.needs_root());
         for v in catalog().into_iter().filter(|v| v.namespace() == "apps") {
+            if v == Verb::AppsInstallEngine {
+                assert_eq!(v.stdin_cap(), Some(CAP_ENGINE));
+                continue;
+            }
             assert_eq!(v.stdin_cap(), None, "{v:?}: apps verbs read no stdin");
             if v != Verb::AppsStatus {
                 assert!(v.takes_lock(), "{v:?}");
@@ -1158,6 +1199,20 @@ mod tests {
             &["apps", "unprep", "--force"],
             &["apps", "install-podman"],
             &["apps", "kvm", "on"],
+            // nft app: one App id and one port inside the gateway range.
+            &["apps", "nft", "app", "jobs"],
+            &["apps", "nft", "app", "jobs", "5432"],
+            &["apps", "nft", "app", "jobs", "38900"],
+            &["apps", "nft", "app", "jobs", "38600-38601"],
+            &["apps", "nft", "app", "jobs", "22"],
+            &["apps", "nft", "app", "../x", "38600"],
+            &["apps", "nft", "app", "jobs", "38600", "accept"],
+            &["apps", "nft", "app", "user.slice/x", "38600"],
+            &["apps", "nft", "app-remove"],
+            &["apps", "nft", "app-remove", "*"],
+            // install-engine: never a path or a version.
+            &["apps", "install-engine", "/tmp/k2-app-engine"],
+            &["apps", "install-engine", "0.46.1"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
@@ -1198,6 +1253,7 @@ mod tests {
                 Verb::MailRenderUnit => assert_eq!(cap, Some(CAP_TEMPLATE)),
                 Verb::MailInstallBin => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::PgPsql { .. } => assert_eq!(cap, Some(CAP_SQL)),
+                Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
             if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet) {

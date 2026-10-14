@@ -29,7 +29,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   useConnectHostStore,
-  rememberPassword,
+  saveRememberedPassword,
   forgetPassword,
   forgetToken,
   duplicateSavedHost,
@@ -316,8 +316,13 @@ export function ConnectionsSection(): React.JSX.Element {
         return
       }
       // Keychain side: remember the password when asked; else forget it.
+      // A failed keychain write un-marks the host and is shown (GH #42).
       if (draft.remember) {
-        await rememberPassword(id, passwordEntered)
+        const failure = await saveRememberedPassword(id, passwordEntered)
+        if (failure) {
+          setError(failure)
+          return
+        }
       } else {
         await forgetPassword(id)
         await forgetToken(id)
@@ -341,7 +346,12 @@ export function ConnectionsSection(): React.JSX.Element {
   const finishRotation = async (newPassword: string): Promise<void> => {
     if (!rotation) return
     if (rotation.remember) {
-      await rememberPassword(rotation.host.id, newPassword)
+      const failure = await saveRememberedPassword(rotation.host.id, newPassword)
+      if (failure) {
+        setRotation(null)
+        setError(failure)
+        return
+      }
     } else {
       await forgetPassword(rotation.host.id)
       await forgetToken(rotation.host.id)

@@ -587,9 +587,9 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
         .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
         .collect();
     assert_eq!(fed.len(), 1);
-    let want = nft_ruleset(APP_UID, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS);
+    let want = nft_ruleset(APP_UID, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 996 jump k2app_v1"));
+    assert!(want.contains("meta skuid 996 jump k2app_v2"));
 
     // Removing it is the daemon's, and so is any other set of ranges (an
     // agent can't open more loopback ports to Apps).
@@ -1075,4 +1075,187 @@ fn hba_app_is_daemon_only_and_refuses_links_and_damage_before_writing() {
     ok(&o);
     assert_eq!(json(&o)["reloaded"], false);
     assert!(calls_of(&t, SYSTEMCTL).iter().all(|c| !c.starts_with("reload")));
+}
+
+// ── per-App gateway rules (slice 3) ─────────────────────────────────────
+
+fn current_table(t: &T) {
+    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v2\n\t}\n\tchain k2app_v2 {\n\t}\n}\n");
+}
+
+fn container_cgroup(t: &T, id: &str) -> String {
+    let safe = id.replace('-', "_");
+    let p = format!("{CGROUP_ROOT}/user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-{safe}.slice");
+    std::fs::create_dir_all(t.p(&p)).unwrap();
+    p
+}
+
+fn nft_scripts(t: &T) -> Vec<String> {
+    t.calls()
+        .into_iter()
+        .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
+        .map(|(_, _, i)| String::from_utf8(i.unwrap_or_default()).unwrap())
+        .collect()
+}
+
+#[test]
+fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
+    let t = box_root();
+    with_app_user(&t);
+    current_table(&t);
+    container_cgroup(&t, "nsi-skin");
+    let o = t.call(&["apps", "nft", "app", "nsi-skin", "38601"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["rules"], 1);
+    assert_eq!(v["cgroupsNow"], 1);
+    let sc = nft_scripts(&t);
+    assert_eq!(sc.len(), 1);
+    assert!(sc[0].starts_with("flush chain inet k2app k2app_apps\n"), "{}", sc[0]);
+    assert!(sc[0].contains(
+        "add rule inet k2app k2app_apps socket cgroupv2 level 5 \"user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"
+    ));
+    // A second App: both rules, each its own port. A port already held is refused.
+    container_cgroup(&t, "nsi");
+    ok(&t.call(&["apps", "nft", "app", "nsi", "38600"]));
+    let last = nft_scripts(&t).pop().unwrap();
+    assert_eq!(last.matches("add rule").count(), 2);
+    assert!(last.contains("k2apps-nsi.slice\" oifname \"lo\" tcp dport 38600 accept"));
+    let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("belongs to App nsi"), "{}", o.stderr);
+    // A full re-apply keeps the per-App rules (boot, drift).
+    t.as_agent();
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"]));
+    let full = nft_scripts(&t).pop().unwrap();
+    assert!(full.contains("k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"));
+    assert!(!full.contains("38600-38899"), "never the whole gateway range");
+    // Agents can't add or remove rules.
+    assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38602"]).code, exit::NOT_DAEMON);
+    assert_eq!(t.call(&["apps", "nft", "app-remove", "nsi"]).code, exit::NOT_DAEMON);
+}
+
+#[test]
+fn nft_app_needs_the_current_table_and_remove_drops_the_rule() {
+    let t = box_root();
+    with_app_user(&t);
+    rule(&t, NFT, "list", 1, "");
+    let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("box_not_prepared"), "{}", o.stderr);
+    // An old (v1) table is not current either.
+    let t = box_root();
+    with_app_user(&t);
+    rule(&t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v1\n\t}\n}\n");
+    assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38600"]).code, exit::STATE);
+
+    let t = box_root();
+    with_app_user(&t);
+    current_table(&t);
+    // No cgroup yet (the App isn't running): recorded, no rule loaded.
+    let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
+    ok(&o);
+    assert_eq!(json(&o)["rules"], 0);
+    container_cgroup(&t, "jobs");
+    ok(&t.call(&["apps", "nft", "app", "jobs", "38600"]));
+    assert_eq!(nft_scripts(&t).pop().unwrap().matches("add rule").count(), 1);
+    let o = t.call(&["apps", "nft", "app-remove", "jobs"]);
+    ok(&o);
+    assert_eq!(json(&o)["changed"], true);
+    assert_eq!(nft_scripts(&t).pop().unwrap(), "flush chain inet k2app k2app_apps\n");
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["nftApps"], serde_json::json!({}));
+}
+
+// ── the engine install (S11) ────────────────────────────────────────────
+
+fn engine_payload(version: &str) -> Vec<u8> {
+    use k2_root_proto::engine::{format_marker, trusted_comment};
+    let elf = k2_root_proto::testsign::fake_elf("x86_64", &format_marker(version, 1, "x86_64"));
+    let sig = k2_root_proto::testsign::sign_with_test_key(&elf, &trusted_comment("x86_64", version, 1));
+    k2_root_proto::sig::encode_payload(&sig, &elf)
+}
+
+fn engine_box(t: &T) {
+    with_app_user(t);
+    std::fs::create_dir_all(t.p("/run/user/996")).unwrap();
+    std::fs::create_dir_all(t.p("/etc/systemd/user")).unwrap();
+    std::fs::create_dir_all(t.p("/etc/tmpfiles.d")).unwrap();
+}
+
+#[test]
+fn install_engine_verifies_installs_and_starts_it_as_k2app() {
+    let t = box_root();
+    engine_box(&t);
+    let payload = engine_payload("0.46.1");
+    let o = t.call_in(&["apps", "install-engine"], &payload);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["version"], "0.46.1");
+    assert_eq!(v["protocol"], 1);
+    assert_eq!(v["changedBinary"], true);
+    assert_eq!(v["daemonUsers"], serde_json::json!(["k2"]));
+    let (_, elf) = k2_root_proto::sig::decode_payload(&payload).unwrap();
+    assert_eq!(std::fs::read(t.p(ENGINE_PATH)).unwrap(), elf);
+    assert_eq!(std::fs::metadata(t.p(ENGINE_PATH)).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(read(&t, "/etc/systemd/user/k2-app-engine.service"), k2_root_proto::engine::user_unit());
+    assert!(read(&t, "/etc/tmpfiles.d/k2app.conf").contains("a+ /run/k2app - - - - u:k2:x\n"));
+    assert_eq!(calls_of(&t, SYSTEMD_TMPFILES), vec!["--create /etc/tmpfiles.d/k2app.conf".to_string()]);
+    let ru = calls_of(&t, k2_root_proto::paths::RUNUSER);
+    assert_eq!(
+        ru,
+        vec![
+            "-u k2app -- /usr/bin/env XDG_RUNTIME_DIR=/run/user/996 /usr/bin/systemctl --user daemon-reload".to_string(),
+            "-u k2app -- /usr/bin/env XDG_RUNTIME_DIR=/run/user/996 /usr/bin/systemctl --user enable k2-app-engine.service".to_string(),
+            "-u k2app -- /usr/bin/env XDG_RUNTIME_DIR=/run/user/996 /usr/bin/systemctl --user restart k2-app-engine.service".to_string(),
+        ]
+    );
+    // Same bytes again: no rewrite, still a restart (so a crashed engine comes back).
+    let o = t.call_in(&["apps", "install-engine"], &payload);
+    ok(&o);
+    assert_eq!(json(&o)["changedBinary"], false);
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["enginePresent"], true);
+    assert_eq!(st["engineUnit"], "ok");
+    assert_eq!(st["engineTmpfiles"], true);
+}
+
+#[test]
+fn install_engine_refuses_agents_bad_signatures_and_other_binaries() {
+    let t = box_root();
+    engine_box(&t);
+    t.as_agent();
+    // Daemon class: refused before stdin is read.
+    let o = crate::run(&t.ctx, &["apps", "install-engine"], super::NoRead);
+    assert_eq!(o.code, exit::NOT_DAEMON);
+    assert!(!t.p(ENGINE_PATH).exists());
+
+    let t = box_root();
+    engine_box(&t);
+    // A tampered binary.
+    let mut p = engine_payload("0.46.1");
+    let n = p.len();
+    p[n - 3] ^= 1;
+    assert_eq!(t.call_in(&["apps", "install-engine"], &p).code, exit::SIGNATURE);
+    // The helper's own signed build is not an engine (domain separation).
+    let elf = k2_root_proto::testsign::fake_elf("x86_64", &k2_root_proto::version::format_marker("0.46.1", 6, "x86_64"));
+    let sig = k2_root_proto::testsign::sign_with_test_key(&elf, &k2_root_proto::sig::trusted_comment("x86_64", "0.46.1", 6));
+    let o = t.call_in(&["apps", "install-engine"], &k2_root_proto::sig::encode_payload(&sig, &elf));
+    assert_eq!(o.code, exit::SIGNATURE);
+    assert!(o.stderr.contains("another file"), "{}", o.stderr);
+    assert!(!t.p(ENGINE_PATH).exists());
+    assert!(calls_of(&t, k2_root_proto::paths::RUNUSER).is_empty());
+    // A planted link at the engine path is refused, never followed.
+    write(&t, "/etc/evil", "x");
+    symlink(t.p("/etc/evil"), t.p(ENGINE_PATH)).unwrap();
+    let o = t.call_in(&["apps", "install-engine"], &engine_payload("0.46.1"));
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert_eq!(read(&t, "/etc/evil"), "x");
+    // No user manager (linger off): refused before any write.
+    let t = box_root();
+    engine_box(&t);
+    std::fs::remove_dir(t.p("/run/user/996")).unwrap();
+    let o = t.call_in(&["apps", "install-engine"], &engine_payload("0.46.1"));
+    assert_eq!(o.code, exit::STATE);
+    assert!(!t.p(ENGINE_PATH).exists());
 }

@@ -21,7 +21,10 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use k2_root_proto::apps::*;
-use k2_root_proto::paths::{SYSTEMCTL, SYSTEMD_SYSTEM_DIR, USERADD};
+use k2_root_proto::engine::{tmpfiles_conf, user_unit, verify_engine_build, TMPFILES_FILE, USER_UNIT, USER_UNIT_DIR, USER_UNIT_FILE};
+use k2_root_proto::keys::trusted_keys;
+use k2_root_proto::paths::{HELPER_DIR, RUNUSER, STATE_DIR, SYSTEMCTL, SYSTEMD_SYSTEM_DIR, USERADD};
+use k2_root_proto::sig::decode_payload;
 
 use crate::caller::{self, Caller};
 use crate::ctx::{Ctx, Fail, HResult, KindStr};
@@ -811,11 +814,230 @@ fn nft_json(ctx: &Ctx, uid: Option<u32>) -> J {
 
 pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: PortRange) -> HResult<J> {
     let pw = app_user(ctx)?;
-    let rules = nft_ruleset(pw.uid, gw, px, db);
-    ctx.run_ok(NFT, &["-f", "-"], Some(rules.as_bytes()))?;
+    let apps = load_nft_apps(ctx)?;
+    let rules = app_rules(ctx, pw.uid, &apps, gw);
+    let text = nft_ruleset(pw.uid, gw, px, db, &rules);
+    ctx.run_ok(NFT, &["-f", "-"], Some(text.as_bytes()))?;
     let mut v = nft_json(ctx, Some(pw.uid));
     v["ranges"] = json!({"gateway": gw.token(), "proxy": px.token(), "db": db.token()});
+    v["appRules"] = json!(rules.len());
     Ok(v)
+}
+
+// ── per-App gateway rules (slice 3) ─────────────────────────────────────
+
+/// `apps-nft.json`: App id → its gateway port.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NftApps {
+    pub apps: std::collections::BTreeMap<String, u16>,
+}
+
+fn load_nft_apps(ctx: &Ctx) -> HResult<NftApps> {
+    match read_cfg(ctx, NFT_APPS_STATE, 256 * 1024)? {
+        None => Ok(NftApps::default()),
+        Some(b) => serde_json::from_slice(&b).map_err(|_| Fail::state("apps-nft.json unreadable")),
+    }
+}
+
+fn save_nft_apps(ctx: &Ctx, s: &NftApps) -> HResult<()> {
+    let d = ensure_subdir(ctx, split(STATE_DIR).0, split(STATE_DIR).1)?;
+    let bytes = serde_json::to_vec_pretty(s).map_err(|_| Fail::io("encode apps-nft.json"))?;
+    put(ctx, &d, split(NFT_APPS_STATE).1, &bytes).map(|_| ())
+}
+
+/// One accept per (App, cgroup that exists now). Ids and ports come from
+/// the state file, re-validated; cgroup paths are built, never read.
+fn app_rules(ctx: &Ctx, uid: u32, s: &NftApps, gw: PortRange) -> Vec<AppRule> {
+    let mut out = Vec::new();
+    for (id, port) in &s.apps {
+        let Some(id) = AppId::parse(id) else { continue };
+        if !(gw.lo..=gw.hi).contains(port) {
+            continue;
+        }
+        for (cg, level) in app_cgroups(uid, &id) {
+            if ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir() {
+                out.push(AppRule { cgroup: cg, level, gw_port: *port });
+            }
+        }
+    }
+    out
+}
+
+fn nft_table_current(ctx: &Ctx, uid: u32) -> bool {
+    nft_list(ctx).is_some_and(|t| t.contains(&format!("chain {NFT_CHAIN}")) && t.contains(&format!("meta skuid {uid} ")))
+}
+
+fn reload_app_rules(ctx: &Ctx, uid: u32, s: &NftApps) -> HResult<usize> {
+    if !nft_table_current(ctx, uid) {
+        return Err(Fail::state("box_not_prepared: the k2app nftables table is missing or old (apps nft apply)"));
+    }
+    let rules = app_rules(ctx, uid, s, GATEWAY_PORTS);
+    ctx.run_ok(NFT, &["-f", "-"], Some(nft_apps_script(&rules).as_bytes()))?;
+    Ok(rules.len())
+}
+
+/// `apps nft app <id> <gw>` (daemon): record the App's gateway port and
+/// reload the per-App chain. A port another App holds is refused.
+pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16) -> HResult<J> {
+    let pw = app_user(ctx)?;
+    let mut s = load_nft_apps(ctx)?;
+    if let Some((other, _)) = s.apps.iter().find(|(a, p)| **p == gw && a.as_str() != id.as_str()) {
+        return Err(Fail::state(format!("refused: gateway port {gw} belongs to App {other}")));
+    }
+    let changed = s.apps.insert(id.as_str().to_string(), gw) != Some(gw);
+    if changed {
+        save_nft_apps(ctx, &s)?;
+    }
+    let n = reload_app_rules(ctx, pw.uid, &s)?;
+    let matched = app_cgroups(pw.uid, id)
+        .iter()
+        .filter(|(cg, _)| ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir())
+        .count();
+    Ok(json!({"app": id.as_str(), "gwPort": gw, "changed": changed, "rules": n, "cgroupsNow": matched}))
+}
+
+pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
+    let pw = app_user(ctx)?;
+    let mut s = load_nft_apps(ctx)?;
+    let changed = s.apps.remove(id.as_str()).is_some();
+    if changed {
+        save_nft_apps(ctx, &s)?;
+    }
+    let n = if nft_table_current(ctx, pw.uid) {
+        reload_app_rules(ctx, pw.uid, &s)?
+    } else {
+        0
+    };
+    Ok(json!({"app": id.as_str(), "changed": changed, "rules": n}))
+}
+
+// ── the engine (S11) ────────────────────────────────────────────────────
+
+/// `runuser -u k2app -- env XDG_RUNTIME_DIR=/run/user/<uid> systemctl --user …`.
+fn user_systemctl(ctx: &Ctx, uid: u32, args: &[&str]) -> HResult<crate::ctx::ExecOut> {
+    let rt = format!("XDG_RUNTIME_DIR=/run/user/{uid}");
+    let mut a: Vec<&str> = vec!["-u", APP_USER, "--", ENV, &rt, SYSTEMCTL, "--user"];
+    a.extend_from_slice(args);
+    ctx.run_ok(RUNUSER, &a, None)
+}
+
+fn engine_unit_state(ctx: &Ctx) -> &'static str {
+    file_state(ctx, &format!("{USER_UNIT_DIR}/{USER_UNIT_FILE}"), user_unit().as_bytes())
+}
+
+/// Largest installed engine file the helper compares against.
+const CAP_ENGINE_FILE: usize = 64 * 1024 * 1024;
+
+/// `apps install-engine` (daemon; stdin `<sig><ELF>`): verify the build
+/// (root-helper key, `file:k2-app-engine-linux-<arch>`, marker), install
+/// `/usr/local/libexec/k2-app-engine` (root 0755, staged + renamed), the
+/// canned user unit (k2app only) and the socket dir's tmpfiles entry (ACL
+/// for each configured daemon user), then (re)start the engine as k2app.
+/// Every check runs before any write; the binary is never executed here.
+pub fn install_engine(ctx: &Ctx, payload: &[u8]) -> HResult<J> {
+    let pw = app_user(ctx)?;
+    let (sig, elf) = decode_payload(payload).map_err(Fail::sig)?;
+    let keys = trusted_keys(ctx.test_keys);
+    let built = verify_engine_build(elf, sig, &keys, ctx.arch).map_err(Fail::sig)?;
+    let users: Vec<String> = {
+        let mut u: Vec<String> = caller::load_daemons(ctx)
+            .map_err(Fail::state)?
+            .into_iter()
+            .map(|d| d.user)
+            .collect();
+        u.sort();
+        u.dedup();
+        u
+    };
+    if !exists(ctx, &format!("/run/user/{}", pw.uid)) {
+        return Err(Fail::state(
+            "box_not_prepared: k2app's user manager isn't running (apps linger on)",
+        ));
+    }
+    // The binary: the same directory rules as the helper's own update.
+    let d = ctx
+        .dir(HELPER_DIR)
+        .map_err(|e| Fail::io_err("open /usr/local/libexec", e))?;
+    let st = d.stat_self().map_err(|e| Fail::io_err("stat libexec", e))?;
+    if (st.st_mode as u32) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
+        return Err(Fail::sig(
+            "refused: /usr/local/libexec is not root-owned or is group/other-writable",
+        ));
+    }
+    let (cur, stage) = (
+        OsStr::new(split(ENGINE_PATH).1),
+        OsStr::new(".k2-app-engine.new"),
+    );
+    match d.kind(cur).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Missing | Kind::File => {}
+        _ => return Err(Fail::state("refused: the engine path is not a regular file")),
+    }
+    let same = d
+        .read_file(cur, CAP_ENGINE_FILE)
+        .ok()
+        .flatten()
+        .is_some_and(|b| b == elf);
+    if !same {
+        if d.kind(stage).map_err(|e| Fail::io_err("stat", e))? != Kind::Missing {
+            d.unlink(stage)
+                .map_err(|e| Fail::io_err("remove stale stage", e))?;
+        }
+        let res = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            use std::os::fd::AsRawFd;
+            let mut f = d.create_excl(stage)?;
+            f.write_all(elf)?;
+            if let Some((u, g)) = ctx.root_owner() {
+                // SAFETY: fd owned by f.
+                if unsafe { libc::fchown(f.as_raw_fd(), u, g) } != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            // SAFETY: fd owned by f.
+            if unsafe { libc::fchmod(f.as_raw_fd(), 0o755) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            f.sync_all()?;
+            d.rename(stage, cur)?;
+            d.fsync()
+        })();
+        if let Err(e) = res {
+            let _ = d.unlink(stage);
+            return Err(Fail::io_err("install engine", e));
+        }
+    }
+    let ud = ensure_subdir(ctx, split(USER_UNIT_DIR).0, split(USER_UNIT_DIR).1)?;
+    let unit_changed = put(ctx, &ud, USER_UNIT_FILE, user_unit().as_bytes())?;
+    let tdir = split(TMPFILES_FILE).0;
+    let td = ensure_subdir(ctx, split(tdir).0, split(tdir).1)?;
+    let refs: Vec<&str> = users.iter().map(String::as_str).collect();
+    let tmp_changed = put(
+        ctx,
+        &td,
+        split(TMPFILES_FILE).1,
+        tmpfiles_conf(&refs).as_bytes(),
+    )?;
+    ctx.run_ok(SYSTEMD_TMPFILES, &["--create", TMPFILES_FILE], None)?;
+    user_systemctl(ctx, pw.uid, &["daemon-reload"])?;
+    user_systemctl(ctx, pw.uid, &["enable", USER_UNIT])?;
+    user_systemctl(ctx, pw.uid, &["restart", USER_UNIT])?;
+    use sha2::Digest;
+    let sha: String = sha2::Sha256::digest(elf)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok(json!({
+        "installed": true,
+        "changedBinary": !same,
+        "changedUnit": unit_changed,
+        "changedTmpfiles": tmp_changed,
+        "version": built.version.to_string(),
+        "protocol": built.protocol,
+        "sha256": sha,
+        "keyId": built.key_id,
+        "daemonUsers": users,
+    }))
 }
 
 pub fn nft_remove(ctx: &Ctx) -> HResult<J> {
@@ -1239,7 +1461,7 @@ fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
             .unwrap_or("");
         if !matches!(
             comm,
-            "systemd" | "(sd-pam)" | "catatonit" | "podman pause" | "podman"
+            "systemd" | "(sd-pam)" | "catatonit" | "podman pause" | "podman" | "k2-app-engine"
         ) {
             n += 1;
         }
@@ -1270,6 +1492,28 @@ pub fn unprep(ctx: &Ctx, who: &Caller) -> HResult<J> {
         );
         Ok(())
     };
+    if let Some(pw) = &pw {
+        if exists(ctx, &format!("/run/user/{}", pw.uid)) {
+            // The engine goes first; it holds no App (each is its own unit).
+            let _ = user_systemctl(ctx, pw.uid, &["disable", "--now", USER_UNIT]);
+        }
+    }
+    step(
+        "engine unit remove",
+        unput(ctx, split(USER_UNIT_DIR).0, Some(split(USER_UNIT_DIR).1), USER_UNIT_FILE)
+            .map(|c| json!({"changed": c})),
+    )?;
+    let tdir = split(TMPFILES_FILE).0;
+    step(
+        "engine socket dir remove",
+        unput(ctx, split(tdir).0, Some(split(tdir).1), split(TMPFILES_FILE).1)
+            .map(|c| json!({"changed": c})),
+    )?;
+    step(
+        "per-App nft state remove",
+        unput(ctx, split(STATE_DIR).0, Some(split(STATE_DIR).1), split(NFT_APPS_STATE).1)
+            .map(|c| json!({"changed": c})),
+    )?;
     step("nft remove", nft_remove(ctx))?;
     step("process-unit off", process_unit_set(ctx, false))?;
     step("cores-slice off", cores_slice(ctx, who, None))?;
@@ -1292,7 +1536,7 @@ pub fn unprep(ctx: &Ctx, who: &Caller) -> HResult<J> {
     Ok(json!({
         "unprepared": true,
         "steps": steps,
-        "kept": ["the k2app user and its subordinate ids", "/var/lib/k2app", "distro packages"],
+        "kept": ["the k2app user and its subordinate ids", "/var/lib/k2app", "distro packages", "the k2-app-engine binary"],
     }))
 }
 
@@ -1367,5 +1611,8 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
                        "daemonUnits": daemons.iter().filter(|d| d.scope == "system").map(|d| d.unit.clone()).collect::<Vec<_>>()},
         "engine": engine_json(ctx),
         "enginePresent": exists(ctx, ENGINE_PATH),
+        "engineUnit": engine_unit_state(ctx),
+        "engineTmpfiles": exists(ctx, TMPFILES_FILE),
+        "nftApps": load_nft_apps(ctx).map(|s| json!(s.apps)).unwrap_or(json!(null)),
     }))
 }

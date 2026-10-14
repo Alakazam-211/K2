@@ -44,10 +44,14 @@ fn db() -> Connection {
     conn
 }
 
+/// A credential with a FIXED far-future expiry (2100-01-01): tests write
+/// one, then compare file bytes against a freshly built one, so the expiry
+/// must not move with the clock (`now() + 30 days` changed when a second
+/// ticked in between; soak 2026-10-14, seed 10).
 fn cred(tag: &str) -> Vec<u8> {
     format!(
         r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-{tag}","refreshToken":"{MARKER}-rt-{tag}","expiresAt":{}}}}}"#,
-        (now() + 30 * 24 * 3600) * 1000
+        4_102_444_800_000_i64
     )
     .into_bytes()
 }

@@ -1281,6 +1281,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0159_workspace_handle_tombstones",
             include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
         ),
+        // 0162 — the per-agent "Manage K2 projects" switch
+        // (projects.agents_can_manage_projects, DEFAULT 1 = today's
+        // behaviour). 0160–0161 belong to the v1 hire API (0.45.6) and 0158
+        // is reserved; the integrator renumbers on slips.
+        (
+            "0162_agents_manage_projects",
+            include_str!("../../drizzle_sql/0162_agents_manage_projects.sql"),
+        ),
         // 0163 — Garden v3 data sources and triggers
         // (prd-garden-v3-external-data-cards-v1, contract-sources-v1 §2).
         // 0160/0161 (hire API) and 0162 (App key) sit before it when they
@@ -1975,6 +1983,7 @@ mod tests {
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
                 "0159_workspace_handle_tombstones",
+                "0162_agents_manage_projects",
                 "0163_sources",
             ],
             "tail migrations out of order: {names:?}"

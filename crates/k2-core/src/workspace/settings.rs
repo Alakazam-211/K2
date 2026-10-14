@@ -1113,6 +1113,40 @@ pub fn set_agents_can_manage_vault(project_id: &str, enable: bool) -> Result<(),
     Ok(())
 }
 
+/// K2 projects (migration 0162) — the per-agent "Manage K2 projects"
+/// switch. DEFAULT ON (the column defaults to 1), so a workspace keeps
+/// today's behaviour until the owner turns it off. An unknown workspace
+/// or a read error is `false` (fail closed: no row, no permission).
+pub fn agents_can_manage_projects(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_projects FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_manage_projects` (0/1). Dedicated writer
+/// for `POST /cli/agent-access/set {toggle: "projects_manage"}`
+/// (Owner/Admin); not on `workspace/set`.
+pub fn set_agents_can_manage_projects(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_manage_projects = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
 /// EFFECTIVE agents-may-manage-hosted-mail gate for `project_path`.
 /// Column only: no global master (unlike DNS / connections). Unknown /
 /// unregistered path → `false` (fail-closed).

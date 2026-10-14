@@ -279,6 +279,10 @@ _cli_tool_id_for_verb() {
         # K2 vault: an `id` tool, so inside a K2 terminal the daemon sees the
         # session passport (agent-level), never the owner token.
         vault) echo "vault" ;;
+        # K2 projects (0.45.6): an `id` tool, so inside a K2 terminal the
+        # daemon sees the session passport, never the owner token, and the
+        # agent's "Manage K2 projects" switch applies to its mutations.
+        project) echo "project" ;;
         heartbeat) echo "heartbeat" ;;
         mail|hostmail) echo "mail" ;;
         # Calendars S3 (CAL23.4, security): `k2 calendar` rides the mail
@@ -316,7 +320,7 @@ _cli_tool_id_for_verb() {
 _cli_tool_default_mode() {
     case "${1:-}" in
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
-        msg|inbox|respond|awareness|connections|heartbeat|sidecar) echo "id" ;;
+        msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
         browser-open|settings|llm-accounts|compute|vault|sources) echo "id" ;;
         *) echo "open" ;;
@@ -373,6 +377,18 @@ _cli_apply_auth_for_verb() {
         if [ -n "$hook_sock" ] && [ -n "${DISK_OWNER_TOKEN:-}" ]; then
             TOKEN="$DISK_OWNER_TOKEN"
         fi
+    fi
+}
+
+# The credential project membership changes ride from verbs that are not
+# themselves `id` tools (`k2 agent hire|set --project`): the session passport
+# inside a K2 terminal (so the agent's "Manage K2 projects" switch applies),
+# else $TOKEN (owner / external terminal).
+_k2_project_token() {
+    if [ -n "${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
+        printf '%s' "$SCOPED_TOKEN"
+    else
+        printf '%s' "$TOKEN"
     fi
 }
 
@@ -21955,7 +21971,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects"
 
 _study_usage() {
     cat <<'EOF'
@@ -21973,7 +21989,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   app-identity  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault  notifications  data-sources
+  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects
 EOF
 }
 
@@ -22008,6 +22024,7 @@ _study_title() {
         vault) echo "Secrets (the vault)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
+        projects) echo "K2 projects and who may change them" ;;
         *) echo "" ;;
     esac
 }
@@ -22055,6 +22072,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   vault               Secrets: fetch not paste; references; who sets what
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
+  projects            k2 project: open by default; the per-agent switch
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -22099,8 +22117,39 @@ _study_page() {
         data-sources) _study_page_data_sources ;;
         vault) _study_page_vault ;;
         notifications) _study_page_notifications ;;
+        projects) _study_page_projects ;;
         *) return 1 ;;
     esac
+}
+
+_study_page_projects() {
+    cat <<'EOF'
+k2 study projects — K2 projects and who may change them
+
+WHAT A PROJECT IS
+  A named group of agent workspaces with one shared chat and one Point
+  of Contact (PoC). Posts from anyone else land in the PoC's session.
+  `k2 project --help` has every command.
+
+OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
+  Every workspace has "Manage K2 projects" (Settings → Workspaces →
+  <ws> → Agent). It starts ON: your agent may create, rename and delete
+  projects and add or remove members, its own or others'.
+  Off: create, rename, delete, add, remove, poc and settings fail with
+  agent_permission_off (exit 1). list, show, read and msg still work.
+  Ask your human with `k2 thread` if you need it on; don't work around it.
+
+WHO MAY FLIP IT
+  Only the owner or an admin (`k2 project access on|off --workspace
+  <ws>` outside K2, or the Agent tab). An agent never can, its own or
+  another's. Inside a K2 terminal `k2 project` sends your session
+  passport, never the owner token, so the switch always applies.
+
+THE LOG
+  Every project created or deleted and every member added or removed
+  is logged with who did it (owner, a person's login, or agent:<ws>),
+  what, and when; refused changes are logged too.
+EOF
 }
 
 _study_page_notifications() {
@@ -25426,6 +25475,7 @@ cmd_agent_set() {
     CONF="$conf" MODE="$mode" ENABLED="$enabled" NEW_NAME="$new_name" \
     PERSONA_FILE="$persona" ADD_PROJECTS="$add_projects_json" \
     REMOVE_PROJECTS="$remove_projects_json" DRY_RUN="$dry_run" AS_JSON="$as_json" \
+    APROJTOKEN="$(_k2_project_token)" \
     ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -25478,8 +25528,12 @@ def http_post_query(route, params, timeout=30):
     except Exception as e:
         return {"error": "%s: %s" % (route, e)}
 
-def http_post_json(route, body):
-    url = base + route + "?token=" + urllib.parse.quote(token, safe="")
+# Project membership changes ride the session passport inside a K2
+# terminal (0.45.6), so the "Manage K2 projects" switch applies to them.
+proj_token = os.environ.get("APROJTOKEN") or token
+
+def http_post_json(route, body, tok=None):
+    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
@@ -25730,7 +25784,7 @@ for a in actions:
         continue
     route = ("/cli/project-group/add-member" if a["step"] == "join-project"
              else "/cli/project-group/remove-member")
-    resp = http_post_json(route, {"group": a["projectId"], "workspace": path})
+    resp = http_post_json(route, {"group": a["projectId"], "workspace": path}, tok=proj_token)
     err = resp.get("error")
     if err or not resp.get("ok"):
         if isinstance(err, str):
@@ -26269,6 +26323,7 @@ cmd_agent_hire() {
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
     NO_WIKI="$no_wiki" NO_AGENTS_MD="$no_agents_md" FANOUT="$fanout" \
     DB_ACCESS="$db_access" COLOR="$color" FOCUS_GROUP="$focus_group" \
+    APROJTOKEN="$(_k2_project_token)" \
     AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" python3 - <<'PYEOF'
 import json, os, re, sys
 import urllib.error, urllib.parse, urllib.request
@@ -26335,8 +26390,12 @@ def http_post_query(route, params, timeout=30):
     except Exception as e:
         return {"error": "%s: %s" % (route, e)}
 
-def http_post_json(route, body, timeout=30):
-    url = base + route + "?token=" + urllib.parse.quote(token, safe="")
+# Project membership changes ride the session passport inside a K2
+# terminal (0.45.6), so the "Manage K2 projects" switch applies to them.
+proj_token = os.environ.get("APROJTOKEN") or token
+
+def http_post_json(route, body, timeout=30, tok=None):
+    url = base + route + "?token=" + urllib.parse.quote(tok or token, safe="")
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
@@ -27085,7 +27144,7 @@ for a in by_step.get("join-project", []):
     if a["status"] != "pending":
         continue
     resp = http_post_json("/cli/project-group/add-member",
-                          {"group": a["projectId"], "workspace": path})
+                          {"group": a["projectId"], "workspace": path}, tok=proj_token)
     err = resp.get("error")
     if err or not resp.get("ok"):
         hint = err if isinstance(err, str) else (err or {}).get("hint") or json.dumps(resp)[:300]
@@ -32215,9 +32274,55 @@ elif verb == "read":
             print("(more messages remain — continue with: k2 project read %s --after %s)"
                   % (name, msgs[-1].get("createdAt")))
 
+elif verb == "access":
+    # The per-agent "Manage K2 projects" switch (0162). Owner/Admin only:
+    # inside a K2 terminal this sends the session passport, which the
+    # daemon refuses (an agent never flips its own switch).
+    on = os.environ.get("P_NAME") == "on"
+    target = os.environ.get("P_ARG_WORKSPACE") or ws_path
+    if not target:
+        die({"code": "usage", "hint": "pass --workspace <workspace>"})
+    d = call("POST", "/cli/agent-access/set",
+             body={"workspace": target, "toggle": "projects_manage", "value": on})
+    wsname = d.get("workspace") or target
+    if as_json:
+        print(dumps({"ok": True, "workspace": wsname,
+                     "agentsCanManageProjects": bool(d.get("agentsCanManageProjects"))}))
+    elif on:
+        print("Manage K2 projects is ON for %s: its agent may create, rename and delete"
+              " projects and change their members." % wsname)
+    else:
+        print("Manage K2 projects is OFF for %s: its agent can read projects and post in"
+              " its project chat, but not change them." % wsname)
+
 else:
     die({"code": "usage", "hint": "unknown project verb '%s'" % verb})
 PYEOF
+}
+
+cmd_project_access() {
+    if _wants_help "$@"; then cmd_help_project_access; exit 0; fi
+    local state="" workspace="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            on|off)
+                [ -z "$state" ] || { _project_err "usage" "pass on or off once"; exit 2; }
+                state="$1"; shift ;;
+            --workspace)
+                [ $# -ge 2 ] || { _project_err "usage" "--workspace requires a workspace name or path"; exit 2; }
+                workspace="$2"; shift 2 ;;
+            --json) as_json=true; shift ;;
+            *)
+                _project_err "usage" "unexpected argument '$1' — usage: k2 project access on|off [--workspace <ws>] [--json]"
+                exit 2 ;;
+        esac
+    done
+    if [ -z "$state" ]; then
+        _project_err "usage" "access needs on or off — usage: k2 project access on|off [--workspace <ws>] [--json]"
+        exit 2
+    fi
+    local P_VERB="access" P_JSON="$as_json" P_NAME="$state" P_ARG_WORKSPACE="$workspace"
+    _project_py
 }
 
 cmd_project_create() {
@@ -32465,6 +32570,19 @@ COMMANDS
                                  ONE project (rule spelled out in `msg --help`)
   read [<project>]               Read the chat, oldest first (--after to catch up
                                  on messages since your last read)
+  access on|off [--workspace <ws>]
+                                 Owner/admin: turn a workspace agent's "Manage
+                                 K2 projects" switch on or off
+
+WHO MAY CHANGE PROJECTS
+  Projects are open by default: any agent may create, rename and delete
+  projects and add or remove members. Each workspace has a per-agent switch,
+  "Manage K2 projects" (Settings → Workspaces → <ws> → Agent, or
+  `k2 project access`). Off: that agent gets exit 1 with code
+  agent_permission_off on every change, but `list`, `show`, `read` and `msg`
+  still work. Only the owner or an admin can flip it; an agent never can.
+  Every project created or deleted and every member change is logged
+  (who, what, when). More: `k2 study projects`.
 
 ADDRESSING
   <project> is a project name. Names match case-insensitively, and any UNIQUE
@@ -32500,6 +32618,31 @@ EXIT CODES
   but refused or failed
 
 Run 'k2 project <command> --help' for details on a command.
+EOF
+}
+
+cmd_help_project_access() {
+    cat <<'EOF'
+Turn a workspace agent's "Manage K2 projects" switch on or off. Projects are
+open by default (the switch starts ON). Off: that workspace's agent can't
+create, rename or delete projects or change their members or settings
+(code agent_permission_off); it can still list, show and read projects and
+post in its project chat. You (the owner) and people are never limited.
+
+Owner or admin only. Inside a K2 terminal this sends the session passport,
+which the daemon refuses: an agent can never flip its own switch. Run it from
+a terminal outside K2, or use Settings → Workspaces → <ws> → Agent.
+
+USAGE
+  k2 project access on|off [--workspace <ws>] [--json]
+
+FLAGS
+  --workspace <ws>       The workspace (name or path); default: this one
+  --json                 JSON output
+
+EXAMPLES
+  k2 project access off --workspace scout
+  k2 project access on --workspace ~/agents/scout
 EOF
 }
 
@@ -46539,6 +46682,7 @@ case "${1:-help}" in
             poc)    shift 2; cmd_project_poc "$@" ;;
             msg)    shift 2; cmd_project_msg "$@" ;;
             read)   shift 2; cmd_project_read "$@" ;;
+            access) shift 2; cmd_project_access "$@" ;;
             --help|-h|'') cmd_help_project; exit 0 ;;
             *)
                 _project_err "usage" "unknown command '${2:-}' — see k2 project --help"

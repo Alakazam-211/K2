@@ -1268,11 +1268,16 @@ fn handle_access(
     }
     let v = json_body(body)?;
     let toggle = str_field(&v, "toggle").unwrap_or("");
-    if toggle != "agents_manage" && toggle != "compute" && toggle != "vault_manage" && toggle != "compute_operate" {
+    if toggle != "agents_manage"
+        && toggle != "compute"
+        && toggle != "vault_manage"
+        && toggle != "compute_operate"
+        && toggle != "projects_manage"
+    {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'compute', 'compute_operate' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
         ));
     }
     let value = match v.get("value") {
@@ -1322,6 +1327,22 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute_operate", "agentsCanOperateCompute": value }),
             format!("ok {} compute_operate={value}", ws.handle),
+        ));
+    }
+    if toggle == "projects_manage" {
+        // K2 projects (0162, Rosson 2026-10-14): "Manage K2 projects".
+        // Default ON. Off refuses this workspace's agent sessions on every
+        // project mutation (`project_group_routes::agent_gate`); reads and
+        // its project chat stay open. Same single writer, same Admin floor.
+        k2_core::workspace::settings::set_agents_can_manage_projects(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::SyncProjects,
+            serde_json::Value::Null,
+        );
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "projects_manage", "agentsCanManageProjects": value }),
+            format!("ok {} projects_manage={value}", ws.handle),
         ));
     }
     if toggle == "vault_manage" {

@@ -13,6 +13,11 @@
 //! `routes::dispatcher` with `token_ok` auth (owner AND connect-user
 //! sessions — connect users see projects too). GET-chain hits on POST
 //! paths return 405 (`feedback_post_only_route_guards` house rule).
+//! 0.45.6: agent passports reach these routes too (TCP and the cell
+//! socket), and every mutation except `msg` needs the workspace's
+//! "Manage K2 projects" switch (0162, default on) — see
+//! [`dispatch_post_as`], which also writes the create/delete/member audit
+//! lines.
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations — additionally require the owner-or-admin bit
@@ -256,6 +261,226 @@ pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliRespon
         "/cli/project-group/dashboard/reorder" => handle_dashboard_reorder(body),
         _ => CliResponse::not_found(),
     }
+}
+
+// ── Who may mutate (the "Manage K2 projects" switch, 0162) ────────────
+
+/// Every project mutation the per-agent "Manage K2 projects" switch
+/// covers: all `/cli/project-group/*` POSTs except the chat post (`msg`),
+/// which stays open to members whatever the switch says.
+pub fn is_gated_mutation(path: &str) -> bool {
+    path.starts_with("/cli/project-group/") && path != "/cli/project-group/msg"
+}
+
+/// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7): owner or
+/// admin. A Member login sees them but cannot change them.
+fn is_admin_only(path: &str) -> bool {
+    path.starts_with("/cli/project-group/dashboard/")
+        || path == "/cli/project-group/set-icon"
+        || path == "/cli/project-group/set-color"
+}
+
+/// The hint every `agent_permission_off` refusal carries.
+fn agent_permission_off(ws: &str) -> CliResponse {
+    error_response(
+        "403 Forbidden",
+        "agent_permission_off",
+        format!(
+            "'Manage K2 projects' is off for {ws}, so this agent can't create, rename or delete \
+             projects or change their members or settings. Reading projects and posting in your \
+             project chat still work. Ask your human to turn it on in Settings → Workspaces → {ws} \
+             → Agent (or the owner runs: k2 project access on --workspace {ws})."
+        ),
+    )
+}
+
+/// The audited project events (who created/deleted a project, who
+/// changed its members). Other gated mutations are audited only when
+/// refused.
+fn audit_event(path: &str) -> Option<&'static str> {
+    match path {
+        "/cli/project-group/create" => Some("project-create"),
+        "/cli/project-group/delete" => Some("project-delete"),
+        "/cli/project-group/add-member" => Some("project-add-member"),
+        "/cli/project-group/remove-member" => Some("project-remove-member"),
+        _ => None,
+    }
+}
+
+fn workspace_label(workspace_id: &str) -> String {
+    k2_core::workspace_session_handles::workspace_address_name_shared(workspace_id)
+        .unwrap_or_else(|_| workspace_id.to_string())
+}
+
+/// `project="<name>" id=<id> [workspace=<handle>]` for an audit line,
+/// from the response (resolved ids) with the request as the fallback.
+fn audit_detail(
+    path: &str,
+    body: &[u8],
+    resp: &CliResponse,
+    pre_name: Option<&str>,
+) -> String {
+    let req: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+    let out: serde_json::Value =
+        serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null);
+    let req_str = |k: &str| req.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let (group_id, name) = match path {
+        "/cli/project-group/create" => (
+            out.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            out.get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| req_str("name")),
+        ),
+        _ => {
+            // A refusal carries no ids: resolve the request's selector.
+            let gid = out
+                .get("groupId")
+                .or_else(|| out.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| project_groups::resolve_group(&req_str("group")).ok())
+                .unwrap_or_default();
+            let name = pre_name
+                .map(str::to_string)
+                .or_else(|| project_groups::get_group_by_id(&gid).map(|g| g.name))
+                .unwrap_or_else(|| req_str("group"));
+            (gid, name)
+        }
+    };
+    let mut detail = format!("project={name:?}");
+    if !group_id.is_empty() {
+        detail.push_str(&format!(" id={group_id}"));
+    }
+    if path.ends_with("-member") {
+        let ws = out
+            .get("workspaceId")
+            .and_then(|v| v.as_str())
+            .map(workspace_label)
+            .unwrap_or_else(|| req_str("workspace"));
+        detail.push_str(&format!(" workspace={ws:?}"));
+    }
+    detail
+}
+
+fn audit(event: &str, caller: &crate::sidecar_routes::Caller, outcome: &str, ingress: &str) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        event,
+        &caller.audit_user(),
+        outcome.to_string(),
+        ingress,
+        "-",
+        "cli",
+    ));
+}
+
+/// `ok` / `refused:<code>` / `error:<status>` for an audit outcome.
+fn outcome_of(resp: &CliResponse) -> String {
+    if resp.status.starts_with("200") {
+        return "ok".to_string();
+    }
+    let code = serde_json::from_str::<serde_json::Value>(&resp.body)
+        .ok()
+        .and_then(|v| v["error"]["code"].as_str().map(str::to_string));
+    match code {
+        Some(c) if resp.status.starts_with("403") => format!("refused:{c}"),
+        Some(c) => format!("error:{c}"),
+        None => format!("error:{}", resp.status),
+    }
+}
+
+/// The authenticated entry for every `/cli/project-group/*` POST, over
+/// TCP and the per-cell socket alike. `caller` is the classified
+/// credential (`sidecar_routes::caller_from_tcp` /
+/// `caller_from_session`):
+///
+/// - Owner token, Connect login, a K2 shell-tab passport (a person): as
+///   before. Dashboards and appearance still need owner or admin.
+/// - An agent passport: every mutation except `msg` needs its
+///   workspace's "Manage K2 projects" switch (0162, DEFAULT ON) → else
+///   403 `agent_permission_off`. With the switch on it may do what the
+///   owner token let it do before (today's behaviour).
+/// - App passes, API keys/cells, bad tokens: 403.
+///
+/// Project create/delete and member add/remove write an audit line
+/// (`~/.k2/auth-audit.jsonl`: who, what, when); every refused gated
+/// mutation does too.
+pub fn dispatch_post_as(
+    path: &str,
+    body: &[u8],
+    caller: &crate::sidecar_routes::Caller,
+    ingress: &str,
+) -> CliResponse {
+    use crate::sidecar_routes::Caller;
+    let session_author = match caller {
+        Caller::WrongCredential => {
+            return error_response(
+                "403 Forbidden",
+                "wrong_credential",
+                "app passes, API keys and API sessions cannot change projects",
+            )
+        }
+        Caller::Invalid => {
+            return error_response("403 Forbidden", "forbidden", "invalid or missing token")
+        }
+        Caller::Login { username } => username.clone(),
+        // Owner token, a person in a K2 shell tab, an agent: the chat's
+        // session author stays "owner" (agents name themselves with
+        // `author`, checked for membership in `handle_msg`).
+        _ => "owner".to_string(),
+    };
+    let refuse = |resp: CliResponse| -> CliResponse {
+        let event = audit_event(path).map(str::to_string).unwrap_or_else(|| {
+            format!("project-{}", path.trim_start_matches("/cli/project-group/").replace('/', "-"))
+        });
+        let outcome = format!("{} {}", outcome_of(&resp), audit_detail(path, body, &resp, None));
+        audit(&event, caller, &outcome, ingress);
+        resp
+    };
+    if is_gated_mutation(path) {
+        if let Caller::Agent(a) = caller {
+            if !k2_core::workspace::settings::agents_can_manage_projects(&a.project_id) {
+                return refuse(agent_permission_off(&workspace_label(&a.project_id)));
+            }
+        }
+    }
+    if is_admin_only(path) {
+        if let Caller::Login { username } = caller {
+            use k2_core::connect_users::Role;
+            let admin = matches!(
+                k2_core::connect_users::role_for_user(username),
+                Some(Role::Owner | Role::Admin)
+            );
+            if !admin {
+                return refuse(error_response(
+                    "403 Forbidden",
+                    "forbidden",
+                    "dashboards and project appearance can only be changed by the owner or an admin",
+                ));
+            }
+        }
+    }
+    // Delete: the name is gone afterwards, so read it first.
+    let pre_name = (path == "/cli/project-group/delete")
+        .then(|| {
+            serde_json::from_slice::<serde_json::Value>(body)
+                .ok()
+                .and_then(|v| v.get("group").and_then(|g| g.as_str()).map(str::to_string))
+                .and_then(|sel| project_groups::resolve_group(&sel).ok())
+                .and_then(|gid| project_groups::get_group_by_id(&gid))
+                .map(|g| g.name)
+        })
+        .flatten();
+    let resp = dispatch_post(path, body, &session_author);
+    if let Some(event) = audit_event(path) {
+        let outcome = format!(
+            "{} {}",
+            outcome_of(&resp),
+            audit_detail(path, body, &resp, pre_name.as_deref())
+        );
+        audit(event, caller, &outcome, ingress);
+    }
+    resp
 }
 
 // ── Shared response helpers ───────────────────────────────────────────
@@ -3008,5 +3233,386 @@ mod tests {
         let mark = crate::push_routes::test_push_capture::mark();
         ok_json(msg_as(&gid, Some(&poc_name), "acknowledged, on it"));
         assert_eq!(pushes_since(mark).len(), 1, "a PoC post pushes like any agent post");
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// "Manage K2 projects" (0162, 0.45.6): the per-agent switch, the
+// authenticated POST entry and its audit lines.
+// ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod agent_switch_tests {
+    use super::*;
+    use crate::sidecar_routes::{AgentCaller, Caller};
+
+    fn insert_workspace(label: &str) -> (String, String, String) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let name = format!("pgs-ws-{label}-{id}");
+        let path = format!("/tmp/pgs-ws-{label}-{}-{id}", std::process::id());
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, name, path],
+        )
+        .expect("insert project row");
+        (id, name, path)
+    }
+
+    fn agent(project_id: &str) -> Caller {
+        Caller::Agent(AgentCaller {
+            project_id: project_id.to_string(),
+            map_key: Some(project_id.to_string()),
+            args: Vec::new(),
+            sandboxed: false,
+        })
+    }
+
+    fn post(path: &str, body: serde_json::Value, caller: &Caller) -> CliResponse {
+        dispatch_post_as(path, body.to_string().as_bytes(), caller, "test")
+    }
+
+    fn ok(resp: CliResponse) -> serde_json::Value {
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        serde_json::from_str(&resp.body).expect("JSON body")
+    }
+
+    fn refused_off(resp: &CliResponse) {
+        assert_eq!(resp.status, "403 Forbidden", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("JSON body");
+        assert_eq!(v["error"]["code"], "agent_permission_off", "{v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("Manage K2 projects"), "clear message: {hint}");
+        assert!(hint.contains("still work"), "says reads + chat still work: {hint}");
+    }
+
+    /// Audit lines whose outcome names `project` (unique per test).
+    fn audit_lines(project: &str) -> Vec<serde_json::Value> {
+        k2_core::auth_audit::tail(1000)
+            .expect("audit tail")
+            .into_iter()
+            .filter(|e| e["outcome"].as_str().is_some_and(|o| o.contains(project)))
+            .collect()
+    }
+
+    fn member_ids(group_id: &str) -> Vec<String> {
+        project_groups::list_members(group_id)
+            .expect("members")
+            .into_iter()
+            .map(|m| m.workspace_id)
+            .collect()
+    }
+
+    #[test]
+    fn switch_defaults_on_and_an_agent_can_add_a_member_audited() {
+        let (a_id, _, _) = insert_workspace("on-agent");
+        let (b_id, b_name, _) = insert_workspace("on-target");
+        assert!(
+            k2_core::workspace::settings::agents_can_manage_projects(&a_id),
+            "0162 default is ON"
+        );
+        let name = format!("pgs-on-{}", uuid::Uuid::new_v4());
+        let me = agent(&a_id);
+        let created = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &me));
+        let gid = created["id"].as_str().expect("id").to_string();
+        let added = ok(post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": name, "workspace": b_name }),
+            &me,
+        ));
+        assert_eq!(added["workspaceId"], b_id.as_str());
+        assert_eq!(member_ids(&gid), vec![b_id.clone()]);
+
+        let lines = audit_lines(&name);
+        let who = me.audit_user();
+        assert!(who.starts_with("agent:"), "{who}");
+        let create = lines
+            .iter()
+            .find(|e| e["event"] == "project-create")
+            .unwrap_or_else(|| panic!("no project-create line: {lines:?}"));
+        assert_eq!(create["user"], who.as_str(), "{create}");
+        assert!(create["outcome"].as_str().unwrap().starts_with("ok "), "{create}");
+        assert!(create["outcome"].as_str().unwrap().contains(&format!("id={gid}")), "{create}");
+        assert!(create["ts"].as_str().is_some_and(|t| !t.is_empty()), "when: {create}");
+        let add = lines
+            .iter()
+            .find(|e| e["event"] == "project-add-member")
+            .unwrap_or_else(|| panic!("no project-add-member line: {lines:?}"));
+        assert_eq!(add["user"], who.as_str(), "{add}");
+        let outcome = add["outcome"].as_str().unwrap();
+        assert!(outcome.starts_with("ok "), "{add}");
+        assert!(outcome.contains(&format!("project={name:?}")), "{add}");
+        assert!(outcome.contains("workspace="), "{add}");
+
+        // Owner remove + delete are audited as the owner. (B is the PoC,
+        // so remove a second member.)
+        let (_, c_name, _) = insert_workspace("on-second");
+        ok(post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": name, "workspace": c_name }),
+            &me,
+        ));
+        ok(post(
+            "/cli/project-group/remove-member",
+            serde_json::json!({ "group": name, "workspace": c_name }),
+            &Caller::Owner,
+        ));
+        assert_eq!(member_ids(&gid), vec![b_id.clone()]);
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": name }), &Caller::Owner));
+        let lines = audit_lines(&name);
+        let rm = lines
+            .iter()
+            .find(|e| e["event"] == "project-remove-member")
+            .unwrap_or_else(|| panic!("no project-remove-member line: {lines:?}"));
+        assert_eq!(rm["user"], "owner", "{rm}");
+        let del = lines
+            .iter()
+            .find(|e| e["event"] == "project-delete")
+            .unwrap_or_else(|| panic!("no project-delete line: {lines:?}"));
+        assert_eq!(del["user"], "owner", "{del}");
+        assert!(
+            del["outcome"].as_str().unwrap().contains(&format!("project={name:?}")),
+            "delete names the project it removed: {del}"
+        );
+    }
+
+    #[test]
+    fn switch_off_refuses_agent_mutations_but_not_owner_reads_or_chat() {
+        let (a_id, a_name, _) = insert_workspace("off-agent");
+        let (b_id, b_name, _) = insert_workspace("off-target");
+        let name = format!("pgs-off-{}", uuid::Uuid::new_v4());
+        let owner = Caller::Owner;
+        let created = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &owner));
+        let gid = created["id"].as_str().expect("id").to_string();
+        // The agent's workspace is a member (and so the PoC).
+        ok(post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": a_name }),
+            &owner,
+        ));
+
+        k2_core::workspace::settings::set_agents_can_manage_projects(&a_id, false)
+            .expect("switch off");
+        assert!(!k2_core::workspace::settings::agents_can_manage_projects(&a_id));
+        let me = agent(&a_id);
+
+        // Every mutation except msg is refused.
+        refused_off(&post(
+            "/cli/project-group/create",
+            serde_json::json!({ "name": format!("{name}-new") }),
+            &me,
+        ));
+        refused_off(&post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": b_name }),
+            &me,
+        ));
+        refused_off(&post(
+            "/cli/project-group/remove-member",
+            serde_json::json!({ "group": gid, "workspace": a_name }),
+            &me,
+        ));
+        refused_off(&post(
+            "/cli/project-group/rename",
+            serde_json::json!({ "group": gid, "name": format!("{name}-renamed") }),
+            &me,
+        ));
+        refused_off(&post("/cli/project-group/delete", serde_json::json!({ "group": gid }), &me));
+        refused_off(&post(
+            "/cli/project-group/pin",
+            serde_json::json!({ "group": gid, "pinned": true }),
+            &me,
+        ));
+        refused_off(&post(
+            "/cli/project-group/set-poc",
+            serde_json::json!({ "group": gid, "workspace": a_name }),
+            &me,
+        ));
+        refused_off(&post(
+            "/cli/project-group/set-color",
+            serde_json::json!({ "group": gid, "color": "#112233" }),
+            &me,
+        ));
+        // Nothing changed.
+        assert_eq!(member_ids(&gid), vec![a_id.clone()]);
+        assert!(project_groups::resolve_group(&format!("{name}-new")).is_err());
+        assert_eq!(project_groups::get_group_by_id(&gid).expect("still there").name, name);
+
+        // The refusal is audited as the agent.
+        let lines = audit_lines(&name);
+        let refused = lines
+            .iter()
+            .find(|e| {
+                e["event"] == "project-add-member"
+                    && e["outcome"]
+                        .as_str()
+                        .is_some_and(|o| o.starts_with("refused:agent_permission_off"))
+            })
+            .unwrap_or_else(|| panic!("no refused add-member line: {lines:?}"));
+        assert_eq!(refused["user"], me.audit_user().as_str(), "{refused}");
+
+        // Reads still work (the read routes take no caller; passports
+        // reach them via is_agent_verb, asserted below).
+        let shown = dispatch(
+            "/cli/project-group/show",
+            &[("group".to_string(), gid.clone())].into_iter().collect(),
+        )
+        .expect("show claimed");
+        assert_eq!(shown.status, "200 OK", "{}", shown.body);
+        assert!(crate::session_token::is_agent_verb("/cli/project-group/show"));
+        // Posting in its own project chat still works.
+        ok(post(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "still here", "author": a_name }),
+            &me,
+        ));
+        // A person in a K2 shell tab of that workspace is not the agent.
+        ok(post(
+            "/cli/project-group/pin",
+            serde_json::json!({ "group": gid, "pinned": false }),
+            &Caller::Shell { project_id: a_id.clone() },
+        ));
+        // The owner still can.
+        let added = ok(post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": b_name }),
+            &owner,
+        ));
+        assert_eq!(added["workspaceId"], b_id.as_str());
+
+        // Back on: the agent may mutate again.
+        k2_core::workspace::settings::set_agents_can_manage_projects(&a_id, true).expect("on");
+        ok(post(
+            "/cli/project-group/remove-member",
+            serde_json::json!({ "group": gid, "workspace": b_name }),
+            &me,
+        ));
+    }
+
+    #[test]
+    fn wrong_credentials_are_refused_and_non_admin_logins_cannot_change_appearance() {
+        let name = format!("pgs-cred-{}", uuid::Uuid::new_v4());
+        for c in [Caller::WrongCredential, Caller::Invalid] {
+            let r = post("/cli/project-group/create", serde_json::json!({ "name": name }), &c);
+            assert_eq!(r.status, "403 Forbidden", "{c:?}: {}", r.body);
+            let r = post(
+                "/cli/project-group/msg",
+                serde_json::json!({ "group": name, "body": "x" }),
+                &c,
+            );
+            assert_eq!(r.status, "403 Forbidden", "{c:?}: {}", r.body);
+        }
+        assert!(project_groups::resolve_group(&name).is_err());
+        // A login that does not exist is not an admin.
+        let created = ok(post(
+            "/cli/project-group/create",
+            serde_json::json!({ "name": name }),
+            &Caller::Owner,
+        ));
+        let r = post(
+            "/cli/project-group/set-color",
+            serde_json::json!({ "group": created["id"], "color": "#112233" }),
+            &Caller::Login { username: format!("nobody-{}", uuid::Uuid::new_v4()) },
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("owner or an admin"), "{}", r.body);
+    }
+
+    /// The switch is written only by the owner/admin route; an agent can
+    /// never flip it (its own or another's), and that route is not an
+    /// agent verb, while the project routes are.
+    #[test]
+    fn an_agent_cannot_flip_the_switch_but_the_owner_can() {
+        let (a_id, _, a_path) = insert_workspace("flip");
+        k2_core::workspace::settings::set_agents_can_manage_projects(&a_id, false).expect("off");
+        let on = serde_json::json!({ "workspace": a_path, "toggle": "projects_manage", "value": true })
+            .to_string();
+        let params = HashMap::new();
+        for c in [agent(&a_id), Caller::WrongCredential] {
+            let r = crate::sidecar_routes::handle(
+                "/cli/agent-access/set",
+                c.clone(),
+                on.as_bytes(),
+                &params,
+                "test",
+            );
+            assert_eq!(r.status, "403 Forbidden", "{c:?}: {}", r.body);
+        }
+        assert!(
+            !k2_core::workspace::settings::agents_can_manage_projects(&a_id),
+            "a refused flip changes nothing"
+        );
+        assert!(!crate::session_token::is_agent_verb("/cli/agent-access/set"));
+        assert!(crate::session_token::is_agent_verb("/cli/project-group/add-member"));
+        assert!(crate::session_token::is_agent_verb("/cli/project-group/list"));
+
+        let r = crate::sidecar_routes::handle(
+            "/cli/agent-access/set",
+            Caller::Owner,
+            on.as_bytes(),
+            &params,
+            "test",
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["agentsCanManageProjects"], true, "{v}");
+        assert!(k2_core::workspace::settings::agents_can_manage_projects(&a_id));
+        let off = serde_json::json!({ "workspace": a_path, "toggle": "projects_manage", "value": false })
+            .to_string();
+        let r = crate::sidecar_routes::handle(
+            "/cli/agent-access/set",
+            Caller::Owner,
+            off.as_bytes(),
+            &params,
+            "test",
+        );
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert!(!k2_core::workspace::settings::agents_can_manage_projects(&a_id));
+    }
+
+    /// Every gated mutation is POST-only (GET → 405 on the read chain and
+    /// in the route policy), and `msg` is the only POST the switch leaves
+    /// open.
+    #[test]
+    fn gated_mutations_are_post_only() {
+        let params = HashMap::new();
+        let posts = [
+            "/cli/project-group/create",
+            "/cli/project-group/rename",
+            "/cli/project-group/delete",
+            "/cli/project-group/pin",
+            "/cli/project-group/sort",
+            "/cli/project-group/add-member",
+            "/cli/project-group/remove-member",
+            "/cli/project-group/set-poc",
+            "/cli/project-group/set-icon",
+            "/cli/project-group/set-color",
+            "/cli/project-group/dashboard/save-layout",
+            "/cli/project-group/dashboard/rename",
+            "/cli/project-group/dashboard/create",
+            "/cli/project-group/dashboard/delete",
+            "/cli/project-group/dashboard/reorder",
+        ];
+        for route in posts {
+            assert!(is_gated_mutation(route), "{route} must be behind the switch");
+            let resp = dispatch(route, &params).expect("route claimed by GET chain");
+            assert_eq!(resp.status, "405 Method Not Allowed", "route={route}");
+            assert!(
+                crate::routes::route_policy::get_refused_params(route, &params),
+                "route policy refuses GET on {route}"
+            );
+        }
+        assert!(!is_gated_mutation("/cli/project-group/msg"));
+        for read in [
+            "/cli/project-group/list",
+            "/cli/project-group/show",
+            "/cli/project-group/messages",
+        ] {
+            assert!(
+                !crate::routes::route_policy::get_refused_params(read, &params),
+                "{read} is a read"
+            );
+        }
     }
 }

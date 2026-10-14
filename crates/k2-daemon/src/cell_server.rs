@@ -651,6 +651,14 @@ mod unix_impl {
                 crate::hook_ingest::legacy_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // K2 projects mutations + chat post over the cell socket: the
+            // bound session's passport, gated by the workspace's "Manage
+            // K2 projects" switch (0162) like the TCP arm. Reads fall to
+            // the `is_agent_verb && !is_post` arm below.
+            p if is_post && p.starts_with("/cli/project-group/") => {
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::project_group_routes::dispatch_post_as(p, body, &caller, "cell"))
+            }
             // k2 sidecar v1: new / list / stop for THIS cell's session
             // (SC36). The handler applies the agent gate from the bound
             // session. Same body caps as TCP (413).

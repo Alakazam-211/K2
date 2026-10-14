@@ -727,6 +727,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/thread",
         "/cli/chatter/",
         "/cli/chatterlog/",
+        // K2 projects (`k2 project`, 0.45.6): reads, the project chat and
+        // the mutations. `project_group_routes::dispatch_post_as`
+        // classifies the passport and refuses an agent's mutations when
+        // its workspace's "Manage K2 projects" switch is off. The switch
+        // itself (`/cli/agent-access/set`) is NOT an agent verb.
+        "/cli/project-group/",
         // Sandbox P1 (Finding-1 follow-on): `/cli/review-checklist/` was
         // DROPPED from the scoped allowlist. Its handlers take the raw `body`
         // (not the params map) and so are NOT reached by the principal-pin in

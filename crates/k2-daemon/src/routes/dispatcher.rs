@@ -6918,7 +6918,20 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if !super::http::token_ok(&query, state.token.as_str()) {
+            // 0.45.6 "Manage K2 projects" (0162): classify the credential
+            // like the sidecar routes. Owner token / Connect login / a K2
+            // shell-tab passport act as before; an agent passport needs
+            // its workspace's switch for every mutation except `msg`
+            // (`project_group_routes::dispatch_post_as`, which also holds
+            // the owner-or-admin rule for dashboards/appearance, the chat
+            // session author and the audit lines).
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if matches!(caller, crate::sidecar_routes::Caller::Invalid) {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(
                     &mut *stream,
@@ -6929,39 +6942,10 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            if (p.starts_with("/cli/project-group/dashboard/")
-                || p == "/cli/project-group/set-icon"
-                || p == "/cli/project-group/set-color")
-                && !super::http::token_is_owner_or_admin(&query, state.token.as_str())
-            {
-                let _ = stream.read(&mut buf).await;
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"ok":false,"error":{"code":"forbidden","hint":"dashboards and project appearance can only be changed by the owner or an admin"}}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
-            // Resolve acting identity for chat author attribution (D3).
-            // Same shape as `/cli/push/*`: owner token → "owner", else
-            // the connect-user session's username.
-            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
-            } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "owner".to_string())
-            };
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::project_group_routes::dispatch_post(
-                    &p_owned,
-                    &body_bytes,
-                    &session_author,
-                )
+                crate::project_group_routes::dispatch_post_as(&p_owned, &body_bytes, &caller, "tcp")
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {
@@ -10615,6 +10599,25 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
+        }
+        // K2 projects reads (list/show/messages/resources/html-docs/icon):
+        // owner / Connect login (token_ok) OR an agent passport (0.45.6:
+        // `k2 project` sends the session passport inside a K2 terminal,
+        // so the "Manage K2 projects" switch applies to its mutations;
+        // reads stay open to agents whatever the switch says).
+        p if !is_post && p.starts_with("/cli/project-group/") => {
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
+            let (auth_ok, _principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let resp = crate::cli::dispatch(p, &params);
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs

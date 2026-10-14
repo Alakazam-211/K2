@@ -22,6 +22,10 @@ pub enum HookSource {
     Claude,
     Cursor,
     Gemini,
+    /// A custom-preset program reporting through `k2 hooks emit` (GL45).
+    /// The PTY child is the agent, so a verified descendant of it speaks
+    /// for it (see `hook_ingest`).
+    Custom,
     Unknown,
 }
 
@@ -31,6 +35,7 @@ impl HookSource {
             "claude" => Self::Claude,
             "cursor" => Self::Cursor,
             "gemini" => Self::Gemini,
+            "custom" => Self::Custom,
             _ => Self::Unknown,
         }
     }
@@ -40,6 +45,7 @@ impl HookSource {
             Self::Claude => "claude",
             Self::Cursor => "cursor",
             Self::Gemini => "gemini",
+            Self::Custom => "custom",
             Self::Unknown => "unknown",
         }
     }
@@ -65,6 +71,13 @@ pub struct HookHeaders {
     /// `X-K2-Hook-Event`: the script's own scan of the event name (or
     /// Cursor's `$1`). The body's `hook_event_name` wins when present.
     pub event_hint: Option<String>,
+}
+
+/// `X-K2-Hook-Report: 1` (`k2 hooks emit`, GL45): the transport answers
+/// 200 `{"verdict":…}` instead of the silent 204, so the CLI can say
+/// whether the event counted. `notify.sh` never sends it.
+pub fn wants_report<'a>(get: impl Fn(&str) -> Option<&'a str>) -> bool {
+    get("x-k2-hook-report").map(str::trim) == Some("1")
 }
 
 impl HookHeaders {

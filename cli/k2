@@ -666,6 +666,9 @@ if [ "${1:-}" = "llm" ]; then
             ;;
     esac
 fi
+# `k2 hooks emit` (GL45) checks its own session passport and transport
+# (cell socket first), and must not need the owner token's PORT/TOKEN pair.
+[ "${1:-}" = "hooks" ] && [ "${2:-}" = "emit" ] && _skip_conn_gate=1
 # `k2 tickets template` prints the static brief skeleton (H42).
 case "${1:-}" in
     tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;
@@ -2961,6 +2964,162 @@ for c in r.get('clis', []):
         note = f\"  ({c['error']})\"
     print(f\"  {c.get('cli','?'):<8} {c.get('state','?'):<18} {c.get('path','?')}{note}\")
 " 2>/dev/null || echo "$raw"
+}
+
+# `k2 hooks emit` (GL45, prd-gardens-local-services-v1 Appendix A/B): the
+# supported way for a custom-preset program (no model CLI, so no hook
+# config of its own) to report its lifecycle to the daemon, as Claude's
+# hooks do through notify.sh. Same route (POST /hook/event), same owner
+# check (the sender must run inside this session's PTY), source `custom`.
+# Auth is ONLY this session's own passport ($K2_HOOK_TOKEN, over the cell
+# socket and then loopback TCP): never the owner token, so it never
+# re-sources ~/.k2/heartbeat.token, and outside a K2 session it refuses.
+_HOOKS_EMIT_EVENTS="SessionStart UserPromptSubmit PreToolUse PostToolUse Notification Stop SessionEnd"
+
+_hooks_emit_usage() {
+    cat <<'EOF'
+Usage: k2 hooks emit <event> [--json '<object>'] [--session-id <id>] [--quiet]
+
+Report a lifecycle event from a custom program running in this K2 session
+(the session's own passport; never the owner token).
+
+Events (Claude's names):
+  SessionStart       the program is up (add --json '{"source":"startup"}')
+  UserPromptSubmit   a turn starts: the agent shows as working
+  PreToolUse         a tool call starts (--json '{"tool_name":…,"tool_use_id":…}')
+  PostToolUse        that tool call ended (same tool_use_id)
+  Notification       waiting on a person
+  Stop               the turn is done: the agent shows as idle
+  SessionEnd         the program is exiting
+
+  --json '<object>'  extra fields merged into the event (object only;
+                     hook_event_name always comes from <event>)
+  --session-id <id>  the program's own conversation id, if it has one
+                     (informational; it never changes the Thread pin)
+  --quiet            print nothing on success
+
+Exit: 0 accepted; 1 not counted (foreign / unknown_pane / parse_error /
+daemon unreachable); 2 usage; 3 no session passport (run it inside a K2
+session). More: k2 study hooks
+EOF
+}
+
+cmd_hooks_emit() {
+    local event="" extra="" sid="" quiet=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) _hooks_emit_usage; return 0 ;;
+            --json) [ $# -ge 2 ] || { echo "Error: --json needs an object" >&2; exit 2; }; extra="$2"; shift 2 ;;
+            --session-id) [ $# -ge 2 ] || { echo "Error: --session-id needs a value" >&2; exit 2; }; sid="$2"; shift 2 ;;
+            --quiet|-q) quiet=1; shift ;;
+            -*) echo "Error: unknown flag $1" >&2; _hooks_emit_usage >&2; exit 2 ;;
+            *)
+                if [ -n "$event" ]; then
+                    echo "Error: one event per call (got '$event' and '$1')" >&2
+                    exit 2
+                fi
+                event="$1"; shift ;;
+        esac
+    done
+    if [ -z "$event" ]; then
+        _hooks_emit_usage >&2
+        exit 2
+    fi
+    local known=0 e
+    for e in $_HOOKS_EMIT_EVENTS; do
+        [ "$e" = "$event" ] && known=1
+    done
+    if [ "$known" != "1" ]; then
+        echo "Error: unknown event '$event'. One of: $_HOOKS_EMIT_EVENTS" >&2
+        exit 2
+    fi
+
+    local pane="${K2_PANE_ID:-${K2SO_PANE_ID:-}}"
+    local sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}"
+    if [ -z "$SCOPED_TOKEN" ] || [ -z "$pane" ]; then
+        echo "Error: k2 hooks emit runs inside a K2 session (no session passport: K2_HOOK_TOKEN / K2_PANE_ID unset)." >&2
+        echo "It reports for the program in this PTY; it never uses the owner token. See k2 study hooks." >&2
+        exit 3
+    fi
+
+    local body
+    body="$(python3 -c '
+import json, sys
+event, extra, sid = sys.argv[1], sys.argv[2], sys.argv[3]
+obj = {}
+if extra:
+    try:
+        obj = json.loads(extra)
+    except ValueError as e:
+        sys.stderr.write("Error: --json is not JSON: %s\n" % e)
+        sys.exit(2)
+    if not isinstance(obj, dict):
+        sys.stderr.write("Error: --json must be a JSON object\n")
+        sys.exit(2)
+obj["hook_event_name"] = event
+if sid:
+    obj["session_id"] = sid
+print(json.dumps(obj, separators=(",", ":")))
+' "$event" "$extra" "$sid")" || exit 2
+
+    local _K2_CFG=""
+    _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+    _k2_cfg_add data-raw "$body"
+    local hdr=(-H "Content-Type: application/json"
+               -H "X-K2-Pane: $pane"
+               -H "X-K2-Hook-Source: custom"
+               -H "X-K2-Hook-Version: 2"
+               -H "X-K2-Hook-Report: 1"
+               -H "X-K2-Hook-Event: $event"
+               -H "X-K2-Agent-Pid: $PPID")
+    local out="" status=""
+    # Per-cell socket first (the session's own door), then loopback TCP
+    # with the SAME passport (the socket can be stale after a restart).
+    if [ -n "$sock" ] && [ -S "$sock" ]; then
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" --connect-timeout 2 --max-time 5 \
+            "${hdr[@]}" -w $'\n%{http_code}' "http://localhost/hook/event" 2>/dev/null)" || out=""
+        status="${out##*$'\n'}"
+    fi
+    if [ -z "$status" ] || [ "$status" = "000" ]; then
+        local port="${PORT:-}"
+        if [ -z "$port" ] && [ -r "${K2_HOME}/heartbeat.port" ]; then
+            port="$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)"
+        fi
+        if [ -z "$port" ]; then
+            echo "Error: K2 daemon unreachable (no cell socket, no port)." >&2
+            exit 1
+        fi
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 2 --max-time 5 \
+            "${hdr[@]}" -w $'\n%{http_code}' "http://127.0.0.1:${port}/hook/event" 2>/dev/null)" || out=""
+        status="${out##*$'\n'}"
+    fi
+    local resp="${out%$'\n'*}"
+    case "$status" in
+        200)
+            local verdict
+            verdict="$(printf '%s' "$resp" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("verdict",""))
+except Exception: print("")')"
+            if [ "$verdict" = "accepted" ]; then
+                [ "$quiet" = "1" ] || echo "hooks emit: $event accepted"
+                return 0
+            fi
+            echo "Error: $event not counted: ${verdict:-no verdict}. The sender must run inside this session's PTY (k2 hooks status)." >&2
+            exit 1
+            ;;
+        204)
+            echo "Error: this daemon does not report hook verdicts (update K2 to 0.45.6+)." >&2
+            exit 1
+            ;;
+        401|403)
+            echo "Error: the session passport was refused for this pane ($status)." >&2
+            exit 3
+            ;;
+        *)
+            echo "Error: K2 daemon unreachable or failed (HTTP ${status:-none})." >&2
+            exit 1
+            ;;
+    esac
 }
 
 # ── Daemon lifecycle ─────────────────────────────────────────────────
@@ -21971,7 +22130,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks"
 
 _study_usage() {
     cat <<'EOF'
@@ -21989,7 +22148,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   app-identity  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects
+  llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
 EOF
 }
 
@@ -22025,6 +22184,7 @@ _study_title() {
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
+        hooks) echo "Custom agents: Thread and lifecycle hooks" ;;
         *) echo "" ;;
     esac
 }
@@ -22073,6 +22233,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   notifications       Your Thread posts may push a phone; who gets it; post less
   data-sources        Checks this server runs: try, propose, approve; triggers; keys
   projects            k2 project: open by default; the per-agent switch
+  hooks               Custom (no-model) agents: their Thread; k2 hooks emit
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -22118,6 +22279,7 @@ _study_page() {
         vault) _study_page_vault ;;
         notifications) _study_page_notifications ;;
         projects) _study_page_projects ;;
+        hooks) _study_page_hooks ;;
         *) return 1 ;;
     esac
 }
@@ -22149,6 +22311,45 @@ THE LOG
   Every project created or deleted and every member added or removed
   is logged with who did it (owner, a person's login, or agent:<ws>),
   what, and when; refused changes are logged too.
+_study_page_hooks() {
+    cat <<'EOF'
+k2 study hooks — custom (no-model) agents: their Thread and lifecycle
+
+WHO THIS IS FOR
+  A workspace whose preset runs your own program instead of an LLM CLI
+  (a keeper, a bridge, a bot). K2 starts it in a PTY like any agent.
+
+THREAD (0.45.6+)
+  K2 pins a Thread conversation for it at launch (the program never sees
+  the id). It survives wakes and restarts; New chat starts a new one.
+    k2 thread <agent> "text"      post to it      (from anyone)
+    k2 thread <agent>             read it
+  A post is typed into the program's stdin as one line, then Enter:
+    [from <who>] [thread:<agent>] <text>
+  Read the line, act, and answer with `k2 thread <agent> "…"` from
+  inside the program (it runs as the agent). Don't answer on stdout.
+
+LIFECYCLE: k2 hooks emit
+  Claude reports working / idle through its hooks. Your program does the
+  same by running, from inside its own PTY:
+    k2 hooks emit SessionStart --json '{"source":"startup"}'
+    k2 hooks emit UserPromptSubmit     a turn starts (shows working)
+    k2 hooks emit PreToolUse --json '{"tool_name":"save","tool_use_id":"t1"}'
+    k2 hooks emit PostToolUse --json '{"tool_name":"save","tool_use_id":"t1"}'
+    k2 hooks emit Stop                 the turn is done (shows idle)
+    k2 hooks emit SessionEnd           the program is exiting
+  --json merges fields into the event (object only); --quiet on success.
+
+AUTH
+  Only this session's own passport (K2_HOOK_TOKEN over K2_HOOK_SOCK, then
+  loopback TCP), never the owner token. The daemon also checks the OS
+  process tree: the `k2` process must descend from this PTY's program.
+  From another terminal or a detached process it is not counted.
+  Exit 0 accepted; 1 not counted (k2 hooks status shows why); 2 usage;
+  3 no passport (not inside a K2 session).
+
+NOT IN THIS CUT
+  An emit never changes the Thread pin (no re-pin from a hook).
 EOF
 }
 
@@ -28651,6 +28852,8 @@ HOOKS (Claude Code / Cursor / Gemini integration state)
                                                 (same as `daemon hooks status`)
   hooks install [--json]                        Re-run the daemon's hook installer
   hooks uninstall [--json]                      Remove K2's hook entries (others kept)
+  hooks emit <event> [--json '<obj>']           A custom program reports its lifecycle
+                                                (session passport only; k2 study hooks)
 
 For "what's running" use `workspace list --running` (daily tier).
 For workspace-scoped ops use the `workspace` verb (daily tier).
@@ -47058,10 +47261,12 @@ EOF
             status)    shift 2; cmd_hooks_status "$@" ;;
             install)   shift 2; cmd_hooks_install 0 "$@" ;;
             uninstall) shift 2; cmd_hooks_install 1 "$@" ;;
+            emit)      shift 2; cmd_hooks_emit "$@" ;;
             *)
                 echo "Usage: k2 hooks status [--limit N] [--json]" >&2
                 echo "       k2 hooks install [--json]     re-run the daemon's hook installer now" >&2
                 echo "       k2 hooks uninstall [--json]   remove K2's entries from the agent CLI configs" >&2
+                echo "       k2 hooks emit <event> [--json '<obj>']  report a custom program's lifecycle (k2 study hooks)" >&2
                 exit 1
                 ;;
         esac

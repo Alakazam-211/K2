@@ -3,8 +3,10 @@
 //! Only owner envelopes, and envelopes from a verified OS-process
 //! descendant of the owner (DA14-4a, `from_descendant`), get here (DA14
 //! ran in the ingest). Child events (`agent_id` set) touch the roster only
-//! (DA20). Cursor and Gemini envelopes, and legacy `/hook/complete` posts,
-//! map through the old three buckets ([`apply_bucket`]).
+//! (DA20). Custom-program envelopes (`k2 hooks emit`, GL45) use the same
+//! Claude event names and rules. Cursor and Gemini envelopes, and legacy
+//! `/hook/complete` posts, map through the old three buckets
+//! ([`apply_bucket`]).
 //!
 //! **Descendants (DA14-4a).** A descendant is merged into the pane's
 //! turn: its tools, subagents and roster count, and it drives the lead
@@ -41,7 +43,9 @@ const ASK_TOOL: &str = "AskUserQuestion";
 pub(crate) fn apply_hook(row: &mut Row, env: &HookEnvelope, now: i64) {
     row.note_evidence(EvidenceSource::Hook, now);
     row.had_hook = true;
-    if env.source != HookSource::Claude {
+    // A custom program (`k2 hooks emit`, GL45) speaks Claude's event
+    // names by contract, so it gets Claude's lead semantics.
+    if !matches!(env.source, HookSource::Claude | HookSource::Custom) {
         // Cursor / Gemini: today's three buckets (their own event names).
         if let Some(bucket) = map_event_type(&env.event) {
             // A descendant (DA14-4a) adds work; only the owner's own

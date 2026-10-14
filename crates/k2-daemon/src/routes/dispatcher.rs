@@ -1610,11 +1610,24 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             };
-            let _ = tokio::task::spawn_blocking(move || {
+            let report = k2_core::agent_hooks::envelope::wants_report(|n| {
+                super::http::extract_header(&headers_blob, n)
+            });
+            let verdict = tokio::task::spawn_blocking(move || {
                 crate::hook_ingest::ingest(&hook_headers, &body)
             })
             .await;
-            super::http::send_response(&mut *stream, "204 No Content", "application/json", "").await;
+            match (report, verdict) {
+                // `k2 hooks emit` (GL45) asks for the verdict.
+                (true, Ok(v)) => {
+                    let body = serde_json::json!({ "verdict": v.as_str() }).to_string();
+                    super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+                }
+                _ => {
+                    super::http::send_response(&mut *stream, "204 No Content", "application/json", "")
+                        .await
+                }
+            }
         }
         // prd-daemon-activity-and-thread-working-v1 DA17: re-run the hook
         // installer now (`k2 hooks install`), or remove K2's entries with

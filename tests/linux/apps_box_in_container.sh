@@ -204,8 +204,11 @@ info "podman info as k2app (rc $prc): $(echo "$pinfo" | tail -n 2 | tr '\n' ' ')
 echo "== nft: App sockets reach only the gateway/proxy/db ports =="
 req agent apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply (open)"
-inns nft list table inet k2app | grep -q "chain k2app_v1" || fail "chain"
-inns nft list table inet k2app | grep -q "meta skuid $U jump k2app_v1" || fail "skuid rule: $(nft list table inet k2app)"
+# Capture first: with pipefail, `nft … | grep -q` fails when grep exits
+# early and nft takes SIGPIPE.
+TABLE="$(inns nft list table inet k2app)"
+grep -q "chain k2app_v1" <<<"$TABLE" || fail "chain"
+grep -q "meta skuid $U jump k2app_v1" <<<"$TABLE" || fail "skuid rule: $TABLE"
 req daemon apps nft apply 38600-38899 38900-38949 5432
 expect_rc 0 "nft apply again (atomic replace)"
 [ "$(inns nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
@@ -371,8 +374,9 @@ done
 ok "a second prep is a no-op"
 
 echo "== audit =="
-journalctl -t k2-root-helper --no-pager | grep -q '"ns":"apps"' || fail "no apps audit lines"
-journalctl -t k2-root-helper --no-pager | grep '"ns":"apps"' | grep -q caller_not_daemon || fail "77s not audited"
+JOURNAL="$(journalctl -t k2-root-helper --no-pager)"
+grep -q '"ns":"apps"' <<<"$JOURNAL" || fail "no apps audit lines"
+grep '"ns":"apps"' <<<"$JOURNAL" | grep -q caller_not_daemon || fail "77s not audited"
 ok "apps calls are audited (journal)"
 
 echo

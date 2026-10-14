@@ -38,8 +38,9 @@ echo "== VM up: $("${SSH[@]}" 'cloud-init status --wait >/dev/null 2>&1; . /etc/
 tar -C /it -cf - . | "${SSH[@]}" 'mkdir -p /it && tar -C /it -xf - && chmod -R a+rX /it'
 rc=0
 "${SSH[@]}" 'bash /it/tests/apps_guarded_e2e.sh' || rc=$?
+QPID="$(cat "$RUN/qemu.pid" 2>/dev/null || true)"
 "${SSH[@]}" 'poweroff' >/dev/null 2>&1 || true
 sleep 3
-kill "$(cat "$RUN/qemu.pid")" 2>/dev/null || true
+[ -n "$QPID" ] && kill "$QPID" 2>/dev/null || true
 rm -rf "$RUN"
 exit "$rc"

@@ -65,6 +65,13 @@ chmod -R a+rX "$R/it"
 file "$R/it/bin/"* | sed "s#$R/##"
 REMOTE
 		;;
+	tests)
+		# Iterate on the e2e scripts without a rebuild (working tree copies).
+		echo "== refresh $R/it/tests and cli from this working tree =="
+		tar -C "$ROOT/tests/linux" -cf - apps_guarded_e2e.sh engine_client.py guarded-fixture guarded_vm_driver.sh Containerfile.vm-it \
+			| "${SSH[@]}" "tar -C $R/it/tests -xf - && chmod -R a+rX $R/it/tests"
+		"${SSH[@]}" "cat > $R/it/cli/k2 && chmod 0755 $R/it/cli/k2" <"$ROOT/cli/k2"
+		;;
 	suites)
 		echo "== suites on $HOST (own TMPDIR/XDG_RUNTIME_DIR under $R/rt) =="
 		"${SSH[@]}" bash -s -- "$R" <<'REMOTE' 2>&1 | tee "$LOGS/suites.log"

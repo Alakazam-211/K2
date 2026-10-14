@@ -251,6 +251,110 @@ impl AppId {
     pub fn process_unit(&self) -> String {
         format!("{PROCESS_UNIT_PREFIX}{}.service", self.0)
     }
+    /// The App's own Postgres database and role (S21): `app_<id>` with
+    /// dashes as underscores. Injective: an App id has no underscore.
+    pub fn pg_name(&self) -> String {
+        format!("app_{}", self.0.replace('-', "_"))
+    }
+    /// The id with dashes as underscores, for systemd unit and slice names
+    /// (a dash there means nesting: `k2apps-nsi-skin.slice` would sit
+    /// inside App `nsi`'s slice).
+    pub fn unit_safe(&self) -> String {
+        self.0.replace('-', "_")
+    }
+}
+
+// ── pg_hba.conf (`pg hba-app`, protocol 6) ─────────────────────────────
+
+/// The K2-owned block in each cluster's `pg_hba.conf`. It sits above every
+/// other rule (first match wins) and holds only canned App lines.
+pub const HBA_BEGIN: &str = "# BEGIN K2 Apps (k2-root-helper pg hba-app; do not edit)";
+pub const HBA_END: &str = "# END K2 Apps";
+/// Largest `pg_hba.conf` the helper edits.
+pub const HBA_MAX_BYTES: usize = 1024 * 1024;
+
+/// The one line an App gets: its own database, its own role, loopback,
+/// password (SCRAM) only.
+pub fn hba_line(id: &AppId) -> String {
+    let n = id.pg_name();
+    format!("host {n} {n} 127.0.0.1/32 scram-sha-256")
+}
+
+/// Add or remove an App's line. `Ok(None)` = already so (nothing to
+/// write). The block is created above the first rule on the first add and
+/// dropped when its last line goes. A damaged block (two BEGINs, no END,
+/// END first, a foreign line inside) is a refusal, never a repair.
+pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'static str> {
+    let line = hba_line(id);
+    let lines: Vec<&str> = text.lines().collect();
+    let begins: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_BEGIN).map(|(i, _)| i).collect();
+    let ends: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.trim_end() == HBA_END).map(|(i, _)| i).collect();
+    let block = match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => None,
+        ([b], [e]) if b < e => Some((*b, *e)),
+        _ => return Err("pg_hba.conf: the K2 Apps block is damaged (fix or remove it by hand)"),
+    };
+    let mut inside: Vec<String> = match block {
+        None => Vec::new(),
+        Some((b, e)) => lines[b + 1..e].iter().map(|l| l.trim_end().to_string()).collect(),
+    };
+    // Only canned App lines live in the block.
+    for l in &inside {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let ok = f.len() == 5
+            && f[0] == "host"
+            && f[1] == f[2]
+            && f[1].strip_prefix("app_").is_some_and(|n| {
+                !n.is_empty() && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            })
+            && f[3] == "127.0.0.1/32"
+            && f[4] == "scram-sha-256"
+            && *l == f.join(" ");
+        if !ok {
+            return Err("pg_hba.conf: the K2 Apps block holds a line K2 didn't write");
+        }
+    }
+    let has = inside.iter().any(|l| *l == line);
+    if has == add {
+        return Ok(None);
+    }
+    if add {
+        inside.push(line);
+        inside.sort();
+    } else {
+        inside.retain(|l| *l != line);
+    }
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 3);
+    let render_block = |out: &mut Vec<String>| {
+        if !inside.is_empty() {
+            out.push(HBA_BEGIN.to_string());
+            out.extend(inside.iter().cloned());
+            out.push(HBA_END.to_string());
+        }
+    };
+    match block {
+        Some((b, e)) => {
+            out.extend(lines[..b].iter().map(|l| l.to_string()));
+            render_block(&mut out);
+            out.extend(lines[e + 1..].iter().map(|l| l.to_string()));
+        }
+        None => {
+            // Above the first rule: after the leading comments and blanks.
+            let first_rule = lines
+                .iter()
+                .position(|l| {
+                    let t = l.trim();
+                    !t.is_empty() && !t.starts_with('#')
+                })
+                .unwrap_or(lines.len());
+            out.extend(lines[..first_rule].iter().map(|l| l.to_string()));
+            render_block(&mut out);
+            out.extend(lines[first_rule..].iter().map(|l| l.to_string()));
+        }
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    Ok(Some(s))
 }
 
 // ── Canned bytes ────────────────────────────────────────────────────────
@@ -524,6 +628,39 @@ mod tests {
             AppId::parse("jobs").unwrap().process_unit(),
             "k2app-process@jobs.service"
         );
+    }
+
+    #[test]
+    fn hba_block_edits() {
+        let jobs = AppId::parse("jobs").unwrap();
+        let nsi = AppId::parse("nsi-skin").unwrap();
+        assert_eq!(nsi.pg_name(), "app_nsi_skin");
+        assert_eq!(hba_line(&jobs), "host app_jobs app_jobs 127.0.0.1/32 scram-sha-256");
+        let base = "# PostgreSQL Client Authentication\n\nlocal all postgres peer\nhost all all 127.0.0.1/32 scram-sha-256\n";
+        let a = hba_edit(base, true, &jobs).unwrap().unwrap();
+        // Above the first rule, after the header.
+        assert!(a.starts_with("# PostgreSQL Client Authentication\n\n# BEGIN K2 Apps"));
+        let pos_line = a.find("host app_jobs").unwrap();
+        assert!(pos_line < a.find("local all postgres").unwrap());
+        assert_eq!(hba_edit(&a, true, &jobs).unwrap(), None, "idempotent");
+        let b = hba_edit(&a, true, &nsi).unwrap().unwrap();
+        assert_eq!(b.matches(HBA_BEGIN).count(), 1);
+        assert!(b.contains("host app_jobs app_jobs") && b.contains("host app_nsi_skin app_nsi_skin"));
+        let c = hba_edit(&b, false, &jobs).unwrap().unwrap();
+        assert!(!c.contains("app_jobs") && c.contains("app_nsi_skin"));
+        assert_eq!(hba_edit(&c, false, &jobs).unwrap(), None);
+        // Last line out: the block goes, the file is as it was.
+        assert_eq!(hba_edit(&c, false, &nsi).unwrap().unwrap(), base);
+        assert_eq!(hba_edit(base, false, &jobs).unwrap(), None);
+        for bad in [
+            format!("{HBA_BEGIN}\nhost all all 0.0.0.0/0 trust\n{HBA_END}\n"),
+            format!("{HBA_BEGIN}\n{HBA_BEGIN}\n{HBA_END}\n"),
+            format!("{HBA_END}\n{HBA_BEGIN}\n"),
+            format!("{HBA_BEGIN}\nhost app_jobs app_jobs 127.0.0.1/32 scram-sha-256\n"),
+            format!("{HBA_BEGIN}\nhost app_jobs all 127.0.0.1/32 scram-sha-256\n{HBA_END}\n"),
+        ] {
+            assert!(hba_edit(&bad, true, &jobs).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

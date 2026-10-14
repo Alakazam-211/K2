@@ -6,11 +6,11 @@
 //! - 3 = self-update + backup + `harden-store` + the `pg` namespace;
 //! - 4 = `keep`;
 //! - 5 = `daemon handoff-dropin install|remove` (runtime stage H, 0.46.0).
-//! - 6 = the App runtime's `apps` namespace (box prep, runtime slice 2) +
-//!   `pg hba-app` (0.46.1, vs-live 2 AR38). `pg hba-app` (S21) must join
-//!   protocol 6 before any 6 build ships (both are in 0.46.1, behind the
-//!   preview); after that it would need 7. Sew's `engine sew` takes 7 or
-//!   later.
+//! - 6 = the App runtime's `apps` namespace (box prep, runtime slice 2;
+//!   the engine install and per-App nft rules, slice 3) + `pg hba-app`
+//!   (0.46.1, vs-live 2 AR38). All of it ships together in 0.46.1, behind
+//!   the preview; anything added after a 6 build ships needs 7. Sew's
+//!   `engine sew` takes 7 or later.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.

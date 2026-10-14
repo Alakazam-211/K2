@@ -183,6 +183,7 @@ fn dispatch(
         Verb::PgDaemonReload => pg::daemon_reload(ctx).map(|_| None)?,
         Verb::PgInstallRamFence => Some(pg::install_ram_fence(ctx)?),
         Verb::PgPsql { db, flags } => pg::psql(ctx, db, *flags, stdin).map(|_| None)?,
+        Verb::PgHbaApp { add, id } => Some(pg::hba_app(ctx, *add, id)?),
 
         Verb::KeepStatus => Some(keep::status(ctx, who.user.as_deref())?),
         Verb::KeepKekInit => keep::kek_init(ctx, &user()?).map(|_| None)?,

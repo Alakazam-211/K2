@@ -223,13 +223,24 @@ pub fn apply(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path
     apply_granted(cmd, service_id, workspace_id, cwd)
 }
 
-/// The vault half of a clean start: `.env.k2` references (in `cwd`) and the
-/// secrets granted to the service. The App runtime's process engine builds
-/// its own clean base and calls this (prd-k2-app-runtime-v1 §4.2 item 9).
-/// Returns the secrets dir to remove when the instance stops.
-pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path) -> Option<PathBuf> {
+/// What the vault grants one service at start: `.env.k2` values (literals
+/// with non-sensitive names, `k2v://` references resolved) and the secrets
+/// granted to the service, split by delivery. Values only leave here into
+/// a child's env, a memory-backed secrets dir, or (the guarded engine) a
+/// Podman secret.
+#[derive(Default)]
+pub struct Granted {
+    pub env: Vec<(String, String)>,
+    /// (file name, bytes) for `K2_SECRETS_DIR`.
+    pub files: Vec<(String, Vec<u8>)>,
+}
+
+/// Resolve the vault half of a clean start (`.env.k2` in `cwd`, then the
+/// service's granted secrets).
+pub fn granted(service_id: &str, workspace_id: &str, cwd: &Path) -> Granted {
+    let mut out = Granted::default();
     let se = get(service_id);
-    let Ok(vault) = super::get() else { return None };
+    let Ok(vault) = super::get() else { return out };
     // `.env.k2`: references resolved, literals passed through.
     let env_file = se.env_file.clone().unwrap_or_else(|| ".env.k2".into());
     if let Ok(p) = crate::vault_use_routes::jailed_path(cwd, &env_file) {
@@ -241,13 +252,11 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
                 }
                 if k2_vault::refs::VaultRef::is_ref(&v) {
                     match resolve_ref(&vault, &v, workspace_id) {
-                        Ok(val) => {
-                            cmd.env(&k, val);
-                        }
+                        Ok(val) => out.env.push((k, val)),
                         Err(e) => k2_core::log_debug!("[vault] publish {service_id}: {k}: {}", e.code),
                     }
                 } else if !k2_vault::delivery::is_sensitive_name(&k) {
-                    cmd.env(&k, v);
+                    out.env.push((k, v));
                 } else {
                     k2_core::log_debug!("[vault] publish {service_id}: {k} holds a value in .env.k2; use a k2v:// reference");
                 }
@@ -257,16 +266,31 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
     // Secrets granted to this service.
     let who = Requester::PublishedService { id: service_id.to_string(), workspace_id: workspace_id.to_string() };
     let items = vault.spawn_items(&who).unwrap_or_default();
-    let mut dir: Option<PathBuf> = None;
     for it in items {
         let use_ = if it.delivery == Delivery::Env { Use::Env } else { Use::File };
         let Ok(r) = vault.resolve(&Selector::Id(it.secret_id.clone()), use_, &who) else { continue };
         if it.delivery == Delivery::Env {
             if let (Some(n), Ok(s)) = (it.env_name.clone(), std::str::from_utf8(r.value.expose())) {
-                cmd.env(n, s);
+                out.env.push((n, s.to_string()));
             }
             continue;
         }
+        out.files.push((it.file_name.clone().unwrap_or_else(|| it.name.clone()), r.value.expose().to_vec()));
+    }
+    out
+}
+
+/// The vault half of a clean start: `.env.k2` references (in `cwd`) and the
+/// secrets granted to the service. The App runtime's process engine builds
+/// its own clean base and calls this (prd-k2-app-runtime-v1 §4.2 item 9).
+/// Returns the secrets dir to remove when the instance stops.
+pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path) -> Option<PathBuf> {
+    let g = granted(service_id, workspace_id, cwd);
+    for (k, v) in &g.env {
+        cmd.env(k, v);
+    }
+    let mut dir: Option<PathBuf> = None;
+    for (name, bytes) in &g.files {
         if dir.is_none() {
             let Some(root) = super::spawn::secrets_root() else {
                 k2_core::log_debug!("[vault] publish {service_id}: no memory filesystem for file secrets");
@@ -275,7 +299,7 @@ pub fn apply_granted(cmd: &mut Command, service_id: &str, workspace_id: &str, cw
             dir = super::spawn::make_session_dir(&root, &format!("svc-{service_id}")).ok();
         }
         if let Some(d) = &dir {
-            let _ = super::spawn::write_secret_file(d, it.file_name.as_deref().unwrap_or(&it.name), r.value.expose());
+            let _ = super::spawn::write_secret_file(d, name, bytes);
         }
     }
     if let Some(d) = &dir {

@@ -73,9 +73,29 @@ fn with_rt<R>(app_id: &str, f: impl FnOnce(&mut AppRt) -> R) -> R {
     f(s.entry(app_id.to_string()).or_default())
 }
 
+/// The process engine (stage 1; the default isolation).
 pub fn engine() -> &'static dyn RuntimeEngine {
     static E: ProcessEngine = ProcessEngine;
     &E
+}
+
+/// The engine for an isolation (`None`: no engine on this box gives it;
+/// the deploy refuses instead of falling back, AR24).
+pub fn engine_for(iso: Isolation) -> Option<&'static dyn RuntimeEngine> {
+    match iso {
+        Isolation::Process => Some(engine()),
+        Isolation::Container if cfg!(target_os = "linux") => Some(super::guarded::engine()),
+        _ => None,
+    }
+}
+
+/// The engine that runs an instance (by its handle).
+pub fn engine_of(h: &RunHandle) -> &'static dyn RuntimeEngine {
+    if super::guarded::owns(h) {
+        super::guarded::engine()
+    } else {
+        engine()
+    }
 }
 
 /// The App front listeners and their splices run on the supervisor's own
@@ -175,7 +195,13 @@ fn boot() {
         }
     }
     let apps = db(|c| store::list_apps(c, None)).unwrap_or_default();
-    let adopted = engine().adopt().unwrap_or_default();
+    let mut adopted = engine().adopt().unwrap_or_default();
+    if let Some(g) = engine_for(Isolation::Container) {
+        match g.adopt() {
+            Ok(mut v) => adopted.append(&mut v),
+            Err(e) => k2_core::log_debug!("[apps] guarded engine adopt: {}", e.message),
+        }
+    }
     let mut claimed = std::collections::BTreeSet::new();
     for app in &apps {
         let _ = ensure_front(app);
@@ -197,7 +223,7 @@ fn boot() {
     for h in adopted.into_iter().filter(|h| !claimed.contains(&h.deployment_id)) {
         let grace = Duration::from_secs(t.stop_grace_secs);
         let _ = std::thread::Builder::new().name("app-orphan-stop".into()).spawn(move || {
-            let _ = engine().stop(&h, grace);
+            let _ = engine_of(&h).stop(&h, grace);
         });
     }
 }
@@ -239,8 +265,8 @@ pub fn runtime_json(app_id: &str) -> serde_json::Value {
         "busy": rt.busy,
         "restartAt": rt.next_restart_at,
         "recentRestarts": rt.backoff.recent_restarts(),
-        "engine": engine().isolation().as_str(),
-        "engineCaps": engine().caps(),
+        "engine": rt.live.as_ref().map(|i| engine_of(&i.handle).isolation().as_str()),
+        "engineCaps": rt.live.as_ref().map(|i| engine_of(&i.handle).caps()),
     })
 }
 
@@ -346,6 +372,7 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
         argv: m.host.start.clone(),
         env: m.env.clone().into_iter().collect(),
         memory_limit_bytes: app.memory_limit_bytes,
+        drain_secs: m.host.drain_secs.unwrap_or(timings().drain_secs),
         data_dir: dir.join("data"),
         cache_dir: dir.join("cache"),
         home_dir: dir.join("home"),
@@ -353,9 +380,18 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
     }
 }
 
+/// A free loopback port for a new instance, never in K2's reserved App
+/// range (38600-38999: gateway links and the proxy; box prep also keeps it
+/// out of the ephemeral range).
 fn free_port() -> Result<u16, Fail> {
-    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, format!("no free port: {e}")))?;
-    Ok(l.local_addr().map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e.to_string()))?.port())
+    for _ in 0..32 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, format!("no free port: {e}")))?;
+        let p = l.local_addr().map_err(|e| fail(codes::ENGINE_UNAVAILABLE, 503, e.to_string()))?.port();
+        if k2_root_proto::engine::app_port_ok(p) {
+            return Ok(p);
+        }
+    }
+    Err(fail(codes::ENGINE_UNAVAILABLE, 503, "no free port outside K2's reserved range"))
 }
 
 fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
@@ -385,12 +421,20 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Err((code, msg)) => return pipeline_fail(app_id, dep, code, &msg),
     };
     let wanted = Isolation::parse(&app.isolation).unwrap_or(Isolation::Process);
-    if let Err(e) = k2_core::deploy::engine::require_isolation(engine(), wanted) {
+    let Some(eng) = engine_for(wanted) else {
+        return pipeline_fail(
+            app_id,
+            dep,
+            codes::ENGINE_UNAVAILABLE,
+            &format!("no engine on this box gives isolation={} (the guarded engine runs on Linux boxes)", wanted.as_str()),
+        );
+    };
+    if let Err(e) = k2_core::deploy::engine::require_isolation(eng, wanted) {
         return pipeline_fail(app_id, dep, e.code, &e.message);
     }
     let spec = spec_for(&app, &m, dep);
     let seed_ref = SeedRef { hash: seed.to_string(), path: deploy::seed::seed_path(seed) };
-    let prepared = match engine().prepare(&seed_ref, &spec) {
+    let prepared = match eng.prepare(&seed_ref, &spec) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
@@ -398,7 +442,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
-    let h = match engine().start(&spec, &prepared, port) {
+    let h = match eng.start(&spec, &prepared, port) {
         Ok(h) => h,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
@@ -412,10 +456,10 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Duration::from_millis(t.probe_every_ms),
         Duration::from_millis(t.probe_timeout_ms),
         gate,
-        || !matches!(engine().liveness(&h), Liveness::Exited(_)),
+        || !matches!(eng.liveness(&h), Liveness::Exited(_)),
     );
     if let Err(g) = healthy {
-        let _ = engine().stop(&h, Duration::from_secs(2));
+        let _ = eng.stop(&h, Duration::from_secs(2));
         return pipeline_fail(app_id, dep, g.code, &g.message);
     }
     let inst = Instance {
@@ -474,7 +518,7 @@ fn retire(app_id: &str, inst: Instance, result: &'static str, t: &Timings) {
     let grace = Duration::from_secs(t.stop_grace_secs);
     let app_id = app_id.to_string();
     let _ = std::thread::Builder::new().name("app-retire".into()).spawn(move || {
-        let _ = engine().stop(&inst.handle, grace);
+        let _ = engine_of(&inst.handle).stop(&inst.handle, grace);
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, result, None));
         audit(&app_id, "stopped", "system", json!({ "deployment": inst.handle.deployment_id, "result": result }));
     });
@@ -519,7 +563,7 @@ fn tick_app(app_id: &str, t: &Timings) {
         }
         return;
     };
-    let exited = matches!(engine().liveness(&live.handle), Liveness::Exited(_));
+    let exited = matches!(engine_of(&live.handle).liveness(&live.handle), Liveness::Exited(_));
     // Health: every second in the watch window, every live_probe_secs after.
     let every = if watch.is_some() { Duration::from_secs(1) } else { Duration::from_secs(t.live_probe_secs.max(1)) };
     let due = t.live_probe_secs > 0 || watch.is_some();
@@ -541,7 +585,7 @@ fn tick_app(app_id: &str, t: &Timings) {
     if exited || unhealthy {
         let why = if exited { "exited" } else { "failed its health checks" };
         if let Some(w) = watch {
-            if let Some(prev) = warm.filter(|p| !matches!(engine().liveness(&p.handle), Liveness::Exited(_))) {
+            if let Some(prev) = warm.filter(|p| !matches!(engine_of(&p.handle).liveness(&p.handle), Liveness::Exited(_))) {
                 return auto_rollback(app_id, &w, live, prev, why, t);
             }
         }
@@ -599,7 +643,7 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
     }
     let grace = Duration::from_secs(t.stop_grace_secs);
     let _ = std::thread::Builder::new().name("app-rollback-stop".into()).spawn(move || {
-        let _ = engine().stop(&bad.handle, grace);
+        let _ = engine_of(&bad.handle).stop(&bad.handle, grace);
     });
     if let Ok(Some(app)) = db(|c| store::get_app(c, app_id)) {
         super::alerts::notify(
@@ -628,7 +672,7 @@ fn crashed(app_id: &str, inst: Instance, why: &str, t: &Timings) {
     let grace = Duration::from_secs(t.stop_grace_secs.min(5));
     let h = inst.handle.clone();
     let _ = std::thread::Builder::new().name("app-crash-stop".into()).spawn(move || {
-        let _ = engine().stop(&h, grace);
+        let _ = engine_of(&h).stop(&h, grace);
     });
     let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_EXITED, Some(why)));
     match decision {
@@ -761,7 +805,7 @@ pub fn rollback_to_warm(app: &AppRow, target: &str, actor: &str) -> Result<Optio
         Ok(rt.warm.clone().filter(|w| w.seed == target))
     })?;
     let Some(warm) = warm else { return Ok(None) };
-    if matches!(engine().liveness(&warm.handle), Liveness::Exited(_)) || !probe(&warm, &t) {
+    if matches!(engine_of(&warm.handle).liveness(&warm.handle), Liveness::Exited(_)) || !probe(&warm, &t) {
         return Ok(None);
     }
     let (_, bad_be) = router::switch(&app.app_id, warm.handle.port);
@@ -822,7 +866,7 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
         router::drain_blocking(&be, Duration::from_secs(d));
     }
     for inst in [live, warm].into_iter().flatten() {
-        let _ = engine().stop(&inst.handle, Duration::from_secs(t.stop_grace_secs));
+        let _ = engine_of(&inst.handle).stop(&inst.handle, Duration::from_secs(t.stop_grace_secs));
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_STOPPED, None));
     }
     db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, None))?;

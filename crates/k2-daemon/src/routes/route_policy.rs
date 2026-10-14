@@ -170,6 +170,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/deploy", Member),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
+    // The guarded engine's install/update through the root helper (S11).
+    post("/cli/app/engine/install", Owner),
     get("/cli/app/errors", Member),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),

@@ -141,9 +141,11 @@ pub const PODMAN_MIN_MAJOR: u32 = 5;
 
 /// The distro packages box prep installs (Rosson 2026-10-14: Podman + crun
 /// from the distro by default; youki is opt-in).
-pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-user-session"];
-pub const DNF_PACKAGES: &[&str] = &["podman", "crun", "passt", "shadow-utils"];
-pub const PACMAN_PACKAGES: &[&str] = &["podman", "crun", "passt"];
+/// skopeo: the daemon (not k2app, which has no network) fetches the pinned
+/// base image by digest into an OCI archive (slice 3).
+pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-user-session", "skopeo"];
+pub const DNF_PACKAGES: &[&str] = &["podman", "crun", "passt", "shadow-utils", "skopeo"];
+pub const PACMAN_PACKAGES: &[&str] = &["podman", "crun", "passt", "skopeo"];
 pub const YOUKI_PACKAGE: &str = "youki";
 
 /// Bounds for the numeric tokens.

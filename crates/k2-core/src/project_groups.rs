@@ -508,6 +508,9 @@ pub fn set_group_color(id: &str, color: Option<&str>) -> Result<ProjectGroup, St
 pub fn delete_group(id: &str) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();
+    // Garden data grants that name this project go with it (no FK;
+    // contract-garden-data-v1 §2.1).
+    crate::garden_data::grants::delete_for_project_group(&conn, id).map_err(|e| format!("delete failed: {e}"))?;
     let deleted = conn
         .execute("DELETE FROM project_groups WHERE id = ?1", params![id])
         .map_err(|e| format!("delete failed: {e}"))?;

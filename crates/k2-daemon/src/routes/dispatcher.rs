@@ -3187,9 +3187,12 @@ async fn handle_one_request(
         // GET /cli/daemon/handoff/status — can this daemon hand off, and is
         // the unit drop-in in place.
         "/cli/daemon/handoff/status" => {
+            // A refusal drains the request itself; on success drain it here
+            // (keep-alive: an unconsumed request is answered again forever).
             if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
                 return DispatchOutcome::Done;
             }
+            let _ = super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query).await;
             let body = tokio::task::spawn_blocking(crate::handoff_setup::status_json)
                 .await
                 .unwrap_or_else(|e| serde_json::json!({"error": format!("worker join: {e}")}));

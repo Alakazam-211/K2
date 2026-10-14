@@ -163,8 +163,19 @@ where
     Ok(())
 }
 
-const UNAVAILABLE: &str = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 30\r\nConnection: close\r\n\r\nThis App is not running now.\r\n";
-const BAD_GATEWAY: &str = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: 29\r\nConnection: close\r\n\r\nThis App did not answer K2.\r\n";
+const UNAVAILABLE_BODY: &str = "This App is not running now.\r\n";
+const BAD_GATEWAY_BODY: &str = "This App did not answer K2.\r\n";
+
+/// K2's own answer on an App's front port (no backend, or it didn't
+/// answer). It carries the daemon's framing headers like every other
+/// response K2 writes (prd-app-frame-ancestors-v1 FA6, routes/frame_walk).
+fn own_answer(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
+        body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
+    )
+}
 
 /// Serve one connection for `app_id`: splice to its live backend, 503
 /// when it has none, 502 when the backend doesn't answer.
@@ -175,12 +186,12 @@ where
     match live(app_id) {
         None => {
             consume_request_head(client).await;
-            let _ = client.write_all(UNAVAILABLE.as_bytes()).await;
+            let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
         }
         Some(be) => {
             if splice(client, be).await.is_err() {
                 consume_request_head(client).await;
-                let _ = client.write_all(BAD_GATEWAY.as_bytes()).await;
+                let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
             }
         }
     }

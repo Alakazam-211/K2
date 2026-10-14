@@ -591,8 +591,12 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
     assert!(want.contains("meta skuid 996 jump k2app_v1"));
 
-    // Removing it is the daemon's.
+    // Removing it is the daemon's, and so is any other set of ranges (an
+    // agent can't open more loopback ports to Apps).
     assert_eq!(t.call(&["apps", "nft", "remove"]).code, exit::NOT_DAEMON);
+    let o = t.call(&["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"]);
+    assert_eq!(o.code, exit::NOT_DAEMON);
+    assert_eq!(calls_of(&t, NFT).iter().filter(|c| *c == "-f -").count(), 1);
 }
 
 #[test]

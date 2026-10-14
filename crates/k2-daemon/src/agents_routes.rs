@@ -314,6 +314,8 @@ pub fn handle_agents_launch(
                 // spawn in the branch-selected cwd — Slice-2 parity.
                 command = r.command.clone();
                 args = r.args.clone();
+                // GL44: pin the custom preset's Thread conversation.
+                let _ = k2_core::workspace::resume_chat::ensure_custom_thread_pin(project_path);
             }
         }
     }

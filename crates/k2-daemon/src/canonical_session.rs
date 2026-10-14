@@ -256,6 +256,11 @@ pub fn ensure_canonical_session(project_path: &str) -> Result<EnsureOutcome, Str
                  using profile args as-is: {e}"
             ),
         }
+    } else {
+        // GL44: a custom preset spawns its profile bare (no grammar to
+        // add), but its pinned Thread still needs a conversation id so
+        // `k2 thread <agent>` resolves. Kept across restarts.
+        let _ = k2_core::workspace::resume_chat::ensure_custom_thread_pin(project_path);
     }
 
     // 4. Spawn via the canonical-keyed v2 helper.

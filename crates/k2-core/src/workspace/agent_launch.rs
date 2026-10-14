@@ -209,7 +209,13 @@ pub fn k2so_agents_build_launch(
                     if chat_history::claude_session_file_exists(&sid, &project_path) {
                         return Some(sid);
                     }
-                    let _ = WorkspaceSession::clear_session_id(&conn, &project_id);
+                    // Only a Claude id is Claude's to clear. Another
+                    // harness's pin (a custom preset's K2-minted Thread id,
+                    // GL44; a grok/codex conversation) has no Claude JSONL
+                    // by design and must survive this launch.
+                    if session.harness == "claude" {
+                        let _ = WorkspaceSession::clear_session_id(&conn, &project_id);
+                    }
                 }
             }
         }

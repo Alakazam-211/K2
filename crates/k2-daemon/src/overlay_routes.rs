@@ -225,25 +225,36 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
         k2_core::workspace_session_handles::split_workspace_handle(addr).is_none();
     match workspace_msg::resolve_msg_target(addr) {
         Some(MsgTarget::WorkspaceCanonical { path }) => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            let Some(project_id) = resolve_project_id(&conn, &path) else {
-                return Err(not_found(format!("workspace not found: {addr}")));
+            let (project_id, pinned, custom_harness) = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let Some(project_id) = resolve_project_id(&conn, &path) else {
+                    return Err(not_found(format!("workspace not found: {addr}")));
+                };
+                let row = WorkspaceSession::get(&conn, &project_id)
+                    .map_err(|e| error_json("500 Internal Server Error", "db", e))?;
+                let custom_harness = row.as_ref().is_some_and(|r| {
+                    k2_core::workspace::provider_resume::provider_resume_for_provider(&r.harness)
+                        .is_none()
+                });
+                let pinned = row
+                    .and_then(|s| s.session_id)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                (project_id, pinned, custom_harness)
             };
-            let Some(session) = WorkspaceSession::get(&conn, &project_id)
-                .map_err(|e| error_json("500 Internal Server Error", "db", e))?
-            else {
-                return Err(not_found(format!(
-                    "no pinned Chat conversation for '{addr}'"
-                )));
+            // GL44: a custom-preset agent (no model CLI, e.g. a keeper
+            // program) has no provider conversation to pin; K2 owns its
+            // Thread id. Pin it here too, so the address works before the
+            // first launch after an upgrade, and a stale id from before a
+            // Claude → custom switch is replaced. Rows of known providers
+            // are untouched (their own resolver paths pin them).
+            let pinned = if pinned.is_none() || custom_harness {
+                k2_core::workspace::resume_chat::ensure_custom_thread_pin(&path).or(pinned)
+            } else {
+                pinned
             };
-            let Some(conversation_id) = session
-                .session_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-            else {
+            let Some(conversation_id) = pinned else {
                 return Err(not_found(format!(
                     "no pinned Chat conversation for '{addr}'"
                 )));

@@ -992,6 +992,8 @@ pub fn handle_agent_conf(q: &str) -> CliResponse {
             "connections": connections,
             "projects": projects,
             "live": live,
+            // GH #40: missing / dangling charter files (empty = healthy).
+            "charterProblems": k2_core::workspace::onboarding::root_charter_problems(&path),
         })
         .to_string(),
     )
@@ -1439,6 +1441,41 @@ mod gap_route_tests {
             "audit sentinels leaked into the fleet view: {}",
             resp.body
         );
+    }
+
+    /// GH #40 — `agent conf` carries the charter health check, so a
+    /// workspace whose agent would start with no instructions is visible.
+    #[test]
+    fn agent_conf_reports_charter_problems() {
+        let id = uuid::Uuid::new_v4();
+        let dir = std::env::temp_dir().join(format!("agent-conf-charter-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".k2")).expect("mkdir .k2");
+        let gone = dir.join(".k2/skills/k2so/SKILL.md");
+        std::os::unix::fs::symlink(&gone, dir.join("CLAUDE.md")).expect("dangling link");
+        let path = dir.to_string_lossy().into_owned();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, agent_mode, agent_enabled) \
+                 VALUES (?1, ?2, ?3, 'custom', 1)",
+                rusqlite::params![id.to_string(), format!("charter-{id}"), path],
+            )
+            .expect("insert project row");
+        }
+        let resp = handle_agent_conf(&path);
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(
+            body["charterProblems"],
+            serde_json::json!([
+                { "file": ".k2/AGENTS.md", "problem": "missing" },
+                { "file": "CLAUDE.md", "problem": "dangling", "target": gone.to_string_lossy() },
+            ]),
+            "body={}",
+            resp.body
+        );
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

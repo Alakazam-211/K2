@@ -23830,6 +23830,19 @@ print("persona  : %s" % persona_line)
 print("connects : %s" % connects)
 print("projects : %s" % projects)
 print("live     : %s" % line)
+# GH #40: the files the agent reads its charter from.
+problems = d.get("charterProblems")
+if problems is not None:
+    if not problems:
+        print("charter  : ok")
+    else:
+        bits = []
+        for pr in problems:
+            if pr.get("problem") == "dangling":
+                bits.append("%s dangling → %s" % (pr.get("file"), pr.get("target")))
+            else:
+                bits.append("%s missing" % pr.get("file"))
+        print("charter  : PROBLEM — %s (fix: cd %s && k2 agent context regen)" % ("; ".join(bits), d.get("path", ".")))
 PYEOF
 }
 

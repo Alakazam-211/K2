@@ -2794,4 +2794,84 @@ mod tests {
         );
         fs::remove_dir_all(&proj).ok();
     }
+
+    /// GH #40: an emptied workspace gets its root charter files back on
+    /// the next regen, and an old-generation root link whose target is gone
+    /// (`.k2/skills/k2so/SKILL.md`, 06-29 layout) is replaced — before the
+    /// fix the dangling AGENTS.md link was "unmanaged" and kept forever.
+    #[test]
+    fn regen_restores_emptied_and_dangling_root_charter_files() {
+        use crate::workspace::onboarding::{root_charter_problems, ROOT_CHARTER_FILES};
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        apply_new_workspace_agents_policy(path, true, true);
+        assert_eq!(root_charter_problems(path), vec![], "healthy after policy");
+
+        for f in ROOT_CHARTER_FILES {
+            fs::remove_file(proj.join(f)).unwrap();
+        }
+        let missing: Vec<String> = root_charter_problems(path)
+            .into_iter()
+            .map(|p| format!("{}:{}", p.file, p.problem))
+            .collect();
+        assert_eq!(missing, vec!["AGENTS.md:missing", "CLAUDE.md:missing"]);
+        write_workspace_skill_file(path);
+        for f in ROOT_CHARTER_FILES {
+            assert!(proj.join(f).exists(), "{f} restored by regen");
+        }
+
+        let old = proj.join(".k2so/skills/k2so/SKILL.md");
+        for f in ROOT_CHARTER_FILES {
+            fs::remove_file(proj.join(f)).unwrap();
+            std::os::unix::fs::symlink(&old, proj.join(f)).unwrap();
+        }
+        let dangling: Vec<String> = root_charter_problems(path)
+            .into_iter()
+            .map(|p| format!("{}:{}", p.file, p.problem))
+            .collect();
+        assert_eq!(dangling.len(), ROOT_CHARTER_FILES.len(), "{dangling:?}");
+        assert!(dangling.iter().all(|d| d.ends_with(":dangling")), "{dangling:?}");
+
+        write_workspace_skill_file(path);
+        for f in ROOT_CHARTER_FILES {
+            assert!(proj.join(f).exists(), "{f} must resolve after regen");
+        }
+        let root = fs::symlink_metadata(proj.join("AGENTS.md")).unwrap();
+        assert!(root.file_type().is_file(), "dangling AGENTS.md link becomes the real file");
+        assert_eq!(
+            fs::read_to_string(proj.join("AGENTS.md")).unwrap(),
+            fs::read_to_string(proj.join(".k2so/AGENTS.md")).unwrap()
+        );
+        assert_eq!(root_charter_problems(path), vec![]);
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// The health check reports what regen must not touch: a dangling link
+    /// that is not K2's, and a missing canonical `.k2/AGENTS.md`. With both
+    /// markers off, absent root files are not a problem (opt-in layout).
+    #[test]
+    fn root_charter_problems_reports_foreign_dangling_link_and_missing_canonical() {
+        use crate::workspace::onboarding::root_charter_problems;
+        let proj = scratch_project();
+        let path = proj.to_str().unwrap();
+        apply_new_workspace_agents_policy(path, false, false);
+        assert_eq!(root_charter_problems(path), vec![], "opt-out layout is healthy");
+
+        let elsewhere = proj.join("notes/gone.md");
+        std::os::unix::fs::symlink(&elsewhere, proj.join("CLAUDE.md")).unwrap();
+        assert!(!crate::workspace::onboarding::is_dangling_k2_link(path, &proj.join("CLAUDE.md")));
+        fs::remove_file(proj.join(".k2so/AGENTS.md")).unwrap();
+        let got = root_charter_problems(path);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].file.as_str(), got[0].problem.as_str()), (".k2so/AGENTS.md", "missing"));
+        assert_eq!((got[1].file.as_str(), got[1].problem.as_str()), ("CLAUDE.md", "dangling"));
+        assert_eq!(got[1].target.as_deref(), Some(elsewhere.to_str().unwrap()));
+
+        // Regen never replaces a foreign link (fan-out is off here anyway).
+        write_workspace_skill_file(path);
+        assert!(fs::symlink_metadata(proj.join("CLAUDE.md")).unwrap().file_type().is_symlink());
+        let after: Vec<String> = root_charter_problems(path).into_iter().map(|p| p.file).collect();
+        assert_eq!(after, vec!["CLAUDE.md"]);
+        fs::remove_dir_all(&proj).ok();
+    }
 }

@@ -645,6 +645,13 @@ fn answer(conn: &mut UnixStream, a: &Answer) {
     line.push(b'\n');
     let _ = conn.write_all(&line);
     let _ = conn.flush();
+    // Close gently: closing with unread request bytes makes the kernel send
+    // a reset, and the caller would lose this answer (a refusal answers
+    // before the request is read). Shut our side, then discard what the
+    // caller still sends (bounded in bytes and time) — never parsed.
+    let _ = conn.shutdown(std::net::Shutdown::Write);
+    let _ = conn.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = std::io::copy(&mut (&mut *conn).take(8 << 20), &mut std::io::sink());
 }
 
 /// Read one header line (at most `MAX_HEADER` bytes).

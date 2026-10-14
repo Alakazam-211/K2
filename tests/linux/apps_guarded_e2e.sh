@@ -35,7 +35,7 @@ fail() {
 }
 ok() { echo "  ok $*"; pass=$((pass + 1)); }
 info() { echo "  info $*"; }
-jq_() { python3 -c "import json,sys; v=json.load(open(sys.argv[1])); $2" "$3"; }
+jq_() { python3 -c "import json,sys; v=json.load(open(sys.argv[1])); $1" "$2"; }
 
 ARCH="$(uname -m)"
 VER="$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]*' "$IT/bin/k2-app-engine" | head -n1 | sed 's/.*v=//')"

@@ -29,6 +29,11 @@ const EXEMPT: &[(&str, &str, &str)] = &[
         "204 CORS preflight, no body",
     ),
     (
+        "k2-daemon/src/sources/fetch_tests.rs",
+        "http",
+        "test-only fake upstream the source fetcher calls; never served by the daemon",
+    ),
+    (
         "k2-daemon/src/cell_server.rs",
         "write_response",
         "UDS / vsock cell API, never reached by a browser",

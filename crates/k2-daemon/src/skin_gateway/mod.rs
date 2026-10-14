@@ -1254,16 +1254,38 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
         return Err(());
     }
     let bytes = std::fs::read(&canon).map_err(|_| ())?;
-    let ct = match canon.extension().and_then(|s| s.to_str()) {
-        Some("html") => "text/html; charset=utf-8",
+    let ext = canon
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    Ok((static_content_type(ext.as_deref()).to_string(), bytes))
+}
+
+/// Content-Type for a static App file by (lower-case) extension. Browsers
+/// refuse `.wasm` for streaming compile and `.mjs` as a module script unless
+/// the type is exact, so unknown types stay `application/octet-stream`.
+fn static_content_type(ext: Option<&str>) -> &'static str {
+    match ext {
+        Some("html" | "htm") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
-        Some("js") => "text/javascript; charset=utf-8",
+        Some("js" | "mjs" | "cjs") => "text/javascript; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("json" | "map") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
+        Some("txt") => "text/plain; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
-        Some("json") => "application/json",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("avif") => "image/avif",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
         _ => "application/octet-stream",
-    };
-    Ok((ct.to_string(), bytes))
+    }
 }
 
 fn upstream_addr(gw: &Gateway) -> Result<String, String> {
@@ -1669,6 +1691,54 @@ async fn write_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sew report: a static App's `.wasm`, `.mjs` and web fonts were served
+    /// as `application/octet-stream`, which browsers refuse for
+    /// `WebAssembly.instantiateStreaming` and module scripts.
+    #[test]
+    fn read_static_file_types_web_assets() {
+        let root = std::env::temp_dir().join(format!(
+            "k2-gw-mime-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+        let cases = [
+            ("index.html", "text/html; charset=utf-8"),
+            ("assets/a.css", "text/css; charset=utf-8"),
+            ("assets/a.js", "text/javascript; charset=utf-8"),
+            ("assets/a.mjs", "text/javascript; charset=utf-8"),
+            ("assets/a.wasm", "application/wasm"),
+            ("assets/a.woff2", "font/woff2"),
+            ("assets/a.woff", "font/woff"),
+            ("assets/a.ttf", "font/ttf"),
+            ("assets/a.otf", "font/otf"),
+            ("assets/a.svg", "image/svg+xml"),
+            ("assets/a.png", "image/png"),
+            ("assets/a.jpg", "image/jpeg"),
+            ("assets/a.jpeg", "image/jpeg"),
+            ("assets/a.gif", "image/gif"),
+            ("assets/a.webp", "image/webp"),
+            ("assets/a.avif", "image/avif"),
+            ("assets/a.ico", "image/x-icon"),
+            ("assets/a.json", "application/json"),
+            ("assets/a.js.map", "application/json"),
+            ("manifest.webmanifest", "application/manifest+json"),
+            ("assets/a.txt", "text/plain; charset=utf-8"),
+            ("assets/A.WASM", "application/wasm"),
+            ("assets/blob.bin", "application/octet-stream"),
+        ];
+        for (rel, _) in cases {
+            std::fs::write(root.join(rel), b"x").expect("write asset");
+        }
+        for (rel, want) in cases {
+            let (ct, bytes) = read_static_file(&root, &format!("/{rel}"))
+                .unwrap_or_else(|_| panic!("read /{rel}"));
+            assert_eq!(ct, want, "content type for {rel}");
+            assert_eq!(bytes, b"x");
+        }
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
 
     #[test]
     fn never_proxy_covers_prd_g8() {

@@ -535,6 +535,7 @@ impl Node {
             exclusive_running: excl,
             free_cpu_millis: cap_cpu.saturating_sub(used_cpu),
             free_mem_bytes: free_mem,
+            network_none: l.policy.network == "none",
         };
         let node_refusal = refusal::node_refusal(&view);
         let pin = self.pin.lock().unwrap().clone();
@@ -687,6 +688,7 @@ impl Node {
             exclusive_running: excl,
             free_cpu_millis: cap_cpu.saturating_sub(used_cpu),
             free_mem_bytes: cap_mem.saturating_sub(used_mem),
+            network_none: l.policy.network == "none",
         };
         let ask = JobAsk {
             workspace_id: &a.plan.workspace_id,

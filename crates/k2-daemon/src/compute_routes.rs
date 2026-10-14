@@ -1618,6 +1618,10 @@ fn local_policy(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         .iter()
         .map(|(k, x)| (k.clone(), x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())))
         .collect();
+    if updates.iter().any(|(k, v)| k == "network" && v.trim() == "none") {
+        use k2_core::compute::proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
+        return Err(no(NETWORK_NONE_NOT_ENFORCED, 400, NETWORK_NONE_MESSAGE));
+    }
     let t = compute::local::set_policy(&updates).map_err(|e| no("local_write", 400, e))?;
     Ok(serde_json::json!({"ok": true, "policy": serde_json::to_value(t).unwrap_or_default()}))
 }

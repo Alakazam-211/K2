@@ -60,20 +60,21 @@ fn account_mismatch(what: &str, label: &str, expected: &(AccountIdentity, Source
         actual.0.describe(),
         actual.1.describe()
     );
-    let hint = if what == "capture" {
+    let hint = if what == "capture" && actual.1 == Source::ClaudeConfig {
+        // Anthropic couldn't be asked (air-gap, offline, slow): say exactly
+        // what the file names and what was expected.
         format!(
-            "K2 stopped the switch: the sign-in live on this server belongs to {} ({}), but K2's record says \"{label}\" ({}) is live. Saving it would put another account's sign-in into \"{label}\". Nothing changed.{}",
+            "K2 stopped the switch: it couldn't check with Anthropic which account is live, and ~/.claude.json names {} as the signed-in account, but you expected \"{label}\" ({}) to be live. Nothing changed. If ~/.claude.json is just out of date, run /login as {} once in a Claude tab, then try again.",
+            actual.0.describe(),
+            expected.0.describe(),
+            expected.0.describe()
+        )
+    } else if what == "capture" {
+        format!(
+            "K2 stopped the switch: the sign-in live on this server belongs to {} ({}), but you expected \"{label}\" ({}) to be live. Saving it would put another account's sign-in into \"{label}\". Nothing changed. If someone signed in outside K2, add that sign-in on Settings → LLMs, or sign this token in again.",
             actual.0.describe(),
             actual.1.describe(),
-            expected.0.describe(),
-            if actual.1 == Source::ClaudeConfig {
-                format!(
-                    " If ~/.claude.json is just out of date, run /login as {} once in a Claude tab, then try again.",
-                    expected.0.describe()
-                )
-            } else {
-                " If someone signed in outside K2, add that sign-in on Settings → LLMs, or sign this token in again.".to_string()
-            }
+            expected.0.describe()
         )
     } else {
         format!(
@@ -307,11 +308,104 @@ pub struct SwitchOutcome {
     pub already_active: bool,
 }
 
+/// A tool's switch state: which token is the default, which is in the
+/// live store, and since when. A two-phase switch compares it before and
+/// after its network calls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Generation {
+    pub active: Option<String>,
+    pub live_owner: Option<String>,
+    pub switched_at: Option<i64>,
+}
+
+pub fn generation(conn: &Connection, tool: Tool) -> Result<Generation, WalletError> {
+    let info = super::active_info(conn, tool)?;
+    Ok(Generation {
+        active: info.as_ref().map(|i| i.account_id.clone()),
+        live_owner: live_owner(conn, tool)?,
+        switched_at: info.map(|i| i.switched_at),
+    })
+}
+
+fn changed(tool: Tool) -> WalletError {
+    WalletError::Conflict(
+        "changed",
+        format!(
+            "The {} tokens changed while K2 checked which accounts they belong to (another switch, a sign-in, or the CLI renewing its token). Nothing was switched; try again.",
+            tool.display()
+        ),
+    )
+}
+
+/// What phase 1 of a switch learned without the database: the incoming
+/// slot's refresh, and who the live and incoming credentials belong to.
+/// Only fingerprints are kept, never the bytes.
+#[derive(Debug, Clone)]
+pub struct Precheck {
+    tool: Tool,
+    target_id: String,
+    generation: Generation,
+    /// Set when phase 1 looked at the credentials (a subscription that
+    /// has to be swapped in).
+    creds: Option<PrecheckCreds>,
+    refresh: Option<Result<(), String>>,
+}
+
+#[derive(Debug, Clone)]
+struct PrecheckCreds {
+    live: Option<([u8; 32], Option<AccountIdentity>)>,
+    incoming: [u8; 32],
+    incoming_id: Option<AccountIdentity>,
+}
+
+/// Phase 1 of a switch. Holds NO database lock: the caller reads
+/// [`generation`] briefly first, then calls this, then
+/// [`switch_prechecked`] under the database. It refreshes an expiring
+/// incoming slot (under that slot's lock only) and asks the vendor which
+/// accounts the live and incoming credentials belong to (no lock at
+/// all). Phase 2 refuses with `changed` if anything moved in between.
+pub fn precheck(tool: Tool, target: &Entry, gen: Generation, refresher: Option<&dyn Refresher>) -> Result<Precheck, WalletError> {
+    let mut pre = Precheck { tool, target_id: target.id.clone(), generation: gen, creds: None, refresh: None };
+    let swaps = !target.is_api_key()
+        && pre.generation.active.as_deref() != Some(target.id.as_str())
+        && pre.generation.live_owner.as_deref() != Some(target.id.as_str())
+        && target.state != state::SIGNING_IN
+        && store::slot_has_cred(tool, &target.id);
+    if !swaps {
+        // Phase 2 answers (already active, API key, refusals) without
+        // the network.
+        return Ok(pre);
+    }
+    {
+        let _slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
+        let meta = store::slot_meta(tool, &target.id);
+        let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
+        if expiring && meta.has_refresh && !crate::airgap::enabled() {
+            if let Some(r) = refresher {
+                pre.refresh = Some(r.refresh(tool, &target.id));
+            }
+        }
+    }
+    let Some(incoming) = store::read_slot(tool, &target.id)? else {
+        return Ok(pre);
+    };
+    let live = store::read_live(tool)?.filter(|b| store::validate_cred(tool, b).is_ok());
+    let ask = |b: &[u8]| refresher.and_then(|r| r.identify(tool, b));
+    pre.creds = Some(PrecheckCreds {
+        live: live.as_deref().map(|b| (fingerprint(b), ask(b))),
+        incoming: fingerprint(&incoming),
+        incoming_id: ask(&incoming),
+    });
+    Ok(pre)
+}
+
 /// Make `target` the active login for its tool: save the outgoing live
 /// login back to its slot (the CLI may have refreshed it), refresh the
 /// incoming slot if it is about to expire (skipped under air-gap), then
 /// write it into the tool's live store. Every session on the server
-/// picks it up.
+/// picks it up. One phase: any vendor call runs inside the caller's
+/// locks. The daemon uses [`precheck`] + [`switch_prechecked`] instead,
+/// so it never waits on the network while holding the database.
 pub fn switch(
     conn: &Connection,
     tool: Tool,
@@ -319,8 +413,40 @@ pub fn switch(
     by: Option<&str>,
     refresher: Option<&dyn Refresher>,
 ) -> Result<SwitchOutcome, WalletError> {
+    switch_inner(conn, tool, target_key, by, refresher, None)
+}
+
+/// Phase 2 of a switch: everything [`switch`] does, with no network. The
+/// vendor's answers come from `pre`; if the default, the live credential
+/// or the incoming slot changed since phase 1, it refuses (`changed`).
+pub fn switch_prechecked(
+    conn: &Connection,
+    tool: Tool,
+    target_key: &str,
+    by: Option<&str>,
+    pre: &Precheck,
+) -> Result<SwitchOutcome, WalletError> {
+    if pre.tool != tool {
+        return Err(changed(tool));
+    }
+    switch_inner(conn, tool, target_key, by, None, Some(pre))
+}
+
+fn switch_inner(
+    conn: &Connection,
+    tool: Tool,
+    target_key: &str,
+    by: Option<&str>,
+    refresher: Option<&dyn Refresher>,
+    pre: Option<&Precheck>,
+) -> Result<SwitchOutcome, WalletError> {
     let target = lookup(conn, Some(tool), target_key)?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
+    if let Some(p) = pre {
+        if p.target_id != target.id || generation(conn, tool)? != p.generation {
+            return Err(changed(tool));
+        }
+    }
     let current = active_id(conn, tool)?;
     let from_label = match current.as_deref() {
         Some(c) => get(conn, c)?.map(|e| e.label),
@@ -367,7 +493,25 @@ pub fn switch(
         set_active(conn, tool, &target.id, by)?;
         return Ok(outcome(false, false, false, false, None));
     }
-    let ident = |t: Tool, b: &[u8]| refresher.and_then(|r| r.identify(t, b));
+    // Two-phase: phase 1 must have looked at these credentials.
+    let pre_creds = match pre {
+        Some(p) => Some(p.creds.as_ref().ok_or_else(|| changed(tool))?),
+        None => None,
+    };
+    // Who a credential belongs to: phase 1's answer for the exact bytes
+    // it saw (never a network call here), or the vendor in one phase.
+    let ident = |t: Tool, b: &[u8]| -> Option<AccountIdentity> {
+        match pre_creds {
+            Some(c) => {
+                let fp = fingerprint(b);
+                if fp == c.incoming {
+                    return c.incoming_id.clone();
+                }
+                c.live.as_ref().filter(|(lfp, _)| *lfp == fp).and_then(|(_, id)| id.clone())
+            }
+            None => refresher.and_then(|r| r.identify(t, b)),
+        }
+    };
     let ident: &dyn Fn(Tool, &[u8]) -> Option<AccountIdentity> = &ident;
     let _target_slot = store::lock_slot(tool, &target.id, LOCK_WAIT)?;
     // 0. The incoming login must be whole before anything moves.
@@ -385,6 +529,11 @@ pub fn switch(
             false
         }
     });
+    if let Some(c) = pre_creds {
+        if live.as_deref().map(fingerprint) != c.live.as_ref().map(|(fp, _)| *fp) {
+            return Err(changed(tool));
+        }
+    }
     //    The live bytes go into the owner's slot only when they are the
     //    owner's account: a `/login` outside K2, or a CLI writing an old
     //    token back, can leave another account live. Never cross logins.
@@ -412,30 +561,42 @@ pub fn switch(
         }
         _ => {}
     }
-    // 2. Lazy refresh of the incoming idle slot.
-    let mut refreshed = false;
-    let meta = store::slot_meta(tool, &target.id);
-    let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
-    if expiring && meta.has_refresh && !crate::airgap::enabled() {
-        if let Some(r) = refresher {
-            match r.refresh(tool, &target.id) {
-                Ok(()) => {
-                    refreshed = true;
-                    let m = store::slot_meta(tool, &target.id);
-                    update_meta(conn, &target.id, &MetaUpdate { expires_at: Some(m.expires_at), refreshed_at: Some(now()), ..Default::default() })?;
-                }
-                Err(e) => {
-                    // The CLI refreshes an expired access token itself as
-                    // long as the refresh token is good, so a failed
-                    // pre-swap refresh is recorded, not fatal.
-                    let detail = if super::looks_like_secret(&e) { "refresh failed".to_string() } else { e };
-                    update_meta(conn, &target.id, &MetaUpdate { detail: Some(Some(detail)), ..Default::default() })?;
-                }
+    // 2. Lazy refresh of the incoming idle slot (phase 1 already did it
+    //    in the two-phase switch; here only its result is recorded).
+    let refresh_result = match pre {
+        Some(p) => p.refresh.clone(),
+        None => {
+            let meta = store::slot_meta(tool, &target.id);
+            let expiring = meta.expires_at.map(|x| x <= now() + 300).unwrap_or(false);
+            match refresher {
+                Some(r) if expiring && meta.has_refresh && !crate::airgap::enabled() => Some(r.refresh(tool, &target.id)),
+                _ => None,
             }
         }
+    };
+    let mut refreshed = false;
+    match refresh_result {
+        Some(Ok(())) => {
+            refreshed = true;
+            let m = store::slot_meta(tool, &target.id);
+            update_meta(conn, &target.id, &MetaUpdate { expires_at: Some(m.expires_at), refreshed_at: Some(now()), ..Default::default() })?;
+        }
+        Some(Err(e)) => {
+            // The CLI refreshes an expired access token itself as long as
+            // the refresh token is good, so a failed pre-swap refresh is
+            // recorded, not fatal.
+            let detail = if super::looks_like_secret(&e) { "refresh failed".to_string() } else { e };
+            update_meta(conn, &target.id, &MetaUpdate { detail: Some(Some(detail)), ..Default::default() })?;
+        }
+        None => {}
     }
     // 3. The incoming sign-in must be the account K2 has on record for it.
     let bytes = store::read_slot(tool, &target.id)?.ok_or_else(|| WalletError::NotSignedIn(target.id.clone()))?;
+    if let Some(c) = pre_creds {
+        if fingerprint(&bytes) != c.incoming {
+            return Err(changed(tool));
+        }
+    }
     let target_expected = identity::expected_identity(tool, &target);
     let incoming_actual = identity::actual_identity(tool, &bytes, Some(ident), false);
     check_same("restore", &target.label, &target_expected, &incoming_actual)?;

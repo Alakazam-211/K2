@@ -34,6 +34,10 @@ pub enum Purpose {
     VaultFetch,
     /// The vault's loopback proxy for LLM CLIs and SDKs (§9.3).
     VaultProxy,
+    /// Which account an LLM sign-in belongs to (Claude
+    /// `/api/oauth/profile`), asked during a token switch. Short: a slow
+    /// answer means "can't tell", never a wait.
+    LlmAccountCheck,
 }
 
 impl Purpose {
@@ -41,12 +45,14 @@ impl Purpose {
         match self {
             Purpose::VaultFetch => "vault-fetch",
             Purpose::VaultProxy => "vault-proxy",
+            Purpose::LlmAccountCheck => "llm-account-check",
         }
     }
 
     fn connect_timeout(self) -> Duration {
         match self {
             Purpose::VaultFetch | Purpose::VaultProxy => Duration::from_secs(10),
+            Purpose::LlmAccountCheck => Duration::from_secs(3),
         }
     }
 }

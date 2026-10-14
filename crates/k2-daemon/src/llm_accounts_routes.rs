@@ -187,6 +187,52 @@ fn recheck_after_switch(tool: Tool, from: Option<String>) {
     });
 }
 
+/// A switch in two phases, so the daemon never waits on the network while
+/// holding the database:
+/// 1. the DB briefly: resolve the target and read the tool's generation;
+/// 2. NO DB lock: refresh an expiring incoming slot (its slot lock only)
+///    and ask the vendor which accounts the live and incoming
+///    credentials belong to (egress gate, 5 s);
+/// 3. the DB briefly again: check nothing changed (else `changed`, try
+///    again) and commit, using phase 2's answers (no network).
+fn switch_two_phase(
+    next: bool,
+    b: &Body,
+    key: &str,
+    vendor: &dyn wallet::Refresher,
+) -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
+    let (tool, target, gen) = with_conn(|conn| -> Result<(Tool, Entry, wallet::Generation), WalletError> {
+        let target = if next {
+            let tool = Tool::parse(b.tool.as_deref().unwrap_or(""))
+                .ok_or_else(|| WalletError::UnknownTool(b.tool.clone().unwrap_or_default()))?;
+            wallet_core::next_signed_in(conn, tool)?.ok_or_else(|| WalletError::NotFound("no_next".into()))?
+        } else {
+            let id = b.id.clone().unwrap_or_default();
+            let tool_hint = match b.tool.as_deref() {
+                Some(t) if !t.trim().is_empty() => Some(Tool::parse(t).ok_or_else(|| WalletError::UnknownTool(t.to_string()))?),
+                _ => None,
+            };
+            wallet_core::lookup(conn, tool_hint, &id)?
+        };
+        let tool = target.tool().ok_or_else(|| WalletError::UnknownTool(target.tool.clone()))?;
+        Ok((tool, target.clone(), wallet::generation(conn, tool)?))
+    })?;
+    // A sign-in rewriting that slot must finish first.
+    if rt::running_for(&target.id).is_some() {
+        return Err(WalletError::Conflict(
+            "signing_in",
+            "that token is signing in right now; finish or cancel that sign-in first".into(),
+        ));
+    }
+    let pre = wallet::precheck(tool, &target, gen, Some(vendor))?;
+    with_conn(|conn| {
+        // A warning, never a refusal: the person may still want it.
+        let warnings = wallet_core::get(conn, &target.id)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
+        let out = wallet::switch_prechecked(conn, tool, &target.id, Some(key), &pre)?;
+        Ok((out, tool, warnings))
+    })
+}
+
 /// `refresh {usage:true}` for every token (Settings → LLMs opening) runs
 /// at most once a minute; a refresh of one named token always runs.
 const USAGE_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
@@ -632,37 +678,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             }
         }
         SWITCH | NEXT => {
-            let res = with_conn(|conn| -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
-                let (tool, target) = if path == NEXT {
-                    let tool = Tool::parse(b.tool.as_deref().unwrap_or(""))
-                        .ok_or_else(|| WalletError::UnknownTool(b.tool.clone().unwrap_or_default()))?;
-                    let next = wallet_core::next_signed_in(conn, tool)?
-                        .ok_or_else(|| WalletError::NotFound("no_next".into()))?;
-                    (tool, next.id)
-                } else {
-                    let id = b.id.clone().unwrap_or_default();
-                    let tool_hint = match b.tool.as_deref() {
-                        Some(t) if !t.trim().is_empty() => {
-                            Some(Tool::parse(t).ok_or_else(|| WalletError::UnknownTool(t.to_string()))?)
-                        }
-                        _ => None,
-                    };
-                    let e = wallet_core::lookup(conn, tool_hint, &id)?;
-                    let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
-                    (tool, e.id)
-                };
-                // A sign-in rewriting that slot must finish first.
-                if rt::running_for(&target).is_some() {
-                    return Err(WalletError::Conflict(
-                        "signing_in",
-                        "that token is signing in right now; finish or cancel that sign-in first".into(),
-                    ));
-                }
-                // A warning, never a refusal: the person may still want it.
-                let warnings = wallet_core::get(conn, &target)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
-                let out = wallet::switch(conn, tool, &target, Some(&key), Some(&rt::DaemonRefresher))?;
-                Ok((out, tool, warnings))
-            });
+            let res = switch_two_phase(path == NEXT, &b, &key, &rt::DaemonRefresher);
             match res {
                 Ok((out, tool, warnings)) => {
                     if !out.already_active {
@@ -689,7 +705,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     "there is no other signed-in subscription for that tool; add one on Settings → LLMs",
                 ),
                 Err(e) => {
-                    if matches!(e.code(), "account_mismatch" | "signing_in") {
+                    if matches!(e.code(), "account_mismatch" | "signing_in" | "changed") {
                         audit("llm_accounts.switch_refused", &key, e.code(), ingress);
                         k2_core::log_debug!("llm: switch refused for {key}: {}", e.code());
                     }
@@ -860,5 +876,129 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             ok(json!({"accounts": out, "usageChecked": want_usage}))
         }
         _ => CliResponse::not_found(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The switch never waits on the network while holding the daemon's
+    //! database: a slow vendor answer must not stall a concurrent DB read,
+    //! and a change made meanwhile aborts the switch (`changed`). Temp
+    //! HOME; the process-wide test DB (the concurrent reader must hit the
+    //! SAME lock the switch would hold), with this test's Claude rows
+    //! cleared before and after; a fake vendor, no network.
+
+    use std::sync::{mpsc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use k2_core::llm_accounts::identity::AccountIdentity;
+    use k2_core::llm_accounts::store;
+
+    use super::*;
+
+    const MARKER: &str = "K2TEST_SECRET_MARKER";
+    const SLOW: Duration = Duration::from_millis(1500);
+
+    struct SlowVendor {
+        entered: Mutex<mpsc::Sender<()>>,
+    }
+
+    impl wallet::Refresher for SlowVendor {
+        fn refresh(&self, _tool: Tool, _id: &str) -> Result<(), String> {
+            panic!("no refresh expected: every fake token is far from expiry");
+        }
+        fn identify(&self, _tool: Tool, b: &[u8]) -> Option<AccountIdentity> {
+            let _ = self.entered.lock().unwrap().send(());
+            std::thread::sleep(SLOW);
+            let v: Value = serde_json::from_slice(b).unwrap();
+            let at = v["claudeAiOauth"]["accessToken"].as_str().unwrap();
+            let who = if at.ends_with("-a") { "a" } else { "b" };
+            Some(AccountIdentity {
+                account_uuid: Some(format!("uuid-{who}")),
+                email: Some(format!("{who}@example.test")),
+                org_uuid: None,
+            })
+        }
+    }
+
+    fn cred(tag: &str) -> String {
+        format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-{tag}","refreshToken":"{MARKER}-rt-{tag}","expiresAt":4102444800000}}}}"#)
+    }
+
+    fn clear_claude_rows() {
+        with_conn(|conn| {
+            conn.execute("DELETE FROM llm_active WHERE tool = 'claude'", []).unwrap();
+            conn.execute("DELETE FROM llm_accounts WHERE tool = 'claude'", []).unwrap();
+        });
+    }
+
+    /// Live = A (imported); B signed in to its slot with B's profile.
+    fn setup(home: &std::path::Path) -> (String, String) {
+        clear_claude_rows();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        std::fs::write(home.join(".claude/.credentials.json"), cred("a")).unwrap();
+        std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"accountUuid":"uuid-a","emailAddress":"a@example.test"}}"#).unwrap();
+        let a = with_conn(|conn| wallet::import_live(conn, Tool::Claude, None)).unwrap().unwrap();
+        let b = with_conn(|conn| wallet_core::create(conn, Tool::Claude, "b", None)).unwrap();
+        let dir = store::slot_dir(Tool::Claude, &b.id);
+        store::ensure_private_dir(&dir).unwrap();
+        std::fs::write(dir.join(".credentials.json"), cred("b")).unwrap();
+        std::fs::write(dir.join(".claude.json"), r#"{"oauthAccount":{"accountUuid":"uuid-b","emailAddress":"b@example.test"}}"#).unwrap();
+        with_conn(|conn| {
+            wallet_core::update_meta(conn, &b.id, &wallet_core::MetaUpdate { state: Some(state::SIGNED_IN.into()), ..Default::default() })
+        })
+        .unwrap();
+        (a.id, b.id)
+    }
+
+    type SwitchResult = Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError>;
+
+    fn start_switch(b_id: &str) -> (mpsc::Receiver<()>, std::thread::JoinHandle<SwitchResult>) {
+        let (tx, rx) = mpsc::channel();
+        let body = Body { id: Some(b_id.to_string()), ..Default::default() };
+        let handle = std::thread::spawn(move || {
+            let vendor = SlowVendor { entered: Mutex::new(tx) };
+            switch_two_phase(false, &body, "owner-token", &vendor)
+        });
+        (rx, handle)
+    }
+
+    #[test]
+    fn the_database_is_free_while_the_vendor_answers_slowly() {
+        let home = crate::test_support::TempHome::new();
+        let (_a, b) = setup(home.path());
+        let (entered, switching) = start_switch(&b);
+        entered.recv_timeout(Duration::from_secs(10)).expect("the switch asked the vendor");
+        // Mid-call: a DB read on another thread must not wait for it.
+        let t0 = Instant::now();
+        let n: i64 = with_conn(|conn| conn.query_row("SELECT COUNT(*) FROM llm_accounts WHERE tool = 'claude'", [], |r| r.get(0)))
+            .unwrap();
+        let waited = t0.elapsed();
+        assert_eq!(n, 2);
+        assert!(waited < Duration::from_millis(400), "a DB read waited {waited:?} on the vendor call");
+        let (out, tool, _) = switching.join().unwrap().expect("switch");
+        assert_eq!(tool, Tool::Claude);
+        assert_eq!(out.to, b);
+        assert_eq!(out.verified_by, Some(k2_core::llm_accounts::identity::Source::Vendor));
+        assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("b"));
+        clear_claude_rows();
+    }
+
+    #[test]
+    fn a_change_while_the_vendor_answers_aborts_with_changed() {
+        let home = crate::test_support::TempHome::new();
+        let (a, b) = setup(home.path());
+        let (entered, switching) = start_switch(&b);
+        entered.recv_timeout(Duration::from_secs(10)).expect("the switch asked the vendor");
+        // Another switch landed meanwhile (the default's generation moved).
+        with_conn(|conn| conn.execute("UPDATE llm_active SET switched_at = switched_at + 7 WHERE tool = 'claude'", [])).unwrap();
+        let err = switching.join().unwrap().expect_err("must abort");
+        assert_eq!(err.code(), "changed", "{err}");
+        assert!(err.to_string().contains("try again"), "{err}");
+        assert_eq!(std::fs::read_to_string(home.path().join(".claude/.credentials.json")).unwrap(), cred("a"), "live untouched");
+        assert_eq!(std::fs::read_to_string(store::slot_cred_path(Tool::Claude, &a)).unwrap(), cred("a"), "A's slot untouched");
+        let active = with_conn(|conn| wallet_core::active_id(conn, Tool::Claude)).unwrap();
+        assert_eq!(active.as_deref(), Some(a.as_str()));
+        clear_claude_rows();
     }
 }

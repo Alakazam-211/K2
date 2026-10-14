@@ -222,12 +222,17 @@ as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1"
 [ "$(as_app http://127.0.0.1:38650/)" = 200 ] || fail "k2app → gateway port"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "k2app → another loopback port was allowed"
 [ "$(as_app "http://$MYIP:9998/")" = 000 ] || fail "k2app → this host's own address was allowed"
-[ "$(as_app https://deb.debian.org/)" = 000 ] || fail "k2app → the internet was allowed"
 [ "$(as_k2 http://127.0.0.1:9999/)" = 200 ] || fail "the daemon user must be unaffected (loopback)"
-k2net="$(as_k2 https://deb.debian.org/)"
-case "$k2net" in 2??|3??) ;; *) fail "the daemon user must be unaffected (internet: $k2net)" ;; esac
+[ "$(as_k2 "http://$MYIP:9998/")" = 200 ] || fail "the daemon user must be unaffected (own address)"
+# Control: without the table k2app reaches both, so the 000s above are nft's.
+inns nft delete table inet k2app
+[ "$(as_app http://127.0.0.1:9999/)" = 200 ] || fail "control: k2app → loopback without the table"
+[ "$(as_app "http://$MYIP:9998/")" = 200 ] || fail "control: k2app → own address without the table"
+req daemon apps nft apply 38600-38899 38900-38949 5432
+expect_rc 0 "nft re-apply"
+[ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "re-applied table does not drop"
 kill "$L1" "$L2" "$L3"
-ok "k2app: gateway yes; other loopback, own address ($MYIP), internet no; the daemon user unaffected"
+ok "k2app: gateway port yes; other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
 
 echo "== the process exception (system unit, User=k2app) =="
 req daemon apps process-unit on

@@ -9,6 +9,7 @@ members = [
     "crates/k2-node",
     "crates/k2-root-proto",
     "crates/k2-root-helper",
+    "crates/k2-app-engine",
     "crates/k2-vault",
 ]
 

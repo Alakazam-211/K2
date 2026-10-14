@@ -314,7 +314,7 @@ pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'s
             return Err("pg_hba.conf: the K2 Apps block holds a line K2 didn't write");
         }
     }
-    let has = inside.iter().any(|l| *l == line);
+    let has = inside.contains(&line);
     if has == add {
         return Ok(None);
     }

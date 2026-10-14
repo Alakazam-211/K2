@@ -253,7 +253,9 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
         return Err(Fail::state("no Postgres cluster here (/etc/postgresql/<n>/main)"));
     }
     let hba = OsStr::new("pg_hba.conf");
-    let mut plan: Vec<(String, &Dir, Option<String>, u32, Option<(u32, u32)>)> = Vec::new();
+    // (cluster, its main dir, new text if it changes, mode, owner)
+    type Step<'a> = (String, &'a Dir, Option<String>, u32, Option<(u32, u32)>);
+    let mut plan: Vec<Step> = Vec::new();
     for (ver, main) in &mains {
         let st = match main.lstat(hba).map_err(|e| Fail::io_err("stat pg_hba.conf", e))? {
             None => return Err(Fail::state("hba-app refused: a cluster has no pg_hba.conf")),

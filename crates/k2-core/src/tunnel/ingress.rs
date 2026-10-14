@@ -67,6 +67,38 @@ pub fn ensure_tunnel_ingress_port(default_port: u16) -> Result<u16, String> {
     }
 }
 
+/// Test guard over the process-global hook slot: installs a stub (or clears
+/// the slot) and clears it again when dropped, panics included. A stub left
+/// behind by one test would otherwise decide a later test's frpc
+/// `localPort` (soak 2026-10-14: the rotation test read 46124, another
+/// test's stub). Hold it under the env lock (`TempHome` / `with_temp_home`).
+#[cfg(test)]
+#[must_use = "the hook is cleared when this guard drops"]
+pub(crate) struct TestIngressHook(());
+
+#[cfg(test)]
+impl TestIngressHook {
+    /// Install `hook` for the guard's lifetime.
+    pub(crate) fn install(hook: Box<EnsureTunnelIngress>) -> Self {
+        register_ensure_tunnel_ingress(hook);
+        Self(())
+    }
+
+    /// No hook for the guard's lifetime (the connector falls back to the
+    /// default port).
+    pub(crate) fn none() -> Self {
+        clear_ensure_tunnel_ingress();
+        Self(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestIngressHook {
+    fn drop(&mut self) {
+        clear_ensure_tunnel_ingress();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

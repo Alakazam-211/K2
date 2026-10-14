@@ -816,7 +816,7 @@ mod tests {
     /// `line`, E2E off, lease off) — frpc RUNNING.
     fn start_frpc(cfg: TunnelConfig, line: &str) {
         config::save(&TunnelConfig { e2e: false, ..cfg }).expect("seed identity");
-        super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46123)));
+        let _hook = super::super::ingress::TestIngressHook::install(Box::new(|| Ok(46123)));
         let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
         let st = super::super::connector::start(
             None,

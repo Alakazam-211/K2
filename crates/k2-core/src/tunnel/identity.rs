@@ -558,14 +558,14 @@ mod tests {
     /// Tunnel-ingress stub (E2E off in these tests: the E2E listener lives
     /// in k2-daemon and is covered by its switch integration test). Refuses
     /// the `broken` subdomain to drive the rollback path.
-    fn install_ingress_stub() {
-        super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| {
+    fn install_ingress_stub() -> super::super::ingress::TestIngressHook {
+        super::super::ingress::TestIngressHook::install(Box::new(|| {
             match config::load() {
                 Ok(c) if c.subdomain == "broken" => Err("ingress refused for broken".to_string()),
                 Ok(_) => Ok(46123),
                 Err(e) => Err(e),
             }
-        }));
+        }))
     }
 
     fn seed(sub: &str, token: &str) {
@@ -580,15 +580,20 @@ mod tests {
     }
 
     /// Env + hooks every test here needs; hold the returned guards.
-    fn env() -> (crate::test_env::EnvVar, crate::test_env::ErrorHttpServer, crate::test_env::EnvVar) {
+    fn env() -> (
+        crate::test_env::EnvVar,
+        crate::test_env::ErrorHttpServer,
+        crate::test_env::EnvVar,
+        super::super::ingress::TestIngressHook,
+    ) {
         let lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
         let cp = crate::test_env::ErrorHttpServer::start(503);
         let cp_env = crate::test_env::EnvVar::set(
             super::super::subdomains::CONTROL_PLANE_BASE_ENV,
             cp.url(),
         );
-        install_ingress_stub();
-        (lease, cp, cp_env)
+        let hook = install_ingress_stub();
+        (lease, cp, cp_env, hook)
     }
 
     fn reset_routing() {

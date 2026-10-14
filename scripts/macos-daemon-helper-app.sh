@@ -86,7 +86,7 @@ k2_daemon_helper_assemble() {
     <key>CFBundleIconFile</key>
     <string>${K2_DAEMON_HELPER_ICON}</string>
     <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
+    <string>11.0</string>
     <key>LSUIElement</key>
     <true/>
 </dict>

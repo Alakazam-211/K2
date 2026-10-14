@@ -39,6 +39,16 @@
 # longer signs k2-node with the updater key. Until the .sig is up, daemons
 # and controllers refuse the asset (fail closed).
 #
+# k2-app-engine (0.46.1+, prd-k2-app-runtime-v1 §10.6, S11). Built here
+# UNSIGNED, Linux only:
+#   k2-app-engine-linux-x86_64{,.sha256}
+#   k2-app-engine-linux-aarch64{,.sha256}
+# The root helper installs it (`apps install-engine`) to run as k2app, so
+# its .sig is the ROOT-HELPER key's, added on z3mbpZ by
+# scripts/sign-app-engine.sh (trusted comment
+# `file:k2-app-engine-linux-<arch> version:<v> protocol:<p>`). Until the .sig
+# is up, daemons and the helper refuse the asset (fail closed).
+#
 # Do NOT attach an air-gap daemon to the GitHub release. `--features airgap`
 # is a custom/enterprise compile (bakes air-gap ON, omits the GitHub
 # daemon-latest.json ping URL). Distribution is off-band / portal, not
@@ -95,11 +105,13 @@ jobs:
             asset: k2-daemon-linux-x86_64
             root_asset: k2-root-helper-linux-x86_64
             node_asset: k2-node-linux-x86_64
+            engine_asset: k2-app-engine-linux-x86_64
             cross: false
           - target: aarch64-unknown-linux-gnu
             asset: k2-daemon-linux-aarch64
             root_asset: k2-root-helper-linux-aarch64
             node_asset: k2-node-linux-aarch64
+            engine_asset: k2-app-engine-linux-aarch64
             cross: true
 
     steps:
@@ -165,7 +177,7 @@ jobs:
             echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar"
           } >> "$GITHUB_ENV"
 
-      - name: Build k2-daemon + k2-node + k2-root-helper (release, standalone bins)
+      - name: Build k2-daemon + k2-node + k2-root-helper + k2-app-engine (release, standalone bins)
         env:
           # Priority: Gmail (customer-facing invalid_client on DTL). MS optional.
           K2_GMAIL_CLIENT_ID: ${{ secrets.K2_GMAIL_CLIENT_ID }}
@@ -205,7 +217,17 @@ jobs:
             echo "k2-node was built with test-keys — refusing" >&2; exit 1
           fi
           test "$(grep -a -o 'K2_NODE_BUILD v=[0-9.]* proto=[0-9]* os=linux arch=[a-z0-9_]*;' "${{ matrix.node_asset }}" | wc -l)" = 1
-          file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}"
+          # The App engine (S11): its own crate, no features (never
+          # test-keys). Signed LATER on z3mbpZ with the root-helper key
+          # (scripts/sign-app-engine.sh), never here.
+          cargo build --release --target ${{ matrix.target }} -p k2-app-engine
+          cp "$TARGET_DIR/${{ matrix.target }}/release/k2-app-engine" \
+             "${{ matrix.engine_asset }}"
+          if grep -a -q K2_APP_ENGINE_TEST_KEYS_ENABLED "${{ matrix.engine_asset }}"; then
+            echo "k2-app-engine was built with test-keys — refusing" >&2; exit 1
+          fi
+          test "$(grep -a -o 'K2_APP_ENGINE_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.engine_asset }}" | wc -l)" = 1
+          file "${{ matrix.asset }}" "${{ matrix.node_asset }}" "${{ matrix.root_asset }}" "${{ matrix.engine_asset }}"
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Sign with the Tauri updater key via the tauri CLI signer (produces a
@@ -247,10 +269,11 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum "${{ matrix.asset }}" | tee "${{ matrix.asset }}.sha256"
-          # sign-root-helper.sh / sign-k2-node.sh check the downloaded
-          # assets against these.
+          # sign-root-helper.sh / sign-k2-node.sh / sign-app-engine.sh
+          # check the downloaded assets against these.
           sha256sum "${{ matrix.root_asset }}" | tee "${{ matrix.root_asset }}.sha256"
           sha256sum "${{ matrix.node_asset }}" | tee "${{ matrix.node_asset }}.sha256"
+          sha256sum "${{ matrix.engine_asset }}" | tee "${{ matrix.engine_asset }}.sha256"
 
       # Attach the binaries + .sig to the release for this tag. The daemon
       # manifest (daemon-latest.json) is produced by release.sh; the daemon
@@ -269,6 +292,8 @@ jobs:
             "${{ matrix.node_asset }}.sha256" \
             "${{ matrix.root_asset }}" \
             "${{ matrix.root_asset }}.sha256" \
+            "${{ matrix.engine_asset }}" \
+            "${{ matrix.engine_asset }}.sha256" \
             --clobber
 
   # The root installer the daemon's "mail helper not installed" hint points

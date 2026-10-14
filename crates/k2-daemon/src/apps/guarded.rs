@@ -352,9 +352,17 @@ pub fn remove_gateway_rule(app: &str) {
     }
 }
 
-/// An App's logs from the engine (the unit's journal).
+/// A guarded deployment's output: its unit's journal, read by the root
+/// helper (`apps logs`; k2app is a system user, so journald files its
+/// lines in the system journal).
 pub fn logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
-    let v = call(&Request::Logs { app: app.into(), deployment: deployment.into(), lines }, None, Duration::from_secs(60))?;
+    let st = crate::root_helper::state();
+    if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
+        return Err(eng_err(codes::ENGINE_UNAVAILABLE, "reading a guarded App's journal needs the root helper (protocol 6)"));
+    }
+    let out = crate::root_helper::call_text(&["apps".into(), "logs".into(), app.into(), deployment.into(), lines.clamp(1, 5000).to_string()], None)
+        .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, e))?;
+    let v: Value = serde_json::from_str(&out).map_err(|_| eng_err(codes::ENGINE_UNAVAILABLE, "apps logs: not JSON"))?;
     Ok(v["text"].as_str().unwrap_or("").to_string())
 }
 

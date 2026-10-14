@@ -912,46 +912,33 @@ pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
     Ok(json!({"app": id.as_str(), "changed": changed, "rules": n}))
 }
 
-// ── the persistent journal (slice 3) ────────────────────────────────────
+// ── guarded Apps' output (slice 3) ──────────────────────────────────────
 
-fn journal_persistent(ctx: &Ctx) -> bool {
-    ctx.dir(JOURNAL_DIR).is_ok()
-}
+/// Largest log answer.
+const LOGS_CAP: usize = 1024 * 1024;
 
-/// `apps journal on` (open): create `/var/log/journal` (root,
-/// `systemd-journal` group, 2755) when it is missing, let systemd-tmpfiles
-/// set its canonical modes and ACLs, and flush the volatile journal into
-/// it. journald then writes per-user files k2app can read. Never removes
-/// a journal (no `off`).
-pub fn journal_on(ctx: &Ctx) -> HResult<J> {
-    let (parent, name) = split(JOURNAL_DIR);
-    let base = ctx.dir(parent).map_err(|e| Fail::io_err("open /var/log", e))?;
-    let n = OsStr::new(name);
-    let changed = match base.kind(n).map_err(|e| Fail::io_err("stat", e))? {
-        Kind::Dir => false,
-        Kind::Missing => {
-            base.mkdir(n, 0o2755).map_err(|e| Fail::io_err("mkdir /var/log/journal", e))?;
-            let d = base.sub(n).map_err(|e| Fail::io_err("open /var/log/journal", e))?;
-            if ctx.real_owners {
-                let gid = read_cfg_text(ctx, GROUP_FILE)?
-                    .lines()
-                    .find_map(|l| {
-                        let f: Vec<&str> = l.split(':').collect();
-                        (f.len() >= 3 && f[0] == "systemd-journal").then(|| f[2].parse::<u32>().ok()).flatten()
-                    })
-                    .unwrap_or(0);
-                d.fchown(0, gid).map_err(|e| Fail::io_err("chown /var/log/journal", e))?;
-            }
-            d.fchmod(0o2755).map_err(|e| Fail::io_err("chmod /var/log/journal", e))?;
-            true
-        }
-        _ => return Err(Fail::state("refused: /var/log/journal is not a directory")),
-    };
-    if changed {
-        ctx.run_ok(SYSTEMD_TMPFILES, &["--create", "--prefix", JOURNAL_DIR], None)?;
-        ctx.run_ok(k2_root_proto::paths::JOURNALCTL, &["--flush"], None)?;
+/// `apps logs <id> <deployment> <lines>` (daemon): the unit's lines from
+/// the journal, matched on k2app's uid AND the deployment's user unit (two
+/// fields journald ANDs). Nothing from argv but validated tokens.
+pub fn logs(ctx: &Ctx, id: &AppId, deployment: &str, lines: u32) -> HResult<J> {
+    let pw = app_user(ctx)?;
+    let unit = format!("{}.service", k2_root_proto::engine::unit_stem(id, deployment));
+    let n = lines.to_string();
+    let uid = format!("_UID={}", pw.uid);
+    let um = format!("_SYSTEMD_USER_UNIT={unit}");
+    let out = ctx.run_ok(
+        k2_root_proto::paths::JOURNALCTL,
+        &["--no-pager", "-o", "cat", "-n", &n, &uid, &um],
+        None,
+    )?;
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let truncated = text.len() > LOGS_CAP;
+    if truncated {
+        let cut = text.len() - LOGS_CAP;
+        let cut = (cut..text.len()).find(|i| text.is_char_boundary(*i)).unwrap_or(text.len());
+        text = text[cut..].to_string();
     }
-    Ok(json!({"journal": "persistent", "changed": changed}))
+    Ok(json!({"unit": unit, "text": text, "truncated": truncated}))
 }
 
 // ── the engine (S11) ────────────────────────────────────────────────────
@@ -1655,7 +1642,6 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "enginePresent": exists(ctx, ENGINE_PATH),
         "engineUnit": engine_unit_state(ctx),
         "engineTmpfiles": exists(ctx, TMPFILES_FILE),
-        "journalPersistent": journal_persistent(ctx),
         "nftApps": load_nft_apps(ctx).map(|s| json!(s.apps)).unwrap_or(json!(null)),
     }))
 }

@@ -411,16 +411,6 @@ pub fn doctor(f: &Facts) -> J {
             ),
             None => c("processUnit", "unknown", "", None),
         });
-        out.push(match hs("/journalPersistent").as_bool() {
-            Some(true) => c("journal", "ok", "persistent journal (k2 app logs reads guarded Apps' output)", None),
-            Some(false) => c(
-                "journal",
-                "warn",
-                "volatile journal: k2 app logs can't read guarded Apps' output",
-                Some(PREPARE),
-            ),
-            None => c("journal", "unknown", "", None),
-        });
         out.push(if hs("/coresSlice/present").as_bool() == Some(true) {
             c(
                 "coresSlice",
@@ -702,7 +692,6 @@ pub fn plan(o: &PrepareOpts) -> Vec<Vec<String>> {
         sv(&["apps", "subid"]),
         sv(&["apps", "delegate", "on"]),
         sv(&["apps", "linger", "on"]),
-        sv(&["apps", "journal", "on"]),
         sv(&["apps", "reserve-ports", "on"]),
         sv(&["apps", "io-cost", "on"]),
         sv(&[
@@ -1112,7 +1101,6 @@ mod tests {
                 "apps subid",
                 "apps delegate on",
                 "apps linger on",
-                "apps journal on",
                 "apps reserve-ports on",
                 "apps io-cost on",
                 "apps nft apply 38600-38899 38900-38949 5432",

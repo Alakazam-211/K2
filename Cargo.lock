@@ -4157,10 +4157,12 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "blake2",
+ "libc",
  "minisign-verify",
  "ring",
  "serde",
  "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

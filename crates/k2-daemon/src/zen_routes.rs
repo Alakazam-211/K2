@@ -724,6 +724,27 @@ fn handle_widget_claim(body: &[u8], caller: &Caller, ingress: &str) -> Result<J,
     Ok(json!({ "ok": true, "widget": widget, "hash": hash, "madeBy": crate::garden_data::call::made_by_wire(&maker) }))
 }
 
+/// `GET /cli/zen/widgets` rows gain `madeBy`: the live version's maker
+/// (creator rights, contract-garden-data-v1 §4.2), or null when the widget
+/// has no good version. Settings shows It's mine from it before any data
+/// exists.
+pub(crate) fn with_made_by(v: &mut J) -> Result<(), ZenError> {
+    let Some(rows) = v["widgets"].as_array_mut() else { return Ok(()) };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for row in rows {
+        let name = row["name"].as_str().unwrap_or_default().to_string();
+        let hash = row["hash"].as_str().unwrap_or_default().to_string();
+        row["madeBy"] = if hash.is_empty() {
+            J::Null
+        } else {
+            let maker = authors::maker_of(&conn, &name, &hash).map_err(data_err)?;
+            crate::garden_data::call::made_by_wire(&maker)
+        };
+    }
+    Ok(())
+}
+
 /// Passport-admitted widget writes (contract-garden-data-v1 §4.3): an
 /// agent or K2 terminal may make a widget folder and sign one. Never
 /// lock-checked: a widget folder isn't a Garden.
@@ -1124,7 +1145,10 @@ pub fn handle(
         }
         "/cli/zen/widgets" => {
             let f = files();
-            set_up(&f).and_then(|_| refresh_and_emit()).and_then(|_| f.widgets_json(&pauses()))
+            set_up(&f)
+                .and_then(|_| refresh_and_emit())
+                .and_then(|_| f.widgets_json(&pauses()))
+                .and_then(|mut v| with_made_by(&mut v).map(|_| v))
         }
         "/cli/zen/widget/bundle" => {
             let f = files();

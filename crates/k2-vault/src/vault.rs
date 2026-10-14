@@ -1217,6 +1217,12 @@ impl LocalVault {
             }
             ConsumerKind::Workspace | ConsumerKind::Session | ConsumerKind::PublishedService => {}
             ConsumerKind::Engine | ConsumerKind::Daemon if m.namespace == Namespace::System => {}
+            // Garden v3 data sources [GV42]: a daemon consumer `source:<id>`
+            // may hold a User secret (fetch only, narrowed to one origin by
+            // the caller). Not a new consumer kind, so older binaries still
+            // read every grant.
+            ConsumerKind::Daemon
+                if m.namespace == Namespace::User && g.consumer.id.starts_with("source:") && g.delivery == Delivery::Fetch => {}
             _ => return Err(VaultError::bad_request("bad_consumer", "that consumer can't hold this secret")),
         }
         if g.consumer.id.is_empty() || g.consumer.id.len() > 128 {
@@ -1391,6 +1397,9 @@ impl LocalVault {
                 Requester::PublishedService { id, .. } => g.consumer.kind == ConsumerKind::PublishedService && &g.consumer.id == id,
                 Requester::Engine(e) => g.consumer.kind == ConsumerKind::Engine && &g.consumer.id == e,
                 Requester::System(_) => false,
+                Requester::Source { id } => {
+                    g.consumer.kind == ConsumerKind::Daemon && g.consumer.id.strip_prefix("source:") == Some(id.as_str())
+                }
             };
             if matches {
                 out.push((g.delivery, g.env_name.clone(), g.file_name.clone(), g.hosts_narrowed.clone(), true));

@@ -187,6 +187,10 @@ pub enum Requester {
     Engine(String),
     /// A daemon subsystem (`mail`, `db`, `tunnel`, …). System namespace.
     System(String),
+    /// A Garden v3 data source (contract-sources-v1 §10.3): resolves only
+    /// through an explicit `ConsumerKind::Daemon` grant with consumer id
+    /// `source:<id>`, for `fetch`, to the source's exact origin.
+    Source { id: String },
 }
 
 impl Requester {
@@ -197,6 +201,7 @@ impl Requester {
             Requester::PublishedService { id, .. } => format!("published_service:{id}"),
             Requester::Engine(e) => format!("engine:{e}"),
             Requester::System(s) => format!("daemon:{s}"),
+            Requester::Source { id } => format!("source:{id}"),
         }
     }
 }

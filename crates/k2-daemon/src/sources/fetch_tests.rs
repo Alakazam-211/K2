@@ -205,11 +205,12 @@ fn airgap_pauses_names_without_a_lookup_and_runs_owner_ip_sources() {
 }
 
 #[test]
-fn a_named_secret_reads_secret_missing_until_bound() {
+fn a_named_secret_missing_from_the_vault_never_connects() {
     let _a = AirgapEnv::set(false);
+    crate::vault::ensure_test_vault();
     let f = Fake::start(|_| http("200 OK", &[], b"{}"));
     let mut p = plan(&f.origin(), "/", true);
-    p.secret = Some("STRIPE".into());
+    p.secret = Some("FETCH_TEST_NOT_IN_VAULT".into());
     assert!(matches!(fetch_once(&p), FetchOutcome::Err { reason: Reason::SecretMissing, .. }));
     assert_eq!(f.conns(), 0);
 }

@@ -72,7 +72,12 @@ pub fn fetch_detailed(plan: &FetchPlan) -> Fetched {
     let res = vault_fetch::execute(spec, &allow, resolved.injections, &resolved.redactor);
     let elapsed_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
     match res {
-        Ok(r) => from_response(r, elapsed_ms),
+        Ok(mut r) => {
+            if let Some(extra) = &resolved.extra_redact {
+                r.body = extra.redact(&r.body);
+            }
+            from_response(r, elapsed_ms)
+        }
         Err(e) => Fetched { outcome: err(reason_for(&e), None, None), park_secs: None },
     }
 }
@@ -183,9 +188,12 @@ fn from_response(r: vault_fetch::FetchResult, elapsed_ms: u32) -> Fetched {
 /// nothing.
 pub struct Resolved {
     pub injections: Vec<vault_fetch::Injection>,
-    pub redactor: Redactor,
+    /// The vault's redactor (every user secret's value and encodings).
+    pub redactor: std::sync::Arc<Redactor>,
     /// A `urlSecret` URL (already checked against the pinned origin).
     pub url: Option<String>,
+    /// The whole `urlSecret` URL, redacted from the body too.
+    pub extra_redact: Option<Redactor>,
 }
 
 #[cfg(test)]

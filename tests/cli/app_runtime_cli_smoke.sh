@@ -115,7 +115,7 @@ mkapp "$WS/sick" 3.0.0 sick
 
 echo "== validate / build =="
 out="$(k2 app validate "$WS/v1")"
-expect_has "validate ok" "$out" "ok — checks: manifest, contract"
+expect_has "validate ok (manifest, contract and the stage 0 code pass)" "$out" "ok — checks: manifest, contract, code"
 mkdir -p "$WS/broken"
 echo '{"schema":1,"kind":"app","id":"smoke"' > "$WS/broken/manifest.json"
 set +e
@@ -127,6 +127,8 @@ out="$(k2 app build "$WS/v1")"
 expect_has "build prints a Seed" "$out" "Seed "
 SEED1="$(printf '%s\n' "$out" | sed -n 's/^Seed \([0-9a-f]\{64\}\)$/\1/p')"
 [ -n "$SEED1" ] || bad "Seed hash parsed"
+out="$(k2 app validate "${SEED1:0:16}")"
+expect_has "one k2 app validate also takes a stored Seed" "$out" "ok — checks: manifest, contract, code"
 
 echo "== install / deploy / rollback =="
 out="$(k2 app install smoke --memory none)"

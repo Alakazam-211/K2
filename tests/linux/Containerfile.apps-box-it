@@ -13,7 +13,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus libpam-systemd sudo passwd \
       curl ca-certificates util-linux procps python3 nftables iproute2 \
-      podman crun passt uidmap dbus-user-session \
+      podman crun passt uidmap dbus-user-session skopeo \
  && (apt-get install -y --no-install-recommends youki || echo "no youki package") \
  && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/* /etc/apt/sources.list
 STOPSIGNAL SIGRTMIN+3

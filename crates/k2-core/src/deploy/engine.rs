@@ -99,6 +99,9 @@ pub struct AppSpec {
     /// Rosson 2026-10-10). Stored; enforced only by engines whose caps say
     /// `memory_limit` (stage R sizes the protected reserve).
     pub memory_limit_bytes: Option<i64>,
+    /// The App's drain window (manifest `host.drainSecs`, else the
+    /// default): a walled engine's stop timeout must cover it (AR45).
+    pub drain_secs: u64,
     /// The App folder's writable parts.
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,

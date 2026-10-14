@@ -397,6 +397,7 @@ mod tests {
             argv: argv.iter().map(|s| s.to_string()).collect(),
             env: BTreeMap::from([("GREETING".to_string(), "hi".to_string()), ("K2_HOOK_TOKEN".to_string(), "x".to_string())]),
             memory_limit_bytes: None,
+            drain_secs: 30,
             data_dir: app.join("data"),
             cache_dir: app.join("cache"),
             home_dir: app.join("home"),

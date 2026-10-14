@@ -169,6 +169,7 @@ def acct(i, label, active, st="signed_in", tool="claude"):
 
 LIST = {"tools": [
     {"tool": "claude", "display": "Claude", "supported": True, "activeId": "acc_work", "loginMethod": "temp_home",
+     "switchedAt": 1760000000, "switchedBy": "owner-token",
      "accounts": [acct("acc_work", "work", True), acct("acc_personal", "personal", False)]},
     {"tool": "codex", "display": "Codex", "supported": True, "activeId": None, "loginMethod": "temp_home", "accounts": []},
     {"tool": "grok", "display": "Grok", "supported": True, "activeId": None, "loginMethod": "temp_home", "accounts": []},
@@ -224,7 +225,10 @@ class H(BaseHTTPRequestHandler):
                              "usage": acct("acc_work", "work", True)["usage"]}]}
         elif verb == "switch":
             out = {"switch": {"tool": "claude", "from": "acc_work", "to": b.get("id"), "savedOutgoing": True,
-                              "refreshed": False, "alreadyActive": False}, "account": acct(b.get("id"), "personal", True)}
+                              "refreshed": False, "alreadyActive": False, "fromLabel": "work", "toLabel": "personal",
+                              "profileSwapped": True},
+                   "warnings": ["personal is at 100% of its Weekly limit until 2026-10-10T12:00:00Z"],
+                   "account": acct(b.get("id"), "personal", True)}
         elif verb == "next":
             if b.get("tool") == "grok":
                 status, out = 404, {"error": {"code": "no_next", "hint": "no other signed-in grok login"}}
@@ -313,6 +317,9 @@ out="$(owner llm tokens list)"
 assert_contains "list: tool heading" "$out" "Claude:"
 assert_contains "list: active mark" "$out" "* work"
 assert_contains "list: usage summary" "$out" "Session 42% · Weekly 10%"
+assert_contains "list: usage age" "$out" "Weekly 10% (never checked)"
+assert_contains "list: default since" "$out" "Claude: (server default since "
+assert_contains "list: default set by" "$out" " by owner-token)"
 assert_contains "list: idle login" "$out" "personal"
 assert_contains "list: empty tool" "$out" "Codex: no tokens (add a subscription: k2 llm tokens add codex <label>)"
 assert_contains "list: api-key-only tool" "$out" "Gemini: no API tokens (add one: k2 llm tokens add-key gemini <label>)"
@@ -361,7 +368,9 @@ out="$(owner llm tokens usage)"
 assert_contains "usage row" "$out" "Session 42%"
 
 out="$(owner llm tokens switch claude personal)"
-assert_contains "switch says server default" "$out" "claude: server default is now personal"
+assert_contains "switch says server default" "$out" "claude: server default is now personal (was work)"
+assert_contains "switch warns about a used-up token" "$out" "WARN: personal is at 100% of its Weekly limit until 2026-10-10T12:00:00Z"
+assert_absent "switch: profile swapped, no note" "$out" "Note: ~/.claude.json"
 assert_contains "switch says every chat" "$out" "every chat that uses Server default on this server"
 assert_eq "switch is a POST" "$(last method)" "POST"
 assert_eq "switch path" "$(last path)" "/cli/llm/accounts/switch"

@@ -124,16 +124,81 @@ fn audit(event: &str, user: &str, outcome: &str, ingress: &str) {
 
 // ── JSON shapes ─────────────────────────────────────────────────────
 
-fn usage_for(e: &Entry, active: bool) -> Value {
-    if active {
-        return crate::subscription_usage::cached_row(&e.tool)
-            .and_then(|r| serde_json::to_value(r).ok())
-            .unwrap_or(Value::Null);
-    }
+/// A token's OWN last usage reading (every row, the server default
+/// included). The shared probe records the live token's reading on that
+/// token only when no switch ran during the check, so a row never shows
+/// another account's numbers. `usage.checkedAt` / `usageCheckedAt` say
+/// when it was last read successfully; `usage.error` says the last check
+/// failed.
+fn usage_for(e: &Entry) -> Value {
     e.usage_json
         .as_deref()
         .and_then(|s| serde_json::from_str::<Value>(s).ok())
         .unwrap_or(Value::Null)
+}
+
+/// Windows of `e`'s last reading that are used up and not reset yet:
+/// "lztek is at 100% of Weekly until 2026-10-16T00:00:00Z".
+fn exhausted_warnings(e: &Entry) -> Vec<String> {
+    let Some(u) = e.usage_json.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()) else {
+        return Vec::new();
+    };
+    let now = chrono::Utc::now();
+    u["windows"]
+        .as_array()
+        .map(|ws| {
+            ws.iter()
+                .filter(|w| w["used"].as_f64().is_some_and(|x| x >= 0.995))
+                .filter(|w| match w["resetsAt"].as_str().filter(|s| !s.is_empty()) {
+                    Some(r) => chrono::DateTime::parse_from_rfc3339(r).map(|t| t > now).unwrap_or(true),
+                    None => true,
+                })
+                .map(|w| {
+                    let label = w["label"].as_str().unwrap_or("a usage");
+                    match w["resetsAt"].as_str().filter(|s| !s.is_empty()) {
+                        Some(r) => format!("{} is at 100% of its {label} limit until {r}", e.label),
+                        None => format!("{} is at 100% of its {label} limit", e.label),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// After a switch: read the new default's usage now (its own row) and
+/// the outgoing token's (now idle), off the request. Never from tests.
+fn recheck_after_switch(tool: Tool, from: Option<String>) {
+    if !rt::vendor_calls_allowed() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("llm-switch-usage".into()).spawn(move || {
+        if let Err(e) = crate::subscription_usage::probe_now(Some(tool.as_str())) {
+            k2_core::log_debug!("[llm-accounts] usage after switch ({}): {e}", tool.as_str());
+        }
+        if let Some(f) = from {
+            let prev = with_conn(|conn| wallet_core::get(conn, &f).ok().flatten());
+            if let Some(e) = prev.filter(|e| e.state == state::SIGNED_IN && !e.is_api_key()) {
+                if let Err(err) = rt::probe_idle_usage(&e) {
+                    k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
+                }
+            }
+        }
+        crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
+    });
+}
+
+/// `refresh {usage:true}` for every token (Settings → LLMs opening) runs
+/// at most once a minute; a refresh of one named token always runs.
+const USAGE_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn usage_refresh_allowed() -> bool {
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|p| p.into_inner());
+    if last.is_some_and(|t| t.elapsed() < USAGE_REFRESH_EVERY) {
+        return false;
+    }
+    *last = Some(std::time::Instant::now());
+    true
 }
 
 fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -> Value {
@@ -194,8 +259,8 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "lastUsedAt": e.last_used_at,
         "createdAt": e.created_at,
         "createdBy": e.created_by,
-        "usage": usage_for(e, active),
-        "usageCheckedAt": if active { Value::Null } else { json!(e.usage_checked_at) },
+        "usage": usage_for(e),
+        "usageCheckedAt": e.usage_checked_at,
     })
 }
 
@@ -210,7 +275,8 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
     let all_pins = with_conn(|conn| -> Result<Vec<Value>, WalletError> {
         Ok(k2_core::llm_accounts::pins::list_pins(conn)?.iter().map(|p| pin_json(conn, p)).collect())
     })?;
-    let accounts_by_tool = with_conn(|conn| -> Result<Vec<(Tool, Option<String>, Option<String>, Vec<Entry>)>, WalletError> {
+    type ToolRows = (Tool, Option<String>, Option<String>, Vec<Entry>, Option<wallet_core::ActiveInfo>);
+    let accounts_by_tool = with_conn(|conn| -> Result<Vec<ToolRows>, WalletError> {
         let mut v = Vec::new();
         for tool in Tool::ALL {
             v.push((
@@ -218,11 +284,12 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
                 wallet_core::active_id(conn, tool)?,
                 wallet_core::live_owner(conn, tool)?,
                 wallet_core::list_for(conn, tool)?,
+                wallet_core::active_info(conn, tool)?,
             ));
         }
         Ok(v)
     })?;
-    for (tool, active, live, entries) in accounts_by_tool {
+    for (tool, active, live, entries, info) in accounts_by_tool {
         let accounts: Vec<Value> = entries
             .iter()
             .map(|e| account_json(e, active.as_deref() == Some(e.id.as_str()), human))
@@ -236,6 +303,10 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
             "apiKeys": true,
             "activeId": active,
             "liveAccountId": live,
+            // "Server default since …": when the current default was set,
+            // and (people only) by whom.
+            "switchedAt": info.as_ref().map(|i| i.switched_at),
+            "switchedBy": if human { json!(info.as_ref().and_then(|i| i.switched_by.clone())) } else { Value::Null },
             "loginMethod": if tool.subscription_supported() { json!(wallet::login_method(tool)) } else { Value::Null },
             "accounts": accounts,
             "pins": pins,
@@ -244,7 +315,8 @@ fn list_doc(human: bool, who_key: Option<&str>) -> Result<Value, WalletError> {
     for (id, display) in wallet_core::NOT_YET {
         tools.push(json!({
             "tool": id, "display": display, "supported": false, "subscription": false, "apiKeys": false,
-            "activeId": Value::Null, "liveAccountId": Value::Null, "loginMethod": Value::Null, "accounts": [], "pins": [],
+            "activeId": Value::Null, "liveAccountId": Value::Null, "switchedAt": Value::Null, "switchedBy": Value::Null,
+            "loginMethod": Value::Null, "accounts": [], "pins": [],
         }));
     }
     let logins: Vec<Value> = match who_key {
@@ -431,7 +503,7 @@ pub fn handle(
                         let is_active = active.as_deref() == Some(e.id.as_str());
                         rows.push(json!({
                             "accountId": e.id, "tool": e.tool, "label": e.label,
-                            "active": is_active, "usage": usage_for(&e, is_active),
+                            "active": is_active, "usage": usage_for(&e), "usageCheckedAt": e.usage_checked_at,
                         }));
                     }
                 }
@@ -560,7 +632,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
             }
         }
         SWITCH | NEXT => {
-            let res = with_conn(|conn| -> Result<(wallet::SwitchOutcome, Tool), WalletError> {
+            let res = with_conn(|conn| -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
                 let (tool, target) = if path == NEXT {
                     let tool = Tool::parse(b.tool.as_deref().unwrap_or(""))
                         .ok_or_else(|| WalletError::UnknownTool(b.tool.clone().unwrap_or_default()))?;
@@ -579,22 +651,50 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
                     (tool, e.id)
                 };
+                // A sign-in rewriting that slot must finish first.
+                if rt::running_for(&target).is_some() {
+                    return Err(WalletError::Conflict(
+                        "signing_in",
+                        "that token is signing in right now; finish or cancel that sign-in first".into(),
+                    ));
+                }
+                // A warning, never a refusal: the person may still want it.
+                let warnings = wallet_core::get(conn, &target)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
                 let out = wallet::switch(conn, tool, &target, Some(&key), Some(&rt::DaemonRefresher))?;
-                Ok((out, tool))
+                Ok((out, tool, warnings))
             });
             match res {
-                Ok((out, tool)) => {
-                    audit("llm_accounts.switch", &key, tool.as_str(), ingress);
+                Ok((out, tool, warnings)) => {
+                    if !out.already_active {
+                        // One line per switch, in the audit log and the
+                        // daemon log: "llm: claude default A → B by <who>".
+                        let from = out.from_label.as_deref().unwrap_or("(none)");
+                        let line = format!("{} default {} → {}", tool.as_str(), from, out.to_label);
+                        k2_core::log_debug!(
+                            "llm: {line} by {key} (saved outgoing: {}, profile: {}, verified: {})",
+                            out.saved_outgoing,
+                            out.profile_swapped,
+                            out.verified_by.map(|s| s.describe()).unwrap_or("no")
+                        );
+                        audit("llm_accounts.switch", &key, &line, ingress);
+                        recheck_after_switch(tool, out.from.clone());
+                    }
                     crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));
                     let account = entry_json(&out.to, true).unwrap_or(Value::Null);
-                    ok(json!({"switch": out, "account": account, "note": rt::SWITCH_NOTE}))
+                    ok(json!({"switch": out, "account": account, "warnings": warnings, "note": rt::SWITCH_NOTE}))
                 }
                 Err(WalletError::NotFound(k)) if k == "no_next" => refuse(
                     404,
                     "no_next",
                     "there is no other signed-in subscription for that tool; add one on Settings → LLMs",
                 ),
-                Err(e) => wallet_err(e),
+                Err(e) => {
+                    if matches!(e.code(), "account_mismatch" | "signing_in") {
+                        audit("llm_accounts.switch_refused", &key, e.code(), ingress);
+                        k2_core::log_debug!("llm: switch refused for {key}: {}", e.code());
+                    }
+                    wallet_err(e)
+                }
             }
         }
         ADD_KEY => {
@@ -728,6 +828,10 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     .unwrap_or_default(),
             };
             let mut out = Vec::new();
+            // Every token's usage at most once a minute (the page asks on
+            // open); one named token always.
+            let all = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none();
+            let want_usage = b.usage.unwrap_or(false) && (!all || usage_refresh_allowed());
             for id in &ids {
                 if rt::running_for(id).is_some() {
                     continue;
@@ -736,14 +840,15 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     Ok(e) => e,
                     Err(e) => return wallet_err(e),
                 };
-                if b.usage.unwrap_or(false) && e.state == state::SIGNED_IN {
+                if want_usage && e.state == state::SIGNED_IN {
                     if let Err(err) = rt::probe_idle_usage(&e) {
                         k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
                     }
                 }
             }
-            if b.usage.unwrap_or(false) && !k2_core::airgap::enabled() {
-                // The active logins' row is the shared cache (top-bar chip).
+            if want_usage && !k2_core::airgap::enabled() {
+                // The live tokens: the shared probe (top-bar chip), which
+                // also records each reading on the token it belongs to.
                 let _ = crate::subscription_usage::handle_refresh();
             }
             for id in &ids {
@@ -752,7 +857,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 }
             }
             crate::session_events::emit_llm_accounts_changed(None);
-            ok(json!({"accounts": out}))
+            ok(json!({"accounts": out, "usageChecked": want_usage}))
         }
         _ => CliResponse::not_found(),
     }

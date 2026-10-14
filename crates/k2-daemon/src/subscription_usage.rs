@@ -60,8 +60,22 @@ pub struct HarnessUsage {
     pub harness: String,
     pub plan: String,
     pub windows: Vec<UsageWindow>,
+    /// When these windows were last read successfully. A failed check
+    /// keeps the old time (never re-stamps old numbers as fresh); `""` =
+    /// never read.
     pub checked_at: String,
     pub status: String,
+    /// The last check failed: why (status code / transport, never a
+    /// body). The windows are the last good reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The wallet token these numbers belong to (shared cache only; set
+    /// when no switch happened during the probe).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// When the failed check ran (freshness of the 15 s cache).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,6 +181,9 @@ pub fn airgap_doc() -> Value {
     let harnesses: Vec<HarnessUsage> = PROBED_HARNESSES
         .iter()
         .map(|name| HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: (*name).to_string(),
             plan: String::new(),
             windows: Vec::new(),
@@ -316,7 +333,10 @@ fn is_fresh(doc: &SubscriptionFile, now: DateTime<Utc>) -> bool {
         let Some(h) = doc.harnesses.iter().find(|h| h.harness == name) else {
             return false;
         };
-        let Ok(checked) = DateTime::parse_from_rfc3339(&h.checked_at) else {
+        // A failed check is "fresh" by when it was tried, so a harness
+        // that keeps failing doesn't make every refresh probe again.
+        let when = h.attempted_at.as_deref().unwrap_or(&h.checked_at);
+        let Ok(checked) = DateTime::parse_from_rfc3339(when) else {
             return false;
         };
         let age = now.signed_duration_since(checked.with_timezone(&Utc));
@@ -361,6 +381,64 @@ fn read_cache_file() -> Result<SubscriptionFile, String> {
 /// Probe Claude, Codex, and Grok, then atomic-replace the cache.
 /// A failed read of an existing file does not truncate it.
 fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
+    probe_and_write_only(io, None)
+}
+
+/// Which wallet token is in a tool's live store, and since when. Read
+/// under the DB lock: a switch holds that lock from its live write to its
+/// pointer update, so the same answer before and after a probe means no
+/// switch happened in between. `None` without a wallet entry.
+fn wallet_generation(harness: &str) -> Option<(String, i64)> {
+    use k2_core::llm_accounts as w;
+    let tool = w::Tool::parse(harness)?;
+    let db = k2_core::db::try_shared()?;
+    let conn = db.lock();
+    let owner = w::live_owner(&conn, tool).ok()??;
+    let info = w::active_info(&conn, tool).ok()??;
+    Some((owner, info.switched_at))
+}
+
+/// The last reading of a wallet token (its own row, never another
+/// token's): what a failed check keeps.
+fn wallet_row(account_id: &str) -> Option<HarnessUsage> {
+    let db = k2_core::db::try_shared()?;
+    let conn = db.lock();
+    let e = k2_core::llm_accounts::get(&conn, account_id).ok()??;
+    serde_json::from_str(e.usage_json.as_deref()?).ok()
+}
+
+/// Store a reading on the wallet token it belongs to (Settings → LLMs
+/// shows each token's own numbers and their age). A failed check keeps the
+/// token's `usage_checked_at`.
+fn record_on_wallet(account_id: &str, row: &HarnessUsage) {
+    let Some(db) = k2_core::db::try_shared() else { return };
+    let Ok(text) = serde_json::to_string(row) else { return };
+    let conn = db.lock();
+    let checked = if row.error.is_none() {
+        DateTime::parse_from_rfc3339(&row.checked_at).ok().map(|d| d.timestamp())
+    } else {
+        None
+    };
+    let res = k2_core::llm_accounts::update_meta(
+        &conn,
+        account_id,
+        &k2_core::llm_accounts::MetaUpdate { usage_json: Some(text), usage_checked_at: checked, ..Default::default() },
+    );
+    if let Err(e) = res {
+        k2_core::log_debug!("[usage] could not record usage on {account_id}: {e}");
+    }
+}
+
+/// Probe now, ignoring the 15 s cache: one tool (after a switch) or all.
+pub fn probe_now(harness: Option<&str>) -> Result<SubscriptionFile, String> {
+    if airgap_on() {
+        return Err(k2_core::airgap::TEACHING.to_string());
+    }
+    probe_and_write_only(io_for_probe().as_ref(), harness)
+}
+
+/// `only`: probe that harness and keep the others' rows as they are.
+fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<SubscriptionFile, String> {
     // Belt for any caller that missed the route/loop gate.
     if airgap_on() {
         return Err(k2_core::airgap::TEACHING.to_string());
@@ -375,35 +453,45 @@ fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
         Loaded::Ready(doc) => doc,
         Loaded::Unreadable(e) => return Err(e),
     };
-    let claude = probe_claude(
-        io.claude_login(),
-        |token| io.claude_get(token),
-        previous
-            .harnesses
-            .iter()
-            .find(|h| h.harness == HARNESS_CLAUDE),
-        now_wall,
-        now,
-    );
-    let codex = probe_codex(
-        io.codex(),
-        previous
-            .harnesses
-            .iter()
-            .find(|h| h.harness == HARNESS_CODEX),
-        now,
-    );
-    let grok = probe_grok(
-        io.grok(),
-        previous
-            .harnesses
-            .iter()
-            .find(|h| h.harness == HARNESS_GROK),
-        now,
-    );
-    let doc = SubscriptionFile {
-        harnesses: vec![claude, codex, grok],
-    };
+    let cached = |name: &str| previous.harnesses.iter().find(|h| h.harness == name).cloned();
+    let mut rows = Vec::new();
+    for name in PROBED_HARNESSES {
+        if only.is_some_and(|o| o != name) {
+            if let Some(row) = cached(name) {
+                rows.push(row);
+            }
+            continue;
+        }
+        let gen_before = wallet_generation(name);
+        // A failed check keeps THIS token's last reading: the token's own
+        // row when the wallet knows which token is live, else (no wallet
+        // entry) the cache row, only if it isn't some other token's.
+        let prev = match &gen_before {
+            Some((owner, _)) => wallet_row(owner).or_else(|| cached(name).filter(|r| r.account_id.as_deref() == Some(owner.as_str()))),
+            None => cached(name).filter(|r| r.account_id.is_none()),
+        };
+        let mut row = match name {
+            HARNESS_CLAUDE => probe_claude(io.claude_login(), |token| io.claude_get(token), prev.as_ref(), now_wall, now),
+            HARNESS_CODEX => probe_codex(io.codex(), prev.as_ref(), now),
+            _ => probe_grok(io.grok(), prev.as_ref(), now),
+        };
+        let gen_after = wallet_generation(name);
+        match (&gen_before, &gen_after) {
+            (Some(b), Some(a)) if a == b => {
+                row.account_id = Some(b.0.clone());
+                record_on_wallet(&b.0, &row);
+            }
+            (Some(_), _) => {
+                // A switch ran during the probe: the reading may be either
+                // token's. Show nothing as fresh; the switch re-checks.
+                k2_core::log_debug!("[usage] {name}: the server default changed during the check; reading dropped");
+                row = preserved(name, None, "", &row.plan, now, Some("the server default changed during the check".into()));
+            }
+            _ => {}
+        }
+        rows.push(row);
+    }
+    let doc = SubscriptionFile { harnesses: rows };
     write_cache(&doc)?;
     Ok(doc)
 }
@@ -421,13 +509,20 @@ fn probe_claude(
         plan,
     } = login
     else {
-        return preserved(HARNESS_CLAUDE, prev, STATUS_NOT_SIGNED_IN, "", now);
+        return preserved(HARNESS_CLAUDE, prev, STATUS_NOT_SIGNED_IN, "", now, None);
     };
     if access_token.is_empty() {
-        return preserved(HARNESS_CLAUDE, prev, STATUS_NOT_SIGNED_IN, &plan, now);
+        return preserved(HARNESS_CLAUDE, prev, STATUS_NOT_SIGNED_IN, &plan, now, None);
     }
     if !access_token_usable(expires_at, now_wall) {
-        return preserved(HARNESS_CLAUDE, prev, STATUS_SIGN_IN_EXPIRED, &plan, now);
+        return preserved(
+            HARNESS_CLAUDE,
+            prev,
+            STATUS_SIGN_IN_EXPIRED,
+            &plan,
+            now,
+            Some("the access token expired before the check".into()),
+        );
     }
     match get(&access_token) {
         Ok(body) => match parse_claude_usage(&body) {
@@ -438,6 +533,9 @@ fn probe_claude(
                     String::new()
                 };
                 HarnessUsage {
+                    error: None,
+                    account_id: None,
+                    attempted_at: None,
                     harness: HARNESS_CLAUDE.into(),
                     plan,
                     windows,
@@ -445,9 +543,20 @@ fn probe_claude(
                     status,
                 }
             }
-            Err(_) => preserved(HARNESS_CLAUDE, prev, prev_status(prev), &plan, now),
+            Err(_) => preserved(HARNESS_CLAUDE, prev, prev_status(prev), &plan, now, Some("the usage answer was unreadable".into())),
         },
-        Err(_) => preserved(HARNESS_CLAUDE, prev, prev_status(prev), &plan, now),
+        Err(e) => preserved(HARNESS_CLAUDE, prev, prev_status(prev), &plan, now, Some(safe_error(&e))),
+    }
+}
+
+/// A probe error as shown to people: status codes and transport words
+/// only (the callers never put a body in it), capped.
+fn safe_error(e: &str) -> String {
+    let s: String = e.chars().filter(|c| !c.is_control()).take(120).collect();
+    if k2_core::llm_accounts::looks_like_secret(&s) {
+        "the check failed".into()
+    } else {
+        s
     }
 }
 
@@ -458,13 +567,16 @@ fn probe_codex(
 ) -> HarnessUsage {
     match outcome {
         CodexOutcome::NotSignedIn => HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: HARNESS_CODEX.into(),
             plan: String::new(),
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: STATUS_NOT_SIGNED_IN.into(),
         },
-        CodexOutcome::Failed => preserved(HARNESS_CODEX, prev, prev_status(prev), "", now),
+        CodexOutcome::Failed => preserved(HARNESS_CODEX, prev, prev_status(prev), "", now, Some("codex did not answer".into())),
         CodexOutcome::Ready { plan, windows } => {
             let status = if windows.is_empty() {
                 STATUS_NO_WINDOW.to_string()
@@ -472,6 +584,9 @@ fn probe_codex(
                 String::new()
             };
             HarnessUsage {
+                error: None,
+                account_id: None,
+                attempted_at: None,
                 harness: HARNESS_CODEX.into(),
                 plan,
                 windows,
@@ -489,13 +604,16 @@ fn probe_grok(
 ) -> HarnessUsage {
     match outcome {
         GrokOutcome::NotSignedIn => HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: HARNESS_GROK.into(),
             plan: String::new(),
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: STATUS_NOT_SIGNED_IN.into(),
         },
-        GrokOutcome::Failed => preserved(HARNESS_GROK, prev, prev_status(prev), "", now),
+        GrokOutcome::Failed => preserved(HARNESS_GROK, prev, prev_status(prev), "", now, Some("grok did not answer".into())),
         GrokOutcome::Ready { plan, windows } => {
             let status = if windows.is_empty() {
                 STATUS_NO_WINDOW.to_string()
@@ -503,6 +621,9 @@ fn probe_grok(
                 String::new()
             };
             HarnessUsage {
+                error: None,
+                account_id: None,
+                attempted_at: None,
                 harness: HARNESS_GROK.into(),
                 plan,
                 windows,
@@ -517,12 +638,17 @@ fn prev_status(prev: Option<&HarnessUsage>) -> &str {
     prev.map(|p| p.status.as_str()).unwrap_or("")
 }
 
+/// The previous reading's still-open windows. `error: None` = a state K2
+/// knows now (not signed in): stamped now. `error: Some` = the check
+/// failed: the last good reading keeps ITS time and says why, so old
+/// numbers are never shown as just checked.
 fn preserved(
     harness: &str,
     prev: Option<&HarnessUsage>,
     status: &str,
     plan: &str,
     now: DateTime<Utc>,
+    error: Option<String>,
 ) -> HarnessUsage {
     let windows = prev
         .map(|p| {
@@ -538,11 +664,18 @@ fn preserved(
     } else {
         prev.map(|p| p.plan.clone()).unwrap_or_default()
     };
+    let (checked_at, attempted_at) = match &error {
+        None => (now.to_rfc3339(), None),
+        Some(_) => (prev.map(|p| p.checked_at.clone()).unwrap_or_default(), Some(now.to_rfc3339())),
+    };
     HarnessUsage {
+        error,
+        account_id: None,
+        attempted_at,
         harness: harness.to_string(),
         plan,
         windows,
-        checked_at: now.to_rfc3339(),
+        checked_at,
         status: status.to_string(),
     }
 }
@@ -1659,15 +1792,21 @@ pub fn codex_refresh_slot(slot: &Path) -> Result<(), String> {
 /// Usage for an idle wallet slot. Same row shape as the shared cache
 /// (`harness` = the tool), never written to the shared cache. The caller
 /// holds the wallet's lock for that tool. `claude_token` is the slot's
-/// access token (Claude only), read by the wallet store.
+/// access token (Claude only), read by the wallet store. `prev` is the
+/// slot's own last reading: a failed check keeps it, with its old time
+/// and the error.
 pub fn probe_wallet_slot(
     tool: &str,
     slot: &Path,
     claude_token: Option<(String, Option<i64>, String)>,
+    prev: Option<&HarnessUsage>,
 ) -> HarnessUsage {
     let now = Utc::now();
     if airgap_on() {
         return HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: tool.to_string(),
             plan: String::new(),
             windows: Vec::new(),
@@ -1681,7 +1820,7 @@ pub fn probe_wallet_slot(
                 Some((access_token, expires_at, plan)) => ClaudeLogin::Token { access_token, expires_at, plan },
                 None => ClaudeLogin::Missing,
             };
-            probe_claude(login, |t| LiveIo.claude_get(t), None, SystemTime::now(), now)
+            probe_claude(login, |t| LiveIo.claude_get(t), prev, SystemTime::now(), now)
         }
         HARNESS_CODEX => {
             let outcome = match guarded_program("codex") {
@@ -1692,7 +1831,7 @@ pub fn probe_wallet_slot(
                     Err(CodexFail::Transport(_)) => CodexOutcome::Failed,
                 },
             };
-            probe_codex(outcome, None, now)
+            probe_codex(outcome, prev, now)
         }
         HARNESS_GROK => {
             let outcome = match guarded_program("grok") {
@@ -1703,24 +1842,18 @@ pub fn probe_wallet_slot(
                     Err(GrokFail::Transport(_)) => GrokOutcome::Failed,
                 },
             };
-            probe_grok(outcome, None, now)
+            probe_grok(outcome, prev, now)
         }
         other => HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: other.to_string(),
             plan: String::new(),
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: "Not supported".into(),
         },
-    }
-}
-
-/// The shared cache row for a tool's ACTIVE login (what the top-bar chip
-/// shows), without probing.
-pub fn cached_row(tool: &str) -> Option<HarnessUsage> {
-    match load_cache() {
-        Loaded::Ready(doc) => doc.harnesses.into_iter().find(|h| h.harness == tool),
-        _ => None,
     }
 }
 
@@ -1812,6 +1945,9 @@ mod tests {
         // Env lock (TempHome) first, then the module probe lock.
         let _home = crate::test_support::TempHome::new();
         let _probe = probe_lock();
+        // Own wallet DB: the probe records readings on wallet tokens, and
+        // another test's rows in the shared DB must not change this one.
+        let _db = k2_core::db::scoped_for_test();
         probe_hits().store(0, Ordering::SeqCst);
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         // Air-gap off unless a test says otherwise; immune to a parallel
@@ -1991,6 +2127,9 @@ mod tests {
 
     fn harness(name: &str, windows: Vec<UsageWindow>, status: &str, checked: &str) -> HarnessUsage {
         HarnessUsage {
+            error: None,
+            account_id: None,
+            attempted_at: None,
             harness: name.into(),
             plan: "Max 20x".into(),
             windows,
@@ -2582,6 +2721,116 @@ mod tests {
             assert_eq!(claude.windows.len(), 1);
             assert_eq!(claude.windows[0].label, "keep-me-weekly");
             assert_eq!(percent_left(claude.windows[0].used), 69);
+            // Field bug 2026-10-14: a failed check used to re-stamp the
+            // old numbers as checked now.
+            assert_eq!(claude.checked_at, checked, "a failed check keeps the old time");
+            assert_eq!(claude.error.as_deref(), Some("usage endpoint down"));
+            assert!(claude.attempted_at.is_some());
+            let codex = written.harnesses.iter().find(|h| h.harness == HARNESS_CODEX).expect("codex");
+            assert_eq!(codex.checked_at, "", "never read: no time");
+            assert!(codex.error.is_some());
+        });
+    }
+
+    /// Insert two Claude wallet tokens; `active` is the server default.
+    fn seed_wallet(active: &str, idle: &str) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (i, id) in [active, idle].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO llm_accounts (id, tool, label, kind, position, created_at, state) \
+                 VALUES (?1, 'claude', ?1, 'subscription', ?2, 1, 'signed_in')",
+                rusqlite::params![id, i as i64],
+            )
+            .expect("seed token");
+        }
+        conn.execute(
+            "INSERT INTO llm_active (tool, account_id, switched_at) VALUES ('claude', ?1, 1)",
+            rusqlite::params![active],
+        )
+        .expect("seed active");
+    }
+
+    fn wallet_usage(id: &str) -> (Option<String>, Option<i64>) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let e = k2_core::llm_accounts::get(&conn, id).expect("db").expect("token");
+        (e.usage_json, e.usage_checked_at)
+    }
+
+    #[test]
+    fn readings_stay_with_the_token_they_belong_to() {
+        with_isolated(|| {
+            seed_wallet("acc_live", "acc_old");
+            // The cache still holds the PREVIOUS default's numbers (the
+            // switch happened since): they belong to acc_old.
+            let now = Utc::now();
+            let mut old = harness(
+                HARNESS_CLAUDE,
+                vec![UsageWindow { label: "old-account-weekly".into(), used: 0.95, resets_at: future_reset(now) }],
+                "",
+                &(now - chrono::Duration::minutes(40)).to_rfc3339(),
+            );
+            old.account_id = Some("acc_old".into());
+            write_cache(&SubscriptionFile { harnesses: vec![old] }).expect("seed");
+            // The check for the new default fails (429): the old account's
+            // numbers must not appear as the new default's.
+            let failing = ScriptIo {
+                login: token_login(Some(future_expiry_secs())),
+                body: Mutex::new(Err("usage endpoint status 429".into())),
+                gets: AtomicUsize::new(0),
+                codex: Mutex::new(CodexOutcome::NotSignedIn),
+                grok: Mutex::new(GrokOutcome::NotSignedIn),
+            };
+            let doc = probe_and_write(&failing).expect("write");
+            let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
+            assert!(claude.windows.is_empty(), "another token's windows were shown: {claude:?}");
+            assert_eq!(claude.checked_at, "", "never read for this token");
+            assert_eq!(claude.error.as_deref(), Some("usage endpoint status 429"));
+            assert_eq!(claude.account_id.as_deref(), Some("acc_live"));
+            let (json_live, checked_live) = wallet_usage("acc_live");
+            assert!(json_live.expect("failure recorded").contains("429"));
+            assert_eq!(checked_live, None, "a failed check never stamps usage_checked_at");
+            // A good reading lands on the live token only.
+            let ok_io = signed_in_script();
+            let doc = probe_and_write(ok_io.as_ref()).expect("write");
+            let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
+            assert!(claude.error.is_none());
+            assert_eq!(claude.account_id.as_deref(), Some("acc_live"));
+            let (json_live, checked_live) = wallet_usage("acc_live");
+            let row: HarnessUsage = serde_json::from_str(&json_live.expect("reading")).expect("row");
+            assert_eq!(row.windows, claude.windows);
+            assert!(checked_live.is_some_and(|t| (Utc::now().timestamp() - t).abs() < 60));
+            let (json_old, checked_old) = wallet_usage("acc_old");
+            assert_eq!((json_old, checked_old), (None, None), "the idle token's row is untouched");
+            // A later failure keeps THIS token's last good reading and time.
+            *ok_io.body.lock().unwrap() = Err("usage endpoint status 500".into());
+            let doc = probe_and_write(ok_io.as_ref()).expect("write");
+            let claude = doc.harnesses.iter().find(|h| h.harness == HARNESS_CLAUDE).expect("claude");
+            let still_open: Vec<UsageWindow> = row.windows.iter().filter(|w| window_still_open(w, Utc::now())).cloned().collect();
+            assert_eq!(claude.windows, still_open, "this token's own windows (closed ones dropped)");
+            assert_eq!(claude.error.as_deref(), Some("usage endpoint status 500"));
+            assert_eq!(claude.checked_at, row.checked_at, "not re-stamped");
+            assert_eq!(wallet_usage("acc_live").1, checked_live);
+            assert!(!fs::read_to_string(cache_path()).unwrap().contains("LEAK-ACCESS"));
+        });
+    }
+
+    #[test]
+    fn probe_now_checks_one_tool_and_keeps_the_others() {
+        with_isolated(|| {
+            let now = Utc::now();
+            let stamp = (now - chrono::Duration::minutes(5)).to_rfc3339();
+            let mut codex = harness(HARNESS_CODEX, Vec::new(), STATUS_NO_WINDOW, &stamp);
+            codex.plan = "pro".into();
+            write_cache(&SubscriptionFile { harnesses: vec![codex.clone()] }).expect("seed");
+            let io = signed_in_script();
+            install(io.clone());
+            let doc = probe_now(Some(HARNESS_CLAUDE)).expect("probe");
+            assert_eq!(io.gets.load(Ordering::SeqCst), 1);
+            let names: Vec<&str> = doc.harnesses.iter().map(|h| h.harness.as_str()).collect();
+            assert_eq!(names, vec![HARNESS_CLAUDE, HARNESS_CODEX], "grok had no row and was not probed");
+            assert_eq!(doc.harnesses[1], codex, "codex kept as it was");
         });
     }
 

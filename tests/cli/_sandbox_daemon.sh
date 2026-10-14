@@ -52,7 +52,11 @@ sandbox_daemon_start() {
     export SANDBOX_DAEMON_BIN
 
     # Launch the daemon in the background under the sandbox HOME.
-    HOME="$SANDBOX_HOME" "$daemon_bin" >"$SANDBOX_HOME/daemon.log" 2>&1 &
+    # Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir
+    # (rendered frpc.toml) must never be the real one (2026-10-14).
+    mkdir -p "$SANDBOX_HOME/tmp" "$SANDBOX_HOME/run"
+    TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= \
+        HOME="$SANDBOX_HOME" "$daemon_bin" >"$SANDBOX_HOME/daemon.log" 2>&1 &
     SANDBOX_DAEMON_PID=$!
     export SANDBOX_DAEMON_PID
 
@@ -100,6 +104,10 @@ _sandbox_daemon_cleanup() {
         # Give the daemon a beat to exit cleanly before SIGKILL.
         sleep 0.3
         kill -9 "$SANDBOX_DAEMON_PID" 2>/dev/null || true
+    fi
+    # Any frpc (real or fake) this sandbox daemon left behind.
+    if [ -n "${SANDBOX_HOME:-}" ]; then
+        pkill -9 -f "frpc -c $SANDBOX_HOME/" 2>/dev/null || true
     fi
     if [ -n "${SANDBOX_HOME:-}" ] && [ -d "$SANDBOX_HOME" ]; then
         rm -rf "$SANDBOX_HOME"

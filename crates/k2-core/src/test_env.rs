@@ -144,6 +144,10 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
 pub struct TempHome {
     prev: Option<OsString>,
     home: PathBuf,
+    /// `K2_RUNTIME_DIR` → `<home>/run`: the private runtime dir (rendered
+    /// frpc.toml) stays inside this temp home, never the real
+    /// `$TMPDIR/k2-runtime` / `/run/user/<uid>/k2` (2026-10-14 incident).
+    _runtime: EnvVar,
     _lock: EnvLock,
 }
 
@@ -169,7 +173,8 @@ impl TempHome {
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &home);
         crate::test_isolation::assert_isolated_from_prod();
-        Self { prev, home, _lock: lock }
+        let runtime = EnvVar::set(crate::runtime_dir::RUNTIME_DIR_ENV, home.join("run"));
+        Self { prev, home, _runtime: runtime, _lock: lock }
     }
 
     /// The temp `$HOME`.
@@ -600,6 +605,81 @@ fn reserve(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, u16)> 
             (*(&out as *const _ as *const libc::sockaddr_in)).sin_port
         };
         Ok((fd, u16::from_be(bound)))
+    }
+}
+
+/// Per-test-daemon runtime isolation (2026-10-14 incident): a spawned
+/// `k2-daemon` with a temp `$HOME` but the inherited `TMPDIR` /
+/// `XDG_RUNTIME_DIR` resolves the REAL private runtime dir, so its tunnel
+/// paths overwrite/delete the production `frpc.toml` and its stop path
+/// `pkill`s the production frpc by config path.
+///
+/// `DaemonRuntime::new(root)` creates `<root>/tmp` and `<root>/run`
+/// (0700); pass [`DaemonRuntime::envs`] to the daemon `Command`. On drop it
+/// kills any frpc (real or fake) still running with a config under `root`
+/// — declare it BEFORE the daemon child so the child is killed first.
+#[cfg(unix)]
+#[must_use = "the frpc reap runs when the guard drops"]
+pub struct DaemonRuntime {
+    root: PathBuf,
+}
+
+#[cfg(unix)]
+impl DaemonRuntime {
+    pub fn new(root: &Path) -> Self {
+        use std::os::unix::fs::DirBuilderExt;
+        for d in ["tmp", "run"] {
+            let p = root.join(d);
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&p)
+                .unwrap_or_else(|e| panic!("create {}: {e}", p.display()));
+        }
+        Self { root: root.to_path_buf() }
+    }
+
+    /// `TMPDIR`, `XDG_RUNTIME_DIR` under the root, and an empty
+    /// `K2_RUNTIME_DIR` (so an override inherited from this test process
+    /// cannot win).
+    pub fn envs(&self) -> Vec<(&'static str, OsString)> {
+        vec![
+            ("TMPDIR", self.root.join("tmp").into_os_string()),
+            ("XDG_RUNTIME_DIR", self.root.join("run").into_os_string()),
+            (crate::runtime_dir::RUNTIME_DIR_ENV, OsString::new()),
+        ]
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DaemonRuntime {
+    fn drop(&mut self) {
+        reap_frpc_under(&self.root);
+    }
+}
+
+/// SIGKILL every process launched as `… frpc -c <root>/…` (a test daemon's
+/// supervised frpc, or a fake one). Matches only configs under `root`.
+#[cfg(unix)]
+pub fn reap_frpc_under(root: &Path) {
+    let mut roots = vec![root.to_path_buf()];
+    if let Ok(c) = std::fs::canonicalize(root) {
+        if c != root {
+            roots.push(c);
+        }
+    }
+    for r in roots {
+        let _ = std::process::Command::new("pkill")
+            .arg("-9")
+            .arg("-f")
+            .arg(format!("frpc -c {}/", r.display()))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 

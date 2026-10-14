@@ -49,8 +49,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$SANDBOX/.k2" "$SANDBOX/shim"
+# Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir (rendered
+# frpc.toml) must never be the real one (2026-10-14 incident).
+mkdir -p "$SANDBOX/.k2" "$SANDBOX/shim" "$SANDBOX/tmp" "$SANDBOX/run"
 env -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK -u K2_HOOK_TOKEN -u K2SO_HOOK_TOKEN -u K2_PORT -u K2SO_PORT \
+    TMPDIR="$SANDBOX/tmp" XDG_RUNTIME_DIR="$SANDBOX/run" K2_RUNTIME_DIR= \
     HOME="$SANDBOX" K2_TEST_AGENT_SHIM_DIR="$SANDBOX/shim" K2SO_WATCHDOG_DISABLED=1 \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
     "$DAEMON_BIN" >"$SANDBOX/daemon.log" 2>&1 &

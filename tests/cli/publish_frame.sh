@@ -116,10 +116,13 @@ done
 [ -n "$DAEMON_BIN" ] || { echo "FAIL: k2-daemon not built (cargo build -p k2-daemon)" >&2; exit 1; }
 
 SB="$WORK/sb"
-mkdir -p "$SB/.k2" "$SB/shim"
+# Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir (rendered
+# frpc.toml) must never be the real one (2026-10-14 incident).
+mkdir -p "$SB/.k2" "$SB/shim" "$SB/tmp" "$SB/run"
 printf '#!/bin/sh\nexec /bin/cat\n' > "$SB/shim/claude"
 chmod +x "$SB/shim/claude"
-HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
+TMPDIR="$SB/tmp" XDG_RUNTIME_DIR="$SB/run" K2_RUNTIME_DIR= \
+    HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
     K2_PUBLISH_HELPER_EXIT_WITH_PARENT=1 \
     "$DAEMON_BIN" >"$SB/daemon.log" 2>&1 &

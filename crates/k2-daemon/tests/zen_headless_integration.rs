@@ -54,6 +54,10 @@ struct Daemon {
     child: std::process::Child,
     port: u16,
     owner: String,
+    /// Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real
+    /// runtime dir with the production frpc.toml); reaps this daemon's
+    /// frpc after the child is killed (fields drop after `Drop::drop`).
+    _rt: k2_core::test_env::DaemonRuntime,
 }
 
 impl Drop for Daemon {
@@ -71,8 +75,10 @@ fn read_trimmed(path: &Path) -> Option<String> {
 fn spawn_daemon(home: &Path) -> Daemon {
     let port_file = home.join(".k2").join("daemon.port");
     let _ = std::fs::remove_file(&port_file);
+    let rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
         .env("HOME", home)
+        .envs(rt.envs())
         .env("K2_TEST_AGENT_SHIM_DIR", home.join("agent-shim-empty"))
         .env("K2SO_WATCHDOG_DISABLED", "1")
         .env("K2_HEARTBEAT_NO_SELF_HEAL", "1")
@@ -91,7 +97,7 @@ fn spawn_daemon(home: &Path) -> Daemon {
         assert!(Instant::now() < deadline, "daemon never published daemon.port + daemon.token");
         std::thread::sleep(Duration::from_millis(50));
     };
-    let d = Daemon { child, port, owner };
+    let d = Daemon { child, port, owner, _rt: rt };
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut conn) = Conn::try_open(d.port) {

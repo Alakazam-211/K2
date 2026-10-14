@@ -77,7 +77,7 @@ unset SANDBOX_DAEMON_PID
 
 # Boot daemon B under the same sandbox HOME — its sweep should
 # migrate.
-HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
+TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
 SANDBOX_DAEMON_PID=$!
 export SANDBOX_DAEMON_PID
 for i in $(seq 1 50); do

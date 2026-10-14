@@ -84,9 +84,14 @@ fn headless_daemon_fires_with_no_external_ticker_within_150s() {
         std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
     }
 
+    // Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real runtime
+    // dir with the production frpc.toml). Declared before the child, so it
+    // drops (reaping any frpc under HOME) after the child is killed.
+    let _rt = k2_core::test_env::DaemonRuntime::new(&home);
     let _daemon = KillOnDrop(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
             .env("HOME", &home)
+            .envs(_rt.envs())
             .env("K2_HEARTBEAT_NO_SELF_HEAL", "1")
             .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
             .env("K2SO_WAKE_HEADLESS_TEST_COMMAND", "cat")

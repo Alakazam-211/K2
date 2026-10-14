@@ -70,9 +70,14 @@ async fn daemon_writes_heartbeat_port_eagerly_on_startup() {
     // Spawn the daemon as a child process with $HOME redirected
     // so its writes land in our scratch dir, not the real
     // ~/.k2so.
+    // Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real runtime
+    // dir with the production frpc.toml). Declared before the child, so it
+    // drops (reaping any frpc under HOME) after the child is killed.
+    let _rt = k2_core::test_env::DaemonRuntime::new(&home);
     let child = KillOnDrop(
         Command::new(daemon_binary())
             .env("HOME", &home)
+            .envs(_rt.envs())
             .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
             // Set K2SO_WATCHDOG_DISABLED so the harness watchdog
             // doesn't add log noise to this specific test.

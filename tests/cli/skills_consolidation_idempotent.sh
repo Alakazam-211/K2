@@ -36,7 +36,7 @@ wait "$SANDBOX_DAEMON_PID" 2>/dev/null || true
 unset SANDBOX_DAEMON_PID
 
 # Boot daemon B — first sweep, real work.
-HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
+TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
 SANDBOX_DAEMON_PID=$!
 export SANDBOX_DAEMON_PID
 for i in $(seq 1 50); do
@@ -70,7 +70,7 @@ unset SANDBOX_DAEMON_PID
 # Sleep enough that an unguarded re-run would bump the mtime.
 sleep 1
 
-HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-3.log" 2>&1 &
+TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-3.log" 2>&1 &
 SANDBOX_DAEMON_PID=$!
 export SANDBOX_DAEMON_PID
 for i in $(seq 1 50); do

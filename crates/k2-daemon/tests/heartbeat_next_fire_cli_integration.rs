@@ -93,9 +93,14 @@ async fn headless_list_route_and_cli_show_next_fire_and_wait_reason() {
     std::fs::create_dir_all(&workspace).unwrap();
     let ws = workspace.to_string_lossy().into_owned();
 
+    // Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real runtime
+    // dir with the production frpc.toml). Declared before the child, so it
+    // drops (reaping any frpc under HOME) after the child is killed.
+    let _rt = k2_core::test_env::DaemonRuntime::new(&home);
     let _daemon = KillOnDrop(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
             .env("HOME", &home)
+            .envs(_rt.envs())
             .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
             .env("K2_HEARTBEAT_NO_SELF_HEAL", "1")
             .env("K2SO_WATCHDOG_DISABLED", "1")

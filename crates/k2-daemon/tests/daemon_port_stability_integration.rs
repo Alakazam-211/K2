@@ -68,9 +68,14 @@ fn boot_once_and_read_port(home: &PathBuf) -> u16 {
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).unwrap();
 
+    // Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real runtime
+    // dir with the production frpc.toml). Declared before the child, so it
+    // drops (reaping any frpc under HOME) after the child is killed.
+    let _rt = k2_core::test_env::DaemonRuntime::new(home);
     let child = KillOnDrop(
         Command::new(daemon_binary())
             .env("HOME", home)
+            .envs(_rt.envs())
             .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
             .env("K2SO_WATCHDOG_DISABLED", "1")
             .stdout(std::process::Stdio::null())

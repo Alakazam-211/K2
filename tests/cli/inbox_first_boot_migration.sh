@@ -104,7 +104,7 @@ unset SANDBOX_DAEMON_PID
 
 # Boot a second daemon under the SAME sandbox HOME. The sweep on
 # this boot is the one that should migrate.
-HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
+TMPDIR="$SANDBOX_HOME/tmp" XDG_RUNTIME_DIR="$SANDBOX_HOME/run" K2_RUNTIME_DIR= HOME="$SANDBOX_HOME" "$SANDBOX_DAEMON_BIN" >"$SANDBOX_HOME/daemon-2.log" 2>&1 &
 SANDBOX_DAEMON_PID=$!
 export SANDBOX_DAEMON_PID
 # Wait for the new port file to be (re)written.

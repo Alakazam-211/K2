@@ -64,7 +64,11 @@ max_parallel = 2
 EOF
 
 echo "== sandbox daemon =="
-HOME="$DHOME" K2_COMPUTE=1 K2_AIRGAP=1 K2_NODE_HOME="$NODE_HOME" K2_NODE_CONFIG_DIR="$NODE_CFG" \
+# Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir (rendered
+# frpc.toml) must never be the real one (2026-10-14 incident).
+mkdir -p "$DHOME/tmp" "$DHOME/run"
+TMPDIR="$DHOME/tmp" XDG_RUNTIME_DIR="$DHOME/run" K2_RUNTIME_DIR= \
+    HOME="$DHOME" K2_COMPUTE=1 K2_AIRGAP=1 K2_NODE_HOME="$NODE_HOME" K2_NODE_CONFIG_DIR="$NODE_CFG" \
     "$DAEMON" > "$SANDBOX/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 150); do

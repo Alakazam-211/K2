@@ -88,7 +88,9 @@ done
 [ -n "$DAEMON_BIN" ] || { echo "FAIL: k2-daemon not built (cargo build -p k2-daemon)" >&2; exit 1; }
 
 SB="$WORK/sb"
-mkdir -p "$SB/.k2" "$SB/shim"
+# Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir (rendered
+# frpc.toml) must never be the real one (2026-10-14 incident).
+mkdir -p "$SB/.k2" "$SB/shim" "$SB/tmp" "$SB/run"
 # Each shim records argv + env and copies whatever is typed into it.
 for h in claude grok; do
     cat > "$SB/shim/$h" <<EOF
@@ -99,7 +101,8 @@ exec /bin/cat > "$SB/$h.stdin"
 EOF
     chmod +x "$SB/shim/$h"
 done
-HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
+TMPDIR="$SB/tmp" XDG_RUNTIME_DIR="$SB/run" K2_RUNTIME_DIR= \
+    HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
     "$DAEMON_BIN" >"$SB/daemon.log" 2>&1 &
 DAEMON_PID=$!

@@ -58,6 +58,10 @@ struct Daemon {
     home: PathBuf,
     port: u16,
     owner: String,
+    /// Own TMPDIR / XDG_RUNTIME_DIR under the temp HOME (never the real
+    /// runtime dir with the production frpc.toml); reaps this daemon's
+    /// frpc after the child is killed (fields drop after `Drop::drop`).
+    _rt: k2_core::test_env::DaemonRuntime,
 }
 
 impl Drop for Daemon {
@@ -99,9 +103,11 @@ fn spawn_daemon(tag: &str) -> Daemon {
     let home = isolated_home(tag);
     let shim_dir = home.join("agent-shim-empty");
     std::fs::create_dir_all(&shim_dir).expect("create empty agent shim dir");
+    let rt = k2_core::test_env::DaemonRuntime::new(&home);
     let child = KillOnDrop(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
             .env("HOME", &home)
+            .envs(rt.envs())
             .env("K2_TEST_AGENT_SHIM_DIR", &shim_dir)
             .env("K2SO_WATCHDOG_DISABLED", "1")
             .stdout(std::process::Stdio::null())
@@ -121,7 +127,7 @@ fn spawn_daemon(tag: &str) -> Daemon {
         assert!(Instant::now() < deadline, "daemon {tag} never published daemon.port + daemon.token");
         std::thread::sleep(Duration::from_millis(50));
     };
-    let d = Daemon { _child: child, home, port, owner };
+    let d = Daemon { _child: child, home, port, owner, _rt: rt };
     // Wait for the readiness handshake (the pool's live / starting rule).
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

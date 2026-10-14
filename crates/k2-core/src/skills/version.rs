@@ -118,7 +118,12 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// the `sources.*` verbs, the five built-in cards and their presets,
 /// `k2 zen widget show`, and runtime errors without text for cards that
 /// read sources (catalog version 6).
-pub const SKILL_VERSION_ZEN: u32 = 16;
+/// v17 = Garden data (prd-gardens-local-services-v1 §7, GL39;
+/// contract-garden-data-v1 §11.4): `k2.store` for data (never inlined),
+/// agents' `k2 store --widget`, validate --widget signs, project grants are
+/// a convenience, the grant admin's bounds, `bin/board`, Lock keeps data
+/// writable, and the board-lite example.
+pub const SKILL_VERSION_ZEN: u32 = 17;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

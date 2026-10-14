@@ -794,6 +794,17 @@ pub const EXAMPLES: &[Example] = &[
             ("arcade.css", include_str!("examples/arcade/arcade.css")),
         ],
     },
+    // Garden data (contract-garden-data-v1 §11.4, PRD §7): sticky notes in
+    // the widget's own keyspace; `k2 zen guide example board-lite`.
+    Example {
+        name: "board-lite",
+        files: &[
+            ("manifest.json", include_str!("examples/board-lite/manifest.json")),
+            ("index.html", include_str!("examples/board-lite/index.html")),
+            ("board-lite.js", include_str!("examples/board-lite/board-lite.js")),
+            ("board-lite.css", include_str!("examples/board-lite/board-lite.css")),
+        ],
+    },
 ];
 
 pub fn example(name: &str) -> Option<&'static Example> {

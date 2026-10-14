@@ -21805,11 +21805,11 @@ cmd_schema() {
     },
     {
       "name": "zen widget",
-      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade]|list|show <name>|errors <name>> [--json]",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade|board-lite]|list|show <name>|errors <name>> [--json]",
       "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting); show <name> adds the caps it runs with, the taint note (a widget asking for sources:read never posts to the Thread) and the source addresses each placement reads; errors <name> [--since <seq>] [--follow] lists its runtime errors (class, code and line only for a widget that reads data sources). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
       "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
       "flags": [
-        {"name": "--from", "arg": "k2:diary|hello|arcade", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
+        {"name": "--from", "arg": "k2:diary|hello|arcade|board-lite", "description": "new: the example to copy (a built-in like k2:diary copies its latest version)."},
         {"name": "--widget", "arg": "name", "description": "revoke: every placement of this widget."},
         {"name": "--json", "arg": null, "description": "Daemon JSON."}
       ]
@@ -45049,7 +45049,7 @@ USAGE
   k2 zen theme set <name> [--garden <name|id>] [--json]
   k2 zen theme set --garden <name|id> --clear
   k2 zen theme new <name> [--from <theme>] [--json]
-  k2 zen widget new <name> [--from k2:diary|hello|arcade] [--json]
+  k2 zen widget new <name> [--from k2:diary|hello|arcade|board-lite] [--json]
   k2 zen widget list [--json]
   k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]
   k2 zen reload [--json]
@@ -45147,7 +45147,7 @@ EOF
 # zen_core Rust test checks every example with the daemon's own schema and
 # that the pages name every slot, align, edge and control kind.
 
-_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api"
+_ZEN_GUIDE_TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api services"
 _ZEN_GUIDE_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
 
 _zen_guide_usage() {
@@ -45160,7 +45160,7 @@ Short pages on building Zen Gardens. Works with no daemon running.
 
 Topics:
   gardens  files  widgets  bands  required  menus  themes  sync
-  examples  undo  safe-mode  api
+  examples  undo  safe-mode  api  services
 
   k2 zen guide                          the index (start here)
   k2 zen guide <topic>                  one page
@@ -45170,6 +45170,9 @@ Topics:
   k2 zen guide example <name> --toml    the file only, ready to pipe:
       k2 zen guide example bottom-bar --toml > ~/.k2/zen/gardens/<id>.toml
   k2 zen guide example --list           bare example names
+  k2 zen guide example board-lite [--toml | --script]
+                                        a widget kept in its data, and the
+                                        agent's script beside it
 EOF
 }
 
@@ -45188,6 +45191,8 @@ _zen_guide_title() {
         undo) echo "Check, look back, put it back" ;;
         safe-mode) echo "Safe mode and the ways out" ;;
         api) echo "The k2 object in a custom widget" ;;
+        services) echo "A widget's data, on this computer only" ;;
+        board-lite) echo "Sticky notes in a widget's data" ;;
         rail-top) echo "The nav rail in the top band" ;;
         quiet-top) echo "The top band without usage" ;;
         bottom-bar) echo "Controls in a bottom band" ;;
@@ -45230,6 +45235,7 @@ Start here: k2 zen guide gardens
   undo        validate, history, reset, reload, doctor; troubleshooting
   safe-mode   Every safe-mode line, its fix, and the ways out
   api         The k2 object in a custom widget: every helper, by cap
+  services    A widget's data: k2.store, revs, live changes, grants
 
   k2 zen guide <topic> [--json]
   k2 zen guide example <name> [--toml]
@@ -45629,6 +45635,10 @@ TRY ONE
 Piping replaces the whole file. To keep your own widgets, copy only the
 Zen-control [[widget]] tables into your file instead. To go back:
 k2 zen guide undo.
+
+A WIDGET EXAMPLE
+  k2 zen guide example board-lite   sticky notes kept in the widget's data,
+                                    with the script an agent uses beside it
 EOF
 }
 
@@ -45866,9 +45876,193 @@ EOF
 }
 # <<< generated
 
+# ── Garden data in the guide (contract-garden-data-v1 §11.4, B3) ─────
+_zen_guide_page_services() {
+    cat <<'EOF'
+k2 zen guide services — a widget's data (k2.store), on this computer only
+
+Every service here is LOCAL: the data lives in a file K2 keeps on this
+computer, never on a server, and no Connect login reaches it.
+
+  k2.store.*  data:<widget>   shared with agents you grant; pushed live
+  k2.save.*   save:<widget>   the widget's private saves; never shared
+  k2.viewer() {kind, name}    who is looking (for labels)
+
+KEYS, REVS, CONFLICTS
+  One key per object (obj/<id>, or project/<pid>/board/<bid>/obj/<id>);
+  a value is JSON ≤ 60 KiB. Never inline data into the widget's code.
+  Every write moves the space's rev. put(key, v, {ifRev: n}) writes only
+  if the key is still at rev n (0 = only if missing); else `conflict`:
+  read it again and re-apply just the fields you changed.
+    const r = await k2.store.put('obj/7', note, {ifRev: seen.rev})
+
+LIVE
+  k2.store.subscribe(prefix, cb, onError) calls cb with
+  [{key, rev, value | null, by}] for anyone's change (another window, an
+  agent's `k2 store put --widget`), never half a batch. On
+  {resync: true, items} redraw from items. `by` is "you", "you via <w>"
+  or "agent:<handle>".
+
+BIG CHANGES
+  store.batch(ops) ≤ 64 ops, one rev. k2.store.tx(): add up to 1,000 ops /
+  1 MiB, then commit: all or nothing, one rev, one push.
+  putChunked/getChunked carry text up to 1 MiB (images as data URLs).
+
+WHO MAY TOUCH IT
+  The widget uses its MAKER's rights: made by you (or It's mine) = all of
+  its data; made by an agent = that agent's grants; nobody signed this
+  version = no data (author_unknown). `k2 zen validate --widget <w>` signs
+  a clean version as whoever runs it. Agents need a grant from the person
+  (Settings → Gardens → Widget data, or k2 zen data grant): per agent (a
+  wall), per K2 project (a convenience: any agent can join a project) or
+  per key prefix. A grant admin grants inside its own prefix.
+
+LOCK AND SOURCES
+  Lock freezes how a Garden works, not what's in it: data still changes.
+  A widget asking sources:read can't write data (store:write dropped).
+
+LIMITS
+  20 MiB / 100,000 keys a widget (saves 5 MiB); 60 writes/s.
+
+EXPORT, HISTORY, ORPHANS
+  k2 store export --widget <w> [--at YYYY-MM-DD] > data.jsonl (daily
+  snapshots: 7 days + 4 weeks). Deleting a Garden keeps the data. A
+  renamed folder leaves "Data with no widget" in Settings until
+  k2 zen data move <old> <new> or a delete.
+
+TRY IT
+  k2 zen guide example board-lite
+EOF
+}
+
+_ZEN_GUIDE_WIDGET_EXAMPLES="board-lite"
+
+_zen_widget_example_page() {
+    cat <<'EOF'
+k2 zen guide example board-lite — sticky notes in a widget's data
+
+A sticky-note board kept in k2.store, in the format Board uses: one key per
+note (<prefix>obj/<id> = {id, text, x, y, color, batch}), field-level
+writes with ifRev (a conflict re-reads and re-applies only the changed
+fields), a batch id per gesture, and subscribe for live changes.
+
+1. Make the widget (from a terminal outside K2, it is signed as yours):
+     k2 zen widget new board-lite --from board-lite
+     k2 zen validate --widget board-lite
+2. Place it in a Garden (k2 zen garden list for the id):
+     k2 zen guide example board-lite --toml > ~/.k2/zen/gardens/<id>.toml
+     k2 zen validate --garden <id>
+   Or paste only its [[widget]] table into your Garden's file.
+   config.prefix (optional) puts the notes under a key prefix, e.g.
+   "project/7/board/1/", so one prefix grant covers that board.
+3. Let an agent help (the person, outside K2):
+     k2 zen data grant board-lite --agent <handle> --level write
+4. The agent's side: a script that checks the shape before it writes.
+     k2 zen guide example board-lite --script > bin/board-lite
+     chmod +x bin/board-lite
+     bin/board-lite add "Ship it"          # a new note
+     bin/board-lite move <id> 200 40       # field-level, retries a conflict
+     bin/board-lite watch 0                # k2 store changes --follow
+   The widget shows each change at once, labelled with the agent's handle.
+
+If the widget says nobody signed it: k2 zen validate --widget board-lite,
+or It's mine in Settings → Gardens. Data and grants: k2 zen guide services.
+EOF
+}
+
+_zen_widget_example_toml() {
+    cat <<'EOF'
+schema = 1
+
+[layout]
+kind = "columns"
+[[layout.column]]
+size = 100
+min-width = 240
+
+[[widget]]
+id = "board"
+kind = "custom"
+widget = "board-lite"
+column = 0
+[widget.props]
+config = { prefix = "" }
+EOF
+}
+
+_zen_widget_example_script() {
+    cat <<'EOF'
+#!/usr/bin/env bash
+# bin/board-lite: an agent's way to change Board Lite's notes. It checks the
+# shape first (a raw `k2 store put` skips that), writes field by field with
+# --if-rev, and retries a conflict (exit 5) by re-reading the note.
+#   board-lite add <text> [--color yellow|blue|green|pink]
+#   board-lite move <id> <x> <y>    board-lite text <id> <text>
+#   board-lite rm <id>              board-lite list    board-lite watch [rev]
+# BOARD_LITE_WIDGET (default board-lite), BOARD_LITE_PREFIX (e.g. project/7/board/1/).
+set -euo pipefail
+W="${BOARD_LITE_WIDGET:-board-lite}"
+P="${BOARD_LITE_PREFIX:-}"
+key() { printf '%sobj/%s' "$P" "$1"; }
+die() { echo "board-lite: $*" >&2; exit 2; }
+
+# change <id> <python that edits dict v>: read, edit, put --if-rev; 3 tries.
+change() {
+    local id="$1" edit="$2" try out rev val rc
+    for try in 1 2 3; do
+        out="$(k2 store get --widget "$W" "$(key "$id")" --json)"
+        rev="$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); e=d.get("entry",d) if isinstance(d,dict) else None; print(e["rev"] if e else "")')"
+        [ -n "$rev" ] || die "no note $id"
+        val="$(printf '%s' "$out" | BL_EDIT="$edit" python3 -c '
+import json, os, sys, uuid
+d = json.load(sys.stdin); e = d.get("entry", d)
+v = dict(e["value"]) if isinstance(e.get("value"), dict) else {}
+exec(os.environ["BL_EDIT"])
+v["batch"] = uuid.uuid4().hex[:12]
+print(json.dumps(v))')"
+        set +e
+        k2 store put --widget "$W" "$(key "$id")" --value "$val" --if-rev "$rev" >/dev/null
+        rc=$?
+        set -e
+        [ "$rc" = 5 ] || return "$rc"
+    done
+    die "note $id keeps changing; try again"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    add)
+        text="${1:-}"; [ -n "$text" ] || die "add <text>"; shift
+        color="yellow"; [ "${1:-}" = "--color" ] && color="${2:-yellow}"
+        case "$color" in yellow|blue|green|pink) ;; *) die "color is yellow, blue, green or pink" ;; esac
+        id="$(python3 -c 'import uuid; print(uuid.uuid4().hex[:10])')"
+        val="$(BL_T="$text" BL_C="$color" BL_ID="$id" python3 -c '
+import json, os, uuid
+t = os.environ["BL_T"][:2000]
+print(json.dumps({"id": os.environ["BL_ID"], "text": t, "x": 20, "y": 20, "color": os.environ["BL_C"], "batch": uuid.uuid4().hex[:12]}))')"
+        k2 store put --widget "$W" "$(key "$id")" --value "$val" --if-rev 0 >/dev/null
+        echo "$id" ;;
+    move)
+        [ $# -eq 3 ] || die "move <id> <x> <y>"
+        [[ "$2$3" =~ ^[0-9]+$ ]] || die "x and y are whole numbers"
+        change "$1" "v['x'] = $2; v['y'] = $3" ;;
+    text)
+        [ $# -eq 2 ] || die "text <id> <text>"
+        BL_T="$2" change "$1" "v['text'] = os.environ['BL_T'][:2000]" ;;
+    rm)
+        [ $# -eq 1 ] || die "rm <id>"
+        k2 store rm --widget "$W" "$(key "$1")" ;;
+    list) k2 store list --widget "$W" --prefix "${P}obj/" --all --json ;;
+    watch) k2 store changes --widget "$W" --since "${1:-0}" --prefix "${P}obj/" --follow ;;
+    *) die "add | move | text | rm | list | watch" ;;
+esac
+EOF
+}
+
 _zen_guide_page() {
     case "$1" in
         index) _zen_guide_index ;;
+        services) _zen_guide_page_services ;;
         gardens) _zen_guide_page_gardens ;;
         files) _zen_guide_page_files ;;
         widgets) _zen_guide_page_widgets ;;
@@ -46127,12 +46321,13 @@ print(json.dumps(out, separators=(",", ":"), ensure_ascii=False))
 }
 
 cmd_zen_guide() {
-    local as_json=0 toml=0 list=0 p1="" p2="" extra=""
+    local as_json=0 toml=0 list=0 script=0 p1="" p2="" extra=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1 ;;
             --toml) toml=1 ;;
             --list) list=1 ;;
+            --script) script=1 ;;
             -h|--help)
                 _zen_guide_usage
                 exit 0
@@ -46187,8 +46382,35 @@ print(json.dumps({"examples": ex}, separators=(",", ":")))
                 fi
                 exit 0
             fi
+            # A widget example (Garden data, contract-garden-data-v1 §11.4):
+            # the page, --toml (a Garden file placing it), --script (the
+            # agent's bin/ script). Not in --list (Garden files only).
+            if _zen_guide_is_in "$p2" $_ZEN_GUIDE_WIDGET_EXAMPLES; then
+                if [ "$toml" = 1 ] && [ "$script" = 1 ]; then
+                    echo "Error: --toml or --script, not both" >&2
+                    exit 2
+                fi
+                if [ "$as_json" = 1 ]; then
+                    _zen_widget_example_page | python3 -c '
+import json, sys
+body = sys.stdin.read().rstrip("\n")
+print(json.dumps({"id": sys.argv[1], "title": sys.argv[2], "body": body, "toml": sys.argv[3] + "\n", "script": sys.argv[4] + "\n"}, separators=(",", ":"), ensure_ascii=False))
+' "$p2" "$(_zen_guide_title "$p2")" "$(_zen_widget_example_toml)" "$(_zen_widget_example_script)"
+                elif [ "$toml" = 1 ]; then
+                    _zen_widget_example_toml
+                elif [ "$script" = 1 ]; then
+                    _zen_widget_example_script
+                else
+                    _zen_widget_example_page
+                fi
+                exit 0
+            fi
+            if [ "$script" = 1 ]; then
+                echo "Error: --script is for k2 zen guide example board-lite" >&2
+                exit 2
+            fi
             if ! _zen_guide_is_in "$p2" $_ZEN_GUIDE_EXAMPLES; then
-                echo "Error: no example '$p2'. Examples: $_ZEN_GUIDE_EXAMPLES" >&2
+                echo "Error: no example '$p2'. Examples: $_ZEN_GUIDE_EXAMPLES $_ZEN_GUIDE_WIDGET_EXAMPLES" >&2
                 exit 2
             fi
             if [ "$as_json" = 1 ]; then
@@ -46201,8 +46423,8 @@ print(json.dumps({"examples": ex}, separators=(",", ":")))
             exit 0
             ;;
     esac
-    if [ "$toml" = 1 ] || [ "$list" = 1 ]; then
-        echo "Error: --toml and --list are for k2 zen guide example" >&2
+    if [ "$toml" = 1 ] || [ "$list" = 1 ] || [ "$script" = 1 ]; then
+        echo "Error: --toml, --list and --script are for k2 zen guide example" >&2
         exit 2
     fi
     if [ -n "$p2" ]; then

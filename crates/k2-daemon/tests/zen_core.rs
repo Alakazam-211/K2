@@ -1865,8 +1865,10 @@ fn fc_t5_skill_v9_documents_the_chrome_tables() {
 // ── prd-zen-freeform-chrome S4: the CLI guide ─────────────────────────
 
 /// The guide's topics, in the index's order (FC33).
-const GUIDE_TOPICS: [&str; 12] =
-    ["gardens", "files", "widgets", "bands", "required", "menus", "themes", "sync", "examples", "undo", "safe-mode", "api"];
+const GUIDE_TOPICS: [&str; 13] = [
+    "gardens", "files", "widgets", "bands", "required", "menus", "themes", "sync", "examples", "undo", "safe-mode", "api",
+    "services",
+];
 /// FC34's examples in Cortana's order (FC65).
 const GUIDE_EXAMPLES: [&str; 7] =
     ["rail-top", "quiet-top", "bottom-bar", "menu-both", "texting-chrome", "menu-bottom-right", "column-corner"];
@@ -1927,6 +1929,39 @@ fn fc_t17_every_guide_example_is_a_clean_garden_file() {
     }
     assert!(guide(&["example", "rail-top", "--toml"]).contains("This does NOT remove the switcher"), "FC65");
     assert!(guide(&["example", "column-corner", "--toml"]).contains("that would be slot = \"bottom\""), "FC65 edge-vs-slot note");
+}
+
+/// Garden data (contract-garden-data-v1 §12.3): the board-lite widget
+/// example's Garden file passes the daemon's own Garden checks clean on an
+/// empty Garden and on Garden 1, places the widget as a content widget,
+/// and keeps the template's required controls; the guide's services page
+/// says the rules the PRD asks for.
+#[test]
+fn board_lite_example_garden_file_is_clean_and_services_page_says_the_rules() {
+    let src = guide(&["example", "board-lite", "--toml"]);
+    assert!(src.starts_with("schema = 1\n"), "a whole file:\n{src}");
+    for (tpl, on) in [(zen::BLANK_TEMPLATE_ID, "an empty Garden"), (zen::TEMPLATE_ID, "Garden 1")] {
+        let c = schema::check_garden("gardens/g-1.toml", &src, zen::builtin_layer(), tpl);
+        assert!(c.is_clean() && c.warnings.is_empty(), "board-lite on {on} must validate clean:\n{}\n{src}", diag_list(&c));
+        let page = zen::garden_page(&c.layer, tpl);
+        assert_page_safe(&page, "board-lite");
+        let widgets = kinds_of(&page, "widgets");
+        assert!(widgets.iter().any(|k| k == "custom"), "board-lite places a custom widget: {page}");
+    }
+    let page = guide(&["example", "board-lite"]);
+    assert!(page.starts_with("k2 zen guide example board-lite —"), "{page}");
+    assert!(page.lines().count() <= 80, "board-lite page: {} lines", page.lines().count());
+    let services = guide(&["services"]);
+    for must in [
+        "Never inline data into the widget's code",
+        "Lock freezes how a Garden works, not what's in it",
+        "a convenience: any agent can join a project",
+        "k2 zen validate --widget <w>",
+        "store:write dropped",
+        "k2 store export --widget",
+    ] {
+        assert!(services.contains(must), "services must say {must:?}:\n{services}");
+    }
 }
 
 /// FC-T18 (drift): the pages name every value of the grammar's tables, the

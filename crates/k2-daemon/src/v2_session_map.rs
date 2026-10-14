@@ -473,6 +473,60 @@ pub fn clear_for_tests() {
     shared().lock().unwrap().clear();
 }
 
+/// Keys of the sessions that belong to the workspace `(project_id, path)`:
+/// its canonical (pinned chat) key, plus every session whose cwd is the
+/// workspace or a child of it — unless a NESTED registered workspace owns
+/// that cwd (same longest-prefix rule as `list-for-workspace`).
+/// `project_paths` must still include `path` (call before the DB delete).
+pub(crate) fn select_workspace_session_keys(
+    entries: &[(String, Option<String>)],
+    project_id: &str,
+    path: &str,
+    project_paths: &[String],
+) -> Vec<String> {
+    let canonical = crate::canonical_session::canonical_key_for(project_id);
+    let path_is_root = path.trim_end_matches('/').is_empty();
+    entries
+        .iter()
+        .filter(|(name, cwd)| {
+            (!project_id.is_empty() && name == &canonical)
+                || (!path_is_root
+                    && cwd.as_deref().is_some_and(|c| {
+                        crate::session_events::cwd_matches_workspace(c, path, project_paths)
+                    }))
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// GH #66 — stop every session the daemon runs for a workspace that is
+/// being removed (pinned chat, sidecar / `tab-*` tabs, API cells). Each
+/// goes through [`unregister`], the same force-kill + reap chokepoint a
+/// tab close uses, so no agent process outlives its workspace.
+///
+/// Call BEFORE deleting the `projects` row: the nested-workspace check
+/// needs the registry to still list `path`. Returns the stopped keys.
+pub fn stop_workspace_sessions(project_id: &str, path: &str) -> Result<Vec<String>, String> {
+    let project_paths: Vec<String> = k2_core::projects_ops::projects_list()?
+        .into_iter()
+        .map(|p| p.path)
+        .collect();
+    let entries: Vec<(String, Option<String>)> = snapshot()
+        .into_iter()
+        .map(|(name, s)| {
+            let cwd = s.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+            (name, cwd)
+        })
+        .collect();
+    let keys = select_workspace_session_keys(&entries, project_id, path, &project_paths);
+    for key in &keys {
+        if unregister(key).is_some() {
+            log_debug!("[v2-map] workspace removed ({path}): stopped session {key}");
+        }
+    }
+    Ok(keys)
+}
+
 /// 0.37.5 boot-time migration — re-key any entry whose key shape is
 /// `<uuid>:<rest>` to the bare `<uuid>` form (the new canonical
 /// shape). Pre-0.37.5 the canonical key encoded the agent name as a
@@ -551,6 +605,35 @@ fn is_legacy_canonical_key(k: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GH #66 — removal stops the canonical key and every session in the
+    /// workspace tree, but not a nested registered workspace, a sibling
+    /// with a shared name prefix, or a cwd-less session of another key.
+    #[test]
+    fn select_workspace_session_keys_covers_tree_but_not_nested_or_siblings() {
+        let projects = vec!["/w/outer".to_string(), "/w/outer/inner".to_string(), "/w/other".to_string()];
+        let e = |name: &str, cwd: Option<&str>| (name.to_string(), cwd.map(str::to_string));
+        let entries = vec![
+            e("pid-outer", None),                         // canonical key, cwd unknown
+            e("tab-a", Some("/w/outer")),                 // sidecar tab
+            e("api-b", Some("/w/outer/src/")),            // API cell in a subdir
+            e("tab-nested", Some("/w/outer/inner")),      // nested workspace's tab
+            e("pid-inner", Some("/w/outer/inner/x")),     // nested workspace subdir
+            e("tab-sibling", Some("/w/outer-2")),         // name-prefix sibling
+            e("tab-other", Some("/w/other")),
+            e("tab-nocwd", None),
+        ];
+        let mut got = select_workspace_session_keys(&entries, "pid-outer", "/w/outer", &projects);
+        got.sort();
+        assert_eq!(got, vec!["api-b", "pid-outer", "tab-a"]);
+
+        let mut inner = select_workspace_session_keys(&entries, "pid-inner", "/w/outer/inner/", &projects);
+        inner.sort();
+        assert_eq!(inner, vec!["pid-inner", "tab-nested"]);
+
+        // A root path never sweeps every session; an empty id matches no key.
+        assert!(select_workspace_session_keys(&entries, "", "/", &projects).is_empty());
+    }
 
     /// P3c (D1) — the default passthrough spec carries NO sandbox backend, so a
     /// normal `SessionAdded` is byte-identical to pre-P3c (no new wire key).

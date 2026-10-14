@@ -407,12 +407,19 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 let conn = db.lock();
                 k2_core::workspace::agent_identity::resolve_project_id(&conn, &target)
             };
-            if let Some(project_id) = project_id {
+            if let Some(project_id) = project_id.as_deref() {
                 let display = k2_core::workspace::display::agent_display_name(&target);
                 if let Some(resp) =
-                    crate::project_group_routes::poc_removal_block(&project_id, &display)
+                    crate::project_group_routes::poc_removal_block(project_id, &display)
                 {
                     return Some(resp);
+                }
+                // GH #66: stop the workspace's sessions before the row goes.
+                if let Err(e) = crate::v2_session_map::stop_workspace_sessions(project_id, &target)
+                {
+                    return Some(CliResponse::internal_error(format!(
+                        "stopping workspace sessions: {e}"
+                    )));
                 }
             }
             match k2_core::workspace::lifecycle::remove_workspace_db_only(&target) {

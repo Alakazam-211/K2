@@ -1001,22 +1001,31 @@ pub fn handle_projects_delete(body: &[u8]) -> CliResponse {
     // the Point of Contact of any project group cannot be removed
     // from the server until every affected project has a successor.
     // This is the UI's removal path (RemoveWorkspaceDialog).
+    let path: Option<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            rusqlite::params![b.id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    };
     {
-        let display = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            conn.query_row(
-                "SELECT path FROM projects WHERE id = ?1",
-                rusqlite::params![b.id],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
-        }
-        .map(|path| k2_core::workspace::display::agent_display_name(&path))
-        .unwrap_or_else(|| b.id.clone());
+        let display = path
+            .as_deref()
+            .map(k2_core::workspace::display::agent_display_name)
+            .unwrap_or_else(|| b.id.clone());
         if let Some(resp) = crate::project_group_routes::poc_removal_block(&b.id, &display) {
             return resp;
         }
+    }
+    // GH #66: stop the workspace's sessions while the row still exists
+    // (the nested-workspace check reads the registry).
+    if let Err(e) =
+        crate::v2_session_map::stop_workspace_sessions(&b.id, path.as_deref().unwrap_or(""))
+    {
+        return CliResponse::internal_error(format!("stopping workspace sessions: {e}"));
     }
     let result = pops::projects_delete(&b.id);
     if result.is_ok() {

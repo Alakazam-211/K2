@@ -89,7 +89,7 @@ export function dotColor(display: Display | 'proposed'): string {
     case 'ok':
       return 'var(--color-success,#30a46c)'
     case 'warn':
-      return 'var(--color-warning,#f5a524)'
+      return 'var(--color-status-warn)'
     case 'crit':
       return 'var(--color-danger,#e5484d)'
     case 'unknown':

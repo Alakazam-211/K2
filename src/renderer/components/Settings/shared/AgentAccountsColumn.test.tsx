@@ -23,7 +23,13 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => h.openUrl(url) }))
 
-import { AgentAccountsColumn, SWITCH_NOTE, ACTIVE_REMOVE_REASON } from './AgentAccountsColumn'
+import {
+  AgentAccountsColumn,
+  SWITCH_NOTE,
+  ACTIVE_REMOVE_REASON,
+  ACTIVE_RELOGIN_HINT,
+  SIGNING_IN_SWITCH_REASON,
+} from './AgentAccountsColumn'
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
@@ -131,6 +137,8 @@ beforeEach(() => {
   h.daemonCliPost.mockReset()
   h.openUrl.mockClear()
   h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => routeGet(route, params))
+  // Switches ask first; tests that look at the dialog replace this.
+  useConfirmDialogStore.setState({ confirm: vi.fn(async () => true) })
   h.daemonCliPost.mockImplementation(async (route: string) => {
     if (route === 'llm/accounts/add' || route === 'llm/accounts/login') return { account: account({ id: 'acc_new' }), login: LOGIN }
     if (route.startsWith('llm/accounts/')) return {}
@@ -180,10 +188,13 @@ describe('Tokens column', () => {
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_home' }))
   })
 
-  it('Use next token posts next with the tool', async () => {
+  it('Use next token confirms the exact next token, then switches to it', async () => {
     await renderColumn()
     fireEvent.click(screen.getByRole('button', { name: 'Use next token' }))
-    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/next', { tool: 'claude' }))
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_home' }))
+    const opts = (useConfirmDialogStore.getState().confirm as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(opts.message).toContain('From: Claude · Max · work')
+    expect(opts.message).toContain('To: Claude · home')
     expect(document.body.textContent).toContain('K2 never switches on its own')
   })
 
@@ -355,7 +366,7 @@ describe('Sign-in sheet', () => {
       }
     })
     await renderColumn()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+    fireEvent.click(within(screen.getByTestId('llm-account-acc_stale')).getByRole('button', { name: 'Sign in again' }))
     expect(screen.getByRole('dialog', { name: 'Sign old in again' })).toBeTruthy()
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await waitFor(() =>

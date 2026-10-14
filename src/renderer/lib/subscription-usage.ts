@@ -16,6 +16,9 @@ export interface HarnessUsage {
   checkedAt: string
   /** "" when signed in with windows. Otherwise an empty-state sentence. */
   status: string
+  /** The last check failed (why); the windows are the last good reading
+   *  and `checkedAt` is when that was. Newer daemons only. */
+  error?: string
 }
 
 export interface SubscriptionDoc {
@@ -64,6 +67,7 @@ function parseHarness(raw: unknown): HarnessUsage | null {
     windows,
     checkedAt: str(raw.checkedAt),
     status: str(raw.status),
+    ...(typeof raw.error === 'string' && raw.error !== '' ? { error: raw.error } : {}),
   }
 }
 

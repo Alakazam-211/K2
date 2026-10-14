@@ -73,6 +73,11 @@ export interface LlmTool {
   /** The subscription login in the tool's live store (differs from
    *  activeId while an API key is the pool's active login). */
   liveAccountId: string | null
+  /** When the current server default was set (unix seconds); null on
+   *  older daemons and for tools with no default. */
+  switchedAt: number | null
+  /** Who set it (`owner-token`, `login:<user>`); people only. */
+  switchedBy: string | null
   pins: LlmPin[]
   loginMethod: 'temp_home' | 'live_swap' | null
   accounts: LlmAccount[]
@@ -202,6 +207,8 @@ export function parseAccountsDoc(raw: unknown): LlmAccountsDoc {
       apiKeys: t.apiKeys === true,
       activeId: typeof t.activeId === 'string' ? t.activeId : null,
       liveAccountId: typeof t.liveAccountId === 'string' ? t.liveAccountId : null,
+      switchedAt: typeof t.switchedAt === 'number' && Number.isFinite(t.switchedAt) ? t.switchedAt : null,
+      switchedBy: typeof t.switchedBy === 'string' ? t.switchedBy : null,
       pins: asArray<LlmPin>(t.pins),
       loginMethod: (t.loginMethod === 'live_swap' || t.loginMethod === 'temp_home' ? t.loginMethod : null) as LlmTool['loginMethod'],
       accounts: asArray<LlmAccount>(t.accounts),
@@ -507,3 +514,69 @@ export function serverDefaultAccount(tool: LlmTool): LlmAccount | null {
 
 /** How often an open login sheet re-reads `login/status`. */
 export const LOGIN_POLL_MS = 1500
+
+/** Is a sign-in running for this token (its slot may change any moment)? */
+export function isSigningIn(doc: LlmAccountsDoc | null, a: LlmAccount): boolean {
+  if (a.state === 'signing_in') return true
+  return (doc?.logins ?? []).some((l) => l.accountId === a.id && !l.done)
+}
+
+/** When the token's usage was last read successfully (unix seconds):
+ *  `usageCheckedAt`, else the reading's own `checkedAt`. */
+export function usageCheckedAtSecs(a: LlmAccount): number | null {
+  if (typeof a.usageCheckedAt === 'number' && a.usageCheckedAt > 0) return a.usageCheckedAt
+  const t = a.usage?.checkedAt ? Date.parse(a.usage.checkedAt) : NaN
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null
+}
+
+/** "checked just now" / "checked 12 min ago" / "checked 3 h ago" /
+ *  "checked 2 d ago" / "never checked". */
+export function checkedAgoText(secs: number | null, nowMs: number = Date.now()): string {
+  if (secs === null) return 'never checked'
+  const d = Math.max(0, Math.floor(nowMs / 1000) - secs)
+  if (d < 60) return 'checked just now'
+  if (d < 3600) return `checked ${Math.floor(d / 60)} min ago`
+  if (d < 86400) return `checked ${Math.floor(d / 3600)} h ago`
+  return `checked ${Math.floor(d / 86400)} d ago`
+}
+
+/** A unix-seconds time as a person reads it ("Oct 14, 2:20 PM"). */
+export function formatWhen(secs: number): string {
+  return new Date(secs * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+/** Usage windows of the token's last reading that are used up and not
+ *  reset yet, as warnings: "lztek is at 100% of its Weekly limit until …". */
+export function exhaustedWarnings(a: LlmAccount, nowMs: number = Date.now()): string[] {
+  const out: string[] = []
+  for (const w of a.usage?.windows ?? []) {
+    if (!(w.used >= 0.995)) continue
+    const reset = w.resetsAt ? Date.parse(w.resetsAt) : NaN
+    if (Number.isFinite(reset) && reset <= nowMs) continue
+    const until = Number.isFinite(reset) ? ` until ${formatWhen(Math.floor(reset / 1000))}` : ''
+    out.push(`${a.label} is at 100% of its ${w.label} limit${until}.`)
+  }
+  return out
+}
+
+/** The token "Use next token" moves to: the next signed-in subscription
+ *  after the server default in pool order (the daemon's rule: no API
+ *  tokens, nothing set for a workspace or chat, nothing signing in). */
+export function nextCandidate(doc: LlmAccountsDoc | null, tool: LlmTool): LlmAccount | null {
+  const list = tool.accounts
+  if (list.length < 2) return null
+  const idx = list.findIndex((a) => a.id === tool.activeId)
+  const start = idx >= 0 ? idx : list.length - 1
+  for (let step = 1; step < list.length; step++) {
+    const a = list[(start + step) % list.length]
+    if (a.id !== tool.activeId && a.kind !== 'api_key' && a.state === 'signed_in' && !isPinned(a) && !isSigningIn(doc, a)) {
+      return a
+    }
+  }
+  return null
+}

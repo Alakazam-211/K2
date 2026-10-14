@@ -30,6 +30,8 @@ pub const MAX_BODY: usize = 256 * 1024;
 
 /// Every runtime route.
 pub const ROUTES: &[&str] = &[
+    "/cli/app/box",
+    "/cli/app/box/prepare",
     "/cli/app/build",
     "/cli/app/config",
     "/cli/app/deploy",
@@ -50,6 +52,7 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/box/prepare",
     "/cli/app/build",
     "/cli/app/config",
     "/cli/app/deploy",
@@ -312,6 +315,10 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     }
     super::supervisor::ensure_started();
     let r = match path {
+        // Box prep (S10): the doctor for anyone with a credential, prepare
+        // for the owner only.
+        "/cli/app/box" => super::box_prep::box_route(&who),
+        "/cli/app/box/prepare" => json_body(body).and_then(|v| super::box_prep::prepare_route(&who, &v)),
         "/cli/app/build" => build(&who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),

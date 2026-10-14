@@ -675,9 +675,6 @@ mod unix_impl {
             // session. Same body caps as TCP (413).
             // LLM login wallet over the cell socket: read-only for every
             // passport (the handler refuses mutations with owner_only).
-            // K2 compute nodes: the agent verbs for THIS cell's session
-            // (owner verbs never pass require_hook on this socket). The two
-            // node sockets are TCP-only.
             // Agent hire over the cell socket: the bound session's passport.
             // Only the agent-verb hire paths pass require_hook here.
             p if crate::hire_routes::is_route(p) => {
@@ -687,6 +684,9 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::hire_routes::handle_cli(p, who, is_post, body, params, None))
             }
+            // K2 compute nodes: the agent verbs for THIS cell's session
+            // (owner verbs never pass require_hook on this socket). The two
+            // node sockets are TCP-only.
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

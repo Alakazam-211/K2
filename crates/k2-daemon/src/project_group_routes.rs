@@ -3306,6 +3306,9 @@ mod agent_switch_tests {
 
     #[test]
     fn switch_defaults_on_and_an_agent_can_add_a_member_audited() {
+        // The audit file lives under $HOME: hold the shared env lock (and a
+        // home of our own) so a parallel TempHome test can't move it mid-test.
+        let _home = crate::test_support::TempHome::new();
         let (a_id, _, _) = insert_workspace("on-agent");
         let (b_id, b_name, _) = insert_workspace("on-target");
         assert!(
@@ -3379,6 +3382,9 @@ mod agent_switch_tests {
 
     #[test]
     fn switch_off_refuses_agent_mutations_but_not_owner_reads_or_chat() {
+        // The audit file lives under $HOME: hold the shared env lock (and a
+        // home of our own) so a parallel TempHome test can't move it mid-test.
+        let _home = crate::test_support::TempHome::new();
         let (a_id, a_name, _) = insert_workspace("off-agent");
         let (b_id, b_name, _) = insert_workspace("off-target");
         let name = format!("pgs-off-{}", uuid::Uuid::new_v4());

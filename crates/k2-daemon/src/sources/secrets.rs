@@ -41,12 +41,11 @@ pub fn bind(source_id: &str, secret_name: &str, origin: &str, proof: &k2_vault::
     Err(not_built())
 }
 
-/// Revoke the source's grant.
-///
-/// C0 skeleton: 501 (B1 replaces it).
+/// Revoke the source's grant. Until binding lands (A1) no grant can
+/// exist, so there is nothing to revoke.
 pub fn unbind(source_id: &str) -> Result<(), SourceErr> {
     let _ = source_id;
-    Err(not_built())
+    Ok(())
 }
 
 /// Reads the value inside the daemon only; returns the hint, never the

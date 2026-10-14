@@ -224,3 +224,7 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         rev: row.rev.max(st.rev),
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;

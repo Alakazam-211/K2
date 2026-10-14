@@ -4,7 +4,8 @@
 -- One global change counter for `sources_changed {rev}` and `GET /cli/sources/changes`.
 CREATE TABLE IF NOT EXISTS source_rev (
   id   INTEGER PRIMARY KEY CHECK (id = 1),
-  rev  INTEGER NOT NULL
+  rev  INTEGER NOT NULL,
+  reaped_rev INTEGER NOT NULL DEFAULT 0   -- highest rev of a reaped tombstone; changes?since older than it answer full
 );
 --> statement-breakpoint
 INSERT OR IGNORE INTO source_rev (id, rev) VALUES (1, 0);
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS source_state (
   http_status       INTEGER,
   soft_health       TEXT CHECK (soft_health IS NULL OR soft_health IN ('ok', 'warn', 'crit', 'unknown')),
   soft_count        INTEGER NOT NULL DEFAULT 0,    -- source-level (single-url and fields/aggregate rules)
+  self_health       TEXT CHECK (self_health IS NULL OR self_health IN ('ok', 'warn', 'crit', 'unknown')),  -- hard source-level reading; NULL until rated
   fetch_failures    INTEGER NOT NULL DEFAULT 0,    -- consecutive cycles with no success on any target
   backoff_k         INTEGER NOT NULL DEFAULT 0,
   hard_since        INTEGER,

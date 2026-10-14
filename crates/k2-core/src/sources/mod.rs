@@ -17,8 +17,12 @@
 use std::fmt;
 
 pub mod extract;
+pub mod history;
+pub mod lint;
 pub mod note;
+pub mod presets;
 pub mod presets_cards;
+pub mod rules;
 pub mod spec;
 pub mod state;
 pub mod store;

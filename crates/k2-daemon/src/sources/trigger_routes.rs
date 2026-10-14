@@ -570,7 +570,6 @@ mod tests {
     #[test]
     fn test_wakes_are_limited_to_five_an_hour() {
         let _g = setup();
-        let db = k2_core::db::shared();
         let fake: std::sync::Arc<crate::sources::wake::Pipe> = std::sync::Arc::new(crate::sources::wake::Pipe::new(Box::new(Answer)));
         crate::sources::wake::test_seams::set_pipe(Some(fake));
         let r = call("/cli/sources/triggers/add", &admin(), json!({"source": "fleet", "on": {"kind": "went_crit"}, "agent": "p1"}))
@@ -583,7 +582,6 @@ mod tests {
         let e = call("/cli/sources/triggers/test", &admin(), json!({"id": id})).unwrap_err();
         assert_eq!((e.code, e.status), ("rate_limited", 429));
         crate::sources::wake::test_seams::set_pipe(None);
-        drop(db);
     }
 
     struct Answer;

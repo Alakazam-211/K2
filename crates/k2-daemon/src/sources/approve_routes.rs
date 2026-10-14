@@ -351,6 +351,7 @@ fn check_root_key(who: &Who, row: &SourceRow, secret: &str, use_anyway: bool) ->
 
 /// Activate a proposed source (one transaction): status active, the
 /// approval stamps, the person's choices for viewers/agentAccess/keep.
+#[allow(clippy::too_many_arguments)]
 fn activate(
     conn: &Connection,
     who: &Who,

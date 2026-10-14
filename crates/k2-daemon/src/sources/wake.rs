@@ -678,10 +678,14 @@ pub mod test_seams {
     use super::*;
     use std::cell::RefCell;
 
+    pub type Live = Box<dyn Fn(&str, &str, &str) -> LiveResult>;
+    pub type WsPath = Box<dyn Fn(&str) -> Option<String>>;
+    pub type Inbox = Box<dyn Fn(&str, &str, &str, &str) -> Result<(), String>>;
+
     pub struct Seams {
-        pub live: Box<dyn Fn(&str, &str, &str) -> LiveResult>,
-        pub ws_path: Box<dyn Fn(&str) -> Option<String>>,
-        pub inbox: Box<dyn Fn(&str, &str, &str, &str) -> Result<(), String>>,
+        pub live: Live,
+        pub ws_path: WsPath,
+        pub inbox: Inbox,
     }
 
     thread_local! {
@@ -850,7 +854,7 @@ mod tests {
         let t = add_trigger(TriggerOn::ItemWentCrit, "p1");
         set_item("ohana", "crit", Some("inc-o"));
         let tr = item_crit("ohana", "inc-o");
-        handle_transitions(&row(), &[tr.clone()], NOW);
+        handle_transitions(&row(), std::slice::from_ref(&tr), NOW);
         assert_eq!(drain(&e, NOW), 1);
         let calls = e.fake.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);

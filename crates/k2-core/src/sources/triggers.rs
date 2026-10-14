@@ -182,7 +182,7 @@ pub fn stale_since(row: &SourceRow, st: &SourceState) -> Option<i64> {
 /// The incident a `stale_for` fire belongs to. One stale episode = one
 /// incident: the last success doesn't move until the source answers again.
 pub fn stale_incident_id(source_id: &str, st: &SourceState) -> String {
-    format!("stale:{source_id}:{}", st.updated_at.unwrap_or(0))
+    super::state::stale_incident(source_id, st.updated_at)
 }
 
 /// Does this trigger act on this transition (kind and scope only)?

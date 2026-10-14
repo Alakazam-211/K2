@@ -258,6 +258,7 @@ fn exposure_name(e: &Exposure) -> &'static str {
     match e {
         Exposure::Widget => "widget",
         Exposure::App => "app",
+        Exposure::GardenLocal => "garden-local",
     }
 }
 
@@ -340,6 +341,8 @@ impl Ts {
                 "string" => "string".into(),
                 "number" | "integer" => "number".into(),
                 "boolean" => "boolean".into(),
+                // Any JSON value (Garden data, contract-garden-data-v1 §7.2).
+                "json" => "unknown".into(),
                 "array" => {
                     let item = match s.get("items") {
                         Some(i) => self.ty(i)?,

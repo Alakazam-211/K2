@@ -19653,6 +19653,8 @@ cmd_schema() {
     {"name": "sources secret", "usage": "k2 sources secret <name> NAME|--none [--use-anyway]", "description": "People only: bind or unbind a source's vault secret.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources pin", "usage": "k2 sources pin|unpin <name>", "description": "People only: a pinned source can't be edited or removed by agents.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources trigger", "usage": "k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test ...", "description": "Wake an agent when a source goes red, amber, recovers or goes stale. Agents propose triggers for themselves; a person approves.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--source", "arg": "name", "description": "The source."}, {"name": "--on", "arg": "kind", "description": "went_crit | went_warn | recovered | item_went_crit | stale_for:30m."}, {"name": "--agent", "arg": "handle", "description": "Who wakes (default: me)."}, {"name": "--note", "arg": "text", "description": "Added to the wake note."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "store --widget", "usage": "k2 store get|put|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. Exit 3 not granted, 4 not found, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "zen data", "usage": "k2 zen data list|show|grant|revoke|admin|unadmin|delete|move|export|import ...", "description": "The person's admin for widget data: grants (agent = a wall; project = a convenience), grant admins, delete, move, export, import. Refused inside a K2 terminal (exit 3).", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--agent", "arg": "handle", "description": "The agent."}, {"name": "--project", "arg": "name", "description": "A K2 project (any agent can join it)."}, {"name": "--level", "arg": "read|write", "description": "The grant level."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix (default: all)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {
       "name": "llm tokens list",
       "usage": "k2 llm tokens list [--tool <tool>] [--json]",
@@ -44609,6 +44611,22 @@ k2 store list --workspace I uses I's PG LOGIN (owner token; cell stamp pins).
 
 OWNER vs AGENT: create-new-DB needs db_agent_access=write. list/get/put
 work when you own a DB or have a grant covering the verb.
+
+GARDEN DATA (--widget): a Garden widget's own data on THIS computer.
+Agents see only the keys the person (or a grant admin) granted them.
+  get     --widget <w> <key> [--json]
+  put     --widget <w> <key> --value '{…}' | --file f.json [--if-rev N]
+  rm      --widget <w> <key> [--if-rev N]
+  list    --widget <w> [--prefix p/] [--after <key>] [--limit N] [--all]
+  changes --widget <w> --since N [--prefix p/] [--wait 30] [--follow]
+  batch   --widget <w> < ops.json      (≤ 1,000 ops, all or nothing, one rev)
+  grants  --widget <w>                 (what can I access?)
+  grant   --widget <w> --agent <h> | --project <p> --level read|write [--prefix p/]
+  revoke  --widget <w> --agent <h> | --project <p> [--prefix p/]
+  export  --widget <w> [--at YYYY-MM-DD] > data.jsonl
+grant/revoke are for a grant admin the person named (k2 zen data admin).
+Exit codes: 3 not granted / needs a person, 4 not found, 5 conflict (re-read, retry).
+The person's admin commands: k2 zen data --help.
 EOF
 }
 
@@ -44813,8 +44831,212 @@ cmd_db() {
     esac
 }
 
+# ── Garden data — k2 store --widget / k2 zen data (contract-garden-data-v1 §8) ──
+# A widget's own keyspace on THIS computer (`data:<widget>`), shared with the
+# agents the person grants. `store` is a locked id tool, so inside a K2
+# terminal these always send the session passport (grants apply per call);
+# outside K2 the owner token is the person. Routes are /cli/zen/data/*, never
+# /cli/store/* (GL28). C0 owns this C0 block, the dispatch, help and
+# --schema; B1 edits only BEGIN/END_GARDEN_DATA_B1 and _ZEN_DATA_B1, B3 only
+# the _B3 regions.
+# BEGIN_GARDEN_DATA_C0
+
+# Print a Garden data refusal and exit with the contract code (§8):
+# 3 person/grant refusals, 4 not found, 5 conflict, 1 anything else.
+_gd_fail() {
+    local status="$1" body="$2" code=""
+    code="$(printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    v = json.loads(sys.stdin.read())
+    e = v.get("error") if isinstance(v, dict) else None
+    print(e.get("code", "") if isinstance(e, dict) else (e or ""))
+except Exception:
+    print("")
+' 2>/dev/null)"
+    if [ "${_GD_JSON:-0}" = "1" ] && [ -n "$body" ]; then
+        printf '%s\n' "$body"
+    elif [ -n "$body" ]; then
+        printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    e = json.loads(raw).get("error")
+    if isinstance(e, dict):
+        print("Error: %s: %s" % (e.get("code", "error"), e.get("hint", "")))
+    else:
+        print("Error: %s" % e)
+except Exception:
+    print("Error: daemon returned: %s" % raw[:200])
+' >&2
+    else
+        echo "Error: no answer from the K2 daemon (status ${status:-none})" >&2
+    fi
+    case "$code" in
+        person_only|owner_only)
+            echo "This needs a person. Run it outside K2, or use Settings → Gardens." >&2
+            exit 3 ;;
+        not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
+        space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot) exit 4 ;;
+        conflict) exit 5 ;;
+        *) exit 1 ;;
+    esac
+}
+
+# _gd_call METHOD PATH [PAYLOAD]: GET payload is a query string, POST payload
+# is JSON. Anything but 200 fails (and exits); the body lands in _GD_BODY.
+_gd_call() {
+    local raw
+    raw="$(_compute_send "$@")"
+    _GD_STATUS="${raw##*$'\n'}"
+    _GD_BODY="${raw%$'\n'*}"
+    [ "$_GD_STATUS" = "$raw" ] && _GD_BODY=""
+    [ -z "$_GD_STATUS" ] && _GD_STATUS="000"
+    [ "$_GD_STATUS" = "200" ] || _gd_fail "$_GD_STATUS" "$_GD_BODY"
+}
+
+_gd_not_built() {
+    echo "Error: not_built: k2 $1 is not built yet" >&2
+    exit 1
+}
+
+# True when the arguments name --widget (k2 store's Garden data mode).
+_gd_has_widget() {
+    local a
+    for a in "$@"; do [ "$a" = "--widget" ] && return 0; done
+    return 1
+}
+
+# k2 store <verb> --widget <name> …  (flags may come in any order).
+# Sets _GD_WIDGET and _GD_JSON, passes the rest to the verb.
+cmd_store_widget() {
+    local sub="${1:-}"
+    shift || true
+    _GD_WIDGET="" _GD_JSON=0
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --widget) _GD_WIDGET="${2:-}"; shift 2 || { echo "Error: --widget takes a name" >&2; exit 2; } ;;
+            --json) _GD_JSON=1; shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    if [ -z "$_GD_WIDGET" ]; then
+        echo "Error: --widget takes a widget name (k2 zen widget list)" >&2
+        exit 2
+    fi
+    set -- ${rest[@]+"${rest[@]}"}
+    case "$sub" in
+        get) cmd_store_widget_get "$@" ;;
+        put) cmd_store_widget_put "$@" ;;
+        rm|delete) cmd_store_widget_rm "$@" ;;
+        list|ls) cmd_store_widget_list "$@" ;;
+        changes) cmd_store_widget_changes "$@" ;;
+        batch) cmd_store_widget_batch "$@" ;;
+        grants) cmd_store_widget_grants "$@" ;;
+        grant) cmd_store_widget_grant "$@" ;;
+        revoke) cmd_store_widget_revoke "$@" ;;
+        export) cmd_store_widget_export "$@" ;;
+        *)
+            echo "Error: unknown 'k2 store $sub --widget' command — see k2 store --help" >&2
+            exit 2 ;;
+    esac
+}
+
+# k2 zen data <verb> … (person-only admin). Goes through _compute_send, so
+# inside a K2 terminal it sends the passport and the daemon refuses
+# (person_only, exit 3).
+cmd_zen_data() {
+    local sub="${1:-}"
+    shift || true
+    _GD_JSON=0
+    local a
+    for a in "$@"; do [ "$a" = "--json" ] && _GD_JSON=1; done
+    case "$sub" in
+        ""|help|--help|-h) cmd_help_zen_data; return 0 ;;
+        list|ls) cmd_zen_data_list "$@" ;;
+        show) cmd_zen_data_show "$@" ;;
+        grant) cmd_zen_data_grant "$@" ;;
+        revoke) cmd_zen_data_revoke "$@" ;;
+        admin) cmd_zen_data_admin "$@" ;;
+        unadmin) cmd_zen_data_unadmin "$@" ;;
+        delete|rm) cmd_zen_data_delete "$@" ;;
+        move|mv) cmd_zen_data_move "$@" ;;
+        export) cmd_zen_data_export "$@" ;;
+        import) cmd_zen_data_import "$@" ;;
+        *)
+            echo "Error: unknown 'k2 zen data $sub'" >&2
+            cmd_help_zen_data >&2
+            exit 2 ;;
+    esac
+}
+
+cmd_help_zen_data() {
+    cat <<'EOF'
+k2 zen data — a widget's data on this computer (the person only)
+
+Each custom widget has its own keyspace (data:<widget>) that it reads and
+writes with k2.store, and that agents you allow read and write with
+`k2 store --widget`. These commands are for you, the person: inside a K2
+terminal they're refused (run them outside K2, or use Settings → Gardens).
+
+USAGE
+  k2 zen data list [--json]
+  k2 zen data show <widget> [--json]
+  k2 zen data grant <widget> --agent <h> | --project <p> --level read|write [--prefix p/]
+  k2 zen data revoke <widget> --agent <h> | --project <p> [--prefix p/]
+  k2 zen data admin <widget> --agent <h> --level read|write [--prefix p/]
+  k2 zen data unadmin <widget> --agent <h> [--prefix p/] [--yes]
+  k2 zen data delete <widget> [--yes]
+  k2 zen data move <old> <new>
+  k2 zen data export <widget> [--at YYYY-MM-DD] > data.jsonl
+  k2 zen data import <widget> [--replace] < data.jsonl
+
+GRANTS
+  An agent grant is a wall: only that agent gets it. A --project grant is a
+  convenience, not a wall: any agent can join a K2 project. admin makes one
+  agent a grant admin: it may grant others inside its prefix, up to its own
+  level, never itself; unadmin removes it and every grant it made.
+EOF
+}
+# END_GARDEN_DATA_C0
+
+# BEGIN_GARDEN_DATA_B1
+cmd_store_widget_get() { _gd_not_built "store get --widget"; }
+cmd_store_widget_put() { _gd_not_built "store put --widget"; }
+cmd_store_widget_rm() { _gd_not_built "store rm --widget"; }
+cmd_store_widget_list() { _gd_not_built "store list --widget"; }
+cmd_store_widget_changes() { _gd_not_built "store changes --widget"; }
+cmd_store_widget_batch() { _gd_not_built "store batch --widget"; }
+cmd_store_widget_grants() { _gd_not_built "store grants --widget"; }
+cmd_store_widget_grant() { _gd_not_built "store grant --widget"; }
+cmd_store_widget_revoke() { _gd_not_built "store revoke --widget"; }
+# END_GARDEN_DATA_B1
+
+# BEGIN_GARDEN_DATA_B3
+cmd_store_widget_export() { _gd_not_built "store export --widget"; }
+# END_GARDEN_DATA_B3
+
+# BEGIN_ZEN_DATA_B1
+cmd_zen_data_list() { _gd_not_built "zen data list"; }
+cmd_zen_data_show() { _gd_not_built "zen data show"; }
+cmd_zen_data_grant() { _gd_not_built "zen data grant"; }
+cmd_zen_data_revoke() { _gd_not_built "zen data revoke"; }
+cmd_zen_data_admin() { _gd_not_built "zen data admin"; }
+cmd_zen_data_unadmin() { _gd_not_built "zen data unadmin"; }
+cmd_zen_data_delete() { _gd_not_built "zen data delete"; }
+cmd_zen_data_move() { _gd_not_built "zen data move"; }
+# END_ZEN_DATA_B1
+
+# BEGIN_ZEN_DATA_B3
+cmd_zen_data_export() { _gd_not_built "zen data export"; }
+cmd_zen_data_import() { _gd_not_built "zen data import"; }
+# END_ZEN_DATA_B3
+
 cmd_store() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_store; exit 0; fi
+    # Garden data (contract-garden-data-v1 §8): a widget's keyspace.
+    if _gd_has_widget "$@"; then cmd_store_widget "$@"; return; fi
     _db_take_workspace_flags "$@"
     if [ ${#_db_ws_args[@]} -eq 0 ]; then cmd_help_store; exit 0; fi
     set -- "${_db_ws_args[@]}"
@@ -44916,6 +45138,7 @@ USAGE
   k2 zen news [--json]
   k2 zen news seen [<id>... | --all] [--json]
   k2 zen guide [<topic>] [--json]
+  k2 zen data <list|show|grant|revoke|admin|unadmin|delete|move|export|import> …
   k2 zen guide example [<name> [--toml] | --list]
 
 COMMANDS
@@ -47047,6 +47270,10 @@ print(json.dumps(b))
         guide)
             cmd_zen_guide "$@"
             ;;
+        # Garden data admin (contract-garden-data-v1 §8): the person only.
+        data)
+            cmd_zen_data "$@"
+            ;;
         grant|grants|allow)
             echo "Error: there is no 'k2 zen $sub'. Widgets in your own Gardens need no permissions:" >&2
             echo "they can talk to your agents right away." >&2
@@ -48059,7 +48286,12 @@ EOF
         # Zen Mode (prd-zen-mode-v1 Z17): this computer's ~/.k2/zen via the
         # local daemon's owner-only /cli/zen/* routes. No grant verb: widgets
         # need no permissions (2026-10-08).
-        # `k2 zen guide` is static and handles its own --help.
+        # `k2 zen guide` is static and handles its own --help; so does
+        # `k2 zen data` (Garden data, contract-garden-data-v1 §8).
+        if [ "${2:-}" = "data" ] && _wants_help "${@:2}"; then
+            cmd_help_zen_data
+            exit 0
+        fi
         if [ "${2:-}" != "guide" ] && _wants_help "${@:2}"; then
             cmd_help_zen
             exit 0

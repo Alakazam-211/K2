@@ -710,6 +710,20 @@ mod unix_impl {
                 let who = crate::sources_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::sources_routes::handle(p, who, body, params))
             }
+            // Garden data (contract-garden-data-v1 §4.7): EVERY
+            // `/cli/zen/data/*` path for THIS cell's session (agent or K2
+            // shell tab, agent rules); person routes answer 403
+            // person_only. The widget door `/cli/zen/call` is never here.
+            p if crate::zen_data_routes::is_agent_route(p) => {
+                if crate::zen_data_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::zen_data_routes::method_not_allowed());
+                }
+                if body.len() > crate::zen_data_routes::max_body(p) {
+                    return from_cli(crate::zen_data_routes::too_large(p));
+                }
+                let who = crate::zen_data_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::zen_data_routes::handle(p, who, body, params, ""))
+            }
             // K2 vault over the cell socket: the bound session's passport
             // (agent or K2 shell tab), agent-level (KV15).
             p if crate::vault_routes::is_route(p) => {
@@ -1469,6 +1483,36 @@ mod unix_impl {
                 let _: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}: {body}"));
                 if crate::sources_routes::is_post_route(path) {
                     let (status, _, _) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-src");
+                    assert_eq!(status, "405 Method Not Allowed", "{path}");
+                }
+            }
+        }
+
+        /// Garden data (contract-garden-data-v1 §4.7): every
+        /// `/cli/zen/data/*` path is an agent verb and is answered by the
+        /// Garden data handler on the cell socket (never cli::dispatch's 404
+        /// nor the cell sentinel), with a JSON body; a GET to a POST row is
+        /// 405. The widget door `/cli/zen/call` is not an agent verb.
+        #[test]
+        fn cell_dispatch_serves_every_zen_data_route() {
+            let _home = crate::test_support::TempHome::new();
+            let _ = k2_core::db::init_for_tests();
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            assert!(!crate::session_token::is_agent_verb(crate::zen_data_routes::CALL_ROUTE));
+            for path in crate::zen_data_routes::ROUTES.iter().filter(|p| crate::zen_data_routes::is_agent_route(p)) {
+                assert!(crate::session_token::is_agent_verb(path), "{path} must be an agent verb");
+                let method = if crate::zen_data_routes::is_post_route(path) { "POST" } else { "GET" };
+                let (status, _, body) = dispatch_cell_verb(method, path, &params, b"{}", &p, "sid-gd");
+                assert!(
+                    !body.contains("route not found") && !body.contains("not served on cell socket"),
+                    "{path}: {status} {body}"
+                );
+                let v: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}: {body}"));
+                assert!(v.get("error").is_some() || status == "200 OK", "{path}: {status} {body}");
+                if crate::zen_data_routes::is_post_route(path) {
+                    let (status, _, _) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-gd");
                     assert_eq!(status, "405 Method Not Allowed", "{path}");
                 }
             }

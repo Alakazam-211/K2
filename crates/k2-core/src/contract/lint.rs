@@ -46,7 +46,9 @@ pub const SCHEMA_KEYWORDS: &[&str] = &[
 ];
 
 /// JSON Schema type names the subset allows.
-pub const SCHEMA_TYPES: &[&str] = &["string", "number", "integer", "boolean", "null", "array", "object"];
+/// `json` is any JSON value (Garden data values, contract-garden-data-v1
+/// §7.2); TypeScript `unknown`.
+pub const SCHEMA_TYPES: &[&str] = &["string", "number", "integer", "boolean", "null", "array", "object", "json"];
 
 /// Every problem in `c`, in file order. Empty = clean.
 pub fn lint(c: &Catalog) -> Vec<String> {

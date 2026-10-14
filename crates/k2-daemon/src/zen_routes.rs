@@ -69,10 +69,12 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/theme/next",
     "/cli/zen/theme/prev",
     "/cli/zen/theme/set",
+    "/cli/zen/widget/claim",
     "/cli/zen/widget/new",
     "/cli/zen/widget/pause",
     "/cli/zen/widget/resume",
     "/cli/zen/widget/run",
+    "/cli/zen/widget/sign",
 ];
 
 /// The GET rows (G45, UW35, UWB23). `/cli/zen/lib/file` is B3's.
@@ -994,6 +996,15 @@ pub fn handle(
         },
         "/cli/zen/widget/pause" => handle_widget_pause(body, caller, ingress),
         "/cli/zen/widget/resume" => handle_widget_resume(body, caller, ingress),
+        // Garden data authorship (contract-garden-data-v1 §4.3, BG3; B2):
+        // sign = the owner token or a local agent/shell passport; claim =
+        // the owner token only. C0 stubs.
+        "/cli/zen/widget/sign" | "/cli/zen/widget/claim" => {
+            return resp(
+                "501 Not Implemented",
+                json!({ "error": { "code": "not_built", "hint": "widget signing is not built yet (Garden data C0 stub)" } }),
+            )
+        }
         "/cli/zen/theme/list" => refuse_home(params).and_then(|_| files().theme_list(param(params, "garden"))),
         "/cli/zen/theme/set" | "/cli/zen/theme/next" | "/cli/zen/theme/prev" => handle_theme_switch(path, body),
         "/cli/zen/theme/new" => handle_theme_new(body),

@@ -539,6 +539,15 @@ export interface SourcesChangedEvent {
   rev: number
 }
 
+/** APP-LEVEL — Garden data: a widget keyspace changed on this computer
+ *  (contract-garden-data-v1 §6). Carries the space (`data:<widget>`) and its
+ *  rev only, never keys or values; readers page `store.changes`. */
+export interface GardenDataChangedEvent {
+  kind: 'garden_data_changed'
+  space: string
+  rev: number
+}
+
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -662,6 +671,7 @@ export type SessionEventMessage =
   | FsChangedEvent
   | ZenChangedEvent
   | SourcesChangedEvent
+  | GardenDataChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
   | ReviewQueueChangedEvent
@@ -1132,6 +1142,7 @@ type TokenUsageChangedHandler = () => void
 type LlmAccountsChangedHandler = (tool: string | null) => void
 type ZenChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
+type GardenDataChangedHandler = (space: string, rev: number) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
@@ -1191,6 +1202,7 @@ interface AppBusHandlers {
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   sourcesChanged: Set<SourcesChangedHandler>
+  gardenDataChanged: Set<GardenDataChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
 }
@@ -1235,6 +1247,7 @@ function createBusState(scopeId: string): BusState {
       activeChanged: new Set(),
       zenChanged: new Set(),
       sourcesChanged: new Set(),
+      gardenDataChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
     },
@@ -1450,6 +1463,12 @@ export function onSourcesChanged(scope: ServerScope, fn: (rev: number) => void):
   return addHandler(busFor(scope).handlers.sourcesChanged, fn)
 }
 
+/** Garden data — subscribe to APP-LEVEL `garden_data_changed` on `scope`'s
+ *  server (contract-garden-data-v1 §6). Gardens only use the local scope. */
+export function onGardenDataChanged(scope: ServerScope, fn: GardenDataChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.gardenDataChanged, fn)
+}
+
 /** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
  *  not install K2's hooks into an agent CLI config). */
 export function onHooksInstallFailed(scope: ServerScope, fn: HooksInstallFailedHandler): UnsubscribeFn {
@@ -1663,6 +1682,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   sources_changed: (h, m) => {
     for (const fn of h.sourcesChanged) fn(m.rev)
   },
+  garden_data_changed: (h, m) => {
+    for (const fn of h.gardenDataChanged) fn(m.space, m.rev)
+  },
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)
   },
@@ -1712,6 +1734,7 @@ export interface AppBus {
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
   onSourcesChanged(fn: SourcesChangedHandler): UnsubscribeFn
+  onGardenDataChanged(fn: GardenDataChangedHandler): UnsubscribeFn
   onHooksInstallFailed(fn: HooksInstallFailedHandler): UnsubscribeFn
   onActivityChanged(fn: ActivityChangedHandler): UnsubscribeFn
 }
@@ -1759,6 +1782,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
     onSourcesChanged: (fn) => onSourcesChanged(scope, fn),
+    onGardenDataChanged: (fn) => onGardenDataChanged(scope, fn),
     onHooksInstallFailed: (fn) => onHooksInstallFailed(scope, fn),
     onActivityChanged: (fn) => onActivityChanged(scope, fn),
   }

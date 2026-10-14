@@ -9,7 +9,7 @@
 // never edited by hand.
 
 /** Who outside K2's own code may call a verb or hold a cap. Empty = none. */
-export type CatalogExposure = 'widget' | 'app'
+export type CatalogExposure = 'widget' | 'app' | 'garden-local'
 
 /** Whether the same call and shape work in an App (UWA4). */
 export type CatalogReach = 'portable' | 'local'

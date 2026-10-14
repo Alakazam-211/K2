@@ -1037,6 +1037,32 @@ pub const ROUTES: &[Route] = &[
     // Zen v2 (prd-zen-user-widgets-v2 UW35, UWB6, UWB15, UWB23): the widget
     // and grant rows are Member too; the grant-giving ones take the owner
     // token only (403 `owner_only`, UWB3). `lib/*` is B3's zen_lib_routes.
+    // Garden data (prd-gardens-local-services-v1 1A, contract-garden-data-v1
+    // §4.4): this computer only, so no Connect login ever (NoLogin). The
+    // owner token and agent passports reach the handlers, which apply
+    // grants on every call; `/cli/zen/call` takes the owner token only.
+    post("/cli/zen/call", NoLogin),
+    post("/cli/zen/data/admin", NoLogin),
+    post("/cli/zen/data/admin/revoke", NoLogin),
+    post("/cli/zen/data/batch", NoLogin),
+    get("/cli/zen/data/changes", NoLogin),
+    post("/cli/zen/data/delete", NoLogin),
+    get("/cli/zen/data/export", NoLogin),
+    get("/cli/zen/data/get", NoLogin),
+    post("/cli/zen/data/grant", NoLogin),
+    get("/cli/zen/data/grants", NoLogin),
+    post("/cli/zen/data/import", NoLogin),
+    get("/cli/zen/data/list", NoLogin),
+    post("/cli/zen/data/put", NoLogin),
+    post("/cli/zen/data/revoke", NoLogin),
+    get("/cli/zen/data/show", NoLogin),
+    post("/cli/zen/data/space/delete", NoLogin),
+    post("/cli/zen/data/space/move", NoLogin),
+    get("/cli/zen/data/spaces", NoLogin),
+    post("/cli/zen/data/tx/abort", NoLogin),
+    post("/cli/zen/data/tx/add", NoLogin),
+    post("/cli/zen/data/tx/begin", NoLogin),
+    post("/cli/zen/data/tx/commit", NoLogin),
     get("/cli/zen/doctor", Member),
     post("/cli/zen/garden/delete", Member),
     // Garden Lock (prd-garden-lock-and-sync-v1 §5.2): the person only; the
@@ -1067,12 +1093,16 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/theme/set", Member),
     get("/cli/zen/validate", Member),
     get("/cli/zen/widget/bundle", Member),
+    // Authorship (contract-garden-data-v1 §4.3, BG3): claim takes the
+    // owner token only; sign takes it or a local agent/shell passport.
+    post("/cli/zen/widget/claim", Member),
     get("/cli/zen/widget/errors", Member),
     post("/cli/zen/widget/new", Member),
     post("/cli/zen/widget/pause", Member),
     post("/cli/zen/widget/resume", Member),
     post("/cli/zen/widget/run", Member),
     get("/cli/zen/widget/show", Member),
+    post("/cli/zen/widget/sign", Member),
     get("/cli/zen/widgets", Member),
 ];
 

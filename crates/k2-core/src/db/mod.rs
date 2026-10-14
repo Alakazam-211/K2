@@ -1307,10 +1307,18 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         ),
         // 0163 — Garden v3 data sources and triggers
         // (prd-garden-v3-external-data-cards-v1, contract-sources-v1 §2).
-        // 0160/0161 (hire API) and 0162 (projects switch) sit before it;
-        // 0164 is reserved for webhook push. The integrator renames
+        // 0160/0161 (hire API) and 0162 (projects switch) sit before it.
+        // Its webhook-push migration takes a later number (0164 went to
+        // Garden data in the 0.45.6 release order). The integrator renames
         // this to 0166+ if integ/0.46.0 (0165) lands first.
         ("0163_sources", include_str!("../../drizzle_sql/0163_sources.sql")),
+        // 0164 — Garden data grants and widget authorship
+        // (prd-gardens-local-services-v1 1A, contract-garden-data-v1 §2.1).
+        // 0.45.6 release order: 0160–0161 hire API, 0162 projects switch,
+        // 0163 Sources, 0164 this; 0165 (app_runtime_core) ships later in
+        // 0.46.0. The integrator renumbers on slips (never below a number
+        // already live).
+        ("0164_garden_data", include_str!("../../drizzle_sql/0164_garden_data.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1971,7 +1979,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0163_sources",
+            last_name, "0164_garden_data",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2003,9 +2011,46 @@ mod tests {
                 "0161_team_links_and_deliveries",
                 "0162_agents_manage_projects",
                 "0163_sources",
+                "0164_garden_data",
             ],
             "tail migrations out of order: {names:?}"
         );
+    }
+
+    /// The tables 0164 creates (contract-garden-data-v1 §2.1).
+    const GARDEN_DATA_TABLES: &[&str] = &["zen_data_grants", "zen_widget_authors"];
+
+    /// 0164 on a fresh database: both tables exist; a delegation is a
+    /// person-made workspace row; a delegate-made row names its
+    /// delegation; `save:` spaces are never granted; an agent stamp names
+    /// its workspace (contract-garden-data-v1 §2.1).
+    #[test]
+    fn garden_data_migration_creates_its_tables_and_checks() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in GARDEN_DATA_TABLES {
+            assert!(tables.iter().any(|n| n == t), "0164 table {t} missing: {tables:?}");
+        }
+        let ins = |space: &str, kind: &str, admin: i64, via: Option<i64>, by: &str| {
+            conn.execute(
+                "INSERT INTO zen_data_grants (space, prefix, subject_kind, subject_id, level, admin, via_grant, granted_by, granted_at)
+                 VALUES (?1, '', ?2, 'w-1', 'write', ?3, ?4, ?5, 1)",
+                params![space, kind, admin, via, by],
+            )
+        };
+        ins("data:board", "workspace", 1, None, "owner").expect("a person-made delegation");
+        assert!(ins("data:other", "project", 1, None, "owner").is_err(), "a project can't be a grant admin");
+        assert!(ins("data:other", "workspace", 0, None, "agent:w-2").is_err(), "an agent grant names its delegation");
+        assert!(ins("save:board", "workspace", 0, None, "owner").is_err(), "save spaces are never granted");
+        ins("data:other", "workspace", 0, Some(1), "agent:w-2").expect("a delegate-made grant");
+        assert!(ins("data:other", "workspace", 0, None, "owner").is_err(), "one row per (space, prefix, subject)");
+        let bad_author = conn.execute(
+            "INSERT INTO zen_widget_authors (widget, hash, author_kind, author_project_id, source, caller_kind, signed_at)
+             VALUES ('board', ?1, 'agent', NULL, 'sign', 'agent', 1)",
+            params!["a".repeat(64)],
+        );
+        assert!(bad_author.is_err(), "an agent stamp names its workspace");
     }
 
     /// The tables 0163 creates (contract-sources-v1 §2).
@@ -2082,6 +2127,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0163_sources'", []).unwrap();
+            // 0164 (Garden data) came after 0163; roll it back too.
+            for t in GARDEN_DATA_TABLES {
+                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
+            }
+            conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

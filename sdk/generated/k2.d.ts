@@ -293,7 +293,7 @@ export interface SourceAsk {
 export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read'
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused'
 
 /** What `k2.connected` resolves with: the hello K2 sent this frame. */
 export interface K2Hello {

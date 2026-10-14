@@ -64,6 +64,11 @@ pub enum Exposure {
     Widget,
     /// An App (Cut B; no `app` verb rows in this cut).
     App,
+    /// A custom Garden widget, through this computer's daemon only
+    /// (`POST /cli/zen/call`; prd-gardens-local-services-v1 §3.1,
+    /// contract-garden-data-v1 §7.2). Wire name `garden-local`.
+    #[serde(rename = "garden-local")]
+    GardenLocal,
 }
 
 /// Whether the same call and shape will work in an App (UWA4).
@@ -347,6 +352,20 @@ mod tests {
                 "removed",
                 "no_history",
                 "failed",
+                // Garden data (contract-garden-data-v1 §7.2).
+                "conflict",
+                "space_full",
+                "value_too_large",
+                "bad_key",
+                "not_granted",
+                "resync",
+                "author_unknown",
+                "stale_widget",
+                "store_full",
+                "bad_tx",
+                "tx_expired",
+                "busy",
+                "paused",
             ]
         );
     }

@@ -193,6 +193,11 @@ pub mod vault_use_routes;
 pub mod sources;
 pub mod sources_routes;
 pub mod wall_jump;
+// Garden data (prd-gardens-local-services-v1 1A, contract-garden-data-v1):
+// widget keyspaces, grants, the widget door `/cli/zen/call` and the agent
+// door `/cli/zen/data/*`.
+pub mod garden_data;
+pub mod zen_data_routes;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;
 pub mod remote_session_routes;

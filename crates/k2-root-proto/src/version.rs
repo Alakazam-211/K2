@@ -6,6 +6,8 @@
 //! - 3 = self-update + backup + `harden-store` + the `pg` namespace;
 //! - 4 = `keep`;
 //! - 5 = `daemon handoff-dropin install|remove` (runtime stage H, 0.46.0).
+//! - 6 = reserved: the App runtime's `apps` namespace + `pg hba-app` (0.46.1,
+//!   vs-live 2 AR38). Not served yet; Sew's `engine sew` takes 7 or later.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -33,6 +35,10 @@ pub const PG_MIN_PROTOCOL: u32 = 3;
 pub const KEEP_MIN_PROTOCOL: u32 = 4;
 /// The daemon unit's hand-off drop-in (`daemon handoff-dropin …`).
 pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
+/// The App runtime's `apps` namespace and `pg hba-app` (0.46.1, AR38).
+/// Reserved: no build answers 6 until those verbs land, so the daemon
+/// treats every helper on the fleet as "no App verbs" (`PROTOCOL` < this).
+pub const APPS_MIN_PROTOCOL: u32 = 6;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -176,6 +182,17 @@ pub fn elf_matches(bytes: &[u8], arch: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace.
+    /// Nothing may answer 6 before its verbs exist, so this build stays
+    /// below it (bump PROTOCOL in the commit that adds the `apps` verbs).
+    #[test]
+    fn protocol_numbers_follow_ar38() {
+        assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
+        assert_eq!(APPS_MIN_PROTOCOL, 6);
+        assert!(PROTOCOL >= HANDOFF_MIN_PROTOCOL);
+        assert!(PROTOCOL < APPS_MIN_PROTOCOL, "no apps verbs yet; PROTOCOL {PROTOCOL} must stay below 6");
+    }
 
     #[test]
     fn semver_is_plain_xyz_and_orders_numerically() {

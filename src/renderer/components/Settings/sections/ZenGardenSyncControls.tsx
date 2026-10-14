@@ -29,6 +29,15 @@ import {
   useZenSyncStore,
   zenSyncChecked,
 } from '@/lib/zen/zen-sync'
+import { offerPinOnLock, type PinOutcome } from './data-sources-lock'
+
+/** The toast after "Also pin the N sources it shows" (data-sources-lock). */
+function pinToast(r: PinOutcome | null): void {
+  if (!r) return
+  const t = useToastStore.getState()
+  if (r.pinned.length) t.addToast(`Pinned ${r.pinned.join(', ')}`, 'success', 6000)
+  for (const f of r.failed) t.addToast(`Couldn’t pin ${f.address}: ${f.text}`, 'error', 8000)
+}
 
 export const ZEN_LOCK_LABEL = 'Lock garden'
 export const ZEN_LOCK_TIP = 'Agents can’t change this Garden. You still can.'
@@ -173,7 +182,11 @@ export function ZenGardenSyncControls({
           dataAttr={{ 'data-zen-garden-lock': garden.id }}
           onChange={(next) =>
             run(
-              () => setZenGardenLock(garden.id, next),
+              async () => {
+                await setZenGardenLock(garden.id, next)
+                // Garden v3 (GV65): offer to pin the sources it shows.
+                if (next) void offerPinOnLock(garden.id, row.name).then(pinToast)
+              },
               next ? `${row.name} is locked` : `${row.name} is unlocked`,
               () => setZenGardenLock(garden.id, !next),
             )

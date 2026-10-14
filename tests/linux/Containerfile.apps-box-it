@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus libpam-systemd sudo passwd \
-      curl ca-certificates util-linux procps python3 nftables iproute2 \
+      curl ca-certificates util-linux procps python3 nftables iproute2 slirp4netns \
  && rm -rf /var/lib/apt/lists/*
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

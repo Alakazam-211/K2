@@ -37,7 +37,17 @@ mkdir -p "$LOGS"
 KEEP="${K2_IT_KEEP:-0}"
 "${SSH[@]}" "df -h / | tail -n 1; if [ -e $R ]; then [ -f $R/.k2-apps-box-it ] || { echo 'refusing: $R exists and is not ours'; exit 1; }; fi"
 
+HOSTSTATE="cat /proc/sys/net/ipv4/ip_local_reserved_ports; nft list tables 2>/dev/null | sort; id k2app 2>&1 | head -c 60; echo; ls /etc/systemd/system | grep -c k2app || true"
+"${SSH[@]}" "$HOSTSTATE" >"$LOGS/host-before.txt"
+
 finish() {
+	"${SSH[@]}" "$HOSTSTATE" >"$LOGS/host-after.txt" || true
+	if cmp -s "$LOGS/host-before.txt" "$LOGS/host-after.txt"; then
+		echo "== host unchanged (reserved ports, nft tables, no k2app user or unit) =="
+	else
+		echo "== HOST STATE CHANGED ==" >&2
+		diff "$LOGS/host-before.txt" "$LOGS/host-after.txt" >&2 || true
+	fi
 	echo "== cleanup on $HOST =="
 	"${SSH[@]}" "podman rm -f k2rh-it-$STAMP k2apps-it-$STAMP k2apps-e2e-$STAMP >/dev/null 2>&1 || true; podman rmi -f localhost/k2rh-it:rts2 localhost/k2-apps-box-it:rts2 >/dev/null 2>&1 || true; if [ '$KEEP' = 1 ]; then echo 'kept $R'; else rm -rf $R; fi; df -h / | tail -n 1" || true
 }
@@ -70,7 +80,7 @@ for l in sys.stdin:
 cargo test --release -j 8 -p k2-root-proto --features test-signer --no-run --message-format=json 2>/dev/null | bins >"$R/unit-bins.txt"
 cargo test --release -j 8 -p k2-root-helper --no-run --message-format=json 2>/dev/null | bins >>"$R/unit-bins.txt"
 cp scripts/install-root-helper.sh scripts/k2-pg-helper "$R/it/scripts/"
-cp tests/linux/root_helper_in_container.sh tests/linux/apps_box_in_container.sh tests/linux/apps_box_daemon_e2e.sh \
+cp tests/linux/root_helper_in_container.sh tests/linux/apps_box_in_container.sh tests/linux/apps_box_daemon_e2e.sh tests/linux/apps_box_netns.sh \
    tests/linux/Containerfile.root-helper-it tests/linux/Containerfile.apps-box-it "$R/it/tests/"
 cp cli/k2 "$R/it/cli/k2"
 chmod -R a+rX "$R"
@@ -108,10 +118,13 @@ echo "== images =="
 "${SSH[@]}" "set -e; podman build -q -t localhost/k2rh-it:rts2 -f $R/it/tests/Containerfile.root-helper-it $R/it/tests >/dev/null; podman build -q -t localhost/k2-apps-box-it:rts2 -f $R/it/tests/Containerfile.apps-box-it $R/it/tests >/dev/null; echo built"
 
 # Own user namespace (8M ids at 2^31: no host user or other container
-# lives there) + /proc/sys writable for THIS netns only + CAP_NET_ADMIN in
-# it + /dev/net/tun for pasta.
+# lives there), so every capability below is held in THAT namespace only:
+# /proc/sys unmasked (host-wide sysctls stay owned by real root and are
+# refused; the tests' own netns, made inside the container by
+# apps_box_netns.sh, is the container's), NET_ADMIN/SYS_ADMIN for that
+# netns and systemd's unit sandboxing, /dev/net/tun for slirp4netns/pasta.
 USERNS=(--uidmap 0:2147483648:8388608 --gidmap 0:2147483648:8388608 --security-opt unmask=/proc/sys
-	--cap-add NET_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun)
+	--cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun)
 
 rc=0
 echo "== existing helper IT (protocol 6) in Ubuntu 24.04 =="

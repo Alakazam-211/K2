@@ -314,6 +314,83 @@ impl ProxyRegistration {
     }
 }
 
+/// How the supervised frpc is ACTUALLY doing (2026-10-14 incident). The
+/// connector's `running` flag is the desired state; it stayed true for two
+/// hours while frpc crash-looped on a missing config, so `k2 tunnel
+/// status` said "Running: yes" and `k2 tunnel start` said "started".
+///
+/// A failure is a run that ended before it was up (no `start proxy
+/// success` and under [`HEALTHY_UPTIME`]), a watchdog kill, or a spawn /
+/// config-render error. A run that comes up resets the count.
+pub(crate) struct FrpcHealth {
+    consecutive_failures: AtomicU64,
+    /// The last frpc error line, spawn error or render error.
+    last_error: Mutex<Option<String>>,
+}
+
+/// frpc log fragments worth surfacing as the last error.
+const ERROR_LINE_MARKERS: &[&str] = &[" [E] ", "[E] [", "no such file", "error", "failed"];
+
+impl FrpcHealth {
+    pub(crate) fn new() -> Self {
+        Self { consecutive_failures: AtomicU64::new(0), last_error: Mutex::new(None) }
+    }
+
+    fn set_error(&self, why: impl Into<String>) {
+        let mut why: String = why.into();
+        if why.len() > 400 {
+            let mut cut = 400;
+            while !why.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            why.truncate(cut);
+        }
+        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(why);
+    }
+
+    /// One failed run / spawn / render.
+    pub(crate) fn record_failure(&self, why: impl Into<String>) {
+        self.consecutive_failures.fetch_add(1, Ordering::SeqCst);
+        let why = why.into();
+        // Keep frpc's own error line when the run already logged one; the
+        // exit code alone says less.
+        let mut slot = self.last_error.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            *slot = Some(why);
+        }
+    }
+
+    /// One failed spawn / render: `why` replaces the last error.
+    pub(crate) fn fail_with(&self, why: impl Into<String>) {
+        self.consecutive_failures.fetch_add(1, Ordering::SeqCst);
+        self.set_error(why);
+    }
+
+    /// The current run came up.
+    pub(crate) fn record_up(&self) {
+        if self.consecutive_failures.swap(0, Ordering::SeqCst) != 0 {
+            crate::log_debug!("[tunnel] frpc is up again");
+        }
+        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+
+    /// One frpc log line (from the pump threads).
+    pub(crate) fn observe_line(&self, line: &str) {
+        let lower = line.to_ascii_lowercase();
+        if ERROR_LINE_MARKERS.iter().any(|m| lower.contains(&m.to_ascii_lowercase())) {
+            self.set_error(line.trim().to_string());
+        }
+    }
+
+    pub(crate) fn failures(&self) -> u64 {
+        self.consecutive_failures.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn last_error(&self) -> Option<String> {
+        self.last_error.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+}
+
 /// Live connector state — the supervised child + the desired-state flag.
 struct ConnectorState {
     /// The currently-running config.
@@ -336,6 +413,8 @@ struct ConnectorState {
     /// Whether frps accepted the current child's proxy (holder evidence
     /// for a release).
     proxy: Arc<ProxyRegistration>,
+    /// Whether frpc is actually up (vs crash-looping).
+    health: Arc<FrpcHealth>,
 }
 
 static STATE: OnceLock<Mutex<Option<ConnectorState>>> = OnceLock::new();
@@ -442,6 +521,27 @@ pub struct TunnelStatus {
     /// identity was deleted and tombstoned (PRD §2B). Always emitted so
     /// the UI's tri-state (Connected / Disabled / Released) never guesses.
     pub released: bool,
+    /// Running only: `false` when frpc is crash-looping or its rendered
+    /// config is missing — `running` is only the desired state (2026-10-14:
+    /// "Running: yes" for two hours while every frpc start failed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frpc_healthy: Option<bool>,
+    /// Running only: frpc runs in a row that failed before coming up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frpc_consecutive_failures: Option<u64>,
+    /// Running only: the last frpc error line / spawn or render error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frpc_last_error: Option<String>,
+    /// Running only: whether the rendered frpc config is on disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frpc_config_present: Option<bool>,
+    /// Where the rendered frpc config lives (private runtime dir).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frpc_config: Option<String>,
+    /// Set by a `start` that found the tunnel "running" but frpc failing
+    /// (or its config gone) and repaired it: the reason it repaired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repaired: Option<String>,
 }
 
 impl TunnelStatus {
@@ -458,8 +558,29 @@ impl TunnelStatus {
             frpc_installed: resolve_frpc(&FrpcBinary::Auto).is_ok(),
             enabled: cfg.enabled,
             released: super::unpair::released_state(&cfg),
+            frpc_healthy: None,
+            frpc_consecutive_failures: None,
+            frpc_last_error: None,
+            frpc_config_present: None,
+            frpc_config: Some(frpc_config_path().display().to_string()),
+            repaired: None,
         }
     }
+}
+
+/// Why a "running" connector is not actually serving (`None` = healthy):
+/// the rendered config is gone, or frpc runs keep failing.
+fn unhealthy_reason(st: &ConnectorState) -> Option<String> {
+    let path = frpc_config_path();
+    if !path.exists() {
+        return Some(format!("frpc config missing at {}", path.display()));
+    }
+    let n = st.health.failures();
+    if n > 0 {
+        let err = st.health.last_error().unwrap_or_else(|| "no error line".to_string());
+        return Some(format!("frpc failing ({n} consecutive failures): {err}"));
+    }
+    None
 }
 
 /// Start the tunnel.
@@ -479,12 +600,19 @@ pub fn start(
     bin: &FrpcBinary,
 ) -> Result<TunnelStatus, String> {
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    // Set when a "running" tunnel was found broken and restarted below.
+    let mut repaired: Option<String> = None;
 
     // Idempotent: already supervising a live child — for the SAME tunnel
     // identity. A live child for another identity (the subdomain/token on
     // disk or in `subdomain_override` moved since it started) is restarted
     // under the new one; returning the old status would keep frpc serving
     // the old name (0.45.2: release + connect a new subdomain).
+    //
+    // Same identity but NOT serving (frpc crash-looping, or the rendered
+    // config gone — 2026-10-14) is repaired the same way: stop + a fresh
+    // start re-renders the config and respawns frpc. "Tunnel started" over
+    // a dead frpc was the bug.
     if let Some(st) = guard.as_ref() {
         if st.running.load(Ordering::SeqCst) {
             let mut desired = config::load()?;
@@ -494,14 +622,24 @@ pub fn start(
             if super::identity::TunnelIdentity::of(&desired)
                 == super::identity::TunnelIdentity::of(&st.cfg)
             {
-                return Ok(status_from(st));
+                match unhealthy_reason(st) {
+                    None => return Ok(status_from(st)),
+                    Some(why) => {
+                        crate::log_debug!(
+                            "[tunnel] start: tunnel is running but not serving ({why}) — \
+                             re-rendering the config and restarting frpc"
+                        );
+                        repaired = Some(why);
+                    }
+                }
+            } else {
+                crate::log_debug!(
+                    "[tunnel] start: running tunnel serves {:?} but the config now says {:?} \
+                     — restarting under the new identity",
+                    st.cfg.subdomain,
+                    desired.subdomain
+                );
             }
-            crate::log_debug!(
-                "[tunnel] start: running tunnel serves {:?} but the config now says {:?} \
-                 — restarting under the new identity",
-                st.cfg.subdomain,
-                desired.subdomain
-            );
             drop(guard);
             stop()?;
             guard = state().lock().unwrap_or_else(|p| p.into_inner());
@@ -634,6 +772,7 @@ pub fn start(
     // rotation so status() always names the relay actually being dialed.
     let current_relay = Arc::new(Mutex::new(cfg.relay_list()[0].clone()));
     let proxy = Arc::new(ProxyRegistration::new(&cfg));
+    let health = Arc::new(FrpcHealth::new());
     spawn_supervised(
         frpc,
         child.clone(),
@@ -644,6 +783,7 @@ pub fn start(
         default_local_port,
         e2e,
         proxy.clone(),
+        health.clone(),
     )?;
 
     // K2SO #674: while the tunnel is up, the DAEMON renews the subdomain
@@ -667,8 +807,10 @@ pub fn start(
         running,
         current_relay,
         proxy,
+        health,
     };
-    let status = status_from(&st);
+    let mut status = status_from(&st);
+    status.repaired = repaired;
     *guard = Some(st);
     Ok(status)
 }
@@ -789,6 +931,8 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         .unwrap_or_else(|p| p.into_inner())
         .host
         .clone();
+    let cfg_path = frpc_config_path();
+    let unhealthy = unhealthy_reason(st);
     TunnelStatus {
         running: st.running.load(Ordering::SeqCst),
         public_url,
@@ -799,6 +943,12 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         // A live connector implies the gate passed at spawn time.
         enabled: true,
         released: false,
+        frpc_healthy: Some(unhealthy.is_none()),
+        frpc_consecutive_failures: Some(st.health.failures()),
+        frpc_last_error: st.health.last_error().or(unhealthy),
+        frpc_config_present: Some(cfg_path.exists()),
+        frpc_config: Some(cfg_path.display().to_string()),
+        repaired: None,
     }
 }
 
@@ -1083,6 +1233,36 @@ impl SessionWatch {
     }
 }
 
+/// Per-child-run health bookkeeping inside [`wait_for_exit`]: marks the
+/// run up (frps accepted the proxy, or it outlived [`HEALTHY_UPTIME`]) and
+/// re-renders the config whenever it has gone missing (macOS purges
+/// untouched files in the per-user temp dir after ~3 days; a test daemon
+/// once deleted it) so the NEXT respawn never execs frpc against nothing.
+struct RunHealth<'a> {
+    proxy: &'a ProxyRegistration,
+    health: &'a FrpcHealth,
+    /// Re-render the config if it is missing (closure over the current
+    /// relay + frozen port).
+    ensure_config: &'a dyn Fn(),
+    came_up: bool,
+    ticks: u32,
+}
+
+impl RunHealth<'_> {
+    fn tick(&mut self, spawned_at: Instant) {
+        if !self.came_up
+            && (self.proxy.is_registered() || spawned_at.elapsed() >= HEALTHY_UPTIME)
+        {
+            self.came_up = true;
+            self.health.record_up();
+        }
+        self.ticks = self.ticks.wrapping_add(1);
+        if self.ticks % LOCAL_TARGET_PROBE_EVERY == 0 {
+            (self.ensure_config)();
+        }
+    }
+}
+
 /// Wait for the current child to end.
 ///
 /// * Single relay ([`RelaySelector::is_solo`]) — poll `try_wait` so we can
@@ -1108,11 +1288,13 @@ fn wait_for_exit(
     local_port: &AtomicU16,
     e2e: bool,
     daemon_http_port: u16,
+    run: &mut RunHealth<'_>,
 ) -> ChildOutcome {
     let mut ticks_since_probe = 0u32;
     // Solo: stop-observability + localPort self-heal — no watchdog / fail-back.
     if selector.is_solo() {
         loop {
+            run.tick(spawned_at);
             match child.try_wait() {
                 Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
                 Ok(None) => {}
@@ -1140,6 +1322,7 @@ fn wait_for_exit(
         }
     }
     loop {
+        run.tick(spawned_at);
         match child.try_wait() {
             Ok(Some(status)) => return ChildOutcome::Exited(status.code()),
             Ok(None) => {} // still running
@@ -1318,6 +1501,7 @@ fn spawn_supervised(
     daemon_http_port: u16,
     e2e: bool,
     proxy: Arc<ProxyRegistration>,
+    health: Arc<FrpcHealth>,
 ) -> Result<(), String> {
     // Mid-session watchdog only in multi-relay mode: it exists to drive
     // ROTATION. Solo still polls for stop (orphan fix) but never arms a
@@ -1327,9 +1511,19 @@ fn spawn_supervised(
     let new_watch = move || multi.then(|| Arc::new(SessionWatch::new()));
 
     // First spawn happens synchronously so `start()` fails loud if the
-    // very first launch can't even exec.
+    // very first launch can't even exec. Like every spawn, it renders the
+    // config first ([`render_and_spawn`]).
     let mut watch = new_watch();
-    let first = spawn_once(&frpc, watch.clone(), &proxy)?;
+    let first = render_and_spawn(
+        &frpc,
+        cfg,
+        &cfg.relay_list()[0],
+        resolved_local_port.load(Ordering::SeqCst),
+        e2e,
+        watch.clone(),
+        &proxy,
+        &health,
+    )?;
     *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(first);
 
     let frpc_thread = frpc.clone();
@@ -1352,6 +1546,26 @@ fn spawn_supervised(
             // Frozen localPort for every normal rewrite (R1). Self-heal
             // may update `port_slot` then re-read via this helper.
             let frozen_port = || port_slot.load(Ordering::SeqCst);
+            // Re-render the config if it vanished while frpc runs (macOS
+            // temp purge, a stray deleter). The relay slot always holds
+            // the selector's current relay (republished on every rotation).
+            let ensure_config = || {
+                let path = frpc_config_path();
+                if path.exists() {
+                    return;
+                }
+                let relay = current_relay.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                crate::log_debug!(
+                    "[tunnel] WARN: frpc config {} is missing while frpc runs — re-rendering",
+                    path.display()
+                );
+                if let Err(e) =
+                    write_relay_config(&cfg_thread, &relay, port_slot.load(Ordering::SeqCst), e2e)
+                {
+                    crate::log_debug!("[tunnel] WARN: re-render of missing frpc config failed: {e}");
+                    health.fail_with(format!("re-render missing frpc config: {e}"));
+                }
+            };
             loop {
                 // Take the current child to wait on it.
                 let mut child = match child_slot
@@ -1379,7 +1593,16 @@ fn spawn_supervised(
                             return;
                         }
                         watch = new_watch();
-                        match spawn_once(&frpc_thread, watch.clone(), &proxy) {
+                        match render_and_spawn(
+                            &frpc_thread,
+                            &cfg_thread,
+                            selector.current(),
+                            frozen_port(),
+                            e2e,
+                            watch.clone(),
+                            &proxy,
+                            &health,
+                        ) {
                             Ok(c) => c,
                             Err(e) => {
                                 crate::log_debug!("[tunnel] respawn failed: {e}");
@@ -1392,6 +1615,13 @@ fn spawn_supervised(
                 };
 
                 let spawned_at = Instant::now();
+                let mut run = RunHealth {
+                    proxy: &proxy,
+                    health: &health,
+                    ensure_config: &ensure_config,
+                    came_up: false,
+                    ticks: 0,
+                };
                 let outcome = wait_for_exit(
                     &mut child,
                     &running,
@@ -1401,10 +1631,25 @@ fn spawn_supervised(
                     &port_slot,
                     e2e,
                     daemon_http_port,
+                    &mut run,
                 );
+                let came_up = run.came_up;
                 if !running.load(Ordering::SeqCst) {
                     // Stop requested — do not restart.
                     return;
+                }
+                // Health: a run that never came up is a failure (the
+                // 2026-10-14 crash loop: frpc exits at once on a missing
+                // config); a watchdog kill always is.
+                match &outcome {
+                    ChildOutcome::Exited(code) if !came_up => health.record_failure(format!(
+                        "frpc exited ({code:?}) after {:.1}s without registering its proxy",
+                        spawned_at.elapsed().as_secs_f64()
+                    )),
+                    ChildOutcome::WatchdogKill => {
+                        health.fail_with("relay session dead (mid-session watchdog killed frpc)")
+                    }
+                    _ => {}
                 }
                 match outcome {
                     ChildOutcome::FailBack(sw) => {
@@ -1585,7 +1830,20 @@ fn spawn_supervised(
                     return;
                 }
                 watch = new_watch();
-                match spawn_once(&frpc_thread, watch.clone(), &proxy) {
+                // Re-render on EVERY spawn (2026-10-14): respawning with the
+                // same `-c` path against a config that was deleted (or that
+                // macOS purged from the per-user temp dir after ~3 days
+                // untouched) crash-looped frpc for two hours.
+                match render_and_spawn(
+                    &frpc_thread,
+                    &cfg_thread,
+                    selector.current(),
+                    frozen_port(),
+                    e2e,
+                    watch.clone(),
+                    &proxy,
+                    &health,
+                ) {
                     Ok(c) => {
                         *child_slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(c);
                     }
@@ -1797,14 +2055,46 @@ fn spawn_subdomain_refresh(cfg: &TunnelConfig, running: Arc<AtomicBool>) {
     }
 }
 
+/// Render the config for `relay` (atomic tmp+rename, 0600) and spawn frpc
+/// against it. EVERY frpc spawn goes through here (2026-10-14): frpc
+/// reads its config only at startup, and the supervisor used to respawn
+/// with the same `-c` path without re-rendering, so a config deleted from
+/// the private runtime dir (a test daemon did it; macOS also purges files
+/// in the per-user temp dir untouched for ~3 days) crash-looped frpc on
+/// `open …/frpc.toml: no such file or directory` until a manual stop+start.
+/// A render or spawn error counts as a failed run.
+#[allow(clippy::too_many_arguments)]
+fn render_and_spawn(
+    frpc: &Path,
+    cfg: &TunnelConfig,
+    relay: &RelayEndpoint,
+    local_port: u16,
+    e2e: bool,
+    watch: Option<Arc<SessionWatch>>,
+    proxy: &Arc<ProxyRegistration>,
+    health: &Arc<FrpcHealth>,
+) -> Result<Child, String> {
+    if let Err(e) = write_relay_config(cfg, relay, local_port, e2e) {
+        let msg = format!("render frpc config: {e}");
+        health.fail_with(msg.clone());
+        return Err(msg);
+    }
+    spawn_once(frpc, watch, proxy, health).map_err(|e| {
+        health.fail_with(e.clone());
+        e
+    })
+}
+
 /// Spawn a single `frpc -c <config>` child, redirecting stdout+stderr
 /// into the append-mode log. When a `watch` is given (multi-relay mode),
 /// every line is ALSO fed to the mid-session watchdog — a tee, so the
 /// `~/.k2/frpc.log` contract is untouched. Returns the child handle.
+/// Callers go through [`render_and_spawn`].
 fn spawn_once(
     frpc: &Path,
     watch: Option<Arc<SessionWatch>>,
     proxy: &Arc<ProxyRegistration>,
+    health: &Arc<FrpcHealth>,
 ) -> Result<Child, String> {
     let cfg_path = frpc_config_path();
     // A new run: not registered until this child logs success.
@@ -1835,10 +2125,10 @@ fn spawn_once(
     // never fill and block the child. We do NOT log the rendered config
     // or token — only frpc's own output (which never echoes the meta).
     if let Some(out) = child.stdout.take() {
-        pump(out, log, watch.clone(), (proxy.clone(), run));
+        pump(out, log, watch.clone(), (proxy.clone(), run), health.clone());
     }
     if let Some(err) = child.stderr.take() {
-        pump(err, log_err, watch, (proxy.clone(), run));
+        pump(err, log_err, watch, (proxy.clone(), run), health.clone());
     }
     Ok(child)
 }
@@ -1848,6 +2138,7 @@ fn pump(
     mut sink: std::fs::File,
     watch: Option<Arc<SessionWatch>>,
     proxy: (Arc<ProxyRegistration>, u64),
+    health: Arc<FrpcHealth>,
 ) {
     use std::io::Write;
     std::thread::spawn(move || {
@@ -1860,6 +2151,7 @@ fn pump(
                         w.observe_line(&l);
                     }
                     proxy.0.observe_line(proxy.1, &l);
+                    health.observe_line(&l);
                 }
                 Err(_) => break,
             }
@@ -2671,6 +2963,140 @@ mod tests {
 
             stop().expect("stop");
             assert!(!proxy_registered());
+            // The hook is process-global: leaving it installed made
+            // `supervisor_rotation_keeps_frozen_local_port` (which expects
+            // the default port) order-dependent.
+            super::super::ingress::clear_ensure_tunnel_ingress();
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    fn wait_until(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while !ok() {
+            assert!(Instant::now() < deadline, "timed out waiting for: {what}\nstatus: {:?}", status());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// 2026-10-14 incident, end to end through the REAL supervisor: the
+    /// rendered config is deleted under a running tunnel. The fake frpc
+    /// behaves like the real one — it refuses to start without its config
+    /// (`open …: no such file or directory`) and a live one exits when the
+    /// config is gone (standing in for its next restart). The supervisor
+    /// must re-render before every respawn, status must say UNHEALTHY while
+    /// runs fail (not a bare "running"), and `start()` on a running-but-
+    /// broken tunnel must repair it instead of reporting success.
+    #[test]
+    fn supervisor_rerenders_a_deleted_config_and_status_reports_a_crash_loop() {
+        with_temp_home(|| {
+            let dir = crate::test_env::unique_temp_path("fake-frpc");
+            std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
+            let starts = dir.join("starts");
+            let broken = dir.join("broken");
+            let hold = dir.join("hold");
+            let script = dir.join("frpc");
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\n\
+                     cfg=\"$2\"\n\
+                     if [ -f '{b}' ] || [ ! -f \"$cfg\" ]; then\n\
+                     \techo \"[E] [sub/root.go:142] open $cfg: no such file or directory\" >&2\n\
+                     \texit 1\n\
+                     fi\n\
+                     grep -q 'token = \"tok\"' \"$cfg\" || {{ echo '[E] bad config' >&2; exit 1; }}\n\
+                     echo started >> '{s}'\n\
+                     echo '[I] [proxy_manager.go:173] [x] [k2so-rosson] start proxy success'\n\
+                     while [ -f \"$cfg\" ] || [ -f '{h}' ]; do sleep 0.1; done\n\
+                     echo '[E] config vanished' >&2\n\
+                     exit 1\n",
+                    b = broken.display(),
+                    s = starts.display(),
+                    h = hold.display(),
+                ),
+            );
+            let start_count = || {
+                std::fs::read_to_string(&starts).unwrap_or_default().lines().count()
+            };
+            config::save(&TunnelConfig {
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed config");
+            // No ingress hook: a registered one outlives the test and
+            // changes other tests' resolved port.
+            super::super::ingress::clear_ensure_tunnel_ingress();
+            let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+            let bin = FrpcBinary::Explicit(script.clone());
+            start(None, 57839, &bin).expect("start");
+
+            wait_until("first clean frpc start", 10, || start_count() == 1 && proxy_registered());
+            let st = status();
+            assert_eq!(st.frpc_healthy, Some(true), "{st:?}");
+            assert_eq!(st.frpc_consecutive_failures, Some(0), "{st:?}");
+            assert_eq!(st.frpc_config_present, Some(true), "{st:?}");
+
+            // 1) Delete the config under the running tunnel: the fake exits,
+            //    and the respawn must find a freshly rendered config.
+            std::fs::remove_file(frpc_config_path()).expect("delete frpc.toml");
+            wait_until("a clean respawn after the config was deleted", 15, || {
+                start_count() == 2 && proxy_registered()
+            });
+            let toml = std::fs::read_to_string(frpc_config_path()).expect("re-rendered frpc.toml");
+            assert!(toml.contains("token = \"tok\""), "{toml}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(frpc_config_path()).expect("stat").permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "re-rendered config must stay 0600");
+            }
+            assert_eq!(status().frpc_healthy, Some(true));
+
+            // 2) A crash loop: every run fails. Status must say so, with
+            //    frpc's own error line, while `running` stays the desired
+            //    state.
+            std::fs::write(&broken, "1").expect("break the fake");
+            std::fs::remove_file(frpc_config_path()).expect("delete frpc.toml again");
+            wait_until("status to report the crash loop", 15, || {
+                status().frpc_consecutive_failures.unwrap_or(0) >= 2
+            });
+            let st = status();
+            assert!(st.running, "{st:?}");
+            assert_eq!(st.frpc_healthy, Some(false), "{st:?}");
+            let err = st.frpc_last_error.clone().expect("a last error while failing");
+            assert!(err.contains("no such file or directory"), "{err}");
+            assert_eq!(st.frpc_config_present, Some(true), "every respawn re-renders: {st:?}");
+
+            // 3) `start()` on a running-but-failing tunnel repairs it.
+            let st = start(None, 57839, &bin).expect("repair start");
+            let why = st.repaired.clone().expect("start must repair, not report success");
+            assert!(why.contains("consecutive failures"), "{why}");
+            std::fs::remove_file(&broken).expect("unbreak the fake");
+            wait_until("recovery after the repair", 20, || {
+                start_count() == 3 && status().frpc_healthy == Some(true)
+            });
+            assert_eq!(status().frpc_last_error, None);
+
+            // 4) Config gone while frpc keeps running: status says so, and
+            //    `start()` repairs (re-renders) rather than "already running".
+            std::fs::write(&hold, "1").expect("hold the fake up");
+            std::fs::remove_file(frpc_config_path()).expect("delete frpc.toml a third time");
+            let st = status();
+            assert_eq!(st.frpc_healthy, Some(false), "{st:?}");
+            assert_eq!(st.frpc_config_present, Some(false), "{st:?}");
+            let st = start(None, 57839, &bin).expect("repair start");
+            let why = st.repaired.clone().expect("a missing config must be repaired");
+            assert!(why.contains("missing"), "{why}");
+            assert!(frpc_config_path().exists(), "start re-rendered the config");
+            std::fs::remove_file(&hold).expect("release the hold");
+            wait_until("healthy after the second repair", 15, || {
+                start_count() == 4 && status().frpc_healthy == Some(true)
+            });
+
+            stop().expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -2855,7 +3281,9 @@ mod tests {
             .expect("seed two-relay config");
 
             // Pin an explicit non-default daemon port so a freeze bug would
-            // be obvious (would rebind to 0 / missing / wrong port).
+            // be obvious (would rebind to 0 / missing / wrong port). No
+            // ingress hook (another test's would answer its own port).
+            super::super::ingress::clear_ensure_tunnel_ingress();
             let st = start(None, 48123, &FrpcBinary::Explicit(true_bin()))
                 .expect("start with two relays");
             assert!(st.running);

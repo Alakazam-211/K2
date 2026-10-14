@@ -14365,6 +14365,11 @@ if d.get("error"):
     err = d["error"]
     print(f"Failed to start tunnel: {err}", file=sys.stderr); sys.exit(1)
 url = d.get("public_url") or ""
+# 0.45.6: a "running" tunnel whose frpc was failing (or whose config was
+# gone) is repaired, not reported as already started.
+if d.get("repaired"):
+    print("Tunnel was running but not serving: " + d["repaired"])
+    print("Re-rendered the frpc config and restarted frpc.")
 print("Tunnel started." + (f" Public URL: {url}" if url else " (subdomain will be assigned by the server)"))
 '
             ;;
@@ -14567,7 +14572,18 @@ except Exception as e:
     print(f"Failed to parse tunnel status: {e}", file=sys.stderr); sys.exit(1)
 print("K2 Connect tunnel")
 running = "yes" if d.get("running") else "no"
-print(f"  Running:    {running}")
+# 0.45.6: "running" is the desired state; frpc_healthy says whether frpc
+# is actually up (2026-10-14: "Running: yes" over a two-hour crash loop).
+if d.get("running") and d.get("frpc_healthy") is False:
+    n = d.get("frpc_consecutive_failures") or 0
+    print(f"  Running:    yes, but frpc is FAILING ({n} consecutive failures)")
+    if d.get("frpc_last_error"):
+        print("  Last error: " + d["frpc_last_error"])
+    if d.get("frpc_config_present") is False:
+        print("  Config:     MISSING " + (d.get("frpc_config") or ""))
+    print("  Repair:     k2 tunnel start")
+else:
+    print(f"  Running:    {running}")
 # PRD connect-login-edge-only S2: who may password-login over the tunnel
 # (edge = only via the K2 edge, any = pre-PRD, off = never). Pre-PRD
 # daemons omit the field -> print nothing.

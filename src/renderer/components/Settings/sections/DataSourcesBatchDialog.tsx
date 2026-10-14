@@ -16,6 +16,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { PendingSource, PendingTrigger } from '@/lib/sources/sources-types'
 import { batchApproveSources, pendingSources } from '@/lib/sources/sources-api'
+import { registerZenSourcesBatchReview } from '@/lib/zen/zen-sources-review'
 import { ConfirmStep } from './DataSourceConfirm'
 import { batchHash, btn, btnPrimary, danger, every, makerLabel, muted, onLabel, scopeForHostKey, sourcesErrorText } from './data-sources-ui'
 import { SquareCheckbox } from '@/components/ui'
@@ -229,3 +230,8 @@ export function openSourcesBatchReview(args: SourcesBatchArgs): void {
   }
   root.render(<DataSourcesBatchDialog args={args} onClose={close} />)
 }
+
+// B3's Garden pill ("Review N pending") opens this dialog. Registered at
+// module load: the app imports Settings (and so this file) at start, and the
+// Garden never imports Settings.
+registerZenSourcesBatchReview(openSourcesBatchReview)

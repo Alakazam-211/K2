@@ -20,6 +20,9 @@ use crate::run;
 
 // ── Fakes ───────────────────────────────────────────────────────────────
 
+/// What running a program does to the temp root.
+type Effect = Rc<dyn Fn(&[String])>;
+
 #[derive(Default)]
 struct ExecLog {
     calls: Vec<(String, Vec<String>, Option<Vec<u8>>)>,
@@ -29,6 +32,10 @@ struct ExecLog {
     answers: HashMap<String, ExecOut>,
     /// `systemctl --user -M` fails (no user D-Bus), like a server image.
     no_user_bus: bool,
+    /// (prog, an argv token) → answer; the first match wins over `answers`.
+    rules: Vec<(String, String, ExecOut)>,
+    /// prog → what running it does to the temp root (useradd, usermod, …).
+    effects: Vec<(String, Effect)>,
 }
 
 #[derive(Clone, Default)]
@@ -62,7 +69,23 @@ impl Exec for FakeExec {
                 },
             });
         }
-        Ok(log.answers.get(prog).cloned().unwrap_or_default())
+        let effects: Vec<_> = log
+            .effects
+            .iter()
+            .filter(|(p, _)| p == prog)
+            .map(|(_, f)| f.clone())
+            .collect();
+        let ruled = log
+            .rules
+            .iter()
+            .find(|(p, tok, _)| p == prog && args.iter().any(|a| a == tok))
+            .map(|(_, _, o)| o.clone());
+        let fallback = log.answers.get(prog).cloned().unwrap_or_default();
+        drop(log);
+        for f in effects {
+            f(args);
+        }
+        Ok(ruled.unwrap_or(fallback))
     }
 }
 
@@ -1610,3 +1633,7 @@ fn handoff_dropin_refuses_a_user_scope_daemon() {
     assert!(o.stderr.contains("user-scope"), "{}", o.stderr);
     assert!(!t.p(HANDOFF_DROPIN).exists());
 }
+
+// The `apps` namespace (protocol 6) lives in its own file, same fakes.
+#[path = "apps_tests.rs"]
+mod apps_tests;

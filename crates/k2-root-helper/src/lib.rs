@@ -16,6 +16,7 @@
 //! A bug in any namespace is a root bug: changes here need two
 //! independent reviewers, one of them a security pass (Q10).
 
+pub mod apps;
 pub mod caller;
 pub mod core;
 pub mod ctx;
@@ -42,14 +43,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=5 arch=x86_64;"
+    " proto=6 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=5 arch=aarch64;"
+    " proto=6 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -194,6 +195,25 @@ fn dispatch(
 
         Verb::DaemonHandoffDropinInstall => Some(daemon_unit::handoff_dropin_set(ctx, who, true)?),
         Verb::DaemonHandoffDropinRemove => Some(daemon_unit::handoff_dropin_set(ctx, who, false)?),
+
+        Verb::AppsStatus => Some(apps::status(ctx)?),
+        Verb::AppsEnsureUser => Some(apps::ensure_user(ctx)?),
+        Verb::AppsSubid => Some(apps::subid(ctx)?),
+        Verb::AppsLinger(on) => Some(apps::linger(ctx, *on)?),
+        Verb::AppsDelegate(on) => Some(apps::delegate(ctx, *on)?),
+        Verb::AppsIoCost(on) => Some(apps::io_cost(ctx, *on)?),
+        Verb::AppsReservePorts(on) => Some(apps::reserve_ports(ctx, *on)?),
+        Verb::AppsNftApply { gw, px, db } => Some(apps::nft_apply(ctx, *gw, *px, *db)?),
+        Verb::AppsNftRemove => Some(apps::nft_remove(ctx)?),
+        Verb::AppsPackagesInstall => Some(apps::packages_install(ctx)?),
+        Verb::AppsPackagesInstallYouki => Some(apps::packages_install_youki(ctx)?),
+        Verb::AppsRuntime(rt) => Some(apps::runtime(ctx, *rt)?),
+        Verb::AppsProcessUnit(on) => Some(apps::process_unit_set(ctx, *on)?),
+        Verb::AppsProcessStart(id) => Some(apps::process_start(ctx, id)?),
+        Verb::AppsProcessStop(id) => Some(apps::process_stop(ctx, id)?),
+        Verb::AppsCoresSlice(n) => Some(apps::cores_slice(ctx, who, *n)?),
+        Verb::AppsBudget(b) => Some(apps::budget(ctx, *b)?),
+        Verb::AppsUnprep => Some(apps::unprep(ctx, who)?),
     })
 }
 

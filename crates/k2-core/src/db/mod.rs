@@ -1281,6 +1281,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0159_workspace_handle_tombstones",
             include_str!("../../drizzle_sql/0159_workspace_handle_tombstones.sql"),
         ),
+        // 0163 — Garden v3 data sources and triggers
+        // (prd-garden-v3-external-data-cards-v1, contract-sources-v1 §2).
+        // 0160/0161 (hire API) and 0162 (App key) sit before it when they
+        // land; 0164 is reserved for webhook push. The integrator renames
+        // this to 0166+ if integ/0.46.0 (0165) lands first.
+        ("0163_sources", include_str!("../../drizzle_sql/0163_sources.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1941,7 +1947,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0159_workspace_handle_tombstones",
+            last_name, "0163_sources",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -1969,9 +1975,120 @@ mod tests {
                 "0156_compute_node_admin",
                 "0157_notify_prefs",
                 "0159_workspace_handle_tombstones",
+                "0163_sources",
             ],
             "tail migrations out of order: {names:?}"
         );
+    }
+
+    /// The tables 0163 creates (contract-sources-v1 §2).
+    const SOURCES_TABLES: &[&str] = &[
+        "source_rev",
+        "sources",
+        "source_state",
+        "source_items",
+        "source_points",
+        "source_events",
+        "source_triggers",
+        "source_trigger_fires",
+        "source_audit",
+    ];
+
+    fn table_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    fn insert_source(conn: &Connection, id: &str, name: &str, status: &str) -> rusqlite::Result<usize> {
+        let removed_at: Option<i64> = (status == "removed").then_some(1_760_000_100);
+        conn.execute(
+            "INSERT INTO sources (id, name, label, spec_json, spec_hash, origins_json, every_secs, \
+             viewers, agent_access, status, made_by, rev, created_at, updated_at, removed_at) \
+             VALUES (?1, ?2, 'Label', '{}', ?3, '[\"https://example.com:443\"]', 60, \
+             'member', 'values', ?4, 'owner', 1, 1760000000, 1760000000, ?5)",
+            params![id, name, "a".repeat(64), status, removed_at],
+        )
+    }
+
+    /// 0163 on a fresh database: every table exists, the change counter
+    /// starts at 0, and the name/tombstone constraints hold.
+    #[test]
+    fn sources_migration_applies_on_a_fresh_db() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in SOURCES_TABLES {
+            assert!(tables.iter().any(|n| n == t), "0163 table {t} missing: {tables:?}");
+        }
+        let rev: i64 = conn.query_row("SELECT rev FROM source_rev WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(rev, 0);
+
+        insert_source(&conn, "11111111-1111-4111-8111-111111111111", "fleet", "active").unwrap();
+        let dup = insert_source(&conn, "22222222-2222-4222-8222-222222222222", "fleet", "proposed");
+        assert!(dup.is_err(), "a second live source can't take a live name");
+        let bad = insert_source(&conn, "33333333-3333-4333-8333-333333333333", "Fleet_1", "active");
+        assert!(bad.is_err(), "names are [a-z0-9-] only");
+        // A tombstone keeps its name next to a live row of the same name.
+        insert_source(&conn, "44444444-4444-4444-8444-444444444444", "fleet", "removed").unwrap();
+        // removed_at must match status.
+        let bad_tomb = conn.execute(
+            "UPDATE sources SET status = 'removed' WHERE id = '11111111-1111-4111-8111-111111111111'",
+            [],
+        );
+        assert!(bad_tomb.is_err(), "status removed needs removed_at");
+    }
+
+    /// 0163 on an upgraded database (a 0.45.5 database, last migration
+    /// 0159): it applies once, keeps existing rows, and a second run is a
+    /// no-op.
+    #[test]
+    fn sources_migration_applies_on_an_upgraded_db() {
+        let path = scratch_db_path();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+            run_migrations(&conn).unwrap();
+            // Roll the file back to a 0.45.5 shape: no 0163 tables, no row.
+            for t in SOURCES_TABLES.iter().rev() {
+                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
+            }
+            conn.execute("DELETE FROM _migrations WHERE name = '0163_sources'", []).unwrap();
+            let last: String = conn
+                .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(last, "0159_workspace_handle_tombstones", "the file looks like 0.45.5");
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES ('w-0163', 'Ops', '/t/ops', 'ops')",
+                [],
+            )
+            .unwrap();
+        }
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in SOURCES_TABLES {
+            assert!(tables.iter().any(|n| n == t), "0163 table {t} missing after upgrade: {tables:?}");
+        }
+        let applied: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0163_sources'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(applied, 1);
+        let kept: String = conn
+            .query_row("SELECT handle FROM projects WHERE id = 'w-0163'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, "ops", "existing rows survive the upgrade");
+        insert_source(&conn, "55555555-5555-4555-8555-555555555555", "deploys", "proposed").unwrap();
+        // A second run changes nothing.
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM sources", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let rev_rows: i64 = conn.query_row("SELECT COUNT(*) FROM source_rev", [], |r| r.get(0)).unwrap();
+        assert_eq!(rev_rows, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// 0159: deleting a workspace moves its handle and aliases into

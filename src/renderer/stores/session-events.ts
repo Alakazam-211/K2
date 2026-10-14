@@ -531,6 +531,14 @@ export interface ZenChangedEvent {
   kind: 'zen_changed'
 }
 
+/** APP-LEVEL — Garden v3: a data source's definition or state changed on
+ *  this server (contract-sources-v1 §5). Carries only the change counter;
+ *  readers re-read `GET /cli/sources/changes?since=<rev>`. */
+export interface SourcesChangedEvent {
+  kind: 'sources_changed'
+  rev: number
+}
+
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -653,6 +661,7 @@ export type SessionEventMessage =
   | LlmAccountsChangedEvent
   | FsChangedEvent
   | ZenChangedEvent
+  | SourcesChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
   | ReviewQueueChangedEvent
@@ -1122,6 +1131,7 @@ type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type LlmAccountsChangedHandler = (tool: string | null) => void
 type ZenChangedHandler = () => void
+type SourcesChangedHandler = (rev: number) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
@@ -1180,6 +1190,7 @@ interface AppBusHandlers {
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
+  sourcesChanged: Set<SourcesChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
 }
@@ -1223,6 +1234,7 @@ function createBusState(scopeId: string): BusState {
       notifyPrefsChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
+      sourcesChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
     },
@@ -1430,6 +1442,12 @@ export function onLlmAccountsChanged(
  *  (`lib/zen/zen-api.ts`). */
 export function onZenChanged(scope: ServerScope, fn: ZenChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.zenChanged, fn)
+}
+
+/** Garden v3 — subscribe to APP-LEVEL `sources_changed` on `scope`'s server
+ *  (contract-sources-v1 §5). The handler gets the server's change counter. */
+export function onSourcesChanged(scope: ServerScope, fn: (rev: number) => void): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.sourcesChanged, fn)
 }
 
 /** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
@@ -1642,6 +1660,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()
   },
+  sources_changed: (h, m) => {
+    for (const fn of h.sourcesChanged) fn(m.rev)
+  },
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)
   },
@@ -1690,6 +1711,7 @@ export interface AppBus {
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
+  onSourcesChanged(fn: SourcesChangedHandler): UnsubscribeFn
   onHooksInstallFailed(fn: HooksInstallFailedHandler): UnsubscribeFn
   onActivityChanged(fn: ActivityChangedHandler): UnsubscribeFn
 }
@@ -1736,6 +1758,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
+    onSourcesChanged: (fn) => onSourcesChanged(scope, fn),
     onHooksInstallFailed: (fn) => onHooksInstallFailed(scope, fn),
     onActivityChanged: (fn) => onActivityChanged(scope, fn),
   }

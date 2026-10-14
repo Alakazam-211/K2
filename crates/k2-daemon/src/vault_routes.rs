@@ -1014,6 +1014,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Node admin (prd-k2-node-admin-v1 §7.4): approving a held request;
     // the token is bound to the request id (`secretId`).
     "node-admin",
+    // Garden v3 data sources (contract-sources-v1 §4.3): binding a secret
+    // to one source (`secretId` = the source id), and one confirm for a
+    // batch approval (`secretId` = the batch hash).
+    "source-secret",
+    "source-batch",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

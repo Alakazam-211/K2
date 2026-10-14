@@ -18,7 +18,7 @@ describe('Settings nav Apps', () => {
     expect(src).not.toContain("id: 'k2-access', label: 'Admin Access', beta")
   })
 
-  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, K2 Companion', () => {
+  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, Data Sources, K2 Companion', () => {
     const serverStart = src.indexOf("title: 'K2 Server'")
     const serverEnd = src.indexOf("title: 'Editors / Fonts'")
     expect(serverStart).toBeGreaterThan(0)
@@ -34,6 +34,7 @@ describe('Settings nav Apps', () => {
         "{ id: 'connections', label: 'Connected Servers' },",
         "{ id: 'api-tokens', label: 'API Keys' },",
         "{ id: 'vault', label: 'Vault' },",
+        "{ id: 'data-sources', label: 'Data Sources' },",
         "{ id: 'companion', label: 'K2 Companion' },",
       ].join('\n        '),
     )
@@ -57,6 +58,11 @@ describe('Settings nav Apps', () => {
     expect(src).toContain("activeSection === 'vault'")
     expect(src).toContain('<VaultSection />')
     expect(src).toContain('...VAULT_MANIFEST,')
+    // contract-sources-v1 §8: Settings → K2 Server → Data Sources, after Vault.
+    expect(SECTION_LABELS['data-sources']).toBe('Data Sources')
+    expect(src).toContain("activeSection === 'data-sources'")
+    expect(src).toContain('<DataSourcesSection />')
+    expect(src).toContain('...DATA_SOURCES_MANIFEST,')
   })
 
   it('User Access, User Templates, and Apps rows carry a right-side BETA tag', () => {

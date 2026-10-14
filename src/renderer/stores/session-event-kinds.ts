@@ -119,6 +119,8 @@ export const SESSION_EVENT_ROUTES = {
   // LOCAL daemon's bus matters (Zen config is local); not carried, a room's
   // socket never stands in for it.
   zen_changed: { class: 'app', app: true },
+  // Garden v3 data sources (contract-sources-v1 §5): the counter only.
+  sources_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

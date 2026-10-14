@@ -187,6 +187,11 @@ pub mod compute_ws;
 pub mod vault;
 pub mod vault_routes;
 pub mod vault_use_routes;
+// Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the poller,
+// trigger wakes, `/cli/sources/*`, and the shared sleep/wake detector.
+pub mod sources;
+pub mod sources_routes;
+pub mod wall_jump;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;
 pub mod remote_session_routes;

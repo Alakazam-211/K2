@@ -377,6 +377,16 @@ impl ZenFiles {
     }
 }
 
+/// Garden v3 data sources (contract-sources-v1 §4.1 step 8, GV16): the
+/// source names that locked Gardens on this computer read (bare `name`, or
+/// `name::<this host>`). An agent's edit or remove of one of them is 423
+/// `garden_locked`.
+///
+/// C0 skeleton: an empty set. B3 replaces it.
+pub fn locked_placement_sources() -> std::collections::BTreeSet<String> {
+    std::collections::BTreeSet::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

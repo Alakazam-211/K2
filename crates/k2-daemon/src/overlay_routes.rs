@@ -647,15 +647,32 @@ fn card_actor_from(params: &HashMap<String, String>, resolved: &ResolvedOverlay,
 }
 
 /// The card's `answeredBy`, from the same credential as [`card_actor_from`]
-/// (and as a compose post's `author`). None for an agent's own answer.
+/// (and as a compose post's `author`). None for an agent's own answer. The
+/// owner token's carries the owner's display name (`name`), the same name
+/// the agent hears in `[from <name>]` and an owner post shows in `from`.
 fn card_actor_author(params: &HashMap<String, String>, session_author: &str) -> Option<overlay::PostAuthor> {
     if let Some(pass) = request_skin() {
         Some(overlay::PostAuthor::guest(&skin_from_stamp(&pass)))
     } else if principal_is_bound(params) {
         None
     } else {
-        Some(compose_author_for_session(session_author))
+        Some(with_owner_name(compose_author_for_session(session_author), &workspace_msg::resolve_owner_from()))
     }
+}
+
+/// An owner author gains the owner's display name; any other kind is as is.
+fn with_owner_name(a: overlay::PostAuthor, owner_name: &str) -> overlay::PostAuthor {
+    if a.kind == k2_core::overlay::doc::AUTHOR_OWNER {
+        overlay::PostAuthor::owner_named(owner_name)
+    } else {
+        a
+    }
+}
+
+/// The `answeredBy` JSON an owner-token answer stores today (tests).
+#[cfg(test)]
+fn owner_answered_by_json() -> serde_json::Value {
+    serde_json::to_value(overlay::PostAuthor::owner_named(&workspace_msg::resolve_owner_from())).expect("author json")
 }
 
 /// `principal_bound` is exactly `"1"`. Boolean `true` stringifies to `"true"`
@@ -2796,7 +2813,7 @@ mod tests {
                 .any(|l| l == &format!("[from {owner}] [thread:{handle}] chose Go")),
             "async inject must fire after tap, from the owner who tapped; got {injects:?}"
         );
-        assert_eq!(answered_doc_by(&handle, &id), serde_json::json!({"kind": "owner", "login": "owner"}));
+        assert_eq!(answered_doc_by(&handle, &id), owner_answered_by_json());
 
         let get2 = dispatch("/cli/thread", &params_of(&[("addr", handle.as_str())]))
             .expect("GET after tap");
@@ -3164,7 +3181,10 @@ mod tests {
             injects.iter().any(|l| l == &format!("[from {owner}] [thread:{handle}] chose OwnerGo")),
             "owner answer keeps the owner's name: {injects:?}"
         );
-        assert_eq!(answered_doc_by(&handle, &o_card), serde_json::json!({"kind": "owner", "login": "owner"}));
+        assert_eq!(answered_doc_by(&handle, &o_card), owner_answered_by_json());
+        if owner != "owner" {
+            assert_eq!(answered_doc_by(&handle, &o_card)["name"], owner.as_str(), "the owner's display name rides answeredBy");
+        }
 
         // A guest dismissing a card: the agent hears the guest too.
         let d_card = ask_card(&handle, "DismissMe,Stop");

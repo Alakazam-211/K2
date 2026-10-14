@@ -206,6 +206,17 @@ describe('cardAnswererLabel', () => {
     expect(cardAnswererLabel({ kind: 'guest', login: 'patty' }, owner)).toBe('patty')
     expect(cardAnswererLabel({ kind: 'guest', login: 'alice' }, alice)).toBe('alice')
   })
+  it("shows the owner's display name, never a bare owner", () => {
+    const rosson = { kind: 'owner', login: 'owner', name: 'Rosson Long' }
+    expect(cardAnswererLabel(rosson, alice)).toBe('Rosson Long')
+    expect(cardAnswererLabel(rosson, null)).toBe('Rosson Long')
+    expect(cardAnswererLabel(rosson, owner)).toBe('You')
+    expect(cardAnswererLabel({ kind: 'owner', login: 'owner', name: ' ' }, alice)).toBe('the owner')
+    expect(cardAnswererLabel({ kind: 'owner', login: 'owner', name: 'owner' }, alice)).toBe('the owner')
+    // A name on any other kind is ignored: the login is who it was.
+    expect(cardAnswererLabel({ kind: 'guest', login: 'patty', name: 'Rosson' }, owner)).toBe('patty')
+    expect(parseThreadAuthor({ kind: 'owner', login: 'owner', name: ' Rosson ' })).toEqual({ kind: 'owner', login: 'owner', name: 'Rosson' })
+  })
   it('names nobody for a card without answeredBy (older cards render as before)', () => {
     expect(cardAnswererLabel(undefined, owner)).toBeNull()
     expect(cardAnswererLabel(null, owner)).toBeNull()

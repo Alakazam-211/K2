@@ -26,6 +26,10 @@ export interface ThreadAuthor {
   kind: string
   /** `owner`, a Connect username, or an app guest's pass username. */
   login: string
+  /** On a card the owner answered: the owner's display name (the name an
+   *  owner post shows in `from`). Absent when none is set, on other kinds,
+   *  and on cards from before the field. */
+  name?: string
 }
 
 /** The person looking at a Thread on one server. */
@@ -45,7 +49,8 @@ export function parseThreadAuthor(raw: unknown): ThreadAuthor | null {
   const kind = typeof r.kind === 'string' ? r.kind.trim() : ''
   const login = typeof r.login === 'string' ? r.login.trim() : ''
   if (!kind || !login) return null
-  return { kind, login }
+  const name = typeof r.name === 'string' ? r.name.trim() : ''
+  return name ? { kind, login, name } : { kind, login }
 }
 
 const fold = (s: string): string => s.trim().toLowerCase()
@@ -79,14 +84,17 @@ export function isOwnThreadPost(
 
 /** Who answered (or dismissed) a card, from the card's `answeredBy` (the
  *  daemon stamps it from the answerer's credential, like a post's
- *  `author`): "You" for the viewer, "the owner" for the owner token, else
- *  the login. Null when the card names nobody (still pending, an agent's
- *  own answer, or a card from before the field), so it renders as before. */
+ *  `author`): "You" for the viewer; for the owner token, the owner's
+ *  display name (the same name the owner's posts show), or "the owner"
+ *  when none is set; else the login. Null when the card names nobody
+ *  (still pending, an agent's own answer, or a card from before the
+ *  field), so it renders as before. */
 export function cardAnswererLabel(raw: unknown, viewer: ThreadViewer | null): string | null {
   const a = parseThreadAuthor(raw)
   if (!a) return null
   if (isViewerAuthor(a, viewer)) return 'You'
-  return a.kind === 'owner' ? 'the owner' : a.login
+  if (a.kind === 'owner') return a.name && a.name.toLowerCase() !== 'owner' ? a.name : 'the owner'
+  return a.login
 }
 
 /** The viewer before the server answers: the saved login on the scope's

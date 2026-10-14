@@ -11850,21 +11850,564 @@ cmd_sources() {
 # END_SOURCES_C0
 
 # BEGIN_SOURCES_B1
-cmd_sources_list() { _sources_not_built list; }
-cmd_sources_show() { _sources_not_built show; }
-cmd_sources_read() { _sources_not_built read; }
-cmd_sources_history() { _sources_not_built history; }
-cmd_sources_status() { _sources_not_built status; }
-cmd_sources_export() { _sources_not_built export; }
-cmd_sources_propose() { _sources_not_built propose; }
-cmd_sources_add() { _sources_not_built add; }
-cmd_sources_edit() { _sources_not_built edit; }
-cmd_sources_remove() { _sources_not_built remove; }
-cmd_sources_pause() { _sources_not_built pause; }
-cmd_sources_resume() { _sources_not_built resume; }
-cmd_sources_mute() { _sources_not_built mute; }
-cmd_sources_unmute() { _sources_not_built unmute; }
-cmd_sources_refresh() { _sources_not_built refresh; }
+# Spec flags → JSON (propose/add/try body, or edit's `set`). argv: mode
+# (`full` | `set`), then the flags. Usage errors exit 2 with a message.
+_sources_spec_json() {
+    python3 - "$@" <<'PY'
+import json, re, sys
+
+mode, args = sys.argv[1], sys.argv[2:]
+
+def die(msg):
+    sys.stderr.write("Error: %s\n" % msg)
+    sys.exit(2)
+
+def dur(v, flag):
+    m = re.fullmatch(r"(\d+)([smhd]?)", v.strip())
+    if not m:
+        die("%s takes a duration like 30s, 5m, 2h, 1d" % flag)
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+def size(v):
+    m = re.fullmatch(r"(\d+)([KkMm]?)", v.strip())
+    if not m:
+        die("--max-bytes takes a size like 512K or 1M")
+    return int(m.group(1)) * {"": 1, "k": 1024, "m": 1 << 20}[m.group(2).lower()]
+
+def val(s):
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+def cond(op, value):
+    ops = {"eq", "ne", "in", "lt", "lte", "gt", "gte", "exists"}
+    if op not in ops:
+        die("unknown operator %r (eq ne in lt lte gt gte exists)" % op)
+    if op == "in":
+        return {"in": [val(x) for x in value.split("|")]}
+    if op in ("lt", "lte", "gt", "gte"):
+        try:
+            return {op: float(value) if "." in value else int(value)}
+        except ValueError:
+            die("%s needs a number" % op)
+    if op == "exists":
+        return {"exists": value.strip().lower() not in ("false", "0", "no")}
+    return {op: val(value)}
+
+def kv(v, flag, sep="="):
+    if sep not in v:
+        die("%s takes name%s/pointer" % (flag, sep))
+    k, x = v.split(sep, 1)
+    return k.strip(), x
+
+out = {}
+extract = {}
+items = {}
+targets = []
+headers = []
+rules = []
+aggs = {}
+fields = {}
+item_fields = {}
+trend = []
+preset_args = {}
+from_file = None
+i = 0
+def nxt(flag):
+    global i
+    if i + 1 >= len(args):
+        die("%s needs a value" % flag)
+    i += 1
+    return args[i]
+while i < len(args):
+    a = args[i]
+    if a == "--json" or a == "--yes":
+        pass
+    elif a == "--from":
+        from_file = nxt(a)
+    elif a == "--name":
+        out["name"] = nxt(a)
+    elif a == "--label":
+        out["label"] = nxt(a)
+    elif a == "--url":
+        out["fetch"] = {"url": nxt(a)}
+    elif a == "--target":
+        k, u = kv(nxt(a), a)
+        targets.append({"key": k, "url": u})
+    elif a == "--url-secret":
+        out.setdefault("fetch", {})
+        out["fetch"] = {"urlSecret": {"name": nxt(a), "origin": out.get("_origin", "")}}
+    elif a == "--origin":
+        o = nxt(a)
+        out["_origin"] = o
+        if "urlSecret" in out.get("fetch", {}):
+            out["fetch"]["urlSecret"]["origin"] = o
+    elif a == "--header":
+        h = nxt(a)
+        if ":" not in h:
+            die("--header takes Name:value")
+        n, v = h.split(":", 1)
+        headers.append([n.strip(), v.strip()])
+    elif a == "--secret":
+        out["secret"] = nxt(a)
+    elif a == "--every":
+        out["everySecs"] = dur(nxt(a), a)
+    elif a == "--timeout":
+        out["timeoutSecs"] = dur(nxt(a), a)
+    elif a == "--max-bytes":
+        out["maxBytes"] = size(nxt(a))
+    elif a == "--field":
+        k, p = kv(nxt(a), a)
+        fields[k] = p
+    elif a == "--items":
+        items["pointer"] = nxt(a)
+    elif a == "--item-key":
+        items["itemKey"] = nxt(a)
+    elif a == "--item-field":
+        k, p = kv(nxt(a), a)
+        item_fields[k] = p
+    elif a == "--agg":
+        k, spec = kv(nxt(a), a)
+        parts = spec.split(":")
+        op = parts[0]
+        if op == "count":
+            aggs[k] = {"op": "count"}
+        elif op == "count-where" and len(parts) >= 4:
+            aggs[k] = {"op": "countWhere", "field": parts[1], "cond": cond(parts[2], ":".join(parts[3:]))}
+        elif op in ("sum", "min", "max", "distinct") and len(parts) == 2:
+            aggs[k] = {"op": op, "field": parts[1]}
+        else:
+            die("--agg takes name=count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f")
+    elif a == "--rule":
+        r = nxt(a)
+        head, _, rest = r.partition(":")
+        if not rest:
+            die("--rule takes 'field:crit:op:value[,warn:op:value][,ok:op:value]'")
+        rule = {"field": head}
+        for part in rest.split(","):
+            bits = part.split(":", 2)
+            if len(bits) != 3 or bits[0] not in ("crit", "warn", "ok"):
+                die("--rule parts are level:op:value with level crit, warn or ok")
+            rule[bits[0]] = cond(bits[1], bits[2])
+        rules.append(rule)
+    elif a == "--trend":
+        trend.append(nxt(a))
+    elif a == "--fail-after":
+        out["failAfter"] = int(nxt(a))
+    elif a == "--on-target-error":
+        out["onTargetError"] = nxt(a)
+    elif a == "--link":
+        out["link"] = nxt(a)
+    elif a == "--preset":
+        out["preset"] = nxt(a)
+    elif a == "--preset-arg":
+        k, v = kv(nxt(a), a)
+        preset_args[k] = v
+    elif a == "--viewers":
+        out["viewers"] = nxt(a)
+    elif a == "--agent-access":
+        out["agentAccess"] = nxt(a)
+    elif a == "--keep":
+        out["keep"] = nxt(a)
+    else:
+        die("unknown flag %s (k2 sources --help)" % a)
+    i += 1
+out.pop("_origin", None)
+if from_file:
+    try:
+        base = json.load(sys.stdin if from_file == "-" else open(from_file))
+    except Exception as e:
+        die("--from: %s" % e)
+    if not isinstance(base, dict):
+        die("--from: the file holds one JSON object")
+    base.update(out)
+    out = base
+if targets:
+    out["fetch"] = {"targets": targets}
+if headers:
+    out["headers"] = headers
+if fields:
+    extract["fields"] = fields
+if items or item_fields:
+    if item_fields:
+        items["itemFields"] = item_fields
+    if "pointer" not in items and "targets" not in out.get("fetch", {}):
+        items["pointer"] = ""
+    extract["items"] = items
+if aggs:
+    extract["aggregates"] = aggs
+if trend:
+    extract["trend"] = trend
+if extract:
+    out["extract"] = extract
+if rules:
+    out["rules"] = rules
+if preset_args:
+    out["presetArgs"] = preset_args
+if mode == "full":
+    if "preset" not in out:
+        for need in ("name", "label"):
+            if need not in out:
+                die("--%s is required" % need)
+        if "fetch" not in out:
+            die("say what to fetch: --url, --target key=url, or --url-secret NAME --origin https://host")
+        out.setdefault("everySecs", 60)
+    else:
+        for need in ("name", "label"):
+            if need not in out:
+                die("--%s is required" % need)
+print(json.dumps(out))
+PY
+}
+
+# Seconds from a duration (30s, 5m, 2h, 1d); exits 2 on a bad one.
+_sources_secs() {
+    local v="$1" flag="$2"
+    case "$v" in
+        *[!0-9smhd]*|"") echo "Error: $flag takes a duration like 30s, 5m, 2h, 1d" >&2; exit 2 ;;
+        *d) echo $(( ${v%d} * 86400 )) ;;
+        *h) echo $(( ${v%h} * 3600 )) ;;
+        *m) echo $(( ${v%m} * 60 )) ;;
+        *s) echo "${v%s}" ;;
+        *) echo "$v" ;;
+    esac
+}
+
+# Print a source's card view (or a list row's view) for people.
+_sources_render() {
+    local kind="$1"
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+kind = sys.argv[1]
+d = json.load(sys.stdin)
+
+def ago(now, t):
+    if t is None:
+        return "never"
+    s = max(0, now - t)
+    if s < 90:
+        return "%d s ago" % s
+    if s < 5400:
+        return "%d min ago" % (s // 60)
+    if s < 172800:
+        return "%d h ago" % (s // 3600)
+    return "%d d ago" % (s // 86400)
+
+DOT = {"ok": "●", "warn": "▲", "crit": "✖", "unknown": "?", "pending": "○", "paused": "‖", "stale": "◌"}
+
+def line(v):
+    c = v.get("counts") or {}
+    counts = ", ".join("%d %s" % (c[k], k) for k in ("ok", "warn", "crit", "unknown") if c.get(k))
+    bits = [v.get("display", "?")]
+    if counts:
+        bits.append(counts)
+    bits.append("updated " + ago(v["serverNow"], v.get("updatedAt")))
+    if v.get("reason"):
+        bits.append(v["reason"])
+    if (v.get("soft") or {}).get("count"):
+        bits.append("retrying %d/%d" % (v["soft"]["count"], v["soft"]["of"]))
+    if v.get("muted"):
+        bits.append("muted by %s" % v["muted"]["by"])
+    if v.get("simulated"):
+        bits.append("TEST " + v["simulated"]["state"])
+    if v.get("pinned"):
+        bits.append("pinned")
+    return " · ".join(bits)
+
+def card(v):
+    print("%s %s (%s)" % (DOT.get(v.get("display"), "?"), v["name"], v["label"]))
+    print("  " + line(v))
+    if v.get("reasonText"):
+        print("  " + v["reasonText"])
+    if v.get("gap"):
+        g = v["gap"]
+        print("  gap: %s (%s s)" % (g["kind"], g["to"] - g["from"]))
+    for k, x in sorted((v.get("fields") or {}).items()):
+        print("  %-18s %s" % (k, json.dumps(x)))
+    for it in v.get("items") or []:
+        f = " ".join("%s=%s" % (k, json.dumps(x)) for k, x in sorted((it.get("fields") or {}).items()))
+        r = (" (" + it["reason"] + ")") if it.get("reason") else ""
+        print("  %s %-24s %s%s %s" % (DOT.get(it["health"], "?"), it["key"], it["health"], r, f))
+    if v.get("masked"):
+        print("  (values hidden from agents on this source)")
+
+if kind == "list":
+    rows = d.get("sources") or []
+    if not rows:
+        print("No data sources on this server. Propose one: k2 sources propose --help")
+    for r in rows:
+        v = r["view"]
+        extra = []
+        if r["status"] != "active":
+            extra.append(r["status"])
+        if r.get("secret"):
+            extra.append("secret " + r["secret"])
+        if r.get("triggers"):
+            extra.append("%d trigger%s" % (r["triggers"], "" if r["triggers"] == 1 else "s"))
+        if r.get("keep") == "states":
+            extra.append("states only")
+        print("%s %-24s %s%s" % (DOT.get(v.get("display"), "?"), r["name"], line(v), (" · " + " · ".join(extra)) if extra else ""))
+elif kind == "read":
+    card(d)
+elif kind == "show":
+    s = d["source"]
+    card(d["view"])
+    f = s.get("fetch") or {}
+    if "url" in f:
+        print("  fetch: %s" % f["url"])
+    elif "targets" in f:
+        print("  fetch: %d targets" % len(f["targets"]))
+    elif "urlSecret" in f:
+        print("  fetch: URL in the vault (%s) at %s" % (f["urlSecret"]["name"], f["urlSecret"]["origin"]))
+    print("  status: %s · every %s s · made by %s · viewers %s · agents see %s · keep %s"
+          % (s["status"], s["everySecs"], s["madeBy"], s.get("viewers"), s.get("agentAccess"), s.get("keep")))
+    if s.get("secret"):
+        print("  secret: %s (%s)" % (s["secret"], "bound" if s.get("secretBound") else "not bound"))
+    for w in d.get("warnings") or []:
+        print("  warning: %s" % w["hint"])
+elif kind == "status":
+    print("Poller: %s · %d sources (%d active) · %d targets · %d in flight · %s"
+          % ("running" if d.get("running") else "not running", d["sources"], d["active"], d["targets"], d["inFlight"],
+             "on time" if not d.get("behindSecs") else "behind by %d s" % d["behindSecs"]))
+    for p in d.get("parkedOrigins") or []:
+        print("  parked: %s until %s (%s)" % (p["origin"], p["untilAt"], p["reason"]))
+    if d.get("lastGap"):
+        g = d["lastGap"]
+        print("  last gap: %s (%d s)" % (g["kind"], g["to"] - g["from"]))
+    if d.get("airgap"):
+        print("  air-gap is on: only exact-IP sources run")
+elif kind == "history":
+    for p in d.get("points") or []:
+        print("%d\t%s" % (p["t"], "gap" if p["v"] is None else p["v"]))
+' "$kind"
+}
+
+_sources_name_arg() {
+    local verb="$1"; shift
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --*) ;;
+            *) printf '%s' "$a"; return 0 ;;
+        esac
+    done
+    echo "Error: usage: k2 sources $verb <name>" >&2
+    exit 2
+}
+
+_sources_out() {
+    if [ "${_SRC_JSON:-0}" = "1" ]; then
+        _sources_print_json "$_SRC_BODY"
+        exit 0
+    fi
+}
+
+cmd_sources_list() {
+    _sources_call GET /cli/sources/list ""
+    _sources_out
+    _sources_render list
+}
+
+cmd_sources_show() {
+    local name; name="$(_sources_name_arg show "$@")"
+    _sources_call GET /cli/sources/show "name=$(urlencode "$name")"
+    _sources_out
+    _sources_render show
+}
+
+cmd_sources_read() {
+    local name; name="$(_sources_name_arg read "$@")"
+    _sources_call GET /cli/sources/read "name=$(urlencode "$name")"
+    _sources_out
+    _sources_render read
+}
+
+cmd_sources_history() {
+    local name="" field="" from="" to=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) from="${2:-}"; shift 2 ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --json) shift ;;
+            --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
+            *) if [ -z "$name" ]; then name="$1"; elif [ -z "$field" ]; then field="$1"; fi; shift ;;
+        esac
+    done
+    [ -n "$name" ] && [ -n "$field" ] || { echo "Error: usage: k2 sources history <name> <field> [--from 6h|epoch] [--to …]" >&2; exit 2; }
+    local q="name=$(urlencode "$name")&field=$(urlencode "$field")" t now
+    now="$(date +%s)"
+    for t in from to; do
+        local v; if [ "$t" = from ]; then v="$from"; else v="$to"; fi
+        [ -z "$v" ] && continue
+        case "$v" in
+            *[smhd]) v=$(( now - $(_sources_secs "$v" "--$t") )) ;;
+            *[!0-9]*) echo "Error: --$t takes a duration (6h) or epoch seconds" >&2; exit 2 ;;
+        esac
+        q="$q&$t=$v"
+    done
+    _sources_call GET /cli/sources/history "$q"
+    _sources_out
+    _sources_render history
+}
+
+cmd_sources_status() {
+    _sources_call GET /cli/sources/status ""
+    _sources_out
+    _sources_render status
+}
+
+cmd_sources_export() {
+    local name; name="$(_sources_name_arg export "$@")"
+    _sources_call GET /cli/sources/export "name=$(urlencode "$name")"
+    _sources_print_json "$_SRC_BODY"
+}
+
+_sources_create() {
+    local verb="$1"; shift
+    local body
+    body="$(_sources_spec_json full "$@")" || exit 2
+    _sources_call POST "/cli/sources/$verb" "$body"
+    _sources_out
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+how = {"one_click": "one click in Settings → K2 Server → Data Sources (or k2 sources approve)",
+       "needs_confirm": "a person binds the secret with a confirm (Settings, or k2 sources approve --secret)",
+       "owner_only": "the server owner approves it"}.get(d.get("approval"), "")
+print("%s: %s" % (d["name"], d["status"]))
+if d["status"] == "proposed" and how:
+    print("Waiting for approval: " + how)
+for w in d.get("warnings") or []:
+    print("warning: " + w["hint"])
+'
+}
+
+cmd_sources_propose() { _sources_create propose "$@"; }
+cmd_sources_add() { _sources_create add "$@"; }
+
+cmd_sources_edit() {
+    local name="" rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --*) rest+=("$1"); case "$1" in --json|--yes) ;; *) [ $# -gt 1 ] && { rest+=("$2"); shift; } ;; esac; shift ;;
+            *) if [ -z "$name" ]; then name="$1"; else rest+=("$1"); fi; shift ;;
+        esac
+    done
+    [ -n "$name" ] || { echo "Error: usage: k2 sources edit <name> [flags]" >&2; exit 2; }
+    local set body
+    set="$(_sources_spec_json set ${rest[@]+"${rest[@]}"})" || exit 2
+    body="$(K2_SRC_NAME="$name" K2_SRC_SET="$set" python3 -c 'import json, os; s = json.loads(os.environ["K2_SRC_SET"]); s.pop("name", None); print(json.dumps({"name": os.environ["K2_SRC_NAME"], "set": s}))')"
+    _sources_call POST /cli/sources/edit "$body"
+    _sources_out
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print("%s: %s" % (d["name"], d["status"]))
+if d.get("unbound"):
+    print("The secret was unbound; a person approves it again with a confirm.")
+for w in d.get("warnings") or []:
+    print("warning: " + w["hint"])
+'
+}
+
+cmd_sources_remove() {
+    local name; name="$(_sources_name_arg remove "$@")"
+    local yes=0 a
+    for a in "$@"; do [ "$a" = "--yes" ] && yes=1; done
+    if [ "$yes" != "1" ]; then
+        if [ -n "${K2_HOOK_SOCK:-}${K2SO_HOOK_SOCK:-}" ] || [ ! -t 0 ]; then
+            echo "Error: k2 sources remove needs --yes here" >&2
+            exit 2
+        fi
+        printf 'Remove %s? Gardens on other computers that show it will say removed; the name is held for 7 days. [y/N] ' "$name" >&2
+        local ans; read -r ans
+        case "$ans" in y|Y|yes) ;; *) echo "Not removed." >&2; exit 1 ;; esac
+    fi
+    _sources_call POST /cli/sources/remove "$(K2_SRC_NAME="$name" python3 -c 'import json, os; print(json.dumps({"name": os.environ["K2_SRC_NAME"]}))')"
+    _sources_out
+    echo "Removed $name (name held for 7 days)."
+}
+
+_sources_name_post() {
+    local verb="$1" name="$2"
+    _sources_call POST "/cli/sources/$verb" "$(K2_SRC_NAME="$name" python3 -c 'import json, os; print(json.dumps({"name": os.environ["K2_SRC_NAME"]}))')"
+}
+
+cmd_sources_pause() {
+    local name; name="$(_sources_name_arg pause "$@")"
+    _sources_name_post pause "$name"
+    _sources_out
+    echo "$name: paused"
+}
+
+cmd_sources_resume() {
+    local name; name="$(_sources_name_arg resume "$@")"
+    _sources_name_post resume "$name"
+    _sources_out
+    echo "$name: active"
+}
+
+cmd_sources_mute() {
+    local name="" for_="" reason=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --for) for_="${2:-}"; shift 2 ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) shift ;;
+            --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
+            *) name="$1"; shift ;;
+        esac
+    done
+    [ -n "$name" ] && [ -n "$for_" ] || { echo "Error: usage: k2 sources mute <name> --for 30m [--reason \"…\"]" >&2; exit 2; }
+    local secs; secs="$(_sources_secs "$for_" --for)"
+    _sources_call POST /cli/sources/mute "$(K2_SRC_NAME="$name" K2_SRC_FOR="$secs" K2_SRC_REASON="$reason" python3 -c '
+import json, os
+b = {"name": os.environ["K2_SRC_NAME"], "forSecs": int(os.environ["K2_SRC_FOR"])}
+if os.environ.get("K2_SRC_REASON"):
+    b["reason"] = os.environ["K2_SRC_REASON"]
+print(json.dumps(b))')"
+    _sources_out
+    echo "$name: muted for $for_"
+}
+
+cmd_sources_unmute() {
+    local name; name="$(_sources_name_arg unmute "$@")"
+    _sources_name_post unmute "$name"
+    _sources_out
+    echo "$name: unmuted"
+}
+
+cmd_sources_refresh() {
+    local name; name="$(_sources_name_arg refresh "$@")"
+    local wait=0 a
+    for a in "$@"; do [ "$a" = "--wait" ] && wait=1; done
+    local before=""
+    if [ "$wait" = "1" ]; then
+        _sources_call GET /cli/sources/read "name=$(urlencode "$name")"
+        before="$(printf '%s' "$_SRC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("checkedAt"))')"
+    fi
+    _sources_name_post refresh "$name"
+    if [ "$wait" != "1" ]; then
+        _sources_out
+        echo "$name: check queued"
+        return 0
+    fi
+    local i
+    for i in $(seq 1 30); do
+        sleep 1
+        _sources_call GET /cli/sources/read "name=$(urlencode "$name")"
+        local now_checked
+        now_checked="$(printf '%s' "$_SRC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("checkedAt"))')"
+        if [ "$now_checked" != "$before" ]; then
+            _sources_out
+            _sources_render read
+            return 0
+        fi
+    done
+    echo "Error: no new check within 30 s" >&2
+    exit 1
+}
 # END_SOURCES_B1
 
 # BEGIN_SOURCES_B2

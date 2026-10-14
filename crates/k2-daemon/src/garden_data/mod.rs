@@ -69,7 +69,7 @@ pub fn start() {
             store().close_if_idle();
             audit::flush();
             budget::prune();
-            if minutes % 60 == 0 {
+            if minutes.is_multiple_of(60) {
                 hourly();
             }
             minutes += 1;

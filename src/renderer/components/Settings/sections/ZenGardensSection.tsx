@@ -19,6 +19,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { SettingEntry } from '../searchManifest'
 import { SettingDropdown } from '../controls/SettingControls'
 import { ZenGardenSyncControls } from './ZenGardenSyncControls'
+import { ZenWidgetData } from './ZenWidgetData'
 import { watchLocalZenChanged } from '@/lib/zen/zen-api'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import {
@@ -47,6 +48,14 @@ export const ZEN_GARDENS_MANIFEST: SettingEntry[] = [
     label: 'Gardens',
     description: 'Lock, sync, rename, reorder or delete your Zen Gardens',
     keywords: ['zen', 'garden', 'gardens', 'lock', 'unlock', 'sync', 'template', 'rename', 'reorder', 'delete', 'new garden'],
+  },
+  {
+    // Garden data (contract-garden-data-v1 §11.4): each custom widget's data.
+    id: 'zen-gardens.data',
+    section: 'zen-gardens',
+    label: 'Widget Data',
+    description: "Each custom widget's data on this computer: size, agent grants, grant admin, export, delete",
+    keywords: ['zen', 'garden', 'widget', 'data', 'store', 'grant', 'grants', 'agent', 'export', 'delete', "it's mine", 'admin'],
   },
   {
     // The Advanced section (always shown): a search lands on it, the theme
@@ -709,6 +718,8 @@ export function ZenGardensSection(): React.JSX.Element {
               <GardenList gardens={st.gardens} query={query} />
             </section>
           )}
+          {/* Garden data (contract-garden-data-v1 §11.4): each custom widget's data line. */}
+          {hasData && st.setUp ? <ZenWidgetData /> : null}
         </div>
 
         {hasData && (st.setUp || st.path) ? (

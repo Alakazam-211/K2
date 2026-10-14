@@ -173,6 +173,17 @@ assert_eq "an absolute dir in the workspace works and a clean folder exits 0" "$
 capture app validate --dir ../
 assert_eq "an escaping dir is refused (1)" "$rc" "1"
 assert_contains "it says why" "$out" "dir must not contain .."
+# One k2 app validate (vs-live 2): a folder with manifest.json goes to the
+# App runtime's Seed check; with the preview off it still gets the code pass.
+mkdir -p "$WS/mapp"
+printf '{"schema":1,"kind":"app","id":"mapp","name":"M","version":"1.0.0","host":{"mode":"cmd","start":["node","s.js"]}}\n' >"$WS/mapp/manifest.json"
+printf 'const a = ;\n' >"$WS/mapp/s.js"
+capture app validate "$WS/mapp"
+assert_eq "a manifest folder with a parse error fails (1) with the preview off" "$rc" "1"
+assert_contains "it says the manifest was not checked" "$out" "the App runtime preview is off"
+assert_contains "the code pass still placed the error" "$out" "s.js:1:"
+capture app validate --dir mapp --types
+assert_eq "--types on a manifest folder with the preview off is a usage error (2)" "$rc" "2"
 
 echo "== k2 publish status <name>: loopable exit codes =="
 capture publish status nope

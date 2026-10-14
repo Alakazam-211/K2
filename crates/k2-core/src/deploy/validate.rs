@@ -11,7 +11,11 @@
 //!   Its errors block (contract errors); a missing checker is an error
 //!   when `--types` was asked for (never a silent skip).
 //!
-//! Stage 0's oxc lints (S4) plug in here as more warnings.
+//! - `code`: stage 0's oxc pass (S4, `crate::jscheck::app`) over every
+//!   JS/TS file and inline `<script>`: a parse error is an error (it would
+//!   fail at start anyway); the leak lints and anything not read are
+//!   warnings. The same check `k2 app validate --dir` runs on a plain
+//!   folder.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -83,11 +87,33 @@ pub fn validate_tree(root: &Path, opts: &Options) -> (Report, Option<Manifest>) 
     check_manifest(&m, &mut errors, &mut warnings);
     checks.push("contract".into());
     check_contract(&m, &mut errors, &mut warnings);
+    checks.push("code".into());
+    check_code(root, &mut errors, &mut warnings);
     if opts.types {
         let label = check_types(root, opts, &mut errors, &mut warnings);
         checks.push(format!("types:{label}"));
     }
     (Report { ok: errors.is_empty(), errors, warnings, checks }, Some(m))
+}
+
+/// Stage 0 (S4): parse every JS/TS file and inline script, run the leak
+/// lints. One `k2 app validate` for Seeds and plain folders (vs-live 2).
+fn check_code(root: &Path, errors: &mut Vec<Issue>, warnings: &mut Vec<Issue>) {
+    let r = crate::jscheck::app::check_dir(root);
+    let text = |d: &crate::zen::schema::Diagnostic| match &d.suggestion {
+        Some(s) => format!("{} (suggestion: {s})", d.message),
+        None => d.message.clone(),
+    };
+    let at = |d: &crate::zen::schema::Diagnostic| Some(format!("{}:{}:{}", d.file, d.line, d.col));
+    for d in &r.errors {
+        errors.push(issue("code_parse_error", text(d), at(d)));
+    }
+    for d in &r.warnings {
+        warnings.push(issue("code_lint", text(d), at(d)));
+    }
+    for line in r.skipped {
+        warnings.push(issue("code_skipped", line, None));
+    }
 }
 
 fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issue>) {
@@ -456,7 +482,30 @@ mod tests {
         let (r, m) = validate_tree(&app(h.path(), GOOD), &Options::default());
         assert!(r.ok, "{r:?}");
         assert_eq!(m.unwrap().id, "jim");
-        assert_eq!(r.checks, vec!["manifest", "contract"]);
+        assert_eq!(r.checks, vec!["manifest", "contract", "code"]);
+    }
+
+    /// vs-live 2: Seed validate runs stage 0's oxc pass too. A parse error
+    /// blocks (errors), a leak lint doesn't (warnings), files are named.
+    #[test]
+    fn code_parse_errors_block_and_leak_lints_warn() {
+        let h = TempHome::new();
+        let f = app(h.path(), GOOD);
+        std::fs::write(f.join("server.js"), "const a = ;\n").unwrap();
+        let (r, _) = validate_tree(&f, &Options::default());
+        assert!(!r.ok, "{r:?}");
+        let e = r.errors.iter().find(|e| e.code == "code_parse_error").expect("parse error reported");
+        assert_eq!(e.at.as_deref(), Some("server.js:1:11"), "{e:?}");
+
+        std::fs::write(
+            f.join("server.js"),
+            "const app = require('express')()\nconst hits = []\napp.get('/', (req, res) => { hits.push(req.ip); res.end() })\n",
+        )
+        .unwrap();
+        let (r, _) = validate_tree(&f, &Options::default());
+        assert!(r.ok, "a leak lint is a warning, never a block: {r:?}");
+        let w = r.warnings.iter().find(|w| w.code == "code_lint").expect("leak lint reported");
+        assert!(w.at.as_deref().is_some_and(|a| a.starts_with("server.js:3:")), "{w:?}");
     }
 
     #[test]

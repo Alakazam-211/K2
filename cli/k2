@@ -6752,49 +6752,10 @@ sys.exit(code)
 '
 }
 
-# `k2 app validate [<name>] [--dir <path>] [--json]` — decision-k2-runtime-v1
-# stage 0: parse an App's JS/TS (and inline scripts) and run the leak lints.
-cmd_app_validate() {
-    local name="" dir="" as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --dir) dir="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
-            --dir=*) dir="${1#--dir=}"; shift ;;
-            --json) as_json=true; shift ;;
-            --help|-h)
-                cat <<'EOF'
-k2 app validate — check an App's code before you publish or after you change it
-
-USAGE
-  k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
-  k2 app validate --dir <path>    a folder in this workspace (default: the workspace)
-  k2 app validate ... --json      {ok, status, target, dir, files, errors, warnings, skipped}
-
-WHAT IT CHECKS (it never runs your code)
-  - every .js .mjs .cjs .jsx .ts .tsx .mts .cts file and every inline <script>
-    in .html pages parses (oxc): errors, file:line:col, each with a suggestion
-  - leak lints, as warnings: module-level Map/Set/array/object growth inside
-    request/event handlers, setInterval started in a handler with no clear,
-    listeners added per request to long-lived targets, session stores with
-    no expiry (express-session with no store, MemoryStore)
-  Skipped: node_modules, dist, build, .next and other build/hidden folders,
-  symlinks, files over 2 MB; anything skipped is listed.
-
-EXIT CODES
-  0 no errors (warnings may be listed)
-  1 errors, or the check could not run
-EOF
-                exit 0 ;;
-            -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<name>] [--dir <path>] [--json]" >&2; exit 2 ;;
-            *)
-                if [ -z "$name" ]; then name="$1"; shift
-                else echo "Error: unexpected argument '$1'" >&2; exit 2; fi ;;
-        esac
-    done
-    if [ -n "$name" ] && [ -n "$dir" ]; then
-        echo "Error: give an App name or --dir, not both" >&2
-        exit 2
-    fi
+# Stage 0 (decision-k2-runtime-v1): parse a folder's JS/TS (and inline
+# scripts) and run the leak lints. GET /cli/publish/validate; read-only.
+_app_validate_code() {
+    local name="$1" dir="$2" as_json="$3"
     # An absolute path inside this workspace becomes workspace-relative.
     if [ -n "$dir" ] && [ "${dir#/}" != "$dir" ]; then
         local ws="${PROJECT%/}"
@@ -6810,6 +6771,100 @@ EOF
     _validate_print "$as_json" "$raw" "${name:-${dir:-this workspace}}"
 }
 
+# `k2 app validate` — ONE command for stage 0 and the App runtime (vs-live 2):
+#   a folder with manifest.json, or a Seed  -> POST /cli/app/validate
+#     (manifest, contract, the same oxc code pass, --types) when the runtime
+#     preview is on; with it off, a folder falls back to the code pass;
+#   a plain folder (--dir or a path)        -> the code pass only;
+#   a published App name, or nothing       -> the code pass on its folder.
+cmd_app_validate() {
+    local name="" dir="" target="" as_json=false types=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dir) dir="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
+            --dir=*) dir="${1#--dir=}"; shift ;;
+            --types) types=1; shift ;;
+            --json) as_json=true; shift ;;
+            --help|-h)
+                cat <<'EOF'
+k2 app validate — check an App's code before you publish, build or deploy it
+
+USAGE
+  k2 app validate <folder>        a folder (a path, or --dir <path>)
+  k2 app validate <seed>          a stored Seed (k2 app build prints its hash)
+  k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
+  k2 app validate                 this workspace's folder
+  ... --types                     also run the TypeScript checker (Seeds and
+                                  manifest folders; its errors block)
+  ... --json                      the report as JSON
+
+WHAT IT CHECKS (it never runs your code)
+  - every .js .mjs .cjs .jsx .ts .tsx .mts .cts file and every inline <script>
+    in .html pages parses (oxc): errors, file:line:col, each with a suggestion
+  - leak lints, as warnings: module-level Map/Set/array/object growth inside
+    request/event handlers, setInterval started in a handler with no clear,
+    listeners added per request to long-lived targets, session stores with
+    no expiry (express-session with no store, MemoryStore)
+  - a folder with manifest.json, or a Seed (App runtime preview: K2_APPS=1 or
+    Settings appsPreview): also manifest.json and the K2 contract (caps,
+    bindings, roles, requires). With the preview off a folder gets the code
+    checks only (said on stderr).
+  Skipped: node_modules, dist, build, .next and other build/hidden folders,
+  symlinks, files over 2 MB; anything skipped is listed.
+
+  A path that exists as a folder wins over a published App with that name.
+
+EXIT CODES
+  0 no errors (warnings may be listed)
+  1 errors, or the check could not run
+  2 bad usage
+  3 the daemon refused (JSON with a code on stderr)
+EOF
+                exit 0 ;;
+            -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<folder|seed|name>] [--dir <path>] [--types] [--json]" >&2; exit 2 ;;
+            *)
+                if [ -z "$target" ]; then target="$1"; shift
+                else echo "Error: unexpected argument '$1'" >&2; exit 2; fi ;;
+        esac
+    done
+    if [ -n "$target" ] && [ -n "$dir" ]; then
+        echo "Error: give a folder, Seed or App name, or --dir, not both" >&2
+        exit 2
+    fi
+    # A folder given as a path is relative to here; --dir is relative to the
+    # workspace (as it always was).
+    if [ -n "$target" ] && [ -d "$target" ]; then
+        dir="$(_app_rt_abs "$target")"; target=""
+    fi
+    if [ -n "$dir" ]; then
+        local abs="$dir"
+        [ "${dir#/}" = "$dir" ] && abs="${PROJECT%/}/$dir"
+        if [ -f "$abs/manifest.json" ]; then
+            _app_validate_seed folder "$abs" "$types" "$as_json" && return 0
+            # 10 = the runtime preview is off: the code pass still runs.
+            [ "$?" = 10 ] || exit 1
+            echo "note: the App runtime preview is off, so manifest.json and the contract were not checked; code checks only" >&2
+        fi
+        if [ "$types" = 1 ]; then
+            echo "Error: --types needs a folder with manifest.json (or a Seed) and the App runtime preview on" >&2
+            exit 2
+        fi
+        _app_validate_code "" "$dir" "$as_json"
+        return
+    fi
+    # A Seed hash (or a unique prefix of one: hex, 12+ characters).
+    if [ -n "$target" ] && [[ "$target" =~ ^[0-9a-f]{12,64}$ ]]; then
+        _app_validate_seed seed "$target" "$types" "$as_json" && return 0
+        [ "$?" = 10 ] && _compute_fail "404" "$_CP_BODY"
+        exit 1
+    fi
+    if [ "$types" = 1 ]; then
+        echo "Error: --types needs a folder with manifest.json or a Seed" >&2
+        exit 2
+    fi
+    _app_validate_code "$target" "" "$as_json"
+}
+
 # ── App runtime (prd-k2-app-runtime-v1 stage 1) ─────────────────────
 # k2 app build/validate (S6), deploy/rollback/stop/start/restart/install
 # (S7), list/inspect/history/logs/errors/uninstall (S8). Preview only
@@ -6823,9 +6878,10 @@ k2 app — host Apps on this box (preview: K2_APPS=1 or Settings appsPreview)
 
 Make and ship:
   k2 app validate <folder|seed> [--types] [--json]
-                                       Check manifest.json and the K2 contract.
-                                       --types also runs the TypeScript checker
-                                       (its errors block).
+                                       Check manifest.json, the K2 contract and
+                                       the code (parse + leak lints). --types
+                                       also runs the TypeScript checker (its
+                                       errors block). k2 app validate --help.
   k2 app build <folder> [--types] [--json]
                                        Store the folder as an immutable Seed
                                        and print its hash. Deploys nothing.
@@ -6891,27 +6947,22 @@ _app_rt_abs() {
     if [ -d "$p" ]; then (cd "$p" && pwd -P); else printf '%s' "$p"; fi
 }
 
-cmd_app_validate() {
-    local target="" types=0 json_out=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --types) types=1; shift ;;
-            --json) json_out=1; shift ;;
-            -h|--help) _app_rt_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) target="$1"; shift ;;
-        esac
-    done
-    [ -z "$target" ] && { echo "usage: k2 app validate <folder|seed> [--types] [--json]" >&2; exit 2; }
-    local body
-    if [ -d "$target" ]; then
+# App runtime S6: POST /cli/app/validate {folder|seed, types}. Returns 0 ok,
+# 1 errors in the report, 10 when the runtime preview is off (the caller
+# decides); any other refusal prints its JSON and exits 2/3.
+_app_validate_seed() {
+    local kind="$1" target="$2" types="$3" as_json="$4" body
+    if [ "$kind" = folder ]; then
         body="$(_compute_json K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_types_b="$types")"
     else
         body="$(_compute_json K2_CJ_seed="$target" K2_CJ_types_b="$types")"
     fi
     _app_rt_post /cli/app/validate "$body"
+    if [ "$_CP_STATUS" = "404" ] && [[ "$_CP_BODY" == *'"apps_disabled"'* ]]; then
+        return 10
+    fi
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
-    if [ "$json_out" = 1 ]; then
+    if [ "$as_json" = true ]; then
         printf '%s\n' "$_CP_BODY"
     else
         printf '%s' "$_CP_BODY" | _app_rt_report
@@ -7440,10 +7491,6 @@ cmd_app() {
         token|tokens)
             shift || true
             cmd_skin_token "$@"
-            ;;
-        validate)
-            shift || true
-            cmd_app_validate "$@"
             ;;
         *)
             cmd_skin "$@"

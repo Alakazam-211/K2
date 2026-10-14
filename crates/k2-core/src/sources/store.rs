@@ -789,6 +789,7 @@ pub fn prune(conn: &Connection, now: i64) -> rusqlite::Result<()> {
 // ── audit ────────────────────────────────────────────────────────────
 
 /// One audit line. `detail` holds names, codes and counts only.
+#[allow(clippy::too_many_arguments)]
 pub fn audit(
     conn: &Connection,
     at: i64,

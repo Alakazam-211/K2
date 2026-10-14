@@ -585,6 +585,12 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "zen_changed" }`.
     ZenChanged {},
 
+    /// Garden v3: a source's definition or state changed on this server.
+    /// Wire: `{ "kind": "sources_changed", "rev": 4182 }`. App-level: reaches
+    /// every subscriber, so it carries nothing but the counter
+    /// (contract-sources-v1 §5, GV12).
+    SourcesChanged { rev: i64 },
+
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
     /// deregistered). `grantedEdit` is retired and always false.
@@ -796,6 +802,7 @@ impl SessionEvent {
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
+            SessionEvent::SourcesChanged { .. } => "sources_changed",
             SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
             SessionEvent::ActivityChanged { .. } => "activity_changed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",

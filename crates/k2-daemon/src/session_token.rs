@@ -699,6 +699,10 @@ pub fn is_agent_verb(path: &str) -> bool {
     ];
     const ALLOW_PREFIXES: &[&str] = &[
         "/cli/inbox/",
+        // Garden v3 data sources (contract-sources-v1 §4, GV52): every
+        // `/cli/sources/*` path is served on the cell socket for the bound
+        // session; handlers refuse person steps with 403 person_only.
+        "/cli/sources/",
         // Wave 0: agent mail verbs (messages/read/send/draft/inboxes/…).
         // Owner surfaces are DENY_PREFIXES above. Identity is forced from
         // HookPrincipal via stamp_principal + resolve_caller_workspace —

@@ -35,6 +35,7 @@
   "remote_session_access_denied": "app",
   "fs_changed": "app",
   "zen_changed": "app",
+  "sources_changed": "app",
   "hooks_install_failed": "app",
   "activity_changed": "app",
   "notify_prefs_changed": "app"

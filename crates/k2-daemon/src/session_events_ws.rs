@@ -384,6 +384,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::LlmAccountsChanged { .. } => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
         SessionEvent::ZenChanged {} => None,
+        // Garden v3 — a source changed: app-level, payload-free but `rev`.
+        SessionEvent::SourcesChanged { .. } => None,
         // A11 — hook install problems: daemon-global, every client may toast.
         SessionEvent::HooksInstallFailed { .. } => None,
         // S4 (RL2) — activity rows: app-level like the compat events below;
@@ -788,6 +790,7 @@ mod tests {
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
             SessionEvent::ZenChanged {},
+            SessionEvent::SourcesChanged { rev: 1 },
             SessionEvent::HooksInstallFailed { failures: vec![] },
             SessionEvent::ActivityChanged {
                 seq: 1,

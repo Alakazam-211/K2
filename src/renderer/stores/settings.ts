@@ -81,6 +81,8 @@ export type SettingsSection =
   | 'api-tokens'
   /** Settings → K2 Server → Vault (prd-k2-vault-v1 §16.1, KV39). */
   | 'vault'
+  /** Settings → K2 Server → Data Sources (contract-sources-v1 §8). */
+  | 'data-sources'
   | 'email-hosting'
   | 'email-link'
   | 'data'

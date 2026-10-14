@@ -269,6 +269,10 @@ _cli_tool_id_for_verb() {
         # terminal it never re-sources the owner token (agents would
         # bypass the workspace switch and grants).
         compute) echo "compute" ;;
+        # k2 sources (Garden v3 data sources): id + locked, so inside a K2
+        # terminal the daemon sees the session passport (agents can't act as
+        # the owner on approvals, secrets or pins).
+        sources|source) echo "sources" ;;
         # LLM tokens (`k2 llm tokens`, alias `accounts`): an `id` tool, so inside a K2
         # terminal the daemon sees the session passport (read-only there).
         llm) echo "llm-accounts" ;;
@@ -314,7 +318,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -322,7 +326,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -622,6 +626,13 @@ fi
 [ "${1:-}" = "sessions" ] && [ "${2:-}" = "spawn" ] && _skip_conn_gate=1
 # `k2 compute` / `k2 compute --help` only print help.
 if [ "${1:-}" = "compute" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
+# `k2 sources` / `k2 sources --help` only print help.
+if [ "${1:-}" = "sources" ] || [ "${1:-}" = "source" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
@@ -11680,6 +11691,193 @@ else:
 '
 }
 
+# ── k2 sources (Garden v3 data sources; contract-sources-v1 §7) ─────
+# HTTP JSON checks the daemon polls; Garden cards and agents read them.
+# Regions: C0 owns the noun line, help, --schema, the shared helpers and
+# the dispatcher below; B1 edits only BEGIN/END_SOURCES_B1, B2 only
+# BEGIN/END_SOURCES_B2. Transport is the compute sender: the session
+# passport over the cell socket inside K2, the owner token outside.
+# Exit codes: 0 ok; 1 failure; 2 usage; 3 needs a person (person_only,
+# owner_only, confirm needed, lan_owner_only, field_person_only); 4 not
+# found (source_not_found, trigger_not_found, removed).
+
+# BEGIN_SOURCES_C0
+_sources_usage() {
+    cat <<'EOF'
+k2 sources — data sources: HTTP JSON checks this server runs for Garden cards and agents
+
+  k2 sources list [--all] [--json]          every source with its state
+  k2 sources show <name> [--json]           definition + current state
+  k2 sources read <name> [--json]           current state (the card view)
+  k2 sources history <name> <field> [--from <dur|epoch>] [--to …] [--json]
+  k2 sources status [--json]                the poller: in flight, behind, parked sites
+  k2 sources export <name>                  definition as JSON (secret names only)
+  k2 sources propose --from <file.json> | --name N --label L --url URL [flags…]
+  k2 sources add …                          like propose; people only (Settings or outside K2)
+  k2 sources edit <name> [flags…]           change a source (agents: only their own)
+  k2 sources remove <name> --yes            the name is held for 7 days
+  k2 sources pause|resume <name>            people only
+  k2 sources mute <name> --for 30m [--reason "…"]   agents: up to 2 h, reason required
+  k2 sources unmute <name>
+  k2 sources refresh <name> [--wait]        check now (at most once per 15 s)
+  k2 sources try [propose flags] | --name <saved>   fetch once, show the shape
+  k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
+  k2 sources pending [--names a,b]          proposals waiting for a person
+  k2 sources approve <name>… [--secret NAME]        people only
+  k2 sources secret <name> NAME|--none      people only
+  k2 sources pin|unpin <name>               people only
+  k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
+
+Exit codes: 0 ok, 1 failure, 2 usage, 3 needs a person, 4 not found.
+--json prints the daemon's answer as is (also on errors).
+More: k2 study data-sources
+EOF
+}
+
+# The daemon's answer as is (pretty when it parses).
+_sources_print_json() {
+    printf '%s' "${1:-}" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    print(json.dumps(json.loads(raw), indent=2, ensure_ascii=False))
+except Exception:
+    print(raw)
+'
+}
+
+# Print a refusal and exit with the contract code.
+_sources_fail() {
+    local status="$1" body="$2" code=""
+    code="$(printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    v = json.loads(sys.stdin.read())
+    e = v.get("error") if isinstance(v, dict) else None
+    print(e.get("code", "") if isinstance(e, dict) else (e or ""))
+except Exception:
+    print("")
+' 2>/dev/null)"
+    if [ "${_SRC_JSON:-0}" = "1" ] && [ -n "$body" ]; then
+        _sources_print_json "$body"
+    elif [ -n "$body" ]; then
+        printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    e = json.loads(raw).get("error")
+    if isinstance(e, dict):
+        print("Error: %s: %s" % (e.get("code", "error"), e.get("hint", "")))
+    else:
+        print("Error: %s" % e)
+except Exception:
+    print("Error: daemon returned: %s" % raw[:200])
+' >&2
+    else
+        echo "Error: no answer from the K2 daemon (status ${status:-none})" >&2
+    fi
+    case "$code" in
+        person_only|owner_only|confirm_required|lan_owner_only|field_person_only)
+            echo "This needs a person. Run it outside K2, or use Settings → K2 Server → Data Sources." >&2
+            exit 3 ;;
+        source_not_found|trigger_not_found|removed) exit 4 ;;
+        *) exit 1 ;;
+    esac
+}
+
+# _sources_call METHOD PATH [PAYLOAD]: GET payload is a query string, POST
+# payload is JSON. Fails (and exits) on anything but 200; the body lands in
+# _SRC_BODY.
+_sources_call() {
+    local raw
+    raw="$(_compute_send "$@")"
+    _SRC_STATUS="${raw##*$'\n'}"
+    _SRC_BODY="${raw%$'\n'*}"
+    [ "$_SRC_STATUS" = "$raw" ] && _SRC_BODY=""
+    [ -z "$_SRC_STATUS" ] && _SRC_STATUS="000"
+    [ "$_SRC_STATUS" = "200" ] || _sources_fail "$_SRC_STATUS" "$_SRC_BODY"
+}
+
+_sources_not_built() {
+    echo "Error: not_built: k2 sources $1 is not built yet" >&2
+    exit 1
+}
+
+cmd_sources() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|help|--help|-h) _sources_usage; return 0 ;;
+    esac
+    shift
+    if _wants_help "$@"; then
+        _sources_usage
+        return 0
+    fi
+    _SRC_JSON=0
+    local a
+    for a in "$@"; do [ "$a" = "--json" ] && _SRC_JSON=1; done
+    case "$sub" in
+        list|ls) cmd_sources_list "$@" ;;
+        show) cmd_sources_show "$@" ;;
+        read) cmd_sources_read "$@" ;;
+        history) cmd_sources_history "$@" ;;
+        status) cmd_sources_status "$@" ;;
+        export) cmd_sources_export "$@" ;;
+        propose) cmd_sources_propose "$@" ;;
+        add) cmd_sources_add "$@" ;;
+        edit) cmd_sources_edit "$@" ;;
+        remove|rm) cmd_sources_remove "$@" ;;
+        pause) cmd_sources_pause "$@" ;;
+        resume) cmd_sources_resume "$@" ;;
+        mute) cmd_sources_mute "$@" ;;
+        unmute) cmd_sources_unmute "$@" ;;
+        refresh) cmd_sources_refresh "$@" ;;
+        try) cmd_sources_try "$@" ;;
+        simulate) cmd_sources_simulate "$@" ;;
+        approve) cmd_sources_approve "$@" ;;
+        secret) cmd_sources_secret "$@" ;;
+        pin) cmd_sources_pin "$@" ;;
+        unpin) cmd_sources_unpin "$@" ;;
+        pending) cmd_sources_pending "$@" ;;
+        trigger|triggers) cmd_sources_trigger "$@" ;;
+        *)
+            echo "Error: unknown k2 sources command '$sub'" >&2
+            _sources_usage >&2
+            exit 2
+            ;;
+    esac
+}
+# END_SOURCES_C0
+
+# BEGIN_SOURCES_B1
+cmd_sources_list() { _sources_not_built list; }
+cmd_sources_show() { _sources_not_built show; }
+cmd_sources_read() { _sources_not_built read; }
+cmd_sources_history() { _sources_not_built history; }
+cmd_sources_status() { _sources_not_built status; }
+cmd_sources_export() { _sources_not_built export; }
+cmd_sources_propose() { _sources_not_built propose; }
+cmd_sources_add() { _sources_not_built add; }
+cmd_sources_edit() { _sources_not_built edit; }
+cmd_sources_remove() { _sources_not_built remove; }
+cmd_sources_pause() { _sources_not_built pause; }
+cmd_sources_resume() { _sources_not_built resume; }
+cmd_sources_mute() { _sources_not_built mute; }
+cmd_sources_unmute() { _sources_not_built unmute; }
+cmd_sources_refresh() { _sources_not_built refresh; }
+# END_SOURCES_B1
+
+# BEGIN_SOURCES_B2
+cmd_sources_try() { _sources_not_built try; }
+cmd_sources_simulate() { _sources_not_built simulate; }
+cmd_sources_approve() { _sources_not_built approve; }
+cmd_sources_secret() { _sources_not_built secret; }
+cmd_sources_pin() { _sources_not_built pin; }
+cmd_sources_unpin() { _sources_not_built unpin; }
+cmd_sources_pending() { _sources_not_built pending; }
+cmd_sources_trigger() { _sources_not_built trigger; }
+# END_SOURCES_B2
+
 # ── k2 vault (prd-k2-vault-v1 §14) ──────────────────────────────────
 # One encrypted store for passwords, tokens and keys. Values are read from
 # stdin only (never an argument, never a URL). Agent verbs go over the
@@ -17274,6 +17472,7 @@ cmd_help() {
         preset)                   cmd_help_preset ;;
         sidecar)                  _sidecar_usage ;;
         compute)                  _compute_usage ;;
+        sources|source)           _sources_usage ;;
         llm)                      _llm_accounts_usage ;;
         vault)                    _vault_usage ;;
         feedback|tickets)         cmd_help_feedback ;;
@@ -17857,6 +18056,27 @@ cmd_schema() {
       "args": [{"name": "on|off|status", "required": true}],
       "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
+    {"name": "sources list", "usage": "k2 sources list [--all] [--json]", "description": "This server's data sources with their state (ok/warn/crit/unknown; pending/live/stale/paused).", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Include proposed and paused (the default shows all, by status)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources show", "usage": "k2 sources show <name> [--json]", "description": "One source: its definition and current card view. Agents see masked values on shape-only sources.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources read", "usage": "k2 sources read <name> [--json]", "description": "One source's card view (what Garden cards show).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources history", "usage": "k2 sources history <name> <field> [--from <dur|epoch>] [--to <dur|epoch>] [--json]", "description": "Trend points for a field (raw for 48 h, hourly for 35 days).", "args": [{"name": "name", "required": true}, {"name": "field", "required": true}], "flags": [{"name": "--from", "arg": "dur|epoch", "description": "Start (default 48h ago)."}, {"name": "--to", "arg": "dur|epoch", "description": "End (default now)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources status", "usage": "k2 sources status [--json]", "description": "The poller: sources, targets, in flight, behind by, parked sites, air-gap.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources export", "usage": "k2 sources export <name>", "description": "A source's definition as JSON (secret names only), ready for propose --from.", "args": [{"name": "name", "required": true}], "flags": []},
+    {"name": "sources propose", "usage": "k2 sources propose --from <file.json> | --name <n> --label <l> --url <url> [flags]", "description": "Propose a source; a person approves it (one click when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:crit:op:value[,warn:op:value][,ok:op:value]", "description": "How a field rates (repeatable)."}, {"name": "--trend", "arg": "name", "description": "Keep history for this field (up to 8)."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources add", "usage": "k2 sources add [propose flags] [--viewers member|admin] [--agent-access values|shape] [--keep values|states]", "description": "People only: add a source (active at once when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:crit:op:value[,warn:op:value][,ok:op:value]", "description": "How a field rates (repeatable)."}, {"name": "--trend", "arg": "name", "description": "Keep history for this field (up to 8)."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--viewers", "arg": "member|admin", "description": "Who may read it."}, {"name": "--agent-access", "arg": "values|shape", "description": "Agents see values, or only the shape."}, {"name": "--keep", "arg": "values|states", "description": "Keep values, or only states."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources edit", "usage": "k2 sources edit <name> [propose/add flags] [--label <l>] [--from <file.json>]", "description": "Change a source. Agents: only their own; changing a secret-bound source's fetch sends it back for approval.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources remove", "usage": "k2 sources remove <name> --yes", "description": "Remove a source and its triggers; the name is held for 7 days.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--yes", "arg": null, "description": "Required for agents and scripts."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources pause", "usage": "k2 sources pause|resume <name>", "description": "People only: stop or restart a source's checks.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources mute", "usage": "k2 sources mute <name> --for <dur> [--reason \"...\"]", "description": "Silence a source's triggers for a while (agents: up to 2h, reason required).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--for", "arg": "dur", "description": "30m, 2h, 1d (required)."}, {"name": "--reason", "arg": "text", "description": "Why (required for agents)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources unmute", "usage": "k2 sources unmute <name>", "description": "End a mute (agents: only one they set).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources refresh", "usage": "k2 sources refresh <name> [--wait]", "description": "Check now (at most once per 15 s).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--wait", "arg": null, "description": "Wait (up to 30 s) for the new result."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources try", "usage": "k2 sources try [propose flags] | --name <saved>", "description": "Fetch once and show the response's shape and the card view; nothing is saved. Agents: secretless only.", "args": [], "flags": [{"name": "--name", "arg": "saved", "description": "Try a saved source."}, {"name": "--tree-depth", "arg": "N", "description": "Display depth."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources simulate", "usage": "k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for <dur>]", "description": "Show a TEST state on cards without firing triggers (agents: up to 1h).", "args": [{"name": "name", "required": true}, {"name": "state", "required": true}], "flags": [{"name": "--for", "arg": "dur", "description": "Default 1h."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources pending", "usage": "k2 sources pending [--names a,b]", "description": "Proposed sources and triggers waiting for a person.", "args": [], "flags": [{"name": "--names", "arg": "a,b", "description": "Only these."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources approve", "usage": "k2 sources approve <name>... [--secret NAME] [--viewers ...] [--agent-access ...] [--keep ...] [--use-anyway]", "description": "People only: approve proposals (a secret needs a confirm: Touch ID, login or vault password).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--secret", "arg": "NAME", "description": "Bind this vault secret."}, {"name": "--use-anyway", "arg": null, "description": "Accept a root-key warning."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources secret", "usage": "k2 sources secret <name> NAME|--none [--use-anyway]", "description": "People only: bind or unbind a source's vault secret.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources pin", "usage": "k2 sources pin|unpin <name>", "description": "People only: a pinned source can't be edited or removed by agents.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources trigger", "usage": "k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test ...", "description": "Wake an agent when a source goes red, amber, recovers or goes stale. Agents propose triggers for themselves; a person approves.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--source", "arg": "name", "description": "The source."}, {"name": "--on", "arg": "kind", "description": "went_crit | went_warn | recovered | item_went_crit | stale_for:30m."}, {"name": "--agent", "arg": "handle", "description": "Who wakes (default: me)."}, {"name": "--note", "arg": "text", "description": "Added to the wake note."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {
       "name": "llm tokens list",
       "usage": "k2 llm tokens list [--tool <tool>] [--json]",
@@ -45339,6 +45559,10 @@ EOF
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).
         shift; cmd_compute "$@"
+        ;;
+    sources|source)
+        # Garden v3 data sources (contract-sources-v1 §7).
+        shift; cmd_sources "$@"
         ;;
     llm)
         # LLM tokens (`k2 llm tokens`; `k2 llm accounts` is an alias).

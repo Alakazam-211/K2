@@ -102,6 +102,10 @@ pub mod skin;
 // Skin front door (slice 3): Caddy path-filter renderer + apply (nested
 // `skin.<sub>.k2.dev` on the existing tunnel; never a second frpc).
 pub mod skin_door;
+// Garden v3 data sources (prd-garden-v3-external-data-cards-v1): HTTP JSON
+// checks the daemon polls, their state, card view and triggers. Pure half;
+// the poller and routes live in k2-daemon. See module docs.
+pub mod sources;
 // Phase 1 (prd-wiki-public-chat-api-loopback-v1): daemon-held host_sessions
 // API key for public wiki chat (`~/.k2/wiki-public-chat/`). See module docs.
 pub mod wiki_public_chat;

@@ -40,7 +40,10 @@ use std::sync::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
+use k2_core::garden_data::authors::{self, CallerKind, StampOutcome, StampSource};
+use k2_core::garden_data::MadeBy;
 use k2_core::zen::widget_access::{Pause, PauseReason, WidgetPauses};
+use k2_core::zen::widget_store::WidgetState;
 use k2_core::zen::store::NOT_SET_UP;
 use k2_core::zen::{ZenError, ZenFile, ZenFiles};
 
@@ -174,6 +177,33 @@ fn files() -> ZenFiles {
 /// The runaway pauses now, read once per request.
 fn pauses() -> WidgetPauses {
     PAUSES.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Is this placement paused (any reason)? Garden data's widget door
+/// refuses data writes while it is (contract-garden-data-v1 §7.1 step 5).
+pub fn placement_pause(garden: &str, placement: &str) -> Option<Pause> {
+    PAUSES.lock().unwrap_or_else(|e| e.into_inner()).get(garden, placement).cloned()
+}
+
+/// Garden data's runaway guard tripped for a placement (`budget::runaway`,
+/// PRD §6.3): pause it (`PauseReason::Writes`) in every window until the
+/// person's Resume, with one `zen_changed`. `garden` is the Garden id.
+pub fn pause_for_writes(garden: &str, placement: &str) {
+    PAUSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(garden, placement, Pause { at: now(), reason: PauseReason::Writes });
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "zen.data.pause",
+        "daemon",
+        format!("{garden}/{placement} reason=writes"),
+        "local",
+        "-",
+        "cli",
+    ));
+    if let Err(e) = refresh_and_emit() {
+        k2_core::log_debug!("[daemon/zen] pause_for_writes refresh: {e}");
+    }
 }
 
 /// Re-read the folder (snapshotting clean new content) and emit ONE
@@ -574,17 +604,132 @@ struct NewWidgetBody {
 }
 
 /// POST `/cli/zen/widget/new {name, from?}` (UW35): a user-file write,
-/// like `garden/new`.
-fn handle_widget_new(body: &[u8]) -> Result<J, ZenError> {
+/// like `garden/new`. Garden data (contract-garden-data-v1 §4.3, BG3): a
+/// clean new folder's hash is stamped as made by the caller (the owner
+/// token → you; an agent or K2 terminal passport → that workspace).
+fn handle_widget_new(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, ZenError> {
     let b: NewWidgetBody = parse_body(body, "widget/new takes {name, from?}")?;
     let f = files();
     let mut out = f.new_widget(&b.name, nonempty(&b.from).as_deref())?;
     out["changed"] = json!(refresh_and_emit()?);
-    let st = f.widget_status(b.name.trim());
+    let name = b.name.trim();
+    let st = f.widget_status(name);
     out["state"] = json!(st.state.as_str());
     out["errors"] = json!(st.errors);
+    if st.state == WidgetState::Ok && !st.hash().is_empty() {
+        let (made, stamped) = stamp_widget(name, st.hash(), caller, StampSource::New)?;
+        audit("zen.widget.sign", caller, format!("{name} {} source=new stamped={stamped}", short(st.hash())), ingress);
+        out["madeBy"] = made;
+        out["stamped"] = json!(stamped);
+    }
     Ok(out)
 }
+
+// ── Garden data authorship (contract-garden-data-v1 §4.3, §3.5; BG3) ────
+
+/// The maker a caller stamps as, and how it called. `None` for a caller
+/// that can't sign (a Connect login, app pass, sandboxed agent).
+fn signer(caller: &Caller) -> Option<(MadeBy, CallerKind)> {
+    match caller {
+        Caller::Owner => Some((MadeBy::Owner, CallerKind::Owner)),
+        Caller::Agent(a) if !a.sandboxed => {
+            Some((MadeBy::Agent { project_id: a.project_id.clone() }, CallerKind::Agent))
+        }
+        Caller::Shell { project_id } => Some((MadeBy::Agent { project_id: project_id.clone() }, CallerKind::Shell)),
+        _ => None,
+    }
+}
+
+fn short(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
+}
+
+fn data_err(e: k2_core::garden_data::DataError) -> ZenError {
+    match e {
+        k2_core::garden_data::DataError::BadRequest(m) => ZenError::BadRequest(m),
+        other => ZenError::Io(other.to_string()),
+    }
+}
+
+/// Stamp `(widget, hash)` as the caller (first signer wins). Answers the
+/// maker now (wire form) and whether this call wrote it.
+fn stamp_widget(widget: &str, hash: &str, caller: &Caller, source: StampSource) -> Result<(J, bool), ZenError> {
+    let (author, kind) =
+        signer(caller).ok_or_else(|| ZenError::OwnerOnly("only you or an agent on this computer can sign a widget".into()))?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let now = chrono::Utc::now().timestamp();
+    let out = authors::stamp(&conn, widget, hash, &author, source, kind, now).map_err(data_err)?;
+    let maker = authors::maker_of(&conn, widget, hash).map_err(data_err)?;
+    Ok((crate::garden_data::call::made_by_wire(&maker), out == StampOutcome::Stamped))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WidgetNameBody {
+    widget: String,
+}
+
+/// The live, clean bundle hash of a widget folder (sign) or its live hash
+/// (claim; a folder with errors runs its last good version).
+fn live_hash(f: &ZenFiles, widget: &str, clean: bool) -> Result<String, ZenError> {
+    let st = f.widget_status(widget);
+    if !st.exists {
+        return Err(ZenError::UnknownWidget(format!("no widget folder '{widget}'")));
+    }
+    if clean && st.state != WidgetState::Ok {
+        return Err(ZenError::WidgetBroken(format!(
+            "{widget} has errors; fix them (k2 zen validate --widget {widget}) and sign again"
+        )));
+    }
+    match st.bundle.as_ref() {
+        Some(b) => Ok(b.hash.clone()),
+        None => Err(ZenError::WidgetBroken(format!("{widget} has no good version"))),
+    }
+}
+
+/// POST `/cli/zen/widget/sign {widget}`: stamp the live hash of a clean
+/// widget folder as the caller. The owner token or a local agent/shell
+/// passport (a K2 terminal is agent-level). Re-signing a hash that already
+/// has a maker changes nothing (`stamped: false`).
+fn handle_widget_sign(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, ZenError> {
+    let b: WidgetNameBody = parse_body(body, "widget/sign takes {widget}")?;
+    let widget = b.widget.trim();
+    if authors::is_builtin(widget) {
+        return Ok(json!({ "ok": true, "widget": widget, "hash": J::Null, "madeBy": { "kind": "k2" }, "stamped": false }));
+    }
+    let f = files();
+    set_up(&f)?;
+    refresh_and_emit()?;
+    let hash = live_hash(&f, widget, true)?;
+    let (made, stamped) = stamp_widget(widget, &hash, caller, StampSource::Sign)?;
+    audit("zen.widget.sign", caller, format!("{widget} {} source=sign stamped={stamped}", short(&hash)), ingress);
+    Ok(json!({ "ok": true, "widget": widget, "hash": hash, "madeBy": made, "stamped": stamped }))
+}
+
+/// POST `/cli/zen/widget/claim {widget}`: the person's "It's mine". Owner
+/// token only (checked in [`handle`]); overwrites the live hash's stamp.
+fn handle_widget_claim(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, ZenError> {
+    let b: WidgetNameBody = parse_body(body, "widget/claim takes {widget}")?;
+    let widget = b.widget.trim();
+    let f = files();
+    set_up(&f)?;
+    refresh_and_emit()?;
+    let hash = live_hash(&f, widget, false)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    authors::claim(&conn, widget, &hash, chrono::Utc::now().timestamp()).map_err(data_err)?;
+    let maker = authors::maker_of(&conn, widget, &hash).map_err(data_err)?;
+    audit("zen.widget.claim", caller, format!("{widget} {}", short(&hash)), ingress);
+    Ok(json!({ "ok": true, "widget": widget, "hash": hash, "madeBy": crate::garden_data::call::made_by_wire(&maker) }))
+}
+
+/// Passport-admitted widget writes (contract-garden-data-v1 §4.3): an
+/// agent or K2 terminal may make a widget folder and sign one. Never
+/// lock-checked: a widget folder isn't a Garden.
+pub const AGENT_WIDGET_WRITES: &[&str] = &["/cli/zen/widget/new", "/cli/zen/widget/sign"];
+
+const CLAIM_OWNER_ONLY: &str = "Only you can claim a widget (It's mine), in Settings \u{2192} Gardens or from a terminal outside K2. Agents and K2 terminals can't.";
 
 /// Requests only a person may make: resuming a paused widget.
 fn person_only(path: &str) -> bool {
@@ -929,13 +1074,21 @@ pub fn handle(
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(OWNER_ONLY.into()));
     }
+    if path == "/cli/zen/widget/claim" && !owner_token {
+        audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
+        return err(ZenError::OwnerOnly(CLAIM_OWNER_ONLY.into()));
+    }
     if !owner {
         // §5.3: a passport (an agent or a K2 terminal) may make the Garden
-        // writes it always could, unless the Garden is locked.
-        if !(is_local_passport(caller) && AGENT_GARDEN_WRITES.contains(&path)) {
+        // writes it always could, unless the Garden is locked; and it may
+        // make and sign widget folders (Garden data authorship, no Lock).
+        let widget_write = is_local_passport(caller) && AGENT_WIDGET_WRITES.contains(&path);
+        if !widget_write && !(is_local_passport(caller) && AGENT_GARDEN_WRITES.contains(&path)) {
             return local_only();
         }
-        if let Some(sel) = garden_named(body) {
+        if widget_write {
+            // Not a Garden: no lock check.
+        } else if let Some(sel) = garden_named(body) {
             let f = files();
             if let Err(e) = f.refuse_if_locked(&sel) {
                 audit("zen.garden.lock_refused", caller, format!("{path}: garden {sel} is locked"), ingress);
@@ -977,7 +1130,7 @@ pub fn handle(
             let f = files();
             set_up(&f).and_then(|_| refresh_and_emit()).and_then(|_| handle_widget_bundle(params))
         }
-        "/cli/zen/widget/new" => handle_widget_new(body),
+        "/cli/zen/widget/new" => handle_widget_new(body, caller, ingress),
         "/cli/zen/widget/run" => handle_widget_run(body),
         "/cli/zen/widget/errors" => match param(params, "widget") {
             None => Err(ZenError::BadRequest("widget/errors needs widget=<name>".into())),
@@ -996,15 +1149,11 @@ pub fn handle(
         },
         "/cli/zen/widget/pause" => handle_widget_pause(body, caller, ingress),
         "/cli/zen/widget/resume" => handle_widget_resume(body, caller, ingress),
-        // Garden data authorship (contract-garden-data-v1 §4.3, BG3; B2):
+        // Garden data authorship (contract-garden-data-v1 §4.3, BG3):
         // sign = the owner token or a local agent/shell passport; claim =
-        // the owner token only. C0 stubs.
-        "/cli/zen/widget/sign" | "/cli/zen/widget/claim" => {
-            return resp(
-                "501 Not Implemented",
-                json!({ "error": { "code": "not_built", "hint": "widget signing is not built yet (Garden data C0 stub)" } }),
-            )
-        }
+        // the owner token only (checked above).
+        "/cli/zen/widget/sign" => handle_widget_sign(body, caller, ingress),
+        "/cli/zen/widget/claim" => handle_widget_claim(body, caller, ingress),
         "/cli/zen/theme/list" => refuse_home(params).and_then(|_| files().theme_list(param(params, "garden"))),
         "/cli/zen/theme/set" | "/cli/zen/theme/next" | "/cli/zen/theme/prev" => handle_theme_switch(path, body),
         "/cli/zen/theme/new" => handle_theme_new(body),

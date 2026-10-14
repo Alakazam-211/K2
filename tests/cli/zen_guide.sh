@@ -65,7 +65,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api"
+TOPICS="gardens files widgets bands required menus themes sync examples undo safe-mode api services"
 # FC34's names in Cortana's order (FC65), menu-bottom-right before the
 # later column-corner.
 WANT_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
@@ -122,6 +122,24 @@ done
 ndcap zen guide nosuch
 assert_eq "an unknown topic exits 2" "$rc" "2"
 assert_contains "an unknown topic says so" "$out" "no guide topic 'nosuch'"
+# Garden data (contract-garden-data-v1 §11.4): the widget example.
+ndcap zen guide example board-lite
+assert_eq "board-lite exits 0" "$rc" "0"
+assert_contains "board-lite starts with its name" "$(printf '%s\n' "$out" | sed -n 1p)" "k2 zen guide example board-lite —"
+assert_contains "board-lite makes the widget" "$out" "k2 zen widget new board-lite --from board-lite"
+assert_short "board-lite" "$out"
+ndcap zen guide example board-lite --toml
+assert_eq "board-lite --toml exits 0" "$rc" "0"
+assert_contains "board-lite --toml places the widget" "$out" 'widget = "board-lite"'
+ndcap zen guide example board-lite --script
+assert_eq "board-lite --script exits 0" "$rc" "0"
+printf '%s\n' "$out" > "$SANDBOX/board-lite.sh"
+if bash -n "$SANDBOX/board-lite.sh"; then ok "board-lite --script is valid bash"; else bad "board-lite --script is valid bash"; fi
+assert_contains "board-lite --script uses the change feed" "$out" "k2 store changes --widget"
+ndcap zen guide example board-lite --toml --script
+assert_eq "board-lite --toml --script exits 2" "$rc" "2"
+ndcap zen guide example --list
+assert_eq "--list stays Garden files only" "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ $//')" "$WANT_EXAMPLES"
 ndcap zen guide bands --toml
 assert_eq "--toml on a topic exits 2" "$rc" "2"
 ndcap zen guide bands extra

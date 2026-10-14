@@ -402,8 +402,46 @@ manifest and gets every one it asks for at once: widgets in your own Gardens\n\
 need no permissions.\n\n",
     );
     s.push_str(&custom_widgets_section());
+    s.push_str(&garden_data_section());
     s.push_str(&whats_available_section());
     s
+}
+
+/// v17: Garden data (prd-gardens-local-services-v1 §7, GL39, BG1–BG3, BG8;
+/// contract-garden-data-v1 §11.4): a widget's own keyspace, agents' side,
+/// grants, signing.
+fn garden_data_section() -> String {
+    String::from(
+        "### A widget's data (`k2.store`, this computer only)\n\n\
+A custom widget that asks for `store:read` / `store:write` gets its own keyspace,\n\
+`data:<widget>`, in a file K2 keeps on THIS computer (and `k2.save.*` for private\n\
+saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your side.\n\n\
+- **Use `k2.store` for data; never inline data into the widget's code** (code is capped\n\
+  at 256 KB, and a code edit is a new version).\n\
+- One key per object (`obj/<id>`, or `project/<pid>/board/<bid>/obj/<id>`), values JSON\n\
+  ≤ 60 KiB. Write with `{ifRev}`; on `conflict` read again and re-apply only the fields\n\
+  you changed. `k2.store.subscribe(prefix, cb)` shows anyone's change live.\n\
+- **Agents use `k2 store --widget <name>`** (`get put rm list changes batch grants\n\
+  export`). Every call needs a grant the person gave (Settings → Gardens → Widget data,\n\
+  or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`\n\
+  says what you can touch and why.\n\
+- **After editing a widget, run `k2 zen validate --widget <w>`: it signs the widget as\n\
+  you, and the widget then reads and writes data with YOUR grants.** An unsigned\n\
+  version gets no data (`author_unknown`). Never sign with the owner token (never use\n\
+  `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n\
+- **Project grants are a convenience; any agent can join a project.** Don't add yourself\n\
+  to a project to get its data; ask the person. A grant admin grants only inside its\n\
+  own prefix, never above its own level, never to itself.\n\
+- A widget's own script checks the data's shape: write Board data through `bin/board`\n\
+  (it validates); a raw `k2 store put` skips Board's schema. Widgets must tolerate bad\n\
+  values (an agent may write one).\n\
+- **A locked Garden's data still changes**: Lock freezes how a Garden works, not\n\
+  what's in it. A widget that asks for `sources:read` can't write data.\n\
+- Big changes: `k2 store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or\n\
+  nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
+- The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
+  the agent's `bin/board-lite` beside it).\n\n",
+    )
 }
 
 /// "Bridge verbs and caps" (UW42, UWA11): every verb, its cap and its one
@@ -570,7 +608,7 @@ document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
 })\n\
 ```\n\n\
 ### Workflow\n\n\
-1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`) copies a\n\
+1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`) copies a\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
 2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
 3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
@@ -683,7 +721,8 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 ### Examples to copy\n\n\
 - `k2:diary` (the Diary): a full widget with draggable page turns, handwriting and reduced motion.\n\
 - `hello`: a clock and a greeting; the smallest widget.\n\
-- `arcade`: agents as characters; click one to talk.\n\n",
+- `arcade`: agents as characters; click one to talk.\n\
+- `board-lite`: sticky notes kept in the widget's data, live for you and your agents.\n\n",
         m.cdn_hosts.join(", "),
         kb(m.max_bytes_per_widget),
     ));
@@ -852,6 +891,33 @@ mod tests {
                 assert!(required.contains(&field), "{verb} AgentRow requires {field}");
                 assert_eq!(items["properties"][field]["type"], serde_json::json!(["string", "null"]), "{verb}.{field} nullable string");
             }
+        }
+    }
+
+    /// v18: Garden data (prd-gardens-local-services-v1 §7; contract-garden-data-v1 §12.3).
+    #[test]
+    fn skill_documents_garden_data() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 18, "Garden data needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in [
+            "### A widget's data (`k2.store`, this computer only)",
+            "never inline data into the widget's code",
+            "**Agents use `k2 store --widget <name>`**",
+            "**A locked Garden's data still changes**",
+            "run `k2 zen validate --widget <w>`: it signs the widget as\nyou",
+            "the widget then reads and writes data with YOUR grants.",
+            "version gets no data (`author_unknown`)",
+            "write Board data through `bin/board`",
+            "a raw `k2 store put` skips Board's schema",
+            "**Project grants are a convenience; any agent can join a project.**",
+            "to a project to get its data; ask the person",
+            "A grant admin grants only inside its\nown prefix",
+            "Never sign with the owner token",
+            "never edit a widget the person made unless they ask",
+            "`k2 zen guide example board-lite`",
+            "- `board-lite`: sticky notes",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }
 

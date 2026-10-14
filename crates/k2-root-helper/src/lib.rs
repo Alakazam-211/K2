@@ -209,7 +209,7 @@ fn dispatch(
         Verb::AppsNftApp { id, gw } => Some(apps::nft_app(ctx, id, *gw)?),
         Verb::AppsNftAppRemove(id) => Some(apps::nft_app_remove(ctx, id)?),
         Verb::AppsInstallEngine => Some(apps::install_engine(ctx, stdin)?),
-        Verb::AppsJournalOn => Some(apps::journal_on(ctx)?),
+        Verb::AppsLogs { id, deployment, lines } => Some(apps::logs(ctx, id, deployment, *lines)?),
         Verb::AppsPackagesInstall => Some(apps::packages_install(ctx)?),
         Verb::AppsPackagesInstallYouki => Some(apps::packages_install_youki(ctx)?),
         Verb::AppsRuntime(rt) => Some(apps::runtime(ctx, *rt)?),

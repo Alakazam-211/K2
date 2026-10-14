@@ -201,6 +201,11 @@ pub fn verify_engine_build(bytes: &[u8], sig_text: &str, keys: &[TrustedKey], ar
 /// `/etc/systemd/user/k2-app-engine.service`. A user unit that only
 /// `k2app`'s manager runs (`ConditionUser=`); enabled by the helper with
 /// `systemctl --user` as `k2app`. No root anywhere on this path.
+///
+/// No `NoNewPrivileges=`: rootless Podman maps each App's ids through the
+/// setuid `newuidmap`/`newgidmap`, which that flag disarms (Linux e2e:
+/// "write to uid_map failed: Operation not permitted"). The Apps
+/// themselves always run with no-new-privileges (the Quadlet floor).
 pub fn user_unit() -> &'static str {
     "# K2 App engine (prd-k2-app-runtime-v1 §10.6). Written by\n\
      # k2-root-helper `apps install-engine`. Runs only in k2app's manager.\n\
@@ -214,7 +219,6 @@ pub fn user_unit() -> &'static str {
      ExecStart=/usr/local/libexec/k2-app-engine serve\n\
      Restart=always\n\
      RestartSec=2\n\
-     NoNewPrivileges=yes\n\
      UMask=0077\n\
      LimitNOFILE=8192\n\
      \n\
@@ -264,7 +268,6 @@ pub enum Request {
     Stop { app: String, deployment: String },
     Liveness { app: String, deployment: String },
     Stats { app: String, deployment: String },
-    Logs { app: String, deployment: String, lines: u32 },
     Exec { app: String, deployment: String, argv: Vec<String> },
     Adopt,
     /// Stop every instance of an App; `data` also deletes its folders and
@@ -586,7 +589,7 @@ mod tests {
         let u = user_unit();
         assert!(u.contains("\nConditionUser=k2app\n"));
         assert!(u.contains("\nExecStart=/usr/local/libexec/k2-app-engine serve\n"));
-        assert!(u.contains("\nNoNewPrivileges=yes\n"));
+        assert!(!u.contains("NoNewPrivileges"), "newuidmap needs its setuid bit");
         let t = tmpfiles_conf(&["k2", "k2std"]);
         assert!(t.contains("d /run/k2app 0750 k2app k2app -\n"));
         assert!(t.contains("a+ /run/k2app - - - - u:k2:x\n"));

@@ -12411,14 +12411,622 @@ cmd_sources_refresh() {
 # END_SOURCES_B1
 
 # BEGIN_SOURCES_B2
-cmd_sources_try() { _sources_not_built try; }
-cmd_sources_simulate() { _sources_not_built simulate; }
-cmd_sources_approve() { _sources_not_built approve; }
-cmd_sources_secret() { _sources_not_built secret; }
-cmd_sources_pin() { _sources_not_built pin; }
-cmd_sources_unpin() { _sources_not_built unpin; }
-cmd_sources_pending() { _sources_not_built pending; }
-cmd_sources_trigger() { _sources_not_built trigger; }
+# Try, simulate, approvals, secrets, pins, pending and triggers (B2).
+
+# 30s / 5m / 2h / 1d / bare seconds → seconds.
+_sources_b2_secs() {
+    local v="$1"
+    case "$v" in
+        *d) echo $(( ${v%d} * 86400 )) ;;
+        *h) echo $(( ${v%h} * 3600 )) ;;
+        *m) echo $(( ${v%m} * 60 )) ;;
+        *s) echo "${v%s}" ;;
+        ''|*[!0-9]*) echo "usage: bad duration '$v' (use 30s, 5m, 2h, 1d)" >&2; exit 2 ;;
+        *) echo "$v" ;;
+    esac
+}
+
+# A query string from k=v pairs (values url-encoded; empty values dropped).
+_sources_b2_query() {
+    python3 -c '
+import sys, urllib.parse
+pairs = [a.split("=", 1) for a in sys.argv[1:]]
+print(urllib.parse.urlencode([(k, v) for k, v in pairs if v != ""]))
+' "$@"
+}
+
+# A draft source (export shape) from propose-style flags, or a file. Used by
+# Try. Prints JSON.
+_sources_b2_draft() {
+    local from="" args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) [ -n "${2:-}" ] || { echo "usage: --from <file.json>" >&2; exit 2; }; from="$2"; shift 2 ;;
+            --every|--timeout) [ -n "${2:-}" ] || { echo "usage: $1 <duration>" >&2; exit 2; }; args+=("$1" "$(_sources_b2_secs "$2")"); shift 2 ;;
+            --name|--label|--url|--target|--url-secret|--header|--secret|--max-bytes|--field|--items|--item-key|--item-field|--agg|--rule|--trend|--fail-after|--on-target-error|--link|--preset|--preset-arg)
+                [ $# -ge 2 ] || { echo "usage: $1 <value>" >&2; exit 2; }
+                args+=("$1" "$2"); shift 2 ;;
+            *) echo "Error: unknown flag '$1' (k2 sources --help)" >&2; exit 2 ;;
+        esac
+    done
+    python3 - "$from" "${args[@]}" <<'PY'
+import json, sys
+from_file, rest = sys.argv[1], sys.argv[2:]
+d = {}
+if from_file:
+    try:
+        with open(from_file) as f:
+            d = json.load(f)
+    except Exception as e:
+        print("Error: can't read %s: %s" % (from_file, e), file=sys.stderr); sys.exit(2)
+    if not isinstance(d, dict):
+        print("Error: %s is not a JSON object" % from_file, file=sys.stderr); sys.exit(2)
+def size(v):
+    v = v.strip(); m = 1
+    if v[-1:] in "Kk": m, v = 1024, v[:-1]
+    elif v[-1:] in "Mm": m, v = 1048576, v[:-1]
+    return int(v) * m
+def value(s):
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+def cond(op, val):
+    op = op.strip()
+    if op == "in":
+        return {"in": [value(x) for x in val.split("|")]}
+    if op in ("lt", "lte", "gt", "gte"):
+        return {op: float(val)}
+    if op == "exists":
+        return {"exists": val.strip().lower() != "false"}
+    return {op: value(val)}
+ex = d.setdefault("extract", {}) if any(a in rest for a in ("--field", "--items", "--item-key", "--item-field", "--agg", "--trend")) else d.get("extract")
+i = 0
+while i < len(rest):
+    k, v = rest[i], rest[i + 1]; i += 2
+    if k == "--name": d["name"] = v
+    elif k == "--label": d["label"] = v
+    elif k == "--url": d["fetch"] = {"url": v}
+    elif k == "--url-secret": d["fetch"] = {"urlSecret": {"name": v, "origin": ""}}
+    elif k == "--target":
+        key, _, url = v.partition("=")
+        if not url: print("usage: --target key=https://…", file=sys.stderr); sys.exit(2)
+        t = d.get("fetch", {}).get("targets") if isinstance(d.get("fetch"), dict) else None
+        if t is None:
+            t = []; d["fetch"] = {"targets": t}
+        t.append({"key": key, "url": url})
+    elif k == "--header":
+        name, _, val = v.partition(":")
+        d.setdefault("headers", []).append([name.strip(), val.strip()])
+    elif k == "--secret": d["secret"] = v
+    elif k == "--every": d["everySecs"] = int(v)
+    elif k == "--timeout": d["timeoutSecs"] = int(v)
+    elif k == "--max-bytes": d["maxBytes"] = size(v)
+    elif k == "--field":
+        n, _, p = v.partition("="); ex.setdefault("fields", {})[n] = p
+    elif k == "--items": ex.setdefault("items", {})["pointer"] = v
+    elif k == "--item-key": ex.setdefault("items", {})["itemKey"] = v
+    elif k == "--item-field":
+        n, _, p = v.partition("="); ex.setdefault("items", {}).setdefault("itemFields", {})[n] = p
+    elif k == "--agg":
+        n, _, spec = v.partition("="); parts = spec.split(":")
+        op = parts[0]
+        if op == "count": a = {"op": "count"}
+        elif op == "count-where": a = {"op": "countWhere", "field": parts[1], "cond": cond(parts[2], ":".join(parts[3:]))}
+        else: a = {"op": op, "field": parts[1]}
+        ex.setdefault("aggregates", {})[n] = a
+    elif k == "--trend": ex.setdefault("trend", []).append(v)
+    elif k == "--rule":
+        field, _, body = v.partition(":")
+        r = {"field": field}
+        for part in body.split(","):
+            lvl, op, val = (part.split(":", 2) + ["", ""])[:3]
+            r[lvl] = cond(op, val)
+        d.setdefault("rules", []).append(r)
+    elif k == "--fail-after": d["failAfter"] = int(v)
+    elif k == "--on-target-error": d["onTargetError"] = v
+    elif k == "--link": d["link"] = v
+    elif k == "--preset": d["preset"] = v
+    elif k == "--preset-arg":
+        n, _, val = v.partition("="); d.setdefault("presetArgs", {})[n] = val
+print(json.dumps(d))
+PY
+}
+
+cmd_sources_try() {
+    local name="" depth="" draft_args=()
+    _SRC_JSON=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _SRC_JSON=1; shift ;;
+            --tree-depth) [ -n "${2:-}" ] || { echo "usage: --tree-depth N" >&2; exit 2; }; depth="$2"; shift 2 ;;
+            --name)
+                # `--name X` alone tries the saved source X; with other flags
+                # it names the draft.
+                draft_args+=("$1" "${2:-}"); name="${2:-}"; shift 2 ;;
+            *) draft_args+=("$1"); shift ;;
+        esac
+    done
+    local body
+    if [ "${#draft_args[@]}" -eq 2 ] && [ -n "$name" ]; then
+        body="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$name")"
+    else
+        [ "${#draft_args[@]}" -gt 0 ] || { echo "usage: k2 sources try --url URL [flags…] | --from file.json | --name <saved>" >&2; exit 2; }
+        body="$(_sources_b2_draft "${draft_args[@]}")" || exit $?
+    fi
+    _sources_call POST /cli/sources/try "$body"
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+depth = int(sys.argv[1]) if sys.argv[1] else 99
+v = json.load(sys.stdin)
+head = "ok" if v.get("ok") else ("failed: %s" % (v.get("reason") or "error"))
+print("%s · HTTP %s · %s ms%s" % (head, v.get("status"), v.get("elapsedMs"), " · truncated" if v.get("truncated") else ""))
+for t in v.get("targets") or []:
+    print("  target %-20s %s %s %s ms" % (t.get("key"), t.get("status"), t.get("reason") or "", t.get("elapsedMs")))
+for w in v.get("warnings") or []:
+    print("warning: %s: %s" % (w.get("code"), w.get("hint")))
+if v.get("rootKey"):
+    print("warning: %s" % v["rootKey"].get("hint"))
+tree = v.get("tree") or []
+if tree:
+    print("shape (pointer · type · sample):")
+for n in tree:
+    p = n.get("pointer") or "/"
+    if p.count("/") > depth:
+        continue
+    extra = ""
+    if n.get("len") is not None:
+        extra = " len %s" % n["len"]
+    if "sample" in n:
+        extra = " " + json.dumps(n["sample"], ensure_ascii=False)[:80]
+    print("  %s · %s%s" % (p, n.get("type"), extra))
+if v.get("treeTruncated"):
+    print("  … (the tree stops at 500 nodes)")
+view = v.get("view")
+if view:
+    print("would read: %s · %s" % (view.get("display"), ", ".join("%s %s" % (k, view.get("counts", {}).get(k)) for k in ("ok", "warn", "crit", "unknown"))))
+print("Nothing was saved. Propose it with: k2 sources propose …")
+' "$depth"
+}
+
+cmd_sources_simulate() {
+    local name="${1:-}" state="${2:-}" for_secs=""
+    case "$name" in ""|-*) echo "usage: k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]" >&2; exit 2 ;; esac
+    case "$state" in
+        ok|warn|crit|stale|unknown|slow|off) ;;
+        *) echo "usage: k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]" >&2; exit 2 ;;
+    esac
+    shift 2
+    _SRC_JSON=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --for) [ -n "${2:-}" ] || { echo "usage: --for 1h" >&2; exit 2; }; for_secs="$(_sources_b2_secs "$2")" || exit 2; shift 2 ;;
+            --json) _SRC_JSON=1; shift ;;
+            *) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+        esac
+    done
+    _sources_call POST /cli/sources/simulate "$(_compute_json K2_CJ_name="$name" K2_CJ_state="$state" K2_CJ_forSecs_n="$for_secs")"
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys, datetime
+v = json.load(sys.stdin); s = v.get("simulated")
+if not s:
+    print("%s: simulate off (real state shows again)" % v.get("name"))
+else:
+    until = datetime.datetime.fromtimestamp(s["until"], datetime.timezone.utc).strftime("%H:%M UTC")
+    print("%s: TEST %s until %s. Triggers never fire for it; nothing is written to history." % (v.get("name"), s["state"], until))
+'
+}
+
+# pending?names=… → JSON (persons only).
+_sources_b2_pending() {
+    local names="${1:-}"
+    _sources_call GET /cli/sources/pending "$(_sources_b2_query "names=$names")"
+}
+
+cmd_sources_pending() {
+    local names=""
+    _SRC_JSON=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --names) names="${2:-}"; shift 2 ;;
+            --json) _SRC_JSON=1; shift ;;
+            *) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+        esac
+    done
+    _sources_b2_pending "$names"
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+src, trg = v.get("sources") or [], v.get("triggers") or []
+if not src and not trg:
+    print("Nothing is waiting for approval."); sys.exit(0)
+for s in src:
+    m = s.get("maker") or {}
+    by = m.get("handle") or m.get("user") or s.get("madeBy")
+    sec = s.get("urlSecret") or s.get("secret")
+    print("%-20s %-11s every %ss · %s target(s) · %s · by %s%s" % (s["name"], s["approval"], s["everySecs"], s["targets"], ", ".join(s.get("origins") or []), by, (" · wants secret " + sec) if sec else ""))
+for t in trg:
+    on = t["on"]["kind"] + ((":%ss" % t["on"]["secs"]) if t["on"].get("secs") else "")
+    print("trigger %s  %s on %s → %s (by %s)" % (t["id"][:8], t["source"], on, t["agent"].get("handle"), t.get("madeBy")))
+print()
+print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>")
+'
+}
+
+# A vault confirm (Touch ID / vault password) for ACTION bound to ID.
+_sources_b2_confirm() {
+    local action="$1" id="$2" label="$3"
+    if [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
+        echo "This needs a person. Run it outside K2, or use Settings → K2 Server → Data Sources." >&2
+        exit 3
+    fi
+    _vault_confirm_token "$action" "$id" "$label"
+}
+
+cmd_sources_approve() {
+    local names=() secret="" viewers="" access="" keep="" use_anyway=""
+    _SRC_JSON=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --secret) [ -n "${2:-}" ] || { echo "usage: --secret NAME" >&2; exit 2; }; secret="$2"; shift 2 ;;
+            --viewers) viewers="${2:-}"; shift 2 ;;
+            --agent-access) access="${2:-}"; shift 2 ;;
+            --keep) keep="${2:-}"; shift 2 ;;
+            --use-anyway) use_anyway=1; shift ;;
+            --json) _SRC_JSON=1; shift ;;
+            -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+            *) names+=("$1"); shift ;;
+        esac
+    done
+    [ "${#names[@]}" -gt 0 ] || { echo "usage: k2 sources approve <name>… [--secret NAME] [--viewers member|admin] [--agent-access values|shape] [--keep values|states] [--use-anyway]" >&2; exit 2; }
+    local joined
+    joined="$(IFS=,; printf '%s' "${names[*]}")"
+    _sources_b2_pending "$joined"
+    local plan
+    plan="$(printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys, hashlib
+v = json.load(sys.stdin)
+want = sys.argv[1].split(",")
+picked = sys.argv[2]
+rows = {s["name"]: s for s in v.get("sources") or []}
+missing = [n for n in want if n not in rows]
+if missing:
+    print("missing\t" + ",".join(missing)); sys.exit(0)
+items, pairs = [], []
+for n in want:
+    s = rows[n]
+    sec = s.get("urlSecret") or (picked if (picked and len(want) == 1) else None) or s.get("secret")
+    it = {"name": n, "specHash": s["specHash"]}
+    if sec:
+        it["secret"] = sec
+        pairs.append("%s:%s" % (s["id"], sec))
+    items.append(it)
+pairs.sort()
+h = hashlib.sha256("\n".join(pairs).encode()).hexdigest() if pairs else ""
+first = rows[want[0]]
+print("ok\t%s\t%s\t%s\t%s" % (json.dumps(items), h, first["id"], "1" if pairs else ""))
+' "$joined" "$secret")"
+    local kind items hash first_id needs
+    IFS=$'\t' read -r kind items hash first_id needs <<<"$plan"
+    if [ "$kind" = "missing" ]; then
+        echo "Error: source_not_found: not waiting for approval: $items (k2 sources pending)" >&2
+        exit 4
+    fi
+    local tok="" body
+    if [ "${#names[@]}" -eq 1 ]; then
+        if [ -n "$needs" ]; then
+            tok="$(_sources_b2_confirm source-secret "$first_id" "${names[0]}")" || exit 3
+        fi
+        body="$(printf '%s' "$items" | python3 -c '
+import json, sys
+it = json.load(sys.stdin)[0]
+a = sys.argv[1:]
+for k, v in (("confirmToken", a[0]), ("viewers", a[1]), ("agentAccess", a[2]), ("keep", a[3])):
+    if v: it[k] = v
+if a[4]: it["useAnyway"] = True
+print(json.dumps(it))
+' "$tok" "$viewers" "$access" "$keep" "$use_anyway")"
+        _sources_call POST /cli/sources/approve "$body"
+    else
+        if [ -n "$secret$viewers$access$keep" ]; then
+            echo "usage: --secret/--viewers/--agent-access/--keep apply to one source at a time" >&2
+            exit 2
+        fi
+        if [ -n "$needs" ]; then
+            tok="$(_sources_b2_confirm source-batch "$hash" "${#names[@]} sources")" || exit 3
+        fi
+        body="$(printf '%s' "$items" | python3 -c '
+import json, sys
+b = {"items": json.load(sys.stdin), "triggers": []}
+if sys.argv[1]: b["confirmToken"] = sys.argv[1]
+if sys.argv[2]: b["useAnyway"] = True
+print(json.dumps(b))
+' "$tok" "$use_anyway")"
+        _sources_call POST /cli/sources/batch-approve "$body"
+    fi
+    tok=""
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "approved" in v:
+    print("approved: " + ", ".join(v["approved"]))
+else:
+    print("%s: active%s" % (v.get("name"), " · secret bound" if v.get("secretBound") else ""))
+'
+}
+
+cmd_sources_secret() {
+    local name="${1:-}" secret="${2:-}" use_anyway=""
+    case "$name" in ""|-*) echo "usage: k2 sources secret <name> NAME|--none [--use-anyway]" >&2; exit 2 ;; esac
+    [ -n "$secret" ] || { echo "usage: k2 sources secret <name> NAME|--none [--use-anyway]" >&2; exit 2; }
+    shift 2
+    _SRC_JSON=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --use-anyway) use_anyway=1; shift ;;
+            --json) _SRC_JSON=1; shift ;;
+            *) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+        esac
+    done
+    local body
+    if [ "$secret" = "--none" ]; then
+        body="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "secret": None}))' "$name")"
+    else
+        # The confirm is bound to the source id (persons see it in show).
+        _sources_call GET /cli/sources/show "$(_sources_b2_query "name=$name")"
+        local sid
+        sid="$(printf '%s' "$_SRC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"].get("id") or "")')"
+        [ -n "$sid" ] || { echo "Error: the daemon didn't name the source id (run this outside K2)" >&2; exit 3; }
+        local tok
+        tok="$(_sources_b2_confirm source-secret "$sid" "$name")" || exit 3
+        body="$(python3 -c '
+import json, sys
+b = {"name": sys.argv[1], "secret": sys.argv[2], "confirmToken": sys.argv[3]}
+if sys.argv[4]: b["useAnyway"] = True
+print(json.dumps(b))' "$name" "$secret" "$tok" "$use_anyway")"
+        tok=""
+    fi
+    _sources_call POST /cli/sources/secret "$body"
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: %s" % (v["name"], ("uses " + v["secret"]) if v.get("secretBound") else "no secret"))'
+}
+
+_sources_b2_pin() {
+    local verb="$1" name="${2:-}"
+    case "$name" in ""|-*) echo "usage: k2 sources $verb <name>" >&2; exit 2 ;; esac
+    _SRC_JSON=0
+    [ "${3:-}" = "--json" ] && _SRC_JSON=1
+    _sources_call POST "/cli/sources/$verb" "$(_compute_json K2_CJ_name="$name")"
+    if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: %s" % (v["name"], "pinned (agents can no longer edit or remove it)" if v.get("pinned") else "not pinned"))'
+}
+
+cmd_sources_pin() { _sources_b2_pin pin "$@"; }
+cmd_sources_unpin() { _sources_b2_pin unpin "$@"; }
+
+# went_crit | stale_for:30m → the JSON `on`.
+_sources_b2_on() {
+    local v="$1" kind secs=""
+    kind="${v%%:*}"
+    case "$kind" in
+        went_crit|went_warn|recovered|item_went_crit) [ "$kind" = "$v" ] || { echo "usage: --on $kind (no duration)" >&2; exit 2; } ;;
+        stale_for)
+            [ "$kind" != "$v" ] || { echo "usage: --on stale_for:30m" >&2; exit 2; }
+            secs="$(_sources_b2_secs "${v#*:}")" || exit 2 ;;
+        *) echo "usage: --on went_crit|went_warn|recovered|item_went_crit|stale_for:30m" >&2; exit 2 ;;
+    esac
+    if [ -n "$secs" ]; then printf '{"kind":"stale_for","secs":%s}' "$secs"; else printf '{"kind":"%s"}' "$kind"; fi
+}
+
+_sources_b2_trigger_line() {
+    python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("triggers") if "triggers" in v else [v["trigger"]]
+if not rows:
+    print("No triggers."); sys.exit(0)
+for t in rows:
+    on = t["on"]["kind"] + ((":%ss" % t["on"]["secs"]) if t["on"].get("secs") else "")
+    a = t["agent"]
+    who = a.get("handle") + (" (missing workspace)" if a.get("missing") else "")
+    last = ""
+    if t.get("lastFireAt"):
+        last = " · last fire %s" % time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(t["lastFireAt"]))
+    print("%s  %-14s %-18s → %-20s %-13s cooldown %ss · cap %s/day · %s today%s" % (
+        t["id"][:8], t["source"], on, who, t["status"], t["cooldownSecs"], t["dailyCap"], t.get("firesToday", 0), last))
+    if t.get("note"):
+        print("          note: %s" % t["note"])
+'
+}
+
+_sources_b2_fires() {
+    python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+fires = v.get("fires") or []
+if not fires:
+    print("No fires yet."); sys.exit(0)
+for f in fires:
+    t = time.strftime("%m-%d %H:%M", time.gmtime(f["at"]))
+    what = f["outcome"]
+    if f.get("suppressReason"): what += " (%s)" % f["suppressReason"]
+    if f.get("detail"): what += " [%s]" % f["detail"]
+    if f.get("woke"): what += " · woke"
+    print("%s  %-36s incident %s%s" % (t, what, f["incidentId"][:12], (" item " + f["itemKey"]) if f.get("itemKey") else ""))
+'
+}
+
+cmd_sources_trigger() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    _SRC_JSON=0
+    case "$sub" in
+        ""|help|--help|-h)
+            cat <<'EOF'
+k2 sources trigger — wake an agent on this server when a source changes
+
+  k2 sources trigger list [--source NAME] [--json]
+  k2 sources trigger show <id> [--json]
+  k2 sources trigger log <id> [--limit 50] [--json]
+  k2 sources trigger propose --source NAME --on KIND [--agent HANDLE] [--note "…"]
+  k2 sources trigger add --source NAME --on KIND --agent HANDLE [--note "…"] [--cooldown 30m] [--daily-cap 12]
+  k2 sources trigger edit <id> [--on KIND] [--agent HANDLE] [--note "…"|--no-note] [--cooldown 30m] [--daily-cap 12]
+  k2 sources trigger approve|pause|resume|remove|test <id>
+
+KIND: went_crit · went_warn · recovered · item_went_crit · stale_for:30m
+Agents propose (waking only themselves) and may remove their own proposal;
+a person approves. A proposed trigger never fires.
+EOF
+            return 0 ;;
+    esac
+    local id="" source="" on="" agent="" note="" no_note="" cooldown="" cap="" limit=""
+    case "$sub" in
+        show|log|edit|approve|pause|resume|remove|rm|test)
+            id="${1:-}"
+            case "$id" in ""|-*) echo "usage: k2 sources trigger $sub <id>" >&2; exit 2 ;; esac
+            shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _SRC_JSON=1; shift ;;
+            --source) source="${2:-}"; shift 2 ;;
+            --on) on="$(_sources_b2_on "${2:-}")" || exit 2; shift 2 ;;
+            --agent) agent="${2:-}"; shift 2 ;;
+            --note) note="${2:-}"; shift 2 ;;
+            --no-note) no_note=1; shift ;;
+            --cooldown) cooldown="$(_sources_b2_secs "${2:-}")" || exit 2; shift 2 ;;
+            --daily-cap) cap="${2:-}"; shift 2 ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            *) echo "Error: unknown flag '$1' (k2 sources trigger --help)" >&2; exit 2 ;;
+        esac
+    done
+    # Full ids only on the wire; a short prefix is matched from the list.
+    if [ -n "$id" ] && [ "${#id}" -lt 36 ]; then
+        _sources_call GET /cli/sources/triggers/list ""
+        local full
+        full="$(printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+m = [t["id"] for t in json.load(sys.stdin).get("triggers") or [] if t["id"].startswith(sys.argv[1])]
+print(m[0] if len(m) == 1 else "")' "$id")"
+        [ -n "$full" ] || { echo "Error: trigger_not_found: no single trigger starts with '$id' (k2 sources trigger list)" >&2; exit 4; }
+        id="$full"
+    fi
+    case "$sub" in
+        list|ls)
+            _sources_call GET /cli/sources/triggers/list "$(_sources_b2_query "source=$source")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else printf '%s' "$_SRC_BODY" | _sources_b2_trigger_line; fi ;;
+        show)
+            _sources_call GET /cli/sources/triggers/show "$(_sources_b2_query "id=$id")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else
+                printf '%s' "$_SRC_BODY" | _sources_b2_trigger_line
+                printf '%s' "$_SRC_BODY" | _sources_b2_fires
+            fi ;;
+        log)
+            _sources_call GET /cli/sources/triggers/log "$(_sources_b2_query "id=$id" "limit=$limit")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else printf '%s' "$_SRC_BODY" | _sources_b2_fires; fi ;;
+        propose|add)
+            [ -n "$source" ] && [ -n "$on" ] || { echo "usage: k2 sources trigger $sub --source NAME --on KIND [--agent HANDLE]" >&2; exit 2; }
+            _sources_call POST "/cli/sources/triggers/$sub" "$(_compute_json K2_CJ_source="$source" K2_CJ_on_j="$on" K2_CJ_agent="$agent" K2_CJ_note="$note" K2_CJ_cooldownSecs_n="$cooldown" K2_CJ_dailyCap_n="$cap")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else
+                printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("trigger %s: %s" % (v["id"], v["status"]))
+if v["status"] == "proposed":
+    print("A person approves it in Settings → K2 Server → Data Sources (or k2 sources trigger approve %s)." % v["id"][:8])'
+            fi ;;
+        edit)
+            local set
+            set="$(_compute_json K2_CJ_on_j="$on" K2_CJ_agent="$agent" K2_CJ_note="$note" K2_CJ_cooldownSecs_n="$cooldown" K2_CJ_dailyCap_n="$cap")"
+            if [ -n "$no_note" ]; then set="$(printf '%s' "$set" | python3 -c 'import json,sys; d=json.load(sys.stdin); d["note"]=None; print(json.dumps(d))')"; fi
+            _sources_call POST /cli/sources/triggers/edit "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1], "set": json.loads(sys.argv[2])}))' "$id" "$set")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else printf '%s' "$_SRC_BODY" | _sources_b2_trigger_line; fi ;;
+        approve|pause|resume|remove|rm|test)
+            local verb="$sub"
+            [ "$verb" = "rm" ] && verb="remove"
+            _sources_call POST "/cli/sources/triggers/$verb" "$(_compute_json K2_CJ_id="$id")"
+            if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; else
+                printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if "outcome" in v:
+    print("test wake: %s%s" % (v["outcome"], " (woke the agent)" if v.get("woke") else ""))
+elif v.get("removed"):
+    print("trigger %s removed" % v["id"])
+else:
+    print("trigger %s: %s" % (v["id"], v.get("status")))'
+            fi ;;
+        *) echo "Error: unknown k2 sources trigger command '$sub' (k2 sources trigger --help)" >&2; exit 2 ;;
+    esac
+}
+# k2 study data-sources (GV67; not `sources`: `k2 study source` is the
+# licence page).
+_study_page_data_sources() {
+    cat <<'EOF'
+k2 study data-sources — checks this server runs for cards and agents
+
+WHAT
+  A source is an HTTP JSON check that THIS server runs on a schedule (it
+  keeps running with no window open). It keeps a few fields, rates each
+  item ok / warn / crit / unknown, and a short history. A Garden card only
+  shows a source; it never fetches. A trigger wakes an agent on this server
+  when the state changes (hard changes only, never soft blips).
+
+THE LOOP
+  1. k2 sources try --url https://… [--items /list --item-field state=/state]
+     Fetch once, see the shape (pointer · type · sample). Nothing is saved.
+  2. k2 sources propose --name fleet --label "Fleet" --target a=https://… …
+     (or --preset k2-fleet --preset-arg boxes=a,b). It waits as "proposed".
+  3. A person approves it: one click in Settings → K2 Server → Data Sources
+     for a secretless public source; a vault confirm when it uses a secret.
+  4. k2 sources trigger propose --source fleet --on item_went_crit
+     wakes YOU when a box goes red. A person approves it too.
+  5. k2 sources show fleet   the definition + the exact card view.
+
+KEYS
+  Never paste a key into a URL, header or file. Keys live in the vault; a
+  person binds one to a source (with a confirm) for that exact site. Query
+  keys like token/key/sig are refused; a long token in the path is warned.
+  Webhook-style URLs that carry a token are vault "url" secrets (urlSecret).
+
+WHAT YOU SEE
+  agentAccess "shape": you see field names and states, values as ••• .
+  That is a guardrail, not a wall. keep "states" is the wall: the server
+  stores no values at all (item keys, states, counts and reasons only).
+  Trigger notes are written by K2 from fixed parts: no values for those.
+
+LIMITS
+  Agents may: propose, edit/remove their own (not pinned, not read by a
+  locked Garden: 423), mute up to 2 h with a reason, simulate up to 1 h,
+  refresh (once per 15 s), propose triggers that wake themselves.
+  Agents may not: approve, bind a secret, pin, pause, enable a trigger,
+  raise its cooldown/cap, or point it at another agent (exit 3).
+  LAN addresses and plain http are the owner's only.
+
+GOTCHAS
+  Redirects must stay on the same origin (a GitHub release ASSET redirects
+  elsewhere and fails; read the API). Timeouts 10 s (fan-out 5 s), 1 MiB.
+  A down box in a fan-out source is a red ITEM; the source stays live.
+  k2 sources simulate fleet crit --for 10m shows TEST on cards; triggers
+  never fire for it.
+
+CARDS
+  Built-in: k2:fleet-grid@1, k2:version-spread@1, k2:relays-dns@1,
+  k2:deploys@1, k2:money-alerts@1 (config.source = "name" or
+  "name::host"). A custom widget asks for cap sources:read (it then can't
+  post to the Thread). Its errors: k2 zen widget errors <name>.
+EOF
+}
 # END_SOURCES_B2
 
 # ── k2 vault (prd-k2-vault-v1 §14) ──────────────────────────────────
@@ -21289,7 +21897,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources"
 
 _study_usage() {
     cat <<'EOF'
@@ -21307,7 +21915,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-heartbeats  app-tickets
   app-identity  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
-  llm-accounts  publish-framing  compute  vault  notifications
+  llm-accounts  publish-framing  compute  vault  notifications  data-sources
 EOF
 }
 
@@ -21341,6 +21949,7 @@ _study_title() {
         compute) echo "Compute nodes" ;;
         vault) echo "Secrets (the vault)" ;;
         notifications) echo "Thread posts and phone pushes" ;;
+        data-sources) echo "Data sources and triggers" ;;
         *) echo "" ;;
     esac
 }
@@ -21387,6 +21996,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   compute             Run builds/tests on your owner's other machines; logs are data
   vault               Secrets: fetch not paste; references; who sets what
   notifications       Your Thread posts may push a phone; who gets it; post less
+  data-sources        Checks this server runs: try, propose, approve; triggers; keys
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -21428,6 +22038,7 @@ _study_page() {
             ;;
         publish-framing) _study_page_publish_framing ;;
         compute) _study_page_compute ;;
+        data-sources) _study_page_data_sources ;;
         vault) _study_page_vault ;;
         notifications) _study_page_notifications ;;
         *) return 1 ;;

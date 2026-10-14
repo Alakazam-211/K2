@@ -37,6 +37,10 @@ pub enum Purpose {
     /// Garden v3 data sources (contract-sources-v1 §10): the poller and
     /// Try. A label only; the source's timeout and size ride `FetchSpec`.
     Source,
+    /// Which account an LLM sign-in belongs to (Claude
+    /// `/api/oauth/profile`), asked during a token switch. Short: a slow
+    /// answer means "can't tell", never a wait.
+    LlmAccountCheck,
 }
 
 impl Purpose {
@@ -45,12 +49,14 @@ impl Purpose {
             Purpose::VaultFetch => "vault-fetch",
             Purpose::VaultProxy => "vault-proxy",
             Purpose::Source => "source",
+            Purpose::LlmAccountCheck => "llm-account-check",
         }
     }
 
     fn connect_timeout(self) -> Duration {
         match self {
             Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source => Duration::from_secs(10),
+            Purpose::LlmAccountCheck => Duration::from_secs(3),
         }
     }
 }

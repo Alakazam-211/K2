@@ -867,6 +867,8 @@ pub fn vendor_calls_allowed() -> bool {
 /// Claude's own account check (Claude Code 2.1.300 `hYe`): the profile
 /// of the account an OAuth access token belongs to.
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+/// The whole profile check, connect included.
+const PROFILE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which account a Claude credential belongs to, asked of Anthropic with
 /// the credential's own access token. The token never leaves this
@@ -882,18 +884,31 @@ fn claude_identify(cred: &[u8]) -> Option<k2_core::llm_accounts::identity::Accou
             return None;
         }
     }
-    // Short: a switch holds the wallet lock (and the DB) while it asks.
-    // A slow answer means "can't tell", never a refusal.
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(6))
-        .build()
-        .ok()?;
+    // Through the daemon's egress gate (air-gap refuses before any DNS
+    // lookup; resolve once, vet, pin). Phase 1 of a switch runs this with
+    // no database lock held; a slow or failed answer means "can't tell",
+    // and the switch falls back to ~/.claude.json.
+    let url = url::Url::parse(CLAUDE_PROFILE_URL).ok()?;
+    let dest = match crate::egress::Destination::vet(&url, false) {
+        Ok(d) => d,
+        Err(e) => {
+            k2_core::log_debug!("[llm-accounts] claude profile check: {}", e.code);
+            return None;
+        }
+    };
+    let client = match crate::egress::client(crate::egress::Purpose::LlmAccountCheck, &dest, PROFILE_CHECK_TIMEOUT) {
+        Ok(c) => c,
+        Err(e) => {
+            k2_core::log_debug!("[llm-accounts] claude profile check: {}", e.code);
+            return None;
+        }
+    };
     let resp = client
-        .get(CLAUDE_PROFILE_URL)
+        .get(url)
         .bearer_auth(token)
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("Accept", "application/json")
+        .header("Accept-Encoding", "identity")
         .send();
     let resp = match resp {
         Ok(r) => r,

@@ -352,6 +352,47 @@ fn active_info_says_since_when_and_by_whom() {
 }
 
 #[test]
+fn two_phase_switch_uses_phase_one_answers_and_refuses_when_anything_moved() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    let vendor = FakeVendor::new(&[("a", "uuid-a", "a@example.test"), ("b", "uuid-b", "b@example.test")]);
+    let target = get(&conn, &b.id).unwrap().unwrap();
+    // Phase 1 needs no connection; phase 2 makes no vendor call (None here).
+    let pre = wallet::precheck(Tool::Claude, &target, wallet::generation(&conn, Tool::Claude).unwrap(), Some(&vendor)).unwrap();
+    // The CLI renewed the live token in between: refused, nothing moved.
+    write_live(&h, "a");
+    let mut renewed: Value = serde_json::from_slice(&cred("a")).unwrap();
+    renewed["claudeAiOauth"]["expiresAt"] = json!(FAR + 1000);
+    fs::write(h.p(".claude/.credentials.json"), serde_json::to_vec(&renewed).unwrap()).unwrap();
+    let err = wallet::switch_prechecked(&conn, Tool::Claude, &b.id, None, &pre).unwrap_err();
+    assert_eq!(err.code(), "changed", "{err}");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
+    // Fresh phase 1 → phase 2 commits with the vendor's answers.
+    let pre = wallet::precheck(Tool::Claude, &target, wallet::generation(&conn, Tool::Claude).unwrap(), Some(&vendor)).unwrap();
+    let out = wallet::switch_prechecked(&conn, Tool::Claude, &b.id, None, &pre).unwrap();
+    assert_eq!(out.verified_by, Some(Source::Vendor));
+    assert_eq!(live_bytes(&h), cred("b"));
+    // A stale phase 1 (the default moved since) is refused.
+    let err = wallet::switch_prechecked(&conn, Tool::Claude, &a.id, None, &pre).unwrap_err();
+    assert_eq!(err.code(), "changed");
+}
+
+#[test]
+fn the_air_gap_fallback_names_what_the_file_says_and_what_was_expected() {
+    let h = Home::new();
+    let conn = db();
+    let (_a, b) = two_logins(&h, &conn);
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    // No vendor answer (air-gap or a failed check): ~/.claude.json decides.
+    let err = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap_err();
+    assert_eq!(err.code(), "account_mismatch");
+    let text = err.to_string();
+    assert!(text.contains("~/.claude.json names c@example.test"), "{text}");
+    assert!(text.contains("you expected \"Default\" (a@example.test)"), "{text}");
+}
+
+#[test]
 fn codex_capture_is_checked_against_the_sign_ins_own_id_token() {
     let h = Home::new();
     let conn = db();

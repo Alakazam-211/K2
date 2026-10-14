@@ -2372,7 +2372,7 @@ mod tests {
                 ..Default::default()
             })
             .expect("seed config");
-            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46123)));
+            let hook = super::super::ingress::TestIngressHook::install(Box::new(|| Ok(46123)));
             let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
                 .expect("start with e2e off");
             assert!(st.running);
@@ -2390,13 +2390,13 @@ mod tests {
             let _ = stop();
 
             // A failing hook must abort the start (no fallback to :57839).
-            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| {
+            drop(hook);
+            let _hook = super::super::ingress::TestIngressHook::install(Box::new(|| {
                 Err("tunnel-ingress bind failed".to_string())
             }));
             let err = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
                 .expect_err("start must fail when the ingress listener cannot bind");
             assert!(err.contains("tunnel-ingress bind failed"), "{err}");
-            super::super::ingress::clear_ensure_tunnel_ingress();
         });
     }
 
@@ -2936,7 +2936,7 @@ mod tests {
                 ..Default::default()
             })
             .expect("seed config");
-            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46124)));
+            let _hook = super::super::ingress::TestIngressHook::install(Box::new(|| Ok(46124)));
             let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
             start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
 
@@ -3262,6 +3262,9 @@ mod tests {
     #[test]
     fn supervisor_rotation_keeps_frozen_local_port() {
         with_temp_home(|| {
+            // E2E off with no ingress hook: start freezes the daemon port
+            // it was given. Never inherit another test's stub.
+            let _no_hook = super::super::ingress::TestIngressHook::none();
             config::save(&TunnelConfig {
                 relays: vec![
                     RelayEndpoint {

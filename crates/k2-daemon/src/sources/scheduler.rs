@@ -626,6 +626,39 @@ impl Sched {
             self.schedule(id, at);
             return;
         }
+        // Every target stopped at the vault: not a check of the site. The
+        // source pauses with the reason; a denial parks it until the secret,
+        // the grant or the source changes, or a Refresh [GV68].
+        let vault_reason = |o: &FetchOutcome| match o {
+            FetchOutcome::Err { reason, .. }
+                if matches!(reason, Reason::SecretMissing | Reason::SecretDisabled | Reason::VaultUnavailable) =>
+            {
+                Some(*reason)
+            }
+            _ => None,
+        };
+        if let Some(reason) = outcomes.iter().map(|(_, o)| vault_reason(o)).collect::<Option<Vec<_>>>().and_then(|v| v.first().copied()) {
+            let mut st = prev.clone();
+            st.phase = Phase::Paused;
+            st.reason = Some(reason);
+            st.checked_at = Some(wall);
+            let park = reason != Reason::VaultUnavailable;
+            let newly = park && !st.vault_denied;
+            st.vault_denied = park;
+            let every = Duration::from_secs(u64::from(e.spec.every_secs));
+            let saved = store::tx(conn, |c| {
+                let rev = store::save_state(c, &st, None)?;
+                if newly {
+                    store::audit(c, wall, "daemon", "daemon", "vault_denied_parked", Some(id), None, &serde_json::json!({"reason": reason.code()}))?;
+                }
+                Ok(rev)
+            });
+            if let Ok(rev) = saved {
+                out.notify.push(rev);
+            }
+            self.schedule(id, mono + every);
+            return;
+        }
         let applied = apply_poll(
             &prev,
             PollInput { spec: &e.spec, outcomes, now: wall, simulated: false, prev_projection: prev_proj.as_ref() },

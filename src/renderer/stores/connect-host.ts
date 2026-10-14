@@ -589,16 +589,50 @@ export async function forgetToken(hostId: string): Promise<void> {
 // the token helpers, under a DISTINCT service so a host can have a
 // remembered password and a separate cached session token.
 
-/** Store a host's login password in the keychain under its id. */
+/** Store a host's login password in the keychain under its id.
+ *  Throws the keychain error (GH #42: a swallowed failure left hosts saved
+ *  as "remembered" with nothing in the keychain). Sign-in paths should use
+ *  {@link saveRememberedPassword}, which also un-marks the host. */
 export async function rememberPassword(hostId: string, password: string): Promise<void> {
+  await invoke('k2_secret_set', {
+    service: K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,
+    account: hostId,
+    secret: password,
+  })
+}
+
+function keychainErrorText(err: unknown): string {
+  if (typeof err === 'string') return err
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
+/** User-facing copy when "Remember password" could not be honoured. */
+export function rememberPasswordFailedMessage(err: unknown): string {
+  return (
+    "Signed in, but your password couldn't be saved to the keychain " +
+    `(${keychainErrorText(err)}). You'll need to enter it next time.`
+  )
+}
+
+/**
+ * "Remember password" on a successful sign-in (GH #42). Writes the password
+ * to the keychain; on failure, un-marks the saved host (`remember: false`,
+ * persisted) so nothing claims a password that isn't there, and returns the
+ * message to show. Returns null when the password was stored.
+ */
+export async function saveRememberedPassword(
+  hostId: string,
+  password: string,
+): Promise<string | null> {
   try {
-    await invoke('k2_secret_set', {
-      service: K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,
-      account: hostId,
-      secret: password,
-    })
-  } catch {
-    /* keychain unavailable — user re-enters the password next connect */
+    await rememberPassword(hostId, password)
+    return null
+  } catch (err) {
+    const store = useConnectHostStore.getState()
+    const saved = store.hosts.find((h) => h.id === hostId)
+    if (saved && saved.remember) store.addHost({ ...saved, remember: false })
+    return rememberPasswordFailedMessage(err)
   }
 }
 
@@ -615,7 +649,14 @@ export async function resolvePassword(hostId: string): Promise<string | null> {
       service: LEGACY_K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE,
       account: hostId,
     })
-    if (legacy) await rememberPassword(hostId, legacy)
+    if (legacy) {
+      // Best-effort forward copy: the legacy entry still answers next time.
+      try {
+        await rememberPassword(hostId, legacy)
+      } catch {
+        /* keep reading the legacy entry */
+      }
+    }
     return legacy ?? null
   } catch {
     return null

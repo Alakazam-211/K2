@@ -11,7 +11,8 @@
 //     loginToHost (POST /cli/auth/login) — which commits the session
 //     token into the store + caches it to the keychain
 //   - if "Remember password" → caches the PASSWORD to the OS keychain
-//     (rememberPassword) and persists remember:true; else forgets it
+//     (saveRememberedPassword) and persists remember:true only if that
+//     write succeeded; a failed write is toasted (GH #42); else forgets it
 //   - selectHost(host) to commit the switch (gate re-polls + mounts)
 //
 // If the password is already remembered, we auto-login on mount without
@@ -28,7 +29,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   useConnectHostStore,
-  rememberPassword,
+  saveRememberedPassword,
   resolvePassword,
   forgetPassword,
   loginToHost,
@@ -38,6 +39,12 @@ import { IconLock } from '@/components/icons/IconLock'
 import { isWebClient } from '@/lib/is-web'
 import GateChrome from './TopBar/GateChrome'
 import { PasswordRotationStep } from './PasswordRotationStep'
+import { useToastStore } from '@/stores/toast'
+
+/** Shown when the host says "remember" but the keychain has no password
+ *  (GH #42) — instead of a checked box over a silently empty field. */
+export const REMEMBERED_PASSWORD_MISSING =
+  'Your saved password was not found in the keychain. Enter it again to sign in and save it.'
 
 /** The pending rotation: the host carrying its RESTRICTED session token,
  *  the temporary password we know (may be empty on the W2 route-back), and
@@ -93,20 +100,28 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
     pw: string,
     rememberPw: boolean,
   ): Promise<void> => {
+    // Keychain first (GH #42): "remember" is only saved when the password
+    // really landed in the keychain; a failed write is shown, not swallowed.
+    let remembered = false
+    if (rememberPw) {
+      const failure = await saveRememberedPassword(host.id, pw)
+      if (failure) {
+        useToastStore.getState().addToast(failure, 'error', 12000)
+      } else {
+        remembered = true
+      }
+    } else {
+      await forgetPassword(host.id)
+    }
     const refreshed = useConnectHostStore.getState().hosts.find((h) => h.id === host.id)
     const updated: ConnectHost = {
       ...(refreshed ?? { ...host, username: uname }),
       username: uname,
       token,
-      remember: rememberPw,
+      remember: remembered,
       lastConnectedAt: Date.now(),
     }
     addHost(updated) // re-persists the (token-less) list with remember + lastConnectedAt
-    if (rememberPw) {
-      await rememberPassword(host.id, pw)
-    } else {
-      await forgetPassword(host.id)
-    }
     // Switcher path ⇒ switch (the gate re-polls against the new host and
     // mounts on accept). Management path ⇒ just close the overlay; the token is
     // cached so the tile's owner controls work, and we stay on the current view.
@@ -181,6 +196,9 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           // rejected/expired → fall through to manual entry.
           setBusy(false)
           if (outcome === 'rotate') return
+        } else {
+          // Saved as remembered, but the keychain has nothing (GH #42).
+          setError(REMEMBERED_PASSWORD_MISSING)
         }
       }
       if (!username.trim()) {

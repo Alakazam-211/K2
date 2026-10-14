@@ -10,6 +10,9 @@ import React from 'react'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 
 const fakeKeychain = new Map<string, string>()
+// GH #42: when set, every keychain write fails the way a locked/denied
+// keychain does (k2_secret_set rejects with the Rust error string).
+let failSecretSet: string | null = null
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
     switch (cmd) {
@@ -18,6 +21,7 @@ vi.mock('@tauri-apps/api/core', () => ({
       case 'connect_hosts_write':
         return undefined
       case 'k2_secret_set':
+        if (failSecretSet) throw failSecretSet
         fakeKeychain.set(`${args!.service}:${args!.account}`, args!.secret as string)
         return undefined
       case 'k2_secret_get':
@@ -41,6 +45,7 @@ import {
 } from '@/stores/connect-host'
 import { ROTATION_COPY } from '@/lib/password-rotation'
 import { LOGIN_404_K2DEV_MESSAGE } from '@/lib/login-url'
+import { useToastStore } from '@/stores/toast'
 
 function makeHost(overrides?: Partial<ConnectHost>): ConnectHost {
   return {
@@ -101,6 +106,8 @@ function scriptedDaemon(opts: { policy?: unknown } = {}) {
 
 beforeEach(() => {
   fakeKeychain.clear()
+  failSecretSet = null
+  useToastStore.setState({ toasts: [] })
   __resetConnectHostStoreForTests()
 })
 afterEach(() => {
@@ -267,5 +274,57 @@ describe('RemoteSignIn — D3: 404 from a hosted host', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     await screen.findByText(LOGIN_404_K2DEV_MESSAGE)
     expect(useConnectHostStore.getState().activeHost).toBe('local')
+  })
+})
+
+describe('RemoteSignIn — remembered password and the keychain (GH #42)', () => {
+  it('a failed keychain write is shown and the host is NOT saved as remembered', async () => {
+    failSecretSet = 'failed to store secret: User interaction is not allowed.'
+    const host = makeHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().requestSignIn(host)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://rpm.app.k2.dev/cli/auth/login') {
+        return jsonRes(200, { token: 'full', username: 'alice', expiresAt: 'x', mustChangePassword: false })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }))
+    render(<RemoteSignIn host={host} />)
+
+    fireEvent.click(screen.getByLabelText(/Remember password/))
+    fireEvent.change(screen.getByPlaceholderText('Server password'), { target: { value: 'pw-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+
+    // Still signs in (the login itself worked)…
+    await waitFor(() => {
+      expect((useConnectHostStore.getState().activeHost as ConnectHost).token).toBe('full')
+    })
+    // …but nothing claims the password is remembered.
+    expect(fakeKeychain.get(`${K2_CONNECT_PASSWORD_KEYCHAIN_SERVICE}:rpm`)).toBeUndefined()
+    expect(useConnectHostStore.getState().hosts.find((h) => h.id === 'rpm')?.remember).toBe(false)
+    expect((useConnectHostStore.getState().activeHost as ConnectHost).remember).toBe(false)
+    const toasts = useToastStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].type).toBe('error')
+    expect(toasts[0].message).toBe(
+      "Signed in, but your password couldn't be saved to the keychain " +
+        '(failed to store secret: User interaction is not allowed.). ' +
+        "You'll need to enter it next time.",
+    )
+  })
+
+  it('remember is on but the keychain has no password: says so instead of a silent empty field', async () => {
+    const host = makeHost({ remember: true })
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().requestSignIn(host)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      throw new Error(`unexpected fetch: ${url}`)
+    }))
+    render(<RemoteSignIn host={host} />)
+
+    await screen.findByText(
+      'Your saved password was not found in the keychain. Enter it again to sign in and save it.',
+    )
+    expect((screen.getByPlaceholderText('Server password') as HTMLInputElement).value).toBe('')
   })
 })

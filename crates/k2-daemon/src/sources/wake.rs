@@ -24,7 +24,7 @@ use std::time::Duration;
 use k2_core::sources::note::{self, NoteEvent, NoteInput};
 use k2_core::sources::state::{Phase, TransitionKind};
 use k2_core::sources::trigger_store::{self as ts, Delivery, NewFire};
-use k2_core::sources::triggers::{self, FireContext, FireDecision, TriggerOn, TriggerStatus};
+use k2_core::sources::triggers::{self, FireContext, FireDecision, TriggerStatus};
 use k2_core::sources::{store, SourceRow, SourceState, Transition, WakeOutcome, WakeRequest, Waker};
 use rusqlite::Connection;
 
@@ -268,6 +268,16 @@ pub fn this_host() -> String {
     }
 }
 
+/// The 0.46.0 hand-off's drain flag (a per-thread override in tests, so a
+/// test never drains its neighbours).
+fn draining() -> bool {
+    #[cfg(test)]
+    if let Some(d) = test_seams::draining() {
+        return d;
+    }
+    super::DRAINING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 fn changed(conn: &Connection) {
     if let Ok(rev) = store::bump_rev(conn) {
         super::notify_changed(rev);
@@ -300,7 +310,7 @@ fn judge(conn: &Connection, source: &SourceRow, ts_in: &[Transition], now: i64, 
     let in_gap = super::transitions_in_gap()
         || ts_in.iter().any(|t| t.kind == TransitionKind::Gap)
         || (state.phase == Phase::Paused && state.gap_kind.is_some());
-    let draining = super::DRAINING.load(std::sync::atomic::Ordering::SeqCst);
+    let draining = draining();
     let mut queued = 0;
     let mut wrote = false;
     for trow in triggers.iter().filter(|t| t.status == TriggerStatus::Active) {
@@ -654,6 +664,15 @@ pub mod test_seams {
     thread_local! {
         static PIPE: RefCell<Option<Arc<Pipe>>> = const { RefCell::new(None) };
         static SEAMS: RefCell<Option<Arc<Seams>>> = const { RefCell::new(None) };
+        static DRAINING: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub fn set_draining(on: bool) {
+        DRAINING.with(|d| d.set(Some(on)));
+    }
+
+    pub(super) fn draining() -> Option<bool> {
+        DRAINING.with(|d| d.get())
     }
 
     pub fn set_pipe(p: Option<Arc<Pipe>>) {
@@ -677,6 +696,7 @@ pub mod test_seams {
 mod tests {
     use super::*;
     use k2_core::sources::state::{Health, Reason};
+    use k2_core::sources::triggers::TriggerOn;
     use std::sync::Mutex as StdMutex;
 
     /// Records every note; answers `Delivered`.
@@ -972,9 +992,9 @@ mod tests {
             c.execute("UPDATE source_state SET phase = 'live', gap_kind = NULL, gap_from = NULL, gap_to = NULL WHERE source_id = 's1'", [])
                 .unwrap();
         });
-        crate::sources::DRAINING.store(true, std::sync::atomic::Ordering::SeqCst);
+        test_seams::set_draining(true);
         handle_transitions(&row(), &[item_crit("d", "i-d")], NOW);
-        crate::sources::DRAINING.store(false, std::sync::atomic::Ordering::SeqCst);
+        test_seams::set_draining(false);
         assert_eq!(drain(&e, NOW), 0);
         let mut reasons: Vec<String> = fires(&t.id).into_iter().filter_map(|f| f.suppress_reason).collect();
         reasons.sort();

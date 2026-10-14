@@ -185,9 +185,48 @@ pub enum Verb {
     DaemonHandoffDropinInstall,
     /// Remove it again and `daemon-reload`.
     DaemonHandoffDropinRemove,
+    // apps (protocol 6, App runtime box prep; see `crate::apps`)
+    AppsStatus,
+    AppsEnsureUser,
+    AppsSubid,
+    AppsLinger(bool),
+    AppsDelegate(bool),
+    AppsIoCost(bool),
+    AppsReservePorts(bool),
+    AppsNftApply { gw: PortRange, px: PortRange, db: PortRange },
+    AppsNftRemove,
+    AppsPackagesInstall,
+    AppsPackagesInstallYouki,
+    AppsRuntime(OciRuntime),
+    AppsProcessUnit(bool),
+    AppsProcessStart(AppId),
+    AppsProcessStop(AppId),
+    /// `Some(MemoryMin MiB)` = write; `None` = `off`.
+    AppsCoresSlice(Option<u64>),
+    /// `Some((MemoryMax MiB, TasksMax))` = write; `None` = `off`.
+    AppsBudget(Option<(u64, u64)>),
+    AppsUnprep,
 }
 
+use crate::apps::{bounded, AppId, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
+
 const REFUSED: &str = "refused arguments";
+
+fn on_off(t: &str) -> Option<bool> {
+    match t {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn on_off_name(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
 
 /// Bytes no token may contain. Tokens are enum names and ids only.
 fn token_ok(t: &str) -> bool {
@@ -348,6 +387,38 @@ impl Verb {
 
             ["daemon", "handoff-dropin", "install"] => Verb::DaemonHandoffDropinInstall,
             ["daemon", "handoff-dropin", "remove"] => Verb::DaemonHandoffDropinRemove,
+
+            ["apps", "status"] => Verb::AppsStatus,
+            ["apps", "ensure-user"] => Verb::AppsEnsureUser,
+            ["apps", "subid"] => Verb::AppsSubid,
+            ["apps", "linger", t] => Verb::AppsLinger(on_off(t).ok_or(REFUSED)?),
+            ["apps", "delegate", t] => Verb::AppsDelegate(on_off(t).ok_or(REFUSED)?),
+            ["apps", "io-cost", t] => Verb::AppsIoCost(on_off(t).ok_or(REFUSED)?),
+            ["apps", "reserve-ports", t] => Verb::AppsReservePorts(on_off(t).ok_or(REFUSED)?),
+            ["apps", "nft", "apply", gw, px, db] => Verb::AppsNftApply {
+                gw: PortRange::parse(gw).ok_or(REFUSED)?,
+                px: PortRange::parse(px).ok_or(REFUSED)?,
+                db: PortRange::parse(db).ok_or(REFUSED)?,
+            },
+            ["apps", "nft", "remove"] => Verb::AppsNftRemove,
+            ["apps", "packages", "install"] => Verb::AppsPackagesInstall,
+            ["apps", "packages", "install-youki"] => Verb::AppsPackagesInstallYouki,
+            ["apps", "runtime", r] => Verb::AppsRuntime(OciRuntime::parse(r).ok_or(REFUSED)?),
+            ["apps", "process-unit", t] => Verb::AppsProcessUnit(on_off(t).ok_or(REFUSED)?),
+            ["apps", "process", "start", id] => {
+                Verb::AppsProcessStart(AppId::parse(id).ok_or(REFUSED)?)
+            }
+            ["apps", "process", "stop", id] => Verb::AppsProcessStop(AppId::parse(id).ok_or(REFUSED)?),
+            ["apps", "cores-slice", "off"] => Verb::AppsCoresSlice(None),
+            ["apps", "cores-slice", n] => {
+                Verb::AppsCoresSlice(Some(bounded(n, CORES_MIN_MIB).ok_or(REFUSED)?))
+            }
+            ["apps", "budget", "off"] => Verb::AppsBudget(None),
+            ["apps", "budget", m, t] => Verb::AppsBudget(Some((
+                bounded(m, BUDGET_MEM_MIB).ok_or(REFUSED)?,
+                bounded(t, BUDGET_TASKS).ok_or(REFUSED)?,
+            ))),
+            ["apps", "unprep"] => Verb::AppsUnprep,
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -446,6 +517,30 @@ impl Verb {
             Verb::KeepGenBump => s(&["keep", "gen", "bump"]),
             Verb::DaemonHandoffDropinInstall => s(&["daemon", "handoff-dropin", "install"]),
             Verb::DaemonHandoffDropinRemove => s(&["daemon", "handoff-dropin", "remove"]),
+            Verb::AppsStatus => s(&["apps", "status"]),
+            Verb::AppsEnsureUser => s(&["apps", "ensure-user"]),
+            Verb::AppsSubid => s(&["apps", "subid"]),
+            Verb::AppsLinger(on) => s(&["apps", "linger", on_off_name(*on)]),
+            Verb::AppsDelegate(on) => s(&["apps", "delegate", on_off_name(*on)]),
+            Verb::AppsIoCost(on) => s(&["apps", "io-cost", on_off_name(*on)]),
+            Verb::AppsReservePorts(on) => s(&["apps", "reserve-ports", on_off_name(*on)]),
+            Verb::AppsNftApply { gw, px, db } => {
+                s(&["apps", "nft", "apply", &gw.token(), &px.token(), &db.token()])
+            }
+            Verb::AppsNftRemove => s(&["apps", "nft", "remove"]),
+            Verb::AppsPackagesInstall => s(&["apps", "packages", "install"]),
+            Verb::AppsPackagesInstallYouki => s(&["apps", "packages", "install-youki"]),
+            Verb::AppsRuntime(r) => s(&["apps", "runtime", r.as_str()]),
+            Verb::AppsProcessUnit(on) => s(&["apps", "process-unit", on_off_name(*on)]),
+            Verb::AppsProcessStart(id) => s(&["apps", "process", "start", id.as_str()]),
+            Verb::AppsProcessStop(id) => s(&["apps", "process", "stop", id.as_str()]),
+            Verb::AppsCoresSlice(None) => s(&["apps", "cores-slice", "off"]),
+            Verb::AppsCoresSlice(Some(n)) => s(&["apps", "cores-slice", &n.to_string()]),
+            Verb::AppsBudget(None) => s(&["apps", "budget", "off"]),
+            Verb::AppsBudget(Some((m, t))) => {
+                s(&["apps", "budget", &m.to_string(), &t.to_string()])
+            }
+            Verb::AppsUnprep => s(&["apps", "unprep"]),
         }
     }
 
@@ -490,6 +585,36 @@ impl Verb {
             // survives a stop) and which process may name its main pid:
             // only the daemon itself may ask.
             Verb::DaemonHandoffDropinInstall | Verb::DaemonHandoffDropinRemove => Daemon,
+
+            // apps: reading, tightening, or converging to the state box
+            // prep sets anyway is open. Loosening, stopping, changing limits
+            // or the OCI runtime away from the default is daemon-only, and
+            // so is starting an App: only the daemon decides what runs as
+            // k2app.
+            Verb::AppsStatus
+            | Verb::AppsEnsureUser
+            | Verb::AppsSubid
+            | Verb::AppsLinger(true)
+            | Verb::AppsDelegate(true)
+            | Verb::AppsIoCost(true)
+            | Verb::AppsReservePorts(true)
+            | Verb::AppsNftApply { .. }
+            | Verb::AppsPackagesInstall
+            | Verb::AppsPackagesInstallYouki
+            | Verb::AppsRuntime(OciRuntime::Crun)
+            | Verb::AppsProcessUnit(true) => Open,
+            Verb::AppsLinger(false)
+            | Verb::AppsDelegate(false)
+            | Verb::AppsIoCost(false)
+            | Verb::AppsReservePorts(false)
+            | Verb::AppsNftRemove
+            | Verb::AppsRuntime(OciRuntime::Youki)
+            | Verb::AppsProcessUnit(false)
+            | Verb::AppsProcessStart(_)
+            | Verb::AppsProcessStop(_)
+            | Verb::AppsCoresSlice(_)
+            | Verb::AppsBudget(_)
+            | Verb::AppsUnprep => Daemon,
         }
     }
 
@@ -522,6 +647,7 @@ impl Verb {
                 | Verb::KeepStatus
                 | Verb::KeepKekGet
                 | Verb::KeepGenGet
+                | Verb::AppsStatus
         )
     }
 
@@ -549,6 +675,7 @@ impl Verb {
             "mail" => "mail",
             "pg" => "pg",
             "daemon" => "daemon",
+            "apps" => "apps",
             _ => "keep",
         }
     }
@@ -603,7 +730,34 @@ pub fn catalog() -> Vec<Verb> {
         Verb::KeepGenBump,
         Verb::DaemonHandoffDropinInstall,
         Verb::DaemonHandoffDropinRemove,
+        Verb::AppsStatus,
+        Verb::AppsEnsureUser,
+        Verb::AppsSubid,
+        Verb::AppsNftApply {
+            gw: crate::apps::GATEWAY_PORTS,
+            px: crate::apps::PROXY_PORTS,
+            db: crate::apps::DB_PORTS,
+        },
+        Verb::AppsNftRemove,
+        Verb::AppsPackagesInstall,
+        Verb::AppsPackagesInstallYouki,
+        Verb::AppsRuntime(OciRuntime::Crun),
+        Verb::AppsRuntime(OciRuntime::Youki),
+        Verb::AppsProcessStart(AppId::parse("jobs").expect("id")),
+        Verb::AppsProcessStop(AppId::parse("jobs").expect("id")),
+        Verb::AppsCoresSlice(Some(768)),
+        Verb::AppsCoresSlice(None),
+        Verb::AppsBudget(Some((4096, 4096))),
+        Verb::AppsBudget(None),
+        Verb::AppsUnprep,
     ];
+    for on in [true, false] {
+        v.push(Verb::AppsLinger(on));
+        v.push(Verb::AppsDelegate(on));
+        v.push(Verb::AppsIoCost(on));
+        v.push(Verb::AppsReservePorts(on));
+        v.push(Verb::AppsProcessUnit(on));
+    }
     for t in [
         MkdirTarget::Config,
         MkdirTarget::Data,
@@ -823,6 +977,136 @@ mod tests {
         }
         let too_long = "a".repeat(65);
         assert!(Verb::parse(&["pg", "psql", "-d", &too_long]).is_err());
+    }
+
+    /// The `apps` namespace (protocol 6): classes written out by hand.
+    #[test]
+    fn apps_class_table() {
+        let open: &[&[&str]] = &[
+            &["apps", "status"],
+            &["apps", "ensure-user"],
+            &["apps", "subid"],
+            &["apps", "linger", "on"],
+            &["apps", "delegate", "on"],
+            &["apps", "io-cost", "on"],
+            &["apps", "reserve-ports", "on"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"],
+            &["apps", "packages", "install"],
+            &["apps", "packages", "install-youki"],
+            &["apps", "runtime", "crun"],
+            &["apps", "process-unit", "on"],
+        ];
+        let daemon: &[&[&str]] = &[
+            &["apps", "linger", "off"],
+            &["apps", "delegate", "off"],
+            &["apps", "io-cost", "off"],
+            &["apps", "reserve-ports", "off"],
+            &["apps", "nft", "remove"],
+            &["apps", "runtime", "youki"],
+            &["apps", "process-unit", "off"],
+            &["apps", "process", "start", "jobs"],
+            &["apps", "process", "stop", "jobs"],
+            &["apps", "cores-slice", "768"],
+            &["apps", "cores-slice", "off"],
+            &["apps", "budget", "4096", "4096"],
+            &["apps", "budget", "off"],
+            &["apps", "unprep"],
+        ];
+        for a in open {
+            assert_eq!(Verb::parse(a).unwrap().class(), Class::Open, "{a:?}");
+        }
+        for a in daemon {
+            assert_eq!(Verb::parse(a).unwrap().class(), Class::Daemon, "{a:?}");
+        }
+        assert_eq!(Verb::parse(&["apps", "status"]).unwrap().namespace(), "apps");
+        assert!(!Verb::AppsStatus.takes_lock());
+        assert!(Verb::AppsStatus.needs_root());
+        for v in catalog().into_iter().filter(|v| v.namespace() == "apps") {
+            assert_eq!(v.stdin_cap(), None, "{v:?}: apps verbs read no stdin");
+            if v != Verb::AppsStatus {
+                assert!(v.takes_lock(), "{v:?}");
+            }
+        }
+    }
+
+    /// Paths, users, units, names and free-form values never parse.
+    #[test]
+    fn apps_attack_table_is_refused() {
+        let rejects: &[&[&str]] = &[
+            &["apps"],
+            &["apps", "status", "--json"],
+            &["apps", "ensure-user", "root"],
+            &["apps", "ensure-user", "k2"],
+            &["apps", "ensure-user", "--uid", "0"],
+            &["apps", "subid", "100000-165535"],
+            &["apps", "subid", "k2app"],
+            &["apps", "linger"],
+            &["apps", "linger", "k2"],
+            &["apps", "linger", "on", "k2"],
+            &["apps", "linger", "ON"],
+            &["apps", "delegate", "on", "cpu"],
+            &["apps", "delegate", "Delegate=yes"],
+            &["apps", "io-cost", "on", "8:0"],
+            &["apps", "io-cost", "8:0"],
+            &["apps", "reserve-ports", "1-65535"],
+            &["apps", "reserve-ports", "on", "38600-38999"],
+            // nft: ranges are bounded and exact.
+            &["apps", "nft", "apply"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949"],
+            &["apps", "nft", "apply", "1-65535", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "22", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "38600-40000", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432;flush ruleset"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432", "53"],
+            &["apps", "nft", "flush"],
+            &["apps", "nft", "remove", "k2app"],
+            // packages: never a name.
+            &["apps", "packages", "install", "podman"],
+            &["apps", "packages", "install", "netcat"],
+            &["apps", "packages", "remove"],
+            &["apps", "packages", "install-youki", "/tmp/youki.deb"],
+            // runtime: an enum, never a path.
+            &["apps", "runtime", "/usr/bin/crun"],
+            &["apps", "runtime", "runc"],
+            &["apps", "runtime", "runsc"],
+            &["apps", "runtime", "krun"],
+            &["apps", "runtime"],
+            // process: the App id is the regex and nothing else.
+            &["apps", "process", "start"],
+            &["apps", "process", "start", "../k2-daemon"],
+            &["apps", "process", "start", "k2-daemon.service"],
+            &["apps", "process", "start", "jobs.service"],
+            &["apps", "process", "start", "Jobs"],
+            &["apps", "process", "start", "1jobs"],
+            &["apps", "process", "start", "jobs-"],
+            &["apps", "process", "start", "a--b"],
+            &["apps", "process", "start", "jobs@x"],
+            &["apps", "process", "start", "jobs", "--now"],
+            &["apps", "process", "restart", "jobs"],
+            &["apps", "process", "kill", "jobs"],
+            &["apps", "process-unit", "on", "/etc/systemd/system/x.service"],
+            // numbers: bounded decimal, no units.
+            &["apps", "cores-slice", "0"],
+            &["apps", "cores-slice", "127"],
+            &["apps", "cores-slice", "768M"],
+            &["apps", "cores-slice", "0768"],
+            &["apps", "cores-slice", "-1"],
+            &["apps", "cores-slice", "99999999"],
+            &["apps", "budget", "4096"],
+            &["apps", "budget", "4096", "4096", "x"],
+            &["apps", "budget", "100", "4096"],
+            &["apps", "budget", "4096", "10"],
+            &["apps", "budget", "4096", "100000"],
+            &["apps", "budget", "infinity", "4096"],
+            &["apps", "unprep", "--force"],
+            &["apps", "install-podman"],
+            &["apps", "kvm", "on"],
+        ];
+        for r in rejects {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
+        let long_id = format!("a{}", "b".repeat(32));
+        assert!(Verb::parse(&["apps", "process", "start", &long_id]).is_err());
     }
 
     #[test]

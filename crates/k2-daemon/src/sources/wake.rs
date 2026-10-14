@@ -1,9 +1,9 @@
 //! Trigger → wake (contract §9). Owner: B2.
 //!
-//! The engine calls [`handle_transitions`] after every state commit,
-//! [`handle_unmute`] when a mute or simulate ends, and [`start`] once at
-//! daemon start (workers, the 30 s tick for `stale_for` and window expiry,
-//! and the boot + 60 s re-delivery of `pending` fires).
+//! The engine calls [`handle_transitions`] after every state commit (and
+//! with the scheduler's once-a-minute stale re-sends, which `stale_for`
+//! triggers judge), [`handle_unmute`] when a mute or simulate ends, and
+//! [`redeliver_pending`] once at boot + 60 s.
 //!
 //! Pipeline per hard transition: evaluate each active trigger on the
 //! source; log a `suppressed` row, or write a `pending` fire (the
@@ -226,45 +226,29 @@ impl Pipe {
 
 static PIPE: OnceLock<Arc<Pipe>> = OnceLock::new();
 
+/// The daemon's queue. The two `sources-wake-N` workers start with it, on
+/// the first fire (the engine's scheduler owns the clock: stale re-sends,
+/// mute/simulate expiry and the boot + 60 s re-delivery call in here).
 fn pipe() -> Arc<Pipe> {
     #[cfg(test)]
     if let Some(p) = test_seams::pipe() {
         return p;
     }
-    PIPE.get_or_init(|| Arc::new(Pipe::new(Box::new(DaemonWaker)))).clone()
-}
-
-static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Start the two wake workers, the 30 s trigger tick and the boot + 60 s
-/// re-delivery. Idempotent. The engine's `start()` calls it.
-pub fn start() {
-    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    let p = pipe();
-    for n in 0..2 {
-        let p = p.clone();
-        let _ = std::thread::Builder::new().name(format!("sources-wake-{n}")).spawn(move || loop {
-            let b = p.take_wait();
-            p.deliver_batch(&b, now());
-        });
-    }
-    let _ = std::thread::Builder::new().name("sources-trigger-tick".into()).spawn(|| {
-        let boot = std::time::Instant::now();
-        let mut redelivered = false;
-        let mut last = now();
-        loop {
-            std::thread::sleep(Duration::from_secs(30));
-            let t = now();
-            if !redelivered && boot.elapsed() >= Duration::from_secs(60) {
-                redeliver_pending(t);
-                redelivered = true;
+    PIPE.get_or_init(|| {
+        let p = Arc::new(Pipe::new(Box::new(DaemonWaker)));
+        for n in 0..2 {
+            let w = p.clone();
+            let spawned = std::thread::Builder::new().name(format!("sources-wake-{n}")).spawn(move || loop {
+                let b = w.take_wait();
+                w.deliver_batch(&b, now());
+            });
+            if let Err(e) = spawned {
+                k2_core::log_debug!("[sources] wake worker {n} didn't start: {e}");
             }
-            tick(last, t);
-            last = t;
         }
-    });
+        p
+    })
+    .clone()
 }
 
 fn now() -> i64 {
@@ -292,8 +276,9 @@ fn changed(conn: &Connection) {
 
 // ── evaluation ───────────────────────────────────────────────────────
 
-/// Which re-judging path this is (the tick and unmute paths re-judge the
-/// same open incident many times and log only its first outcome).
+/// Which re-judging path this is. The unmute path and the scheduler's
+/// once-a-minute stale re-sends judge the same open incident many times;
+/// they log only its first outcome (never a stream of `deduped` rows).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Path {
     Transition,
@@ -310,8 +295,10 @@ fn judge(conn: &Connection, source: &SourceRow, ts_in: &[Transition], now: i64, 
     let Ok(triggers) = ts::list(conn, Some(&source.id)) else {
         return 0;
     };
-    let state = ts::load_state(conn, &source.id).ok().flatten().map(|(s, _)| s).unwrap_or_else(|| SourceState::new(&source.id));
-    let in_gap = ts_in.iter().any(|t| t.kind == TransitionKind::Gap)
+    let state =
+        store::load_state(conn, &source.id).ok().flatten().map(|(s, _)| s).unwrap_or_else(|| SourceState::new(&source.id));
+    let in_gap = super::transitions_in_gap()
+        || ts_in.iter().any(|t| t.kind == TransitionKind::Gap)
         || (state.phase == Phase::Paused && state.gap_kind.is_some());
     let draining = super::DRAINING.load(std::sync::atomic::Ordering::SeqCst);
     let mut queued = 0;
@@ -344,7 +331,7 @@ fn judge(conn: &Connection, source: &SourceRow, ts_in: &[Transition], now: i64, 
             match triggers::evaluate(&spec, tr, &cx) {
                 FireDecision::Ignore => {}
                 FireDecision::Suppress { reason, .. }
-                    if path == Path::Rejudge
+                    if (path == Path::Rejudge || tr.kind == TransitionKind::WentStale)
                         && (reason == triggers::SuppressReason::Deduped
                             || ts::incident_logged(conn, &trow.id, &incident, item.as_deref()).unwrap_or(true)) => {}
                 FireDecision::Suppress { reason, incident_id, item_key } => {
@@ -453,35 +440,11 @@ pub fn handle_unmute(source: &SourceRow, now: i64) {
 }
 
 fn rejudge_open(conn: &Connection, source: &SourceRow, now: i64, only: Option<&str>) -> usize {
-    let Some((state, _)) = ts::load_state(conn, &source.id).ok().flatten() else {
+    let Some((state, _)) = store::load_state(conn, &source.id).ok().flatten() else {
         return 0;
     };
     let open = triggers::open_incidents(&state);
     judge(conn, source, &open, now, Path::Rejudge, only)
-}
-
-/// The 30 s tick: `stale_for` triggers whose source has been stale long
-/// enough, and mutes/simulates that expired since `last`.
-pub fn tick(last: i64, now: i64) {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    let Ok(sources) = store::list_live(&conn) else {
-        return;
-    };
-    let stale_triggers: Vec<ts::TriggerRow> = ts::list_by_status(&conn, TriggerStatus::Active)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|t| matches!(t.on, TriggerOn::StaleFor { .. }))
-        .collect();
-    for s in &sources {
-        let expired = |until: Option<i64>| until.is_some_and(|u| u > last && u <= now);
-        if expired(s.mute_until) || expired(s.simulate_until) {
-            rejudge_open(&conn, s, now, None);
-        }
-        for t in stale_triggers.iter().filter(|t| t.source_id == s.id) {
-            rejudge_open(&conn, s, now, Some(&t.id));
-        }
-    }
 }
 
 /// Re-queue `pending` fires older than 60 s whose incident is still open;
@@ -496,7 +459,7 @@ pub fn redeliver_pending(now: i64) {
     for (fire_id, trigger_id, incident, item) in rows {
         let job = (|| {
             let t = ts::get(&conn, &trigger_id).ok()??;
-            let (state, _) = ts::load_state(&conn, &t.source_id).ok()??;
+            let (state, _) = store::load_state(&conn, &t.source_id).ok()??;
             let open = triggers::open_incidents(&state);
             let tr = open.into_iter().find(|tr| {
                 triggers::matches(&t.on, tr)
@@ -550,7 +513,7 @@ fn deliver_batch(waker: &dyn Waker, batch: &Batch, now: i64) {
         let mut evs = Vec::new();
         for j in &batch.jobs {
             let Some(src) = store::get_by_id(&conn, &j.source_id).ok().flatten() else { continue };
-            let (state, proj) = ts::load_state(&conn, &j.source_id)
+            let (state, proj) = store::load_state(&conn, &j.source_id)
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| (SourceState::new(&j.source_id), None));
@@ -1019,26 +982,40 @@ mod tests {
     }
 
     #[test]
-    fn stale_for_fires_once_from_the_tick_and_ignores_gaps() {
+    fn stale_for_fires_once_from_the_minute_resends_and_ignores_gaps() {
         let e = env();
         let t = add_trigger(TriggerOn::StaleFor { secs: 900 }, "p1");
-        // updated 2000 s ago, every 60 → stale since NOW - 1820.
+        // Updated 2000 s before NOW, every 60 → stale since NOW - 1820.
+        let upd = NOW - 2000;
         conn_do(|c| {
-            c.execute("UPDATE source_state SET phase = 'stale', updated_at = ?1 WHERE source_id = 's1'", rusqlite::params![NOW - 2000])
+            c.execute("UPDATE source_state SET phase = 'stale', updated_at = ?1 WHERE source_id = 's1'", rusqlite::params![upd])
                 .unwrap();
         });
-        tick(NOW - 30, NOW);
-        tick(NOW, NOW + 30);
-        assert_eq!(drain(&e, NOW + 30), 1);
-        assert_eq!(fires(&t.id).len(), 1, "one row per stale episode, no tick spam");
+        let stale = Transition {
+            scope_item: None,
+            from: Health::Ok,
+            to: Health::Ok,
+            kind: TransitionKind::WentStale,
+            incident_id: Some(k2_core::sources::state::stale_incident("s1", Some(upd))),
+            reason: None,
+            hard: true,
+        };
+        // The scheduler re-sends the stale transition every minute.
+        handle_transitions(&row(), std::slice::from_ref(&stale), NOW - 1000);
+        assert!(fires(&t.id).is_empty(), "820 s stale is under 15 min");
+        for k in 0..4 {
+            handle_transitions(&row(), std::slice::from_ref(&stale), NOW + 60 * k);
+        }
+        assert_eq!(drain(&e, NOW + 240), 1);
+        assert_eq!(fires(&t.id).len(), 1, "one row per stale episode, no re-send spam");
         assert!(e.fake.calls.lock().unwrap()[0].note.contains("has had no good check for"));
         // A gap (paused) is never stale.
         let t2 = add_trigger(TriggerOn::StaleFor { secs: 300 }, "p2");
         conn_do(|c| {
-            c.execute("UPDATE source_state SET phase = 'paused', gap_kind = 'daemon_restarted', updated_at = 1 WHERE source_id = 's1'", [])
+            c.execute("UPDATE source_state SET phase = 'paused', gap_kind = 'daemon_restarted' WHERE source_id = 's1'", [])
                 .unwrap();
         });
-        tick(NOW + 30, NOW + 60);
+        handle_transitions(&row(), std::slice::from_ref(&stale), NOW + 600);
         assert!(fires(&t2.id).is_empty());
     }
 

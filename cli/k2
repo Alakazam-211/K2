@@ -13562,8 +13562,9 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   Apps: official static host is `k2 publish run <label> --skin --port N`.
     k2 publish run agents --skin --port 8788
   → https://agents.<host>.k2.dev  (login + Thread; no grid)
-  Custom static files: --skin <dir> (workspace-relative). Label `skin`
-  is reserved. Off-platform custom domains are not created here.
+  Custom static files: --skin <dir> (workspace-relative). Labels `skin`,
+  `meet` and `chat` are reserved (box front doors: Apps, K2 Meet, K2 chat).
+  Off-platform custom domains are not created here.
   k2 app is guests/roles/tokens — it does not serve software.
   Leftover: k2 skin.
 
@@ -13774,6 +13775,9 @@ if mode == "list":
         ))
         if s.get("frameWarning"):
             warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
+        if s.get("reservedLabel"):
+            warnings.append((str(s.get("name") or "?"),
+                "this name is now reserved for a K2 box door; it keeps working, but pick another name for anything new"))
     if not rows:
         print("No published services.")
         sys.exit(0)
@@ -14403,13 +14407,17 @@ _subdomain_attrib_post() {
 # so a name another workspace on this server owns is never touched.
 # Returns non-zero (message on stderr) on refusal or when the daemon is
 # unreachable. Usage: _subdomain_label_preflight <label> [transfer 0|1]
+# A third arg `release` = the check before a REMOVE: an old `meet`/`chat`
+# label (reserved after it was made) can still be deleted.
 _subdomain_label_preflight() {
-    local label="$1" transfer="${2:-0}" resp
+    local label="$1" transfer="${2:-0}" mode="${3:-}" resp
     if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
         echo "Error: the local K2 daemon isn't reachable, so ownership of '$label' can't be checked." >&2
         return 1
     fi
-    if [ "$transfer" = 1 ]; then
+    if [ "$mode" = release ]; then
+        resp=$(_subdomain_attrib_post claim "$label" "" "check=1" "release=1") || resp=""
+    elif [ "$transfer" = 1 ]; then
         resp=$(_subdomain_attrib_post claim "$label" "" "check=1" "transfer=1") || resp=""
     else
         resp=$(_subdomain_attrib_post claim "$label" "" "check=1") || resp=""
@@ -14528,14 +14536,23 @@ PY
     return 0
 }
 
-# U7 — nested label `skin` is the Skin front door, never a publish target.
+# Reserved nested labels: box-level front doors, never a publish target.
+#   skin = the App front door; meet = K2 Meet; chat = K2 chat (Sew).
+# Same set and messages as k2_core::skin::RESERVED_NESTED_LABELS.
 _refuse_reserved_nested_label() {
     local label
-    label=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
-    if [ "$label" = "skin" ]; then
-        echo "Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)." >&2
-        exit 1
-    fi
+    label=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$label" in
+        skin)
+            echo "Error: reserved_label: 'skin' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)." >&2
+            exit 1 ;;
+        meet)
+            echo "Error: reserved_label: 'meet' is reserved for K2 Meet (meet.<box>.k2.dev). Pick another nested label." >&2
+            exit 1 ;;
+        chat)
+            echo "Error: reserved_label: 'chat' is reserved for K2 chat (chat.<box>.k2.dev). Pick another nested label." >&2
+            exit 1 ;;
+    esac
 }
 
 cmd_publish_subdomain() {
@@ -14813,7 +14830,7 @@ print("  effective: %s" % d.get("effective","?"))
             # Never delete a name another workspace on this server owns.
             # (The reserved front-door label is box-level, not a workspace's.)
             if [ "$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')" != "skin" ]; then
-                _subdomain_label_preflight "$label" 0 || exit 1
+                _subdomain_label_preflight "$label" 0 release || exit 1
             fi
             _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
 print("Removed %s" % (d.get("removed") or "(subdomain)"))
@@ -16572,6 +16589,8 @@ cmd_wiki_publish() {
     if [ -z "$label" ]; then
         label="$(_wiki_default_label)"
     fi
+    # skin/meet/chat are box doors (a workspace named "chat" defaults here).
+    _refuse_reserved_nested_label "$label"
 
     # 1) Ensure local serve is on (and capture port/url).
     local serve_raw status_raw
@@ -21592,7 +21611,8 @@ WHAT THE CLI TOUCHES
 WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.
   Apps are guests+passes+websocket rooms. Host the UI with
-  k2 publish on any nested label. See `k2 study apps`.
+  k2 publish on any nested label except the reserved box doors
+  `skin`, `meet` and `chat`. See `k2 study apps`.
   Federation (`agent::host`) is peer messaging, not Connect login.
 
 WHAT THIS PAGE WILL NOT DO
@@ -22264,7 +22284,8 @@ STATIC DIR (--skin <dir>)
 
 NOT THIS
   Do not require Caddy, `k2 app front-door`, or port 38472.
-  Nested label `skin` is reserved — pick any other name.
+  Nested labels `skin`, `meet` and `chat` are reserved (box front
+  doors: Apps, K2 Meet, K2 chat) — pick any other name.
   Do not CNAME a customer domain here (no Connect cert).
   Do not apt install caddy for an app. If a leftover install
   already happened: stop AND disable the systemd unit

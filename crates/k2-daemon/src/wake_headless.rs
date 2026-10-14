@@ -64,6 +64,75 @@ pub fn spawn_wake_headless(
     wake_prompt: &str,
     heartbeat_name: Option<&str>,
 ) -> Result<String, String> {
+    spawn_wake_headless_with(
+        agent_name,
+        project_path,
+        wake_prompt,
+        heartbeat_name,
+        WakeDelivery::Background,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// 0.45.6 (GH #61) — [`spawn_wake_headless`] that returns only once the
+/// wake prompt was actually written into the live agent (readiness +
+/// quiescence + locked inject). A heartbeat records `fired` on `Ok`
+/// only; `Err(NotDelivered)` becomes a recorded failure, never a
+/// silent `fired`.
+pub fn spawn_wake_headless_confirmed(
+    agent_name: &str,
+    project_path: &str,
+    wake_prompt: &str,
+    heartbeat_name: Option<&str>,
+) -> Result<String, WakeFireError> {
+    spawn_wake_headless_with(
+        agent_name,
+        project_path,
+        wake_prompt,
+        heartbeat_name,
+        WakeDelivery::Confirmed,
+    )
+}
+
+/// How the post-spawn wake prompt is delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WakeDelivery {
+    /// Detached thread; failures are logged (triage / chat-tab wakes).
+    Background,
+    /// Synchronous; the caller learns whether it landed (heartbeats).
+    Confirmed,
+}
+
+/// Why a confirmed wake fire did not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WakeFireError {
+    /// The PTY never came up.
+    SpawnFailed(String),
+    /// The PTY is up but the wake prompt was not written into a live
+    /// agent (`pty_died` / `pty_stalled` / `hitl_gate_open` /
+    /// `session_lookup_miss`).
+    NotDelivered { terminal_id: String, reason: &'static str },
+}
+
+impl std::fmt::Display for WakeFireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WakeFireError::SpawnFailed(e) => write!(f, "{e}"),
+            WakeFireError::NotDelivered { terminal_id, reason } => write!(
+                f,
+                "wake prompt not delivered to session {terminal_id} ({reason})"
+            ),
+        }
+    }
+}
+
+fn spawn_wake_headless_with(
+    agent_name: &str,
+    project_path: &str,
+    wake_prompt: &str,
+    heartbeat_name: Option<&str>,
+    delivery: WakeDelivery,
+) -> Result<String, WakeFireError> {
     if std::env::var("K2SO_TRACE_WAKE_SPAWN")
         .map(|v| v == "1")
         .unwrap_or(false)
@@ -192,7 +261,8 @@ pub fn spawn_wake_headless(
         env: resolved.env_map(),
         launch_prompt: None,
         label: None,
-    })?;
+    })
+    .map_err(WakeFireError::SpawnFailed)?;
 
     let terminal_id = outcome.session_id.to_string();
 
@@ -203,63 +273,63 @@ pub fn spawn_wake_headless(
         terminal_id
     );
 
-    // Deliver the wakeup body to the freshly-spawned interactive
-    // claude. Two-phase write — body, settle, `\r` — same pattern
-    // run_inject uses on a live PTY. A single combined write lands
-    // the body as a multi-line paste in the TUI input widget,
-    // typed-but-not-sent. Claude's TUI needs ~1s to start up before
-    // it accepts input cleanly, so wait a beat first.
+    // Deliver the wakeup body to the freshly-spawned agent.
     //
-    // Skip when running under the test override (the test command
-    // is e.g. `cat`, which doesn't need a wakeup payload).
+    // 0.45.6: through the SAME guarded path `k2 msg` uses
+    // (`workspace_msg::deliver_heartbeat_wake` → readiness signal +
+    // screen quiescence + the locked, framed inject). The old delivery
+    // was a raw `write(body)` after a fixed 1500ms sleep: on a slow or
+    // busy start the TUI was still drawing, its composer repainted
+    // mid-paste and dropped what had been typed, and the agent got only
+    // the TAIL of WAKEUP.md (appa 2026-08-31, 2026-10-13).
+    //
+    // Also delivered under the test override (`cat` echoes it back into
+    // the grid), so integration tests can assert exactly what a fire
+    // typed into the agent.
     let is_test_override = std::env::var("K2SO_WAKE_HEADLESS_TEST_COMMAND")
         .ok()
         .filter(|c| !c.is_empty())
         .is_some();
-    if !is_test_override {
-        // Look up the freshly-spawned session by its v2 session id.
-        // It was just registered by `spawn_agent_session_v2_blocking`
-        // a few microseconds ago.
-        if let Some(session) =
-            crate::v2_session_map::lookup_by_session_id(&outcome.session_id)
-        {
-            let prompt = wake_prompt.to_string();
-            // Slice 5: per-provider startup settle. Claude keeps the
-            // historical 1500ms (its TUI needs ~1s to accept input);
-            // slower-starting providers get their study-derived floor
-            // (hermes ~7s: prompt ~3.6s + ~3s agent init) via the
-            // injection profile keyed off the SPAWNED command. W4: the
-            // resolved preset's declared readiness metadata takes
-            // precedence over the static table (the shared chain —
-            // resolve_injection_profile — same order every injector
-            // uses). Unknown commands consult the chain too, so a
-            // custom preset that DECLARES its readiness gets a
-            // truthful settle instead of the blanket default.
-            let provider = k2_core::workspace::provider_resume::provider_resume_for_command(
-                &command,
-            )
-            .map(|p| p.provider)
-            .unwrap_or("");
-            let provider_settle = k2_core::workspace::provider_resume::resolve_injection_profile(
-                resolved.readiness.as_deref(),
-                provider,
-            )
-            .post_spawn_settle;
-            let settle = provider_settle.max(std::time::Duration::from_millis(1500));
-            std::thread::spawn(move || {
-                // Wait for the agent TUI to draw its initial prompt.
-                std::thread::sleep(settle);
-                session.write(prompt.into_bytes());
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                session.write(b"\r".to_vec());
-            });
-        } else {
+    let delivery_job = match crate::v2_session_map::lookup_by_session_id(&outcome.session_id) {
+        Some(session) => {
+            // Readiness dialect: the test override keeps the claude-shaped
+            // default with a short ceiling (`cat` never advertises
+            // bracketed paste) — the same seam `workspace_msg` uses. Real
+            // spawns use the shared precedence chain (preset readiness
+            // metadata, then the provider table).
+            let (profile, ceiling) = if is_test_override {
+                (
+                    k2_core::workspace::provider_resume::DEFAULT_INJECTION_PROFILE,
+                    std::time::Duration::from_millis(1500),
+                )
+            } else {
+                let provider =
+                    k2_core::workspace::provider_resume::provider_resume_for_command(&command)
+                        .map(|p| p.provider)
+                        .unwrap_or("");
+                (
+                    k2_core::workspace::provider_resume::resolve_injection_profile(
+                        resolved.readiness.as_deref(),
+                        provider,
+                    ),
+                    crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+                )
+            };
+            Some((
+                crate::session_lookup::LiveSession(session),
+                wake_prompt.to_string(),
+                profile,
+                ceiling,
+            ))
+        }
+        None => {
             log_debug!(
                 "[daemon/wake] post-spawn lookup miss for session={} — wakeup body not delivered",
                 terminal_id
             );
+            None
         }
-    }
+    };
 
     // 0.37.8 — only chat-tab wakes (heartbeat_name = None) touch the
     // workspace_sessions row. Heartbeat fires live in their own lane
@@ -372,7 +442,40 @@ pub fn spawn_wake_headless(
     // The Arc dropping silently retires the unused outcome metadata.
     let _ = Arc::new(outcome);
 
-    Ok(terminal_id)
+    let Some((live, prompt, profile, ceiling)) = delivery_job else {
+        return match delivery {
+            WakeDelivery::Background => Ok(terminal_id),
+            WakeDelivery::Confirmed => Err(WakeFireError::NotDelivered {
+                terminal_id,
+                reason: "session_lookup_miss",
+            }),
+        };
+    };
+    match delivery {
+        WakeDelivery::Background => {
+            std::thread::spawn(move || {
+                if let Err(reason) = crate::workspace_msg::deliver_heartbeat_wake(
+                    &live,
+                    &prompt,
+                    Some((&profile, ceiling)),
+                ) {
+                    log_debug!(
+                        "[daemon/wake] wake prompt NOT delivered to session={} ({reason})",
+                        live.session_id()
+                    );
+                }
+            });
+            Ok(terminal_id)
+        }
+        WakeDelivery::Confirmed => match crate::workspace_msg::deliver_heartbeat_wake(
+            &live,
+            &prompt,
+            Some((&profile, ceiling)),
+        ) {
+            Ok(()) => Ok(terminal_id),
+            Err(reason) => Err(WakeFireError::NotDelivered { terminal_id, reason }),
+        },
+    }
 }
 
 /// Deferred post-spawn read-back: stamp `workspace_sessions.session_id`

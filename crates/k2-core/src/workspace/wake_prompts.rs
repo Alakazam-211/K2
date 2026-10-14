@@ -185,6 +185,134 @@ pub fn compose_wake_prompt_from_path(
     compose_agent_wake_from_body(Some(&content))
 }
 
+// ── Wake delivery: inline vs pointer (0.45.6) ──────────────────────────
+//
+// A heartbeat wake prompt is typed into the agent's TUI through its PTY.
+// Long bodies have been seen to arrive with their HEAD missing: the
+// agent got only the tail of WAKEUP.md (2026-08-31: 599 and 191 chars
+// of 17 KB and 24 KB files; 2026-10-13: an 8,540-byte file, while
+// ~7.8 KB files on the same box were fine). K2 writes the whole payload
+// (`DaemonPtySession::write` has no cap); the cut happens in the TUI
+// while it ingests a long burst (startup redraw / composer reset /
+// resize during the drain). Keeping the tail is the worst possible
+// failure: the instructions that come first (gates, STEP 0) are lost
+// and the agent acts on the footer.
+//
+// Rule: a wake prompt never silently loses its head. Bodies up to
+// [`WAKE_PROMPT_INLINE_MAX_BYTES`] are pasted whole; anything longer is
+// replaced by a short one-line pointer telling the agent to read the
+// file in full before doing anything. The choice is recorded in the
+// heartbeat run log by the daemon.
+
+/// Largest wake body (bytes, after frontmatter strip) that is pasted
+/// inline. Half of the smallest size seen truncated in the field.
+pub const WAKE_PROMPT_INLINE_MAX_BYTES: usize = 4096;
+
+/// How a wake prompt reaches the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakePromptMode {
+    /// The whole body is pasted as the user turn.
+    Inline,
+    /// The body is too long to paste safely; a short pointer to the
+    /// file is sent instead.
+    Pointer,
+}
+
+impl WakePromptMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WakePromptMode::Inline => "inline",
+            WakePromptMode::Pointer => "pointer",
+        }
+    }
+}
+
+/// The text a heartbeat fire delivers, plus how it was chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WakeDelivery {
+    /// What is written to the agent (the body, or the pointer line).
+    pub prompt: String,
+    pub mode: WakePromptMode,
+    /// Size of the wake body (frontmatter stripped) in bytes.
+    pub body_bytes: usize,
+}
+
+impl WakeDelivery {
+    /// One clause for the heartbeat run log (`heartbeat_fires.reason`).
+    pub fn audit_note(&self) -> String {
+        match self.mode {
+            WakePromptMode::Inline => {
+                format!("wake prompt inline ({} bytes)", self.body_bytes)
+            }
+            WakePromptMode::Pointer => format!(
+                "wake prompt sent as a pointer to the file ({} bytes > {} byte inline limit)",
+                self.body_bytes, WAKE_PROMPT_INLINE_MAX_BYTES
+            ),
+        }
+    }
+
+    /// `wakePrompt` object for fire responses.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": self.mode.as_str(),
+            "bodyBytes": self.body_bytes,
+            "sentBytes": self.prompt.len(),
+            "inlineMaxBytes": WAKE_PROMPT_INLINE_MAX_BYTES,
+        })
+    }
+}
+
+/// The one-line pointer sent instead of a body that is too long to
+/// paste. One line on purpose: a raw PTY write turns every newline into
+/// a keystroke, and a short single line can't be cut mid-way by a TUI
+/// composer the way a long burst can.
+pub fn wake_pointer_prompt(
+    wakeup_path: &std::path::Path,
+    heartbeat_name: &str,
+    body_bytes: usize,
+) -> String {
+    let name = if heartbeat_name.is_empty() {
+        "heartbeat".to_string()
+    } else {
+        format!("heartbeat `{heartbeat_name}`")
+    };
+    format!(
+        "K2 {name} fired. Its wake instructions are {body_bytes} bytes, too long to paste \
+         safely, so they were not pasted here. Before doing anything else, read your wake \
+         instructions in full, from the top, at `{}` and then follow them exactly.",
+        wakeup_path.display()
+    )
+}
+
+/// Pure delivery choice for an already-composed wake body.
+pub fn wake_delivery_for_body(
+    body: String,
+    wakeup_path: &std::path::Path,
+    heartbeat_name: &str,
+) -> WakeDelivery {
+    let body_bytes = body.len();
+    if body_bytes <= WAKE_PROMPT_INLINE_MAX_BYTES {
+        WakeDelivery { prompt: body, mode: WakePromptMode::Inline, body_bytes }
+    } else {
+        WakeDelivery {
+            prompt: wake_pointer_prompt(wakeup_path, heartbeat_name, body_bytes),
+            mode: WakePromptMode::Pointer,
+            body_bytes,
+        }
+    }
+}
+
+/// [`compose_wake_prompt_from_path`] plus the inline/pointer choice.
+/// `None` exactly when `compose_wake_prompt_from_path` is `None`
+/// (missing/unreadable file or empty body).
+pub fn compose_wake_delivery_from_path(
+    wakeup_path: &std::path::Path,
+    heartbeat_name: &str,
+) -> Option<WakeDelivery> {
+    let body = compose_wake_prompt_from_path(wakeup_path)?;
+    Some(wake_delivery_for_body(body, wakeup_path, heartbeat_name))
+}
+
 // ── Headless wake spawn ─────────────────────────────────────────────────
 //
 // Daemon-side entry point. The full `spawn_wake_pty` in
@@ -548,6 +676,99 @@ mod tests {
         // a fire-time error instead of spawning claude with no prompt.
         assert!(compose_agent_wake_from_body(Some("---\ndescription:\n---\n\n")).is_none());
         assert!(compose_agent_wake_from_body(Some("   \n  ")).is_none());
+    }
+
+    /// A body with a distinct head and tail, `size` bytes long.
+    fn head_tail_body(size: usize) -> String {
+        let head = "# STEP 0 HEAD-MARKER: run the gate first\n";
+        let tail = "\nFOOTER TAIL-MARKER: report and stop.";
+        let filler = size - head.len() - tail.len();
+        let mut s = String::with_capacity(size);
+        s.push_str(head);
+        for i in 0..filler {
+            s.push(if i % 80 == 79 { '\n' } else { 'x' });
+        }
+        s.push_str(tail);
+        assert_eq!(s.len(), size, "fixture must be exactly {size} bytes");
+        s
+    }
+
+    fn temp_wakeup(name: &str, body: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-wake-delivery-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("WAKEUP.md");
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// 0.45.6 — a 20 KB wake file is delivered as the pointer, never as
+    /// a cut-down body (and never as its tail).
+    #[test]
+    fn twenty_kb_wake_file_is_delivered_as_pointer_never_tail() {
+        let body = head_tail_body(20 * 1024);
+        let path = temp_wakeup("20k", &body);
+        let d = compose_wake_delivery_from_path(&path, "daily-look")
+            .expect("20 KB file must compose");
+        assert_eq!(d.mode, WakePromptMode::Pointer);
+        assert_eq!(d.body_bytes, 20 * 1024);
+        assert!(
+            d.prompt.contains(&path.display().to_string()),
+            "pointer must name the file: {}",
+            d.prompt
+        );
+        assert!(d.prompt.contains("daily-look"), "pointer names the heartbeat");
+        assert!(d.prompt.contains("in full"), "pointer says read it in full");
+        assert!(!d.prompt.contains("TAIL-MARKER"), "pointer must not carry the tail");
+        assert!(!d.prompt.contains('\n'), "pointer is a single line");
+        assert!(d.prompt.len() < 1024, "pointer stays short: {} bytes", d.prompt.len());
+        assert!(d.audit_note().contains("pointer"), "{}", d.audit_note());
+        assert_eq!(d.to_json()["mode"], "pointer");
+        assert_eq!(d.to_json()["bodyBytes"], 20 * 1024);
+    }
+
+    /// The appa case: 8,540 bytes is over the inline limit → pointer.
+    #[test]
+    fn appa_sized_wake_file_is_delivered_as_pointer() {
+        let path = temp_wakeup("8540", &head_tail_body(8540));
+        let d = compose_wake_delivery_from_path(&path, "daily-look").unwrap();
+        assert_eq!(d.mode, WakePromptMode::Pointer);
+    }
+
+    /// A body at the limit is delivered whole, head and tail intact.
+    #[test]
+    fn wake_file_at_limit_is_delivered_inline_whole() {
+        let body = head_tail_body(WAKE_PROMPT_INLINE_MAX_BYTES);
+        let path = temp_wakeup("limit", &body);
+        let d = compose_wake_delivery_from_path(&path, "hb").unwrap();
+        assert_eq!(d.mode, WakePromptMode::Inline);
+        assert_eq!(d.prompt, body.trim(), "inline delivery is the whole body");
+        assert!(d.prompt.starts_with("# STEP 0 HEAD-MARKER"));
+        assert!(d.prompt.ends_with("TAIL-MARKER: report and stop."));
+        assert!(d.audit_note().contains("inline"), "{}", d.audit_note());
+    }
+
+    /// One byte over the limit flips to the pointer.
+    #[test]
+    fn wake_file_one_byte_over_limit_is_pointer() {
+        let path = temp_wakeup("over", &head_tail_body(WAKE_PROMPT_INLINE_MAX_BYTES + 1));
+        let d = compose_wake_delivery_from_path(&path, "hb").unwrap();
+        assert_eq!(d.mode, WakePromptMode::Pointer);
+    }
+
+    /// Missing / empty files keep the existing `None` contract.
+    #[test]
+    fn wake_delivery_none_for_missing_or_empty_file() {
+        let missing = std::env::temp_dir().join("k2-wake-delivery-definitely-missing/WAKEUP.md");
+        assert!(compose_wake_delivery_from_path(&missing, "hb").is_none());
+        let empty = temp_wakeup("empty", "---\ndescription:\n---\n\n");
+        assert!(compose_wake_delivery_from_path(&empty, "hb").is_none());
     }
 
     #[test]

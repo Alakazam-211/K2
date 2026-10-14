@@ -34,6 +34,9 @@ pub enum Purpose {
     VaultFetch,
     /// The vault's loopback proxy for LLM CLIs and SDKs (§9.3).
     VaultProxy,
+    /// Garden v3 data sources (contract-sources-v1 §10): the poller and
+    /// Try. A label only; the source's timeout and size ride `FetchSpec`.
+    Source,
 }
 
 impl Purpose {
@@ -41,12 +44,13 @@ impl Purpose {
         match self {
             Purpose::VaultFetch => "vault-fetch",
             Purpose::VaultProxy => "vault-proxy",
+            Purpose::Source => "source",
         }
     }
 
     fn connect_timeout(self) -> Duration {
         match self {
-            Purpose::VaultFetch | Purpose::VaultProxy => Duration::from_secs(10),
+            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source => Duration::from_secs(10),
         }
     }
 }
@@ -132,17 +136,29 @@ impl Destination {
             return Ok(Destination { host, kind: DestKind::IpLiteral(ip) });
         }
 
-        let addrs: Vec<SocketAddr> = (host.as_str(), port)
-            .to_socket_addrs()
-            .map_err(|_| EgressError::new("upstream_error", 502, format!("couldn't resolve {host}")))?
-            .collect();
+        #[cfg(test)]
+        let pinned = test_dns::lookup(&host, port);
+        #[cfg(not(test))]
+        let pinned: Option<(Vec<SocketAddr>, bool, bool)> = None;
+        let (addrs, skip_range, skip_own) = match pinned {
+            Some(p) => p,
+            None => {
+                #[cfg(test)]
+                test_dns::count_lookup();
+                let addrs: Vec<SocketAddr> = (host.as_str(), port)
+                    .to_socket_addrs()
+                    .map_err(|_| EgressError::new("upstream_error", 502, format!("couldn't resolve {host}")))?
+                    .collect();
+                (addrs, false, false)
+            }
+        };
         if addrs.is_empty() {
             return Err(EgressError::new("upstream_error", 502, format!("couldn't resolve {host}")));
         }
         let own = own_addresses();
         for a in &addrs {
             let ip = canonical_ip(a.ip());
-            if is_blocked_ip(ip) || own.contains(&ip) {
+            if (is_blocked_ip(ip) && !skip_range) || (own.contains(&ip) && !skip_own) {
                 return Err(blocked(&host));
             }
         }
@@ -339,6 +355,72 @@ thread_local! {
     /// production clients trust the built-in roots and nothing else.
     pub(crate) static TEST_ROOTS: std::cell::RefCell<Vec<reqwest::Certificate>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Test-only name pinning (contract §10.4): answers for a host name in the
+/// order given (the last one repeats), each with whether the answer skips
+/// the private-range check and the own-address check (a "public" fake on
+/// loopback). Every real lookup is counted, so a test can prove none
+/// happened. Thread-local: tests call the fetch on their own thread.
+#[cfg(test)]
+pub(crate) mod test_dns {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, SocketAddr};
+
+    #[derive(Clone)]
+    pub(crate) struct Answer {
+        pub ips: Vec<IpAddr>,
+        pub skip_range: bool,
+        pub skip_own: bool,
+    }
+
+    thread_local! {
+        static PINS: RefCell<HashMap<String, Vec<Answer>>> = RefCell::new(HashMap::new());
+        static LOOKUPS: RefCell<usize> = const { RefCell::new(0) };
+        static PINNED_LOOKUPS: RefCell<usize> = const { RefCell::new(0) };
+    }
+
+    /// Pin `host` to a sequence of answers until the guard drops.
+    pub(crate) fn pin(host: &str, answers: Vec<Answer>) -> Guard {
+        PINS.with(|p| p.borrow_mut().insert(host.to_string(), answers));
+        Guard
+    }
+
+    /// A "public" name on loopback: skips both checks.
+    pub(crate) fn public(ip: IpAddr) -> Answer {
+        Answer { ips: vec![ip], skip_range: true, skip_own: true }
+    }
+
+    pub(crate) fn plain(ip: IpAddr) -> Answer {
+        Answer { ips: vec![ip], skip_range: false, skip_own: false }
+    }
+
+    pub(crate) fn lookup(host: &str, port: u16) -> Option<(Vec<SocketAddr>, bool, bool)> {
+        PINS.with(|p| {
+            let mut p = p.borrow_mut();
+            let answers = p.get_mut(host)?;
+            let a = if answers.len() > 1 { answers.remove(0) } else { answers[0].clone() };
+            PINNED_LOOKUPS.with(|n| *n.borrow_mut() += 1);
+            Some((a.ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect(), a.skip_range, a.skip_own))
+        })
+    }
+
+    pub(crate) fn count_lookup() {
+        LOOKUPS.with(|n| *n.borrow_mut() += 1);
+    }
+
+    /// Lookups of any kind (real and pinned) on this thread so far.
+    pub(crate) fn lookups() -> usize {
+        LOOKUPS.with(|n| *n.borrow()) + PINNED_LOOKUPS.with(|n| *n.borrow())
+    }
+
+    pub(crate) struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PINS.with(|p| p.borrow_mut().clear());
+        }
+    }
 }
 
 #[cfg(test)]

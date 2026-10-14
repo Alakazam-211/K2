@@ -197,9 +197,11 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
         max_bytes: b.max_bytes,
         timeout: Duration::from_secs(b.timeout_secs),
         include_headers: b.include_headers,
+        purpose: crate::egress::Purpose::VaultFetch,
     };
     let redactor = vault.redactor();
-    let res = crate::vault_fetch::execute(spec, injections, &redactor)?;
+    let allow = crate::vault_fetch::Allowlist::from_injections(&injections);
+    let res = crate::vault_fetch::execute(spec, &allow, injections, &redactor)?;
     let headers: Vec<Value> = res.headers.iter().map(|(k, v)| json!([k, v])).collect();
     if let Some(out) = b.out.as_deref() {
         let root = ws_root.as_ref().ok_or_else(|| VaultError::not_found("workspace folder not found"))?;

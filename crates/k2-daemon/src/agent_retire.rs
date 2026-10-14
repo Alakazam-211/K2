@@ -459,6 +459,12 @@ pub fn handle_agent_retire(body: &[u8]) -> CliResponse {
             // session goes away" chokepoint.
             let _ = crate::v2_session_map::unregister(key);
         }
+        // GH #66: sidecar tabs and API cells in the workspace go too.
+        let pid = project_id.clone().unwrap_or_default();
+        if let Err(e) = crate::v2_session_map::stop_workspace_sessions(&pid, &path) {
+            actions[0]["status"] = serde_json::json!("failed");
+            return fail(actions, &name, &path, format!("stopping sessions failed: {e}"));
+        }
         actions[0]["status"] = serde_json::json!("done");
     }
 

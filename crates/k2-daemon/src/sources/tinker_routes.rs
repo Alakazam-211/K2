@@ -187,6 +187,10 @@ fn plans(s: &Subject) -> Result<Vec<(Option<String>, FetchPlan)>, SourceErr> {
     })
 }
 
+// TODO(sources 0.45.7): share the engine's per-origin budget instead of a
+// second bucket. Contract §4.3 says Try "uses the same per-origin budget";
+// today Try and the poller each get 1 request / 2 s per origin, so a Try
+// burst can briefly double what K2 sends to one origin.
 static TRY_BUDGET: Mutex<Option<Budget>> = Mutex::new(None);
 
 /// One token per origin, or 429 with the wait.

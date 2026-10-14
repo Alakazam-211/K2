@@ -1977,7 +1977,9 @@ fn fc_t18_guide_pages_track_the_grammar() {
         let page = guide(&[t]);
         assert!(page.starts_with(&format!("k2 zen guide {t} —")), "{t}: {page}");
         let n = page.lines().count();
-        assert!(n <= 80, "guide page {t} is {n} lines (max 80)");
+        // The generated api page lists every widget verb, Garden data's too.
+        let max = if t == "api" { k2_core::contract::gen::GUIDE_MAX_LINES } else { 80 };
+        assert!(n <= max, "guide page {t} is {n} lines (max {max})");
     }
     let bands = guide(&["bands"]);
     for v in schema::WIDGET_SLOTS.iter().chain(schema::ALIGNS).chain(schema::EDGES) {

@@ -290,7 +290,7 @@ fn guide_api(args: &[&str]) -> String {
 fn guide_api_works_without_a_daemon() {
     let page = guide_api(&[]);
     assert_eq!(page.trim_end(), gen::guide_api_page(catalog()).trim_end(), "cli/k2 prints the generated page");
-    assert!(page.lines().count() <= 80, "guide api is {} lines", page.lines().count());
+    assert!(page.lines().count() <= gen::GUIDE_MAX_LINES, "guide api is {} lines", page.lines().count());
     let c = catalog();
     for (cap, rows) in gen::widget_groups(c) {
         let head = cap.unwrap_or("no cap");

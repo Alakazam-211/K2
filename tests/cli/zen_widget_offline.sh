@@ -6,7 +6,7 @@
 #     need no permissions, Rosson 2026-10-08) and never reach a daemon;
 #   - usage errors exit 2 before any request;
 #   - help and the --schema manifest list the widget family and --widget;
-#   - `k2 zen guide api` is generated, at most 80 lines, and --json parses.
+#   - `k2 zen guide api` is generated, at most 104 lines, and --json parses.
 # The daemon half (new/list/revoke/validate --widget, exit 3 before setup)
 # is tests/cli/zen_widget_cli.sh.
 

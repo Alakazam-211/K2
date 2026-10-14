@@ -5,6 +5,7 @@
 //! are `k2_core::deploy`.
 
 pub mod alerts;
+pub mod box_prep;
 pub mod process_engine;
 pub mod router;
 pub mod routes;

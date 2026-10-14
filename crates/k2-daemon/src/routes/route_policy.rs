@@ -174,6 +174,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/api-keys/revoke", Owner),
     // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
     // (own workspace + "Allow this agent to manage Apps") in the handler.
+    // Box prep (S10): the doctor is Admin (agents read it through their
+    // passport); prepare runs root-helper verbs and is the owner's.
+    get("/cli/app/box", Admin),
+    post("/cli/app/box/prepare", Owner),
     post("/cli/app/build", Member),
     // Stage 1 holds only the per-App memory limit (the rest is S13).
     post("/cli/app/config", Member),

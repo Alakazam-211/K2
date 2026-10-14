@@ -181,6 +181,38 @@ expect_has "refusal names the code" "$(cat "$SANDBOX/out")" "app_not_found"
 expect_has "uninstall" "$(k2 app uninstall smoke)" "App smoke uninstalled"
 expect_has "list is empty" "$(k2 app list)" "No Apps on this box"
 
+echo "== box doctor / prepare (S10) =="
+# A sandbox daemon never has a protocol-6 root helper (a Mac has none;
+# a Linux build box's helper predates protocol 6), so the box is not
+# ready and prepare refuses before any root verb. Prepare is only tried
+# when the doctor confirms that: this smoke never preps a real box.
+set +e
+out="$(k2 app doctor --json)"; rc=$?
+set -e
+expect_eq "doctor: a box without a protocol-6 helper is not ready (exit 1)" "$rc" "1"
+expect_has "doctor lists the helper check" "$out" '"id":"helper"'
+expect_has "doctor lists the platform check" "$out" '"id":"platform"'
+expect_has "doctor names the apps protocol" "$out" '"appsMinProtocol":6'
+human="$(k2 app doctor 2>&1 || true)"
+expect_has "doctor prints a verdict" "$human" "App box: NOT READY"
+proto="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["helperProtocol"])')"
+if [ "$proto" -lt 6 ]; then
+    set +e
+    k2 app box prepare > "$SANDBOX/out" 2>&1; rc=$?
+    set -e
+    expect_eq "prepare without a protocol-6 helper exits 3" "$rc" "3"
+    case "$(cat "$SANDBOX/out")" in
+        *linux_only*|*helper_needed*) ok "prepare names why (linux_only / helper_needed)" ;;
+        *) bad "prepare names why: $(cat "$SANDBOX/out")" ;;
+    esac
+else
+    bad "the sandbox daemon saw a protocol-$proto helper: refusing to prepare a real box from a smoke"
+fi
+set +e
+k2 app box prepare --runtime runc > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "prepare refuses an unknown runtime (exit 2)" "$rc" "2"
+
 echo
 echo "app_runtime_cli_smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

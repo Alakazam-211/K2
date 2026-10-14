@@ -80,12 +80,17 @@ pub fn start() {
     }
 }
 
-/// One reaper + orphan pass. Errors are logged (the next hour retries).
+/// One reaper + orphan + daily-snapshot pass (contract §2.2, §2.3). Errors
+/// are logged (the next hour retries).
 pub fn hourly() {
     if let Err(e) = store().reap(now()) {
         k2_core::log_debug!("[garden-data] reaper: {e}");
     }
     mark_orphans();
+    // B3: today's dated snapshot unless one exists or nothing changed.
+    if let Err(e) = export_routes::snapshot_tick() {
+        k2_core::log_debug!("[garden-data] daily snapshot: {e}");
+    }
 }
 
 /// Mark spaces whose widget folder is gone (and clear the mark when it's
@@ -240,6 +245,36 @@ pub fn ok(v: serde_json::Value) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hourly tick takes today's snapshot when one is due (data changed,
+    /// no dated file yet), and doesn't take a second one the same day.
+    #[test]
+    fn hourly_tick_takes_the_daily_snapshot_when_due() {
+        let _home = crate::test_support::TempHome::new();
+        let dir = export_routes::snapshot_dir();
+        let dated = |d: &std::path::Path| -> Vec<String> {
+            std::fs::read_dir(d)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| n.starts_with("gardens-") && n.len() == "gardens-YYYY-MM-DD.sqlite".len())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert!(dated(&dir).is_empty(), "a fresh home has no snapshots");
+        let space = k2_core::garden_data::Space::data("board").unwrap();
+        store()
+            .put(&space, "obj/1", &serde_json::json!({"t": "hi"}), None, &k2_core::garden_data::Actor::Owner)
+            .expect("a write to snapshot");
+        hourly();
+        let first = dated(&dir);
+        assert_eq!(first.len(), 1, "today's snapshot was taken: {first:?}");
+        let today = k2_core::garden_data::snapshots::local_date(now());
+        assert_eq!(first[0], format!("gardens-{today}.sqlite"));
+        hourly();
+        assert_eq!(dated(&dir), first, "one dated snapshot a day");
+    }
 
     #[test]
     fn waiters_wake_on_a_newer_rev_and_time_out_otherwise() {

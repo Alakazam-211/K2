@@ -83,6 +83,7 @@ import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 import { ZenNewGardenHost } from './widgets/ZenNewGardenModal'
 import { ZenSourceAskHost, ZEN_SOURCE_ASK_CAPS, ZEN_SOURCE_ASK_ID } from './widgets/ZenSourceAsk'
+import { ZenSourcesPending } from './widgets/ZenSourcesPending'
 
 type ControlFailure = Extract<ZenControlCheck, { ok: false }>
 
@@ -394,6 +395,7 @@ export function ZenPage({
         {placement.bands.bottom && <ZenBottomBand groups={placement.bands.bottom} src={src} />}
         <ZenNewGardenHost bridge={controlsBridge} />
         <ZenSourceAskHost bridge={sourceAskBridge} />
+        <ZenSourcesPending gardenName={garden.garden?.name ?? 'this Garden'} widgets={page.widgets} />
       </div>
     </ZenFillReloadContext.Provider>
   )

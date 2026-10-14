@@ -8,7 +8,8 @@ import { join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
 import { HtmlFrame } from './HtmlFrame'
-import { frameCsp } from '@/lib/frame-csp'
+import { DNS_PREFETCH_OFF_META, frameCsp } from '@/lib/frame-csp'
+import { SEALED_FRAME_GUARD } from '@/lib/sealed-frame-guard'
 
 const RENDERER = resolve(__dirname, '../..')
 
@@ -135,7 +136,7 @@ describe('HtmlFrame — rendered attributes', () => {
     expect(f!.getAttribute('referrerpolicy')).toBe('no-referrer')
     expect(f!.getAttribute('src')).toBeNull()
     expect(f!.getAttribute('srcdoc')).toBe(
-      `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="${frameCsp('scripted')}"><script>1</script>`,
+      `<!DOCTYPE html>${DNS_PREFETCH_OFF_META}<meta http-equiv="Content-Security-Policy" content="${frameCsp('scripted')}"><script>${SEALED_FRAME_GUARD}</script><script>1</script>`,
     )
   })
 
@@ -158,7 +159,7 @@ describe('HtmlFrame — rendered attributes', () => {
     expect(f).not.toBeNull()
     expect(f!.getAttribute('sandbox')).toBe('allow-scripts')
     expect(f!.getAttribute('srcdoc')).toBe(
-      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${frameCsp('widget', { nonce })}"><script nonce="${nonce}">k2()</script><p>hi</p>`,
+      `<!doctype html>${DNS_PREFETCH_OFF_META}<meta http-equiv="Content-Security-Policy" content="${frameCsp('widget', { nonce })}"><script nonce="${nonce}">k2()</script><p>hi</p>`,
     )
     expect(refs[0]).toBe(f)
     f!.dispatchEvent(new Event('load'))
@@ -171,7 +172,7 @@ describe('HtmlFrame — rendered attributes', () => {
     expect(f).not.toBeNull()
     expect(f!.getAttribute('sandbox')).toBe('')
     expect(f!.getAttribute('srcdoc')).toBe(
-      `<meta http-equiv="Content-Security-Policy" content="${frameCsp('inert')}"><p>hi</p>`,
+      `${DNS_PREFETCH_OFF_META}<meta http-equiv="Content-Security-Policy" content="${frameCsp('inert')}"><p>hi</p>`,
     )
   })
 })

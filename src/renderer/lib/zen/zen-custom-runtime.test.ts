@@ -6,6 +6,7 @@ import { MessageChannel, type MessagePort } from 'node:worker_threads'
 import { afterEach, describe, expect, it } from 'vitest'
 import { K2_FRAME_MAX_BYTES, k2FrameScript, zenFramePrelude, zenScriptText } from './zen-custom-prelude'
 import { ZEN_CUSTOM_VERBS } from './zen-verbs.generated'
+import { SEALED_FRAME_GUARD } from '../sealed-frame-guard'
 
 type Listener = (e: unknown) => void
 
@@ -414,18 +415,20 @@ describe('0.45.3: the whole canvas in the runtime', () => {
 })
 
 describe('the frame prelude', () => {
-  it('theme style, then the nonced runtime, then each library, all nonced; no theme value can break out', () => {
+  it('the sealed-frame guard, then theme style, then the nonced runtime, then each library, all nonced; no theme value can break out', () => {
     const html = zenFramePrelude({
       nonce: 'AAAAAAAAAAAAAAAAAAAAAA',
       theme: { vars: { '--zen-text': '#111', '--zen-x': 'red}</style><script>alert(1)</script>', bad: 'x' }, scheme: 'light' },
       libs: ['var LIB = "</script>";'],
     })
-    expect(html.startsWith('<style data-k2-theme="">:root{--zen-text:#111;color-scheme:light;')).toBe(true)
+    const guard = `<script nonce="AAAAAAAAAAAAAAAAAAAAAA">${SEALED_FRAME_GUARD}</script>`
+    expect(html.startsWith(guard)).toBe(true)
+    expect(html.slice(guard.length).startsWith('<style data-k2-theme="">:root{--zen-text:#111;color-scheme:light;')).toBe(true)
     expect(html).not.toContain('alert(1)')
     const scripts = [...html.matchAll(/<script nonce="AAAAAAAAAAAAAAAAAAAAAA">/g)]
-    expect(scripts).toHaveLength(3)
+    expect(scripts).toHaveLength(4)
     expect(html.indexOf('__K2_VERBS__')).toBeLessThan(html.indexOf('var LIB'))
     expect(html).toContain('var LIB = "<\\/script>";')
-    expect(html.match(/<\/script>/g)).toHaveLength(3)
+    expect(html.match(/<\/script>/g)).toHaveLength(4)
   })
 })

@@ -25,6 +25,17 @@
 //     blob workers and wasm in them (three.js, PixiJS, physics); no network;
 //   - everything else as the base: no frames, objects, forms or base.
 // The nonce is fresh per bundle response (UW9), so a page can't guess it.
+//
+// Every profile's head also starts with `x-dns-prefetch-control: off`, and
+// the `scripted` profile runs the sealed-frame guard (no WebRTC, link
+// resource hints or `<a ping>`; see src/shared/sealed-frame-guard.js) before
+// any of the document. These frames never need those features. The desktop
+// app runs the same guard as an all-frames init script; the in-frame copy is
+// best effort for the web client. `inert` runs no script at all; `widget`
+// gets the guard as the first script of its prelude (zen-custom-prelude.ts),
+// since only nonced scripts run there.
+
+import { SEALED_FRAME_GUARD } from './sealed-frame-guard'
 
 /**
  * `scripted` — HTML file tabs and dashboard htmlDoc panes. Inline JS runs
@@ -102,6 +113,9 @@ export function frameSandbox(profile: FrameProfile): string {
   return SANDBOX[profile]
 }
 
+/** First element of every profile's head: no DNS prefetching. */
+export const DNS_PREFETCH_OFF_META = '<meta http-equiv="x-dns-prefetch-control" content="off">'
+
 /** The `<meta>` tag the helper injects. Exported for tests. */
 export function frameCspMeta(profile: FrameProfile, opts?: FrameCspOptions): string {
   return `<meta http-equiv="Content-Security-Policy" content="${frameCsp(profile, opts)}">`
@@ -116,8 +130,10 @@ export function frameCspMeta(profile: FrameProfile, opts?: FrameCspOptions): str
 const LEADING_DOCTYPE = /^﻿?[\t\n\f\r ]*<!doctype\b[^>]*>/i
 
 /**
- * Wrap untrusted HTML for `<iframe srcdoc>`: the CSP meta becomes the first
- * element the parser sees, before any script, style or resource in `html`.
+ * Wrap untrusted HTML for `<iframe srcdoc>`: the dns-prefetch-off meta and
+ * then the CSP meta are the first elements the parser sees, before any
+ * script, style or resource in `html`. The `scripted` profile then runs the
+ * sealed-frame guard (inline, allowed by its own `'unsafe-inline'`).
  * Placed after a leading `<!doctype …>` so standards-mode docs stay in
  * standards mode (a meta before the doctype would force quirks).
  *
@@ -126,7 +142,8 @@ const LEADING_DOCTYPE = /^﻿?[\t\n\f\r ]*<!doctype\b[^>]*>/i
  * any of `html`, so K2's runtime exists before the widget's first script.
  */
 export function frameSrcDoc(html: string, profile: FrameProfile, opts?: FrameCspOptions & { prelude?: string }): string {
-  const head = frameCspMeta(profile, opts) + (opts?.prelude ?? '')
+  const guard = profile === 'scripted' ? `<script>${SEALED_FRAME_GUARD}</script>` : ''
+  const head = DNS_PREFETCH_OFF_META + frameCspMeta(profile, opts) + guard + (opts?.prelude ?? '')
   const m = LEADING_DOCTYPE.exec(html)
   if (m) return m[0] + head + html.slice(m[0].length)
   return head + html

@@ -200,6 +200,7 @@ async fn ship_pass(node: &Node, tracks: &Tracks, tx: &mpsc::Sender<Frame>) -> Re
                     exit: None,
                     src: None,
                     log_seq: 0,
+                    outputs: None,
                 });
                 tx.send(f).await.map_err(|_| ())?;
             }
@@ -469,6 +470,14 @@ where
                 tokio::spawn(async move {
                     let r = crate::admin::courier::keys(n, k).await;
                     let _ = t.send(Frame::AdminResult(r)).await;
+                });
+            }
+            Frame::ArtifactGet(g) => {
+                // Streamed from a blocking thread; the bounded queue paces it.
+                let (n, t) = (node.clone(), tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    let known = n.ledger.lock().unwrap().get(&g.job_id, g.generation).ok().flatten().map(|r| r.outputs.map(|o| o.artifacts).unwrap_or_default());
+                    crate::artifacts::answer(n.layout(), &g, known.as_deref(), &mut |f| t.blocking_send(f).is_ok());
                 });
             }
             Frame::UpdateOffer(o) => crate::admin::courier::update_offer(&node, &tx, o),

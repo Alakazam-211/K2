@@ -231,6 +231,8 @@ export function settingsNav({
       title: 'Cores',
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
+        // Sew, run on this box (Rosson 2026-10-15); `k2 hostchat` lands with S27–S32.
+        { label: 'Chat Hosting', soon: true },
         { id: 'data', label: 'Database' },
         { id: 'skin-access', label: 'Apps', beta: true },
       ],

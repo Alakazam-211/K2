@@ -1031,6 +1031,12 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",
+    // Sew on K2 (S29 K12, person-only steps): purging all Sew data,
+    // revealing the master recovery key, dropping the retiring master key
+    // after a rotation. `secretId` = the Sew install id (or `none`).
+    "sew-purge",
+    "sew-recovery-key",
+    "sew-drop-prev",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

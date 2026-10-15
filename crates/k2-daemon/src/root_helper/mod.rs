@@ -517,6 +517,7 @@ pub fn status_json(
             "pg": PG_MIN_PROTOCOL,
             "keep": KEEP_MIN_PROTOCOL,
             "apps": k2_root_proto::version::APPS_MIN_PROTOCOL,
+            "sew": k2_root_proto::version::SEW_MIN_PROTOCOL,
         },
         "autoHeal": heal::status_value(),
         "plainSudoRestartUsed": plain_sudo_restart_used().load(std::sync::atomic::Ordering::SeqCst),

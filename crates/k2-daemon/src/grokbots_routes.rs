@@ -26,20 +26,25 @@
 //! - `GET  /cli/grokbots/detect`   → `{installed, dataPath, agents}`
 //! - `GET  /cli/grokbots/list`     → `{enabled, sendEnabled, status, agents}`
 //! - `GET  /cli/grokbots/status`   → `{enabled, sendEnabled, status}`
-//! - `GET  /cli/grokbots/thread?agent=<id>&since=<seq>&limit=<n>` → `ThreadPage`
-//!   (+ `stale: true, liveTail: {sinceMs, entries}` for a stale bot, below)
+//! - `GET  /cli/grokbots/thread?agent=<id>&since=<seq>&limit=<n>` → the
+//!   bot's collected Thread: `{agent, addr, conversationId, supported,
+//!   messages, nextSince, hasMoreBefore, stale?}` (`seq` = Thread seq)
 //! - `POST /cli/grokbots/send`     `{agent, text}` → `{ok, clientNonce}`
+//! - `GET  /cli/thread?addr=gb:<name>` (the dispatcher hands a `gb:`
+//!   address here, [`thread_by_addr`]) → the same Thread in the overlay
+//!   snapshot shape, so `k2 thread gb:<name>` reads it. Same gates.
 //!
-//! A **stale** bot's live conversation runs outside this computer (another
-//! box, Grok's cloud): its local chat store is old and Grok Bot's gateway
-//! has no transcript endpoint. Sends still go through (the gateway delivers
-//! them to the live conversation), so `send` is allowed and records the
-//! line in the bot's live tail (`k2_core::external_agents::live_tail`). The
-//! poller records each new latest entry the roster reports. `thread`
-//! returns the old local history plus that tail after it; `list` shows the
-//! tail's newest line as the bot's preview. The tail is only what the
-//! roster summary exposed (the latest entry at each poll): a burst between
-//! two polls shows only its last line, marked as a possible gap.
+//! **Collected Threads.** K2 keeps every Grok Bot message it sees in its
+//! own Thread store, one conversation per bot (`gb:<name>`, see
+//! `k2_core::external_agents::collect`): from the moment collection starts
+//! (a start line), new `store.db` rows for a bot whose chat is on this
+//! computer, each new latest roster entry for a **stale** bot (live
+//! conversation elsewhere; gap lines where some may be missing), and every
+//! send made here. The poller collects headless; `thread` also collects
+//! before it reads (a read never waits for the poller). Older history in
+//! Grok Bot's `store.db` is not shown. Collected Threads never wake an
+//! agent, reach a PTY or federate; agents and App guests can't read them
+//! (`/cli/thread` on a cell socket answers 403 for `gb:`).
 //!
 //! A send reaches Grok Bot as `[from <name>] <text>`, so the bot knows who
 //! wrote. The name comes from the credential, never the body (the same
@@ -55,8 +60,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
+use k2_core::external_agents::collect;
 use k2_core::external_agents::grokbot::{self, GrokBot};
-use k2_core::external_agents::live_tail;
 use k2_core::external_agents::rate_limit::SendLimiter;
 use k2_core::external_agents::settings::{self, LocalGrokBotsSettings};
 use k2_core::external_agents::{ExtError, ExternalAgentProvider};
@@ -273,7 +278,7 @@ fn list() -> CliResponse {
         Err(e) => return ext_err(e),
     };
     for a in agents.iter_mut().filter(|a| a.stale) {
-        if let Some(text) = live_preview(a) {
+        if let Some(text) = collected_preview(a) {
             a.last_message_preview = Some(text);
         }
     }
@@ -327,59 +332,205 @@ fn thread(params: &HashMap<String, String>) -> CliResponse {
     };
     let limit = match params.get("limit").filter(|v| !v.is_empty()) {
         Some(v) => match v.parse::<usize>() {
-            Ok(n) => n,
+            Ok(n) => n.clamp(1, grokbot::MAX_PAGE),
             Err(_) => return refuse("400 Bad Request", "bad_input", "limit must be a number"),
         },
         None => 100,
     };
+    if !k2_core::external_agents::valid_agent_id(agent) {
+        return refuse("400 Bad Request", "bad_input", "invalid agent id");
+    }
     let p = provider();
-    match p.read_thread(agent, since, limit) {
-        Ok(page) => {
-            let mut v = serde_json::to_value(&page).unwrap_or(J::Null);
-            if let Some(o) = v.as_object_mut() {
-                o.insert("ok".into(), J::Bool(true));
-                o.insert("agent".into(), J::String(agent.clone()));
-                if let Some(tail) = stale_live_tail(&p, agent) {
-                    o.insert("stale".into(), J::Bool(true));
-                    o.insert(
-                        "liveTail".into(),
-                        serde_json::to_value(&tail).unwrap_or(J::Null),
-                    );
-                }
-            }
-            resp("200 OK", v)
+    let bot = match collect_now(&p, agent) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    // After a cursor: everything newer (no line skipped); else the newest
+    // `limit`.
+    let page = match collect::page(agent, since, None, if since.is_some() { 0 } else { limit }) {
+        Ok(pg) => pg,
+        Err(e) => return CliResponse::internal_error(format!("read Thread: {e}")),
+    };
+    let next_since = page
+        .items
+        .iter()
+        .map(|i| i.seq)
+        .max()
+        .unwrap_or(since.unwrap_or(0))
+        .max(since.unwrap_or(0));
+    let messages: Vec<J> = page.items.iter().map(collect::message_json).collect();
+    let mut v = json!({
+        "ok": true,
+        "agent": agent,
+        "addr": collect::address(&bot.name),
+        "conversationId": collect::conversation_id(agent),
+        "supported": bot.unsupported.is_none(),
+        "messages": messages,
+        "nextSince": next_since,
+        "hasMoreBefore": since.is_none() && page.has_more,
+    });
+    if let Some(r) = bot.unsupported {
+        v["reason"] = J::String(r);
+    }
+    if bot.stale {
+        v["stale"] = J::Bool(true);
+    }
+    resp("200 OK", v)
+}
+
+/// What a read learned about the bot while collecting.
+struct Bot {
+    name: String,
+    stale: bool,
+    unsupported: Option<String>,
+}
+
+/// Collect what's new for `agent` before a read (a read never waits for
+/// the poller), and tell other clients when that changed the Thread. A bot
+/// the roster no longer lists still reads its collected Thread; one K2
+/// never collected is 404.
+fn collect_now(p: &GrokBot, agent: &str) -> Result<Bot, CliResponse> {
+    let roster = match p.list_agents() {
+        Ok(l) => l,
+        Err(ExtError::NotInstalled) => Vec::new(),
+        Err(e) => return Err(ext_err(e)),
+    };
+    let names: HashMap<String, String> = roster.iter().map(|a| (a.id.clone(), a.name.clone())).collect();
+    if let Ok(moved) = collect::migrate_legacy_tail(p, &names) {
+        for id in moved {
+            crate::grokbots_watch::announce_agent(&id);
         }
-        Err(e) => ext_err(e),
     }
-}
-
-/// For a stale bot: its live tail, freshly topped up from the roster (so a
-/// read never waits for the poller). `None` when the bot is not stale or
-/// the gateway can't be asked (then the page is the local history alone).
-fn stale_live_tail(p: &GrokBot, agent: &str) -> Option<live_tail::LiveTail> {
-    let roster = p.list_agents().ok()?;
-    let a = roster.into_iter().find(|a| a.id == *agent && a.stale)?;
     let now = chrono::Utc::now().timestamp_millis();
-    if let Some(live) = &a.live {
-        live_tail::observe(agent, live, now, |id| {
-            p.store_has_entry(agent, id) == Some(true)
-        });
+    match roster.iter().find(|a| a.id.eq_ignore_ascii_case(agent)) {
+        Some(a) => {
+            let synced = collect::sync_agent(p, a, true, now)
+                .map_err(|e| CliResponse::internal_error(format!("collect: {e}")))?;
+            if synced.changed {
+                crate::grokbots_watch::announce_agent(&a.id);
+            }
+            Ok(Bot {
+                name: a.name.clone(),
+                stale: a.stale,
+                unsupported: synced.unsupported,
+            })
+        }
+        None => match collect::started(agent) {
+            Ok(true) => Ok(Bot {
+                name: collect::page(agent, None, Some(2), 1)
+                    .ok()
+                    .and_then(|pg| pg.items.first().and_then(|i| i.doc.to.clone()))
+                    .and_then(|to| collect::parse_addr(&to).map(str::to_string))
+                    .unwrap_or_else(|| grokbot::fallback_name_for(agent)),
+                stale: false,
+                unsupported: None,
+            }),
+            Ok(false) => Err(ext_err(ExtError::UnknownAgent(agent.to_string()))),
+            Err(e) => Err(CliResponse::internal_error(format!("read Thread: {e}"))),
+        },
     }
-    Some(live_tail::tail(agent).unwrap_or(live_tail::LiveTail {
-        since_ms: now,
-        entries: Vec::new(),
-    }))
 }
 
-/// A stale bot's row preview: the tail's newest line when it is at least as
-/// new as the roster's own latest activity (a K2 send just made, a reply
-/// the poller saw). Otherwise the roster's preview stands.
-fn live_preview(a: &k2_core::external_agents::ExternalAgent) -> Option<String> {
-    let newest = live_tail::newest(&a.id)?;
-    if a.last_activity_at.is_some_and(|t| newest.at_ms < t) {
+/// A stale bot's row preview: the newest collected line when it is at
+/// least as new as the roster's own latest activity (a K2 send just made, a
+/// reply the poller saw). Otherwise the roster's preview stands.
+fn collected_preview(a: &k2_core::external_agents::ExternalAgent) -> Option<String> {
+    let (at, text) = collect::newest_line(&a.id)?;
+    if a.last_activity_at.is_some_and(|t| at < t) {
         return None;
     }
-    grokbot::clean_preview(&newest.text)
+    grokbot::clean_preview(&text)
+}
+
+/// `gb:<name>` / `gb:<agent id>` → the bot's agent id (and its name).
+fn resolve_gb(p: &GrokBot, wanted: &str) -> Result<(String, String), CliResponse> {
+    let roster = match p.list_agents() {
+        Ok(l) => l,
+        Err(ExtError::NotInstalled) => Vec::new(),
+        Err(e) => return Err(ext_err(e)),
+    };
+    if let Some(a) = roster.iter().find(|a| a.id.eq_ignore_ascii_case(wanted)) {
+        return Ok((a.id.clone(), a.name.clone()));
+    }
+    let named: Vec<_> = roster
+        .iter()
+        .filter(|a| a.name.eq_ignore_ascii_case(wanted))
+        .collect();
+    match named.as_slice() {
+        [a] => Ok((a.id.clone(), a.name.clone())),
+        [] if k2_core::external_agents::valid_agent_id(wanted)
+            && collect::started(wanted).unwrap_or(false) =>
+        {
+            Ok((wanted.to_string(), wanted.to_string()))
+        }
+        [] => Err(refuse(
+            "404 Not Found",
+            "unknown_agent",
+            format!("no Grok Bot named '{wanted}' on this server"),
+        )),
+        many => Err(refuse(
+            "409 Conflict",
+            "ambiguous_agent",
+            format!(
+                "several Grok Bots are named '{wanted}': use gb:<id> with one of {}",
+                many.iter().map(|a| a.id.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        )),
+    }
+}
+
+/// Whether `/cli/thread` should hand `addr` to [`thread_by_addr`].
+pub fn is_gb_addr(addr: &str) -> bool {
+    collect::parse_addr(addr).is_some()
+}
+
+/// `GET /cli/thread?addr=gb:<name>` for a TCP caller: the bot's collected
+/// Thread in the overlay snapshot shape (`k2 thread gb:<name>`). Same
+/// gates as the Grok Bots routes (people only, Show on). Paging like
+/// `/cli/thread`: `since_seq`, `before_seq`, `limit` (default 25, `0` =
+/// all, at most 500).
+pub fn thread_by_addr(who: Who, params: &HashMap<String, String>) -> CliResponse {
+    if !is_human(&who) {
+        return humans_only();
+    }
+    if !settings::load().show {
+        return show_off();
+    }
+    let addr = params.get("addr").map(String::as_str).unwrap_or("");
+    let Some(wanted) = collect::parse_addr(addr) else {
+        return refuse("400 Bad Request", "bad_input", "addr must be gb:<bot name>");
+    };
+    let p = provider();
+    let (id, _) = match resolve_gb(&p, wanted) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let bot = match collect_now(&p, &id) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let num = |k: &str| params.get(k).and_then(|v| v.parse::<i64>().ok());
+    let limit = match num("limit") {
+        None => 25,
+        Some(0) => 0,
+        Some(n) if n < 0 => 25,
+        Some(n) => (n as usize).clamp(1, 500),
+    };
+    match collect::page(&id, num("since_seq"), num("before_seq"), limit) {
+        Ok(page) => resp(
+            "200 OK",
+            json!({
+                "ok": true,
+                "collection": "thread",
+                "addr": collect::address(&bot.name),
+                "conversation_id": collect::conversation_id(&id),
+                "items": page.items,
+                "has_more": page.has_more,
+                "pastAddresses": [],
+            }),
+        ),
+        Err(e) => CliResponse::internal_error(format!("read Thread: {e}")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -428,8 +579,10 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
             }),
         );
     }
-    let prompt = from_envelope(&sender_name(who), &b.text);
-    match provider().send(&b.agent, &prompt) {
+    let sender = sender_name(who);
+    let prompt = from_envelope(&sender, &b.text);
+    let p = provider();
+    match p.send(&b.agent, &prompt) {
         Ok(r) => {
             log_debug!(
                 "[grokbots] send to {} by {} ({} bytes{})",
@@ -438,11 +591,20 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
                 b.text.len(),
                 if r.agent_stale { ", stale" } else { "" }
             );
-            if r.agent_stale {
-                // Its local store won't show this line: the live tail does.
-                live_tail::record_own_send(&b.agent, &r.client_nonce, &prompt, now);
-                crate::grokbots_watch::announce_agent(&b.agent);
+            // Into the bot's Thread at once (linked later to the line Grok
+            // Bot reports for it, so it never shows twice).
+            if let Err(e) = collect::record_own_send(
+                &p,
+                &b.agent,
+                &r.client_nonce,
+                &prompt,
+                &sender,
+                Some(post_author(who)),
+                now,
+            ) {
+                log_debug!("[grokbots] send to {} not recorded in its Thread: {e}", b.agent);
             }
+            crate::grokbots_watch::announce_agent(&b.agent);
             crate::grokbots_watch::nudge_agent(&b.agent);
             resp(
                 "200 OK",
@@ -474,6 +636,17 @@ fn sender_name(who: &Who) -> String {
         _ => String::new(),
     };
     clean_from_name(&raw).unwrap_or_else(|| "the owner".to_string())
+}
+
+/// Who sent, as the Thread line's `author` (the credential, like a Thread
+/// post's).
+fn post_author(who: &Who) -> k2_core::overlay::PostAuthor {
+    match who {
+        Who::Login { username, .. } => k2_core::overlay::PostAuthor::user(username),
+        _ => k2_core::overlay::PostAuthor::owner_named(
+            &k2_core::app_settings::load().owner_display_name.unwrap_or_default(),
+        ),
+    }
 }
 
 /// A name safe inside `[from <name>]`: no `[`, `]`, line breaks or other

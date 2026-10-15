@@ -9201,6 +9201,10 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
 sales = live alias for pinned Chat now. sales/reviewer is durable.
 
+gb:<bot name> (or gb:<agent id>) reads a local Grok Bot's collected messages:
+people signed in to this server only, while Local Grok Bots → Show is on. Agents
+and App guests get 403, and nobody posts there (message the bot from its chat).
+
 Post and continue; you get a later turn when they answer. Do not --wait. Do not
 emit widget JSON.
 

@@ -7,8 +7,8 @@ import {
   grokK2Sender,
   grokRowStatus,
   isGrokBotAddress,
-  grokLiveDividerText,
-  grokLiveEntryAsMessage,
+  grokStaleBannerText,
+  grokStartText,
   mergeGrokMessages,
   parseGrokList,
   parseGrokThread,
@@ -117,33 +117,38 @@ describe('parsing', () => {
     expect(l.agents[1]).toMatchObject({ stale: false, lastMessagePreview: null, lastActivityAt: null, localActivityAt: null })
   })
 
-  it("reads a stale bot's live tail; a page without one is unchanged", () => {
+  it("reads a bot's collected Thread: start and gap lines, previews, K2 sends", () => {
     const p = parseGrokThread({
       supported: true,
-      messages: [{ seq: 1, author: 'agent', text: 'old' }],
       stale: true,
-      liveTail: {
-        sinceMs: 1_792_070_000_000,
-        entries: [
-          { id: 'r1', author: 'agent', text: 'Shipped.', atMs: 1_792_070_010_000 },
-          { id: 'k2-n', author: 'human', text: '[from Pat] go', atMs: 1_792_070_020_000, viaK2: true },
-          { id: 'r2', author: 'agent', text: 'Done.', atMs: 1_792_070_030_000, gapBefore: true, previewOnly: true },
-          { id: 'bad', author: 'agent' },
-          { author: 'agent', text: 'no id' },
-        ],
-      },
+      addr: 'gb:Grok',
+      messages: [
+        { seq: 1, author: 'system', system: 'start', text: 'K2 started collecting…', atMs: 1_792_070_000_000 },
+        { seq: 2, author: 'human', text: '[from Pat] go', atMs: 1_792_070_020_000, viaK2: true },
+        { seq: 3, author: 'system', system: 'gap', text: '… earlier messages not shown — open Grok Bot' },
+        { seq: 4, author: 'agent', text: 'Done.', atMs: 1_792_070_030_000, previewOnly: true },
+        { seq: 5, author: 'agent', system: 'bogus', text: 'plain' },
+      ],
     })
+    expect(p.addr).toBe('gb:Grok')
     expect(p.stale).toBe(true)
-    expect(p.liveTail?.sinceMs).toBe(1_792_070_000_000)
-    expect(p.liveTail?.entries.map((e) => e.id)).toEqual(['r1', 'k2-n', 'r2'])
-    expect(p.liveTail?.entries[1]).toMatchObject({ author: 'human', viaK2: true, gapBefore: false })
-    expect(p.liveTail?.entries[2]).toMatchObject({ gapBefore: true, previewOnly: true })
-    // A K2 send in the tail reads its sender like any K2 line.
-    expect(grokK2Sender(grokLiveEntryAsMessage(p.liveTail!.entries[1]))).toEqual({ from: 'Pat', text: 'go' })
+    expect(p.messages.map((m) => `${m.seq}:${m.author}:${m.system ?? '-'}`)).toEqual([
+      '1:system:start',
+      '2:human:-',
+      '3:system:gap',
+      '4:agent:-',
+      '5:agent:-',
+    ])
+    expect(p.messages[3].previewOnly).toBe(true)
+    // A K2 send reads its sender like any K2 line.
+    expect(grokK2Sender(p.messages[1])).toEqual({ from: 'Pat', text: 'go' })
     const plain = parseGrokThread({ supported: true, messages: [] })
+    expect(plain.addr).toBeNull()
     expect(plain.stale).toBe(false)
-    expect(plain.liveTail).toBeNull()
-    expect(grokLiveDividerText(1_792_070_000_000)).toMatch(/^Live since .+ — older history above may be out of date$/)
+    expect(grokStartText('Grok', 1_792_070_000_000)).toMatch(/^K2 started collecting Grok's messages here on .+\.$/)
+    expect(grokStaleBannerText('Grok')).toBe(
+      "Grok's conversation runs outside this computer; K2 shows each new message as it arrives.",
+    )
   })
 
   it('merges pages by seq, a later read replaces the line', () => {
@@ -196,6 +201,8 @@ describe('grokK2Sender', () => {
     viaK2: true,
     openInApp: null,
     card: null,
+    system: null,
+    previewOnly: false,
     ...over,
   })
 

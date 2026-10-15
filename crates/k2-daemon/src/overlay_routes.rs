@@ -48,7 +48,7 @@ fn record_test_inject(line: &str) {
 }
 
 #[cfg(test)]
-fn recorded_injects() -> Vec<String> {
+pub(crate) fn recorded_injects() -> Vec<String> {
     TEST_INJECTS.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
@@ -114,6 +114,17 @@ fn forbidden(hint: impl std::fmt::Display) -> CliResponse {
     error_json("403 Forbidden", "forbidden", hint)
 }
 
+/// Any Thread use of a `gb:` address other than a person's read.
+fn gb_refused() -> CliResponse {
+    error_json(
+        "403 Forbidden",
+        "grokbots_humans_only",
+        "gb: Threads hold a Grok Bot's messages for people signed in to this server: \
+         agents and App guests can't read them, and nobody posts there (message the bot \
+         from its chat in K2).",
+    )
+}
+
 fn skin_room_denied() -> CliResponse {
     crate::skin_routes::skin_room_response()
 }
@@ -155,6 +166,9 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
     let addr = addr.trim();
     if addr.is_empty() {
         return Err(usage("missing addr"));
+    }
+    if crate::grokbots_routes::is_gb_addr(addr) {
+        return Err(gb_refused());
     }
     if k2_core::workspace_session_handles::split_workspace_handle(addr).is_some() {
         return Err(skin_room_denied());
@@ -220,6 +234,13 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     let addr = addr.trim();
     if addr.is_empty() {
         return Err(usage("missing addr"));
+    }
+    // `gb:<name>`: a Grok Bot's collected Thread. People read it over TCP
+    // (the dispatcher hands it to `grokbots_routes::thread_by_addr`);
+    // everything that lands here (an agent's cell socket, a post, a
+    // card, Chatter, `thread/latest`) is refused: no wake, no inject.
+    if crate::grokbots_routes::is_gb_addr(addr) {
+        return Err(gb_refused());
     }
     let canonical_alias =
         k2_core::workspace_session_handles::split_workspace_handle(addr).is_none();

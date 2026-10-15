@@ -250,7 +250,7 @@ describe('chat view', () => {
     expect(typed.textContent).toContain('You')
   })
 
-  it('a stale bot shows the banner, the old history, then the live tail under a divider, and still sends', async () => {
+  it('a stale bot shows the banner, then its collected Thread with start and gap lines, and still sends', async () => {
     cli.list = listWith({
       sendEnabled: true,
       agents: [
@@ -262,50 +262,52 @@ describe('chat view', () => {
         }),
       ],
     })
+    const started = Date.now() - 3 * 3600_000
     cli.thread = {
-      ...THREAD,
+      ok: true,
+      supported: true,
       stale: true,
-      liveTail: {
-        sinceMs: Date.now() - 3 * 3600_000,
-        entries: [
-          { id: 'r1', author: 'agent', text: 'Shipped the October report.', atMs: Date.now() - 3 * 3600_000 },
-          { id: 'k2-n1', author: 'human', text: '[from Rosson Test] send it to the board', atMs: Date.now() - 2.5 * 3600_000, viaK2: true },
-          { id: 'r2', author: 'agent', text: 'Done: report sent.', atMs: Date.now() - 2 * 3600_000, gapBefore: true },
-        ],
-      },
+      addr: 'gb:Grok',
+      nextSince: 5,
+      hasMoreBefore: false,
+      messages: [
+        { seq: 1, author: 'system', system: 'start', text: 'K2 started collecting', atMs: started },
+        { seq: 2, author: 'agent', text: 'Shipped the October report.', atMs: started + 60_000 },
+        { seq: 3, author: 'human', text: '[from Rosson Test] send it to the board', atMs: started + 120_000, viaK2: true },
+        { seq: 4, author: 'system', system: 'gap', text: '… earlier messages not shown — open Grok Bot', atMs: started + 180_000 },
+        { seq: 5, author: 'agent', text: 'Done: report sent.', atMs: started + 180_000, previewOnly: true },
+      ],
     }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     const banner = await screen.findByTestId('grokbot-stale-banner')
-    expect(banner.textContent).toContain("Grok's latest conversation runs outside this computer.")
-    expect(banner.textContent).toContain('Showing history up to')
+    expect(banner.textContent).toContain(
+      "Grok's conversation runs outside this computer; K2 shows each new message as it arrives.",
+    )
+    expect(banner.textContent).not.toContain('Showing history up to')
     expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Done: report sent.')
-    // Old local history first, then the divider, then the live lines.
-    await screen.findByText('Build is green.')
-    const divider = screen.getByTestId('grokbot-live-divider')
-    expect(divider.textContent).toMatch(/^Live since .+ — older history above may be out of date$/)
-    const all = screen.getAllByTestId('grokbot-message')
-    expect(all).toHaveLength(7)
-    const live = screen.getAllByTestId('grokbot-live-entry')
-    expect(live.map((e) => e.getAttribute('data-live-id'))).toEqual(['r1', 'k2-n1', 'r2'])
-    const history = screen.getByText('Build is green.')
-    expect(history.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(divider.compareDocumentPosition(live[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // Normal bubbles: the agent's reply, and K2's own line with its sender.
-    expect(live[0].textContent).toContain('Shipped the October report.')
-    expect(live[1].textContent).toContain('Rosson Test')
-    expect(live[1].textContent).toContain('send it to the board')
-    expect(live[1].textContent).toContain('sent from K2')
-    expect(live[1].textContent).not.toContain('[from Rosson Test]')
-    // A gap marker only where lines may be missing.
-    const gaps = screen.getAllByTestId('grokbot-live-gap')
+    // The Thread starts where collection started: no older history block.
+    const start = await screen.findByTestId('grokbot-start-line')
+    expect(start.textContent).toMatch(/^K2 started collecting Grok's messages here on .+\.$/)
+    const bubbles = screen.getAllByTestId('grokbot-message')
+    expect(bubbles).toHaveLength(3)
+    expect(start.compareDocumentPosition(bubbles[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(bubbles[0].textContent).toContain('Shipped the October report.')
+    // K2's own line with its sender, without the stamp.
+    expect(bubbles[1].textContent).toContain('Rosson Test')
+    expect(bubbles[1].textContent).toContain('send it to the board')
+    expect(bubbles[1].textContent).toContain('sent from K2')
+    expect(bubbles[1].textContent).not.toContain('[from Rosson Test]')
+    // A gap line only where lines may be missing, right before that line.
+    const gaps = screen.getAllByTestId('grokbot-gap-line')
     expect(gaps).toHaveLength(1)
-    expect(live[2].contains(gaps[0])).toBe(true)
     expect(gaps[0].textContent).toBe('… earlier messages not shown — open Grok Bot')
+    expect(gaps[0].compareDocumentPosition(bubbles[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(bubbles[2].textContent).toContain('preview, open Grok Bot for the full message')
+    expect(screen.queryByTestId('grokbot-empty')).toBeNull()
 
     // The compose box works, with a note about where replies come from.
-    expect(screen.queryByTestId('grokbot-compose-stale')).toBeNull()
     expect(screen.getByTestId('grokbot-compose-stale-note').textContent).toBe(
-      "Replies come from Grok Bot's live conversation; older history on this computer may be out of date.",
+      "Your message reaches Grok Bot's live conversation; K2 shows each new reply as it arrives.",
     )
     const input = screen.getByTestId('grokbot-compose-input') as HTMLTextAreaElement
     expect(input.disabled).toBe(false)
@@ -316,20 +318,30 @@ describe('chat view', () => {
     expect(cli.posts).toEqual([{ route: 'grokbots/send', body: { agent: ID, text: 'thanks' } }])
   })
 
-  it("a new live line from the server's change event shows up", async () => {
+  it("a new collected line from the server's change event shows up", async () => {
     cli.list = listWith({ agents: [item(ID, 'Grok', { stale: true })] })
-    const entry = (id: string, text: string): Record<string, unknown> => ({ id, author: 'agent', text, atMs: Date.now() })
-    cli.thread = { ...THREAD, stale: true, liveTail: { sinceMs: Date.now(), entries: [entry('r1', 'first')] } }
+    const start = { seq: 1, author: 'system', system: 'start', text: 's', atMs: Date.now() }
+    const line = (seq: number, text: string): Record<string, unknown> => ({ seq, author: 'agent', text, atMs: Date.now() })
+    cli.thread = { ok: true, supported: true, stale: true, nextSince: 2, messages: [start, line(2, 'first')] }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     await screen.findByText('first')
-    cli.thread = {
-      ...THREAD,
-      stale: true,
-      liveTail: { sinceMs: Date.now(), entries: [entry('r1', 'first'), entry('r2', 'second')] },
-    }
+    cli.thread = { ok: true, supported: true, stale: true, nextSince: 3, messages: [start, line(2, 'first'), line(3, 'second')] }
     act(() => useGrokBotsStore.getState().noteChange('local'))
     await screen.findByText('second')
-    expect(screen.getAllByTestId('grokbot-live-entry')).toHaveLength(2)
+    expect(screen.getAllByTestId('grokbot-message')).toHaveLength(2)
+    expect(screen.getAllByTestId('grokbot-start-line')).toHaveLength(1)
+  })
+
+  it('a Thread with only its start line says no messages yet', async () => {
+    cli.thread = {
+      ok: true,
+      supported: true,
+      nextSince: 1,
+      messages: [{ seq: 1, author: 'system', system: 'start', text: 's', atMs: Date.now() }],
+    }
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    expect((await screen.findByTestId('grokbot-empty')).textContent).toBe('No messages yet')
+    expect(screen.getByTestId('grokbot-start-line').textContent).toContain('K2 started collecting Cortana')
   })
 
   it('a current bot has no stale banner', async () => {
@@ -338,7 +350,7 @@ describe('chat view', () => {
     await screen.findByTestId('grokbot-compose')
     expect(screen.queryByTestId('grokbot-stale-banner')).toBeNull()
     expect(screen.queryByTestId('grokbot-compose-stale-note')).toBeNull()
-    expect(screen.queryByTestId('grokbot-live-divider')).toBeNull()
+    expect(screen.queryByTestId('grokbot-start-line')).toBeNull()
   })
 
   it('an unknown chat layout says "Open it in Grok Bot" instead of breaking', async () => {

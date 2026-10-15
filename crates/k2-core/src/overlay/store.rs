@@ -26,6 +26,15 @@ const CHATTERLOG: TableDefinition<&str, &str> = TableDefinition::new("chatterlog
 /// whose card closed earlier is dropped when its time comes.
 const CARD_EXPIRY: TableDefinition<&str, &str> = TableDefinition::new("card_expiry");
 
+/// Collected conversations (lines K2 gathers from an outside agent
+/// product, e.g. a local Grok Bot): `{conv}/{product entry id}` → doc id.
+/// The dedupe index: a line the product reports again (or under a second
+/// id) updates or links the one doc instead of adding another.
+const EXT_IDS: TableDefinition<&str, &str> = TableDefinition::new("ext_ids");
+/// Collected conversations: `{conv}` → the collector's JSON cursor
+/// (high-water marks, counters). Never a token.
+const EXT_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("ext_state");
+
 static DB: OnceLock<Result<Database, String>> = OnceLock::new();
 
 fn store_path() -> PathBuf {
@@ -787,4 +796,188 @@ fn move_collection(
         moved: old.len(),
         total: rows.len(),
     })
+}
+
+// ── collected conversations ─────────────────────────────────────────────
+
+fn ext_key(conversation_id: &str, ext_id: &str) -> String {
+    format!("{conversation_id}/{ext_id}")
+}
+
+/// One write transaction on a collected conversation (see [`ext_write`]).
+/// Seqs are allocated from the conversation's own `thread` range (these
+/// conversations have no SQLite catalog row: they belong to no workspace).
+pub struct ExtTxn<'a> {
+    txn: &'a redb::WriteTransaction,
+    conv: String,
+    wrote: bool,
+}
+
+impl ExtTxn<'_> {
+    pub fn conversation_id(&self) -> &str {
+        &self.conv
+    }
+
+    /// The collector's cursor JSON.
+    pub fn state(&self) -> Result<Option<Vec<u8>>, String> {
+        let t = self
+            .txn
+            .open_table(EXT_STATE)
+            .map_err(|e| format!("overlay open ext_state: {e}"))?;
+        let out = t
+            .get(self.conv.as_str())
+            .map_err(|e| format!("overlay get ext_state: {e}"))?
+            .map(|g| g.value().to_vec());
+        Ok(out)
+    }
+
+    pub fn set_state(&mut self, json: &[u8]) -> Result<(), String> {
+        let mut t = self
+            .txn
+            .open_table(EXT_STATE)
+            .map_err(|e| format!("overlay open ext_state: {e}"))?;
+        t.insert(self.conv.as_str(), json)
+            .map_err(|e| format!("overlay insert ext_state: {e}"))?;
+        self.wrote = true;
+        Ok(())
+    }
+
+    /// The doc a product id names in this conversation.
+    pub fn lookup(&self, ext_id: &str) -> Result<Option<String>, String> {
+        let t = self
+            .txn
+            .open_table(EXT_IDS)
+            .map_err(|e| format!("overlay open ext_ids: {e}"))?;
+        let out = t
+            .get(ext_key(&self.conv, ext_id).as_str())
+            .map_err(|e| format!("overlay get ext_ids: {e}"))?
+            .map(|g| g.value().to_string());
+        Ok(out)
+    }
+
+    pub fn doc(&self, doc_id: &str) -> Result<Option<OverlayDoc>, String> {
+        let t = self
+            .txn
+            .open_table(DOCS)
+            .map_err(|e| format!("overlay open docs: {e}"))?;
+        let out = match t.get(doc_id).map_err(|e| format!("overlay get doc: {e}"))? {
+            Some(g) => Some(
+                serde_json::from_slice::<OverlayDoc>(g.value())
+                    .map_err(|e| format!("overlay doc parse {doc_id}: {e}"))?,
+            ),
+            None => None,
+        };
+        Ok(out)
+    }
+
+    /// Rewrite a doc in place (its seq and ids stay).
+    pub fn put_doc(&mut self, doc: &OverlayDoc) -> Result<(), String> {
+        let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
+        let mut t = self
+            .txn
+            .open_table(DOCS)
+            .map_err(|e| format!("overlay open docs: {e}"))?;
+        t.insert(doc.id.as_str(), json.as_slice())
+            .map_err(|e| format!("overlay insert docs: {e}"))?;
+        self.wrote = true;
+        Ok(())
+    }
+
+    /// Point another product id at an existing doc.
+    pub fn alias(&mut self, ext_id: &str, doc_id: &str) -> Result<(), String> {
+        let mut t = self
+            .txn
+            .open_table(EXT_IDS)
+            .map_err(|e| format!("overlay open ext_ids: {e}"))?;
+        t.insert(ext_key(&self.conv, ext_id).as_str(), doc_id)
+            .map_err(|e| format!("overlay insert ext_ids: {e}"))?;
+        self.wrote = true;
+        Ok(())
+    }
+
+    /// Append `doc` as the conversation's next Thread line and index it
+    /// under `ext_ids`. Returns its seq.
+    pub fn append(&mut self, doc: &OverlayDoc, ext_ids: &[&str]) -> Result<i64, String> {
+        let seq = {
+            let t = self
+                .txn
+                .open_table(THREAD)
+                .map_err(|e| format!("overlay open thread: {e}"))?;
+            let start = format!("{}/", self.conv);
+            let end = conv_end(&self.conv);
+            let mut range = t
+                .range(start.as_str()..end.as_str())
+                .map_err(|e| format!("overlay thread range: {e}"))?;
+            let last = match range.next_back() {
+                Some(entry) => {
+                    let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+                    parse_conv_pointer("thread", k.value(), v.value())?.0
+                }
+                None => 0,
+            };
+            last + 1
+        };
+        self.put_doc(doc)?;
+        {
+            let mut t = self
+                .txn
+                .open_table(THREAD)
+                .map_err(|e| format!("overlay open thread: {e}"))?;
+            t.insert(conv_key(&self.conv, seq).as_str(), doc.id.as_str())
+                .map_err(|e| format!("overlay insert thread: {e}"))?;
+        }
+        for id in ext_ids {
+            self.alias(id, &doc.id)?;
+        }
+        Ok(seq)
+    }
+}
+
+/// Run `f` in one redb write transaction on collected conversation
+/// `conversation_id`. Commits when `f` returns Ok and wrote something; an
+/// Err aborts everything `f` did. Callers go through
+/// [`super::collected_write`], which holds the overlay write lock.
+pub fn ext_write<R>(
+    conversation_id: &str,
+    f: impl FnOnce(&mut ExtTxn<'_>) -> Result<R, String>,
+) -> Result<R, String> {
+    let db = db()?;
+    let txn = db
+        .begin_write()
+        .map_err(|e| format!("overlay redb write: {e}"))?;
+    let (out, wrote) = {
+        let mut x = ExtTxn {
+            txn: &txn,
+            conv: conversation_id.to_string(),
+            wrote: false,
+        };
+        let out = f(&mut x)?;
+        (out, x.wrote)
+    };
+    if wrote {
+        txn.commit()
+            .map_err(|e| format!("overlay redb commit: {e}"))?;
+    } else {
+        txn.abort()
+            .map_err(|e| format!("overlay redb abort: {e}"))?;
+    }
+    Ok(out)
+}
+
+/// The collector's cursor JSON for a collected conversation (read only).
+pub fn ext_state(conversation_id: &str) -> Result<Option<Vec<u8>>, String> {
+    let db = db()?;
+    let txn = db
+        .begin_read()
+        .map_err(|e| format!("overlay redb read: {e}"))?;
+    let t = match txn.open_table(EXT_STATE) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(format!("overlay open ext_state: {e}")),
+    };
+    let out = t
+        .get(conversation_id)
+        .map_err(|e| format!("overlay get ext_state: {e}"))?
+        .map(|g| g.value().to_vec());
+    Ok(out)
 }

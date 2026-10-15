@@ -10328,6 +10328,35 @@ async fn handle_one_request(
             || p == "/cli/chatterlog" =>
         {
             let _ = stream.read(&mut buf).await;
+            // `k2 thread gb:<name>` (0.46.0): a Grok Bot's collected Thread
+            // is read through the Grok Bots gate (people only, Show on),
+            // never the workspace overlay path. Agents, App passes and API
+            // keys get 403 `grokbots_humans_only` there.
+            if p == "/cli/thread" {
+                let params = super::http::parse_params(&path, &query);
+                if params
+                    .get("addr")
+                    .is_some_and(|a| crate::grokbots_routes::is_gb_addr(a))
+                {
+                    let who = crate::grokbots_routes::who_from_tcp(
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    let r = tokio::task::spawn_blocking(move || {
+                        crate::grokbots_routes::thread_by_addr(who, &params)
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        crate::cli_response::CliResponse::internal_error(format!(
+                            "worker join: {e}"
+                        ))
+                    });
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body)
+                        .await;
+                    return DispatchOutcome::KeepAlive;
+                }
+            }
             let is_grant = super::http::extract_token(&query)
                 .is_some_and(k2_core::remote_sessions::is_grant_token);
             let skin_presented = super::http::extract_token(&query)

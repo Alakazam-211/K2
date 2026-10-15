@@ -3,6 +3,13 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.0 — Grok Bot Threads
+
+- **K2 keeps every Grok Bot message it sees in your Threads**, so history builds up even for bots whose live chat runs elsewhere. Each bot's chat in K2 now starts the day K2 starts collecting, with a line that says so (older history on this computer isn't shown), and grows from there: new messages from the bot, everything you send from K2, the same on every computer you use. If a bot's conversation runs somewhere other than this computer, its chat says so, and K2 shows each new message as it arrives. For such a bot K2 only sees its latest message at each check, so when it writes several in a row, K2 marks where earlier ones may be missing; open Grok Bot to read them all. People who can see Grok Bots can also read a bot's chat with `k2 thread gb:<name>`. Agents and App guests still can't.
+
+**After updating**
+- Lines K2 already collected for a bot whose chat runs elsewhere move into that bot's Thread once.
+
 ## 0.45.7 — Grok Bots at home
 
 - **Grok Bots on your server show up in K2.** If Grok Bot runs on the same computer as your K2 server, K2 can find its agents and list them in Agents with a **Grok Bot** tag. Click one to read its chat, or right-click → **Add to Home** to keep it on My Home and in your Gardens, with live Working / Needs you / Idle status. Questions, connect requests and credential requests from a Grok Bot show as cards you answer in Grok Bot itself; K2 never asks for or shows a secret. Turn it on in Settings → K2 Server → **Local Grok Bots**, which first shows the folder and the agents it found. It's off until you turn it on, and only the owner or an admin can change it. Agents and App guests never see Grok Bot chats.

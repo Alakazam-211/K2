@@ -33,11 +33,11 @@ export interface GrokBotAgent {
   needsYou: boolean
   unreadCount: number
   /** The bot's live conversation runs outside this computer (another box
-   *  or Grok's cloud): the chat K2 reads here is old. Sends still reach the
-   *  live conversation; its new lines show in the thread's live tail. */
+   *  or Grok's cloud). Sends still reach the live conversation; K2 collects
+   *  each new latest line into the bot's Thread as it arrives. */
   stale: boolean
   /** The latest message's preview (current even when stale: the daemon
-   *  uses the live tail's newest line when that is newer). */
+   *  uses the newest collected line when that is newer). */
   lastMessagePreview: string | null
   /** Latest activity anywhere (ms). */
   lastActivityAt: number | null
@@ -47,21 +47,22 @@ export interface GrokBotAgent {
 
 /** The note under a stale bot's compose box. */
 export const GROK_STALE_COMPOSE_NOTE =
-  "Replies come from Grok Bot's live conversation; older history on this computer may be out of date."
+  "Your message reaches Grok Bot's live conversation; K2 shows each new reply as it arrives."
 
-/** Shown before a live line when the bot may have written more in between
- *  (only the latest line at each check is visible to K2). */
+/** The banner on a stale bot's chat. */
+export function grokStaleBannerText(name: string): string {
+  return `${name}'s conversation runs outside this computer; K2 shows each new message as it arrives.`
+}
+
+/** A gap line: the bot may have written more in between (only the latest
+ *  line at each check is visible to K2 for a stale bot). */
 export const GROK_LIVE_GAP_TEXT = '… earlier messages not shown — open Grok Bot'
 
-/** The divider between a stale bot's old local history and its live tail. */
-export function grokLiveDividerText(sinceMs: number): string {
-  const when = new Date(sinceMs).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-  return `Live since ${when} — older history above may be out of date`
+/** The first line of every bot's Thread: when K2 started collecting
+ *  (in this viewer's own time zone). */
+export function grokStartText(name: string, atMs: number): string {
+  const when = new Date(atMs).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  return `K2 started collecting ${name}'s messages here on ${when}.`
 }
 
 export interface GrokBotStatus {
@@ -93,9 +94,11 @@ export type GrokCard =
   | { type: 'secret-request'; label: string; description: string | null; platform: string | null; provided: boolean }
   | { type: 'template-share'; name: string; body: string | null; shareUrl: string | null }
 
+/** One line of a bot's collected K2 Thread (`gb:<name>`). */
 export interface GrokMessage {
+  /** The Thread seq (the paging cursor). */
   seq: number
-  author: 'human' | 'agent' | 'peer'
+  author: 'human' | 'agent' | 'peer' | 'system'
   text: string
   atMs: number | null
   toAgent: { id: string; name: string } | null
@@ -104,27 +107,10 @@ export interface GrokMessage {
   /** Set when K2 can't show the line (names what it is). */
   openInApp: string | null
   card: GrokCard | null
-}
-
-/** One line of a stale bot's live tail: what Grok Bot's roster summary
- *  showed as the bot's latest line at one of the server's checks, or a
- *  message sent from K2. */
-export interface GrokLiveEntry {
-  id: string
-  author: 'human' | 'agent' | 'peer'
-  text: string
-  atMs: number | null
-  viaK2: boolean
-  /** Lines may be missing just before this one. */
-  gapBefore: boolean
+  /** A K2 note: `start` (collection began) or `gap` (lines may be missing). */
+  system: 'start' | 'gap' | null
   /** The text is Grok Bot's one-line preview (may be cut short). */
   previewOnly: boolean
-}
-
-export interface GrokLiveTail {
-  /** When the server started following the bot's live conversation. */
-  sinceMs: number
-  entries: GrokLiveEntry[]
 }
 
 export interface GrokThreadPage {
@@ -133,9 +119,10 @@ export interface GrokThreadPage {
   messages: GrokMessage[]
   nextSince: number
   hasMoreBefore: boolean
-  /** The bot's live conversation runs elsewhere (then `liveTail` is set). */
+  /** The bot's live conversation runs elsewhere. */
   stale: boolean
-  liveTail: GrokLiveTail | null
+  /** The Thread's address, `gb:<name>`. */
+  addr: string | null
 }
 
 export interface GrokSettings {
@@ -243,50 +230,30 @@ function parseCard(raw: unknown): GrokCard | null {
 export function parseGrokMessage(raw: unknown): GrokMessage | null {
   const o = obj(raw)
   if (typeof o.seq !== 'number') return null
-  const author = o.author === 'human' || o.author === 'peer' ? o.author : 'agent'
+  const system = o.system === 'start' || o.system === 'gap' ? o.system : null
+  const author =
+    system !== null || o.author === 'system'
+      ? 'system'
+      : o.author === 'human' || o.author === 'peer'
+        ? o.author
+        : 'agent'
   return {
     seq: o.seq,
     author,
     text: typeof o.text === 'string' ? o.text : '',
-    atMs: typeof o.atMs === 'number' ? o.atMs : null,
+    atMs: typeof o.atMs === 'number' && o.atMs > 0 ? o.atMs : null,
     toAgent: ref(o.toAgent),
     fromAgent: ref(o.fromAgent),
     viaK2: o.viaK2 === true,
     openInApp: str(o.openInApp),
     card: parseCard(o.card),
-  }
-}
-
-export function parseGrokLiveEntry(raw: unknown): GrokLiveEntry | null {
-  const o = obj(raw)
-  const id = str(o.id)
-  if (!id || typeof o.text !== 'string') return null
-  return {
-    id,
-    author: o.author === 'human' || o.author === 'peer' ? o.author : 'agent',
-    text: o.text,
-    atMs: typeof o.atMs === 'number' && o.atMs > 0 ? o.atMs : null,
-    viaK2: o.viaK2 === true,
-    gapBefore: o.gapBefore === true,
+    system,
     previewOnly: o.previewOnly === true,
-  }
-}
-
-export function parseGrokLiveTail(raw: unknown): GrokLiveTail | null {
-  if (!raw || typeof raw !== 'object') return null
-  const o = obj(raw)
-  if (typeof o.sinceMs !== 'number') return null
-  return {
-    sinceMs: o.sinceMs,
-    entries: Array.isArray(o.entries)
-      ? o.entries.map(parseGrokLiveEntry).filter((e): e is GrokLiveEntry => e !== null)
-      : [],
   }
 }
 
 export function parseGrokThread(raw: unknown): GrokThreadPage {
   const o = obj(raw)
-  const liveTail = parseGrokLiveTail(o.liveTail)
   return {
     supported: o.supported !== false,
     reason: str(o.reason),
@@ -295,24 +262,8 @@ export function parseGrokThread(raw: unknown): GrokThreadPage {
       : [],
     nextSince: typeof o.nextSince === 'number' ? o.nextSince : 0,
     hasMoreBefore: o.hasMoreBefore === true,
-    stale: o.stale === true && liveTail !== null,
-    liveTail,
-  }
-}
-
-/** A live-tail line in the chat's message shape (its `seq` is not a store
- *  cursor and is never merged into the local history). */
-export function grokLiveEntryAsMessage(e: GrokLiveEntry): GrokMessage {
-  return {
-    seq: -1,
-    author: e.author,
-    text: e.text,
-    atMs: e.atMs,
-    toAgent: null,
-    fromAgent: null,
-    viaK2: e.viaK2,
-    openInApp: null,
-    card: null,
+    stale: o.stale === true,
+    addr: str(o.addr),
   }
 }
 

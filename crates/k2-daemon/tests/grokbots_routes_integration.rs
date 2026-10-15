@@ -11,9 +11,11 @@
 //! - a send reaches Grok Bot as `[from <login>]` / `[from <owner name>]`;
 //! - a send emits nothing on its own, but the setting change emits
 //!   `grokbots_changed` on the session-event bus;
-//! - a stale bot (live conversation elsewhere) takes sends; its thread is
-//!   the old local history plus a live tail holding Grok Bot's latest line
-//!   and the line K2 sent, and the send announces `grokbots_changed`.
+//! - each bot's chat is its collected K2 Thread: a start line, then what
+//!   K2 sees after it (never the older `store.db` history); `/cli/thread`
+//!   reads it at `gb:<name>` for people, 403 for a passport or an App pass;
+//! - a stale bot (live conversation elsewhere) takes sends; the line K2
+//!   sent lands in its Thread, and the send announces `grokbots_changed`.
 //!
 //! Never touches the real `~/.k2` or a real `~/sand-data`.
 
@@ -263,8 +265,36 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
         None,
     );
     assert_eq!(s, 200, "{b}");
-    assert_eq!(b["messages"][2]["text"], json!("Build is green."));
+    // The collected Thread starts now: no older store.db history.
+    assert_eq!(b["messages"][0]["system"], json!("start"), "{b}");
+    assert!(!raw.contains("Build is green."), "{b}");
     assert!(!raw.contains(FAKE_TOKEN));
+
+    // `k2 thread gb:<name>`: the same Thread through /cli/thread, for
+    // people only.
+    let (s, b, _) = call(
+        port,
+        "GET",
+        &format!("/cli/thread?addr=gb%3ACortana&token={member}"),
+        None,
+    );
+    assert_eq!(s, 200, "{b}");
+    assert_eq!(
+        (b["collection"].clone(), b["addr"].clone()),
+        (json!("thread"), json!("gb:Cortana")),
+        "{b}"
+    );
+    assert_eq!(b["items"][0]["doc"]["external"]["entryId"], json!("start"));
+    for tok in [passport.as_str(), "k2skn_0123456789abcdef0123456789abcdef"] {
+        let (s, b, _) = call(
+            port,
+            "GET",
+            &format!("/cli/thread?addr=gb%3ACortana&token={tok}"),
+            None,
+        );
+        assert_eq!(s, 403, "{b}");
+        assert_eq!(b["error"], json!("grokbots_humans_only"), "{b}");
+    }
 
     // Send is still off.
     let (s, b, _) = call(
@@ -365,29 +395,34 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
     assert_eq!(s, 200, "{t}");
     assert!(!raw.contains(FAKE_TOKEN));
     assert_eq!(t["stale"], json!(true));
-    assert_eq!(t["messages"][2]["text"], json!("Build is green."), "old history: {t}");
-    let entries = t["liveTail"]["entries"].as_array().expect("liveTail.entries");
-    let got: Vec<(J, J, J)> = entries
+    let msgs = t["messages"].as_array().expect("messages");
+    let got: Vec<(J, J, J)> = msgs
         .iter()
-        .map(|e| (e["id"].clone(), e["author"].clone(), e["text"].clone()))
+        .map(|e| (e["entryId"].clone(), e["author"].clone(), e["text"].clone()))
         .collect();
+    assert_eq!(got.len(), 2, "the start line, then our send: {t}");
+    assert_eq!(got[0].0, json!("start"));
     assert_eq!(
-        got,
-        vec![
-            (json!("r1"), json!("agent"), json!("The October report is out.")),
-            (
-                json!(format!("k2-{nonce}")),
-                json!("human"),
-                json!("[from Rosson Test] send it to the board")
-            ),
-        ]
+        got[1],
+        (
+            json!(format!("k2-{nonce}")),
+            json!("human"),
+            json!("[from Rosson Test] send it to the board")
+        )
     );
-    assert_eq!(entries[1]["viaK2"], json!(true));
-    let tail_file = home
-        .path()
-        .join(".k2/external-agents/grokbots-live-tail.json");
-    let on_disk = std::fs::read_to_string(&tail_file).expect("live tail persisted");
-    assert!(!on_disk.contains(FAKE_TOKEN), "no token in the tail file");
+    assert_eq!(msgs[1]["viaK2"], json!(true));
+    assert!(!raw.contains("Build is green."), "no older history: {t}");
+    assert!(
+        !home
+            .path()
+            .join(".k2/external-agents/grokbots-live-tail.json")
+            .exists(),
+        "no JSON tail any more"
+    );
+    assert!(
+        !k2_core::overlay::store::debug_docs_contain(FAKE_TOKEN).expect("scan"),
+        "no token in the Thread store"
+    );
 
     drop(d);
     drop(home);

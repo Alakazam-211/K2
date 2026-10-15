@@ -1,17 +1,19 @@
-// A Grok Bot's chat in the main area (0.45.7): read from Grok Bot's own
-// store by the daemon (`/cli/grokbots/thread`), plus a message box when
-// the server's owner turned Send on. No terminal, no session, no tabs —
-// a Grok Bot is not a K2 workspace.
+// A Grok Bot's chat in the main area (0.45.7): the bot's collected K2
+// Thread (`gb:<name>`, read through `/cli/grokbots/thread`), plus a message
+// box when the server's owner turned Send on. No terminal, no session, no
+// tabs — a Grok Bot is not a K2 workspace.
+//
+// The daemon collects every message it sees into that Thread, starting the
+// day collection started (the first line says so): new lines from Grok
+// Bot's store on this computer, each new latest line for a stale bot (its
+// live conversation runs outside this computer), and every send made from
+// K2. Older history in Grok Bot's own store is not shown. For a stale bot
+// only the latest line at each check is visible, so a gap line stands
+// where lines may be missing.
 //
 // Interactive lines (a question with choices, a connect request, a
 // credential request, a shared template) show as read-only cards: they are
 // answered in Grok Bot itself. K2 never asks for or shows a secret.
-//
-// A stale bot (its live conversation runs outside this computer) shows the
-// old local history, then a "Live since …" divider and the live tail: the
-// new lines the server saw in Grok Bot's roster summary plus what was sent
-// from K2. The summary only shows the latest line at each check, so a gap
-// marker stands where lines may be missing.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
@@ -28,12 +30,11 @@ import {
   GROK_STALE_COMPOSE_NOTE,
   GROK_STATE_LABEL,
   grokK2Sender,
-  grokLiveDividerText,
-  grokLiveEntryAsMessage,
+  grokStaleBannerText,
+  grokStartText,
   mergeGrokMessages,
   sendToGrokBot,
   type GrokCard,
-  type GrokLiveTail,
   type GrokMessage,
 } from '@/lib/grokbots'
 import { grokAgentOn, scopeForGrokHost, useGrokBotsStore, useGrokBotsSync } from '@/stores/grokbots'
@@ -54,38 +55,20 @@ function OpenInGrokBot({ what }: { what: string }): React.JSX.Element {
   )
 }
 
-/** A stale bot's live tail under its old history: a divider, then each
- *  live line as an ordinary bubble (a gap marker where lines may be
- *  missing). */
-export function GrokLiveTailView({
-  tail,
-  agentName,
-  nowSec,
-}: {
-  tail: GrokLiveTail
-  agentName: string
-  nowSec: number
-}): React.JSX.Element {
-  return (
-    <div data-testid="grokbot-live-tail">
-      <div
-        data-testid="grokbot-live-divider"
-        className={`my-2 flex items-center gap-2 text-[10px] ${muted}`}
-      >
+/** A K2 note in the Thread: where collection started, or a gap. */
+export function GrokSystemLine({ m, agentName }: { m: GrokMessage; agentName: string }): React.JSX.Element {
+  if (m.system === 'start') {
+    return (
+      <div data-testid="grokbot-start-line" className={`my-2 flex items-center gap-2 text-[10px] ${muted}`}>
         <div className="h-px flex-1 bg-[var(--color-border)]" />
-        <span className="shrink-0">{grokLiveDividerText(tail.sinceMs)}</span>
+        <span className="shrink-0">{m.atMs !== null ? grokStartText(agentName, m.atMs) : m.text}</span>
         <div className="h-px flex-1 bg-[var(--color-border)]" />
       </div>
-      {tail.entries.map((e) => (
-        <div key={e.id} data-testid="grokbot-live-entry" data-live-id={e.id}>
-          {e.gapBefore && (
-            <div data-testid="grokbot-live-gap" className={`py-1 text-center text-[10px] ${muted}`}>
-              {GROK_LIVE_GAP_TEXT}
-            </div>
-          )}
-          <MessageRow m={grokLiveEntryAsMessage(e)} agentName={agentName} nowSec={nowSec} previewOnly={e.previewOnly} />
-        </div>
-      ))}
+    )
+  }
+  return (
+    <div data-testid="grokbot-gap-line" className={`py-1 text-center text-[10px] ${muted}`}>
+      {m.system === 'gap' ? GROK_LIVE_GAP_TEXT : m.text}
     </div>
   )
 }
@@ -159,35 +142,23 @@ export function GrokCardView({ card }: { card: GrokCard }): React.JSX.Element {
   }
 }
 
-/** The banner on a bot whose live conversation runs elsewhere: Grok Bot's
- *  current preview on top, the old local history below it. */
+/** The banner on a bot whose live conversation runs elsewhere, with Grok
+ *  Bot's current preview. */
 export function GrokStaleBanner({
   name,
   preview,
   lastActivityAt,
-  localActivityAt,
   nowSec,
 }: {
   name: string
   preview: string | null
   lastActivityAt: number | null
-  localActivityAt: number | null
   nowSec: number
 }): React.JSX.Element {
-  const upTo =
-    localActivityAt !== null
-      ? `Showing history up to ${new Date(localActivityAt).toLocaleDateString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-        })}.`
-      : 'Showing the history on this computer.'
   const when = lastActivityAt !== null ? ` (${formatRelativeTime(Math.floor(lastActivityAt / 1000), nowSec)})` : ''
   return (
-    <Callout tone="warn" data-testid="grokbot-stale-banner">
-      <div>
-        {name}'s latest conversation runs outside this computer. {upTo}
-      </div>
+    <Callout tone="info" data-testid="grokbot-stale-banner">
+      <div>{grokStaleBannerText(name)}</div>
       {preview && (
         <div data-testid="grokbot-stale-preview" className="mt-1">
           {`Latest${when}: “${preview}”`}
@@ -203,17 +174,9 @@ function authorLabel(m: GrokMessage, agentName: string, k2From: string | null): 
   return agentName
 }
 
-function MessageRow({
-  m,
-  agentName,
-  nowSec,
-  previewOnly = false,
-}: {
-  m: GrokMessage
-  agentName: string
-  nowSec: number
-  previewOnly?: boolean
-}): React.JSX.Element {
+function MessageRow({ m, agentName, nowSec }: { m: GrokMessage; agentName: string; nowSec: number }): React.JSX.Element {
+  if (m.author === 'system') return <GrokSystemLine m={m} agentName={agentName} />
+  const previewOnly = m.previewOnly
   const sent = grokK2Sender(m)
   const time = m.atMs !== null ? formatRelativeTime(Math.floor(m.atMs / 1000), nowSec) : ''
   const notes: string[] = []
@@ -252,7 +215,6 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   const realId = agent?.id ?? agentId
 
   const [messages, setMessages] = useState<GrokMessage[]>([])
-  const [liveTail, setLiveTail] = useState<GrokLiveTail | null>(null)
   const [supported, setSupported] = useState(true)
   const [reason, setReason] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -269,8 +231,6 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
         setSupported(page.supported)
         setReason(page.reason)
         setMessages((prev) => (reset ? page.messages : mergeGrokMessages(prev, page.messages)))
-        // The whole tail comes with every read (bounded by the server).
-        setLiveTail(page.liveTail)
         setLoadError(null)
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : String(e))
@@ -285,14 +245,13 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   // First page when the chat opens (or switches agent).
   useEffect(() => {
     setMessages([])
-    setLiveTail(null)
     setLoaded(false)
     setSendError(null)
     void load(PAGE, true)
   }, [load])
 
   // The server said this agent's chat (or the roster) moved: re-read the
-  // tail and merge by seq (a line updated in place is replaced).
+  // newest lines and merge by seq (a line updated in place is replaced).
   useEffect(() => {
     if (changeSeq > 0) void load(TAIL, false)
   }, [changeSeq, load])
@@ -307,7 +266,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length, liveTail?.entries.length])
+  }, [messages.length])
 
   const send = async (): Promise<void> => {
     const text = draft.trim()
@@ -353,14 +312,13 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
         </div>
       </div>
 
-      {/* Pinned above the (old) history so it stays in view while scrolling. */}
+      {/* Pinned above the Thread so it stays in view while scrolling. */}
       {stale && agent && (
         <div className="px-2 pt-2">
           <GrokStaleBanner
             name={name}
             preview={agent.lastMessagePreview}
             lastActivityAt={agent.lastActivityAt}
-            localActivityAt={agent.localActivityAt}
             nowSec={nowSec}
           />
         </div>
@@ -376,13 +334,14 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
             K2 can't read this chat yet{reason ? ` (${reason})` : ''}. Open it in Grok Bot.
           </Callout>
         )}
-        {loaded && supported && !loadError && messages.length === 0 && !liveTail?.entries.length && (
-          <div className={`py-6 text-center text-xs ${muted}`}>No messages yet</div>
-        )}
         {messages.map((m) => (
           <MessageRow key={m.seq} m={m} agentName={name} nowSec={nowSec} />
         ))}
-        {liveTail && <GrokLiveTailView tail={liveTail} agentName={name} nowSec={nowSec} />}
+        {loaded && supported && !loadError && !messages.some((m) => m.author !== 'system') && (
+          <div data-testid="grokbot-empty" className={`py-6 text-center text-xs ${muted}`}>
+            No messages yet
+          </div>
+        )}
       </div>
 
       <div className="border-t border-[var(--color-border)] px-3 py-2">

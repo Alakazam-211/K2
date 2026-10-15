@@ -1336,6 +1336,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
+        // 0166 — Sew on K2 (Sew S29, K11/K12): the supervisor's singleton
+        // `sew_server` row (with S32's `app_url` folded in) and the
+        // per-agent "Manage Sew" switch `projects.agents_can_manage_chat`
+        // (DEFAULT 0 = off). Stacked on 0165 (runtime core) on the
+        // rt-s3-engine base; the integrator renumbers on slips.
+        ("0166_sew_server", include_str!("../../drizzle_sql/0166_sew_server.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1996,7 +2002,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0165_app_runtime_core",
+            last_name, "0166_sew_server",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2030,6 +2036,7 @@ mod tests {
                 "0163_sources",
                 "0164_garden_data",
                 "0165_app_runtime_core",
+                "0166_sew_server",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2155,6 +2162,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
+            // 0166 (Sew server + the Manage Sew switch) came after 0165.
+            conn.execute_batch("DROP TABLE sew_server; ALTER TABLE projects DROP COLUMN agents_can_manage_chat;")
+                .unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0166_sew_server'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

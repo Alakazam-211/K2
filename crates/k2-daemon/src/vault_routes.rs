@@ -1022,6 +1022,12 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
     // that can hire agents, for every caller (owner token included).
     "hire-key-mint",
+    // Sew on K2 (S29 K12, person-only steps): purging all Sew data,
+    // revealing the master recovery key, dropping the retiring master key
+    // after a rotation. `secretId` = the Sew install id (or `none`).
+    "sew-purge",
+    "sew-recovery-key",
+    "sew-drop-prev",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

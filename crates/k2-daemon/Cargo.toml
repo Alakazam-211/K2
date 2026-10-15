@@ -191,6 +191,9 @@ notify = { version = "7", features = ["macos_fsevent"] }
 # signing keys ever live in the daemon — verify only.
 sha2 = "0.10"
 minisign-verify = "0.2"
+# Sew S29 (K12): the KEK id check — Sew's S4 §5.3 formula is a blake3
+# derive_key over the master key. Only for that id; tarballs stay sha2.
+blake3 = "1"
 # Hostmail root helper extracts the pinned stalwart tarball in-process.
 # No shell `tar`. Both crates are already in Cargo.lock.
 flate2 = "1.1.9"

@@ -515,6 +515,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/restore",
         "/cli/vault/backup",
         "/cli/vault/legacy-export",
+        // Sew on K2 (S29 K12): revealing the master recovery key is a
+        // person's step (vault confirm). Purge and drop-prev ride routes an
+        // agent may reach; their handlers refuse every passport.
+        "/cli/sew/server/recovery-key",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
@@ -658,6 +662,22 @@ pub fn is_agent_verb(path: &str) -> bool {
         // needs "Allow this agent to manage Apps" for every change.
         // `/cli/app/box` is the read-only doctor; `/cli/app/box/prepare`
         // is NOT here (the owner's).
+        // Sew on K2 (S29 K12, K19): the server on this box. Reads for any
+        // passport; every mutation needs "Manage Sew" (`chat_manage`) on
+        // the passport's workspace (the handler checks). Exact paths.
+        "/cli/sew/status",
+        "/cli/sew/preflight",
+        "/cli/sew/backups",
+        "/cli/sew/job",
+        "/cli/sew/server/enable",
+        "/cli/sew/server/disable",
+        "/cli/sew/server/uninstall",
+        "/cli/sew/server/upgrade",
+        "/cli/sew/server/rollback",
+        "/cli/sew/server/backup",
+        "/cli/sew/server/restore",
+        "/cli/sew/server/doctor",
+        "/cli/sew/server/rotate-master",
         "/cli/app/box",
         "/cli/app/build",
         "/cli/app/config",

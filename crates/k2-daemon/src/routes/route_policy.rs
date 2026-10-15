@@ -865,6 +865,25 @@ pub const ROUTES: &[Route] = &[
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
+    // Sew on K2 (S29 K12): reads for any login; the server lifecycle is
+    // Admin for logins (owner token, or an agent passport whose workspace
+    // has "Manage Sew" on, pass through to the handler). Purge, the
+    // recovery key and rotate-master drop-prev are person-only in the
+    // handler (owner + a vault confirm).
+    get("/cli/sew/backups", Member),
+    get("/cli/sew/job", Member),
+    get("/cli/sew/preflight", Member),
+    post("/cli/sew/server/backup", Admin),
+    post("/cli/sew/server/disable", Admin),
+    post("/cli/sew/server/doctor", Admin),
+    post("/cli/sew/server/enable", Admin),
+    post("/cli/sew/server/recovery-key", Owner),
+    post("/cli/sew/server/restore", Admin),
+    post("/cli/sew/server/rollback", Admin),
+    post("/cli/sew/server/rotate-master", Admin),
+    post("/cli/sew/server/uninstall", Admin),
+    post("/cli/sew/server/upgrade", Admin),
+    get("/cli/sew/status", Member),
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),
     post("/cli/sidecar/stop", Admin),

@@ -9,8 +9,11 @@
 //! - 6 = the App runtime's `apps` namespace (box prep, runtime slice 2;
 //!   the engine install and per-App nft rules, slice 3) + `pg hba-app`
 //!   (0.46.1, vs-live 2 AR38). All of it ships together in 0.46.1, behind
-//!   the preview; anything added after a 6 build ships needs 7. Sew's
-//!   `engine sew` takes 7 or later.
+//!   the preview; anything added after a 6 build ships needs 7.
+//! - 7 = Sew's `engine sew` namespace (Sew S29, K11): stage / install /
+//!   upgrade / rollback / uninstall / purge, units, stdin-JSON config,
+//!   master-key rotation and the media sysctl drop-in. The daemon gates it
+//!   on `protocol >= 7 && namespaces.sew == true` ([`SEW_MIN_PROTOCOL`]).
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -19,7 +22,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -42,6 +45,10 @@ pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
 /// AR38). Helpers on the fleet answer ≤ 5, so the daemon treats them as
 /// "no App verbs" until they self-update.
 pub const APPS_MIN_PROTOCOL: u32 = 6;
+/// Sew's `engine sew` namespace (Sew S29, K11). Gated on this AND the
+/// `namespaces.sew` flag in `helper version` (protocol numbers on other
+/// branches have collided before; the flag keeps them apart).
+pub const SEW_MIN_PROTOCOL: u32 = 7;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -186,15 +193,21 @@ pub fn elf_matches(bytes: &[u8], arch: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace.
-    /// This build answers 6 because the `apps` verbs exist: every one of
-    /// them is in the catalog. Sew's `engine sew` takes 7 or later, so
-    /// nothing here may answer 7 yet.
+    /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace,
+    /// 7 is Sew's `engine sew`. This build answers 7 because the Sew verbs
+    /// exist: every one of them is in the catalog (and so are the apps
+    /// verbs, which 7 still serves: protocols are additive).
     #[test]
     fn protocol_numbers_follow_ar38() {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
-        assert_eq!(PROTOCOL, APPS_MIN_PROTOCOL, "protocol 6 = the apps namespace; 7 is Sew's");
+        assert_eq!(SEW_MIN_PROTOCOL, 7);
+        assert_eq!(PROTOCOL, SEW_MIN_PROTOCOL, "protocol 7 = Sew's engine sew namespace");
+        let sew: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| v.namespace() == "sew")
+            .collect();
+        assert!(!sew.is_empty(), "protocol 7 without any engine sew verb");
         let apps: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "apps")

@@ -28,3 +28,7 @@ libc = "0.2"
 ring = { version = "0.17", optional = true }
 blake2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
+
+[dev-dependencies]
+# Fixture tarball checks in `sew.rs` tests only.
+sha2 = "0.10"

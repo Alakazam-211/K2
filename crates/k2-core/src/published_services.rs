@@ -152,7 +152,8 @@ pub struct ServiceJson {
     pub frame_warning: Option<String>,
     /// Set while a service from before the vault still inherits the
     /// daemon's whole environment (`legacy` mode): that way of running
-    /// ends in 0.46.0 (Rosson 2026-10-10). Null for every other service.
+    /// ends in 0.46.1 (Rosson 2026-10-10; moved from 0.46.0 by the
+    /// 2026-10-14 cross-over plan). Null for every other service.
     #[serde(default)]
     pub env_deprecation: Option<String>,
     /// `legacy` (inherits the daemon's environment) or `clean`, for a
@@ -160,7 +161,7 @@ pub struct ServiceJson {
     /// own). Added in 0.45.4 so agents and scripts can branch on it.
     #[serde(default)]
     pub env_mode: Option<String>,
-    /// The K2 version the `legacy` mode ends in (`0.46.0`) on a legacy
+    /// The K2 version the `legacy` mode ends in (`0.46.1`) on a legacy
     /// service; null otherwise. `env_deprecation` keeps the full notice.
     #[serde(default)]
     pub env_removed_in: Option<String>,
@@ -169,6 +170,11 @@ pub struct ServiceJson {
     /// sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub helper_needs_restart: bool,
+    /// 0.46.0: the service runs in clean mode (the 0.46.1 behaviour, opted
+    /// into early: system PATH, its own HOME, owner-token calls refused).
+    /// Only sent when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clean_mode: bool,
     /// True when this row's name is a reserved nested label (`meet`,
     /// `chat`) it held before the reservation. It keeps working; a new
     /// claim of that name is refused. Only sent when true.
@@ -224,6 +230,7 @@ impl ServiceJson {
             env_mode: None,
             env_removed_in: None,
             helper_needs_restart: false,
+            clean_mode: false,
             reserved_label: crate::skin::is_reserved_nested_label(&row.name),
         }
     }

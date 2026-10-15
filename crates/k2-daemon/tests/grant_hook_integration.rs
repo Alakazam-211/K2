@@ -278,8 +278,13 @@ async fn sew_down_retries_then_succeeds_exactly_once() {
     }
     let t = hook::get_target(CHAT_KIND).unwrap().unwrap();
     assert!(!t.healthy);
+    // The first send of a provision is preceded by the A8 member lookup,
+    // so the transport error surfaces there.
     assert!(
-        t.last_error.as_deref().unwrap_or("").starts_with("connect"),
+        t.last_error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("member lookup: connect"),
         "{t:?}"
     );
     let pending: Vec<_> = rows()

@@ -313,6 +313,11 @@ pub const FEATURE_THREAD_PUSH: &str = "thread-push-v1";
 /// computer's daemon.
 pub const FEATURE_SOURCES: &str = "sources-v1";
 
+/// Local Grok Bots (0.45.7): this daemon serves `/cli/grokbots/*` and
+/// emits `grokbots_changed`. A client hides Grok Bot rows on a server
+/// without it.
+pub const FEATURE_GROKBOTS: &str = "grokbots-v1";
+
 /// Garden data (contract-garden-data-v1 §7): the `store.*`, `save.*` and
 /// `viewer.get` garden-local verbs' catalog feature, served through
 /// `POST /cli/zen/call` on this computer's daemon.
@@ -348,6 +353,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_ADDRESS_STABLE);
     out.push(FEATURE_SOURCES);
     out.push(FEATURE_GARDEN_DATA);
+    out.push(FEATURE_GROKBOTS);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -393,6 +399,7 @@ mod tests {
                 "thread-address-stable",
                 "sources-v1",
                 "garden-data-v1",
+                "grokbots-v1",
                 "thread-push-v1"
             ]
         );

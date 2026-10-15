@@ -5,7 +5,8 @@
 #   - No daemon (empty HOME, no PORT/TOKEN): the index, every topic, --json,
 #     every example (--toml too), k2 zen / help / --help and k2 study zen
 #     exit 0; an unknown topic or example exits 2; every page is at most 80
-#     lines; the examples come in Cortana's order (FC65).
+#     lines (the generated api page: k2-core GUIDE_MAX_LINES); the examples
+#     come in Cortana's order (FC65).
 #   - Then the worktree's k2-daemon boots under a temp HOME (never the real
 #     ~/.k2, never a production daemon). Zen is set up over curl, and a
 #     SCRATCH Garden is made in that temp folder (FC67). Every example from
@@ -70,6 +71,10 @@ TOPICS="gardens files widgets bands required menus themes sync examples undo saf
 # later column-corner.
 WANT_EXAMPLES="rail-top quiet-top bottom-bar menu-both texting-chrome menu-bottom-right column-corner"
 MAX_LINES=80
+# The generated api page's cap is k2-core's GUIDE_MAX_LINES (80 until Garden
+# data's 15 rows, contract-garden-data-v1 §7.2). Read it, never guess it.
+API_MAX_LINES="$(sed -n 's/^pub const GUIDE_MAX_LINES: usize = \([0-9][0-9]*\);$/\1/p' "$PROJECT_ROOT/crates/k2-core/src/contract/gen.rs")"
+[ -n "$API_MAX_LINES" ] || { echo "FAIL: GUIDE_MAX_LINES not found in crates/k2-core/src/contract/gen.rs" >&2; exit 1; }
 
 # ── No daemon (FC-T16) ──────────────────────────────────────────────────
 mkdir -p "$SANDBOX/nodaemon"
@@ -83,10 +88,10 @@ ndcap() {
     set -e
 }
 line_count() { printf '%s\n' "$1" | wc -l | tr -d ' '; }
-assert_short() {
-    local n
+assert_short() { # label text [cap]
+    local n cap="${3:-$MAX_LINES}"
     n="$(line_count "$2")"
-    if [ "$n" -le "$MAX_LINES" ]; then ok "$1 is $n lines (<= $MAX_LINES)"; else bad "$1 is $n lines (> $MAX_LINES)"; fi
+    if [ "$n" -le "$cap" ]; then ok "$1 is $n lines (<= $cap)"; else bad "$1 is $n lines (> $cap)"; fi
 }
 
 echo "== no daemon: the index and every topic =="
@@ -107,7 +112,7 @@ for t in $TOPICS; do
     ndcap zen guide "$t"
     assert_eq "guide $t exits 0" "$rc" "0"
     assert_contains "guide $t starts with its name" "$(printf '%s\n' "$out" | sed -n 1p)" "k2 zen guide $t —"
-    assert_short "guide $t" "$out"
+    if [ "$t" = api ]; then assert_short "guide $t" "$out" "$API_MAX_LINES"; else assert_short "guide $t" "$out"; fi
     page="$out"
     ndcap zen guide "$t" --json
     assert_eq "guide $t --json exits 0" "$rc" "0"

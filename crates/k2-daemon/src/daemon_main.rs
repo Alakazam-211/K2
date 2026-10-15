@@ -1420,6 +1420,13 @@ async fn async_main() {
     // federation is off or every queue is empty.
     let _federation_drain_handle = federation_drain::spawn();
 
+    // Sew S27 grant hook: delivers `tool_outbox` rows (written in the same
+    // skin.db transaction as each chat grant change) to Sew's mgmt socket,
+    // and runs the reconcile sweep. Its FIRST pass is the boot pass, so
+    // rows queued before a restart deliver now. Idle while no tool target
+    // is enabled (macOS boxes never enable Sew).
+    let _tool_hook_worker_handle = tool_hook_worker::spawn();
+
     // 0.45.2: federation has its own identity key. Load it once at boot so
     // the one-time copy from tunnel-key.pem happens before anything else
     // could replace the tunnel key (same fingerprint, no peer re-pairs).

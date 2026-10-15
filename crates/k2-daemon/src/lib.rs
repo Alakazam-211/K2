@@ -37,6 +37,9 @@ pub mod db_routes;
 pub mod events;
 pub mod federation_address;
 pub mod federation_drain;
+// Sew S27 grant hook: thin mgmt UDS client + the outbox delivery worker.
+pub mod sew_mgmt;
+pub mod tool_hook_worker;
 pub mod feedback_routes;
 pub mod federation_routes;
 pub mod fs_routes;

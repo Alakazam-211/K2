@@ -370,10 +370,19 @@ pub fn hba_edit(text: &str, add: bool, id: &AppId) -> Result<Option<String>, &'s
 
 /// `user@<k2app uid>.service.d/k2-delegate.conf`: every controller the
 /// engine needs (default delegation is only memory+pids on 22.04).
+///
+/// Also the Apps' log rate limit (W §5.3: a log flood pushed Postgres p99
+/// x3-13). journald honours `LogRateLimit*` only on SYSTEM units (it reads
+/// them from /run/systemd/units, which only PID 1 writes) and keys user
+/// units' lines on the system unit `user@<uid>.service`, so the limit
+/// lives here and covers every App together (Linux e2e: on the Quadlet
+/// unit it was ignored; here a 20000-line burst was suppressed).
 pub fn delegate_dropin() -> &'static str {
     "# K2 App runtime box prep (k2-root-helper `apps delegate on`).\n\
      [Service]\n\
-     Delegate=cpu cpuset io memory pids\n"
+     Delegate=cpu cpuset io memory pids\n\
+     LogRateLimitIntervalSec=30s\n\
+     LogRateLimitBurst=5000\n"
 }
 
 /// `user@<k2app uid>.service.d/k2-budget.conf`: the aggregate cap for every

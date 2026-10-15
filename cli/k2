@@ -6888,10 +6888,15 @@ See and run it:
   k2 app deployment <app-id> [<id>]    Who, commit, state (live/failed/stalled).
   k2 app stop|start|restart <app-id>   restart is zero-downtime.
   k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
-  k2 app config <app-id> --memory 8G|512M|none
-                                       Optional per-App limit; none (the default)
-                                       lets the App use any memory outside the
-                                       reserve K2 keeps for itself.
+  k2 app config <app-id> [--memory 8G|512M|none] [--cpu-weight N] [--tasks N]
+                 [--disk 2G] [--egress add|rm HOST:PORT] [--egress-mode allowlist|broad]
+                 [--port add|rm 5000/udp] [--recycle-every 24h] [--recycle-at 85%]
+                 [--isolation container|process] [--path guarded|open]
+                 [--risk normal|high] [--db-private on|off] [--db-raw on|off]
+                                       Narrowing applies now; a widening is held
+                                       for the owner (exit 2, k2 app approvals).
+                                       Memory: none (the default) lets the App
+                                       use any memory outside K2's reserve.
 
 The box (Linux):
   k2 app doctor [--json]               Is this box ready for Apps? Kernel, cgroup
@@ -6909,6 +6914,10 @@ The box (Linux):
 
 Exit codes: 0 live/ok, 1 a failed check or health gate, 2 usage or still
 pending (loop on k2 app deployment), 3 infra or permission (JSON with a code).
+
+Getting existing Apps ready for 0.46.1 (no preview flag): k2 app warnings,
+clean-mode, key mint|revoke, keys, approvals, approve, deny, access
+(k2 app grace for the details).
 
 Read `k2 study apps` first. Guests, roles and tokens: k2 app user|role|grant|token.
 EOF
@@ -7312,27 +7321,65 @@ print("  commit  %s" % (v.get("commit") or "-"))
 print("  seed    %s → %s" % ((d.get("fromSeed") or "-")[:12], (d.get("toSeed") or "-")[:12]))'
 }
 
-# k2 app config <app-id> --memory 8G|512M|none [--json]
+# k2 app config <app-id> [--memory 8G|none] [--cpu-weight N] [--tasks N] [--disk 2G]
+#   [--egress add|rm HOST:PORT]… [--egress-mode allowlist|broad] [--port add|rm 5000/udp]…
+#   [--recycle-every 24h|none] [--recycle-at 85%|none] [--isolation container|process]
+#   [--path guarded|open] [--risk normal|high] [--db-private on|off] [--db-raw on|off] [--json]
+# S13: narrowing applies now; a widening is held for the owner (exit 2).
 cmd_app_config() {
-    local app="" memory="" have=0 json_out=0
+    local app="" json_out=0
+    local -a kv=()
+    local egress_add="" egress_rm="" port_add="" port_rm=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --memory) memory="${2:-}"; have=1; shift 2 ;;
+            --memory) kv+=("K2_CJ_memory=${2:-}"); shift 2 ;;
+            --cpu-weight) kv+=("K2_CJ_cpuWeight=${2:-}"); shift 2 ;;
+            --tasks) kv+=("K2_CJ_tasks=${2:-}"); shift 2 ;;
+            --disk) kv+=("K2_CJ_disk=${2:-}"); shift 2 ;;
+            --egress)
+                case "${2:-}" in
+                    add) egress_add="${egress_add:+$egress_add,}${3:-}" ;;
+                    rm) egress_rm="${egress_rm:+$egress_rm,}${3:-}" ;;
+                    *) echo "usage: --egress add|rm HOST:PORT" >&2; exit 2 ;;
+                esac
+                shift 3 ;;
+            --egress-mode) kv+=("K2_CJ_egressMode=${2:-}"); shift 2 ;;
+            --port)
+                case "${2:-}" in
+                    add) port_add="${port_add:+$port_add,}${3:-}" ;;
+                    rm) port_rm="${port_rm:+$port_rm,}${3:-}" ;;
+                    *) echo "usage: --port add|rm PORT[/tcp|udp]" >&2; exit 2 ;;
+                esac
+                shift 3 ;;
+            --recycle-every) kv+=("K2_CJ_recycleEvery=${2:-}"); shift 2 ;;
+            --recycle-at) kv+=("K2_CJ_recycleAt=${2:-}"); shift 2 ;;
+            --isolation) kv+=("K2_CJ_isolation=${2:-}"); shift 2 ;;
+            --path) kv+=("K2_CJ_path=${2:-}"); shift 2 ;;
+            --risk) kv+=("K2_CJ_risk=${2:-}"); shift 2 ;;
+            --db-private) kv+=("K2_CJ_dbPrivate=${2:-}"); shift 2 ;;
+            --db-raw) kv+=("K2_CJ_dbRaw=${2:-}"); shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
-            -*) echo "Unknown flag: $1 (this release sets --memory only)" >&2; exit 2 ;;
+            -*) echo "Unknown flag: $1 (k2 app --help)" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ "$have" = 0 ]; } && { echo "usage: k2 app config <app-id> --memory 8G|512M|none" >&2; exit 2; }
-    _app_rt_post /cli/app/config "$(_compute_json K2_CJ_app="$app" K2_CJ_memory="${memory:-none}")"
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    [ -n "$egress_add" ] && kv+=("K2_CJ_egressAdd=$egress_add")
+    [ -n "$egress_rm" ] && kv+=("K2_CJ_egressRm=$egress_rm")
+    [ -n "$port_add" ] && kv+=("K2_CJ_portAdd=$port_add")
+    [ -n "$port_rm" ] && kv+=("K2_CJ_portRm=$port_rm")
+    { [ -z "$app" ] || [ "${#kv[@]}" = 0 ]; } && { echo "usage: k2 app config <app-id> --memory 8G|512M|none [--egress add HOST:PORT] … (k2 app --help)" >&2; exit 2; }
+    _app_rt_post /cli/app/config "$(_compute_json K2_CJ_app="$app" "${kv[@]}")"
+    _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-m = v["app"].get("memoryLimitBytes")
-print("%s: memory limit %s" % (v["app"]["appId"], "none (the App may use any memory outside the K2 reserve)" if m is None else "%d MiB" % (m >> 20)))
+a = v["app"]
+for line in v.get("applied") or []:
+    print("%s: %s" % (a["appId"], line))
+m = a.get("memoryLimitBytes")
+print("%s: memory limit %s" % (a["appId"], "none (the App may use any memory outside the K2 reserve)" if m is None else "%d MiB" % (m >> 20)))
 print(v.get("note", ""))'
 }
 
@@ -7599,6 +7646,357 @@ EOF
 
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
+# ── 0.46.0 App grace (Rosson's cross-over plan, 2026-10-14) ─────────────
+# 0.46.0 adds the new ways and removes nothing; 0.46.1 is the cut-over.
+# These verbs are not behind the runtime preview flag: they serve every
+# published --cmd service (and every runtime App).
+
+_app_grace_usage() {
+    cat <<'EOF'
+k2 app — getting existing Apps ready for K2 0.46.1 (0.46.0 removes nothing)
+
+  k2 app warnings [<app>] [--json]     What breaks at the 0.46.1 cut-over: env
+                                       names the code reads that only the daemon
+                                       gives it, K2 files it touches
+                                       (daemon.token, heartbeat.port), programs
+                                       it finds through PATH, owner-token calls
+                                       K2 saw it make (Linux). No <app>: every
+                                       --cmd service you can see.
+  k2 app clean-mode <app> on|off [--restart]
+                                       Run it the 0.46.1 way now: clean env,
+                                       system PATH, its own HOME, owner-token
+                                       calls refused (Linux). On narrows (agents
+                                       may); off is the owner's (held otherwise).
+  k2 app key mint <app> --scopes users,rooms,fetch [--rooms a,b] [--roles r]
+                 [--label L] [--show]
+                                       An App-scoped key instead of the owner
+                                       token: it opens /v1/apps/<app id>/… only.
+                                       The owner confirms in person; K2 puts it
+                                       in the vault and the App reads
+                                       $K2_SECRETS_DIR/K2_APP_KEY at its next
+                                       start (--show prints it once instead).
+                                       From an agent: held for the owner.
+  k2 app keys [<app>] [--json]         App keys (never the key itself).
+  k2 app key revoke <key-id>           Stops it at once.
+  k2 app approvals [--app A] [--all] [--json]
+                                       Held requests (an agent's widening, key
+                                       mint, clean mode off, new --cmd service).
+  k2 app approve <request-id>          Owner, in person (Touch ID / password),
+                                       from a terminal outside K2.
+  k2 app deny <request-id> [--reason R]
+                                       Owner/Admin; an agent withdraws its own.
+  k2 app access <workspace> [--manage on|off] [--open on|off]
+                                       Owner/Admin: "Allow this agent to manage
+                                       Apps" and the nested "…and publish open
+                                       Apps".
+
+Exit codes: 0 done, 2 held for the owner (or a usage error), 3 refused or
+infra (JSON on stderr).
+EOF
+}
+
+# Print the held answer (202) and exit 2, or fail on a refusal.
+_app_grace_done() {
+    local json_out="$1"
+    if [ "$_CP_STATUS" = "202" ]; then
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+h = v.get("held") if isinstance(v.get("held"), dict) else v
+for line in v.get("applied") or []:
+    print("applied: %s" % line)
+print("held for the owner: %s" % h.get("request"))
+d = h.get("diff")
+for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
+    print("  %s" % line)
+for r in h.get("reasons") or []:
+    print("  why: %s" % r)
+print(h.get("hint", ""))'
+        fi
+        exit 2
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
+cmd_app_warnings() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    _compute_call GET /cli/app/warnings "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+reports = v.get("services") if "services" in v else [v]
+if not reports:
+    print("No server Apps (--cmd services) to check.")
+for r in reports:
+    a = r.get("app", {})
+    mode = a.get("envMode") or "-"
+    if a.get("cleanMode"):
+        mode = "clean mode"
+    status = "ready for %s" % r.get("cutover") if r.get("readyForCutover") else "%d thing(s) break in %s" % (r.get("breaks", 0), r.get("cutover"))
+    print("%s  [%s]  %s" % (a.get("handle") or a.get("name"), mode, status))
+    for w in r.get("warnings", []):
+        print("  %-6s %s" % ("BREAKS" if w.get("severity") == "breaks" else "check", w.get("message")))
+        if w.get("fix"):
+            print("         fix: %s" % w["fix"])
+    sc = r.get("scan") or {}
+    if sc.get("truncated"):
+        print("  (the code scan stopped early: %s files)" % sc.get("filesScanned"))
+    if r.get("ownerTokenAttribution") and r["ownerTokenAttribution"] != "on":
+        print("  (owner-token calls are traced on Linux only)")
+'
+}
+
+cmd_app_clean_mode() {
+    local app="" onoff="" restart="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --restart) restart=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            on|off) onoff="$1"; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$onoff" ]; } && { echo "usage: k2 app clean-mode <app> on|off [--restart]" >&2; exit 2; }
+    _app_rt_post /cli/app/clean-mode "$(_compute_json K2_CJ_app="$app" K2_CJ_on="$onoff" K2_CJ_restart_b="${restart:-0}")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: clean mode %s (env %s); %s" % (v["app"].get("handle"), "on" if v.get("cleanMode") else "off", v.get("envMode"), v.get("restart")))'
+}
+
+# k2 app key mint|revoke …
+cmd_app_key() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        mint) cmd_app_key_mint "$@" ;;
+        revoke|rm)
+            local id="${1:-}"
+            [ -n "$id" ] || { echo "usage: k2 app key revoke <key-id>" >&2; exit 2; }
+            _app_rt_post /cli/app/key/revoke "$(_compute_json K2_CJ_id="$id")"
+            _app_grace_done 0
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s %s (%s)" % ("revoked" if v.get("revoked") else "already revoked:", v.get("id"), v["app"].get("handle")))'
+            ;;
+        list|ls) cmd_app_keys "$@" ;;
+        *) _app_grace_usage >&2; exit 2 ;;
+    esac
+}
+
+cmd_app_key_mint() {
+    local app="" scopes="" rooms="" roles="" label="" show=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --scopes|--scope) scopes="${2:-}"; shift 2 ;;
+            --rooms|--room) rooms="${2:-}"; shift 2 ;;
+            --roles|--role) roles="${2:-}"; shift 2 ;;
+            --label) label="${2:-}"; shift 2 ;;
+            --show) show=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$scopes" ]; } && { echo "usage: k2 app key mint <app> --scopes users,rooms,fetch [--rooms a,b] [--roles r] [--label L] [--show]" >&2; exit 2; }
+    local deliver=vault
+    [ "$show" = 1 ] && deliver=show
+    local body
+    body="$(K2_AK_APP="$app" K2_AK_SCOPES="$scopes" K2_AK_ROOMS="$rooms" K2_AK_ROLES="$roles" K2_AK_LABEL="$label" K2_AK_DELIVER="$deliver" python3 -c '
+import json, os
+sp = lambda k: [x.strip() for x in os.environ.get(k, "").split(",") if x.strip()]
+b = {"app": os.environ["K2_AK_APP"], "scopes": sp("K2_AK_SCOPES"), "rooms": sp("K2_AK_ROOMS"), "roles": sp("K2_AK_ROLES"),
+     "deliver": os.environ["K2_AK_DELIVER"]}
+if os.environ.get("K2_AK_LABEL"):
+    b["label"] = os.environ["K2_AK_LABEL"]
+print(json.dumps(b))')"
+    _app_rt_post /cli/app/key/mint "$body"
+    if [ "$_CP_STATUS" = "403" ] && [[ "$_CP_BODY" == *'"vault_confirm_required"'* ]] && ! _compute_in_session; then
+        # The owner, outside K2: confirm in person, bound to this App.
+        local svc tok
+        svc="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("error") or {}).get("serviceId") or "")')"
+        [ -n "$svc" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        tok="$(_vault_confirm_token app-key-mint "$svc" "App key for $app")" || exit 3
+        body="$(printf '%s' "$body" | K2_AK_TOK="$tok" python3 -c 'import json,os,sys; b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AK_TOK"]; print(json.dumps(b))')"
+        tok=""
+        _app_rt_post /cli/app/key/mint "$body"
+    fi
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("App key %s for %s: scopes %s" % (v.get("id"), v["app"].get("handle"), ",".join(v.get("scopes") or [])))
+print("  calls: %s (Authorization: Bearer <key>)" % v.get("routes"))
+d = v.get("delivered")
+if d:
+    print("  in the vault as %s; the App reads $K2_SECRETS_DIR/%s" % (d.get("vaultSecret"), d.get("file")))
+    print("  %s" % d.get("note"))
+if v.get("key"):
+    print("  key (shown once): %s" % v["key"])'
+}
+
+cmd_app_keys() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    local q=""
+    [ -n "$app" ] && q="app=$(urlencode "$app")"
+    _compute_call GET /cli/app/keys "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+ks = v.get("keys") or []
+if not ks:
+    print("No App keys."); sys.exit(0)
+for k in ks:
+    print("%s  %-8s %-24s scopes=%s rooms=%s" % (k["id"], k["state"], (k.get("label") or "-")[:24], ",".join(k.get("scopes") or []), ",".join(k.get("rooms") or []) or "-"))'
+}
+
+cmd_app_approvals() {
+    local app="" all=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app) app="${2:-}"; shift 2 ;;
+            --all) all=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            *) echo "Unknown argument: $1" >&2; exit 2 ;;
+        esac
+    done
+    local q="all=${all}"
+    [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
+    _compute_call GET /cli/app/approvals "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+rs = v.get("requests") or []
+if not rs:
+    print("No held App requests."); sys.exit(0)
+for r in rs:
+    print("%s  %-9s %-11s %s (%s) by %s" % (r["id"], r["state"], r["kind"], r["appLabel"], r.get("workspaceHandle"), r["requestedBy"]))
+    d = r.get("diff")
+    for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
+        print("    %s" % line)
+    for why in r.get("reasons") or []:
+        print("    why: %s" % why)'
+}
+
+cmd_app_approve() {
+    local id="${1:-}"
+    [ -n "$id" ] || { echo "usage: k2 app approve <request-id>" >&2; exit 2; }
+    if _compute_in_session; then
+        echo '{"error":"owner_only","hint":"the owner approves in person, from a terminal outside K2 (or Settings); an agent can never approve"}' >&2
+        exit 3
+    fi
+    _compute_call GET /cli/app/approvals "all=1"
+    local found
+    found="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+want = sys.argv[1]
+for r in json.load(sys.stdin).get("requests") or []:
+    if r["id"] == want:
+        print(r["state"]); print("%s for %s" % (r["kind"], r["appLabel"]))
+        d = r.get("diff")
+        for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
+            print("  " + line)
+        sys.exit(0)
+sys.exit(1)' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no App request '$id' (k2 app approvals)\"}" >&2; exit 3; }
+    local state
+    state="$(printf '%s\n' "$found" | sed -n 1p)"
+    if [ "$state" != "held" ]; then
+        echo "{\"error\":\"not_pending\",\"hint\":\"$id is $state\"}" >&2
+        exit 3
+    fi
+    printf '%s\n' "$found" | sed -n '2,$p' >&2
+    local tok
+    tok="$(_vault_confirm_token app-approve "$id" "approve $id")" || exit 3
+    _compute_call POST /cli/app/approve "$(_compute_json K2_CJ_request="$id" K2_CJ_confirmToken="$tok")" tcp
+    tok=""
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: %s" % (v.get("request"), v.get("state")))
+if v.get("error"):
+    print("  %s" % v["error"].get("hint")); sys.exit(1)'
+}
+
+cmd_app_deny() {
+    local id="" reason=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) reason="${2:-}"; shift 2 ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) id="$1"; shift ;;
+        esac
+    done
+    [ -n "$id" ] || { echo "usage: k2 app deny <request-id> [--reason R]" >&2; exit 2; }
+    _compute_call POST /cli/app/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_reason="$reason")"
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)["request"]
+print("%s: %s" % (r["id"], r["state"]))'
+}
+
+cmd_app_access() {
+    local ws="" manage="" open=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --manage) manage="${2:-}"; shift 2 ;;
+            --open) open="${2:-}"; shift 2 ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) ws="$1"; shift ;;
+        esac
+    done
+    { [ -z "$ws" ] || { [ -z "$manage" ] && [ -z "$open" ]; }; } && { echo "usage: k2 app access <workspace> [--manage on|off] [--open on|off]" >&2; exit 2; }
+    local t v
+    # The parent first when turning on; the child first when turning off.
+    for t in manage open; do
+        [ "$t" = manage ] && v="$manage" || v="$open"
+        [ -z "$v" ] && continue
+        case "$v" in on|off) ;; *) echo "usage: --$t on|off" >&2; exit 2 ;; esac
+    done
+    local order="manage open"
+    [ "$manage" = off ] && order="open manage"
+    for t in $order; do
+        [ "$t" = manage ] && v="$manage" || v="$open"
+        [ -z "$v" ] && continue
+        _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="apps_$t" K2_CJ_value_b="$([ "$v" = on ] && echo 1 || echo 0)")"
+    done
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: manage Apps %s, publish open Apps %s" % (v.get("workspace"), "on" if v.get("agentsCanManageApps") else "off", "on" if v.get("agentsCanPublishOpenApps") else "off"))'
+}
+
 cmd_app() {
     case "${1:-}" in
         validate) shift; cmd_app_validate "$@" ;;
@@ -7618,6 +8016,15 @@ cmd_app() {
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
+        warnings) shift; cmd_app_warnings "$@" ;;
+        clean-mode) shift; cmd_app_clean_mode "$@" ;;
+        key) shift; cmd_app_key "$@" ;;
+        keys) shift; cmd_app_keys "$@" ;;
+        approvals) shift; cmd_app_approvals "$@" ;;
+        approve) shift; cmd_app_approve "$@" ;;
+        deny) shift; cmd_app_deny "$@" ;;
+        access) shift; cmd_app_access "$@" ;;
+        grace|crossover) shift; _app_grace_usage ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"
@@ -16553,7 +16960,7 @@ def env_legacy(s):
     return bool(s.get("envDeprecation"))
 
 def env_ends(s):
-    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.0")
+    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.1")
 
 def env_warning(n, s):
     return ("warning: %s still inherits the daemon environment; this ends in K2 %s. "
@@ -16565,6 +16972,9 @@ if mode == "service" and verb in ("run", "start"):
     _s = d.get("service") if isinstance(d.get("service"), dict) else d
     if env_legacy(_s):
         sys.stderr.write(env_warning(str(_s.get("name") or "?"), _s) + "\n")
+    _c = d.get("crossover") if isinstance(d, dict) else None
+    if isinstance(_c, dict) and _c.get("wouldHold"):
+        sys.stderr.write("notice: %s\n" % _c.get("hint", ""))
 
 if as_json:
     print(json.dumps(d, separators=(",", ":")))
@@ -16605,7 +17015,7 @@ if mode == "list":
     rows = []
     warnings = []
     legacy = []
-    ends = "0.46.0"
+    ends = "0.46.1"
     for s in services:
         if not isinstance(s, dict):
             continue

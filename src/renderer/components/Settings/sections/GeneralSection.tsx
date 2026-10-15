@@ -56,11 +56,14 @@ import { webFeatures } from '@/web/features'
 import type { GeneralSubTab } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
+import { AppFontRows } from '../shared/AppFontRows'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
+  { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
+  { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
@@ -200,6 +203,10 @@ export function GeneralSection(): React.JSX.Element {
       >
       {tab === 'general' && (
       <div className="space-y-4">
+        {/* App font (0.45.7): the same setting as Editors / Fonts → Code. */}
+        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
+          <AppFontRows where="general" lastHasBorder={false} />
+        </div>
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">

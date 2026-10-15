@@ -2,7 +2,8 @@ import React from 'react'
 import { useCallback, useMemo, useState } from 'react'
 import { useSettingsStore } from '@/stores/settings'
 import { useCustomThemesStore } from '@/stores/custom-themes'
-import { EDITOR_THEMES, EDITOR_FONTS, CodeEditor } from '@/components/FileViewerPane/CodeEditor'
+import { EDITOR_THEMES, CodeEditor } from '@/components/FileViewerPane/CodeEditor'
+import { AppFontRows } from '../shared/AppFontRows'
 import { CustomThemeCreator } from '../CustomThemeCreator'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -319,14 +320,8 @@ async function fetchClassifiedData(id: string): Promise<string[]> {
                 </div>
               </div>
             )}
-            {dropdownRow('Font Family', 'Monospace font for code editing', editor.fontFamily,
-              EDITOR_FONTS.map(f => ({ value: f.id, label: f.label })),
-              (v) => updateEditorSettings({ fontFamily: v })
-            )}
-            {dropdownRow('Font Size', 'Editor text size in pixels', String(editor.fontSize),
-              [10, 11, 12, 13, 14, 15, 16, 18, 20].map(n => ({ value: String(n), label: `${n}px` })),
-              (v) => updateEditorSettings({ fontSize: Number(v) })
-            )}
+            {/* Same control as the top of Settings → General (one setting). */}
+            <AppFontRows where="code-editor" />
             {toggleRow('Font Ligatures', fontSupportsLigatures ? 'Enable programming ligatures (e.g. => becomes arrow)' : 'Requires Fira Code, JetBrains Mono, or Lilex', 'fontLigatures', false, !fontSupportsLigatures)}
             {dropdownRow('Cursor Style', 'Shape of the text cursor', editor.cursorStyle,
               [{ value: 'bar', label: 'Bar' }, { value: 'block', label: 'Block' }, { value: 'underline', label: 'Underline' }],

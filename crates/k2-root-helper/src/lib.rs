@@ -199,6 +199,7 @@ fn dispatch(
 
         Verb::AppsStatus => Some(apps::status(ctx)?),
         Verb::AppsEnsureUser => Some(apps::ensure_user(ctx)?),
+        Verb::AppsEnsureProcessUser => Some(apps::ensure_process_user(ctx)?),
         Verb::AppsSubid => Some(apps::subid(ctx)?),
         Verb::AppsLinger(on) => Some(apps::linger(ctx, *on)?),
         Verb::AppsDelegate(on) => Some(apps::delegate(ctx, *on)?),
@@ -214,8 +215,13 @@ fn dispatch(
         Verb::AppsPackagesInstallYouki => Some(apps::packages_install_youki(ctx)?),
         Verb::AppsRuntime(rt) => Some(apps::runtime(ctx, *rt)?),
         Verb::AppsProcessUnit(on) => Some(apps::process_unit_set(ctx, *on)?),
+        Verb::AppsApparmor(on) => Some(apps::apparmor(ctx, *on)?),
         Verb::AppsProcessStart(id) => Some(apps::process_start(ctx, id)?),
         Verb::AppsProcessStop(id) => Some(apps::process_stop(ctx, id)?),
+        Verb::AppsProcessPurge(id) => Some(apps::process_purge(ctx, id)?),
+        Verb::AppsProcessCaps { id, mem_mib, io, devices } => {
+            Some(apps::process_caps(ctx, id, *mem_mib, io, devices)?)
+        }
         Verb::AppsCoresSlice(n) => Some(apps::cores_slice(ctx, who, *n)?),
         Verb::AppsBudget(b) => Some(apps::budget(ctx, *b)?),
         Verb::AppsUnprep => Some(apps::unprep(ctx, who)?),

@@ -38,6 +38,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/deployment",
     "/cli/app/engine/install",
     "/cli/app/errors",
+    "/cli/app/exception",
+    "/cli/app/exec",
     "/cli/app/history",
     "/cli/app/inspect",
     "/cli/app/install",
@@ -45,6 +47,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/logs",
     "/cli/app/restart",
     "/cli/app/rollback",
+    "/cli/app/shell",
     "/cli/app/start",
     "/cli/app/stop",
     "/cli/app/uninstall",
@@ -58,6 +61,8 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/config",
     "/cli/app/deploy",
     "/cli/app/engine/install",
+    "/cli/app/exception",
+    "/cli/app/exec",
     "/cli/app/install",
     "/cli/app/restart",
     "/cli/app/rollback",
@@ -77,6 +82,7 @@ pub fn is_post_route(p: &str) -> bool {
 
 // ── refusals ─────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub(crate) struct Refusal {
     pub code: &'static str,
     pub status: u16,
@@ -339,6 +345,12 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/logs" => logs(&who, params),
         "/cli/app/errors" => errors(&who, params),
         "/cli/app/uninstall" => uninstall(&who, body),
+        // S28 and the process exception.
+        "/cli/app/exec" => super::exec::exec_route(&who, body),
+        "/cli/app/exception" => super::exception::route(&who, body),
+        // A WebSocket: the TCP dispatcher serves it; anything else (the
+        // cell socket) is told so.
+        "/cli/app/shell" => return super::exec::shell_on_cell(),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     match r {
@@ -598,6 +610,13 @@ fn wait_secs(v: &J) -> u64 {
 /// Absent: the App's current engine. A change is recorded and audited.
 fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
     let Some(e) = s(v, "engine") else { return Ok(app) };
+    if app.is_process_exception() {
+        return Err(no(
+            codes::ENGINE_UNAVAILABLE,
+            409,
+            format!("{} runs as the process exception; turn that off first (k2 app exception {} off), then pick an engine", app.app_id, app.app_id),
+        ));
+    }
     let iso = match e {
         "guarded" | "container" => "container",
         "process" => "process",
@@ -712,14 +731,84 @@ fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }))
 }
 
-/// POST `/cli/app/config {app, memory}`: stage 1 holds only the per-App
-/// memory limit (`none` by default; the user decides). The rest of §4.4 is
-/// S13.
+/// The App's disk ceilings after `v`'s `io` (an object with `rbps`,
+/// `wbps`, `riops`, `wiops`: a rate like `40M`, a number, or `none`; or
+/// the string `default` / `none` for all of them). `None` = no `io` asked.
+pub(crate) fn io_after(app: &AppRow, v: &J) -> R<Option<k2_root_proto::apps::IoMax>> {
+    use k2_root_proto::apps::{parse_rate, IoMax};
+    let Some(io) = v.get("io") else { return Ok(None) };
+    let cur = IoMax::from_column(app.io_max_json.as_deref());
+    let out = match io {
+        J::String(x) if x == "default" => IoMax::k2_default(),
+        J::String(x) if x == "none" => IoMax::unlimited(),
+        J::Object(m) => {
+            let mut n = cur;
+            for (k, val) in m {
+                let txt = match val {
+                    J::String(t) => t.clone(),
+                    J::Number(x) => x.to_string(),
+                    J::Null => "none".into(),
+                    _ => return Err(no(codes::BAD_REQUEST, 400, format!("io.{k}: a rate (40M), a number or none"))),
+                };
+                let iops = matches!(k.as_str(), "riops" | "wiops");
+                let r = parse_rate(&txt, iops).map_err(|e| no(codes::BAD_REQUEST, 400, format!("io.{k}: {e}")))?;
+                match k.as_str() {
+                    "rbps" => n.rbps = r,
+                    "wbps" => n.wbps = r,
+                    "riops" => n.riops = r,
+                    "wiops" => n.wiops = r,
+                    other => return Err(no(codes::BAD_REQUEST, 400, format!("io.{other}: the knobs are rbps, wbps, riops, wiops"))),
+                }
+            }
+            n
+        }
+        _ => return Err(no(codes::BAD_REQUEST, 400, "io is default, none, or {rbps, wbps, riops, wiops}")),
+    };
+    out.check().map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    Ok(Some(out))
+}
+
+/// POST `/cli/app/config {app, memory?, io?}`: the per-App memory limit
+/// (`none` by default; the user decides) and the disk ceilings (§6.2;
+/// K2's default ceiling until changed). An agent may tighten a ceiling but
+/// never loosen one (a higher number or none): that is the owner's.
 fn config(who: &Who, body: &[u8]) -> R<J> {
     need_manage(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
-    let raw = v.get("memory").ok_or_else(|| no(codes::BAD_REQUEST, 400, "nothing to change (memory: 8G | 512M | none)"))?;
+    if let Some(io) = io_after(&app, &v)? {
+        let cur = k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref());
+        let looser = cur.loosened_by(&io);
+        if !looser.is_empty() && agent_ws(who).is_some() {
+            return Err(no(
+                codes::OWNER_ONLY,
+                403,
+                format!(
+                    "raising an App's disk ceiling ({}) is the owner's call: ask your human (k2 app config {} --io-… from a terminal outside K2)",
+                    looser.join(", "),
+                    app.app_id
+                ),
+            ));
+        }
+        let col = if io == k2_root_proto::apps::IoMax::k2_default() { None } else { Some(io.to_column()) };
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_io_max(&conn, &app.app_id, col.as_deref()).map_err(db_err)?;
+        }
+        audit_human(&app.app_id, "config", who, json!({ "io": io, "was": cur, "loosened": looser }));
+        mirror(&app.app_id);
+        if v.get("memory").is_none() {
+            return Ok(json!({
+                "ok": true,
+                "app": app_for(who, Some(&app.app_id))?,
+                "io": io,
+                "note": "Walled engines apply disk ceilings at the App's next deploy or restart (k2 app restart).",
+            }));
+        }
+    }
+    let app = app_for(who, Some(&app.app_id))?;
+    let raw = v.get("memory").ok_or_else(|| no(codes::BAD_REQUEST, 400, "nothing to change (memory: 8G | 512M | none; io: …)"))?;
     let raw = match raw {
         J::Null => "none".to_string(),
         J::String(x) => x.clone(),
@@ -747,7 +836,10 @@ const LOG_CAP: usize = 256 * 1024;
 
 /// What a stage-1 App's wall is (the §4.5 label function arrives with the
 /// walls in S13; preview Apps are always this).
-fn label(app: &AppRow) -> &'static str {
+pub(crate) fn label(app: &AppRow) -> &'static str {
+    if app.is_process_exception() {
+        return "Open (process)";
+    }
     match app.isolation.as_str() {
         "process" => "Preview, unwalled (process)",
         "container" => "Guarded (container)",
@@ -777,7 +869,11 @@ fn app_summary(app: &AppRow) -> J {
         "frontPort": app.front_port,
         "memoryLimitBytes": app.memory_limit_bytes,
         "isolation": app.isolation,
+        "path": app.path,
         "label": label(app),
+        "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),
+        "devices": app.devices(),
+        "exception": app.exception_json.as_deref().and_then(|e| serde_json::from_str::<J>(e).ok()),
         "url": url_for(app),
         "livePort": super::supervisor::live_port(&app.app_id),
     })
@@ -1046,6 +1142,13 @@ fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         // gateway rule). Best effort: a process-only App has none.
         if let Err(e) = super::guarded::remove_app(&app.app_id, purge) {
             k2_core::log_debug!("[apps] uninstall {}: engine: {}", app.app_id, e.message);
+        }
+        // The process exception's own state belongs to k2appx: the root
+        // helper deletes it.
+        if purge && app.is_process_exception() {
+            if let Err(e) = super::process_exception::purge(&app.app_id) {
+                k2_core::log_debug!("[apps] uninstall {}: process state: {}", app.app_id, e.message);
+            }
         }
     }
     let svc = {

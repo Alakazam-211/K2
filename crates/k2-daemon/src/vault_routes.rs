@@ -1022,6 +1022,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
     // that can hire agents, for every caller (owner token included).
     "hire-key-mint",
+    // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
+    // guarded container into the process exception (`secretId` = App id).
+    "app-process-exception",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

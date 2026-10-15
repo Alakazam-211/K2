@@ -225,7 +225,8 @@ import json, sys
 c = json.load(open(sys.argv[1]))[0]
 hc = c["HostConfig"]
 assert hc["ReadonlyRootfs"] is True, "ro root"
-assert c["OCIRuntime"] == "crun", c["OCIRuntime"]
+# The engine's OCI shim (named crun) runs crun (lane D: the MAC profile).
+assert c["OCIRuntime"].rsplit("/", 1)[-1] == "crun", c["OCIRuntime"]
 assert hc["Memory"] == 256 * 1024 * 1024, hc["Memory"]
 assert hc.get("MemorySwap") == 256 * 1024 * 1024, hc.get("MemorySwap")
 assert hc["PidsLimit"] == 512, hc["PidsLimit"]
@@ -304,6 +305,58 @@ sleep 2
 [ "$up" = 1 ] && [ "$(curl -s -m 2 "http://127.0.0.1:$FA/")" = a2 ] || fail "esc-a did not come back after a crash"
 ok "a killed container is restarted by the supervisor"
 
+echo "== lane D: MAC, io.max, exec, shell =="
+UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
+CPID="$(asapp podman inspect "${UNIT%.service}" --format '{{.State.Pid}}')"
+if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+	grep -q '^k2-app (enforce)' /sys/kernel/security/apparmor/profiles || fail "k2-app profile not loaded: $(grep k2 /sys/kernel/security/apparmor/profiles)"
+	apparmor_parser -Q -K /etc/apparmor.d/k2-app || fail "the canned profile doesn't parse"
+	[ "$(cat "/proc/$CPID/attr/current")" = "k2-app (enforce)" ] || fail "container init not under k2-app: $(cat "/proc/$CPID/attr/current")"
+	ok "AppArmor: k2-app loaded (enforce); the container runs under it (pid $CPID)"
+	K2 app doctor --json | python3 -c 'import json,sys; c=[x for x in json.load(sys.stdin)["checks"] if x["id"]=="mac"][0]; assert c["status"]=="ok", c'
+	ok "doctor: mac ok"
+else
+	info "no AppArmor on $PRETTY_NAME: MAC checks skipped"
+fi
+CG="$(asapp systemctl --user show -p ControlGroup --value "$UNIT")"
+grep -q 'wbps=41943040' "/sys/fs/cgroup$CG/io.max" || fail "io.max on $CG: $(cat "/sys/fs/cgroup$CG/io.max" 2>&1)"
+grep -q 'wiops=2000' "/sys/fs/cgroup$CG/io.max" || fail "write IOPS ceiling: $(cat "/sys/fs/cgroup$CG/io.max")"
+ok "io.max on the App's unit: $(tr '\n' ' ' <"/sys/fs/cgroup$CG/io.max")"
+K2 app config esc-a --io-write 20M >/dev/null
+K2 app restart esc-a >/dev/null
+r="$(wait_dep esc-a)"; [ "$r" = live ] || fail "esc-a restart after io change: $r"
+UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
+CG="$(asapp systemctl --user show -p ControlGroup --value "$UNIT")"
+grep -q 'wbps=20971520' "/sys/fs/cgroup$CG/io.max" || fail "io.max after config: $(cat "/sys/fs/cgroup$CG/io.max")"
+ok "k2 app config --io-write 20M reaches io.max at the next restart"
+out="$(K2 app exec esc-a -- id -u)"; rc=$?
+[ "$rc" = 0 ] && printf '%s' "$out" | grep -qx 0 || fail "exec id -u: rc $rc $out"
+printf '%s' "$out" | grep -q '<untrusted-app-output app="esc-a" kind="exec">' || fail "exec output is framed: $out"
+st="$(K2 app exec esc-a -- cat /proc/self/status)"
+printf '%s' "$st" | grep -q '^CapEff:\s*0000000000000000' || fail "exec CapEff: $st"
+printf '%s' "$st" | grep -q '^NoNewPrivs:\s*1' || fail "exec NoNewPrivs: $st"
+printf '%s' "$st" | grep -q '^Seccomp:\s*2' || fail "exec seccomp: $st"
+if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+	K2 app exec esc-a -- cat /proc/self/attr/current | grep -q 'k2-app (enforce)' || fail "exec process not under k2-app"
+fi
+set +e
+K2 app exec esc-a -- sh -c 'exit 7' >/dev/null 2>&1; rc=$?
+K2 app exec esc-a --timeout 2 -- sleep 30 >/dev/null 2>&1; rt=$?
+set -e
+[ "$rc" = 7 ] || fail "exec passes the command's exit code (got $rc)"
+[ "$rt" = 124 ] || fail "exec timeout exits 124 (got $rt)"
+ok "k2 app exec: as the App (uid 0 in its namespace, CapEff 0, NoNewPrivs, seccomp, MAC), framed, exit codes, timeout"
+sh_out="$(printf 'echo shell-$((40+2))\nexit 5\n' | K2 app shell esc-a 2>&1)" && rc=0 || rc=$?
+printf '%s' "$sh_out" | grep -q 'shell-42' || fail "shell output: $sh_out"
+printf '%s' "$sh_out" | grep -q 'start of k2 app shell' || fail "shell banner: $sh_out"
+[ "$rc" = 5 ] || fail "shell exit code (got $rc)"
+sh_out="$(printf 'printf "\\033]52;c;ZXZpbA==\\007x\\033]0;t\\007y\\n"\nexit\n' | K2 app shell esc-a 2>&1 | od -c)"
+printf '%s' "$sh_out" | grep -q ']   5   2' && fail "OSC 52 reached the client: $sh_out"
+ok "k2 app shell: piped session, banners, exit code, OSC 52/title stripped"
+K2 app history esc-a --json | python3 -c 'import json,sys; ev=[a["event"] for a in json.load(sys.stdin)["audit"]]; assert "exec" in ev and "shell_start" in ev and "shell_end" in ev, ev'
+grep -q '"event":"app-exec"' "$K2HOME/.k2/auth-audit.jsonl" || fail "Access Audit has no app-exec"
+ok "exec and shell are in the deploy audit and the Access Audit"
+
 echo "== youki (opt-in) =="
 set +e
 K2 app box prepare --runtime youki >/tmp/py.txt 2>&1; rc=$?
@@ -313,7 +366,7 @@ if [ "$rc" = 0 ]; then
 	r="$(wait_dep esc-b)"
 	[ "$r" = live ] || fail "esc-b on youki: $r"
 	CB="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-b--' | head -n1)"
-	[ "$(asapp podman inspect "$CB" --format '{{.OCIRuntime}}')" = youki ] || fail "esc-b runtime"
+	case "$(asapp podman inspect "$CB" --format '{{.OCIRuntime}}')" in youki | */youki) ;; *) fail "esc-b runtime" ;; esac
 	curl -s "http://127.0.0.1:$FB/probe" >/tmp/py.json
 	jq_ 'assert v["capEff"]=="0000000000000000" and v["seccomp"]=="2" and v["unshareU"]["ok"] is False and v["gateway"]["body"]=="gw-38601", v' /tmp/py.json
 	ok "youki: esc-b restarted on youki, same floor from inside (CapEff 0, seccomp, no unshare -U, gateway)"

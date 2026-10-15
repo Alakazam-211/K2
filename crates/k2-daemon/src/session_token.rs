@@ -664,6 +664,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/deploy",
         "/cli/app/deployment",
         "/cli/app/errors",
+        // `on` refuses passports (owner_only, with the command for their
+        // human); `off` is a tightening under the manage switch.
+        "/cli/app/exception",
+        "/cli/app/exec",
         "/cli/app/history",
         "/cli/app/inspect",
         "/cli/app/install",
@@ -671,6 +675,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/logs",
         "/cli/app/restart",
         "/cli/app/rollback",
+        "/cli/app/shell",
         "/cli/app/start",
         "/cli/app/stop",
         "/cli/app/uninstall",

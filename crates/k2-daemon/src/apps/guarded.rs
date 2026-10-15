@@ -444,6 +444,7 @@ impl RuntimeEngine for GuardedEngine {
             secrets,
             // The App pass arrives with the gateway link (S14).
             pass_hex: None,
+            io: k2_root_proto::apps::IoMax::from_column(spec.io_max_json.as_deref()),
         };
         wire::check_start(&s).map_err(|w| eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")))?;
         let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(420)) {
@@ -501,9 +502,9 @@ impl RuntimeEngine for GuardedEngine {
 
     fn exec(&self, h: &RunHandle, argv: &[String], tty: bool) -> Result<ExecStream> {
         if tty {
-            return Err(eng_err(codes::ENGINE_UNAVAILABLE, "an interactive shell arrives with k2 app shell (S28)"));
+            return Err(eng_err(codes::ENGINE_UNAVAILABLE, "a terminal goes through exec_tty (k2 app shell)"));
         }
-        let v = call(&Request::Exec { app: h.app_id.clone(), deployment: h.deployment_id.clone(), argv: argv.to_vec() }, None, Duration::from_secs(150))?;
+        let v = exec_once(&h.app_id, &h.deployment_id, argv, wire::EXEC_TIMEOUT_DEFAULT)?;
         Ok(ExecStream {
             exit_code: v["exitCode"].as_i64().and_then(|c| i32::try_from(c).ok()),
             output: v["output"].as_str().unwrap_or("").as_bytes().to_vec(),
@@ -550,6 +551,58 @@ fn spec_seed_hash(p: &Prepared) -> Option<String> {
     wire::seed_hash_ok(&h).then_some(h)
 }
 
+/// S28 one-shot exec into a guarded deployment's container (`k2 app
+/// exec`): `{exitCode, timedOut, bytes, ms, output}` (output raw; the route
+/// strips and frames it).
+pub fn exec_once(app: &str, deployment: &str, argv: &[String], timeout_secs: u64) -> Result<Value> {
+    call(
+        &Request::Exec { app: app.into(), deployment: deployment.into(), argv: argv.to_vec(), timeout_secs },
+        None,
+        Duration::from_secs(timeout_secs + 30),
+    )
+}
+
+/// S28 `k2 app shell`: ask the engine for a terminal; on `ok` the returned
+/// stream carries `wire::tty` frames until the command exits.
+#[cfg(unix)]
+pub fn exec_tty_at(socket: &Path, app: &str, deployment: &str, argv: &[String], cols: u16, rows: u16) -> Result<std::os::unix::net::UnixStream> {
+    use std::os::unix::net::UnixStream;
+    let mut c = UnixStream::connect(socket)
+        .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("the App engine isn't answering at {} ({e})", socket.display())))?;
+    let _ = c.set_write_timeout(Some(Duration::from_secs(60)));
+    let req = Request::ExecTty { app: app.into(), deployment: deployment.into(), argv: argv.to_vec(), cols, rows };
+    let mut line = serde_json::to_vec(&req).map_err(|e| eng_err(codes::BAD_REQUEST, e.to_string()))?;
+    line.push(b'\n');
+    c.write_all(&line).map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine write: {e}")))?;
+    // The answer line, byte by byte: nothing of the frame stream after it
+    // may be swallowed by a buffer.
+    let _ = c.set_read_timeout(Some(Duration::from_secs(60)));
+    let mut ans = Vec::new();
+    let mut b = [0u8; 1];
+    loop {
+        match c.read(&mut b) {
+            Ok(1) if b[0] == b'\n' => break,
+            Ok(1) if ans.len() < 64 * 1024 => ans.push(b[0]),
+            Ok(_) => return Err(eng_err(codes::ENGINE_UNAVAILABLE, "the App engine gave no answer")),
+            Err(e) => return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("engine answer: {e}"))),
+        }
+    }
+    let a: Answer = serde_json::from_slice(&ans).map_err(|_| eng_err(codes::ENGINE_UNAVAILABLE, "the App engine gave no answer"))?;
+    if !a.ok {
+        return Err(eng_err(code_of(a.code.as_deref()), format!("App engine: {}", a.message.unwrap_or_default())));
+    }
+    let _ = c.set_read_timeout(None);
+    Ok(c)
+}
+
+#[cfg(unix)]
+pub fn exec_tty(app: &str, deployment: &str, argv: &[String], cols: u16, rows: u16) -> Result<std::os::unix::net::UnixStream> {
+    if !cfg!(target_os = "linux") {
+        return Err(eng_err(codes::ENGINE_UNAVAILABLE, "the guarded engine runs on Linux boxes only"));
+    }
+    exec_tty_at(Path::new(wire::SOCKET), app, deployment, argv, cols, rows)
+}
+
 /// Is this handle the guarded engine's?
 pub fn owns(h: &RunHandle) -> bool {
     h.engine_ref.starts_with(REF_PREFIX)
@@ -587,6 +640,8 @@ mod tests {
             .collect(),
             memory_limit_bytes: None,
             drain_secs: 30,
+            io_max_json: None,
+            devices: vec![],
             data_dir: "/x/data".into(),
             cache_dir: "/x/cache".into(),
             home_dir: "/x/home".into(),

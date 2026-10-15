@@ -398,7 +398,7 @@ pub fn handle_users_email(body: &[u8], actor: &str) -> CliResponse {
         Ok(e) => e,
         Err(r) => return r,
     };
-    match skin::set_principal_email(username, email) {
+    match skin::set_principal_email_as(username, email, actor) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} set email for {} has_email={}",
@@ -445,7 +445,7 @@ pub fn handle_users_full_name(body: &[u8], actor: &str) -> CliResponse {
         Err(r) => return r,
     };
     let cleaned = cleaned_full_name(full_name);
-    match skin::set_principal_full_name(username, cleaned.as_deref()) {
+    match skin::set_principal_full_name_as(username, cleaned.as_deref(), actor) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} set full name for {} has_full_name={}",
@@ -570,7 +570,7 @@ pub fn handle_users_remove(body: &[u8], actor: &str) -> CliResponse {
     let Some(username) = str_field(&v, &["username", "name"]) else {
         return CliResponse::bad_request("missing username");
     };
-    match skin::remove_principal(username) {
+    match skin::remove_principal_as(username, actor) {
         Ok(true) => {
             k2_core::log_debug!("[skin] actor={actor} removed principal {username}");
             CliResponse::ok_json(r#"{"success":true}"#.to_string())
@@ -688,10 +688,30 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub fn handle_grants_get() -> CliResponse {
-    match skin::list_grants() {
-        Ok(grants) => CliResponse::ok_json(serde_json::json!({ "grants": grants }).to_string()),
-        Err(e) => CliResponse::internal_error(e),
-    }
+    let grants = match skin::list_grants() {
+        Ok(g) => g,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    // Sew S27 §17.1: hooked (chat) grants carry `hookState` (synced |
+    // pending | blocked | held) and `hookError`. Additive.
+    let states = match k2_core::tool_hook::hook_states(&grants) {
+        Ok(s) => s,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    let rows: Vec<serde_json::Value> = grants
+        .iter()
+        .map(|g| {
+            let mut v = serde_json::to_value(g).unwrap_or_default();
+            if let Some((state, err)) = states.get(&g.id) {
+                v["hookState"] = serde_json::json!(state);
+                if let Some(e) = err {
+                    v["hookError"] = serde_json::json!(e);
+                }
+            }
+            v
+        })
+        .collect();
+    CliResponse::ok_json(serde_json::json!({ "grants": rows }).to_string())
 }
 
 fn opt_text_field<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
@@ -712,8 +732,14 @@ pub fn handle_grants_post(body: &[u8], actor: &str) -> CliResponse {
     let Some(kind) = str_field(&v, &["kind"]) else {
         return CliResponse::bad_request("missing kind");
     };
-    let Some(target_id) = str_field(&v, &["targetId", "target_id", "target"]) else {
-        return CliResponse::bad_request("missing target id");
+    // Sew S27: a hooked kind (chat) fills its one target (`sew`), resolves
+    // a principal username / workspace handle in core, and defaults the
+    // principal scope to `member`.
+    let hooked = k2_core::tool_hook::provisioner_for(kind);
+    let target_id = match (str_field(&v, &["targetId", "target_id", "target"]), hooked) {
+        (Some(t), _) => t,
+        (None, Some(p)) => p.default_target(),
+        (None, None) => return CliResponse::bad_request("missing target id"),
     };
     let is_app = kind.trim().eq_ignore_ascii_case("app");
     // S24-11: an App target may be `host`, a service id, or
@@ -784,8 +810,9 @@ pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Sew S27 §17.1: the response lists cascaded assistant grants.
     let deleted = if let Some(id) = str_field(&v, &["id"]) {
-        skin::delete_grant_by_id(id)
+        skin::delete_grant_by_id_with_cascade(id, actor)
     } else {
         let Some(subject_kind) = str_field(&v, &["subjectKind", "subject_kind"]) else {
             return CliResponse::bad_request("missing grant id or subjectKind");
@@ -796,19 +823,149 @@ pub fn handle_grants_delete(body: &[u8], actor: &str) -> CliResponse {
         let Some(kind) = str_field(&v, &["kind"]) else {
             return CliResponse::bad_request("missing kind");
         };
-        let Some(target_id) = str_field(&v, &["targetId", "target_id", "target"]) else {
-            return CliResponse::bad_request("missing target id");
+        let target_id = match str_field(&v, &["targetId", "target_id", "target"]) {
+            Some(t) => t,
+            None if k2_core::tool_hook::provisioner_for(kind).is_some() => "",
+            None => return CliResponse::bad_request("missing target id"),
         };
-        skin::delete_grant_by_key(subject_kind, subject_id, kind, target_id)
+        skin::delete_grant_by_key_with_cascade(subject_kind, subject_id, kind, target_id, actor)
     };
     match deleted {
-        Ok(true) => {
-            k2_core::log_debug!("[skin] actor={actor} revoked grant");
-            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+        Ok(Some(cascaded)) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} revoked grant (cascaded {})",
+                cascaded.len()
+            );
+            CliResponse::ok_json(
+                serde_json::json!({ "success": true, "cascaded": cascaded }).to_string(),
+            )
         }
-        Ok(false) => CliResponse::bad_request("unknown grant"),
+        Ok(None) => CliResponse::bad_request("unknown grant"),
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+// ── Sew S27 grant hooks (owner-tier; POSTs are POST-only) ────────────
+
+/// `POST /cli/skin/grants/update {id, scope}` → the updated grant.
+pub fn handle_grants_update(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing grant id");
+    };
+    let Some(scope) = str_field(&v, &["scope"]) else {
+        return CliResponse::bad_request("missing scope");
+    };
+    match skin::update_grant_scope(id, scope, actor) {
+        Ok(g) => {
+            k2_core::log_debug!("[skin] actor={actor} grant {} scope updated", g.id);
+            CliResponse::ok_json(serde_json::to_string(&g).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// `GET /cli/skin/grant-hooks` → targets, outbox counts, blocked + held rows.
+pub fn handle_grant_hooks_get() -> CliResponse {
+    match k2_core::tool_hook::status() {
+        Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+fn query_value(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| percent_decode(v))
+    })
+}
+
+/// `GET /cli/skin/grant-hooks/log?limit=50&subject=<ext id>` → newest
+/// first; payload only on blocked rows (payloads hold emails).
+pub fn handle_grant_hooks_log(query: &str) -> CliResponse {
+    let limit = match query_value(query, "limit") {
+        None => 50,
+        Some(l) => match l.parse::<usize>() {
+            Ok(n) if (1..=500).contains(&n) => n,
+            _ => return CliResponse::bad_request("limit must be 1–500"),
+        },
+    };
+    let subject = query_value(query, "subject").filter(|s| !s.trim().is_empty());
+    match k2_core::tool_hook::log(limit, subject.as_deref()) {
+        Ok(rows) => CliResponse::ok_json(
+            serde_json::json!({
+                "rows": rows,
+                "actorNote": "actor is reported by K2; it is not proof a person acted",
+            })
+            .to_string(),
+        ),
+        Err(e) => CliResponse::internal_error(e),
+    }
+}
+
+/// `POST /cli/skin/grant-hooks/target {kind, enabled, socket?, tokenFile?}`.
+pub fn handle_grant_hooks_target(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let kind = str_field(&v, &["kind"]).unwrap_or(k2_core::tool_hook::CHAT_KIND);
+    let enabled = match require_bool(&v, &["enabled"]) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let socket = str_field(&v, &["socket"]);
+    let token_file = str_field(&v, &["tokenFile", "token_file"]);
+    match k2_core::tool_hook::set_target(kind, enabled, socket, token_file, actor) {
+        Ok(t) => CliResponse::ok_json(serde_json::to_string(&t).unwrap_or_else(|_| "{}".into())),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// `POST /cli/skin/grant-hooks/retry {id}` (blocked, or pending that failed).
+pub fn handle_grant_hooks_retry(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing outbox row id");
+    };
+    match k2_core::tool_hook::retry(id) {
+        Ok(row) => {
+            k2_core::log_debug!("[grant-hook] actor={actor} retry row {id}");
+            CliResponse::ok_json(serde_json::to_string(&row).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// `POST /cli/skin/grant-hooks/skip {id}` (blocked only); then reconcile.
+pub fn handle_grant_hooks_skip(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(&v, &["id"]) else {
+        return CliResponse::bad_request("missing outbox row id");
+    };
+    match k2_core::tool_hook::skip(id) {
+        Ok(row) => {
+            k2_core::log_debug!("[grant-hook] actor={actor} skip row {id}");
+            CliResponse::ok_json(serde_json::to_string(&row).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// `POST /cli/skin/grant-hooks/reconcile {}` → `{started:true}`.
+pub fn handle_grant_hooks_reconcile(_body: &[u8], actor: &str) -> CliResponse {
+    k2_core::log_debug!("[grant-hook] actor={actor} asked for a reconcile");
+    k2_core::tool_hook::kick_reconcile();
+    CliResponse::ok_json(r#"{"started":true}"#.to_string())
 }
 
 fn require_bool(v: &serde_json::Value, keys: &[&str]) -> Result<bool, CliResponse> {
@@ -834,7 +991,7 @@ pub fn handle_grants_enabled(body: &[u8], actor: &str) -> CliResponse {
         Ok(b) => b,
         Err(r) => return r,
     };
-    match skin::set_grant_enabled(id, enabled) {
+    match skin::set_grant_enabled_as(id, enabled, actor) {
         Ok(grant) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} grant {} enabled={}",
@@ -1112,6 +1269,11 @@ pub fn handle_access_post(path: &str, body: &[u8], actor: &str) -> CliResponse {
         "/cli/skin/grants/enabled" => handle_grants_enabled(body, actor),
         "/cli/skin/grants/host" => handle_grants_host(body, actor),
         "/cli/skin/grants/copy-host" => handle_grants_copy_host(body, actor),
+        "/cli/skin/grants/update" => handle_grants_update(body, actor),
+        "/cli/skin/grant-hooks/target" => handle_grant_hooks_target(body, actor),
+        "/cli/skin/grant-hooks/retry" => handle_grant_hooks_retry(body, actor),
+        "/cli/skin/grant-hooks/skip" => handle_grant_hooks_skip(body, actor),
+        "/cli/skin/grant-hooks/reconcile" => handle_grant_hooks_reconcile(body, actor),
         "/cli/skin/templates/update" => handle_templates_update(body, actor),
         "/cli/skin/templates/delete" => handle_templates_delete(body, actor),
         "/cli/skin/templates/lines" => handle_template_lines_post(body, actor),

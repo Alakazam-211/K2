@@ -9313,6 +9313,32 @@ async fn handle_one_request(
                             })
                     }
                 }
+                // Sew S27: grant-hook status + log (owner-tier reads).
+                "/cli/skin/grant-hooks" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        tokio::task::spawn_blocking(crate::skin_routes::handle_grant_hooks_get)
+                            .await
+                            .unwrap_or_else(|e| {
+                                crate::cli_response::CliResponse::internal_error(e)
+                            })
+                    }
+                }
+                "/cli/skin/grant-hooks/log" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::owner_role_identity(&query, state.token.as_str()).is_none() {
+                        skin_dual_auth_failure(&query, bearer_token.as_deref())
+                    } else {
+                        let q = query.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            crate::skin_routes::handle_grant_hooks_log(&q)
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
                 "/cli/skin/grants/delete" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
@@ -9344,6 +9370,11 @@ async fn handle_one_request(
                 "/cli/skin/grants/enabled"
                 | "/cli/skin/grants/host"
                 | "/cli/skin/grants/copy-host"
+                | "/cli/skin/grants/update"
+                | "/cli/skin/grant-hooks/target"
+                | "/cli/skin/grant-hooks/retry"
+                | "/cli/skin/grant-hooks/skip"
+                | "/cli/skin/grant-hooks/reconcile"
                 | "/cli/skin/templates/update"
                 | "/cli/skin/templates/delete"
                 | "/cli/skin/templates/lines"

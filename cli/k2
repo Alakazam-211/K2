@@ -6642,6 +6642,132 @@ except Exception as e:
 # {code,hint} owner_only/forbidden/gated → 3; other errors → 1.
 # Success (no error) exits 0 silently. Callers capture the body, run this,
 # then format — never rely on pipe last-status.
+# Sew S27: `k2 app grant hooks …` — grant-hook status, log, retry, skip,
+# reconcile, target. Owner only (the daemon gates every route).
+_app_grant_hooks() {
+    local action="${1:-status}"
+    shift || true
+    case "$action" in
+        status|"")
+            local json_out=0
+            [[ "${1:-}" == "--json" ]] && json_out=1
+            local raw
+            raw=$(cli_request "/cli/skin/grant-hooks")
+            printf '%s' "$raw" | _skin_die_if_err
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$raw"; return 0; fi
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+ts=d.get("targets") or []
+if not ts:
+    print("No grant-hook targets (chat is not enabled on this box).")
+for t in ts:
+    print("%s  %s  %s  socket %s" % (t.get("kind",""), "on" if t.get("enabled") else "off",
+        "healthy" if t.get("healthy") else ("unhealthy: " + (t.get("lastError") or "?")), t.get("socket","")))
+    if t.get("lastReconcile"):
+        print("  last reconcile: %s" % json.dumps(t["lastReconcile"]))
+o=d.get("outbox") or {}
+age=o.get("oldestPendingAgeSecs")
+print("outbox: %s pending, %s blocked, %s held%s" % (o.get("pending",0), o.get("blocked",0), o.get("held",0),
+    ("  (oldest pending %ss)" % age) if age is not None else ""))
+for r in d.get("blocked") or []:
+    print("  BLOCKED %s  %s %s  %s" % (r.get("id",""), r.get("op",""), r.get("subjectKey",""), r.get("lastError") or ""))
+for r in d.get("held") or []:
+    print("  HELD    %s  %s %s  %s" % (r.get("id",""), r.get("op",""), r.get("subjectKey",""), r.get("lastError") or ""))
+print("Actors are reported by K2; not proof a person acted.")'
+            ;;
+        log)
+            local subject="" limit="50" json_out=0
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --subject) subject="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                    --subject=*) subject="${1#--subject=}"; shift ;;
+                    --limit) limit="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                    --limit=*) limit="${1#--limit=}"; shift ;;
+                    --json) json_out=1; shift ;;
+                    *) echo "Usage: k2 app grant hooks log [--subject <ext id>] [--limit N] [--json]" >&2; exit 1 ;;
+                esac
+            done
+            local raw
+            if [[ -n "$subject" ]]; then
+                raw=$(cli_request "/cli/skin/grant-hooks/log" "limit=$(urlencode "$limit")" "subject=$(urlencode "$subject")")
+            else
+                raw=$(cli_request "/cli/skin/grant-hooks/log" "limit=$(urlencode "$limit")")
+            fi
+            printf '%s' "$raw" | _skin_die_if_err
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$raw"; return 0; fi
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+rows=d.get("rows") or []
+if not rows:
+    print("No outbox rows.")
+for r in rows:
+    print("%s  %-9s %-11s %s  by %s  (%s, %s attempt(s))%s" % (r.get("id",""), r.get("state",""), r.get("op",""),
+        r.get("subjectKey",""), r.get("actor",""), r.get("cause",""), r.get("attempts",0),
+        ("  " + r["lastError"]) if r.get("lastError") else ""))'
+            ;;
+        retry|skip)
+            local id="${1:-}"
+            [[ -z "$id" ]] && { echo "Usage: k2 app grant hooks $action <outbox-id>" >&2; exit 1; }
+            local body raw
+            body=$(K2_HOOK_ROW="$id" python3 -c 'import json,os; print(json.dumps({"id": os.environ["K2_HOOK_ROW"]}))')
+            raw=$(cli_post_json "/cli/skin/grant-hooks/$action" "$body")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Outbox row %s is now %s." % (d.get("id",""), d.get("state","")))'
+            ;;
+        reconcile)
+            local raw
+            raw=$(cli_post_json "/cli/skin/grant-hooks/reconcile" "{}")
+            printf '%s' "$raw" | _skin_die_if_err
+            echo "Reconcile started."
+            ;;
+        target)
+            local kind="${1:-}" enabled="" socket="" token_file=""
+            shift || true
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --on) enabled=true; shift ;;
+                    --off) enabled=false; shift ;;
+                    --socket) socket="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                    --socket=*) socket="${1#--socket=}"; shift ;;
+                    --token-file) token_file="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                    --token-file=*) token_file="${1#--token-file=}"; shift ;;
+                    *) echo "Usage: k2 app grant hooks target chat --on|--off [--socket <path>] [--token-file <path>]" >&2; exit 1 ;;
+                esac
+            done
+            if [[ -z "$kind" || -z "$enabled" ]]; then
+                echo "Usage: k2 app grant hooks target chat --on|--off [--socket <path>] [--token-file <path>]" >&2
+                exit 1
+            fi
+            local body raw
+            body=$(K2_HOOK_KIND="$kind" K2_HOOK_ON="$enabled" K2_HOOK_SOCKET="$socket" K2_HOOK_TOKEN_FILE="$token_file" python3 -c '
+import json,os
+b={"kind": os.environ["K2_HOOK_KIND"], "enabled": os.environ["K2_HOOK_ON"] == "true"}
+if os.environ.get("K2_HOOK_SOCKET"):
+    b["socket"]=os.environ["K2_HOOK_SOCKET"]
+if os.environ.get("K2_HOOK_TOKEN_FILE"):
+    b["tokenFile"]=os.environ["K2_HOOK_TOKEN_FILE"]
+print(json.dumps(b))')
+            raw=$(cli_post_json "/cli/skin/grant-hooks/target" "$body")
+            printf '%s' "$raw" | _skin_die_if_err
+            printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Target %s %s (socket %s)" % (d.get("kind",""), "on" if d.get("enabled") else "off", d.get("socket","")))'
+            ;;
+        --help|-h)
+            echo "Usage: k2 app grant hooks [status|log|retry <id>|skip <id>|reconcile|target chat --on|--off]" >&2
+            exit 0 ;;
+        *)
+            echo "Usage: k2 app grant hooks [status|log|retry <id>|skip <id>|reconcile|target chat --on|--off]" >&2
+            exit 1 ;;
+    esac
+}
+
 _skin_die_if_err() {
     python3 -c '
 import json, sys
@@ -6732,13 +6858,24 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app role update <name> [--agent … | --clear]
                                         --clear empties the whole map. Always rewrites live sessions.
   k2 app role remove <name>            Drop an unassigned role
-  k2 app grant list                    Grants (subject, kind, target, role|scope)
-  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]
+  k2 app grant list                    Grants (subject, kind, target, role|scope; chat rows show hook state)
+  k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]
                                         Owner only. kind=app is a login on one App: --role, or --room (repeatable;
                                         Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
                                         Other kinds need --scope and no --role (recorded, not enforced).
+  k2 app grant add --kind chat --subject-kind principal --subject <username|id> [--scope member|guest]
+  k2 app grant add --kind chat --subject-kind workspace --subject <handle|id> --scope coworker|assistant:<username|owner>
+                                        chat grants create the person's or agent's Sew account (Linux, Sew enabled);
+                                        roles and channels are set in Sew. --target is optional (sew).
+  k2 app grant set --id <grant-id> --scope <scope>
+                                        Change a chat grant's scope (member↔guest, assistant re-pin).
   k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>
   k2 app grant rm --id <id>            Revoke the grant. The role stays. Ends that App's live logins.
+                                        A person's chat grant also removes assistant grants pinned to them.
+  k2 app grant hooks [status] [--json] Grant-hook targets, outbox counts, blocked + held rows
+  k2 app grant hooks log [--subject <ext id>] [--limit N] [--json]
+  k2 app grant hooks retry <outbox-id> | skip <outbox-id> | reconcile
+  k2 app grant hooks target chat --on|--off [--socket <path>] [--token-file <path>]
   k2 app grant copy-host <app> [--dry-run] [--json]
                                         Owner only. Everyone with the box login gets the same access on <app>
                                         (an App published after 0.45.5 starts with nobody).
@@ -9424,6 +9561,9 @@ for g in grants:
     role=g.get("roleId") or g.get("role_id") or ""
     scope=g.get("scope") or ""
     extra=("role "+role) if role else (("scope "+scope) if scope else "")
+    hs=g.get("hookState")
+    if hs:
+        extra += "  [%s%s]" % (hs, (": " + g["hookError"]) if g.get("hookError") else "")
     print("%s  %s %s  %s %s  %s" % (
         g.get("id") or "",
         g.get("subjectKind") or g.get("subject_kind") or "",
@@ -9452,14 +9592,20 @@ for g in grants:
                             --room) rooms_nl="${rooms_nl}${2-}"$'\n'; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
                             --room=*) rooms_nl="${rooms_nl}${1#--room=}"$'\n'; shift ;;
                             --help|-h)
-                                echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]" >&2
+                                echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]" >&2
+                                echo "       k2 app grant add --kind chat --subject-kind principal|workspace --subject <name|handle|id> [--scope member|guest|coworker|assistant:<person>]" >&2
+                                echo "       chat grants create the Sew account; roles and channels are set in Sew." >&2
                                 exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
                             *) echo "Unknown argument: $1" >&2; exit 1 ;;
                         esac
                     done
+                    # Sew S27: chat has one target (sew); the daemon fills it in.
+                    if [[ "$(printf %s "$kind" | tr "[:upper:]" "[:lower:]")" == "chat" && -z "$target" ]]; then
+                        target="sew"
+                    fi
                     if [[ -z "$subject_kind" || -z "$subject" || -z "$kind" || -z "$target" ]]; then
-                        echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role>] [--scope <text>]" >&2
+                        echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role>] [--scope <text>]" >&2
                         exit 1
                     fi
                     local body raw
@@ -9486,13 +9632,16 @@ print(json.dumps(b))')
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-print("Grant %s  %s %s  %s %s" % (
+print("Grant %s  %s %s  %s %s%s" % (
     d.get("id") or "",
     d.get("subjectKind") or "",
     d.get("subjectId") or "",
     d.get("kind") or "",
     d.get("targetId") or "",
-))'
+    ("  scope " + d["scope"]) if d.get("kind") == "chat" and d.get("scope") else "",
+))
+if d.get("kind") == "chat":
+    print("Queued for chat (Sew). Check with: k2 app grant hooks")'
                     ;;
                 rm|remove|delete|revoke)
                     local subject_kind="" subject="" kind="" target="" gid=""
@@ -9516,6 +9665,9 @@ print("Grant %s  %s %s  %s %s" % (
                             *) echo "Unknown argument: $1" >&2; exit 1 ;;
                         esac
                     done
+                    if [[ -z "$gid" && "$(printf %s "$kind" | tr "[:upper:]" "[:lower:]")" == "chat" && -z "$target" ]]; then
+                        target="sew"
+                    fi
                     if [[ -z "$gid" && ( -z "$subject_kind" || -z "$subject" || -z "$kind" || -z "$target" ) ]]; then
                         echo "Usage: k2 app grant rm --id <id>" >&2
                         echo "       k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>" >&2
@@ -9539,7 +9691,42 @@ else:
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-print("Grant removed." if d.get("success") else "No matching grant.")'
+print("Grant removed." if d.get("success") else "No matching grant.")
+for c in d.get("cascaded") or []:
+    print("  also removed %s grant %s (%s %s, scope %s)" % (c.get("kind",""), c.get("id",""), c.get("subjectKind",""), c.get("subjectId",""), c.get("scope","")))'
+                    ;;
+                set|update)
+                    local gid="" scope=""
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --id) gid="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --id=*) gid="${1#--id=}"; shift ;;
+                            --scope) scope="${2-}"; if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;
+                            --scope=*) scope="${1#--scope=}"; shift ;;
+                            --help|-h)
+                                echo "Usage: k2 app grant set --id <grant-id> --scope <scope>   (chat grants only)" >&2
+                                exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+                            *) echo "Unknown argument: $1" >&2; exit 1 ;;
+                        esac
+                    done
+                    if [[ -z "$gid" || -z "$scope" ]]; then
+                        echo "Usage: k2 app grant set --id <grant-id> --scope <scope>   (chat grants only)" >&2
+                        exit 1
+                    fi
+                    local body raw
+                    body=$(K2_GRANT_ID="$gid" K2_GRANT_SCOPE="$scope" python3 -c '
+import json,os
+print(json.dumps({"id": os.environ["K2_GRANT_ID"], "scope": os.environ["K2_GRANT_SCOPE"]}))')
+                    raw=$(cli_post_json "/cli/skin/grants/update" "$body")
+                    printf '%s' "$raw" | _skin_die_if_err
+                    printf '%s' "$raw" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+print("Grant %s scope %s" % (d.get("id") or "", d.get("scope") or ""))'
+                    ;;
+                hooks|hook)
+                    _app_grant_hooks "$@"
                     ;;
                 copy-host|copyhost)
                     local app="" dry_run=0 json_out=0
@@ -9580,11 +9767,11 @@ for u in d.get("skippedOtherAppRole") or []:
     print("  skipped %s: the box-login role is tagged for another App" % u)'
                     ;;
                 --help|-h)
-                    echo "Usage: k2 app grant <list|add|rm|copy-host>" >&2
+                    echo "Usage: k2 app grant <list|add|set|rm|copy-host|hooks>" >&2
                     exit 0
                     ;;
                 *)
-                    echo "Usage: k2 app grant <list|add|rm|copy-host>" >&2
+                    echo "Usage: k2 app grant <list|add|set|rm|copy-host|hooks>" >&2
                     exit 1 ;;
             esac
             ;;
@@ -25870,7 +26057,7 @@ cmd_schema() {
     },
     {
       "name": "app grant",
-      "usage": "k2 app grant <list|add|rm|copy-host> ...",
+      "usage": "k2 app grant <list|add|set|rm|copy-host|hooks> ...",
       "description": "Owner-only grants. kind=app is a login on one App (host = the box login): a role, or Thread-only rooms. Since 0.45.5 a login needs the grant for that App and its pass reaches only that App's rooms. Other kinds store a scope and no role (recorded, not enforced). Revoke deletes the grant, keeps the role, and ends that App's live logins.",
       "args": [],
       "flags": []
@@ -25884,13 +26071,13 @@ cmd_schema() {
     },
     {
       "name": "app grant add",
-      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli --target <id> [--role <role> | --room <handle>…] [--scope <text>]",
-      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). Owner only.",
+      "usage": "k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]",
+      "description": "Create a grant. kind=app takes --role (role id or name) or --room (repeatable; Thread-only rooms, or --scope as a JSON array), not both; --target is host, a published service id, or <workspace>/<name> (unknown Apps 400). Other kinds require --scope and no --role. Principal subject is a principals.id. Workspace subject is a non-empty id (not looked up). kind=chat creates the Sew account (Sew must be enabled; Linux): --target optional (sew); principal --subject may be a username, scope member (default) or guest; workspace --subject may be a handle, scope coworker or assistant:<username|owner>. Roles and channels are set in Sew. Owner only.",
       "args": [],
       "flags": [
         {"name": "--subject-kind", "arg": "principal|workspace", "description": "Who the grant is for."},
         {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
-        {"name": "--kind", "arg": "app|mailbox|database|cli", "description": "What is granted. app is a login on one App."},
+        {"name": "--kind", "arg": "app|mailbox|database|cli|chat", "description": "What is granted. app is a login on one App; chat is a Sew account."},
         {"name": "--target", "arg": "id", "description": "App (host, service id, or <workspace>/<name>), mailbox, database, or cli target id."},
         {"name": "--role", "arg": "role", "description": "Role id or name (kind=app)."},
         {"name": "--room", "arg": "handle", "description": "Thread-only room for a role-less kind=app grant (repeatable)."},
@@ -25908,6 +26095,27 @@ cmd_schema() {
         {"name": "--subject", "arg": "id", "description": "Principal id or workspace id."},
         {"name": "--kind", "arg": "kind", "description": "Grant kind."},
         {"name": "--target", "arg": "id", "description": "Target id."}
+      ]
+    },
+    {
+      "name": "app grant set",
+      "usage": "k2 app grant set --id <grant-id> --scope <scope>",
+      "description": "Change a chat grant's scope: member <-> guest, or re-pin an assistant. coworker <-> assistant is refused (delete and add again). Owner only.",
+      "args": [],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "Grant id."},
+        {"name": "--scope", "arg": "scope", "description": "member|guest (principal) or coworker|assistant:<person> (workspace)."}
+      ]
+    },
+    {
+      "name": "app grant hooks",
+      "usage": "k2 app grant hooks [status|log|retry|skip|reconcile|target] ...",
+      "description": "Grant hooks (Sew S27): status shows targets, outbox counts, blocked and held rows; log lists outbox rows (--subject <ext id>, --limit N); retry <id> re-arms a blocked row or a pending row that failed; skip <id> drops a blocked row and reconciles; reconcile sweeps now; target chat --on|--off [--socket P] [--token-file P]. The actor on a row is reported by K2, not proof a person acted. Owner only.",
+      "args": [{"name": "action", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."},
+        {"name": "--subject", "arg": "ext id", "description": "log: one subject, e.g. k2:principal:<uuid>."},
+        {"name": "--limit", "arg": "N", "description": "log: 1-500 rows (default 50)."}
       ]
     },
     {

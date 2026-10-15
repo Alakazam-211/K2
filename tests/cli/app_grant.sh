@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# k2 app grant list|add|rm — owner CLI for skin.db grants.
+# k2 app grant list|add|set|rm|hooks — owner CLI for skin.db grants
+# (incl. Sew S27 chat grants and the grant-hook outbox).
 # Stub daemon only. Never touch real ~/.k2.
 
 set -euo pipefail
@@ -150,7 +151,32 @@ class H(BaseHTTPRequestHandler):
                 "targetId": "booking",
                 "roleId": "r-guest",
                 "scope": None,
+            }, {
+                "id": "g-chat",
+                "subjectKind": "principal",
+                "subjectId": "p-ann",
+                "kind": "chat",
+                "targetId": "sew",
+                "roleId": None,
+                "scope": "member",
+                "hookState": "blocked",
+                "hookError": "validation_failed: bad",
             }]}))
+            return
+        if path == "/cli/skin/grant-hooks":
+            self._send(200, json.dumps({
+                "targets": [{"kind": "chat", "enabled": True, "healthy": False,
+                             "lastError": "mgmt token rejected", "socket": "/run/sew/mgmt.sock"}],
+                "outbox": {"pending": 2, "blocked": 1, "held": 1, "oldestPendingAgeSecs": 40},
+                "blocked": [{"id": "ob-1", "op": "provision", "subjectKey": "k2:principal:x", "lastError": "validation_failed: bad"}],
+                "held": [{"id": "ob-2", "op": "provision", "subjectKey": "k2:principal:y", "lastError": "skipped by Sew"}],
+            }))
+            return
+        if path == "/cli/skin/grant-hooks/log":
+            with open(seen, "a") as f:
+                f.write("GET " + self.path + "\n")
+            self._send(200, json.dumps({"rows": [{"id": "ob-1", "state": "done", "op": "provision",
+                "subjectKey": "k2:owner", "actor": "owner-token", "cause": "target_enable", "attempts": 1}]}))
             return
         self._send(404, json.dumps({"error": "not found"}))
 
@@ -171,7 +197,24 @@ class H(BaseHTTPRequestHandler):
             }))
             return
         if path == "/cli/skin/grants/delete":
-            self._send(200, json.dumps({"success": True}))
+            cascaded = []
+            if body.get("id") == "g-chat":
+                cascaded = [{"id": "g-asst", "kind": "chat", "subjectKind": "workspace",
+                             "subjectId": "w-1", "scope": "assistant:p-ann"}]
+            self._send(200, json.dumps({"success": True, "cascaded": cascaded}))
+            return
+        if path == "/cli/skin/grants/update":
+            self._send(200, json.dumps({"id": body.get("id"), "kind": "chat", "scope": body.get("scope")}))
+            return
+        if path in ("/cli/skin/grant-hooks/retry", "/cli/skin/grant-hooks/skip"):
+            self._send(200, json.dumps({"id": body.get("id"), "state": "pending" if path.endswith("retry") else "skipped"}))
+            return
+        if path == "/cli/skin/grant-hooks/reconcile":
+            self._send(200, json.dumps({"started": True}))
+            return
+        if path == "/cli/skin/grant-hooks/target":
+            self._send(200, json.dumps({"kind": body.get("kind"), "enabled": body.get("enabled"),
+                                        "socket": body.get("socket") or "/run/sew/mgmt.sock"}))
             return
         if path == "/cli/skin/grants/copy-host":
             self._send(200, json.dumps({
@@ -222,6 +265,30 @@ add_app_out="$(run_k2 app user add eve --app docs/portal --role desk 2>/dev/null
 add_app_rc=$?
 add_role_only="$(run_k2 app user add eve --role desk 2>&1)"
 add_role_only_rc=$?
+chat_add_out="$(run_k2 app grant add --kind chat --subject-kind principal --subject ann 2>/dev/null)"
+chat_add_rc=$?
+chat_ws_out="$(run_k2 app grant add --kind chat --subject-kind workspace --subject sales --scope assistant:ann 2>/dev/null)"
+chat_ws_rc=$?
+chat_set_out="$(run_k2 app grant set --id g-chat --scope guest 2>/dev/null)"
+chat_set_rc=$?
+chat_rm_out="$(run_k2 app grant rm --id g-chat 2>/dev/null)"
+chat_rm_rc=$?
+chat_rm_key_out="$(run_k2 app grant rm --kind chat --subject-kind principal --subject ann 2>/dev/null)"
+chat_rm_key_rc=$?
+hooks_out="$(run_k2 app grant hooks 2>/dev/null)"
+hooks_rc=$?
+hooks_log_out="$(run_k2 app grant hooks log --subject k2:owner --limit 5 2>/dev/null)"
+hooks_log_rc=$?
+hooks_retry_out="$(run_k2 app grant hooks retry ob-1 2>/dev/null)"
+hooks_retry_rc=$?
+hooks_skip_out="$(run_k2 app grant hooks skip ob-1 2>/dev/null)"
+hooks_skip_rc=$?
+hooks_rec_out="$(run_k2 app grant hooks reconcile 2>/dev/null)"
+hooks_rec_rc=$?
+hooks_tgt_out="$(run_k2 app grant hooks target chat --on --socket /run/sew/mgmt.sock 2>/dev/null)"
+hooks_tgt_rc=$?
+set_missing="$(run_k2 app grant set --id g-chat 2>&1)"
+set_missing_rc=$?
 set -e
 assert_eq "grant list exit 0" "$list_rc" "0"
 assert_contains "list prints grant" "$list_out" "g1"
@@ -258,6 +325,51 @@ assert_contains "add --room target" "$seen" '"targetId": "docs/portal"'
 assert_contains "copy-host posts" "$seen" "/cli/skin/grants/copy-host"
 assert_contains "copy-host body" "$seen" '{"app": "docs/portal", "dryRun": true}'
 assert_contains "user add --app body" "$seen" '{"username": "eve", "app": "docs/portal", "role": "desk"}'
+
+echo "== Sew S27 chat grants + hooks =="
+assert_contains "list shows chat hook state" "$list_out" "[blocked: validation_failed: bad]"
+assert_eq "chat add exit 0" "$chat_add_rc" "0"
+assert_contains "chat add says queued" "$chat_add_out" "Queued for chat (Sew)"
+assert_eq "chat workspace add exit 0" "$chat_ws_rc" "0"
+assert_eq "chat set exit 0" "$chat_set_rc" "0"
+assert_contains "chat set prints scope" "$chat_set_out" "Grant g-chat scope guest"
+assert_eq "chat rm exit 0" "$chat_rm_rc" "0"
+assert_contains "chat rm prints cascade" "$chat_rm_out" "also removed chat grant g-asst (workspace w-1, scope assistant:p-ann)"
+assert_eq "chat rm by key without --target exit 0" "$chat_rm_key_rc" "0"
+assert_eq "hooks status exit 0" "$hooks_rc" "0"
+assert_contains "hooks status target" "$hooks_out" "chat  on  unhealthy: mgmt token rejected"
+assert_contains "hooks status counts" "$hooks_out" "outbox: 2 pending, 1 blocked, 1 held  (oldest pending 40s)"
+assert_contains "hooks status blocked row" "$hooks_out" "BLOCKED ob-1"
+assert_contains "hooks status held row" "$hooks_out" "HELD    ob-2"
+assert_contains "hooks status attribution note" "$hooks_out" "not proof a person acted"
+assert_eq "hooks log exit 0" "$hooks_log_rc" "0"
+assert_contains "hooks log row" "$hooks_log_out" "ob-1  done"
+assert_eq "hooks retry exit 0" "$hooks_retry_rc" "0"
+assert_contains "hooks retry" "$hooks_retry_out" "Outbox row ob-1 is now pending."
+assert_eq "hooks skip exit 0" "$hooks_skip_rc" "0"
+assert_contains "hooks skip" "$hooks_skip_out" "Outbox row ob-1 is now skipped."
+assert_eq "hooks reconcile exit 0" "$hooks_rec_rc" "0"
+assert_contains "hooks reconcile" "$hooks_rec_out" "Reconcile started."
+assert_eq "hooks target exit 0" "$hooks_tgt_rc" "0"
+assert_contains "hooks target" "$hooks_tgt_out" "Target chat on (socket /run/sew/mgmt.sock)"
+assert_eq "set without --scope exit 1" "$set_missing_rc" "1"
+seen="$(cat "$SEEN")"
+assert_contains "chat add body kind" "$seen" '"kind": "chat"'
+assert_contains "chat add body default target" "$seen" '"subjectId": "ann", "kind": "chat", "targetId": "sew"'
+assert_contains "chat ws body scope" "$seen" '"scope": "assistant:ann"'
+assert_contains "set posts update" "$seen" '/cli/skin/grants/update'
+assert_contains "set body" "$seen" '{"id": "g-chat", "scope": "guest"}'
+assert_contains "rm by key fills sew" "$seen" '"subjectId": "ann", "kind": "chat", "targetId": "sew"'
+assert_contains "retry posts" "$seen" '/cli/skin/grant-hooks/retry'
+assert_contains "skip posts" "$seen" '/cli/skin/grant-hooks/skip'
+assert_contains "reconcile posts" "$seen" '/cli/skin/grant-hooks/reconcile'
+assert_contains "target body" "$seen" '{"kind": "chat", "enabled": true, "socket": "/run/sew/mgmt.sock"}'
+assert_contains "log query subject (curl lowercases %3a)" "$seen" "subject=k2%3aowner"
+assert_contains "log query limit" "$seen" 'limit=5'
+assert_contains "schema grant set" "$schema" '"name": "app grant set"'
+assert_contains "schema grant hooks" "$schema" '"name": "app grant hooks"'
+assert_contains "help names chat" "$help_out" "--kind chat"
+assert_contains "help says Sew owns roles" "$help_out" "roles and channels are set in Sew"
 
 echo
 echo "$pass passed, $fail failed"

@@ -22,15 +22,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
-use base64::Engine;
 use chrono::{Duration as ChronoDuration, Utc};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
+use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use p256::SecretKey;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::cli_response::CliResponse;
 use k2_core::log_debug;
@@ -218,61 +214,13 @@ fn generate_and_persist_key(path: &Path) -> Result<String, String> {
     Ok(pem)
 }
 
-/// CSPRNG P-256 secret via `getrandom` (already a daemon dep).
+/// CSPRNG P-256 secret (shared helper, `crate::es256`).
 fn random_p256_secret() -> Result<SecretKey, String> {
-    // Rejection sampling until the 32-byte seed is a valid scalar.
-    for _ in 0..64 {
-        let mut bytes = [0u8; 32];
-        getrandom::getrandom(&mut bytes)
-            .map_err(|e| format!("os rng unavailable for capability key: {e}"))?;
-        if let Ok(sk) = SecretKey::from_slice(&bytes) {
-            return Ok(sk);
-        }
-    }
-    Err("failed to sample a valid P-256 secret key".into())
+    crate::es256::random_secret()
 }
 
 fn jwk_from_private_pem(pem: &str) -> Result<(String, serde_json::Value), String> {
-    let secret = SecretKey::from_pkcs8_pem(pem)
-        .map_err(|e| format!("parse capability private key for JWKS: {e}"))?;
-    let public = secret.public_key();
-    let point = public.to_encoded_point(false);
-    let x = point
-        .x()
-        .ok_or_else(|| "P-256 public point missing x".to_string())?;
-    let y = point
-        .y()
-        .ok_or_else(|| "P-256 public point missing y".to_string())?;
-    let x_b64 = B64URL.encode(x.as_slice());
-    let y_b64 = B64URL.encode(y.as_slice());
-
-    // Stable kid = first 8 bytes of SHA-256(x||y) as lowercase hex.
-    let mut hasher = Sha256::new();
-    hasher.update(x.as_slice());
-    hasher.update(y.as_slice());
-    let digest = hasher.finalize();
-    let kid = bytes_to_hex(&digest[..8]);
-
-    let jwk = serde_json::json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "x": x_b64,
-        "y": y_b64,
-        "use": "sig",
-        "alg": "ES256",
-        "kid": kid,
-    });
-    Ok((kid, jwk))
-}
-
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0xf) as usize] as char);
-    }
-    out
+    crate::es256::jwk_from_private_pem(pem)
 }
 
 // ── Public handlers / API ─────────────────────────────────────────────
@@ -715,6 +663,8 @@ fn stage_file(workspace: &Path, session_id: &str, env_value: &str) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+    use base64::Engine;
     use super::*;
     use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 

@@ -271,6 +271,11 @@ pub fn check(app: &str, host: &str, port: u16) -> Result<Verdict, Refused> {
 /// keeps its own host binding per secret; both must pass.
 pub fn check_for_key_proxy(app: &str, host: &str, port: u16) -> Result<Vec<SocketAddr>, Refused> {
     let host = pol::normalize_name(host).ok_or_else(|| refused(400, codes::BAD_REQUEST, "not a host name"))?;
+    // The key proxy may be asked before the App's proxy ever started
+    // (a stopped App, a fresh daemon): read the policy from the DB.
+    if policy_of(app).is_none() {
+        reload(app);
+    }
     decide(app, &host, port).map(|(a, _)| a)
 }
 

@@ -1273,11 +1273,12 @@ fn handle_access(
         && toggle != "vault_manage"
         && toggle != "compute_operate"
         && toggle != "projects_manage"
+        && toggle != "chat_manage"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'chat_manage', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
         ));
     }
     let value = match v.get("value") {
@@ -1327,6 +1328,20 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute_operate", "agentsCanOperateCompute": value }),
             format!("ok {} compute_operate={value}", ws.handle),
+        ));
+    }
+    if toggle == "chat_manage" {
+        // Sew chat (0167, Rosson 2026-10-15): "Manage Sew". Default OFF.
+        // On lets this workspace's agent run the community-management verbs
+        // and, where approvals.by allows agents, decide OTHER agents'
+        // queued chat posts. Same single writer, same Admin floor: the
+        // agent never turns on its own switch.
+        k2_core::workspace::settings::set_agents_can_manage_chat(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"sewChat": "chat_manage"}));
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_manage", "agentsCanManageChat": value }),
+            format!("ok {} chat_manage={value}", ws.handle),
         ));
     }
     if toggle == "projects_manage" {

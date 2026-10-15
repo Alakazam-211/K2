@@ -198,6 +198,9 @@ pub mod vault_use_routes;
 // trigger wakes, `/cli/sources/*`, and the shared sleep/wake detector.
 pub mod sources;
 pub mod sources_routes;
+// Sew chat for agents (`k2 chat`, S30 core): `/cli/sew/chat/*`, the chat
+// approval queue `/cli/sew/approvals*`, and the `SewChat` seam to Sew.
+pub mod sew_chat;
 pub mod wall_jump;
 // Garden data (prd-gardens-local-services-v1 1A, contract-garden-data-v1):
 // widget keyspaces, grants, the widget door `/cli/zen/call` and the agent

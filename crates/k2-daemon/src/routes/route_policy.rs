@@ -824,6 +824,31 @@ pub const ROUTES: &[Route] = &[
     // ingress, LAN, air-gap) at once — Owner only.
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
+    // Sew chat S30 (plan-sew-s30-s32-on-k2-v1 K17/K18). The chat queue's
+    // deciders: the owner token, Owner/Admin logins, or a passport with
+    // Manage Sew (the handler applies approvals.by and the vault confirm).
+    get("/cli/sew/approvals", Admin),
+    post("/cli/sew/approvals/approve", Admin),
+    post("/cli/sew/approvals/approve-batch", Admin),
+    post("/cli/sew/approvals/deny", Admin),
+    get("/cli/sew/approvals/policy", Admin),
+    post("/cli/sew/approvals/policy/set", Admin),
+    // `k2 chat` agent verbs: passports only (people use the Sew app; the
+    // owner token gets 403 agent_only from the handler).
+    get("/cli/sew/chat/access", NoLogin),
+    get("/cli/sew/chat/channels", NoLogin),
+    post("/cli/sew/chat/delete", NoLogin),
+    post("/cli/sew/chat/dm", NoLogin),
+    post("/cli/sew/chat/edit", NoLogin),
+    get("/cli/sew/chat/messages", NoLogin),
+    get("/cli/sew/chat/outbox", NoLogin),
+    post("/cli/sew/chat/outbox/cancel", NoLogin),
+    get("/cli/sew/chat/read", NoLogin),
+    post("/cli/sew/chat/reply", NoLogin),
+    post("/cli/sew/chat/send", NoLogin),
+    get("/cli/sew/chat/spaces", NoLogin),
+    get("/cli/sew/chat/wait", NoLogin),
+    get("/cli/sew/chat/whoami", NoLogin),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),

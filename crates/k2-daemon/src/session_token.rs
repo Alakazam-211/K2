@@ -720,6 +720,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         // Sidecar identity: `k2 whoami` (NOT /cli/auth/whoami — that
         // `role` is connect-user).
         "/cli/whoami",
+        // Sew chat S30: the approval queue list (prefix `/cli/sew/approvals/`
+        // below covers approve/deny/policy).
+        "/cli/sew/approvals",
         "/cli/chatter",
         "/cli/chatterlog",
         // Custom domains / certs (prd-custom-domains A9 + name-add fold).
@@ -739,6 +742,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         // `/cli/sources/*` path is served on the cell socket for the bound
         // session; handlers refuse person steps with 403 person_only.
         "/cli/sources/",
+        // Sew chat S30 (`k2 chat`): every `/cli/sew/chat/*` verb runs AS
+        // the bound session (identity never from the body). The chat
+        // approval queue is served here too: the handler admits a passport
+        // only with Manage Sew on and approvals.by = people+agents, never
+        // on its own items, and refuses the policy change (person step).
+        // NOT `/cli/sew/` — the Sew server surfaces stay off this list.
+        "/cli/sew/chat/",
+        "/cli/sew/approvals/",
         // Garden data (contract-garden-data-v1 §4.7): every
         // `/cli/zen/data/*` path is served on the cell socket for the bound
         // session; grants apply per call, person routes answer 403

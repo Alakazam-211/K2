@@ -722,6 +722,19 @@ mod unix_impl {
                 let who = crate::sources_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::sources_routes::handle(p, who, body, params))
             }
+            // Sew chat S30: EVERY `/cli/sew/chat/*` and `/cli/sew/approvals*`
+            // path for THIS cell's session (agent or K2 shell tab — both
+            // agent-level, never the owner). Identity is the bound passport.
+            p if crate::sew_chat::routes::is_route(p) => {
+                if crate::sew_chat::routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::sew_chat::routes::method_not_allowed());
+                }
+                if body.len() > crate::sew_chat::routes::MAX_BODY {
+                    return from_cli(crate::sew_chat::routes::too_large());
+                }
+                let who = crate::sew_chat::routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::sew_chat::routes::handle(p, who, body, params, is_post))
+            }
             // Garden data (contract-garden-data-v1 §4.7): EVERY
             // `/cli/zen/data/*` path for THIS cell's session (agent or K2
             // shell tab, agent rules); person routes answer 403
@@ -1627,6 +1640,35 @@ mod unix_impl {
                 let _: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}: {body}"));
                 if crate::sources_routes::is_post_route(path) {
                     let (status, _, _) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-src");
+                    assert_eq!(status, "405 Method Not Allowed", "{path}");
+                }
+            }
+        }
+
+        /// Sew chat S30: every `/cli/sew/chat/*` and `/cli/sew/approvals*`
+        /// path is an agent verb answered by the chat handler on the cell
+        /// socket (never cli::dispatch's 404 nor the cell sentinel), with a
+        /// JSON error body; a GET to a POST-only path is 405.
+        #[test]
+        fn cell_dispatch_serves_every_sew_chat_route() {
+            let _home = crate::test_support::TempHome::new();
+            let _ = k2_core::db::init_for_tests();
+            let p = principal();
+            let params: HashMap<String, String> = HashMap::new();
+            for path in crate::sew_chat::routes::ROUTES {
+                assert!(crate::session_token::is_agent_verb(path), "{path} must be an agent verb");
+                let method = if crate::sew_chat::routes::is_post_route(path) { "POST" } else { "GET" };
+                let (status, _, body) = dispatch_cell_verb(method, path, &params, b"{}", &p, "sid-sew");
+                assert!(
+                    !body.contains("route not found") && !body.contains("not served on cell socket"),
+                    "{path}: {status} {body}"
+                );
+                let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("{path}: {e}: {body}"));
+                // Reading the approvals policy is open to any passport; every
+                // other path refuses this unbound session with a JSON error.
+                assert!(v["error"]["code"].is_string() || status == "200 OK", "{path}: {status} {body}");
+                if crate::sew_chat::routes::is_post_route(path) {
+                    let (status, _, _) = dispatch_cell_verb("GET", path, &params, b"", &p, "sid-sew");
                     assert_eq!(status, "405 Method Not Allowed", "{path}");
                 }
             }

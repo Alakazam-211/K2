@@ -18,7 +18,8 @@ use std::time::Duration;
 use k2_root_proto::apps::{AppId, APP_HOME, APP_USER, CONTAINERS_CONF, SUBGID_FILE, SUBUID_FILE};
 use k2_root_proto::engine::{
     self as wire, app_slice, check_start, codes, deployment_ok, gateway_port, hex_decode, image_ok, seed_hash_ok, slot_base,
-    unit_stem, Answer, Request, StartSpec, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES, PASS_TARGET, SECRETS_TARGET_DIR,
+    pass_hex_ok, unit_stem, Answer, Request, StartSpec, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES, PASS_FILE_NAME, PASS_ROOT,
+    PASS_TARGET, SECRETS_TARGET_DIR,
 };
 use serde_json::{json, Value};
 
@@ -38,6 +39,8 @@ fn bad(m: impl Into<String>) -> (&'static str, String) {
 pub struct Engine {
     pub home: PathBuf,
     pub runtime_dir: String,
+    /// The App pass folders' root (tmpfs [`PASS_ROOT`] in production).
+    pub pass_root: PathBuf,
     /// Serializes slot changes and unit-file writes + `daemon-reload`.
     lock: Mutex<()>,
 }
@@ -57,7 +60,41 @@ pub struct RunState {
 
 impl Engine {
     pub fn new(home: PathBuf, runtime_dir: String) -> Self {
-        Self { home, runtime_dir, lock: Mutex::new(()) }
+        Self { home, runtime_dir, pass_root: PathBuf::from(PASS_ROOT), lock: Mutex::new(()) }
+    }
+
+    /// Tests: keep the pass folders somewhere writable.
+    pub fn with_pass_root(mut self, root: PathBuf) -> Self {
+        self.pass_root = root;
+        self
+    }
+
+    fn pass_dir(&self, app: &AppId) -> PathBuf {
+        self.pass_root.join(app.as_str())
+    }
+
+    /// Write the App's pass file (S14): `pass/` 0700 (k2app only, so the
+    /// daemon user's agents can't read it), `pass/<app>/` 0755 and the
+    /// file 0444 (the container's root is "other" to k2app), swapped in
+    /// by a rename so every mounted instance sees the whole new pass.
+    fn write_pass(&self, app: &AppId, pass_hex: &str) -> R<PathBuf> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        if !pass_hex_ok(pass_hex) {
+            return Err(bad("pass"));
+        }
+        let raw = hex_decode(pass_hex).ok_or_else(|| bad("pass"))?;
+        let dir = self.pass_dir(app);
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        for (d, mode) in [(&self.pass_root, 0o700), (&dir, 0o755)] {
+            if !d.is_dir() {
+                std::fs::DirBuilder::new().recursive(true).mode(mode).create(d).map_err(|e| (codes::IO, format!("mkdir {}: {e}", d.display())))?;
+            }
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(mode)).map_err(|e| (codes::IO, format!("chmod {}: {e}", d.display())))?;
+        }
+        let file = dir.join(PASS_FILE_NAME);
+        sys::write_atomic(&file, &raw, 0o444).map_err(|e| (codes::IO, e))?;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).map_err(|e| (codes::IO, format!("chmod pass: {e}")))?;
+        Ok(dir)
     }
 
     fn seeds(&self) -> PathBuf {
@@ -184,6 +221,11 @@ impl Engine {
             Request::Exec { app, deployment, argv } => self.exec(&app, &deployment, &argv),
             Request::Adopt => self.adopt(),
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
+            Request::PassWrite { app, pass_hex } => {
+                let a = AppId::parse(&app).ok_or_else(|| bad("app id"))?;
+                self.write_pass(&a, &pass_hex)?;
+                Ok(json!({ "written": true }))
+            }
         }
     }
 
@@ -376,15 +418,15 @@ impl Engine {
         if files {
             env.insert("K2_SECRETS_DIR".into(), SECRETS_TARGET_DIR.into());
         }
+        let mut pass_dir = None;
         if let Some(p) = &s.pass_hex {
-            let name = Self::secret_name(&app, &s.deployment, "pass");
-            let val = hex_decode(p).ok_or_else(|| bad("pass"))?;
-            if let Err(e) = self.podman(&["secret", "create", "--replace", &name, "-"], Some(val), 60) {
-                cleanup(&made);
-                return Err(e);
+            match self.write_pass(&app, p) {
+                Ok(d) => pass_dir = Some(d.to_string_lossy().to_string()),
+                Err(e) => {
+                    cleanup(&made);
+                    return Err(e);
+                }
             }
-            made.push(name.clone());
-            mounts.push(SecretMount::File { secret: name, target: PASS_TARGET.into() });
             env.insert("K2_PASS_FILE".into(), PASS_TARGET.into());
         }
         let env_file = run_dir.join(format!("{}.env", s.deployment));
@@ -415,6 +457,7 @@ impl Engine {
             memory_mib: s.memory_mib,
             drain_secs: s.drain_secs,
             secrets: &mounts,
+            pass_dir: pass_dir.as_deref(),
         });
         let qfile = self.quadlets().join(format!("{stem}.container"));
         let state = RunState { app: app.as_str().into(), deployment: s.deployment.clone(), port: s.port, gw_port: gw, slot, unit: unit.clone(), secrets: made.clone() };
@@ -566,6 +609,8 @@ impl Engine {
             stopped.push(s.deployment);
         }
         let _ = std::fs::remove_dir(self.run_dir(&a));
+        // The App's pass goes with its last instance (the daemon revoked it).
+        let _ = std::fs::remove_dir_all(self.pass_dir(&a));
         let mut purged = false;
         if data {
             let dir = self.apps().join(a.as_str());
@@ -616,6 +661,7 @@ fn verb_name(r: &Request) -> &'static str {
         Request::Exec { .. } => "exec",
         Request::Adopt => "adopt",
         Request::RemoveApp { .. } => "remove-app",
+        Request::PassWrite { .. } => "pass-write",
     }
 }
 
@@ -815,6 +861,50 @@ mod tests {
         let ans: Answer = serde_json::from_str(out.trim()).unwrap();
         assert!(ans.ok, "{ans:?}");
         assert_eq!(std::fs::read_to_string(d.path().join("seeds").join(&hash).join("index.js")).unwrap(), "1;");
+    }
+
+    /// S14: the pass file lands in the App's pass folder with the modes
+    /// the wall needs (folder root k2app-only, App folder and file
+    /// world-readable for the container's mapped root), is replaced whole
+    /// on rotation, and a malformed pass is refused before any write.
+    #[test]
+    fn pass_write_rotates_the_file_and_refuses_junk() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("run-pass");
+        let e = Engine::new(d.path().to_path_buf(), "/tmp".into()).with_pass_root(root.clone());
+        let ask = |line: String| -> Answer {
+            let (mut a, b) = UnixStream::pair().unwrap();
+            a.write_all(line.as_bytes()).unwrap();
+            a.shutdown(std::net::Shutdown::Write).unwrap();
+            serve_conn(&e, b, &|_| Ok("k2".into()));
+            let mut s = String::new();
+            a.read_to_string(&mut s).unwrap();
+            serde_json::from_str(s.trim()).unwrap()
+        };
+        let w = |p: &[u8]| format!("{{\"verb\":\"pass-write\",\"app\":\"jobs\",\"passHex\":\"{}\"}}\n", wire::hex_encode(p));
+        // serde field names: snake_case in the enum (no rename_all on variant fields).
+        let w2 = |p: &[u8]| format!("{{\"verb\":\"pass-write\",\"app\":\"jobs\",\"pass_hex\":\"{}\"}}\n", wire::hex_encode(p));
+        let a = ask(w2(b"k2skn_first"));
+        assert!(a.ok, "{a:?}");
+        let file = root.join("jobs").join("pass");
+        assert_eq!(std::fs::read(&file).unwrap(), b"k2skn_first");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&root), 0o700, "the root stops the daemon user's agents");
+        assert_eq!(mode(&root.join("jobs")), 0o755);
+        assert_eq!(mode(&file), 0o444);
+        let a = ask(w2(b"k2skn_second"));
+        assert!(a.ok, "{a:?}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"k2skn_second", "rotation replaces the whole file");
+        for junk in [&b"not-a-pass"[..], b"k2skn_a\nb", b""] {
+            let a = ask(w2(junk));
+            assert_eq!(a.code.as_deref(), Some(codes::BAD_REQUEST), "{junk:?}");
+        }
+        let a = ask(w(b"k2skn_x"));
+        assert_eq!(a.code.as_deref(), Some(codes::BAD_REQUEST), "unknown field");
+        let a = ask(format!("{{\"verb\":\"pass-write\",\"app\":\"../x\",\"pass_hex\":\"{}\"}}\n", wire::hex_encode(b"k2skn_x")));
+        assert_eq!(a.code.as_deref(), Some(codes::BAD_REQUEST));
+        assert_eq!(std::fs::read(&file).unwrap(), b"k2skn_second", "refusals never touch the file");
     }
 
     #[test]

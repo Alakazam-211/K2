@@ -14,10 +14,12 @@
 //! 5. read-only root, tmpfs `/tmp` and HOME, the Seed read-only at `/app`,
 //!    `data/` and `cache/` read-write;
 //! 6. nothing privileged, no host namespaces, no devices, no sockets;
-//! 7. pasta with one forward: the App's gateway link port on its own
-//!    loopback (`-T`), the App's port published on host loopback only;
+//! 7. pasta with one forward: the container's `127.0.0.1:8730` to the
+//!    App's own gateway link on host loopback (`-T 8730:<link>`, S14), the
+//!    App's port published on host loopback only;
 //! 9. environment from an env file (never systemd-expanded) and secrets as
-//!    Podman secrets (never in the unit);
+//!    Podman secrets (never in the unit); the App pass is a file in the
+//!    App's pass folder, mounted read-only (it rotates, S14);
 //! 10. caps: memory (no swap), pids, open files.
 //!
 //! Plus `StopTimeout` ≥ the drain window, an init (catatonit) so SIGTERM
@@ -28,7 +30,7 @@
 //! Health is the daemon's HTTP probe, not a Podman healthcheck (W §5.6).
 
 use k2_root_proto::apps::AppId;
-use k2_root_proto::engine::{app_slice, unit_stem, SLOT_SIZE};
+use k2_root_proto::engine::{app_slice, unit_stem, IN_WALL_GATEWAY_PORT, PASS_MOUNT, SLOT_SIZE};
 
 /// One secret mount for the template (the Podman secret already exists).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +59,8 @@ pub struct Render<'a> {
     pub memory_mib: u64,
     pub drain_secs: u64,
     pub secrets: &'a [SecretMount],
+    /// The App's pass folder on the host (S14), mounted at `/run/k2`.
+    pub pass_dir: Option<&'a str>,
 }
 
 /// Container stop timeout: the drain window plus 10 s (AR45).
@@ -114,7 +118,10 @@ pub fn render(r: &Render) -> String {
     line(format!("Volume={}:/data:rw", r.data_dir));
     line(format!("Volume={}:/cache:rw", r.cache_dir));
     line("WorkingDir=/app".into());
-    line(format!("Network=pasta:-T,{}", r.gw_port));
+    if let Some(d) = r.pass_dir {
+        line(format!("Volume={d}:{PASS_MOUNT}:ro"));
+    }
+    line(format!("Network=pasta:-T,{IN_WALL_GATEWAY_PORT}:{}", r.gw_port));
     line(format!("PublishPort=127.0.0.1:{p}:{p}", p = r.port));
     line("RunInit=true".into());
     line("PidsLimit=512".into());
@@ -161,6 +168,7 @@ mod tests {
             memory_mib: 512,
             drain_secs: 30,
             secrets,
+            pass_dir: Some("/run/k2app/pass/nsi-skin"),
         }
     }
 
@@ -170,7 +178,7 @@ mod tests {
         let argv = vec!["node".to_string(), "server.mjs".to_string()];
         let secrets = vec![
             SecretMount::Env { secret: "k2-nsi-skin--d-0123456789ab--0".into(), var: "STRIPE_KEY".into() },
-            SecretMount::File { secret: "k2-nsi-skin--d-0123456789ab--p".into(), target: "/run/k2/pass".into() },
+            SecretMount::File { secret: "k2-nsi-skin--d-0123456789ab--1".into(), target: "/run/secrets/db.json".into() },
         ];
         let u = render(&base_render(&app, &argv, &secrets));
         for want in [
@@ -183,14 +191,15 @@ mod tests {
             "\nSeccompProfile=/var/lib/k2app/engine/seccomp-k2-v1.json\n",
             "\nReadOnly=true\n",
             "\nVolume=/var/lib/k2app/seeds/aaaa:/app:ro\n",
-            "\nNetwork=pasta:-T,38601\n",
+            "\nNetwork=pasta:-T,8730:38601\n",
+            "\nVolume=/run/k2app/pass/nsi-skin:/run/k2:ro\n",
             "\nPublishPort=127.0.0.1:41234:41234\n",
             "\nRunInit=true\n",
             "\nPidsLimit=512\n",
             "\nPodmanArgs=--memory=512m --memory-swap=512m\n",
             "\nStopTimeout=40\n",
             "\nSecret=k2-nsi-skin--d-0123456789ab--0,type=env,target=STRIPE_KEY\n",
-            "\nSecret=k2-nsi-skin--d-0123456789ab--p,type=mount,target=/run/k2/pass,mode=0400,uid=0,gid=0\n",
+            "\nSecret=k2-nsi-skin--d-0123456789ab--1,type=mount,target=/run/secrets/db.json,mode=0400,uid=0,gid=0\n",
             "\nExec=\"node\" \"server.mjs\"\n",
             "\nSlice=k2apps-nsi_skin.slice\n",
             "\nRestart=no\n",
@@ -203,6 +212,10 @@ mod tests {
             assert!(!u.contains(never), "{never} in\n{u}");
         }
         assert!(!u.contains("[Install]"), "never started at boot by systemd itself (the daemon adopts)");
+        assert!(!u.contains("target=/run/k2/pass"), "the pass is a mounted file, never a Podman secret (it rotates)");
+        let mut r = base_render(&app, &argv, &secrets);
+        r.pass_dir = None;
+        assert!(!render(&r).contains(":/run/k2:ro"), "no pass, no mount");
     }
 
     #[test]

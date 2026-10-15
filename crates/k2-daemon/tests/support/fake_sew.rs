@@ -70,9 +70,15 @@ pub struct Call {
 
 #[derive(Debug, Clone)]
 enum Fault {
-    Fail { status: u16, code: String, reason: String },
+    Fail {
+        status: u16,
+        code: String,
+        reason: String,
+    },
     ApplyThenDrop,
-    RateLimit { secs: u64 },
+    RateLimit {
+        secs: u64,
+    },
 }
 
 #[derive(Default)]
@@ -240,7 +246,10 @@ impl FakeSew {
         self.with(|s| s.calls.clone())
     }
     pub fn posts(&self) -> Vec<Call> {
-        self.calls().into_iter().filter(|c| c.method == "POST").collect()
+        self.calls()
+            .into_iter()
+            .filter(|c| c.method == "POST")
+            .collect()
     }
     /// POSTs that changed state (not replays, not faults).
     pub fn applied(&self, path: &str, ext: &str) -> usize {
@@ -271,8 +280,16 @@ impl FakeSew {
     /// Fail loudly on any request the real Sew would not take.
     pub fn assert_clean(&self) {
         self.with(|s| {
-            assert!(s.bad_paths.is_empty(), "unknown mgmt paths: {:?}", s.bad_paths);
-            assert!(s.bad_bodies.is_empty(), "bodies sew-proto refuses: {:?}", s.bad_bodies);
+            assert!(
+                s.bad_paths.is_empty(),
+                "unknown mgmt paths: {:?}",
+                s.bad_paths
+            );
+            assert!(
+                s.bad_bodies.is_empty(),
+                "bodies sew-proto refuses: {:?}",
+                s.bad_bodies
+            );
         })
     }
 
@@ -285,7 +302,10 @@ impl FakeSew {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("timed out waiting for {what}; fake Sew call log:\n{}", self.log());
+        panic!(
+            "timed out waiting for {what}; fake Sew call log:\n{}",
+            self.log()
+        );
     }
 }
 
@@ -325,7 +345,10 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
                     Ok(n) => buf.extend_from_slice(&chunk[..n]),
                 }
             }
-            break (head, String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).to_string());
+            break (
+                head,
+                String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).to_string(),
+            );
         }
     };
     let mut lines = head.split("\r\n");
@@ -341,7 +364,16 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 
     let (status, out, extra, drop_conn) = {
         let mut s = state.lock().unwrap();
-        handle(&mut s, &method, &path, &query, auth.as_deref(), key.as_deref(), actor.as_deref(), &body)
+        handle(
+            &mut s,
+            &method,
+            &path,
+            &query,
+            auth.as_deref(),
+            key.as_deref(),
+            actor.as_deref(),
+            &body,
+        )
     };
     if drop_conn {
         return; // applied, but the response is lost
@@ -357,7 +389,9 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
 fn header(head: &str, name: &str) -> Option<String> {
     head.lines().skip(1).find_map(|l| {
         let (k, v) = l.split_once(':')?;
-        k.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+        k.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| v.trim().to_string())
     })
 }
 
@@ -373,7 +407,7 @@ fn handle(
     body: &str,
 ) -> (u16, String, String, bool) {
     let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    let mut record = |s: &mut State, status: u16, replayed: bool| {
+    let record = |s: &mut State, status: u16, replayed: bool| {
         s.calls.push(Call {
             method: method.into(),
             path: path.into(),
@@ -403,7 +437,12 @@ fn handle(
             sew_wire::MGMT_PRINCIPALS => list(s, query),
             _ => {
                 s.bad_paths.push(format!("GET {path}"));
-                err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}))
+                err(
+                    404,
+                    "not_found",
+                    "unknown route",
+                    json!({"reason": "unknown_route"}),
+                )
             }
         };
         record(s, st, false);
@@ -416,7 +455,10 @@ fn handle(
         return (st, b, String::new(), false);
     };
     if let Some(a) = actor {
-        assert!(sew_wire::is_sew_actor(a), "Sew-Actor {a:?} breaks the grammar");
+        assert!(
+            sew_wire::is_sew_actor(a),
+            "Sew-Actor {a:?} breaks the grammar"
+        );
     }
     let hash = sha(body);
     if let Some((h, st, b)) = s.idem.get(key).cloned() {
@@ -424,19 +466,33 @@ fn handle(
             record(s, st, true);
             return (st, b, "Idempotent-Replayed: true\r\n".into(), false);
         }
-        let (st, b) = err(409, "idempotency_conflict", "key reused with another body", json!({}));
+        let (st, b) = err(
+            409,
+            "idempotency_conflict",
+            "key reused with another body",
+            json!({}),
+        );
         record(s, st, false);
         return (st, b, String::new(), false);
     }
     let mut drop_conn = false;
     match s.faults.pop_front() {
-        Some(Fault::Fail { status, code, reason }) => {
+        Some(Fault::Fail {
+            status,
+            code,
+            reason,
+        }) => {
             let (st, b) = err(status, &code, "injected", json!({"reason": reason}));
             record(s, st, false);
             return (st, b, String::new(), false);
         }
         Some(Fault::RateLimit { secs }) => {
-            let (st, b) = err(429, "rate_limited", "slow down", json!({"retry_after_ms": secs * 1000}));
+            let (st, b) = err(
+                429,
+                "rate_limited",
+                "slow down",
+                json!({"retry_after_ms": secs * 1000}),
+            );
             record(s, st, false);
             return (st, b, format!("Retry-After: {secs}\r\n"), false);
         }
@@ -450,7 +506,12 @@ fn handle(
         sew_wire::MGMT_OWNER_SET => owner_set(s, body),
         _ => {
             s.bad_paths.push(format!("POST {path}"));
-            err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}))
+            err(
+                404,
+                "not_found",
+                "unknown route",
+                json!({"reason": "unknown_route"}),
+            )
         }
     };
     if (200..300).contains(&st) || st == 404 || st == 409 || st == 422 {
@@ -486,16 +547,31 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
     if let Some(person) = &req.assistant_of {
         match s.members.get(&person.to_string()) {
             None => {
-                return err(422, "invalid_state", "person not provisioned", json!({"reason": "assistant_person_unknown", "field": "assistant_of"}))
+                return err(
+                    422,
+                    "invalid_state",
+                    "person not provisioned",
+                    json!({"reason": "assistant_person_unknown", "field": "assistant_of"}),
+                )
             }
             Some(p) if p.deactivated => {
-                return err(422, "invalid_state", "person deactivated", json!({"reason": "assistant_person_inactive", "field": "assistant_of"}))
+                return err(
+                    422,
+                    "invalid_state",
+                    "person deactivated",
+                    json!({"reason": "assistant_person_inactive", "field": "assistant_of"}),
+                )
             }
             Some(_) => {}
         }
     }
     if active_username_holder(s, &req.profile.username, &ext).is_some() {
-        return err(409, "conflict", "username taken", json!({"field": "profile.username", "reason": "username_taken"}));
+        return err(
+            409,
+            "conflict",
+            "username taken",
+            json!({"field": "profile.username", "reason": "username_taken"}),
+        );
     }
     if s.banned.contains(&ext) {
         let id = s.members.get(&ext).map(|m| m.member_id).unwrap_or(0);
@@ -558,7 +634,12 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
     let ext = req.external_id.to_string();
     if let Some(u) = &req.profile.username {
         if active_username_holder(s, u, &ext).is_some() {
-            return err(409, "conflict", "username taken", json!({"field": "profile.username", "reason": "username_taken"}));
+            return err(
+                409,
+                "conflict",
+                "username taken",
+                json!({"field": "profile.username", "reason": "username_taken"}),
+            );
         }
     }
     let Some(m) = s.members.get_mut(&ext) else {
@@ -575,7 +656,10 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
         Patch::Clear => m.email = None,
         Patch::Set(e) => m.email = Some(e),
     }
-    (200, json!({"member_id": m.member_id.to_string()}).to_string())
+    (
+        200,
+        json!({"member_id": m.member_id.to_string()}).to_string(),
+    )
 }
 
 fn deprovision(s: &mut State, body: &str) -> (u16, String) {
@@ -597,7 +681,10 @@ fn deprovision(s: &mut State, body: &str) -> (u16, String) {
             a.deactivated = true;
         }
     }
-    (200, json!({"member_id": id.to_string(), "sessions_revoked": 0}).to_string())
+    (
+        200,
+        json!({"member_id": id.to_string(), "sessions_revoked": 0}).to_string(),
+    )
 }
 
 fn owner_set(s: &mut State, body: &str) -> (u16, String) {
@@ -607,15 +694,30 @@ fn owner_set(s: &mut State, body: &str) -> (u16, String) {
     };
     let ext = req.external_id.to_string();
     let Some(m) = s.members.get(&ext) else {
-        return err(422, "invalid_state", "not eligible", json!({"reason": "target_not_eligible"}));
+        return err(
+            422,
+            "invalid_state",
+            "not eligible",
+            json!({"reason": "target_not_eligible"}),
+        );
     };
     if m.deactivated || m.guest || m.kind != MemberKind::Person {
-        return err(422, "invalid_state", "not eligible", json!({"reason": "target_not_eligible"}));
+        return err(
+            422,
+            "invalid_state",
+            "not eligible",
+            json!({"reason": "target_not_eligible"}),
+        );
     }
     let id = m.member_id.to_string();
     match s.owner.clone() {
         Some(o) if o == ext => (200, json!({"owner_id": id, "changed": false}).to_string()),
-        Some(_) => err(403, "missing_permission", "approval needed", json!({"reason": "owner_approval_required"})),
+        Some(_) => err(
+            403,
+            "missing_permission",
+            "approval needed",
+            json!({"reason": "owner_approval_required"}),
+        ),
         None => {
             s.owner = Some(ext);
             (200, json!({"owner_id": id, "changed": true}).to_string())
@@ -663,5 +765,8 @@ fn list(s: &State, query: &str) -> (u16, String) {
             v
         })
         .collect();
-    (200, json!({"items": items, "has_more": has_more}).to_string())
+    (
+        200,
+        json!({"items": items, "has_more": has_more}).to_string(),
+    )
 }

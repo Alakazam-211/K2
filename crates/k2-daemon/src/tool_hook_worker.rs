@@ -99,10 +99,20 @@ fn secs_ceil(d: Duration) -> i64 {
 /// What to do with a row after one attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
-    Done { status: u16, body: String, reconcile: bool },
+    Done {
+        status: u16,
+        body: String,
+        reconcile: bool,
+    },
     /// HC2: delivered, but the tool skipped this subject (e.g. banned).
-    Held { status: u16, body: String, why: String },
-    UsernameRetry { status: u16 },
+    Held {
+        status: u16,
+        body: String,
+        why: String,
+    },
+    UsernameRetry {
+        status: u16,
+    },
     Retry {
         status: Option<u16>,
         error: String,
@@ -112,7 +122,10 @@ pub enum Outcome {
         /// Stop this target's pass (transport/5xx/401).
         stop_target: bool,
     },
-    Blocked { status: Option<u16>, error: String },
+    Blocked {
+        status: Option<u16>,
+        error: String,
+    },
 }
 
 /// HC2: does a 2xx body list this subject as `skipped`?
@@ -125,10 +138,13 @@ fn skipped_reason(body: &[u8], row: &OutboxRow) -> Option<String> {
                 .get("member_id")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let hit = items.iter().filter_map(Value::as_str).any(|s| {
-                s == row.subject_key || member.as_deref() == Some(s)
-            });
-            hit.then(|| "skipped by Sew (e.g. banned); not re-added until the grant changes".to_string())
+            let hit = items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|s| s == row.subject_key || member.as_deref() == Some(s));
+            hit.then(|| {
+                "skipped by Sew (e.g. banned); not re-added until the grant changes".to_string()
+            })
         }
         _ => None,
     }
@@ -161,12 +177,22 @@ pub fn classify(
         if let Some(why) = skipped_reason(&resp.body, row) {
             return Outcome::Held { status, body, why };
         }
-        return Outcome::Done { status, body, reconcile: false };
+        return Outcome::Done {
+            status,
+            body,
+            reconcile: false,
+        };
     }
     let err = resp.error();
     let code = err.as_ref().map(|e| e.error.code.as_str()).unwrap_or("");
-    let reason = err.as_ref().and_then(|e| e.error.detail_str("reason")).unwrap_or("");
-    let field = err.as_ref().and_then(|e| e.error.detail_str("field")).unwrap_or("");
+    let reason = err
+        .as_ref()
+        .and_then(|e| e.error.detail_str("reason"))
+        .unwrap_or("");
+    let field = err
+        .as_ref()
+        .and_then(|e| e.error.detail_str("field"))
+        .unwrap_or("");
     match status {
         404 if op == Op::Deprovision => Outcome::Done {
             status,
@@ -185,7 +211,11 @@ pub fn classify(
             if row.idem_key.ends_with("_u") {
                 let name = serde_json::from_str::<Value>(&row.payload_raw)
                     .ok()
-                    .and_then(|v| v.pointer("/profile/username").and_then(Value::as_str).map(str::to_string))
+                    .and_then(|v| {
+                        v.pointer("/profile/username")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
                     .unwrap_or_default();
                 Outcome::Blocked {
                     status: Some(status),
@@ -200,7 +230,10 @@ pub fn classify(
             if (now - first) as u128 * 1000 > cfg.dep_wait.as_millis() {
                 Outcome::Blocked {
                     status: Some(status),
-                    error: format!("{}: the assistant's person never arrived in chat", resp.error_line()),
+                    error: format!(
+                        "{}: the assistant's person never arrived in chat",
+                        resp.error_line()
+                    ),
                 }
             } else {
                 Outcome::Retry {
@@ -299,7 +332,12 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
             };
             report.attempted += 1;
             let res = client
-                .post(path_for(op), row.payload_raw.as_bytes(), &row.idem_key, &row.actor)
+                .post(
+                    path_for(op),
+                    row.payload_raw.as_bytes(),
+                    &row.idem_key,
+                    &row.actor,
+                )
                 .await;
             let now = k2_core::tool_hook::outbox::now_secs();
             let outcome = classify(cfg, &row, res.as_ref(), now);
@@ -338,7 +376,11 @@ async fn apply(
         }
     );
     match outcome {
-        Outcome::Done { status, body, reconcile } => {
+        Outcome::Done {
+            status,
+            body,
+            reconcile,
+        } => {
             report.done += 1;
             blocking(move || {
                 hook::record_done(&id, status, &body)?;
@@ -360,7 +402,11 @@ async fn apply(
             let Some(payload) = suffixed_payload(row) else {
                 report.blocked += 1;
                 blocking(move || {
-                    hook::record_blocked(&id, Some(status), "username taken; no username in the body")
+                    hook::record_blocked(
+                        &id,
+                        Some(status),
+                        "username taken; no username in the body",
+                    )
                 })
                 .await?;
                 return Ok((false, false));
@@ -429,7 +475,10 @@ pub async fn reconcile_once() -> Result<SweepReport, String> {
     Ok(report)
 }
 
-async fn get_json<T: serde::de::DeserializeOwned>(client: &MgmtClient, path: &str) -> Result<T, String> {
+async fn get_json<T: serde::de::DeserializeOwned>(
+    client: &MgmtClient,
+    path: &str,
+) -> Result<T, String> {
     let r = client.get(path).await.map_err(|e| e.0)?;
     if r.status == 401 {
         return Err("mgmt token rejected".into());
@@ -609,7 +658,10 @@ mod tests {
         let c = cfg();
         for (attempt, base_ms) in [(1, 2_000u64), (2, 4_000), (3, 8_000), (20, 300_000)] {
             let d = backoff(&c, attempt).as_millis() as u64;
-            assert!(d >= base_ms * 8 / 10 && d <= base_ms * 12 / 10, "attempt {attempt}: {d}");
+            assert!(
+                d >= base_ms * 8 / 10 && d <= base_ms * 12 / 10,
+                "attempt {attempt}: {d}"
+            );
         }
     }
 
@@ -618,42 +670,153 @@ mod tests {
         let c = cfg();
         let r = row("provision", 0, "k2ob_x");
         // 2xx → done
-        assert!(matches!(classify(&c, &r, Ok(&resp(200, r#"{"member_id":"7","created":true}"#, "")), 0), Outcome::Done { reconcile: false, .. }));
+        assert!(matches!(
+            classify(
+                &c,
+                &r,
+                Ok(&resp(200, r#"{"member_id":"7","created":true}"#, "")),
+                0
+            ),
+            Outcome::Done {
+                reconcile: false,
+                ..
+            }
+        ));
         // HC2: 2xx with our subject skipped → held
         let held = resp(200, r#"{"member_id":"7","skipped":["7"]}"#, "");
-        assert!(matches!(classify(&c, &r, Ok(&held), 0), Outcome::Held { .. }));
+        assert!(matches!(
+            classify(&c, &r, Ok(&held), 0),
+            Outcome::Held { .. }
+        ));
         let not_us = resp(200, r#"{"member_id":"7","skipped":["9"]}"#, "");
-        assert!(matches!(classify(&c, &r, Ok(&not_us), 0), Outcome::Done { .. }));
+        assert!(matches!(
+            classify(&c, &r, Ok(&not_us), 0),
+            Outcome::Done { .. }
+        ));
         // 404 deprovision → done; 404 update → done + reconcile; 404 provision → blocked
-        assert!(matches!(classify(&c, &row("deprovision", 0, "k"), Ok(&resp(404, &err("not_found", "", ""), "")), 0), Outcome::Done { reconcile: false, .. }));
-        assert!(matches!(classify(&c, &row("update", 0, "k"), Ok(&resp(404, &err("not_found", "", ""), "")), 0), Outcome::Done { reconcile: true, .. }));
-        assert!(matches!(classify(&c, &r, Ok(&resp(404, &err("not_found", "", ""), "")), 0), Outcome::Blocked { .. }));
+        assert!(matches!(
+            classify(
+                &c,
+                &row("deprovision", 0, "k"),
+                Ok(&resp(404, &err("not_found", "", ""), "")),
+                0
+            ),
+            Outcome::Done {
+                reconcile: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            classify(
+                &c,
+                &row("update", 0, "k"),
+                Ok(&resp(404, &err("not_found", "", ""), "")),
+                0
+            ),
+            Outcome::Done {
+                reconcile: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            classify(&c, &r, Ok(&resp(404, &err("not_found", "", ""), "")), 0),
+            Outcome::Blocked { .. }
+        ));
         // 409 username (S27-A6 field profile.username) → suffix once, then blocked
-        let taken = resp(409, &err("conflict", "username_taken", "profile.username"), "");
-        assert_eq!(classify(&c, &r, Ok(&taken), 0), Outcome::UsernameRetry { status: 409 });
-        assert!(matches!(classify(&c, &row("provision", 1, "k2ob_x_u"), Ok(&taken), 0), Outcome::Blocked { ref error, .. } if error == "username 'ann' is taken in chat"));
+        let taken = resp(
+            409,
+            &err("conflict", "username_taken", "profile.username"),
+            "",
+        );
+        assert_eq!(
+            classify(&c, &r, Ok(&taken), 0),
+            Outcome::UsernameRetry { status: 409 }
+        );
+        assert!(
+            matches!(classify(&c, &row("provision", 1, "k2ob_x_u"), Ok(&taken), 0), Outcome::Blocked { ref error, .. } if error == "username 'ann' is taken in chat")
+        );
         // 409 idempotency_conflict → blocked
-        assert!(matches!(classify(&c, &r, Ok(&resp(409, &err("idempotency_conflict", "", ""), "")), 0), Outcome::Blocked { .. }));
+        assert!(matches!(
+            classify(
+                &c,
+                &r,
+                Ok(&resp(409, &err("idempotency_conflict", "", ""), "")),
+                0
+            ),
+            Outcome::Blocked { .. }
+        ));
         // 422 person unknown → retry within 1 h, blocked after (S27-A7)
-        let unknown = resp(422, &err("invalid_state", "assistant_person_unknown", "assistant_of"), "");
-        assert!(matches!(classify(&c, &row("provision", 1, "k"), Ok(&unknown), 1_000 + 60), Outcome::Retry { target_error: None, .. }));
-        assert!(matches!(classify(&c, &row("provision", 9, "k"), Ok(&unknown), 1_000 + 3_601), Outcome::Blocked { .. }));
+        let unknown = resp(
+            422,
+            &err("invalid_state", "assistant_person_unknown", "assistant_of"),
+            "",
+        );
+        assert!(matches!(
+            classify(&c, &row("provision", 1, "k"), Ok(&unknown), 1_000 + 60),
+            Outcome::Retry {
+                target_error: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            classify(&c, &row("provision", 9, "k"), Ok(&unknown), 1_000 + 3_601),
+            Outcome::Blocked { .. }
+        ));
         // 422 person inactive → blocked at once
-        let inactive = resp(422, &err("invalid_state", "assistant_person_inactive", "assistant_of"), "");
-        assert!(matches!(classify(&c, &r, Ok(&inactive), 0), Outcome::Blocked { .. }));
+        let inactive = resp(
+            422,
+            &err("invalid_state", "assistant_person_inactive", "assistant_of"),
+            "",
+        );
+        assert!(matches!(
+            classify(&c, &r, Ok(&inactive), 0),
+            Outcome::Blocked { .. }
+        ));
         // 429 honours Retry-After when larger than backoff
-        match classify(&c, &r, Ok(&resp(429, &err("rate_limited", "", ""), "Retry-After: 30\r\n")), 0) {
-            Outcome::Retry { delay, stop_target: false, target_error: None, .. } => assert_eq!(delay, Duration::from_secs(30)),
+        match classify(
+            &c,
+            &r,
+            Ok(&resp(
+                429,
+                &err("rate_limited", "", ""),
+                "Retry-After: 30\r\n",
+            )),
+            0,
+        ) {
+            Outcome::Retry {
+                delay,
+                stop_target: false,
+                target_error: None,
+                ..
+            } => assert_eq!(delay, Duration::from_secs(30)),
             o => panic!("429 → {o:?}"),
         }
         // 401 → retry, target unhealthy, stop
-        assert!(matches!(classify(&c, &r, Ok(&resp(401, &err("unauthenticated", "", ""), "")), 0), Outcome::Retry { stop_target: true, target_error: Some(ref e), .. } if e == "mgmt token rejected"));
+        assert!(
+            matches!(classify(&c, &r, Ok(&resp(401, &err("unauthenticated", "", ""), "")), 0), Outcome::Retry { stop_target: true, target_error: Some(ref e), .. } if e == "mgmt token rejected")
+        );
         // 5xx → retry, unhealthy, stop
-        assert!(matches!(classify(&c, &r, Ok(&resp(503, &err("unavailable", "", ""), "")), 0), Outcome::Retry { stop_target: true, target_error: Some(_), .. }));
+        assert!(matches!(
+            classify(&c, &r, Ok(&resp(503, &err("unavailable", "", ""), "")), 0),
+            Outcome::Retry {
+                stop_target: true,
+                target_error: Some(_),
+                ..
+            }
+        ));
         // transport → retry, unhealthy, stop
-        assert!(matches!(classify(&c, &r, Err(&TransportError("connect: refused".into())), 0), Outcome::Retry { status: None, stop_target: true, .. }));
+        assert!(matches!(
+            classify(&c, &r, Err(&TransportError("connect: refused".into())), 0),
+            Outcome::Retry {
+                status: None,
+                stop_target: true,
+                ..
+            }
+        ));
         // other 4xx → blocked with code: hint
-        assert!(matches!(classify(&c, &r, Ok(&resp(400, &err("validation_failed", "", "profile"), "")), 0), Outcome::Blocked { ref error, .. } if error == "validation_failed: h"));
+        assert!(
+            matches!(classify(&c, &r, Ok(&resp(400, &err("validation_failed", "", "profile"), "")), 0), Outcome::Blocked { ref error, .. } if error == "validation_failed: h")
+        );
     }
 
     #[test]

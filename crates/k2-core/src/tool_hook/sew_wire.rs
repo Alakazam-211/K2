@@ -65,24 +65,21 @@ pub const PRINCIPALS_LIMIT_MAX: u32 = 500;
 /// `sew_proto::addr::is_valid_handle`: `^[a-z0-9_-]{2,64}$`.
 pub fn is_valid_handle(s: &str) -> bool {
     (2..=64).contains(&s.len())
-        && s
-            .bytes()
+        && s.bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
 }
 
 /// `sew_proto::mgmt::is_sew_actor`: 1–128 chars of `[A-Za-z0-9_.:@-]`.
 pub fn is_sew_actor(s: &str) -> bool {
     (1..=128).contains(&s.len())
-        && s.bytes().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b':' | b'@' | b'-')
-        })
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b':' | b'@' | b'-'))
 }
 
 /// `Idempotency-Key` grammar (S1 §6.7): `[A-Za-z0-9_-]{1,64}`.
 pub fn is_idempotency_key(s: &str) -> bool {
     (1..=64).contains(&s.len())
-        && s
-            .bytes()
+        && s.bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
@@ -319,7 +316,9 @@ pub fn validate_provision(r: &ProvisionRequest) -> Result<(), String> {
                 return Err("agent_kind: agent_kind is required for agents".into());
             };
             if !r.external_id.is_agent() {
-                return Err("external_id: an agent's external_id must be k2:workspace:<uuid>".into());
+                return Err(
+                    "external_id: an agent's external_id must be k2:workspace:<uuid>".into(),
+                );
             }
             if r.guest {
                 return Err("guest: agents cannot be guests".into());
@@ -345,7 +344,9 @@ pub fn validate_provision(r: &ProvisionRequest) -> Result<(), String> {
                 return Err("assistant_of: assistant_of is only for assistants".into());
             }
             if r.external_id.is_agent() {
-                return Err("external_id: a person's external_id must not be k2:workspace:*".into());
+                return Err(
+                    "external_id: a person's external_id must not be k2:workspace:*".into(),
+                );
             }
         }
     }
@@ -565,9 +566,13 @@ mod tests {
             assert!(ExternalId::parse(bad).is_err(), "{bad:?} must be refused");
         }
         // Lenient on the way IN (a newer Sew's list must still parse).
-        let other: ExternalId = serde_json::from_str("\"k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e\"").unwrap();
+        let other: ExternalId =
+            serde_json::from_str("\"k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e\"").unwrap();
         assert!(!other.is_known());
-        assert_eq!(other.to_string(), "k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e");
+        assert_eq!(
+            other.to_string(),
+            "k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e"
+        );
     }
 
     #[test]

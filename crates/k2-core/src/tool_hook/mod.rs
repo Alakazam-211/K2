@@ -173,13 +173,26 @@ pub const OWNER_GRANT_REV: &str = "owner";
 /// What happened, for [`ToolProvisioner::plan`].
 #[derive(Debug, Clone, Copy)]
 pub enum HookEvent<'a> {
-    GrantCreated { grant: &'a SkinGrant },
-    GrantUpdated { old: &'a SkinGrant, new: &'a SkinGrant },
-    GrantDeleted { grant: &'a SkinGrant },
-    GrantEnabled { grant: &'a SkinGrant },
-    GrantDisabled { grant: &'a SkinGrant },
+    GrantCreated {
+        grant: &'a SkinGrant,
+    },
+    GrantUpdated {
+        old: &'a SkinGrant,
+        new: &'a SkinGrant,
+    },
+    GrantDeleted {
+        grant: &'a SkinGrant,
+    },
+    GrantEnabled {
+        grant: &'a SkinGrant,
+    },
+    GrantDisabled {
+        grant: &'a SkinGrant,
+    },
     /// Email or full name changed.
-    PrincipalChanged { principal: &'a SkinPrincipal },
+    PrincipalChanged {
+        principal: &'a SkinPrincipal,
+    },
     TargetEnabled,
 }
 
@@ -245,7 +258,9 @@ pub fn workspace_facts(id: &str) -> Option<WorkspaceFacts> {
     let display_name = crate::workspace::display::agent_display_name(&path);
     Some(WorkspaceFacts {
         id,
-        handle: handle.map(|h| h.trim().to_string()).filter(|h| !h.is_empty()),
+        handle: handle
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty()),
         name,
         display_name,
     })
@@ -277,8 +292,12 @@ pub trait ToolProvisioner: Send + Sync {
     /// Refuse a disable that would strand dependent grants.
     fn validate_disable(&self, conn: &Connection, grant: &SkinGrant) -> Result<(), String>;
     /// Ops to enqueue for an event, in order.
-    fn plan(&self, conn: &Connection, ev: &HookEvent<'_>, ctx: &HookCtx)
-        -> Result<Vec<NewOp>, String>;
+    fn plan(
+        &self,
+        conn: &Connection,
+        ev: &HookEvent<'_>,
+        ctx: &HookCtx,
+    ) -> Result<Vec<NewOp>, String>;
     /// Extra grant rows to delete with this event (assistant cascade).
     fn cascade(&self, conn: &Connection, ev: &HookEvent<'_>) -> Result<Vec<SkinGrant>, String>;
 }
@@ -451,7 +470,10 @@ pub fn drop_target_grants(kind: &str) -> Result<DropReport, String> {
             .unchecked_transaction()
             .map_err(|e| format!("grant hook drop begin: {e}"))?;
         let grants = tx
-            .execute("DELETE FROM grants WHERE kind = ?1", rusqlite::params![kind])
+            .execute(
+                "DELETE FROM grants WHERE kind = ?1",
+                rusqlite::params![kind],
+            )
             .map_err(|e| format!("grant hook drop grants: {e}"))?;
         let rows = outbox::skip_open_rows(&tx, kind, now, "target dropped")?;
         tx.commit()
@@ -516,7 +538,9 @@ pub fn skip(id: &str) -> Result<outbox::OutboxRow, String> {
 
 /// Hook state per grant id for `GET /cli/skin/grants` (from the newest
 /// outbox row of the grant's subject).
-pub fn hook_states(grants: &[SkinGrant]) -> Result<HashMap<String, (String, Option<String>)>, String> {
+pub fn hook_states(
+    grants: &[SkinGrant],
+) -> Result<HashMap<String, (String, Option<String>)>, String> {
     let hooked: Vec<&SkinGrant> = grants
         .iter()
         .filter(|g| provisioner_for(&g.kind).is_some())
@@ -559,11 +583,8 @@ pub fn apply_reconcile(
         let built = reconcile::build_desired(&tx, &ctx)?;
         let mut orphan_ops = Vec::new();
         for (g, cause) in &built.orphans {
-            tx.execute(
-                "DELETE FROM grants WHERE id = ?1",
-                rusqlite::params![g.id],
-            )
-            .map_err(|e| format!("reconcile orphan delete: {e}"))?;
+            tx.execute("DELETE FROM grants WHERE id = ?1", rusqlite::params![g.id])
+                .map_err(|e| format!("reconcile orphan delete: {e}"))?;
             orphan_ops.push(chat::deprovision_op(g, *cause)?);
         }
         let mut busy = outbox::busy_subjects(&tx, kind)?;
@@ -605,7 +626,10 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
         outbox::set_target_install_id(&tx, kind, install_id, now)?;
         let changed = matches!(old.as_deref(), Some(o) if o != install_id);
         if changed {
-            crate::log_debug!("[grant-hook] Sew install_id changed {} → {install_id}", old.unwrap_or_default());
+            crate::log_debug!(
+                "[grant-hook] Sew install_id changed {} → {install_id}",
+                old.unwrap_or_default()
+            );
             let ops: Vec<NewOp> = p
                 .plan(&tx, &HookEvent::TargetEnabled, &ctx)?
                 .into_iter()
@@ -635,7 +659,9 @@ pub fn due(kind: &str, limit: usize) -> Result<Vec<outbox::OutboxRow>, String> {
 
 pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
     let now = outbox::now_secs();
-    crate::skin::with_skin_conn(|conn| outbox::mark_done(conn, id, status as i64, Some(result), now))
+    crate::skin::with_skin_conn(|conn| {
+        outbox::mark_done(conn, id, status as i64, Some(result), now)
+    })
 }
 
 /// HC2: the tool listed the subject as `skipped`.
@@ -655,7 +681,14 @@ pub fn record_retry(
 ) -> Result<(), String> {
     let now = outbox::now_secs();
     crate::skin::with_skin_conn(|conn| {
-        outbox::mark_retry(conn, id, status.map(i64::from), error, now + delay_secs.max(0), now)
+        outbox::mark_retry(
+            conn,
+            id,
+            status.map(i64::from),
+            error,
+            now + delay_secs.max(0),
+            now,
+        )
     })
 }
 
@@ -697,7 +730,9 @@ pub fn set_health(kind: &str, healthy: bool, error: Option<&str>) -> Result<(), 
 
 pub fn set_reconcile_error(kind: &str, error: &str) -> Result<(), String> {
     let now = outbox::now_secs();
-    crate::skin::with_skin_conn(|conn| outbox::set_target_reconcile(conn, kind, None, Some(error), now))
+    crate::skin::with_skin_conn(|conn| {
+        outbox::set_target_reconcile(conn, kind, None, Some(error), now)
+    })
 }
 
 pub fn prune() -> Result<usize, String> {

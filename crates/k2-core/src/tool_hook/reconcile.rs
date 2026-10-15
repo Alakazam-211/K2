@@ -129,8 +129,9 @@ pub fn build_desired(conn: &Connection, ctx: &HookCtx) -> Result<DesiredBuild, S
             "principal" => chat::principal_by_id(conn, &g.subject_id)?
                 .is_none()
                 .then_some(Cause::PrincipalDelete),
-            "workspace" => (!ctx.workspaces.contains_key(&g.subject_id))
-                .then_some(Cause::WorkspaceRemoved),
+            "workspace" => {
+                (!ctx.workspaces.contains_key(&g.subject_id)).then_some(Cause::WorkspaceRemoved)
+            }
             _ => None,
         };
         if let Some(cause) = gone {
@@ -146,10 +147,7 @@ pub fn build_desired(conn: &Connection, ctx: &HookCtx) -> Result<DesiredBuild, S
                 request,
                 grant: Some(g),
             }),
-            Err(e) => crate::log_debug!(
-                "[grant-hook] reconcile skips grant {}: {e}",
-                g.id
-            ),
+            Err(e) => crate::log_debug!("[grant-hook] reconcile skips grant {}: {e}", g.id),
         }
     }
     Ok(DesiredBuild { desired, orphans })
@@ -207,8 +205,10 @@ pub fn plan(
 ) -> (Vec<PlannedOp>, Summary) {
     let mut out = Vec::new();
     let mut s = Summary::default();
-    let by_ext: HashMap<String, &MgmtPrincipal> =
-        actual.iter().map(|m| (m.external_id.to_string(), m)).collect();
+    let by_ext: HashMap<String, &MgmtPrincipal> = actual
+        .iter()
+        .map(|m| (m.external_id.to_string(), m))
+        .collect();
     let mut wanted: HashSet<String> = HashSet::new();
 
     for d in desired {

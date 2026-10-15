@@ -508,6 +508,14 @@ async fn async_main() {
         Ok(outcome) => log_debug!("[daemon/users] ownerDisplayName carry-over: {outcome:?}"),
         Err(e) => log_debug!("[daemon/users] ERROR: ownerDisplayName carry-over: {e}"),
     }
+    // Sew S28 rev 134 (K7): every Connect account gets its stable,
+    // never-reused id (`k2:connect:<id>`). Any later store write and the
+    // pass mint also backfill, so a failure here only logs.
+    match k2_core::connect_users::backfill_user_ids() {
+        Ok(0) => {}
+        Ok(n) => log_debug!("[daemon/users] gave {n} Connect account(s) a stable id"),
+        Err(e) => log_debug!("[daemon/users] ERROR: Connect account id backfill: {e}"),
+    }
 
     // K2 vault (prd-k2-vault-v1 §5.1, VS14): open ~/.k2/vault/vault.db
     // here — the serve path, after the single-instance lock, before any

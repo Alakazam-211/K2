@@ -27,8 +27,13 @@
 //! own key and their own JWKS URL ([`APPROVAL_JWKS_PATH_RESERVED`]), never
 //! this one.
 
+pub mod handoff;
+pub mod identity;
 pub mod keyring;
+pub mod link;
 pub mod maint;
+pub mod mint;
+pub mod ratelimit;
 pub mod routes;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
@@ -59,7 +64,15 @@ pub const APPROVAL_JWKS_PATH_RESERVED: &str = "/v1/chat/jwks/approval";
 /// on the unknown `kid`.
 pub const JWKS_CACHE_CONTROL: &str = "public, max-age=300";
 
-/// The seven claims of a chat pass (S28 §6), exactly.
+/// The App-wide chat caps a pass may carry (S28 vs-live, K7/K9). A
+/// ceiling Sew enforces (SW3), never a grant: `voice:join` only lets the
+/// holder through to Sew's own media token (rev 144: K2 never mints one).
+pub const CHAT_CAPS: &[&str] = &["chat:read", "chat:post", "chat:respond", "voice:join"];
+
+/// The seven claims of a chat pass (S28 §6), plus the optional `caps`
+/// ceiling (K7). `caps` is omitted (not `[]`) when the caller's App role
+/// grants none, so a pass without caps is exactly the seven claims Sew S8
+/// already verifies; Sew ignores claims it doesn't know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatPassClaims {
@@ -70,6 +83,8 @@ pub struct ChatPassClaims {
     pub iat: i64,
     pub exp: i64,
     pub jti: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<Vec<String>>,
 }
 
 fn is_install_id(s: &str) -> bool {
@@ -99,9 +114,17 @@ impl ChatPassClaims {
             iat: now,
             exp: now + PASS_TTL_SECS,
             jti: new_jti()?,
+            caps: None,
         };
         c.validate()?;
         Ok(c)
+    }
+
+    /// Attach the `caps` ceiling. Empty → no claim at all.
+    pub fn with_caps(mut self, caps: Vec<String>) -> Result<ChatPassClaims, String> {
+        self.caps = if caps.is_empty() { None } else { Some(caps) };
+        self.validate()?;
+        Ok(self)
     }
 
     /// The shape rules K2 checks before signing.
@@ -125,6 +148,14 @@ impl ChatPassClaims {
         }
         if self.jti.len() != 32 || !self.jti.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
             return Err("jti must be 32 lowercase hex characters".into());
+        }
+        if let Some(caps) = &self.caps {
+            if caps.is_empty() {
+                return Err("caps, when present, is not empty".into());
+            }
+            if let Some(bad) = caps.iter().find(|c| !CHAT_CAPS.contains(&c.as_str())) {
+                return Err(format!("unknown chat cap {bad}"));
+            }
         }
         Ok(())
     }
@@ -190,8 +221,10 @@ pub fn verify_with_jwks(token: &str, jwks: &serde_json::Value, expected_aud: &st
         .map_err(|e| format!("rejected: {:?}", e.kind()))?;
     let mut claim_names: Vec<&str> = data.claims.keys().map(String::as_str).collect();
     claim_names.sort_unstable();
-    if claim_names != ["aud", "exp", "iat", "iss", "jti", "sid", "sub"] {
-        return Err(format!("claims must be exactly the seven (got {claim_names:?})"));
+    if claim_names != ["aud", "exp", "iat", "iss", "jti", "sid", "sub"]
+        && claim_names != ["aud", "caps", "exp", "iat", "iss", "jti", "sid", "sub"]
+    {
+        return Err(format!("claims must be exactly the seven, plus optional caps (got {claim_names:?})"));
     }
     let c: ChatPassClaims =
         serde_json::from_value(serde_json::Value::Object(data.claims)).map_err(|e| format!("claim types: {e}"))?;
@@ -208,8 +241,12 @@ pub fn verify_with_jwks(token: &str, jwks: &serde_json::Value, expected_aud: &st
     if c.iat > now + VERIFY_SKEW_SECS {
         return Err("issued in the future".into());
     }
+    c.validate().map_err(|e| format!("claim shape: {e}"))?;
     Ok(c)
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mint_tests;

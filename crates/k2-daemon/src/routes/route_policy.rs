@@ -922,6 +922,13 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/keys", Admin),
     post("/cli/sew/keys/drop-previous", Admin),
     post("/cli/sew/keys/rotate", Admin),
+    // Sew owner handoff mint (S32 §11.1, K7): the owner token or an
+    // Owner-role Connect login, plus a vault confirm (person-proof).
+    post("/cli/sew/owner-handoff", Owner),
+    // Sew chat pass (S28 §9, K7): every Connect login role mints its own
+    // member pass; App sessions, the owner token and a handoff code
+    // (no credential) pass the login gate to the handler's own checks.
+    post("/cli/sew/pass", Member),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     // Sew on K2 (S29 K12): reads for any login; the server lifecycle is
     // Admin for logins (owner token, or an agent passport whose workspace

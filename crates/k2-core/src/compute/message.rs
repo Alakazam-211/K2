@@ -18,7 +18,9 @@ pub fn short(job_id: &str) -> &str {
     &job_id[..job_id.len().min(8)]
 }
 
-/// One line for the requesting session when a job ends.
+/// One line for the requesting session when a job ends. `tests` adds the
+/// counts (numbers only: test names are program output and stay out).
+#[allow(clippy::too_many_arguments)]
 pub fn completion_text(
     job_id: &str,
     node: &str,
@@ -27,6 +29,7 @@ pub fn completion_text(
     signal: Option<i64>,
     reason: Option<&str>,
     secs: Option<i64>,
+    tests: Option<&super::proto::results::TestSummary>,
 ) -> String {
     let id = short(job_id);
     let after = secs.map(|s| format!(" after {}", duration(s))).unwrap_or_default();
@@ -45,7 +48,20 @@ pub fn completion_text(
     };
     // Only ids, names and codes we generated or validated go in.
     let node = node.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>();
-    format!("[compute] job {id} on {node}: {what}. k2 compute logs {id} --tail 50")
+    let counts = tests
+        .map(|t| {
+            let mut s = format!("; tests {} passed, {} failed", t.passed, t.failed + t.errors);
+            if t.skipped > 0 {
+                s.push_str(&format!(", {} skipped", t.skipped));
+            }
+            s
+        })
+        .unwrap_or_default();
+    let look = match tests {
+        Some(t) if !t.passed_all() => format!("k2 compute logs {id} --failures"),
+        _ => format!("k2 compute logs {id} --tail 50"),
+    };
+    format!("[compute] job {id} on {node}: {what}{counts}. {look} · k2 compute get {id} --json")
 }
 
 #[cfg(test)]
@@ -58,10 +74,15 @@ mod tests {
         assert_eq!(duration(372), "6m12s");
         assert_eq!(duration(7260), "2h01m");
         assert_eq!(
-            completion_text("7f3a0000aaaa", "z13flow", "done", Some(1), None, None, Some(372)),
-            "[compute] job 7f3a0000 on z13flow: exit 1 after 6m12s. k2 compute logs 7f3a0000 --tail 50"
+            completion_text("7f3a0000aaaa", "z13flow", "done", Some(1), None, None, Some(372), None),
+            "[compute] job 7f3a0000 on z13flow: exit 1 after 6m12s. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
         );
-        assert!(completion_text("j", "n", "failed", None, None, Some("sync_failed"), None).contains("failed (sync_failed)"));
-        assert!(completion_text("j", "n; rm -rf", "unknown", None, None, None, None).contains("on nrm-rf:"));
+        assert!(completion_text("j", "n", "failed", None, None, Some("sync_failed"), None, None).contains("failed (sync_failed)"));
+        assert!(completion_text("j", "n; rm -rf", "unknown", None, None, None, None, None).contains("on nrm-rf:"));
+        let t = super::super::proto::results::TestSummary { total: 415, passed: 410, failed: 2, errors: 1, skipped: 2, ..Default::default() };
+        assert_eq!(
+            completion_text("7f3a0000aaaa", "mini-1", "done", Some(100), None, None, Some(61), Some(&t)),
+            "[compute] job 7f3a0000 on mini-1: exit 100 after 1m01s; tests 410 passed, 3 failed, 2 skipped. k2 compute logs 7f3a0000 --failures · k2 compute get 7f3a0000 --json"
+        );
     }
 }

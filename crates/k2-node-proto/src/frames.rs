@@ -275,6 +275,8 @@ pub enum Frame {
     UpdateChunk(UpdateChunk),
     /// Protocol 2: approval key pin/rotation ([`crate::admin::AdminKeys`]).
     AdminKeys(crate::admin::AdminKeys),
+    /// Ask for one kept artifact (only to nodes offering `artifacts`).
+    ArtifactGet(ArtifactGet),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -287,6 +289,9 @@ pub enum Frame {
     AdminResult(crate::admin::AdminResult),
     UpdateState(UpdateState),
     Health(crate::health::Health),
+    /// One piece of an artifact asked for with `artifact_get`.
+    ArtifactChunk(ArtifactChunk),
+    ArtifactFailed(ArtifactFailed),
 }
 
 impl Frame {
@@ -302,7 +307,8 @@ impl Frame {
             | Frame::Admin(_)
             | Frame::UpdateOffer(_)
             | Frame::UpdateChunk(_)
-            | Frame::AdminKeys(_) => Direction::ControllerToNode,
+            | Frame::AdminKeys(_)
+            | Frame::ArtifactGet(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -312,7 +318,9 @@ impl Frame {
             | Frame::Goodbye(_)
             | Frame::AdminResult(_)
             | Frame::UpdateState(_)
-            | Frame::Health(_) => Direction::NodeToController,
+            | Frame::Health(_)
+            | Frame::ArtifactChunk(_)
+            | Frame::ArtifactFailed(_) => Direction::NodeToController,
         }
     }
 
@@ -339,6 +347,9 @@ impl Frame {
             Frame::AdminResult(_) => "admin_result",
             Frame::UpdateState(_) => "update_state",
             Frame::Health(_) => "health",
+            Frame::ArtifactGet(_) => "artifact_get",
+            Frame::ArtifactChunk(_) => "artifact_chunk",
+            Frame::ArtifactFailed(_) => "artifact_failed",
         }
     }
 }
@@ -417,6 +428,12 @@ pub struct Plan {
     /// without the tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
+    /// Artifact globs collected after the command exits
+    /// ([`crate::results`]). Absent when empty, like `needs`: a node
+    /// without the `artifacts` feature computes another digest and
+    /// refuses, so the controller only sends globs to nodes that offer it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<String>,
 }
 
 impl Plan {
@@ -722,6 +739,9 @@ pub struct StateUpdate {
     pub src: Option<SrcRan>,
     /// Last log sequence written for this job.
     pub log_seq: u64,
+    /// Artifacts and test results (terminal states, `artifacts` nodes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<crate::results::Outputs>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -773,6 +793,37 @@ pub struct ReceiptFrame {
     pub job_id: String,
     pub generation: u32,
     pub receipt: SignedReceipt,
+}
+
+/// `artifact_get`: send one kept artifact of an attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactGet {
+    /// The controller's id for this pull (echoed in every answer).
+    pub request_id: String,
+    pub job_id: String,
+    pub generation: u32,
+    /// An [`crate::results::ArtifactInfo::name`] the node reported.
+    pub name: String,
+}
+
+/// `artifact_chunk`: ≤ [`TRANSFER_CHUNK`] raw bytes of the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactChunk {
+    pub request_id: String,
+    pub seq: u32,
+    pub data: String,
+    pub last: bool,
+    pub total_bytes: u64,
+    /// SHA-256 hex of the whole file (as kept).
+    pub sha256: String,
+}
+
+/// `artifact_failed`: the node can't send it (gone, cap, read error).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactFailed {
+    pub request_id: String,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,6 +911,10 @@ pub struct Receipt {
     pub state: JobState,
     pub exit: Option<ExitInfo>,
     pub log: ReceiptLog,
+    /// The files kept as artifacts (§11.6). Absent when none, so older
+    /// receipts are byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<crate::results::ArtifactInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -938,6 +993,7 @@ mod tests {
             exclusive: false,
             created_at: 1_700_000_000,
             needs: Vec::new(),
+            artifacts: Vec::new(),
         }
     }
 
@@ -963,6 +1019,7 @@ mod tests {
             exit: None,
             src: None,
             log_seq: 9,
+            outputs: None,
         });
         assert!(crate::canonical::to_string(&s).unwrap().contains(r#""state":"interrupted""#));
     }
@@ -1037,8 +1094,15 @@ mod tests {
         assert!(a.consistent());
         let bad = Assign { fence: a.fence.clone(), plan: q };
         assert!(!bad.consistent());
-        let wrong_id = Assign { fence: Fence { job_id: "j2".into(), ..a.fence.clone() }, plan: p };
+        let wrong_id = Assign { fence: Fence { job_id: "j2".into(), ..a.fence.clone() }, plan: p.clone() };
         assert!(!wrong_id.consistent());
+        // Empty artifact globs leave the canonical plan (and every older
+        // digest) unchanged; any glob changes it.
+        let text = crate::canonical::to_string(&p).unwrap();
+        assert!(!text.contains("artifacts"), "{text}");
+        let mut g = p.clone();
+        g.artifacts = vec!["out/*.xml".into()];
+        assert_ne!(g.digest().unwrap(), d);
     }
 
     #[test]
@@ -1063,6 +1127,7 @@ mod tests {
             state: JobState::Done,
             exit: Some(ExitInfo { code: Some(1), signal: None }),
             log: ReceiptLog { sha256: "s".into(), bytes: 3, truncated: false },
+            artifacts: Vec::new(),
         };
         let s = SignedReceipt::sign(&k, &r).unwrap();
         assert_eq!(s.verify(k.spki_der()).unwrap(), r);

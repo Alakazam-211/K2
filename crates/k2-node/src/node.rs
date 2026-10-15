@@ -17,6 +17,7 @@ use k2_node_proto::frames::{
     ReceiptLog, SignedReceipt, SrcRan, StateUpdate, Transfer, TransferFailed, TransferKind, PROTOCOL,
 };
 use k2_node_proto::refusal::{self, JobAsk, NodeView};
+use k2_node_proto::results::{self, Outputs};
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::cgroup::{Cgroups, Leaf};
@@ -245,6 +246,7 @@ pub fn node_features() -> Vec<String> {
         k2_node_proto::admin::FEATURE_ADMIN.to_string(),
         k2_node_proto::admin::FEATURE_SELF_UPDATE.to_string(),
         k2_node_proto::admin::FEATURE_HEALTH.to_string(),
+        results::FEATURE_ARTIFACTS.to_string(),
     ];
     if crate::packages::installer_present() {
         f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
@@ -600,6 +602,7 @@ impl Node {
             exit: None,
             src: None,
             log_seq: 0,
+            outputs: None,
         })
     }
 
@@ -614,6 +617,7 @@ impl Node {
             exit: r.exit.clone(),
             src: r.src.clone(),
             log_seq: r.log_seq,
+            outputs: r.outputs.clone(),
         })
     }
 
@@ -921,7 +925,7 @@ impl Node {
         let mut journal = match dirs.create().and_then(|_| JournalWriter::create(&dirs.log, a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
             Err(e) => {
-                self.finish_job(&a, None, JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, None, None).await;
+                self.finish_job(&a, None, JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, None, None, None).await;
                 return;
             }
         };
@@ -951,7 +955,7 @@ impl Node {
                         None => (JobState::Failed, code),
                     };
                     sys(&mut journal, &format!("sync failed: {detail}"));
-                    self.finish_job(&a, Some(&dirs), state, Some(&reason), Some(&detail), None, None, Some(journal), None).await;
+                    self.finish_job(&a, Some(&dirs), state, Some(&reason), Some(&detail), None, None, Some(journal), None, None).await;
                     return;
                 }
             }
@@ -960,7 +964,7 @@ impl Node {
             match safe_relative(rel) {
                 Some(p) => cwd = cwd.join(p),
                 None => {
-                    self.finish_job(&a, Some(&dirs), JobState::Failed, Some("cwd_invalid"), Some(rel), src_ran, None, Some(journal), lease).await;
+                    self.finish_job(&a, Some(&dirs), JobState::Failed, Some("cwd_invalid"), Some(rel), src_ran, None, Some(journal), lease, None).await;
                     return;
                 }
             }
@@ -971,7 +975,7 @@ impl Node {
             Ok(r) => r,
             Err((state, code, detail)) => {
                 sys(&mut journal, &format!("toolchains: {detail}"));
-                self.finish_job(&a, Some(&dirs), state, Some(&code), Some(&detail), src_ran, None, Some(journal), lease).await;
+                self.finish_job(&a, Some(&dirs), state, Some(&code), Some(&detail), src_ran, None, Some(journal), lease, None).await;
                 return;
             }
         };
@@ -990,13 +994,13 @@ impl Node {
         }) {
             Ok(e) => e,
             Err((code, name)) => {
-                self.finish_job(&a, Some(&dirs), JobState::Failed, Some("env_refused"), Some(&format!("{code}: {name}")), src_ran, None, Some(journal), lease).await;
+                self.finish_job(&a, Some(&dirs), JobState::Failed, Some("env_refused"), Some(&format!("{code}: {name}")), src_ran, None, Some(journal), lease, None).await;
                 return;
             }
         };
         if stop.borrow().is_some() {
             let s = stop.borrow().clone().unwrap_or(StopReason { state: JobState::Cancelled, reason: "cancelled".into() });
-            self.finish_job(&a, Some(&dirs), s.state, Some(&s.reason), None, src_ran, None, Some(journal), lease).await;
+            self.finish_job(&a, Some(&dirs), s.state, Some(&s.reason), None, src_ran, None, Some(journal), lease, None).await;
             return;
         }
 
@@ -1014,7 +1018,7 @@ impl Node {
                     l.remove();
                 }
                 sys(&mut journal, &e);
-                self.finish_job(&a, Some(&dirs), JobState::Failed, Some("spawn_failed"), Some(&e), src_ran, None, Some(journal), lease).await;
+                self.finish_job(&a, Some(&dirs), JobState::Failed, Some("spawn_failed"), Some(&e), src_ran, None, Some(journal), lease, None).await;
                 return;
             }
         };
@@ -1111,12 +1115,38 @@ impl Node {
             use std::os::unix::process::ExitStatusExt;
             ExitInfo { code: s.code(), signal: s.signal() }
         });
-        let journal = Arc::try_unwrap(journal).ok().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()));
+        let mut journal = Arc::try_unwrap(journal).ok().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()));
         let (state, reason) = match ended_by {
             Some(s) => (s.state, Some(s.reason)),
             None => (JobState::Done, None),
         };
-        self.finish_job(&a, Some(&dirs), state, reason.as_deref(), None, src_ran, exit, journal, lease).await;
+        // Artifacts and test results: after the command (and its group)
+        // are gone, before the warm slot goes back to the pool.
+        let outputs = if a.plan.artifacts.is_empty() {
+            None
+        } else {
+            let (globs, cwd, target, keep) = (a.plan.artifacts.clone(), cwd.clone(), target.clone(), crate::artifacts::dir(self.layout(), &job, gen));
+            let o = tokio::task::spawn_blocking(move || {
+                crate::artifacts::collect(&globs, &crate::artifacts::Roots { cwd: &cwd, target: Some(&target) }, &keep)
+            })
+            .await
+            .ok();
+            if let (Some(j), Some(o)) = (journal.as_mut(), o.as_ref()) {
+                let mut line = |m: String| {
+                    let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {m}\n").as_bytes());
+                };
+                let bytes: u64 = o.artifacts.iter().map(|x| x.bytes).sum();
+                line(format!("artifacts: kept {} file(s), {} KB", o.artifacts.len(), bytes.div_ceil(1024)));
+                if let Some(t) = &o.tests {
+                    line(format!("tests: {} passed, {} failed, {} errors, {} skipped", t.passed, t.failed, t.errors, t.skipped));
+                }
+                for n in &o.notes {
+                    line(format!("artifacts: {n}"));
+                }
+            }
+            o
+        };
+        self.finish_job(&a, Some(&dirs), state, reason.as_deref(), None, src_ran, exit, journal, lease, outputs).await;
     }
 
     /// The job's toolchains. `Err((state, reason, detail))` ends the job.
@@ -1276,6 +1306,7 @@ impl Node {
         exit: Option<ExitInfo>,
         journal: Option<JournalWriter>,
         lease: Option<Lease>,
+        outputs: Option<Outputs>,
     ) {
         let job = &a.fence.job_id;
         let gen = a.fence.generation;
@@ -1319,6 +1350,7 @@ impl Node {
             state,
             exit: exit.clone(),
             log: ReceiptLog { sha256: log_sha, bytes: log_bytes, truncated },
+            artifacts: outputs.as_ref().map(|o| o.artifacts.clone()).unwrap_or_default(),
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         {
@@ -1326,6 +1358,11 @@ impl Node {
             let l = self.ledger.lock().unwrap();
             if let Some(s) = &src {
                 let _ = l.set_src(job, gen, s);
+            }
+            if let Some(o) = &outputs {
+                if let Err(e) = l.set_outputs(job, gen, o) {
+                    crate::nlog!("ledger outputs {job}: {e}");
+                }
             }
             if let Err(e) = l.finish(job, gen, state, reason, detail, exit.as_ref(), log_seq, now) {
                 crate::nlog!("ledger finish {job}: {e}");
@@ -1365,6 +1402,7 @@ impl Node {
             let _ = self.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);
         }
         let _ = self.ledger.lock().unwrap().prune(now - 14 * 24 * 3600);
+        crate::artifacts::sweep(self.layout(), now);
     }
 
     /// Background loops: config poll, power, tools, janitor.

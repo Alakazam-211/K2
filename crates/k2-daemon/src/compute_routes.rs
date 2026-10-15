@@ -1190,6 +1190,12 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         None if b(&v, "retryInterrupted") == Some(false) => 0,
         None => 1,
     };
+    let stall = match n(&v, "stallSecs") {
+        None => None,
+        Some(0) => Some(0),
+        Some(x) if (1..=7 * 86_400).contains(&x) => Some(x),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--stall-timeout is between 1s and 7d, or off")),
+    };
     let any = s(&v, "node").is_none() && b(&v, "any") == Some(true);
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
@@ -1210,6 +1216,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         needs_git: b(&v, "noSource") != Some(true),
         cpu_millis,
         mem_bytes,
+        stall: stall.is_some_and(|x| x > 0),
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
@@ -1219,6 +1226,13 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             "node_upgrade_required",
             409,
             format!("'{}' runs an older k2-node that can't keep --artifact files; update k2-node on that machine (sudo k2-node setup), or run without --artifact", node.name),
+        ));
+    }
+    if want.stall && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::frames::FEATURE_STALL) {
+        return Err(no(
+            "node_upgrade_required",
+            409,
+            format!("'{}' runs an older k2-node that can't watch for stalls; update k2-node on that machine (sudo k2-node setup), or run without --stall-timeout", node.name),
         ));
     }
     if !needs.is_empty() {
@@ -1285,8 +1299,10 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         queue_timeout_secs: queue_timeout,
         queued_at: compute::now(),
         retries,
+        stall_secs: stall,
         ..Default::default()
     };
+    let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
     let plan = Plan {
         job_id: job_id.clone(),
         node_id: node.id.clone(),
@@ -1308,6 +1324,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         created_at: compute::now(),
         needs: needs.clone(),
         artifacts,
+        stall_secs,
     };
     let job = {
         let db = k2_core::db::shared();

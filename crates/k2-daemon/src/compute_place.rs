@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
-use k2_core::compute::proto::frames::{JobState, Offer, Plan};
+use k2_core::compute::proto::frames::{JobState, Offer, Plan, FEATURE_STALL};
 use k2_core::compute::proto::{needs, refusal, results};
 use k2_core::compute::retry::{self, NodeHealth};
 use k2_core::compute::store::{self, AnyFilter, AttemptNote, GrantRow, JobCtl, JobRow, NodeRow};
@@ -92,6 +92,8 @@ pub struct Want {
     pub needs_git: bool,
     pub cpu_millis: Option<u64>,
     pub mem_bytes: Option<u64>,
+    /// An explicit `--stall-timeout` (the node must enforce it).
+    pub stall: bool,
 }
 
 impl Want {
@@ -106,6 +108,7 @@ impl Want {
             needs_git: plan.src.is_some(),
             cpu_millis: plan.limits.cpu_millis,
             mem_bytes: plan.limits.mem_bytes,
+            stall: j.ctl.stall_secs.is_some_and(|s| s > 0),
         }
     }
 
@@ -174,7 +177,22 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if w.artifacts {
         f.push(results::FEATURE_ARTIFACTS);
     }
+    if w.stall {
+        f.push(FEATURE_STALL);
+    }
     f
+}
+
+/// The stall timeout a plan for a node with `features` carries: the asked
+/// one, else the default — only on nodes that enforce it, and only when
+/// shorter than the wall-clock limit.
+pub fn stall_for(ctl: &JobCtl, features: &[String], max_secs: u64) -> Option<u64> {
+    let s = match ctl.stall_secs {
+        Some(0) => return None,
+        Some(n) => n,
+        None => retry::tuning().stall_secs,
+    };
+    (s > 0 && (s as u64) < max_secs && features.iter().any(|f| f == FEATURE_STALL)).then_some(s as u64)
 }
 
 /// Every node that could take the job, except `exclude`.
@@ -270,14 +288,16 @@ pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_ke
 }
 
 /// The plan for `node`: the base plan's argv/env/source/needs/artifacts,
-/// with this node's id and this node's grant limits.
-pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&GrantRow>) -> Plan {
+/// with this node's id, this node's grant limits and (when it enforces
+/// one) the stall timeout.
+pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&GrantRow>, features: &[String]) -> Plan {
     let max_secs = grant.map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
     let disk_gb = grant.map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     let mut p = base.clone();
     p.node_id = node.id.clone();
     p.limits.max_secs = ctl.timeout_secs.unwrap_or(max_secs).clamp(1, max_secs.max(1)) as u64;
     p.limits.disk_bytes = (disk_gb.max(1) as u64) << 30;
+    p.stall_secs = stall_for(ctl, features, p.limits.max_secs);
     p
 }
 
@@ -336,7 +356,7 @@ pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<S
     if !ok {
         return None;
     }
-    let new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref());
+    let new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer.features);
     let moved = {
         let db = k2_core::db::shared();
         let conn = db.lock();

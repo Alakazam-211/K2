@@ -434,7 +434,16 @@ pub struct Plan {
     /// refuses, so the controller only sends globs to nodes that offer it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<String>,
+    /// Stall timeout: no stdout/stderr for this many seconds ends the job
+    /// as `timeout/stalled` (research G4). Absent = off, so older digests
+    /// are unchanged; only sent to nodes offering [`FEATURE_STALL`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_secs: Option<u64>,
 }
+
+/// Offer feature: this node ends a job that prints nothing for
+/// `Plan::stall_secs`.
+pub const FEATURE_STALL: &str = "stall";
 
 impl Plan {
     /// `sha256:<hex>` of the canonical JSON.
@@ -994,6 +1003,7 @@ mod tests {
             created_at: 1_700_000_000,
             needs: Vec::new(),
             artifacts: Vec::new(),
+            stall_secs: None,
         }
     }
 
@@ -1099,7 +1109,7 @@ mod tests {
         // Empty artifact globs leave the canonical plan (and every older
         // digest) unchanged; any glob changes it.
         let text = crate::canonical::to_string(&p).unwrap();
-        assert!(!text.contains("artifacts"), "{text}");
+        assert!(!text.contains("artifacts") && !text.contains("stall_secs"), "{text}");
         let mut g = p.clone();
         g.artifacts = vec!["out/*.xml".into()];
         assert_ne!(g.digest().unwrap(), d);

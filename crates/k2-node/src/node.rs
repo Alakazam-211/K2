@@ -247,6 +247,7 @@ pub fn node_features() -> Vec<String> {
         k2_node_proto::admin::FEATURE_SELF_UPDATE.to_string(),
         k2_node_proto::admin::FEATURE_HEALTH.to_string(),
         results::FEATURE_ARTIFACTS.to_string(),
+        k2_node_proto::frames::FEATURE_STALL.to_string(),
     ];
     if crate::packages::installer_present() {
         f.push(k2_node_proto::needs::FEATURE_SYSTEM_PACKAGES.to_string());
@@ -1029,8 +1030,11 @@ impl Node {
         }
         self.ship.notify_one();
 
-        // Pump output into the journal.
+        // Pump output into the journal. `last_out` = ms after `t0` of the
+        // last stdout/stderr bytes (the stall watch reads it).
         let journal = Arc::new(Mutex::new(journal));
+        let t0 = std::time::Instant::now();
+        let last_out = Arc::new(AtomicU64::new(0));
         let mut pumps = Vec::new();
         for (pipe, stream) in [
             (child.stdout.take().map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), k2_node_proto::frames::LogStream::Out),
@@ -1039,6 +1043,7 @@ impl Node {
             if let Some(mut pipe) = pipe {
                 let j = journal.clone();
                 let node = self.clone();
+                let last = last_out.clone();
                 pumps.push(tokio::spawn(async move {
                     use tokio::io::AsyncReadExt;
                     let mut buf = vec![0u8; k2_node_proto::frames::MAX_LOG_CHUNK];
@@ -1047,6 +1052,7 @@ impl Node {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
                                 let _ = j.lock().unwrap().append(stream, &buf[..n]);
+                                last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
                                 node.ship.notify_one();
                             }
                         }
@@ -1064,6 +1070,11 @@ impl Node {
         };
         let mut rss_tick = tokio::time::interval(self.opts.rss_every);
         rss_tick.tick().await;
+        // Stall watch: no output for `stall_secs` ends the job (a hung test
+        // shouldn't hold the slot until the wall clock).
+        let stall_ms = a.plan.stall_secs.filter(|s| *s > 0).map(|s| s.saturating_mul(1000));
+        let mut stall_tick = tokio::time::interval(Duration::from_millis(stall_ms.map(|m| (m / 4).clamp(50, 1000)).unwrap_or(1000)));
+        stall_tick.tick().await;
         let mut ended_by: Option<StopReason> = None;
         let mut status = None;
         loop {
@@ -1077,6 +1088,13 @@ impl Node {
                 _ = tokio::time::sleep_until(deadline) => {
                     ended_by = Some(StopReason { state: JobState::Timeout, reason: "timeout".into() });
                     break;
+                }
+                _ = stall_tick.tick(), if stall_ms.is_some() => {
+                    let quiet = (t0.elapsed().as_millis() as u64).saturating_sub(last_out.load(Ordering::Relaxed));
+                    if stall_ms.is_some_and(|m| quiet >= m) {
+                        ended_by = Some(StopReason { state: JobState::Timeout, reason: "stalled".into() });
+                        break;
+                    }
                 }
                 _ = rss_tick.tick(), if mem_cap.is_some() => {
                     let sampler = self.opts.rss.clone();
@@ -1146,7 +1164,8 @@ impl Node {
             }
             o
         };
-        self.finish_job(&a, Some(&dirs), state, reason.as_deref(), None, src_ran, exit, journal, lease, outputs).await;
+        let detail = (reason.as_deref() == Some("stalled")).then(|| format!("no output for {}s", a.plan.stall_secs.unwrap_or(0)));
+        self.finish_job(&a, Some(&dirs), state, reason.as_deref(), detail.as_deref(), src_ran, exit, journal, lease, outputs).await;
     }
 
     /// The job's toolchains. `Err((state, reason, detail))` ends the job.

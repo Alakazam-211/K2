@@ -261,9 +261,12 @@ async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
     let r = http_with(d.port, "POST", &format!("/cli/sew/pass?token={raw}"), &[], Some("{}"));
     assert_eq!((r.status, err_code(&r).as_str()), (401, "unauthenticated"));
     assert!(!r.raw_body.contains("\"pass\""));
-    // A bare skin cookie dies at the CSRF gate (S28-A6) …
+    // The skin cookie is never read off a skin Host (no fold) → 401 …
     let cookie = format!("k2_skin_session={raw}");
     let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Cookie", &cookie)], Some("{}"));
+    assert_eq!((r.status, err_code(&r).as_str()), (401, "unauthenticated"));
+    // … on a skin Host the folded cookie dies at the CSRF gate (S28-A6) …
+    let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Host", "skin.test.k2.dev"), ("Cookie", &cookie)], Some("{}"));
     assert_eq!(r.status, 403, "{}", r.raw_body);
     assert!(r.raw_body.contains("csrf"), "{}", r.raw_body);
     // … and with the web header on a skin Host it dies at the Host belt.

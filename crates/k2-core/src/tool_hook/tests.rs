@@ -1137,7 +1137,7 @@ fn apply_reconcile_removes_orphans_and_provisions_drift() {
         "x",
     );
     ws_m.agent_kind = Some(AgentKind::Coworker);
-    let s = apply_reconcile(CHAT_KIND, &[owner_m, ws_m]).unwrap();
+    let s = apply_reconcile(CHAT_KIND, &[owner_m.clone(), ws_m]).unwrap();
     assert_eq!(s.orphans_removed, 1);
     assert!(
         skin::list_grants().unwrap().iter().all(|x| x.id != wg.id),
@@ -1158,8 +1158,9 @@ fn apply_reconcile_removes_orphans_and_provisions_drift() {
     assert!(t.last_reconcile_at.is_some());
     assert_eq!(t.last_reconcile.unwrap()["orphansRemoved"], 1);
     // A second sweep while those rows are open plans nothing new for them.
+    // (The owner is in Sew, so only busy subjects are left to consider.)
     let n = rows().len();
-    apply_reconcile(CHAT_KIND, &[]).unwrap();
+    apply_reconcile(CHAT_KIND, &[owner_m]).unwrap();
     assert_eq!(rows().len(), n, "busy subjects are never re-planned");
 }
 

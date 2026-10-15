@@ -21,8 +21,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use super::sew_wire::{
-    self, AgentKind, DeprovisionRequest, ExternalId, MemberKind, OwnerSetRequest, Patch,
-    ProfileInput, ProfilePatch, ProvisionRequest, UpdatePrincipalRequest,
+    self, AgentKind, DeprovisionRequest, ExternalId, MemberKind, MgmtPrincipal, OwnerSetRequest,
+    Patch, ProfileInput, ProfilePatch, ProvisionRequest, UpdatePrincipalRequest,
 };
 use super::{
     grant_rev, outbox, Cause, HookCtx, HookEvent, NewOp, Op, ToolProvisioner, CHAT_KIND,
@@ -424,6 +424,36 @@ pub fn deprovision_op(grant: &SkinGrant, cause: Cause) -> Result<NewOp, String> 
 }
 
 /// The owner's provision body (person, never a guest).
+/// A8 (Sew's answer, 2026-10-15): `principals/provision` is declarative —
+/// an absent optional profile field CLEARS it. Before a provision reaches
+/// an EXISTING member (guest flip, assistant re-pin, reconcile repair,
+/// owner re-provision), K2 copies back the fields it does not own from
+/// Sew's member list (`MgmtPrincipal`, SW14):
+/// - `title`, `pronouns`: always Sew-local;
+/// - `email`: only for agents and `k2:owner` (a principal's email is K2's,
+///   `principals.email`, so K2's value — set or absent — wins).
+///
+/// Fields the list does not carry (`None`: an older Sew) are unknown and
+/// left absent; nothing K2 can do there until SW14 ships. Returns whether
+/// the body changed. Pure.
+pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal) -> bool {
+    let mut changed = false;
+    let mut take = |slot: &mut Option<String>, have: &Option<Option<String>>| {
+        if slot.is_none() {
+            if let Some(Some(v)) = have {
+                *slot = Some(v.clone());
+                changed = true;
+            }
+        }
+    };
+    take(&mut req.profile.title, &m.title);
+    take(&mut req.profile.pronouns, &m.pronouns);
+    if !matches!(req.external_id, ExternalId::K2Principal(_)) {
+        take(&mut req.profile.email, &m.email);
+    }
+    changed
+}
+
 pub fn owner_provision_request(ctx: &HookCtx) -> ProvisionRequest {
     let d = ctx.owner_display_name.as_deref();
     ProvisionRequest {

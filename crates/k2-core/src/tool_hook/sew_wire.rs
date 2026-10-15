@@ -16,10 +16,10 @@
 //! | [`ProfileInput`] … [`OwnerSetResponse`], [`RevokeSessionsRequest`] | `mgmt.rs` |
 //! | [`Patch`], [`Page`] | `http.rs` |
 //! | [`Status`] (subset) | `mgmt.rs` `Status` |
-//! | [`MgmtPrincipal`] | `mgmt.rs` `MgmtPrincipal` (S27-A5) |
+//! | [`MgmtPrincipal`] | `mgmt.rs` `MgmtPrincipal` (S27-A5; `email`/`title`/`pronouns` = SW14) |
 //! | [`ErrorBody`], [`ApiError`], [`codes`] | `error.rs` |
 //! | [`reasons`] | `mgmt.rs` `reasons` |
-//! | [`AddMembersOutcome`] | `api/spaces.rs` `AddSpaceMembersResponse` (HC2 `skipped`) |
+//! | [`AddMembersOutcome`] | `api/spaces.rs` `AddSpaceMembersResponse` / `api/channels.rs` `AddChannelMembersResponse` (HC2 `skipped`) |
 //!
 //! Differences on purpose (all of them additive-safe for K2 as a client):
 //! - Ids (`Id`) and timestamps (`Timestamp`) are kept as `String`: K2 never
@@ -469,22 +469,69 @@ pub struct MgmtPrincipal {
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deactivated_at: Option<String>,
+    /// SW14 (coming): read leniently. `None` = the field is absent (an
+    /// older Sew): UNKNOWN, so K2 never clears what it cannot see.
+    /// `Some(None)` = Sew says there is none. `Some(Some(v))` = the value.
+    #[serde(
+        default,
+        deserialize_with = "known",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub email: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "known",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "known",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pronouns: Option<Option<String>>,
+}
+
+/// Absent → `None` (via `default`); present `null` → `Some(None)`.
+fn known<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Ok(Some(Option::<String>::deserialize(d)?))
 }
 
 pub type MgmtPrincipalPage = Page<MgmtPrincipal>;
 
-/// HC2 (`sew_proto::api::spaces::AddSpaceMembersResponse`): a batch add
-/// never fails because of a ban; banned targets come back in `skipped`.
-/// S27 parses `skipped` from any 2xx mgmt body so a skipped subject is
-/// recorded and not re-added (K5/K31 reuse it for Space adds).
+/// `GET /mgmt/v1/principals?external_id=<ext>&limit=1` (PrincipalsQuery):
+/// one member by external id, deactivated included.
+pub fn principal_lookup_path(ext: &ExternalId) -> String {
+    format!("{MGMT_PRINCIPALS}?external_id={ext}&limit=1")
+}
+
+/// HC2: the batch Space / channel member-add responses
+/// (`AddSpaceMembersResponse`, `AddChannelMembersResponse`, and SW13's
+/// mgmt per-Space add, empty until HC2 lands). A ban never fails the
+/// batch; banned targets come back in `skipped`. `principals/provision`
+/// has NO `skipped` field — S27 does not read one there. K5/K31's
+/// Space-add op reads it here and records the member `held`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddMembersOutcome {
     #[serde(default)]
     pub added: Vec<String>,
     #[serde(default)]
     pub already: Vec<String>,
+    /// Absent on a Sew without HC2: read as empty.
     #[serde(default)]
     pub skipped: Vec<String>,
+}
+
+impl AddMembersOutcome {
+    /// Lenient read of a 2xx member-add body (`None` if it is not one).
+    pub fn parse(body: &[u8]) -> Option<AddMembersOutcome> {
+        serde_json::from_slice(body).ok()
+    }
+
+    /// Whether `member_id` was skipped (HC2: banned; K2 must not re-add).
+    pub fn skipped_member(&self, member_id: &str) -> bool {
+        self.skipped.iter().any(|s| s == member_id)
+    }
 }
 
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
@@ -608,6 +655,39 @@ mod tests {
         assert!(!is_sew_actor(&"a".repeat(129)));
         assert!(is_idempotency_key(&format!("k2ob_{}", "a".repeat(32))));
         assert!(!is_idempotency_key("k2ob:x"));
+    }
+
+    #[test]
+    fn mgmt_principal_profile_fields_are_read_leniently() {
+        let base = r#""member_id":"7","external_id":"k2:owner","kind":"person",
+            "install_role":"owner","username":"owner","display_name":"Owner",
+            "deactivated":false,"created_at":"2026-10-15T00:00:00Z""#;
+        // Pre-SW14 Sew: fields absent → unknown.
+        let old: MgmtPrincipal = serde_json::from_str(&format!("{{{base}}}")).unwrap();
+        assert_eq!((old.email, old.title, old.pronouns), (None, None, None));
+        // SW14: null = none, a value = the value.
+        let new: MgmtPrincipal = serde_json::from_str(&format!(
+            r#"{{{base},"email":null,"title":"CTO","pronouns":"she/her"}}"#
+        ))
+        .unwrap();
+        assert_eq!(new.email, Some(None));
+        assert_eq!(new.title, Some(Some("CTO".into())));
+        assert_eq!(new.pronouns, Some(Some("she/her".into())));
+        assert_eq!(
+            principal_lookup_path(&ExternalId::K2Owner),
+            "/mgmt/v1/principals?external_id=k2:owner&limit=1"
+        );
+    }
+
+    #[test]
+    fn hc2_skipped_is_read_from_member_add_outcomes_only() {
+        let o =
+            AddMembersOutcome::parse(br#"{"added":["1"],"already":[],"skipped":["9"]}"#).unwrap();
+        assert!(o.skipped_member("9"));
+        assert!(!o.skipped_member("1"));
+        // A Sew without HC2: no `skipped` → nobody skipped.
+        let pre = AddMembersOutcome::parse(br#"{"added":["1"],"already":["2"]}"#).unwrap();
+        assert!(pre.skipped.is_empty());
     }
 
     #[test]

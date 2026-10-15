@@ -100,11 +100,38 @@ pub const IN_WALL_GATEWAY_PORT: u16 = 8730;
 /// rename swaps it, so the container sees the new pass at once.
 pub const PASS_ROOT: &str = "/run/k2app/pass";
 pub const PASS_FILE_NAME: &str = "pass";
+/// The App's egress proxy port (S15: the daemon listens there; pasta `-T`
+/// forwards it from the container's loopback; the per-App nft rule
+/// admits it). Same offset as the gateway port.
+pub fn proxy_port(slot: u64) -> Option<u16> {
+    gateway_port(slot).and_then(crate::apps::proxy_port_for_gateway)
+}
+
+/// The proxy variables the engine sets in every guarded container (S15).
+/// Engine-owned: a manifest or the daemon's env can't replace them.
+/// `NO_PROXY` keeps the gateway link (container loopback) direct; Node 24
+/// honours the variables with `NODE_USE_ENV_PROXY=1`.
+pub fn proxy_env(px_port: u16) -> Vec<(&'static str, String)> {
+    let url = format!("http://127.0.0.1:{px_port}");
+    let no = "127.0.0.1,localhost,::1".to_string();
+    vec![
+        ("HTTP_PROXY", url.clone()),
+        ("HTTPS_PROXY", url.clone()),
+        ("http_proxy", url.clone()),
+        ("https_proxy", url.clone()),
+        ("ALL_PROXY", url),
+        ("NO_PROXY", no.clone()),
+        ("no_proxy", no),
+        ("NODE_USE_ENV_PROXY", "1".to_string()),
+    ]
+}
 
 // ── signed builds ───────────────────────────────────────────────────────
 
-/// What this build of the engine speaks on its socket.
-pub const ENGINE_PROTOCOL: u32 = 1;
+/// What this build of the engine speaks on its socket. 2 (S15): each
+/// container gets its egress proxy forward and proxy variables, and the
+/// prepare/start/adopt answers carry `pxPort`.
+pub const ENGINE_PROTOCOL: u32 = 2;
 
 pub fn asset_name(arch: &str) -> String {
     format!("k2-app-engine-linux-{arch}")
@@ -523,6 +550,21 @@ mod tests {
         assert_eq!(gateway_port(0), Some(38_600));
         assert_eq!(gateway_port(MAX_SLOTS - 1), Some(38_663));
         assert_eq!(gateway_port(400), None);
+        assert_eq!(proxy_port(0), Some(38_900));
+        assert_eq!(proxy_port(MAX_SLOTS - 1), Some(38_963));
+        assert_eq!(proxy_port(400), None);
+    }
+
+    #[test]
+    fn proxy_env_points_at_the_own_proxy_and_keeps_loopback_direct() {
+        let e: BTreeMap<&str, String> = proxy_env(38_901).into_iter().collect();
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"] {
+            assert_eq!(e[k], "http://127.0.0.1:38901", "{k}");
+        }
+        assert_eq!(e["NO_PROXY"], "127.0.0.1,localhost,::1");
+        assert_eq!(e["no_proxy"], e["NO_PROXY"]);
+        assert_eq!(e["NODE_USE_ENV_PROXY"], "1");
+        assert!(e.iter().all(|(k, v)| env_name_ok(k) && value_ok(v, 256)));
     }
 
     #[test]

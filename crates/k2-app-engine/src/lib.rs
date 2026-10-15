@@ -27,10 +27,10 @@ pub mod sys;
 /// The marker a signed build must carry exactly once.
 #[cfg(target_arch = "x86_64")]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_APP_ENGINE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=1 arch=x86_64;");
+pub static BUILD_MARKER: &str = concat!("K2_APP_ENGINE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=2 arch=x86_64;");
 #[cfg(target_arch = "aarch64")]
 #[used]
-pub static BUILD_MARKER: &str = concat!("K2_APP_ENGINE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=1 arch=aarch64;");
+pub static BUILD_MARKER: &str = concat!("K2_APP_ENGINE_BUILD v=", env!("K2_PRODUCT_VERSION"), " proto=2 arch=aarch64;");
 
 /// Present only in a `test-keys` build; release signing refuses it.
 #[cfg(feature = "test-keys")]

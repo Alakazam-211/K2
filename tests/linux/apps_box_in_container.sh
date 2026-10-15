@@ -102,7 +102,7 @@ echo "$V" | grep -q '"apps":true' || fail "namespaces.apps: $V"
 ok "helper answers protocol 6 with the apps namespace"
 
 echo "== argv and caller refusals (nothing changes) =="
-for a in "apps process start ../k2-daemon" "apps process start Jobs" "apps nft apply 1-65535 38900-38949 5432" \
+for a in "apps process start ../k2-daemon" "apps process start Jobs" "apps nft apply 1-65535 38900-38999 5432" \
 	"apps runtime runc" "apps packages install netcat" "apps cores-slice 768M" "apps linger on k2" "apps ensure-user root"; do
 	req daemon $a
 	expect_rc 2 "refused argv: $a"
@@ -202,7 +202,7 @@ set -e
 info "podman info as k2app (rc $prc): $(echo "$pinfo" | tail -n 2 | tr '\n' ' ')"
 
 echo "== nft: App sockets reach only the proxy/db ports (gateway ports: per-App rules only) =="
-req agent apps nft apply 38600-38899 38900-38949 5432
+req agent apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft apply (open)"
 # Capture first: with pipefail, `nft … | grep -q` fails when grep exits
 # early and nft takes SIGPIPE.
@@ -210,7 +210,7 @@ TABLE="$(inns nft list table inet k2app)"
 grep -q "chain k2app_v2" <<<"$TABLE" || fail "chain"
 grep -q "meta skuid $U jump k2app_v2" <<<"$TABLE" || fail "skuid rule: $TABLE"
 grep -q "chain k2app_apps" <<<"$TABLE" || fail "per-App chain"
-req daemon apps nft apply 38600-38899 38900-38949 5432
+req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft apply again (atomic replace)"
 [ "$(inns nft list tables | grep -c 'inet k2app$')" = 1 ] || fail "one table"
 inns python3 -m http.server 38650 --bind 127.0.0.1 >/dev/null 2>&1 &
@@ -235,7 +235,7 @@ as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1"
 inns nft delete table inet k2app
 [ "$(as_app http://127.0.0.1:9999/)" = 200 ] || fail "control: k2app → loopback without the table"
 [ "$(as_app "http://$MYIP:9998/")" = 200 ] || fail "control: k2app → own address without the table"
-req daemon apps nft apply 38600-38899 38900-38949 5432
+req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft re-apply"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "re-applied table does not drop"
 kill "$L1" "$L2" "$L3" "$L4"
@@ -365,7 +365,7 @@ ok "unprep reversed every setting, kept k2app, its ids and /var/lib/k2app"
 
 echo "== prepare again from scratch: every verb converges =="
 for a in "apps ensure-user" "apps subid" "apps delegate on" "apps linger on" "apps reserve-ports on" \
-	"apps io-cost on" "apps nft apply 38600-38899 38900-38949 5432" "apps process-unit on" "apps runtime crun"; do
+	"apps io-cost on" "apps nft apply 38600-38899 38900-38999 5432" "apps process-unit on" "apps runtime crun"; do
 	req daemon $a
 	expect_rc 0 "$a"
 done

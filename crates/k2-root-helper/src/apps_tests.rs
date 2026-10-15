@@ -316,7 +316,7 @@ fn box_verbs_need_the_user_first() {
         &["apps", "subid"][..],
         &["apps", "linger", "on"],
         &["apps", "delegate", "on"],
-        &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"],
+        &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
         &["apps", "process-unit", "on"],
     ] {
         let o = t.call(args);
@@ -579,7 +579,7 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     let t = box_root();
     with_app_user(&t);
     t.as_agent(); // tightening: open
-    let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"]);
+    let o = t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]);
     ok(&o);
     let fed: Vec<_> = t
         .calls()
@@ -589,12 +589,12 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     assert_eq!(fed.len(), 1);
     let want = nft_ruleset(APP_UID, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 996 jump k2app_v2"));
+    assert!(want.contains("meta skuid 996 jump k2app_v3"));
 
     // Removing it is the daemon's, and so is any other set of ranges (an
     // agent can't open more loopback ports to Apps).
     assert_eq!(t.call(&["apps", "nft", "remove"]).code, exit::NOT_DAEMON);
-    let o = t.call(&["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"]);
+    let o = t.call(&["apps", "nft", "apply", "1024-2047", "38900-38999", "5432"]);
     assert_eq!(o.code, exit::NOT_DAEMON);
     assert_eq!(calls_of(&t, NFT).iter().filter(|c| *c == "-f -").count(), 1);
 }
@@ -1080,7 +1080,7 @@ fn hba_app_is_daemon_only_and_refuses_links_and_damage_before_writing() {
 // ── per-App gateway rules (slice 3) ─────────────────────────────────────
 
 fn current_table(t: &T) {
-    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v2\n\t}\n\tchain k2app_v2 {\n\t}\n}\n");
+    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v3\n\t}\n\tchain k2app_v3 {\n\t}\n}\n");
 }
 
 fn container_cgroup(t: &T, id: &str) -> String {
@@ -1113,22 +1113,22 @@ fn nft_app_admits_only_the_apps_own_port_by_cgroup_and_is_daemon_only() {
     assert_eq!(sc.len(), 1);
     assert!(sc[0].starts_with("flush chain inet k2app k2app_apps\n"), "{}", sc[0]);
     assert!(sc[0].contains(
-        "add rule inet k2app k2app_apps socket cgroupv2 level 5 \"user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"
+        "add rule inet k2app k2app_apps socket cgroupv2 level 5 \"user.slice/user-996.slice/user@996.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
     ));
     // A second App: both rules, each its own port. A port already held is refused.
     container_cgroup(&t, "nsi");
     ok(&t.call(&["apps", "nft", "app", "nsi", "38600"]));
     let last = nft_scripts(&t).pop().unwrap();
     assert_eq!(last.matches("add rule").count(), 2);
-    assert!(last.contains("k2apps-nsi.slice\" oifname \"lo\" tcp dport 38600 accept"));
+    assert!(last.contains("k2apps-nsi.slice\" oifname \"lo\" tcp dport { 38600, 38900 } accept"));
     let o = t.call(&["apps", "nft", "app", "jobs", "38600"]);
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.contains("belongs to App nsi"), "{}", o.stderr);
     // A full re-apply keeps the per-App rules (boot, drift).
     t.as_agent();
-    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"]));
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
     let full = nft_scripts(&t).pop().unwrap();
-    assert!(full.contains("k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"));
+    assert!(full.contains("k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"));
     assert!(!full.contains("38600-38899"), "never the whole gateway range");
     // Agents can't add or remove rules.
     assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38602"]).code, exit::NOT_DAEMON);

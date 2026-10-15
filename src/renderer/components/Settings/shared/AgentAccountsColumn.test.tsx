@@ -245,6 +245,60 @@ describe('Tokens column', () => {
   })
 })
 
+describe('time until each token refreshes', () => {
+  const T0 = Date.parse('2026-10-15T12:00:00Z')
+  const iso = (ms: number) => new Date(ms).toISOString()
+
+  function reading(windows: Array<{ label: string; used: number; resetsAt: string }>): Record<string, unknown> {
+    return { harness: 'claude', plan: 'Max', windows, checkedAt: iso(T0), status: '' }
+  }
+
+  function docWithResets(): Record<string, unknown> {
+    const d = doc() as { tools: Array<{ tool: string; accounts: unknown[] }> }
+    const claude = d.tools.find((t) => t.tool === 'claude')!
+    claude.accounts = [
+      { ...WORK, usage: reading([
+        { label: 'Session', used: 0.42, resetsAt: iso(T0 + 3 * 3_600_000) },
+        { label: 'Weekly', used: 0.1, resetsAt: '' },
+      ]) },
+      { ...HOME, usage: reading([
+        { label: 'Session', used: 1, resetsAt: iso(T0 - 5 * 60_000) },
+        { label: 'Weekly', used: 0.6, resetsAt: iso(T0 + 4 * 86_400_000) },
+      ]) },
+      STALE,
+    ]
+    return d
+  }
+
+  it('shows each token its own reset time in the top bar format, nothing when unknown, "now" when past, and ticks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(T0)
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) =>
+      route === 'llm/accounts/list' ? docWithResets() : routeGet(route, params),
+    )
+    await renderColumn()
+
+    const win = (id: string, label: string) => screen.getByTestId(`llm-usage-window-${id}-${label}`)
+    // Known reset: the top bar's "Session 42% · 3h".
+    expect(win('acc_work', 'Session').textContent).toBe('Session 42% · 3h')
+    expect(win('acc_work', 'Session').getAttribute('title')).toBe('Session 42% used · refreshes in 3h')
+    // Unknown reset: no time at all, not a guess.
+    expect(win('acc_work', 'Weekly').textContent).toBe('Weekly 10%')
+    expect(win('acc_work', 'Weekly').getAttribute('title')).toBeNull()
+    // A different token counts down to its own reset; a past reset reads "now".
+    expect(win('acc_home', 'Session').textContent).toBe('Session 100% · now')
+    expect(win('acc_home', 'Weekly').textContent).toBe('Weekly 60% · 4d')
+    // No reading: no windows.
+    expect(screen.queryByTestId('llm-usage-window-acc_stale-Session')).toBeNull()
+
+    // Two hours later (the page ticks once a minute): 1h left = "60m".
+    await act(async () => {
+      vi.advanceTimersByTime(2 * 3_600_000)
+    })
+    expect(win('acc_work', 'Session').textContent).toBe('Session 42% · 60m')
+  })
+})
+
 describe('Workspace/chat tokens and API tokens', () => {
   it('Gemini offers only an API token', async () => {
     await renderColumn()

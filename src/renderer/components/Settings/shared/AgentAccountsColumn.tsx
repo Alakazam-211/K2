@@ -18,6 +18,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
+import { formatResetsIn } from '@/lib/subscription-usage'
+import { USAGE_CACHE_POLL_MS } from '@/stores/subscription-usage'
 import {
   addApiKey,
   checkedAgoText,
@@ -105,7 +107,7 @@ function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | n
   const age = checkedAgoText(usageCheckedAtSecs(account))
   return (
     <div className="mt-1" data-testid={`llm-usage-${account.id}`}>
-      {windows.length > 0 && <UsageWindows windows={windows} />}
+      {windows.length > 0 && <UsageWindows accountId={account.id} windows={windows} />}
       <div className="text-[9px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-usage-age-${account.id}`}>
         {windows.length === 0 && usage.status ? `${usage.status} · ` : ''}
         Usage {age}
@@ -120,15 +122,36 @@ function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | n
   )
 }
 
-function UsageWindows({ windows }: { windows: NonNullable<LlmAccount['usage']>['windows'] }): React.JSX.Element {
+/** Each window also says when it refreshes, the top bar's way ("Session
+ *  42% · 3h", "· now" once the reset time has passed, nothing when
+ *  unknown). The time comes from that token's own last reading, so every
+ *  row counts down to its own reset. Ticks once a minute (the top bar's
+ *  usage cadence). */
+function UsageWindows({
+  accountId,
+  windows,
+}: {
+  accountId: string
+  windows: NonNullable<LlmAccount['usage']>['windows']
+}): React.JSX.Element {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), USAGE_CACHE_POLL_MS)
+    return () => clearInterval(id)
+  }, [])
   return (
     <div className="flex gap-3">
       {windows.slice(0, 2).map((w) => {
         const pct = Math.max(0, Math.min(100, Math.round(w.used * 100)))
+        const until = formatResetsIn(w.resetsAt, now)
         return (
-          <div key={w.label} className="min-w-0 w-24">
-            <div className="text-[9px] text-[var(--color-text-muted)] truncate">
-              {w.label} {pct}%
+          <div key={w.label} className="min-w-0 w-28">
+            <div
+              className="text-[9px] text-[var(--color-text-muted)] truncate"
+              data-testid={`llm-usage-window-${accountId}-${w.label}`}
+              title={until ? `${w.label} ${pct}% used · refreshes ${until === 'now' ? 'now' : `in ${until}`}` : undefined}
+            >
+              {w.label} {pct}%{until ? ` · ${until}` : ''}
             </div>
             <div className="h-0.5 bg-[var(--color-border)]">
               <div

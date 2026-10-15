@@ -1391,6 +1391,44 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Ok(serde_json::json!({ "job": job_summary(&j), "existing": true }));
         }
     }
+    if v.get("shards").is_some_and(|x| !x.is_null()) {
+        return run_sharded(who, &v, &ws, client_id, &request_sha);
+    }
+    let session = who.passport().map(|(_, sid)| sid.to_string());
+    let sub = submit_one(who, &v, &ws, client_id, &request_sha, &SubmitOpts { session, ..Default::default() })?;
+    Ok(submitted_json(who, &sub))
+}
+
+/// How one job is submitted (a plain run, or one shard of a split run).
+#[derive(Debug, Default)]
+struct SubmitOpts {
+    shard: Option<store::ShardRef>,
+    /// Nodes to avoid when another fits as well (sibling shards).
+    prefer_not: Vec<String>,
+    /// The session the wake message goes to (shards: none, the parent has it).
+    session: Option<String>,
+}
+
+struct Submitted {
+    job: store::JobRow,
+    warnings: Vec<String>,
+    /// Where the code came from (slice A's `source` in the run response).
+    source: Option<serde_json::Value>,
+}
+
+fn submitted_json(who: &Who, sub: &Submitted) -> serde_json::Value {
+    let job = &sub.job;
+    let mut out = serde_json::json!({ "job": job_summary(job), "existing": false, "warnings": sub.warnings, "source": sub.source });
+    if job.state == "queued" {
+        if let Some(q) = queue_view(who, job, &compute_ws::decision_for(&job.node_id)) {
+            out["queue"] = q;
+        }
+    }
+    out
+}
+
+/// Check, place and store one job, then try to start it.
+fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, request_sha: &str, opts: &SubmitOpts) -> R<Submitted> {
     // argv / env / cwd.
     let argv: Vec<String> = v
         .get("argv")
@@ -1462,7 +1500,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
-    let node = pick_node(&v, &ws, &want, queue_timeout, &mut warnings)?;
+    let node = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     if !artifacts.is_empty() && !node_features(&node).iter().any(|f| f == results::FEATURE_ARTIFACTS) {
         return Err(no(
             "node_upgrade_required",
@@ -1581,6 +1619,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         queued_at: compute::now(),
         retries,
         stall_secs: stall,
+        shard: opts.shard.clone(),
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -1610,14 +1649,14 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let job = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let session = who.passport().map(|(_, sid)| sid);
+        let session = opts.session.as_deref();
         let j = store::insert_job(
             &conn,
             &store::NewJob {
                 plan: &plan,
                 client_job_id: client_id,
                 session_id: session,
-                request_sha256: &request_sha,
+                request_sha256: request_sha,
                 detach,
                 retry_interrupted: retries > 0,
                 ctl,
@@ -1632,7 +1671,8 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             Some(&ws.id),
             Some(&j.id),
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
-                "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout}),
+                "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
+                "shard": opts.shard}),
         );
         j
     };
@@ -1643,14 +1683,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let conn = db.lock();
         store::job_by_id(&conn, &job.id).unwrap_or(job)
     };
-    let mut out = serde_json::json!({ "job": job_summary(&job), "existing": false, "warnings": warnings,
-        "source": source.as_ref().map(SourceInfo::json) });
-    if job.state == "queued" {
-        if let Some(q) = queue_view(who, &job, &compute_ws::decision_for(&node.id)) {
-            out["queue"] = q;
-        }
-    }
-    Ok(out)
+    Ok(Submitted { job, warnings, source: source.as_ref().map(SourceInfo::json) })
 }
 
 /// `--timeout` over the grant's (or the default) time per job.
@@ -1683,6 +1716,7 @@ fn pick_node(
     ws: &Ws,
     want: &crate::compute_place::Want,
     queue_timeout: Option<i64>,
+    prefer_not: &[String],
     warnings: &mut Vec<String>,
 ) -> R<store::NodeRow> {
     if let Some(name) = s(v, "node") {
@@ -1717,7 +1751,7 @@ fn pick_node(
     let pk = compute::sync::repo_root(Path::new(&ws.path))
         .ok()
         .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref()));
-    let Some((c, tier)) = choose(&cands, want, &[], pk.as_deref(), None) else {
+    let Some((c, tier)) = choose(&cands, want, prefer_not, pk.as_deref(), None) else {
         return Err(no(
             codes::NO_NODE_FITS,
             404,
@@ -2016,9 +2050,21 @@ fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
 }
 
 /// What a `get?wait=N` waiter watches: a change in any of these ends the wait.
-fn wait_fingerprint(j: &store::JobRow) -> (String, Option<String>, i64, Option<usize>) {
-    let position = (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten();
-    (j.state.clone(), j.reason.clone(), j.generation, position)
+type WaitPrint = (String, Option<String>, i64, Option<usize>);
+
+/// A job's wait fingerprint; a split run's (compute B) also changes when
+/// any of its shards' does, so its CLI can print one line per shard change.
+fn wait_fingerprint(j: &store::JobRow) -> (WaitPrint, Vec<WaitPrint>) {
+    let one = |j: &store::JobRow| -> WaitPrint {
+        let position = (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten();
+        (j.state.clone(), j.reason.clone(), j.generation, position)
+    };
+    let kids = if j.ctl.shards.is_empty() {
+        Vec::new()
+    } else {
+        crate::compute_shards::children(j).iter().map(|(k, _)| one(k)).collect()
+    };
+    (one(j), kids)
 }
 
 /// Re-checks of a waiting `get` happen at most this often: the change
@@ -2086,8 +2132,155 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
     }
     v["nodeOnline"] = compute_ws::is_online(&j.node_id).into();
     let node = v["node"].as_str().map(str::to_string);
-    v["result"] = compute::result::envelope(&j, node.as_deref());
+    v["result"] = if j.ctl.shards.is_empty() {
+        compute::result::envelope(&j, node.as_deref())
+    } else {
+        compute::result::envelope_with_shards(&j, &crate::compute_shards::children(&j))
+    };
     Ok(v)
+}
+
+// ── split runs (`--shards`, compute B) ───────────────────────────────
+
+/// `run` with `shards: N`: one parent row (no node, `running` until its
+/// shards end) and N `--any` child jobs, `{shard}`/`{shards}` filled in,
+/// spread across nodes. One wake message for the whole run.
+fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, request_sha: &str) -> R<serde_json::Value> {
+    use k2_core::compute::shards;
+    let count = n(v, "shards").filter(|x| (2..=shards::MAX_SHARDS as i64).contains(x)).ok_or_else(|| {
+        no(codes::BAD_REQUEST, 400, format!("--shards is 2–{} (one job per shard, each on its own node when it can)", shards::MAX_SHARDS))
+    })? as u32;
+    if s(v, "node").is_some() || b(v, "any") != Some(true) {
+        return Err(no(codes::BAD_REQUEST, 400, "--shards needs --any: each shard goes to whichever node can take it"));
+    }
+    let argv: Vec<String> = v
+        .get("argv")
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    if !shards::has_placeholders(&argv) {
+        return Err(no(
+            codes::BAD_REQUEST,
+            400,
+            "put {shard} and {shards} in the command (e.g. cargo nextest run --partition hash:{shard}/{shards}), or use k2 compute test --shards N",
+        ));
+    }
+    let detach = b(v, "detach") == Some(true);
+    let parent_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
+    let now = compute::now();
+    let parent_plan = Plan {
+        job_id: parent_id.clone(),
+        node_id: String::new(),
+        workspace_id: ws.id.clone(),
+        workspace_label: ws.handle.clone(),
+        requested_by: who.label(),
+        argv: argv.clone(),
+        env: BTreeMap::new(),
+        cwd: None,
+        limits: JobLimits { max_secs: 1, cpu_millis: None, mem_bytes: None, disk_bytes: 0, log_cap_bytes: 0 },
+        src: None,
+        exclusive: false,
+        created_at: now,
+        needs: Vec::new(),
+        artifacts: Vec::new(),
+        stall_secs: None,
+    };
+    let session = who.passport().map(|(_, sid)| sid.to_string());
+    let parent = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let p = store::insert_job(
+            &conn,
+            &store::NewJob {
+                plan: &parent_plan,
+                client_job_id: client_id,
+                session_id: session.as_deref(),
+                request_sha256: request_sha,
+                detach,
+                retry_interrupted: false,
+                ctl: store::JobCtl { admin: who.is_admin(), queued_at: now, ..Default::default() },
+            },
+        )
+        .map_err(|e| no("internal", 500, e))?;
+        store::set_parent_running(&conn, &p.id).map_err(|e| no("internal", 500, e))?;
+        p
+    };
+    let mut kids: Vec<store::JobRow> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let stem: String = client_id.chars().take(56).collect();
+    for i in 1..=count {
+        let mut cv = v.clone();
+        if let Some(m) = cv.as_object_mut() {
+            m.remove("shards");
+            m.insert("argv".into(), serde_json::json!(shards::argv_for(&argv, i, count)));
+            m.insert("clientJobId".into(), serde_json::json!(format!("{stem}-s{i}")));
+        }
+        let child_client = format!("{stem}-s{i}");
+        let child_sha = crypto::sha256_hex(&k2_core::compute::proto::canonical::to_vec(&cv).map_err(|e| no(codes::BAD_REQUEST, 400, e))?);
+        let opts = SubmitOpts {
+            shard: Some(store::ShardRef { parent: parent_id.clone(), index: i, of: count }),
+            prefer_not: kids.iter().map(|k| k.node_id.clone()).collect(),
+            session: None,
+        };
+        match submit_one(who, &cv, ws, &child_client, &child_sha, &opts) {
+            Ok(sub) => {
+                for w in sub.warnings {
+                    if !warnings.contains(&w) {
+                        warnings.push(w);
+                    }
+                }
+                kids.push(sub.job);
+            }
+            Err(e) => {
+                // All or nothing: stop the shards already placed (forced:
+                // one may have started already).
+                for k in &kids {
+                    let _ = cancel_one(who, k, false);
+                }
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = store::set_job_state(&conn, &parent_id, JobState::Failed, Some(e.code), Some(&format!("shard {i}/{count}: {}", e.hint)), compute::now());
+                return Err(e);
+            }
+        }
+    }
+    let parent = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut ctl = parent.ctl.clone();
+        ctl.shards = kids.iter().map(|k| k.id.clone()).collect();
+        store::set_job_ctl(&conn, &parent_id, &ctl).map_err(|e| no("internal", 500, e))?;
+        store::record_event(
+            &conn,
+            &who.label(),
+            "job_submit_shards",
+            None,
+            Some(&ws.id),
+            Some(&parent_id),
+            serde_json::json!({"argv": argv, "shards": count, "children": ctl.shards}),
+        );
+        store::job_by_id(&conn, &parent_id).unwrap_or(parent)
+    };
+    // A shard may have ended before the parent knew its shards.
+    crate::compute_shards::child_ended(&parent_id);
+    compute_ws::notify_change();
+    let list: Vec<serde_json::Value> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        kids.iter()
+            .map(|k| {
+                let k = store::job_by_id(&conn, &k.id).unwrap_or_else(|| k.clone());
+                serde_json::json!({
+                    "index": k.ctl.shard.as_ref().map(|s| s.index),
+                    "job": k.id,
+                    "short": compute::message::short(&k.id),
+                    "node": store::node_by_id(&conn, &k.node_id).map(|n| n.name),
+                    "state": k.state,
+                })
+            })
+            .collect()
+    };
+    Ok(serde_json::json!({ "job": job_summary(&parent), "existing": false, "warnings": warnings, "shards": list }))
 }
 
 /// Fetch failure codes as the stable `&'static str` refusals carry.
@@ -2111,7 +2304,35 @@ fn fetch_code(code: &str) -> &'static str {
 /// at `offset`. The CLI loops until `eof`.
 fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
-    let o = compute::result::outputs(&j).unwrap_or_default();
+    if !j.ctl.shards.is_empty() {
+        // A split run: every shard's files as `shard-<i>/<name>`.
+        let kids = crate::compute_shards::children(&j);
+        let name = params.get("name").map(String::as_str).filter(|n| !n.is_empty());
+        let Some(name) = name else {
+            let mut all = Vec::new();
+            for (k, _) in &kids {
+                let i = k.ctl.shard.as_ref().map(|s| s.index).unwrap_or(0);
+                for a in compute::result::outputs(k).unwrap_or_default().artifacts {
+                    all.push(serde_json::json!({"name": format!("shard-{i}/{}", a.name), "sha256": a.sha256, "bytes": a.bytes}));
+                }
+            }
+            return Ok(serde_json::json!({"job": j.id, "short": compute::message::short(&j.id), "state": j.state, "artifacts": all}));
+        };
+        let (prefix, rest) = name.split_once('/').unwrap_or((name, ""));
+        let idx: Option<u32> = prefix.strip_prefix("shard-").and_then(|x| x.parse().ok());
+        let child = kids.iter().find(|(k, _)| k.ctl.shard.as_ref().map(|s| s.index) == idx).map(|(k, _)| k.clone());
+        let Some(child) = child.filter(|_| !rest.is_empty()) else {
+            return Err(no("artifact_not_found", 404, format!("a split run's files are shard-<i>/<name> (k2 compute fetch {} lists them)", compute::message::short(&j.id))));
+        };
+        let mut p = params.clone();
+        p.insert("job".into(), child.id.clone());
+        p.insert("name".into(), rest.to_string());
+        let mut out = job_artifact(who, &p)?;
+        out["job"] = j.id.clone().into();
+        out["name"] = name.into();
+        return Ok(out);
+    }
+    let o =compute::result::outputs(&j).unwrap_or_default();
     let short = compute::message::short(&j.id).to_string();
     let Some(name) = params.get("name").map(String::as_str).filter(|n| !n.is_empty()) else {
         return Ok(serde_json::json!({
@@ -2157,6 +2378,18 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
 fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     compute_ws::touch_follower(&j.id);
+    if !j.ctl.shards.is_empty() {
+        let shards: Vec<String> = j.ctl.shards.clone();
+        return Ok(serde_json::json!({
+            "job": job_summary(&j),
+            "generation": j.generation,
+            "cursor": 0,
+            "chunks": [],
+            "end": j.is_terminal(),
+            "shards": shards,
+            "hint": "a split run: each shard has its own log (k2 compute logs <run> reads them all)",
+        }));
+    }
     let generation = params.get("generation").and_then(|g| g.parse::<i64>().ok()).unwrap_or(j.generation);
     let mut cursor = match params.get("cursor").and_then(|c| c.parse::<u64>().ok()) {
         Some(c) => c,
@@ -2232,6 +2465,37 @@ fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     };
     // Visibility (a passport sees only its workspace's jobs).
     let seen = job_for(who, s(&v, "job"))?;
+    if !seen.ctl.shards.is_empty() {
+        // A split run (compute B): cancel every shard that hasn't ended.
+        // Without --force (slice A's `ifState: queued`), a run with a
+        // started shard is refused as a whole, before anything is cancelled.
+        let short = compute::message::short(&seen.id).to_string();
+        if seen.is_terminal() {
+            return Err(no("already_ended", 409, format!("job {short} already ended ({})", seen.state)));
+        }
+        let kids: Vec<store::JobRow> = crate::compute_shards::children(&seen).into_iter().map(|(k, _)| k).filter(|k| !k.is_terminal()).collect();
+        let started = kids.iter().filter(|k| k.state != "queued").count();
+        if queued_only && started > 0 {
+            return Err(no(
+                JOB_STARTED,
+                409,
+                format!("split run {short} has {started} shard(s) already started; k2 compute cancel {short} --force stops them"),
+            ));
+        }
+        let mut n = 0;
+        for k in &kids {
+            if cancel_one(who, k, false).is_ok() {
+                n += 1;
+            }
+        }
+        return Ok(serde_json::json!({"ok": true, "state": seen.state, "cancel": format!("sent to {n} shard(s)")}));
+    }
+    cancel_one(who, &seen, queued_only)
+}
+
+/// Cancel one job: queued, at once (compare-and-set); on a node, the node
+/// is told, unless `queued_only` (no --force), which refuses it.
+fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_json::Value> {
     let by = who.label();
     let short = compute::message::short(&seen.id).to_string();
     let node_name = {
@@ -2313,15 +2577,46 @@ fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let short = compute::message::short(&j.id);
         return Err(no("still_running", 409, format!("the job hasn't ended; k2 compute cancel {short} --force first")));
     }
+    if !j.ctl.shards.is_empty() {
+        // Re-run only the shards that didn't pass; the run reopens.
+        let mut again = Vec::new();
+        for (k, _) in crate::compute_shards::children(&j) {
+            if !(k.state == "done" && k.exit_code == Some(0)) {
+                retry_one(who, &k)?;
+                again.push(k.ctl.shard.as_ref().map(|s| s.index).unwrap_or(0));
+            }
+        }
+        if again.is_empty() {
+            return Err(no("nothing_to_retry", 409, "every shard passed"));
+        }
+        let r = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_parent_running(&conn, &j.id).map_err(|e| no("internal", 500, e))?;
+            store::record_event(&conn, &who.label(), "job_retry", None, Some(&j.workspace_id), Some(&j.id), serde_json::json!({"shards": again}));
+            store::job_by_id(&conn, &j.id).unwrap_or(j)
+        };
+        compute_ws::notify_change();
+        return Ok(serde_json::json!({ "ok": true, "job": job_summary(&r), "shards": again }));
+    }
+    let r = retry_one(who, &j)?;
+    Ok(serde_json::json!({ "ok": true, "job": job_summary(&r) }))
+}
+
+/// A new attempt of one ended job. An `--any` job whose node is gone
+/// still retries: the sweeper moves it.
+fn retry_one(who: &Who, j: &store::JobRow) -> R<store::JobRow> {
     let n = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::node_by_id(&conn, &j.node_id)
+    };
+    let live = n.clone().filter(|n| n.state == "active");
+    if live.is_none() && j.ctl.any.is_none() {
+        return Err(no(codes::NODE_NOT_FOUND, 404, "the job's node was removed; submit a new run"));
     }
-    .filter(|n| n.state == "active")
-    .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, "the job's node was removed; submit a new run"))?;
-    if who.passport().is_some() {
-        node_visible(who, &n)?;
+    if let (Some(n), true) = (&live, who.passport().is_some()) {
+        node_visible(who, n)?;
     }
     let r = {
         let db = k2_core::db::shared();
@@ -2336,8 +2631,9 @@ fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         store::record_event(&conn, &who.label(), "job_retry", Some(&j.node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": r.generation}));
         r
     };
-    compute_ws::kick(&n.id);
-    Ok(serde_json::json!({ "ok": true, "job": job_summary(&r) }))
+    compute_ws::kick(&r.node_id);
+    compute_ws::notify_change();
+    Ok(r)
 }
 
 fn usage(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {

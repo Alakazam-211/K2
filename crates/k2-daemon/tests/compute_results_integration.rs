@@ -10,6 +10,10 @@
 //!   node), lost nodes, infra-only retries on another node (the CLI
 //!   follows the new attempt), a returning lost node is told to stop,
 //!   a node with infra failures in a row is set aside;
+//! - stall timeout: a silent job ends `timeout/stalled`, never retried;
+//! - split runs (compute B): `k2 compute test --shards N` puts one nextest
+//!   partition per node, merges the JUnit, gives one exit code, one wake
+//!   message; logs/fetch/retry/cancel work on the run.
 
 #![cfg(unix)]
 
@@ -632,6 +636,143 @@ async fn a_stalled_job_ends_as_a_result_and_is_never_retried() {
         serde_json::from_str(&conn.query_row("SELECT plan_json FROM compute_jobs WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap()).unwrap()
     };
     assert!(p.get("stall_secs").is_none(), "{p}");
+    k2_core::compute::retry::set_tuning_for_tests(Default::default());
+    drop(env);
+}
+
+// ── split runs = compute B (G8) ──────────────────────────────────────
+
+/// Stands in for `cargo nextest run` on the node: reads --profile,
+/// --partition and --config-file, writes JUnit where nextest would
+/// (`$CARGO_TARGET_DIR/nextest/<profile>/junit.xml`). Shard 2 fails.
+const FAKE_NEXTEST: &str = r#"profile=default; part=""; cfg=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile) profile="$2"; shift 2 ;;
+    --partition) part="$2"; shift 2 ;;
+    --config-file) cfg="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+i=${part#hash:}; i=${i%/*}; n=${part#*/}
+out="$CARGO_TARGET_DIR/nextest/$profile"; mkdir -p "$out"
+if [ "$i" = "2" ]; then fail='<testcase name="t2_bad" classname="k2-core"><failure message="boom in shard 2"/></testcase>'; rc=100; else fail=""; rc=0; fi
+printf '<testsuites><testsuite name="k2-core"><testcase name="t%s_a" classname="k2-core"/><testcase name="t%s_b" classname="k2-core"/>%s</testsuite></testsuites>' "$i" "$i" "$fail" > "$out/junit.xml"
+grep -q 'path = "junit.xml"' "$cfg" && echo "junit config ok"
+env | grep -q '^K2_' && echo "K2 VARIABLE LEAKED"
+[ -d "$XDG_RUNTIME_DIR" ] && echo "xdg ok"
+echo "shard $i of $n, profile $profile"
+exit $rc
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn split_runs_spread_shards_merge_junit_and_give_one_result() {
+    let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(tuning_for_tests());
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    std::fs::create_dir_all(env.home.join("cli-tmp")).unwrap();
+    let ws = seed_ws(&env, "sp", &[("fake-nextest.sh", FAKE_NEXTEST)]);
+    let (_a, a_id) = online_node(&env, port, "sa", 1).await;
+    let (_b, b_id) = online_node(&env, port, "sb", 1).await;
+    let (_c, c_id) = online_node(&env, port, "sc", 1).await;
+
+    // Usage errors first (exit 2): shards need --any and the placeholders.
+    let (rc, _, err) = k2(&env, port, &ws.path, &["compute", "run", "sa", "--shards", "2", "--", "true"]);
+    assert_eq!(rc, 2, "{err}");
+    let (rc, _, err) = k2(&env, port, &ws.path, &["compute", "run", "--any", "--shards", "2", "--", "true"]);
+    assert_eq!(rc, 2, "{err}");
+    assert!(err.contains("{shard}"), "{err}");
+
+    // `k2 compute test --shards 3`: one partition per node, one result.
+    let (rc, out, err) = k2(&env, port, &ws.path, &["compute", "test", "--shards", "3", "--runner", "sh fake-nextest.sh", "--json"]);
+    assert_eq!(rc, 100, "the failing shard's exit code: {err}");
+    let r: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("one JSON result ({e}): {out:?} / {err}"));
+    assert_eq!((r["state"].as_str(), r["exit"].as_i64(), r["ok"].as_bool()), (Some("done"), Some(100), Some(false)), "{r}");
+    let shards = r["shards"].as_array().unwrap();
+    assert_eq!(shards.len(), 3);
+    let mut nodes: Vec<String> = shards.iter().map(|x| x["node"].as_str().unwrap().to_string()).collect();
+    nodes.sort();
+    assert_eq!(nodes, vec!["sa", "sb", "sc"], "one shard per node");
+    assert_eq!(shards[1]["exit"], 100);
+    let t = &r["tests"];
+    assert_eq!((t["passed"].as_u64(), t["failed"].as_u64(), t["total"].as_u64()), (Some(6), Some(1), Some(7)), "{t}");
+    assert_eq!(t["failing"][0]["name"], "t2_bad");
+    assert_eq!(t["failing"][0]["shard"], 2);
+    assert!(err.contains("shard 2/3 on") && err.contains("3 shards: exit 100"), "{err}");
+    let run = r["short"].as_str().unwrap().to_string();
+
+    // logs: the merged failures once, then each shard's log under a header.
+    let (rc, out, err) = k2(&env, port, &ws.path, &["compute", "logs", &run]);
+    assert_eq!(rc, 0, "{err}");
+    for i in 1..=3 {
+        assert!(out.contains(&format!("── shard {i}/3 · job ")), "{out}");
+        assert!(out.contains(&format!("shard {i} of 3, profile k2")), "{out}");
+    }
+    assert!(out.contains("junit config ok") && out.contains("xdg ok") && !out.contains("K2 VARIABLE LEAKED"), "{out}");
+    let (rc, out, _) = k2(&env, port, &ws.path, &["compute", "logs", &run, "--failures"]);
+    assert_eq!(rc, 0);
+    assert!(out.starts_with("FAILING TESTS: 1 failed, 0 errors, 6 passed"), "{out}");
+    assert!(out.contains("[shard 2] k2-core t2_bad — boom in shard 2"), "{out}");
+    assert_eq!(out.matches("FAILING TESTS").count(), 1, "once for the run: {out}");
+
+    // fetch: every shard's JUnit, under shard-<i>/.
+    let dest = env.home.join("shards-out");
+    let (rc, out, err) = k2(&env, port, &ws.path, &["compute", "fetch", &run, "--out", dest.to_str().unwrap(), "--json"]);
+    assert_eq!(rc, 0, "{err}");
+    let f: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(f["files"].as_array().unwrap().len(), 3, "{f}");
+    let x = std::fs::read_to_string(dest.join("shard-2/target/nextest/k2/junit.xml")).unwrap();
+    assert!(x.contains("t2_bad"), "{x}");
+
+    // retry: only the shard that didn't pass runs again; the run reopens.
+    let parent = job(port, &run).await;
+    let pid = parent["id"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/compute/jobs/retry", OWNER, json!({"job": pid})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["shards"], json!([2]));
+    let v = wait_state(port, &pid, 30, |v| v["state"] == "done").await;
+    let sh = v["result"]["shards"].as_array().unwrap();
+    assert_eq!((sh[0]["attempt"].as_i64(), sh[1]["attempt"].as_i64(), sh[2]["attempt"].as_i64()), (Some(1), Some(2), Some(1)), "{v}");
+
+    // A detached agent run: ONE wake message for the whole run.
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": ws.id, "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (agent, sid) = passport(&ws);
+    k2_daemon::compute_ws::test_sink_register(&sid);
+    let r = post(
+        port,
+        "/cli/compute/run",
+        &agent,
+        json!({"any": true, "shards": 3, "detach": true, "clientJobId": "client-shards-detached-1",
+               "argv": ["sh", "-c", "echo shard {shard} of {shards}"], "noSource": true}),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pid = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let p2 = pid.clone();
+    wait_for("the run ends", 30, move || {
+        let p = p2.clone();
+        Box::pin(async move { job(port, &p).await["state"] == "done" })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let msgs = k2_daemon::compute_ws::test_sink_take(&sid);
+    assert_eq!(msgs.len(), 1, "one message for the run, none per shard: {msgs:?}");
+    assert!(msgs[0].starts_with(&format!("[compute] job {} (3 shards): exit 0", &pid[..8])), "{msgs:?}");
+    let v = job(port, &pid).await;
+    for x in v["result"]["shards"].as_array().unwrap() {
+        let r = get(port, "/cli/compute/jobs/logs", &agent, &format!("job={}&cursor=0", x["job"].as_str().unwrap())).await;
+        let text: String = j(&r)["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["stream"] == "out")
+            .map(|c| String::from_utf8(k2_node_proto::crypto::unb64(c["data"].as_str().unwrap()).unwrap()).unwrap())
+            .collect();
+        assert_eq!(text, format!("shard {} of 3\n", x["index"]), "placeholders filled per shard");
+    }
+    let _ = (a_id, b_id, c_id);
     k2_core::compute::retry::set_tuning_for_tests(Default::default());
     drop(env);
 }

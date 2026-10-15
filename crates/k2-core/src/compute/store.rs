@@ -427,6 +427,22 @@ pub struct JobCtl {
     /// `--stall-timeout` as asked: None = the default, 0 = off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_secs: Option<i64>,
+    /// A shard of a split run: its parent and place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shard: Option<ShardRef>,
+    /// A split run's parent: the child job ids, shard 1 first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shards: Vec<String>,
+}
+
+/// Which shard a child job is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShardRef {
+    pub parent: String,
+    /// 1-based.
+    pub index: u32,
+    pub of: u32,
 }
 
 /// What an `--any` job asks of a node.
@@ -831,6 +847,34 @@ pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, r
         )
         .map_err(|e| e.to_string())?;
     Ok(n == 1)
+}
+
+/// A split run's parent is `running` (no node) until its shards end.
+pub fn set_parent_running(conn: &Connection, id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE compute_jobs SET state = 'running', reason = NULL, detail = NULL, exit_code = NULL, signal = NULL, \
+         ended_at = NULL, summary_json = NULL, notified_at = NULL WHERE id = ?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())
+    .map(|_| ())
+}
+
+/// Write a split run's combined end (once every shard has ended).
+pub fn finish_parent(conn: &Connection, id: &str, a: &super::shards::Aggregate) -> Result<(), String> {
+    let summary = a
+        .tests
+        .as_ref()
+        .map(|t| serde_json::to_string(&super::proto::results::Outputs { tests: Some(t.clone()), ..Default::default() }))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE compute_jobs SET state = ?2, reason = ?3, detail = ?4, exit_code = ?5, signal = ?6, started_at = ?7, \
+         ended_at = COALESCE(?8, ended_at), summary_json = ?9 WHERE id = ?1",
+        params![id, a.state, a.reason, a.detail, a.exit_code, a.signal, a.started_at, a.ended_at, summary],
+    )
+    .map_err(|e| e.to_string())
+    .map(|_| ())
 }
 
 /// Every queued job (all nodes), oldest first.

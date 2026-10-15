@@ -1081,7 +1081,7 @@ async fn handle_one_request(
     if !crate::boot_status::is_ready()
         && !matches!(
             path.as_str(),
-            "/ping" | "/health" | "/boot-status" | "/v1/jwks"
+            "/ping" | "/health" | "/boot-status" | "/v1/jwks" | "/v1/chat/jwks"
         )
     {
         let _ = stream.read(&mut buf).await;
@@ -5917,6 +5917,37 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Sew chat-pass keys (S28 §10, K6): Owner/Admin people, loopback/
+        // LAN only; the emergency wipe needs a vault confirm. POST-only rows
+        // 405 on GET; bodies are capped; no key material in any response.
+        p if crate::chat_pass::routes::is_route(p) => {
+            let post_row = crate::chat_pass::routes::is_post_route(p);
+            if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::chat_pass::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::chat_pass::routes::error(413, "body_too_large", "chat-key bodies are at most 4 KiB", None);
+                        super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::chat_pass::routes::handle(&p_owned, is_post, &ingress_label, caller, &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+        }
         // K2 vault (prd-k2-vault-v1 §15, KV14): one module arm. POST-only
         // rows 405 on GET; bodies are capped; the handler maps the caller.
         p if crate::vault_routes::is_route(p) => {
@@ -9010,6 +9041,25 @@ async fn handle_one_request(
             let _ = stream.read(&mut buf).await;
             let r = crate::v1_capabilities::handle_v1_jwks();
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // GET /v1/chat/jwks — PUBLIC, the Sew chat-pass keys (S28 §8):
+        // current, next, and any key being retired. Same tier as /v1/jwks:
+        // served before the /v1/ gate (the /v1 API surface may be dark) and
+        // during boot readiness. Creates the keyring (vault) on first use.
+        // A POST is the top-level 405 (not on the POST allowlist).
+        // KM13's approval key gets its own URL later
+        // (`chat_pass::APPROVAL_JWKS_PATH_RESERVED`), not this one.
+        "/v1/chat/jwks" => {
+            let _ = stream.read(&mut buf).await;
+            let r = tokio::task::spawn_blocking(crate::chat_pass::routes::handle_jwks)
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            let cache = if r.status.starts_with("200") {
+                format!("Cache-Control: {}\r\n", crate::chat_pass::JWKS_CACHE_CONTROL)
+            } else {
+                "Cache-Control: no-store\r\n".to_string()
+            };
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, &cache).await;
         }
         // ── P3a (sandbox / K2-as-a-server) — the EXTERNAL `/v1/*` surface.
         //

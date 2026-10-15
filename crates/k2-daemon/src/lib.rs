@@ -157,6 +157,10 @@ pub mod v1_host_sessions;
 // Julie 2–4: POST /v1/w hire + wiki notes + context layers (host-sessions cap).
 pub mod v1_hire;
 pub mod v1_capabilities;
+// Sew S28 / K6: chat-pass keyring (vault), /v1/chat/jwks, rotation tick.
+pub mod chat_pass;
+// Shared ES256 helpers (capability key + chat-pass keys).
+pub mod es256;
 // F2 (sandbox): per-session agent response log + principal→session ownership map
 // backing GET /v1/sandboxes/<id>/messages. Reached ONLY via the K2_SANDBOX_API
 // surface (default OFF) + the scoped /cli/respond cell verb.

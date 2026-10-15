@@ -1022,6 +1022,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
     // that can hire agents, for every caller (owner token included).
     "hire-key-mint",
+    // Sew chat passes (S28 §7.4, KM13): an emergency wipe of the chat-pass
+    // signing keys needs a person, not the owner token alone.
+    "chat-keys-emergency",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

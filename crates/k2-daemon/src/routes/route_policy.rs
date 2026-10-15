@@ -824,6 +824,11 @@ pub const ROUTES: &[Route] = &[
     // ingress, LAN, air-gap) at once — Owner only.
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
+    // Sew chat-pass keys (S28 §10, K6): Owner/Admin people; the emergency
+    // wipe additionally needs a vault confirm (person-proof).
+    get("/cli/sew/keys", Admin),
+    post("/cli/sew/keys/drop-previous", Admin),
+    post("/cli/sew/keys/rotate", Admin),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),

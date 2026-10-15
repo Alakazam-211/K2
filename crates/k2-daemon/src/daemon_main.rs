@@ -1382,6 +1382,9 @@ async fn async_main() {
     // every call — this is the hygiene backstop for sessions never
     // presented again after expiry. First pass runs at boot.
     let _session_reaper_handle = session_reaper::spawn();
+    // Sew chat-pass keys (S28 §7.3): daemon-owned rotation tick, headless-
+    // safe. Maintains an existing keyring only; never creates one.
+    let _chat_keys_maint_handle = crate::chat_pass::maint::spawn();
 
     // Idle-reaper for API-created sandbox cells: tears a cell down once it's
     // been idle past its per-request `timeout_secs` (default 180). Replaces the

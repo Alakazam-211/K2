@@ -233,10 +233,10 @@ export function settingsNav({
         { id: 'email-hosting', label: 'Email Hosting' },
         // Sew, run on this box (Rosson 2026-10-15); `k2 hostchat` lands with S27–S32.
         { label: 'Chat Hosting', soon: true },
+        // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
+        { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
         { id: 'skin-access', label: 'Apps', beta: true },
-        // Rosson 2026-10-15: Compute is a core (it sits on the runtime).
-        { id: 'compute', label: 'Compute', beta: true },
       ],
     },
     {

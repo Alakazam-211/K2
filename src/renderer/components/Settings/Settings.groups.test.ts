@@ -122,7 +122,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'data', 'skin-access', 'compute'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'compute', 'data', 'skin-access'])
     const chat = group(nav, 'Cores').items[1]
     expect(chat.label).toBe('Chat Hosting')
     expect(chat.soon).toBe(true)

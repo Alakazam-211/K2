@@ -386,7 +386,12 @@ async fn fetch_calls_out_with_a_secret_by_name_and_the_app_never_sees_it() {
         k2_core::deploy::egress::allow(&conn, "bff", &[spec], k2_core::deploy::egress::SOURCE_REQUEST, "owner").unwrap();
     }
     k2_daemon::apps::egress_proxy::reload("bff");
+    // The real proxy resolver refuses loopback; the fake upstream lives
+    // there, so the proxy's vetting step answers with it (the policy step
+    // above is the one under test).
+    k2_daemon::apps::egress_proxy::set_resolver(Some(Arc::new(|_: &str, p: u16| Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], p))]))));
     let r = v1(d.port, "POST", &format!("/v1/apps/{svc}/fetch"), &key, Some(json!({"secret": "STRIPE_KEY", "url": url}))).await;
+    k2_daemon::apps::egress_proxy::set_resolver(None);
     assert_eq!(r.status, 200, "on the allowlist now: {}", r.body);
     assert_eq!(conns.load(Ordering::SeqCst), 2);
     let hits: i64 = {

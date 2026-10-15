@@ -1128,6 +1128,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     }
     // Toolchains / system packages the job needs (compute polish v1).
     let needs = needs_from(&v)?;
+    let (cpu_millis, mem_bytes) = job_resources(&v)?;
     // Node: by name, or --any.
     let node = pick_node(who, &v, &ws, gate.as_deref())?;
     let mut warnings: Vec<String> = Vec::new();
@@ -1174,22 +1175,24 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Err(no(codes::QUEUE_FULL, 409, format!("{queued} jobs from this workspace already wait on {} (grant max {})", node.name, g.max_queued)));
         }
     }
+    // A job over the node's caps would sit at the head of its queue
+    // forever and hold every later job from this workspace: refuse it now.
+    let (_, _, live) = compute_ws::live_view(&node.id);
+    if let Some(offer) = live.or_else(|| node.last_offer.clone()) {
+        if let Some(r) = scheduler::never_fits(&offer, &probe_job(&ws, &v, cpu_millis, mem_bytes)) {
+            return Err(no(
+                scheduler::EXCEEDS_NODE_CAPS,
+                400,
+                format!("'{}': {}; ask for less, or pick a bigger node (k2 compute nodes)", node.name, r.message),
+            ));
+        }
+    }
     let max_secs = grant.as_ref().map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
     let timeout = n(&v, "timeoutSecs").unwrap_or(max_secs);
     if timeout < 1 || timeout > max_secs {
         return Err(no(codes::BAD_REQUEST, 400, format!("--timeout must be at most {max_secs}s on this grant")));
     }
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
-    let cpu_millis = match v.get("cpus").and_then(|x| x.as_f64()) {
-        Some(c) if c > 0.0 && c <= 1024.0 => Some((c * 1000.0) as u64),
-        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--cpus must be between 0 and 1024")),
-        None => None,
-    };
-    let mem_bytes = match n(&v, "memBytes") {
-        Some(m) if m > 0 => Some(m as u64),
-        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--mem must be positive")),
-        None => None,
-    };
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
@@ -1310,26 +1313,54 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
         cands.push((n.id.clone(), offer, load));
         by_id.insert(n.id.clone(), n);
     }
-    let probe = scheduler::QueuedJob {
-        id: "probe".into(),
-        workspace_id: ws.id.clone(),
-        created_at: compute::now(),
-        exclusive: b(v, "exclusive") == Some(true),
-        cpu_millis: None,
-        mem_bytes: None,
-        disk_bytes: 0,
-        needs_git: b(v, "noSource") != Some(true),
-    };
+    let (cpu_millis, mem_bytes) = job_resources(v)?;
+    let probe = probe_job(ws, v, cpu_millis, mem_bytes);
     let pk = compute::sync::repo_root(Path::new(&ws.path))
         .ok()
         .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref()));
     let id = scheduler::pick_any(&cands, pk.as_deref(), None, &probe)
-        .map(str::to_string)
-        // Nothing free right now: queue on the first fitting online node.
-        .or_else(|| cands.first().map(|c| c.0.clone()));
+        // Nothing takes it now: queue where its --cpus/--mem can ever fit.
+        .or_else(|| scheduler::pick_any_queue(&cands, pk.as_deref(), None, &probe))
+        .map(str::to_string);
+    if id.is_none() && !cands.is_empty() {
+        return Err(no(
+            codes::NO_NODE_FITS,
+            404,
+            "no node granted to this workspace allows that much --mem/--cpus; ask for less (k2 compute nodes shows each node's caps)",
+        ));
+    }
     id.and_then(|i| by_id.remove(&i)).ok_or_else(|| {
         no(codes::NO_NODE_FITS, 404, "no online node granted to this workspace matches --any (k2 compute nodes)")
     })
+}
+
+/// `--cpus` (as millicores) and `--mem` (bytes) from a run request.
+fn job_resources(v: &serde_json::Value) -> R<(Option<u64>, Option<u64>)> {
+    let cpu_millis = match v.get("cpus").and_then(|x| x.as_f64()) {
+        Some(c) if c > 0.0 && c <= 1024.0 => Some((c * 1000.0) as u64),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--cpus must be between 0 and 1024")),
+        None => None,
+    };
+    let mem_bytes = match n(v, "memBytes") {
+        Some(m) if m > 0 => Some(m as u64),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--mem must be positive")),
+        None => None,
+    };
+    Ok((cpu_millis, mem_bytes))
+}
+
+/// The scheduler's view of a job not yet queued.
+fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes: Option<u64>) -> scheduler::QueuedJob {
+    scheduler::QueuedJob {
+        id: "probe".into(),
+        workspace_id: ws.id.clone(),
+        created_at: compute::now(),
+        exclusive: b(v, "exclusive") == Some(true),
+        cpu_millis,
+        mem_bytes,
+        disk_bytes: 0,
+        needs_git: b(v, "noSource") != Some(true),
+    }
 }
 
 fn source_for(ws: &Ws, v: &serde_json::Value, job_id: &str, warnings: &mut Vec<String>) -> R<Src> {

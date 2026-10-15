@@ -146,6 +146,37 @@ fn rate_limit_headers_park_the_origin() {
 }
 
 #[test]
+fn sends_a_default_user_agent_that_a_source_header_overrides() {
+    // GitHub answers 403 to a request without a User-Agent.
+    let _a = AirgapEnv::set(false);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let s2 = seen.clone();
+    let f = Fake::start(move |head| {
+        s2.lock().expect("lock").push(head.to_ascii_lowercase());
+        http("200 OK", &[], b"{}")
+    });
+    let user_agents = |head: &str| -> Vec<String> {
+        head.lines()
+            .filter_map(|l| l.strip_prefix("user-agent:"))
+            .map(|v| v.trim().to_string())
+            .collect()
+    };
+
+    let out = fetch_once(&plan(&f.origin(), "/default", true));
+    assert!(matches!(out, FetchOutcome::Ok { status: 200, .. }), "{out:?}");
+    let head = seen.lock().expect("lock").pop().expect("server saw the default request");
+    assert_eq!(user_agents(&head), vec![crate::egress::USER_AGENT.to_ascii_lowercase()], "{head}");
+    assert!(crate::egress::USER_AGENT.starts_with(&format!("K2/{} ", env!("CARGO_PKG_VERSION"))));
+
+    let mut p = plan(&f.origin(), "/override", true);
+    p.headers = vec![("User-Agent".into(), "k2-check".into())];
+    let out = fetch_once(&p);
+    assert!(matches!(out, FetchOutcome::Ok { status: 200, .. }), "{out:?}");
+    let head = seen.lock().expect("lock").pop().expect("server saw the override request");
+    assert_eq!(user_agents(&head), vec!["k2-check".to_string()], "only the source's own User-Agent: {head}");
+}
+
+#[test]
 fn too_large_is_never_parsed() {
     let _a = AirgapEnv::set(false);
     let big = vec![b'7'; 2 << 20];

@@ -10049,6 +10049,7 @@ Agents:
                  [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw]
                  [--artifact GLOB]... [--json]
+                 [--queue-timeout 30m|off] [--retries N]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
@@ -10109,6 +10110,11 @@ This computer (its owner):
                           [--private-home | --no-private-home]
   k2 compute local disable
 
+Never stuck: a job that can't start within --queue-timeout (default 30m
+attached, 24h --detach) fails with queue_timeout; --any jobs move off a node
+that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
+retry --retries times (default 1) with backoff, on another node when --any.
+A non-zero exit, a timeout or a cancel is a result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,
 compute_off, queue_full, owner_only, …); 130 = you detached with Ctrl-C
@@ -10383,16 +10389,18 @@ _compute_print_result() {
 # on stdout at the end (same exit code).
 _compute_follow() {
     local job="$1" raw="${2:-0}" start="${3:-0}" as_json="${4:-0}"
-    local cursor=0 query state_file fails=0 lost=0
+    local cursor=0 query state_file fails=0 lost=0 gen=""
     state_file="$(mktemp -t k2-compute-XXXXXX)"
     # shellcheck disable=SC2064
-    trap "rm -f '$state_file'; echo '[k2 compute] detached; the job keeps running. k2 compute attach $job | k2 compute cancel $job' >&2; exit 130" INT
+    trap "rm -f '$state_file' '$state_file.err'; echo '[k2 compute] detached; the job keeps running. k2 compute attach $job | k2 compute cancel $job' >&2; exit 130" INT
     case "$start" in
         seq:*) query="since_seq=${start#seq:}" ;;
         *) cursor="$start"; query="" ;;
     esac
     while :; do
         local q="job=$(urlencode "$job")&wait=20"
+        # Follow one attempt at a time: a retry is a new generation.
+        [ -n "$gen" ] && q="$q&generation=$gen"
         if [ -n "$query" ]; then q="$q&$query"; query=""; else q="$q&cursor=$cursor"; fi
         local resp
         resp="$(_compute_send GET /cli/compute/jobs/logs "$q")"
@@ -10437,15 +10445,31 @@ def s(x):
 # "|", not a tab: bash `read` merges runs of IFS whitespace, so an empty
 # field (no signal, no reason) shifted every later one (mini-1 smoke printed
 # the start time as the job id). s() never lets "|" through.
+fa = ((j.get("ctl") or {}).get("failedAttempts") or [{}])[-1]
 open(os.environ["K2_CP_STATE"], "w").write("|".join([
     s(v.get("cursor", 0)), "1" if v.get("end") else "0", s(j.get("state")), s(j.get("exitCode")),
     s(j.get("signal")), s(j.get("reason")), s(j.get("short")), s(j.get("node")),
     s(j.get("startedAt")), s(j.get("endedAt")), s(q.get("position")), s(q.get("reason")),
+    s(v.get("generation")), s(j.get("generation")), s(j.get("attempt")), s(fa.get("reason") or fa.get("state")),
 ]) + "\n")
+# The teaching error line for a non-result end (JSON-safe here, not in bash).
+err = {"error": j.get("state"), "reason": j.get("reason"), "detail": j.get("detail"),
+       "hint": "k2 compute get %s --json; k2 compute retry %s" % (j.get("short"), j.get("short"))}
+open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 '
-        local end st code sig reason short node started ended qpos qreason
-        IFS='|' read -r cursor end st code sig reason short node started ended qpos qreason < "$state_file"
+        local end st code sig reason short node started ended qpos qreason fgen jgen attempt lastfail
+        IFS='|' read -r cursor end st code sig reason short node started ended qpos qreason fgen jgen attempt lastfail < "$state_file"
         lost=0
+        [ -z "$gen" ] && gen="$fgen"
+        # The attempt we followed ended in an infrastructure failure and a
+        # new attempt is queued: keep following that one.
+        if [ "$end" = "1" ] && [ -n "$jgen" ] && [ "$jgen" != "$gen" ] && [ "$st" != "done" ] && [ "$st" != "failed" ] && [ "$st" != "cancelled" ] && [ "$st" != "timeout" ] && [ "$st" != "interrupted" ] && [ "$st" != "unknown" ]; then
+            echo "[k2 compute] attempt $((attempt - 1)) hit an infrastructure failure (${lastfail:-?}); retrying as attempt $attempt on $node" >&2
+            gen="$jgen"
+            cursor=0
+            _CP_LAST_Q=""
+            continue
+        fi
         if [ "$st" = "queued" ] && [ -n "$qreason" ] && [ "$qreason" != "${_CP_LAST_Q:-}" ]; then
             echo "[k2 compute] queued on $node: position $qpos — $qreason" >&2
             _CP_LAST_Q="$qreason"
@@ -10453,6 +10477,7 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
         if [ "$end" = "1" ]; then
             rm -f "$state_file"
             trap - INT
+            [ "$st" = "done" ] && rm -f "$state_file.err"
             [ "$as_json" = "1" ] && _compute_print_result "$job"
             local took=""
             if [ -n "$started" ] && [ -n "$ended" ]; then
@@ -10469,7 +10494,8 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
                     ;;
                 *)
                     echo "[k2 compute] job $short $st${reason:+ ($reason)}$took" >&2
-                    echo "{\"error\":\"$st\",\"reason\":\"$reason\",\"hint\":\"k2 compute get $short; k2 compute retry $short\"}" >&2
+                    cat "$state_file.err" >&2
+                    rm -f "$state_file.err"
                     exit 3
                     ;;
             esac
@@ -10479,7 +10505,7 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace="" as_json=0
+    local retry="" raw=0 workspace="" as_json=0 qtimeout="" retries=""
     local -a labels=() envs=() needs=() artifacts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -10499,7 +10525,15 @@ cmd_compute_run() {
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
             --exclusive) exclusive=1; shift ;;
             --retry-interrupted) retry=1; shift ;;
-            --no-retry) retry=0; shift ;;
+            --no-retry) retry=0; retries=0; shift ;;
+            --retries) retries="${2:-}"; shift 2
+                case "$retries" in ''|*[!0-9]*) echo "usage: --retries N (0–5)" >&2; exit 2 ;; esac ;;
+            --queue-timeout)
+                case "${2:-}" in
+                    off|none|0) qtimeout=0 ;;
+                    *) qtimeout="$(_compute_secs "${2:-}")" ;;
+                esac
+                shift 2 ;;
             --raw) raw=1; shift ;;
             --artifact|--artifacts) artifacts+=("${2:-}"); shift 2 ;;
             --json) as_json=1; shift ;;
@@ -10560,7 +10594,7 @@ print(json.dumps(out))' "${needs[@]}")"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \

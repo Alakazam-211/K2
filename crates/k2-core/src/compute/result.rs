@@ -134,6 +134,7 @@ mod tests {
             receipt_json: None,
             receipt_ok: None,
             notified_at: None,
+            ctl: Default::default(),
         }
     }
 

@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -69,11 +69,18 @@ struct Engine {
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 static KICK: Mutex<()> = Mutex::new(());
-static TICKER: OnceLock<()> = OnceLock::new();
+/// The ticker task. Restarted when its runtime is gone (a test's
+/// runtime, or never started).
+static TICKER: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
 
 fn with_engine<T>(f: impl FnOnce(&mut Engine) -> T) -> T {
     let mut g = ENGINE.lock().unwrap_or_else(|p| p.into_inner());
-    f(g.get_or_insert_with(Engine::default))
+    let e = g.get_or_insert_with(Engine::default);
+    // A session whose task is gone (its writer queue closed) is offline,
+    // even if its cleanup never ran (a dropped runtime): never "online"
+    // with a dead queue, never a placement into it.
+    e.conns.retain(|_, c| !c.tx.is_closed());
+    f(e)
 }
 
 /// Wakes log/state long-pollers (`/cli/compute/jobs/logs?wait=`).
@@ -732,12 +739,12 @@ fn apply_observation(
         Some(job_id),
         serde_json::json!({"state": state.as_str(), "reason": reason, "exit": exit.and_then(|x| x.code)}),
     );
-    // One automatic retry, only for an interruption, only when asked.
-    if state == JobState::Interrupted && job.retry_interrupted && job.attempt == 1 {
-        let _ = store::requeue_new_attempt(&conn, job_id, "retry_interrupted");
+    drop(conn);
+    // Infrastructure failures retry (with backoff, on another node for
+    // `--any`); results never do. A retried job gets no message yet.
+    if crate::compute_place::after_attempt(job_id) {
         return;
     }
-    drop(conn);
     finalize(job_id);
 }
 
@@ -869,6 +876,7 @@ fn on_state(node_id: &str, s: StateUpdate) {
 fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     for j in &s.jobs {
         seen.insert(format!("{}#{}", j.job_id, j.generation));
+        stop_stale(node_id, j);
         apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None);
     }
     if !s.last {
@@ -890,10 +898,31 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     }
     seen.clear();
     for id in lost {
-        finalize(&id);
+        if !crate::compute_place::after_attempt(&id) {
+            finalize(&id);
+        }
     }
     kick(node_id);
     notify_change();
+}
+
+/// A node reconnected still running an attempt this controller already
+/// ended (it was `node_lost`, or a newer attempt replaced it): tell it to
+/// stop, so a lost node never keeps a slot busy for nothing.
+fn stop_stale(node_id: &str, j: &frames::LedgerJob) {
+    if j.state.is_terminal() {
+        return;
+    }
+    let stale = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::job_by_id(&conn, &j.job_id).is_some_and(|row| {
+            (row.generation as u32) > j.generation || (row.node_id != node_id) || (row.generation as u32 == j.generation && row.is_terminal())
+        })
+    };
+    if stale {
+        send_to(node_id, Frame::Cancel(Cancel { job_id: j.job_id.clone(), generation: j.generation, reason: "superseded".into() }));
+    }
 }
 
 fn on_receipt(node_id: &str, r: ReceiptFrame) {
@@ -1204,8 +1233,11 @@ fn send_to(node_id: &str, f: Frame) -> bool {
 
 /// Queued jobs on a node as the scheduler sees them.
 pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
+    let now = compute::now();
     let queue = store::jobs_in_states(conn, node_id, &["queued"])
         .into_iter()
+        // A retry waiting out its backoff isn't placeable yet.
+        .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
         .map(|j| {
             let plan = j.plan();
             scheduler::QueuedJob {
@@ -1241,7 +1273,18 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
         .into_iter()
         .map(|g| (g.workspace_id, g.max_parallel.max(1) as u32))
         .collect();
-    scheduler::decide(&queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref())
+    let mut d = scheduler::decide(&queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref());
+    let now = compute::now();
+    for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
+        if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
+            let pos = d.waiting.len() + 1;
+            d.waiting.insert(
+                j.id.clone(),
+                (pos, frames::Refusal::new("retry_backoff", format!("retrying after an infrastructure failure in {}s", nb - now))),
+            );
+        }
+    }
+    d
 }
 
 /// Try to place one queued job on `node_id`.
@@ -1300,15 +1343,31 @@ pub fn revoke(node_id: &str) {
     }
 }
 
-/// Periodic upkeep: placements, metering, log retention.
+/// Start the compute ticker if it isn't running (any compute route or
+/// node attach). Needs a tokio runtime; a no-op without one.
+pub fn ensure_ticker_started() {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        ensure_ticker();
+    }
+}
+
+/// Periodic upkeep: placements, the never-stuck sweep (queue timeouts,
+/// moves, lost nodes), metering, log retention.
 fn ensure_ticker() {
-    TICKER.get_or_init(|| {
-        tokio::spawn(async {
-            let mut tick = tokio::time::interval(Duration::from_secs(5));
-            let mut n: u64 = 0;
+    let mut g = TICKER.lock().unwrap_or_else(|p| p.into_inner());
+    if g.as_ref().is_some_and(|h| !h.is_finished()) {
+        return;
+    }
+    *g = Some(tokio::spawn(async {
+            let every = Duration::from_millis(compute::retry::tuning().tick_millis.max(50));
+            let mut tick = tokio::time::interval(every);
+            let mut last_daily: Option<Instant> = None;
             loop {
                 tick.tick().await;
-                n += 1;
+                let daily = last_daily.is_none_or(|t| t.elapsed() > Duration::from_secs(86_400));
+                if daily {
+                    last_daily = Some(Instant::now());
+                }
                 let _ = tokio::task::spawn_blocking(move || {
                     let ids: Vec<(String, &'static str, u64, u64)> = with_engine(|e| {
                         e.conns
@@ -1324,15 +1383,17 @@ fn ensure_ticker() {
                             store::add_usage(&conn, id, &day(), route, *bin, *bout);
                         }
                     }
-                    if n % 17_280 == 1 {
+                    if daily {
                         logs::sweep(14);
                         sweep_artifact_cache();
                     }
                     // Machines switched off in Settings: remove once idle.
                     crate::compute_routes::sweep_retiring();
+                    let now = compute::now();
+                    crate::compute_place::note_tick(now);
+                    crate::compute_place::sweep(now);
                 })
                 .await;
             }
-        });
-    });
+    }));
 }

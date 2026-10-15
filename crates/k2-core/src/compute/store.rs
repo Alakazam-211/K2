@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::proto::frames::{JobState, Offer, Plan};
 
@@ -387,6 +387,88 @@ pub fn grants(conn: &Connection, node_id: Option<&str>, workspace_id: Option<&st
 
 // ── jobs ─────────────────────────────────────────────────────────────
 
+/// The key under which [`JobCtl`] rides in `compute_jobs.plan_json`
+/// (beside the plan's own fields; never sent to a node, never in the
+/// plan digest: `Plan` ignores it when it reads the row back).
+pub const CTL_KEY: &str = "k2ctl";
+
+/// Controller-only options and bookkeeping for one job (no migration:
+/// it lives in `plan_json`). Never-stuck placement, retries, shards.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCtl {
+    /// `--any`: what any node must match, so the job may move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub any: Option<AnyFilter>,
+    /// Submitted by the owner or an admin (may use ungranted nodes).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub admin: bool,
+    /// `--timeout` as asked (None = the grant's max), re-applied when the
+    /// job moves to a node with another grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+    /// Give up when not started this long after `queued_at` (None = wait).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_timeout_secs: Option<i64>,
+    /// When the job last entered the queue (submit, retry).
+    #[serde(default)]
+    pub queued_at: i64,
+    /// Infrastructure retries allowed and used.
+    #[serde(default)]
+    pub retries: u32,
+    #[serde(default)]
+    pub retries_used: u32,
+    /// Retry backoff: not placed before this time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<i64>,
+    /// Earlier attempts that ended in an infrastructure failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_attempts: Vec<AttemptNote>,
+}
+
+/// What an `--any` job asks of a node.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnyFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// One attempt that ended in an infrastructure failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttemptNote {
+    pub attempt: i64,
+    pub node_id: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub at: i64,
+}
+
+/// `plan_json` text: the plan's own fields plus `k2ctl` (when not empty).
+pub fn plan_json_with(plan: &Plan, ctl: &JobCtl) -> Result<String, String> {
+    let mut v = serde_json::to_value(plan).map_err(|e| e.to_string())?;
+    if *ctl != JobCtl::default() {
+        if let Some(m) = v.as_object_mut() {
+            m.insert(CTL_KEY.into(), serde_json::to_value(ctl).map_err(|e| e.to_string())?);
+        }
+    }
+    serde_json::to_string(&v).map_err(|e| e.to_string())
+}
+
+fn ctl_of(plan_json: &str) -> JobCtl {
+    serde_json::from_str::<serde_json::Value>(plan_json)
+        .ok()
+        .and_then(|v| v.get(CTL_KEY).cloned())
+        .and_then(|c| serde_json::from_value(c).ok())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobRow {
@@ -427,6 +509,8 @@ pub struct JobRow {
     pub receipt_json: Option<String>,
     pub receipt_ok: Option<bool>,
     pub notified_at: Option<i64>,
+    /// Controller-only options (from `plan_json`).
+    pub ctl: JobCtl,
 }
 
 impl JobRow {
@@ -484,6 +568,7 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         receipt_json: r.get(31)?,
         receipt_ok: r.get::<_, Option<i64>>(32)?.map(|v| v != 0),
         notified_at: r.get(33)?,
+        ctl: ctl_of(&r.get::<_, String>(9)?),
     })
 }
 
@@ -496,6 +581,7 @@ pub struct NewJob<'a> {
     pub request_sha256: &'a str,
     pub detach: bool,
     pub retry_interrupted: bool,
+    pub ctl: JobCtl,
 }
 
 pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
@@ -519,7 +605,7 @@ pub fn insert_job(conn: &Connection, j: &NewJob<'_>) -> Result<JobRow, String> {
             serde_json::to_string(&p.argv).map_err(|e| e.to_string())?,
             serde_json::to_string(&env_names).map_err(|e| e.to_string())?,
             j.request_sha256,
-            serde_json::to_string(p).map_err(|e| e.to_string())?,
+            plan_json_with(p, &j.ctl)?,
             src_commit,
             dirty,
             digest,
@@ -684,6 +770,45 @@ pub fn set_job_receipt(conn: &Connection, id: &str, receipt_json: &str, ok: bool
         "UPDATE compute_jobs SET receipt_json = ?2, receipt_ok = ?3 WHERE id = ?1",
         params![id, receipt_json, ok as i64],
     );
+}
+
+/// Rewrite a job's controller options (the plan itself is unchanged).
+pub fn set_job_ctl(conn: &Connection, id: &str, ctl: &JobCtl) -> Result<(), String> {
+    let Some(j) = job_by_id(conn, id) else { return Err("job not found".into()) };
+    let plan = j.plan().ok_or_else(|| "stored plan unreadable".to_string())?;
+    conn.execute("UPDATE compute_jobs SET plan_json = ?2 WHERE id = ?1", params![id, plan_json_with(&plan, ctl)?])
+        .map_err(|e| e.to_string())
+        .map(|_| ())
+}
+
+/// Move a QUEUED job to another node with its rebuilt plan (new digest).
+/// Returns false when the job wasn't queued any more (it raced a placement).
+pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, reason: &str) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE compute_jobs SET node_id = ?2, plan_json = ?3, plan_digest = ?4, reason = ?5, detail = NULL \
+             WHERE id = ?1 AND state = 'queued'",
+            params![id, plan.node_id, plan_json_with(plan, ctl)?, plan.digest()?, reason],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n == 1)
+}
+
+/// Every queued job (all nodes), oldest first.
+pub fn queued_jobs(conn: &Connection) -> Vec<JobRow> {
+    let Ok(mut stmt) = conn.prepare(&format!("SELECT {JOB_COLS} FROM compute_jobs WHERE state = 'queued' ORDER BY created_at, id")) else {
+        return Vec::new();
+    };
+    stmt.query_map([], job_from_row).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
+}
+
+/// Every job on a node (any node) in an active state, oldest first.
+pub fn active_jobs(conn: &Connection) -> Vec<JobRow> {
+    let list = ACTIVE_STATES.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(",");
+    let Ok(mut stmt) = conn.prepare(&format!("SELECT {JOB_COLS} FROM compute_jobs WHERE state IN ({list}) ORDER BY created_at, id")) else {
+        return Vec::new();
+    };
+    stmt.query_map([], job_from_row).map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default()
 }
 
 pub fn mark_notified(conn: &Connection, id: &str, at: i64) {
@@ -896,7 +1021,7 @@ mod tests {
         let p = plan("abcdef0123456789abcdef0123456789", "n1", "ws");
         let j = insert_job(
             &c,
-            &NewJob { plan: &p, client_job_id: "client-0000000001", session_id: Some("s1"), request_sha256: "h", detach: true, retry_interrupted: true },
+            &NewJob { plan: &p, client_job_id: "client-0000000001", session_id: Some("s1"), request_sha256: "h", detach: true, retry_interrupted: true, ctl: JobCtl::default() },
         )
         .unwrap();
         assert_eq!(j.state, "queued");
@@ -907,7 +1032,7 @@ mod tests {
         assert_eq!(job_by_client_id(&c, "ws", "client-0000000001").unwrap().id, j.id);
         assert!(insert_job(
             &c,
-            &NewJob { plan: &plan("other", "n1", "ws"), client_job_id: "client-0000000001", session_id: None, request_sha256: "x", detach: false, retry_interrupted: false }
+            &NewJob { plan: &plan("other", "n1", "ws"), client_job_id: "client-0000000001", session_id: None, request_sha256: "x", detach: false, retry_interrupted: false, ctl: JobCtl::default() }
         )
         .is_err(), "client job id is unique per workspace");
         assert_eq!(queued_count(&c, "n1", "ws"), 1);
@@ -920,6 +1045,44 @@ mod tests {
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
         assert_eq!((r.state.as_str(), r.attempt, r.generation, r.exit_code, r.ended_at), ("queued", 2, 2, None, None));
         assert_eq!(jobs_in_states(&c, "n1", &["queued"]).len(), 1);
+    }
+
+    #[test]
+    fn ctl_rides_in_plan_json_outside_the_plan_and_moves_rebuild_the_digest() {
+        let c = conn();
+        let p = plan("job-ctl-0000000000000000000000001", "n1", "ws");
+        let ctl = JobCtl {
+            any: Some(AnyFilter { os: Some("linux".into()), ..Default::default() }),
+            queue_timeout_secs: Some(1800),
+            queued_at: 10,
+            retries: 1,
+            ..Default::default()
+        };
+        let j = insert_job(
+            &c,
+            &NewJob { plan: &p, client_job_id: "client-ctl-000000001", session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: ctl.clone() },
+        )
+        .unwrap();
+        assert_eq!(j.ctl, ctl);
+        assert_eq!(j.plan().unwrap(), p, "the plan reads back without the ctl key");
+        assert_eq!(j.plan_digest, p.digest().unwrap());
+        assert_eq!(queued_jobs(&c).len(), 1);
+        // A requeue keeps the options.
+        let mut more = ctl.clone();
+        more.retries_used = 1;
+        more.failed_attempts.push(AttemptNote { attempt: 1, node_id: "n1".into(), state: "interrupted".into(), reason: Some("node_lost".into()), at: 20 });
+        set_job_ctl(&c, &j.id, &more).unwrap();
+        let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
+        assert_eq!(r.ctl, more);
+        // A move rewrites node, plan and digest, only while queued.
+        let mut q = p.clone();
+        q.node_id = "n2".into();
+        assert!(move_queued_job(&c, &j.id, &q, &more, "moved").unwrap());
+        let m = job_by_id(&c, &j.id).unwrap();
+        assert_eq!((m.node_id.as_str(), m.plan_digest.clone(), m.ctl.clone()), ("n2", q.digest().unwrap(), more.clone()));
+        set_job_state(&c, &j.id, JobState::Assigned, None, None, 30).unwrap();
+        assert!(!move_queued_job(&c, &j.id, &p, &more, "moved").unwrap(), "never moves an assigned job");
+        assert_eq!(active_jobs(&c).len(), 1);
     }
 
     #[test]

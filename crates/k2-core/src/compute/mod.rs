@@ -21,6 +21,7 @@ pub mod local;
 pub mod logs;
 pub mod message;
 pub mod result;
+pub mod retry;
 pub mod scheduler;
 pub mod store;
 pub mod sync;

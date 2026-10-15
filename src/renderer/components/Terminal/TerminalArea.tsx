@@ -9,6 +9,8 @@ import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { KeyCombo } from '@/components/KeySymbol'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { applyColumnResize } from './columnResize'
+import { readColumnFlexes, writeColumnFlexes } from '@/lib/column-sizes'
+import { scopedKey } from '@/kessel/server-scope'
 
 interface TerminalAreaProps {
   cwd: string
@@ -90,17 +92,22 @@ function useTabDragState(): TabDragState | null {
 // ── Resize Handle between columns ────────────────────────────────────────
 
 function ColumnResizeHandle({
-  onDrag
+  onDrag,
+  onDragEnd,
 }: {
   onDrag: (clientX: number) => void
+  /** Once per drag, when the pointer lets go (or capture is lost). */
+  onDragEnd: () => void
 }): React.JSX.Element {
   const draggingRef = useRef(false)
 
   const endDrag = useCallback(() => {
+    if (!draggingRef.current) return
     draggingRef.current = false
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
-  }, [])
+    onDragEnd()
+  }, [onDragEnd])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
@@ -126,6 +133,7 @@ function ColumnResizeHandle({
   return (
     <div
       className="flex-shrink-0 hover:bg-[var(--color-accent)] transition-colors"
+      data-column-resize-handle=""
       style={{
         width: 4,
         cursor: 'col-resize',
@@ -285,7 +293,28 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
   const activeGroupIndex = useRoomTabs((s) => s.activeGroupIndex)
   const setActiveGroup = useRoomTabs((s) => s.setActiveGroup)
 
-  const [flexes, setFlexes] = useState([50, 25, 25])
+  // Column widths are per-window view state (split-view D2), kept in this
+  // window's `k2.windowChrome.columns.<label>` per workspace and column
+  // count. Leaving a workspace stashes it (splitCount → 1, key → null) and
+  // coming back restores splitCount, so the widths are re-read whenever the
+  // workspace or the column count changes — never reset to an even split.
+  const activeWorkspaceKey = useRoomTabs((s) => s.activeWorkspaceKey)
+  const sizesKey = activeWorkspaceKey ? scopedKey(room.scope, activeWorkspaceKey) : null
+  const [sized, setSized] = useState(() => ({
+    key: sizesKey,
+    count: splitCount,
+    flexes: readColumnFlexes(sizesKey, splitCount),
+  }))
+  // The latest widths for the drag math and the save on release, which can
+  // run before React re-renders with the last move.
+  const sizedRef = useRef(sized)
+  let current = sized
+  if (sized.key !== sizesKey || sized.count !== splitCount) {
+    current = { key: sizesKey, count: splitCount, flexes: readColumnFlexes(sizesKey, splitCount) }
+    setSized(current)
+  }
+  sizedRef.current = current
+  const flexes = current.flexes
   const containerRef = useRef<HTMLDivElement>(null)
 
   useTerminalShortcuts(room, cwd)
@@ -294,16 +323,16 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
     const container = containerRef.current
     if (!container) return
     const rowRect = container.getBoundingClientRect()
-    setFlexes((prev) => applyColumnResize({ clientX, rowRect, handleIndex, flexes: prev }))
+    const prev = sizedRef.current
+    const next = { ...prev, flexes: applyColumnResize({ clientX, rowRect, handleIndex, flexes: prev.flexes }) }
+    sizedRef.current = next
+    setSized(next)
   }, [])
 
-  const prevSplitCountRef = useRef(splitCount)
-  if (splitCount !== prevSplitCountRef.current) {
-    prevSplitCountRef.current = splitCount
-    if (splitCount === 2) setFlexes([50, 50, 0])
-    else if (splitCount === 3) setFlexes([34, 33, 33])
-    else setFlexes([100, 0, 0])
-  }
+  const handleResizeEnd = useCallback(() => {
+    const { key, count, flexes: widths } = sizedRef.current
+    if (key && widths.length === count) writeColumnFlexes(key, widths)
+  }, [])
 
   return (
     // `data-room-key` — pointer-down / focus-in here focuses this room for
@@ -321,6 +350,7 @@ export function TerminalArea({ cwd }: TerminalAreaProps): React.JSX.Element {
             {i > 0 && (
               <ColumnResizeHandle
                 onDrag={(clientX) => handleResize(i - 1, clientX)}
+                onDragEnd={handleResizeEnd}
               />
             )}
             <TabGroupColumn

@@ -1221,6 +1221,10 @@ async fn async_main() {
     // Registry only (restart only if the reload is refused). Linux thread.
     mail::defaults::spawn_startup_reconcile();
     sql::supervisor::spawn_health_loop();
+    // Sew on K2 (S29 K12): the 60 s Sew health cadence, after first
+    // finishing or rolling back an upgrade the last daemon died in. Linux
+    // only; nothing runs while no Sew is installed.
+    crate::sew::supervisor::spawn_background();
 
     // Files-drawer multi-writer live refresh — recursive watcher over
     // every registered project root. Agent shell writes and other

@@ -859,6 +859,38 @@ pub fn hire_limits_for(id: &str) -> Option<String> {
     .flatten()
 }
 
+/// The stored hire envelope of a non-revoked hire key, disabled included
+/// (the owner may change a disabled key's App access limit). `None` =
+/// unknown, revoked, or not a hire key.
+pub fn hire_limits_of_unrevoked(id: &str) -> Option<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT hire_limits FROM api_keys WHERE id = ?1 AND cap_hire = 1 AND revoked_at IS NULL",
+        rusqlite::params![id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// Replace a hire key's stored envelope (`hire_limits`), only when it still
+/// holds `expected` (no lost update between read and write). `Ok(false)` =
+/// the key changed, was revoked, or isn't a hire key. The caller (the owner
+/// route) has validated `limits` and checked the confirm.
+pub fn set_hire_limits(id: &str, expected: &str, limits: &str) -> Result<bool, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let rows = conn
+        .execute(
+            "UPDATE api_keys SET hire_limits = ?3 \
+             WHERE id = ?1 AND hire_limits = ?2 AND cap_hire = 1 AND revoked_at IS NULL",
+            rusqlite::params![id, expected, limits],
+        )
+        .map_err(|e| format!("DB update failed: {e}"))?;
+    Ok(rows > 0)
+}
+
 /// 0160 T19 — may this live key still create new workspaces on `POST /v1/w`
 /// without the hire scope (pre-0.45.6 `*` keys only)?
 pub fn legacy_new_workspace(id: &str) -> bool {

@@ -168,6 +168,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/api-keys/create", Owner),
     post("/cli/api-keys/disable", Owner),
     post("/cli/api-keys/enable", Owner),
+    post("/cli/api-keys/hire-ceiling", Owner),
+    get("/cli/api-keys/hire-ceiling-options", Owner),
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
     post("/cli/auth/change-password", Member),

@@ -4479,6 +4479,37 @@ pub fn principal_exists(username: &str) -> Result<bool, String> {
     with_conn(|conn| Ok(principal_by_username(conn, &username)?.is_some()))
 }
 
+/// Hire-key App access limit (0.45.6): the role `token` (id or name) as
+/// usable on App `app`: a role of that App or a box-wide role (`app_id`
+/// NULL), the same rule an App grant applies. `Ok(None)` = no such role,
+/// or a role of another App.
+pub fn role_for_app(app: &str, token: &str) -> Result<Option<SkinRole>, String> {
+    let app = app.trim();
+    with_conn(|conn| {
+        Ok(role_by_id_or_name(conn, token)?
+            .filter(|r| r.app_id.as_deref().is_none_or(|a| a == app)))
+    })
+}
+
+/// Every role usable on App `app` (its own roles and box-wide roles).
+pub fn roles_for_app(app: &str) -> Result<Vec<SkinRole>, String> {
+    let app = app.trim();
+    Ok(list_roles()?
+        .into_iter()
+        .filter(|r| r.app_id.as_deref().is_none_or(|a| a == app))
+        .collect())
+}
+
+/// Is `inner` no wider than `outer`: every room of `inner` is in `outer`
+/// with a subset of its functions? (A role "up to" another.)
+pub fn policy_within(inner: &RoomPolicy, outer: &RoomPolicy) -> bool {
+    inner.iter().all(|(room, caps)| {
+        outer
+            .get(room)
+            .is_some_and(|allowed| caps.iter().all(|c| allowed.iter().any(|a| a == c)))
+    })
+}
+
 // ── Access templates ─────────────────────────────────────────────────
 // A line is kind + optional role. Apply copies that into real grants
 // with the target (and scope) supplied on the POST. Later edits of the

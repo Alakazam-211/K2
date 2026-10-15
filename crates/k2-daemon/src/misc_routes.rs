@@ -1822,6 +1822,17 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
 /// `hire-key-mint`, 60 s). `actor` is the mint gate's identity
 /// (`owner-token` | `user:<name>`). Returns the confirm method.
 fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, CliResponse> {
+    take_hire_confirm(
+        actor,
+        token,
+        "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → K2 API Tokens",
+    )
+}
+
+/// The same one-use `hire-key-mint` confirm, with the hint for a missing
+/// token. Raising a hire key's App access limit takes it too (it widens
+/// what the key's agents get, exactly like minting).
+fn take_hire_confirm(actor: &str, token: Option<&str>, missing_hint: &str) -> Result<String, CliResponse> {
     let refuse = |code: &str, hint: &str| CliResponse {
         status: "403 Forbidden",
         content_type: "application/json",
@@ -1835,10 +1846,7 @@ fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, Cl
         return Err(refuse("owner_only", "only the server's owner mints keys"));
     };
     let Some(token) = token else {
-        return Err(refuse(
-            "vault_confirm_required",
-            "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → K2 API Tokens",
-        ));
+        return Err(refuse("vault_confirm_required", missing_hint));
     };
     let vault = match crate::vault::get() {
         Ok(v) => v,
@@ -1856,6 +1864,133 @@ fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, Cl
             "vault_confirm_required",
             "confirm again: a confirm works once, for minting a hire key, within 60 seconds",
         )),
+    }
+}
+
+/// `POST /cli/api-keys/hire-ceiling` `{id, apps, confirmToken?}` — change a
+/// hire key's App access limit (the `apps` part of its hire envelope; the
+/// rest stays). Owner only (the dispatcher's `api_key_manager_identity`
+/// gate: agent passports, Admin/Member logins and API keys never get
+/// here). The new limit is validated like a mint (a real App, real rooms,
+/// roles usable on that App). **Confirm rule:** a raise (any App, room or
+/// role the old limit didn't cover) needs the same one-use owner confirm
+/// as minting (`hire-key-mint`), owner token included — agents can read
+/// the owner token, not pass the confirm. A lowering (or no change) needs
+/// none, like disable/revoke: it only takes access away. `[]` = no App
+/// access (hired agents get no App login).
+pub fn handle_api_key_hire_ceiling(body: &[u8], actor: &str) -> CliResponse {
+    use k2_core::hire::limits::{HireLimits, RoleShape};
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("Invalid JSON: {e}")),
+    };
+    let Some(obj) = v.as_object() else {
+        return CliResponse::bad_request("body must be an object");
+    };
+    if let Some(k) = obj.keys().find(|k| !matches!(k.as_str(), "id" | "apps" | "confirmToken")) {
+        return CliResponse::bad_request(format!("unknown field {k:?}"));
+    }
+    let id = obj.get("id").and_then(|x| x.as_str()).map(str::trim).unwrap_or("");
+    if id.is_empty() {
+        return CliResponse::bad_request("missing id");
+    }
+    let Some(apps_v) = obj.get("apps") else {
+        return CliResponse::bad_request("missing apps (use [] for no App access)");
+    };
+    if !apps_v.is_array() {
+        return CliResponse::bad_request("apps is a list (use [] for no App access)");
+    }
+    let Some(stored) = k2_core::api_keys::hire_limits_of_unrevoked(id) else {
+        return crate::hire_routes::hire_error_response(&k2_core::hire::HireError::new(
+            404,
+            "not_found",
+            "no live API key with that id can hire agents",
+        ));
+    };
+    let Some(old) = HireLimits::parse_stored(Some(&stored)) else {
+        return crate::hire_routes::hire_error_response(&k2_core::hire::HireError::new(
+            409,
+            "unreadable_limits",
+            "this key's hire limits can't be read by this daemon: mint a new key and revoke this one",
+        ));
+    };
+    let apps = match HireLimits::apps_from_value(apps_v) {
+        Ok(a) => a,
+        Err(e) => return crate::hire_routes::hire_error_response(&e),
+    };
+    let lookup = |app: &str, t: &str| RoleShape::lookup(app, t);
+    let raise = !HireLimits::apps_within(&apps, &old.apps, &lookup);
+    let mut confirm_method: Option<String> = None;
+    if raise {
+        let token = obj.get("confirmToken").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty());
+        match take_hire_confirm(
+            actor,
+            token,
+            "widening a hire key's App access needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key hire-ceiling` asks for it, or Settings → API Keys",
+        ) {
+            Ok(m) => confirm_method = Some(m),
+            Err(resp) => {
+                crate::hire_routes::audit("hire-key-ceiling", actor, &format!("deny no-confirm {id}"));
+                return resp;
+            }
+        }
+    }
+    let new = HireLimits { apps, ..old };
+    let new_json = new.to_json();
+    match k2_core::api_keys::set_hire_limits(id, &stored, &new_json) {
+        Ok(true) => {}
+        Ok(false) => {
+            return crate::hire_routes::hire_error_response(&k2_core::hire::HireError::new(
+                409,
+                "key_changed",
+                "the key changed or was revoked while you edited it: reload and try again",
+            ))
+        }
+        Err(e) => return CliResponse::internal_error(e),
+    }
+    let kind = if raise { "raise" } else { "lower" };
+    let caller = if actor == "owner-token" {
+        k2_core::hire::HireCaller::Owner
+    } else {
+        k2_core::hire::HireCaller::Login { username: actor.trim_start_matches("user:").to_string() }
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::hire::ledger::event(
+            &conn,
+            "hire-key-ceiling",
+            &caller,
+            None,
+            None,
+            None,
+            "ok",
+            None,
+            Some(&serde_json::json!({ "keyId": id, "change": kind, "via": confirm_method, "apps": new.apps })),
+        );
+    }
+    crate::hire_routes::audit(
+        "hire-key-ceiling",
+        actor,
+        &format!("ok {id} {kind} via {}", confirm_method.as_deref().unwrap_or("-")),
+    );
+    CliResponse::ok_json(
+        serde_json::json!({
+            "id": id,
+            "change": kind,
+            "confirmed": confirm_method.is_some(),
+            "hireLimits": serde_json::from_str::<serde_json::Value>(&new_json).unwrap_or(serde_json::Value::Null),
+        })
+        .to_string(),
+    )
+}
+
+/// `GET /cli/api-keys/hire-ceiling-options` — the Apps, roles and rooms
+/// Settings can offer for a hire key's App access limit. Owner only.
+pub fn handle_api_key_hire_ceiling_options() -> CliResponse {
+    match k2_core::hire::apps::ceiling_options() {
+        Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) => crate::hire_routes::hire_error_response(&e),
     }
 }
 

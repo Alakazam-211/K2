@@ -6144,7 +6144,9 @@ PY
 # what a hired agent gets never exceeds the key. A hire key is hire-only
 # unless --allow names other doors. Minting one asks for the owner confirm
 # (Touch ID / login password, or the vault password) even with the owner
-# token. Keys can't be edited: to change limits, mint a new key and revoke
+# token. Only the App access limit can change afterwards (`k2 api-key
+# hire-ceiling <id>`, or Settings → API Keys; widening asks for the same
+# confirm, lowering doesn't). For other limits, mint a new key and revoke
 # the old one.
 # Defaults for NEW keys: host-sessions ON, canonical-message OFF, sandboxes OFF
 # (the wiki-chat recipe). --allow REPLACES the default set with only the listed
@@ -6189,7 +6191,9 @@ cmd_api_key() {
                     --folder)       h_folder="${2:-}"; shift 2 ;;
                     # S5: Apps hired agents may get a login on. APP is a
                     # published service id or <workspace>/<name>; ROOMS a
-                    # comma list (self = the hired agent); ROLES a comma list.
+                    # comma list (self = the hired agent); ROLES the highest
+                    # role(s) — a hired agent may get that role or one no
+                    # wider, whose rooms are all in ROOMS.
                     --app-login)    h_apps="${h_apps}${2:-}"$'\n'; shift 2 ;;
                     # The LLM credential is read from stdin (hidden prompt on
                     # a terminal, else one line). Never an argument.
@@ -6328,6 +6332,76 @@ try:
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
+        hire-ceiling|app-access)
+            # Change a hire key's App access limit (0.45.6): which App its
+            # hired agents may get a login on, which rooms, and the highest
+            # role. Replaces the whole limit; --none = no App access.
+            # Lowering needs no confirm; widening asks for the owner confirm
+            # (the daemon decides and answers vault_confirm_required).
+            local id="${1:-}"
+            if [ -z "$id" ] || [ "${id#-}" != "$id" ]; then
+                echo "Usage: k2 api-key hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)" >&2
+                exit 2
+            fi
+            shift
+            local c_apps="" c_none=0
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --app-login) c_apps="${c_apps}${2:-}"$'\n'; shift 2 ;;
+                    --none)      c_none=1; shift ;;
+                    *)           echo "Unknown flag: $1" >&2; exit 2 ;;
+                esac
+            done
+            if [ "$c_none" = "1" ] && [ -n "$c_apps" ]; then
+                echo "Error: --none and --app-login don't mix." >&2; exit 2
+            fi
+            if [ "$c_none" = "0" ] && [ -z "$c_apps" ]; then
+                echo "Error: name the App access (--app-login APP[:ROOMS[:ROLE]]) or --none for no App access." >&2; exit 2
+            fi
+            local c_body c_resp c_code c_tok
+            c_body="$(K2_AK_ID="$id" K2_AK_HAPPS="$c_apps" python3 -c 'import json,os
+apps=[]
+for line in os.environ.get("K2_AK_HAPPS","").splitlines():
+    line=line.strip()
+    if not line: continue
+    parts=line.split(":")
+    a={"app": parts[0]}
+    if len(parts)>1 and parts[1].strip(): a["rooms"]=[r.strip() for r in parts[1].split(",") if r.strip()]
+    if len(parts)>2 and parts[2].strip(): a["roles"]=[r.strip() for r in parts[2].split(",") if r.strip()]
+    apps.append(a)
+print(json.dumps({"id": os.environ["K2_AK_ID"], "apps": apps}))')"
+            c_resp="$(printf '%s' "$c_body" | cli_post_json_stdin "/cli/api-keys/hire-ceiling")"
+            c_code="$(printf '%s' "$c_resp" | python3 -c 'import json,sys
+try:
+    e=json.load(sys.stdin).get("error")
+    print(e.get("code","") if isinstance(e,dict) else "")
+except Exception:
+    print("")')"
+            if [ "$c_code" = "vault_confirm_required" ]; then
+                c_tok="$(_vault_confirm_token hire-key-mint "" "Widen an API key's App access")" || exit 3
+                c_body="$(printf '%s' "$c_body" | K2_AK_TOK="$c_tok" python3 -c 'import json,os,sys
+b=json.load(sys.stdin); b["confirmToken"]=os.environ["K2_AK_TOK"]; print(json.dumps(b))')"
+                c_tok=""
+                c_resp="$(printf '%s' "$c_body" | cli_post_json_stdin "/cli/api-keys/hire-ceiling")"
+            fi
+            printf '%s' "$c_resp" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("Error: no answer from the daemon", file=sys.stderr); sys.exit(1)
+e=d.get("error") if isinstance(d,dict) else None
+if e:
+    if isinstance(e,dict): e="%s: %s" % (e.get("code",""), e.get("hint",""))
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+apps=(d.get("hireLimits") or {}).get("apps") or []
+print("App access %s for key %s." % ("widened" if d.get("change")=="raise" else "updated", d.get("id","")))
+if not apps:
+    print("No App access: agents hired with this key get no App login.")
+for a in apps:
+    roles=a.get("roles") or []
+    print("  %s: rooms %s, %s" % (a.get("app"), ",".join(a.get("rooms") or []),
+        ("up to role " + ",".join(roles)) if roles else "no role (Thread only in those rooms)"))'
+            ;;
         list)
             cli_request "/cli/api-keys/list" \
                 | python3 -c 'import json,sys
@@ -6358,6 +6432,14 @@ try:
         line += "  caps=%s" % (",".join(on) if on else "none")
         if k.get("legacyNewWorkspace"): line += "  legacy-new-workspace"
         print(line)
+        if caps.get("hire") and k.get("hireLimits") is not None:
+            apps=(k.get("hireLimits") or {}).get("apps") or []
+            if not apps:
+                print("    App access: none (hired agents get no App login)")
+            for a in apps:
+                roles=a.get("roles") or []
+                print("    App access: %s rooms=%s %s" % (a.get("app"), ",".join(a.get("rooms") or []),
+                    ("up-to-role=" + ",".join(roles)) if roles else "no-role"))
 except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
@@ -6407,7 +6489,7 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
             ;;
         *)
-            echo "Usage: k2 api-key <create|list|revoke|disable|enable>" >&2
+            echo "Usage: k2 api-key <create|list|hire-ceiling|revoke|disable|enable>" >&2
             echo "" >&2
             echo "  create  [--label L] [--key-stdin]   (LLM key read from stdin; never an argument)" >&2
             echo "          [--provider anthropic|openai|google|xai] [--base-url U]" >&2
@@ -6418,6 +6500,9 @@ except Exception as e:
             echo "                  [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions]" >&2
             echo "                  [--folder SUB] [--app-login APP[:ROOMS[:ROLES]]]...]   (asks for the owner confirm)" >&2
             echo "  list" >&2
+            echo "  hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)" >&2
+            echo "                 A hire key's App access limit: the App, rooms (self = the hired agent's own)" >&2
+            echo "                 and highest role its agents may get. Widening asks for the owner confirm." >&2
             echo "  disable <id>   Soft emergency kill (re-enableable)" >&2
             echo "  enable  <id>   Clear soft-disable" >&2
             echo "  revoke  <id>   Permanent (cannot re-enable same secret)" >&2
@@ -22505,8 +22590,11 @@ APP LOGINS (appLogin)
   "username"?, "email"?, "password": true?} makes an App login for the
   hired agent: an App grant on that App only (never the box login),
   marked as the agent, whole rooms (no folder lines yet). A key gives
-  only what its ceiling names (--app-login APP[:ROOMS[:ROLES]]). A
-  password, if asked for, is shown once. Retire revokes the login.
+  only what its App access limit names (--app-login APP[:ROOMS[:ROLE]]):
+  rooms from ROOMS, or a role no wider than ROLE whose rooms are all in
+  ROOMS. The owner changes it with k2 api-key hire-ceiling (or Settings →
+  API Keys); widening asks for the owner confirm. A password, if asked
+  for, is shown once. Retire revokes the login.
 
 TEAMS AND LINKS
   A team is a project group; its lead is the PoC; star edges by default.

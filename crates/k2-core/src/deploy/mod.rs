@@ -9,6 +9,8 @@
 //!   1, `kind: "app"`) and `k2 app validate` (`--types` blocks on errors).
 //! - [`store`]: `seeds`, `apps`, `deployments` rows (migration 0165).
 //! - [`audit`]: the hash-chained `deploy_audit` (Apps and Garden widgets).
+//! - [`egress`]: per-App egress policy, host list and held widening
+//!   requests (migration 0168, S15).
 //! - [`engine`]: the `RuntimeEngine` trait every isolation plugs into
 //!   (process in stage 1; Podman/Quadlet in stage 3; krun in stage V).
 //! - [`health`]: the HTTP health gate, one implementation above the trait,
@@ -29,6 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub mod audit;
 pub mod backoff;
 pub mod build;
+pub mod egress;
 pub mod engine;
 pub mod framing;
 pub mod health;

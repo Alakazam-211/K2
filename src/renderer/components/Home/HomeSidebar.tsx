@@ -49,6 +49,8 @@ import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAv
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
+import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
+import { isGrokBotAddress } from '@/lib/grokbots'
 
 /** Avatar color for an agent on another server (its color lives there). */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
@@ -243,6 +245,12 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
  *  selects `rows[N - 1]` on Home), shown for the first nine rows like the
  *  Agents pinned area. */
 function HomeRowView({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
+  // Local Grok Bots (0.45.7): not a workspace, its own row.
+  if (isGrokBotAddress(row.address)) return <GrokBotHomeRow home={home} row={row} index={index} />
+  return <WorkspaceHomeRowView home={home} row={row} index={index} />
+}
+
+function WorkspaceHomeRowView({ home, row, index }: { home: Home; row: HomeRow; index: number }): React.JSX.Element {
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
   const connectionStatus = useConnectHostStore((s) => s.connectionStatus)
   const projects = useProjectsStore((s) => s.projects)

@@ -548,6 +548,15 @@ export interface GardenDataChangedEvent {
   rev: number
 }
 
+/** APP-LEVEL — Local Grok Bots (0.45.7): the roster or status changed
+ *  (`roster`), or these agents' chats grew (`agents`, ids only). */
+export interface GrokbotsChangedEvent {
+  kind: 'grokbots_changed'
+  rev: number
+  roster: boolean
+  agents: string[]
+}
+
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -672,6 +681,7 @@ export type SessionEventMessage =
   | ZenChangedEvent
   | SourcesChangedEvent
   | GardenDataChangedEvent
+  | GrokbotsChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
   | ReviewQueueChangedEvent
@@ -1143,6 +1153,7 @@ type LlmAccountsChangedHandler = (tool: string | null) => void
 type ZenChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
 type GardenDataChangedHandler = (space: string, rev: number) => void
+type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
@@ -1203,6 +1214,7 @@ interface AppBusHandlers {
   zenChanged: Set<ZenChangedHandler>
   sourcesChanged: Set<SourcesChangedHandler>
   gardenDataChanged: Set<GardenDataChangedHandler>
+  grokbotsChanged: Set<GrokbotsChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
 }
@@ -1248,6 +1260,7 @@ function createBusState(scopeId: string): BusState {
       zenChanged: new Set(),
       sourcesChanged: new Set(),
       gardenDataChanged: new Set(),
+      grokbotsChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
     },
@@ -1469,6 +1482,12 @@ export function onGardenDataChanged(scope: ServerScope, fn: GardenDataChangedHan
   return addHandler(busFor(scope).handlers.gardenDataChanged, fn)
 }
 
+/** Local Grok Bots — subscribe to APP-LEVEL `grokbots_changed` on `scope`'s
+ *  server (0.45.7). Ids only; refetch the list / thread. */
+export function onGrokbotsChanged(scope: ServerScope, fn: GrokbotsChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.grokbotsChanged, fn)
+}
+
 /** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
  *  not install K2's hooks into an agent CLI config). */
 export function onHooksInstallFailed(scope: ServerScope, fn: HooksInstallFailedHandler): UnsubscribeFn {
@@ -1684,6 +1703,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   garden_data_changed: (h, m) => {
     for (const fn of h.gardenDataChanged) fn(m.space, m.rev)
+  },
+  grokbots_changed: (h, m) => {
+    for (const fn of h.grokbotsChanged) fn(m)
   },
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)

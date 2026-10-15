@@ -87,6 +87,9 @@ import {
   workspaceHandle,
 } from '@/lib/home-address'
 import { computeRowStatus } from '@/components/Home/home-room'
+import { grokBotIdFromAddress } from '@/lib/grokbots'
+import { useGrokBotsStore } from '@/stores/grokbots'
+import { openHomeRow } from '@/lib/home-open'
 import { cachedProjectIcon, loadProjectIcon } from '@/components/Sidebar/ProjectAvatar'
 import { homeRowAvatarFrom, useHomeAvatarStore } from '@/lib/home-avatars'
 import { agentLookColor, agentLookImage } from '@/lib/agent-look'
@@ -818,7 +821,17 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   let counts: ZenAgentCounts | null = onConnected ? null : roomCountsOf(roomEntry)
   let people: ZenPerson[] = []
   let detail: string | null = status.detail ?? null
-  if (onConnected) {
+  const grokRow = grokBotIdFromAddress(row.address) !== null
+  if (grokRow) {
+    // Local Grok Bots (0.45.7): status from the server's Grok Bot list. A
+    // Grok Bot is not a workspace: no activity rows, counts or presence.
+    if (status.kind === 'working' || status.kind === 'permission' || status.kind === 'idle') {
+      state = 'ok'
+      activity = status.kind === 'working' ? 'working' : status.kind === 'permission' ? 'needs-you' : 'idle'
+    } else {
+      state = status.kind === 'not-found' ? 'not-found' : status.kind === 'checking' ? 'checking' : (status.kind as ZenRowState)
+    }
+  } else if (onConnected) {
     if (status.kind === 'idle') {
       state = 'ok'
       const ws = findWorkspaceForRow(projects, row)
@@ -872,7 +885,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   else if (state === 'no-access') detail = `Your login on ${where} can’t message agents.${detail ? ` ${detail}` : ''}`
   else if (state === 'offline') detail = detail ?? `${where} is offline.`
   else if (state === 'sign-in') detail = detail ?? `Sign in to ${where} to message ${row.label}.`
-  else if (state === 'not-found') detail = `${row.label} is not on ${where} any more.`
+  else if (state === 'not-found') detail = grokRow ? (status.detail ?? `${row.label} is not on ${where} any more.`) : `${row.label} is not on ${where} any more.`
   else if (state === 'ok') detail = null
   const avatarUrl = rowAvatar(row, onConnected)
   return {
@@ -962,6 +975,7 @@ function startLive(): void {
   unsubs.push(useZenGardensStore.subscribe(on))
   // Pictures land in the Home avatar cache after the rows first paint.
   unsubs.push(useHomeAvatarStore.subscribe(on))
+  unsubs.push(useGrokBotsStore.subscribe(on))
   // A custom widget's server scope fills in as other servers answer.
   unsubs.push(useZenServerRosters.subscribe(on))
   // Open rooms' own activity slices (Z39) and project lists (an agent's
@@ -1139,6 +1153,16 @@ export async function openZenConversation(
   opts: { where?: 'zen' | 'agents'; select?: boolean } = {},
 ): Promise<ZenAgentRow> {
   const { row, index } = findRow(view, address)
+  // Local Grok Bots (0.45.7): a Grok Bot's chat is K2's Grok Bot view on
+  // Home (no Thread, no room). Zen hands it over; a widget that only reads
+  // a row (`select: false`) gets the row as it is.
+  if (grokBotIdFromAddress(row.address) !== null) {
+    if (opts.select !== false && rowFor(row, index, view).openable) {
+      exitZen()
+      openHomeRow(row)
+    }
+    return rowFor(row, index, view)
+  }
   if (opts.where === 'agents') {
     await openInAgents(row)
     return rowFor(row, index, view)

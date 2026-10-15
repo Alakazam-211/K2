@@ -30,6 +30,8 @@ import { DomainsSection, DOMAINS_MANIFEST } from './sections/DomainsSection'
 import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
 import { VaultSection, VAULT_MANIFEST } from './sections/VaultSection'
 import { DataSourcesSection, DATA_SOURCES_MANIFEST } from './sections/DataSourcesSection'
+import { LocalGrokBotsSection, LOCAL_GROKBOTS_MANIFEST } from './sections/LocalGrokBotsSection'
+import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
@@ -90,6 +92,13 @@ export function settingsNav({
   notifications?: boolean
 }): NavBlock[] {
   const hideTunnel = isAirgap()
+  // Local Grok Bots (0.45.7): only on a server that has the routes.
+  let hideGrokBots = true
+  try {
+    hideGrokBots = !settingsPrimaryScope().serverSupports('grokbots-v1')
+  } catch {
+    hideGrokBots = true
+  }
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
     ...(notifications
@@ -125,6 +134,7 @@ export function settingsNav({
         { id: 'api-tokens', label: 'API Keys' },
         { id: 'vault', label: 'Vault' },
         { id: 'data-sources', label: 'Data Sources' },
+        { id: 'local-grokbots', label: 'Local Grok Bots', hide: hideGrokBots },
         { id: 'companion', label: 'K2 Companion' },
       ],
     },
@@ -210,6 +220,7 @@ export default function Settings(): React.JSX.Element {
       ...API_TOKENS_MANIFEST,
       ...VAULT_MANIFEST,
       ...DATA_SOURCES_MANIFEST,
+      ...LOCAL_GROKBOTS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
@@ -524,6 +535,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'data-sources' && (
           <SectionErrorBoundary>
             <DataSourcesSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'local-grokbots' && (
+          <SectionErrorBoundary>
+            <LocalGrokBotsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'projects' && (

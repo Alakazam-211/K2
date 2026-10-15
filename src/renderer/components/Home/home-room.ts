@@ -44,6 +44,8 @@ import { hostPool } from '@/lib/host-pool-instance'
 import { useHomeRoomsStore } from '@/stores/home-rooms'
 import { useZenShown } from '@/lib/zen/zen-view'
 import { useHomeAvatarSync } from '@/lib/home-avatars'
+import { grokBotIdFromAddress, grokRowStatus } from '@/lib/grokbots'
+import { useGrokBotsStore, type GrokHostState } from '@/stores/grokbots'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -120,7 +122,8 @@ export function useRowStatus(row: HomeRow): { status: RowStatus; place: string |
   const sameServerAs = useSameServerAs(hostKey)
   const room = useHomeRoomsStore((s) => s.entries[row.address]?.room ?? null)
   const roomActivity = useRoomRowActivity(room)
-  return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity })
+  const grok = useGrokBotsStore((s) => s.byHost[hostKey])
+  return computeRowStatus(row, { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity, grok })
 }
 
 /** Home 0.43.2 (Z23): an open room's activity, live from its server's
@@ -147,13 +150,16 @@ export type RowStatusInputs = {
   sameServerAs: string | null
   /** An open room's live activity for the row (Z23), or null. */
   roomActivity?: RoomRowActivity | null
+  /** Local Grok Bots (0.45.7): what the row's server said about its Grok
+   *  Bots (read from the store when absent). */
+  grok?: GrokHostState
 }
 
 /** The status a row paints, from plain store values (shared by the row's
  *  hook and the Cmd+1–9 shortcut). */
 export function computeRowStatus(
   row: HomeRow,
-  { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity }: RowStatusInputs,
+  { activeHost, hosts, connectionStatus, projects, entry, sameServerAs, roomActivity, grok }: RowStatusInputs,
 ): { status: RowStatus; place: string | null; onConnected: boolean } {
   const parsed = parseHomeAddress(row.address)
   const hostKey = parsed?.host ?? ''
@@ -162,6 +168,31 @@ export function computeRowStatus(
   const place = rowPlace(hostKey, connectedKey, hosts)
 
   if (!parsed) return { status: { kind: 'not-found', label: 'Not found', people: [] }, place, onConnected }
+  // Local Grok Bots (0.45.7): not a workspace — its status comes from the
+  // server's Grok Bot list (the server's own offline / sign-in state wins).
+  const grokId = grokBotIdFromAddress(row.address)
+  if (grokId) {
+    const snap = grok ?? useGrokBotsStore.getState().byHost[hostKey]
+    if (onConnected) {
+      const base: RowStatus | null =
+        connectionStatus !== 'connected' ? { kind: 'checking', label: 'Checking…', people: [] } : null
+      return { status: grokRowStatus(snap, grokId, base), place, onConnected }
+    }
+    const isLocalHost = hostKey === LOCAL_HOME_HOST
+    const savedHost = isLocalHost ? null : savedHostForKey(hosts, hostKey)
+    const base = resolveRowStatus({
+      where: 'other',
+      row,
+      saved: isLocalHost ? !isWebClient() : savedHost !== null,
+      hasLogin: isLocalHost ? true : (savedHost?.token.length ?? 0) > 0,
+      entry,
+      self: isLocalHost ? 'owner' : savedHost?.username || 'owner',
+      sameServerAs,
+      serverLabel: place ?? hostKey,
+      roomActivity: null,
+    })
+    return { status: grokRowStatus(snap, grokId, base), place, onConnected }
+  }
   if (onConnected) {
     if (connectionStatus !== 'connected') {
       return { status: { kind: 'checking', label: 'Checking…', people: [] }, place, onConnected }
@@ -210,6 +241,10 @@ export function homeRowOpenableNow(row: HomeRow): boolean {
     sameServerAs: null,
   })
   if (onConnected && host.connectionStatus === 'connected' && status.kind === 'idle') return true
+  if (grokBotIdFromAddress(row.address)) {
+    if (isWebClient() && !onConnected) return false
+    return status.kind !== 'not-found' && status.kind !== 'no-access' && status.kind !== 'checking'
+  }
   if (isWebClient() && !onConnected) return false
   return status.kind !== 'not-found' && status.kind !== 'no-access'
 }

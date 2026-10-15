@@ -48,6 +48,9 @@ export const REPORTED_FEATURES = {
    *  `GET /cli/notify/prefs` says that). Settings → Notifications, the
    *  Agent tab's phone switch and the viewing sender all hide without it. */
   'thread-push-v1': 'thread-push-v1',
+  /** Local Grok Bots (0.45.7): `/cli/grokbots/*` and `grokbots_changed`.
+   *  A server without the key shows no Grok Bot rows and no Settings page. */
+  'grokbots-v1': 'grokbots-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

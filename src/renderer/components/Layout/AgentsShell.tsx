@@ -34,6 +34,8 @@ import { RoomProvider } from '@/components/Room/RoomContext'
 import { primaryRoom } from '@/stores/room'
 import { RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
 import { RoomSlot } from '@/components/Home/room/HomeRoomsHost'
+import GrokBotChatView from '@/components/GrokBots/GrokBotChatView'
+import { useGrokBotsStore } from '@/stores/grokbots'
 
 interface ShellProject {
   name: string
@@ -86,7 +88,10 @@ export default function AgentsShell({
   const homeEmpty = useHomesStore((s) => selectedHome(s).rows.length === 0)
   const remote = useShownRemoteRoom()
   const remoteRoom = remote?.room ?? null
-  const roomShown = useRoomShown() && remote === null
+  // Local Grok Bots (0.45.7): a Grok Bot chat takes the main area (no room,
+  // no drawers — it is not a workspace). Picking a K2 agent closes it.
+  const grok = useGrokBotsStore((s) => s.open)
+  const roomShown = useRoomShown() && remote === null && grok === null
   const hasRoom = !!(activeProject && activeWorkspace)
   const rootPath = activeWorkspace?.worktreePath ?? activeProject?.path
   const emptyHint = onHome
@@ -116,10 +121,13 @@ export default function AgentsShell({
       projectName={remote ? remote.entry.label : roomShown ? activeProject?.name : undefined}
       workspaceName={remote ? undefined : roomShown ? activeWorkspace?.name : undefined}
     >
-      <RoomSlot visible={remote !== null} />
-      <RoomProvider room={room} shown={remote === null}>
+      <RoomSlot visible={remote !== null && grok === null} />
+      {grok !== null && <GrokBotChatView key={`${grok.hostKey}|${grok.agentId}`} hostKey={grok.hostKey} agentId={grok.agentId} />}
+      <RoomProvider room={room} shown={remote === null && grok === null}>
         {hasRoom ? (
           <>
+            {/* Same tree with or without a Grok Bot chat: the room stays
+                mounted (hidden), never remounted. */}
             <div
               className="h-full w-full"
               style={roomShown ? undefined : { display: 'none' }}
@@ -128,9 +136,9 @@ export default function AgentsShell({
             >
               <TerminalArea cwd={cwd} />
             </div>
-            {!roomShown && remote === null && <RoomEmptyState hint={emptyHint} />}
+            {!roomShown && remote === null && grok === null && <RoomEmptyState hint={emptyHint} />}
           </>
-        ) : remote === null ? (
+        ) : remote === null && grok === null ? (
           <RoomEmptyState hint={emptyHint} />
         ) : null}
       </RoomProvider>

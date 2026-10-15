@@ -104,6 +104,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Feedback/useTicketMe.ts',
   'components/FileViewerPane/CodeEditor.tsx',
   'components/GitInitDialog/GitInitDialog.tsx',
+  'components/GrokBots/GrokBotRows.tsx',
   'components/HeartbeatScheduleDialog/HeartbeatScheduleDialog.tsx',
   'components/MergeDialog/MergeDialog.tsx',
   'components/Presence/PresenceKickButton.tsx',
@@ -132,6 +133,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/GeneralSection.tsx',
   'components/Settings/sections/HeartbeatsSection.tsx',
   'components/Settings/sections/K2ConnectSection.tsx',
+  'components/Settings/sections/LocalGrokBotsSection.tsx',
   'components/Settings/sections/PeopleSection.tsx',
   'components/Settings/sections/ProjectsSection.tsx',
   'components/Settings/sections/RoleSkillEditor.tsx',
@@ -196,6 +198,7 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/custom-themes.ts',
   'stores/feedback.ts',
   'stores/focus-groups.ts',
+  'stores/grokbots.ts',
   'stores/heartbeat-sessions.ts',
   // Heartbeat S6: Keep awake is a server's machine. 0.43.2 Z17: the
   // window's own entry; a focused room's entry uses the room's scope.

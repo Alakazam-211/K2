@@ -83,6 +83,8 @@ export type SettingsSection =
   | 'vault'
   /** Settings → K2 Server → Data Sources (contract-sources-v1 §8). */
   | 'data-sources'
+  /** Settings → K2 Server → Local Grok Bots (0.45.7). */
+  | 'local-grokbots'
   | 'email-hosting'
   | 'email-link'
   | 'data'

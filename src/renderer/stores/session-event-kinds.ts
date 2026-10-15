@@ -124,6 +124,9 @@ export const SESSION_EVENT_ROUTES = {
   // Garden data (contract-garden-data-v1 §6): the space and its rev only.
   // Gardens read only this computer's daemon, so it isn't carried.
   garden_data_changed: { class: 'app', app: true },
+  // Local Grok Bots (0.45.7): ids only — the roster/status moved or some
+  // agents' chats grew. Refetch `grokbots/list` / `grokbots/thread`.
+  grokbots_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

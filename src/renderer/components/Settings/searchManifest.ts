@@ -128,6 +128,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'api-tokens': 'API Keys',
   vault: 'Vault',
   'data-sources': 'Data Sources',
+  'local-grokbots': 'Local Grok Bots',
   'email-hosting': 'Email Hosting',
   'email-link': 'Email Link',
   data: 'Database',

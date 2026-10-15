@@ -36,6 +36,8 @@ import { switchWindowToRow, toastOldServerOnce } from '@/lib/home-switch'
 import { hostPool } from '@/lib/host-pool-instance'
 import { homeRooms } from '@/stores/home-rooms'
 import type { HomeRow } from '@/stores/homes'
+import { grokBotIdFromAddress } from '@/lib/grokbots'
+import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
 
 export { switchTargetForHost } from '@/lib/home-switch'
 
@@ -49,6 +51,16 @@ function unknownServer(host: string): OpenResult {
 export function openHomeRow(row: HomeRow): OpenResult {
   const parsed = parseHomeAddress(row.address)
   if (!parsed) return 'not-found'
+  // Local Grok Bots (0.45.7): open the chat in the main area, on whichever
+  // server the row lives (no window switch, no room).
+  const grokId = grokBotIdFromAddress(row.address)
+  if (grokId) {
+    if (isWebClient() && parsed.host !== activeHomeHostKey(useConnectHostStore.getState().activeHost)) return 'web-remote'
+    usePageViewStore.getState().setPage('home')
+    useGrokBotsStore.getState().openChat({ hostKey: parsed.host, agentId: grokId })
+    return 'selected'
+  }
+  closeGrokChat()
   const hostState = useConnectHostStore.getState()
   const connectedKey = activeHomeHostKey(hostState.activeHost)
 

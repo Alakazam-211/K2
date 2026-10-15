@@ -18,7 +18,7 @@ describe('Settings nav Apps', () => {
     expect(src).not.toContain("id: 'k2-access', label: 'Admin Access', beta")
   })
 
-  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, Data Sources, K2 Companion', () => {
+  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, Data Sources, Local Grok Bots, K2 Companion', () => {
     const serverStart = src.indexOf("title: 'K2 Server'")
     const serverEnd = src.indexOf("title: 'Editors / Fonts'")
     expect(serverStart).toBeGreaterThan(0)
@@ -35,6 +35,7 @@ describe('Settings nav Apps', () => {
         "{ id: 'api-tokens', label: 'API Keys' },",
         "{ id: 'vault', label: 'Vault' },",
         "{ id: 'data-sources', label: 'Data Sources' },",
+        "{ id: 'local-grokbots', label: 'Local Grok Bots', hide: hideGrokBots },",
         "{ id: 'companion', label: 'K2 Companion' },",
       ].join('\n        '),
     )

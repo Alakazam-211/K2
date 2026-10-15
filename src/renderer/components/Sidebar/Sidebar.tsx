@@ -37,6 +37,8 @@ import ActiveBar from './ActiveBar'
 import { NavProjectTags } from './NavProjectTags'
 import { KeyCombo } from '@/components/KeySymbol'
 import { primaryScope } from '@/kessel/server-scope'
+import { GrokBotSidebarSection } from '@/components/GrokBots/GrokBotRows'
+import { closeGrokChat } from '@/stores/grokbots'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -296,6 +298,8 @@ export function SingleProjectItem({
   )
 
   const handleClick = useCallback(() => {
+    // Picking a K2 agent gives the main area back from a Grok Bot chat.
+    closeGrokChat()
     if (firstWorkspace) {
       setActiveWorkspace(project.id, firstWorkspace.id)
     }
@@ -1121,6 +1125,9 @@ export default function Sidebar(): React.JSX.Element {
             </p>
           </div>
         )}
+
+        {/* Local Grok Bots (0.45.7): only when the server has Show on. */}
+        <GrokBotSidebarSection />
       </div>
 
       {/* Active workspaces dock */}

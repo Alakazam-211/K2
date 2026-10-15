@@ -31,7 +31,7 @@ fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
-expect_has() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+expect_has() { if grep -Fq -- "$3" <<<"$2"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/k2gd-XXXXXX")"
 DAEMON_PID=""
@@ -117,8 +117,11 @@ expect_eq "--at header names the snapshot" \
     "$(head -1 "$SANDBOX/out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["snapshot"])')" "$TODAY"
 SNAPS="$DHOME/.k2/stores/.snapshots"
 [ -f "$SNAPS/gardens-$TODAY.sqlite" ] && ok "today's snapshot file" || bad "today's snapshot file"
-expect_eq "snapshot is 0600" "$(stat -f %Lp "$SNAPS/gardens-$TODAY.sqlite" 2>/dev/null || stat -c %a "$SNAPS/gardens-$TODAY.sqlite")" "600"
-expect_eq "snapshot folder is 0700" "$(stat -f %Lp "$SNAPS" 2>/dev/null || stat -c %a "$SNAPS")" "700"
+# GNU stat takes -c; BSD/macOS stat takes -f. Never try one then the other:
+# GNU `stat -f` is --file-system and prints filesystem info before failing.
+mode_of() { if stat -c %a / >/dev/null 2>&1; then stat -c %a "$1"; else stat -f %Lp "$1"; fi; }
+expect_eq "snapshot is 0600" "$(mode_of "$SNAPS/gardens-$TODAY.sqlite")" "600"
+expect_eq "snapshot folder is 0700" "$(mode_of "$SNAPS")" "700"
 run store export --widget board --at 2000-01-01
 expect_eq "--at before any snapshot exits 4" "$rc" "4"
 expect_has "no_snapshot" "$(cat "$SANDBOX/err")" "no_snapshot"
@@ -149,7 +152,9 @@ expect_eq "replace: 1 written, 3 deleted, rev 5" \
     "$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(v["written"], v["deleted"], v["rev"])' "$SANDBOX/out")" "1 3 5"
 run zen data export board
 expect_eq "only obj/2 is left" "$(keys_of "$SANDBOX/out")" "obj/2"
-expect_eq "two pre-op import snapshots" "$(ls "$SNAPS" | grep -c -- '-import\.sqlite$')" "2"
+# Two imports in the same second get -import.sqlite and -import-2.sqlite
+# (take_pre_op never overwrites); count both shapes.
+expect_eq "two pre-op import snapshots" "$(ls "$SNAPS" | grep -cE -- '-import(-[0-9]+)?\.sqlite$')" "2"
 printf '%s\n' '{"key":"/bad","value":1}' > "$SANDBOX/bad.jsonl"
 runin "$SANDBOX/bad.jsonl" zen data import board
 expect_eq "a bad key exits 1" "$rc" "1"

@@ -7754,6 +7754,37 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                // 0.45.6 — change a hire key's App access limit. Owner only
+                // (same gate as create); a raise also needs the owner confirm.
+                "/cli/api-keys/hire-ceiling" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let Some(actor) =
+                        super::http::api_key_manager_identity(&query, state.token.as_str())
+                    else {
+                        let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                        let f = crate::cli_response::CliResponse::forbidden();
+                        super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
+                        return DispatchOutcome::Done;
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::misc_routes::handle_api_key_hire_ceiling(&body, &actor)
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
+                "/cli/api-keys/hire-ceiling-options" => {
+                    let _ = stream.read(&mut buf).await;
+                    if super::http::api_key_manager_identity(&query, state.token.as_str()).is_none() {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        tokio::task::spawn_blocking(crate::misc_routes::handle_api_key_hire_ceiling_options)
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
                 "/cli/api-keys/list" => {
                     // GET, owner-tier. Drain the peeked head then gate.
                     let _ = stream.read(&mut buf).await;

@@ -328,6 +328,13 @@ pub fn list_for_project(conn: &Connection, project_id: &str) -> Result<Vec<Publi
     rows.collect()
 }
 
+/// Every published service on the box (the hire-key App picker).
+pub fn list_all(conn: &Connection) -> Result<Vec<PublishedService>> {
+    let mut stmt = conn.prepare(&format!("SELECT {COLS} FROM published_services ORDER BY name, created_at"))?;
+    let rows = stmt.query_map([], map_row)?;
+    rows.collect()
+}
+
 /// Ids of every row of one kind (`skin` | `cmd`), any desired state. The
 /// per-App login backfill (S24-10) copies box logins onto each `skin` id.
 pub fn ids_of_kind(conn: &Connection, kind: &str) -> Result<Vec<String>> {

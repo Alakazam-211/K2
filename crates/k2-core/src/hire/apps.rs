@@ -63,6 +63,72 @@ pub fn resolve_rooms(tokens: &[String]) -> Result<Vec<String>, HireError> {
     Ok(out)
 }
 
+/// What Settings → API Keys can pick for a hire key's App access limit:
+/// every published App on this box (with the roles usable on it and the
+/// rooms it already uses), and every room (workspace), `self` first. Owner
+/// route only; read-only.
+pub fn ceiling_options() -> Result<serde_json::Value, HireError> {
+    let (services, rooms) = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let services = crate::published_services::list_all(&conn)
+            .map_err(|e| HireError::internal(format!("app list: {e}")))?;
+        let mut stmt = conn
+            // Not the internal audit sentinels (`_orphan`, `_broadcast`).
+            .prepare(
+                "SELECT id, COALESCE(handle, ''), name FROM projects \
+                 WHERE id NOT IN ('_orphan', '_broadcast') ORDER BY name COLLATE NOCASE",
+            )
+            .map_err(|e| HireError::internal(format!("room list: {e}")))?;
+        let rooms: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| HireError::internal(format!("room list: {e}")))?
+            .filter_map(Result::ok)
+            .collect();
+        (services, rooms)
+    };
+    let grants = crate::skin::list_grants().map_err(HireError::internal)?;
+    let handle_of = |id: &str| rooms.iter().find(|r| r.0 == id).map(|r| r.1.clone()).unwrap_or_default();
+    let mut apps = Vec::new();
+    for s in services {
+        let roles = crate::skin::roles_for_app(&s.id).map_err(HireError::internal)?;
+        let mut used: Vec<String> = vec![s.project_id.clone()];
+        let mut add = |id: &str| {
+            if !id.is_empty() && !used.iter().any(|u| u == id) {
+                used.push(id.to_string());
+            }
+        };
+        for r in roles.iter().filter(|r| r.app_id.as_deref() == Some(s.id.as_str())) {
+            r.rooms.iter().for_each(|id| add(id));
+        }
+        for g in grants.iter().filter(|g| g.kind == "app" && g.target_id == s.id && g.role_id.is_none()) {
+            let scope: Vec<String> = g.scope.as_deref().and_then(|x| serde_json::from_str(x).ok()).unwrap_or_default();
+            scope.iter().for_each(|id| add(id));
+        }
+        apps.push(serde_json::json!({
+            "id": s.id,
+            "name": s.name,
+            "kind": s.kind,
+            "workspaceId": s.project_id,
+            "workspace": handle_of(&s.project_id),
+            "roomIds": used,
+            "roles": roles.iter().map(|r| serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "appId": r.app_id,
+                "rooms": r.rooms,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    let mut room_list = vec![serde_json::json!({
+        "id": SELF_ROOM,
+        "handle": SELF_ROOM,
+        "name": "The hired agent's own workspace",
+    })];
+    room_list.extend(rooms.iter().map(|(id, handle, name)| serde_json::json!({ "id": id, "handle": handle, "name": name })));
+    Ok(serde_json::json!({ "apps": apps, "rooms": room_list }))
+}
+
 /// A 24-character random password (base62, OS CSPRNG), shown once.
 pub fn random_password() -> String {
     use argon2::password_hash::rand_core::{OsRng, RngCore};

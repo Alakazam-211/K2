@@ -248,6 +248,17 @@ fn assert_all_key_routes_403(port: u16, token: &str, ctx: &str) {
         Some(r#"{"id":"not-a-real-id"}"#),
     );
     assert_key_refusal(&revoke, ctx, "revoke");
+
+    // 0.45.6: changing a hire key's App access limit, and its pickers.
+    let ceiling = http(
+        port,
+        "POST",
+        &format!("/cli/api-keys/hire-ceiling?token={token}"),
+        Some(r#"{"id":"not-a-real-id","apps":[]}"#),
+    );
+    assert_key_refusal(&ceiling, ctx, "hire-ceiling");
+    let options = http(port, "GET", &format!("/cli/api-keys/hire-ceiling-options?token={token}"), None);
+    assert_key_refusal(&options, ctx, "hire-ceiling-options");
 }
 
 /// Owner-token list → the set of key labels currently stored (proves a

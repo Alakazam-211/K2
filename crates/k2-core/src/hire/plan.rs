@@ -211,7 +211,8 @@ fn plan_app_login(
         (None, None) => vec![super::apps::SELF_ROOM.to_string()],
     };
     if is_key {
-        let ok = limits.is_some_and(|l| l.allows_app_login(&app, &rooms, role.as_deref()));
+        let lookup = |t: &str| super::limits::RoleShape::lookup(&app, t);
+        let ok = limits.is_some_and(|l| l.allows_app_login(&app, &rooms, role.as_deref(), &lookup));
         if !ok {
             return Err(refuse_key());
         }

@@ -482,6 +482,8 @@ pub fn projects_delete(id: &str) -> Result<(), String> {
             serde_json::json!({ "groupId": gid }),
         );
     }
+    // Sew S27-A2: the UI's remove path deletes `projects` too.
+    crate::tool_hook::kick_reconcile();
     Ok(())
 }
 

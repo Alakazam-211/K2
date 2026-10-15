@@ -1333,6 +1333,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     let _ = conn.execute("ALTER TABLE tokens ADD COLUMN room_policy TEXT", []);
     ensure_platform_name_index(&conn)?;
     migrate_room_policy(&conn)?;
+    // Sew S27 grant hook: `tool_outbox` + `tool_targets`. Idempotent and
+    // additive like `grants`; NOT a ladder step (user_version stays put).
+    crate::tool_hook::outbox::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest
@@ -1880,6 +1883,14 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
     f(conn)
 }
 
+/// The one skin.db connection, for [`crate::tool_hook`] (same mutex as
+/// every `skin::*` function; not reentrant).
+pub(crate) fn with_skin_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(
+    f: F,
+) -> Result<T, String> {
+    with_conn(f)
+}
+
 // ── Principals ───────────────────────────────────────────────────────
 
 pub fn add_principal(username: &str) -> Result<SkinPrincipal, String> {
@@ -1942,6 +1953,8 @@ pub fn add_principal_with_email(
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    // App user change (Sew rev 147 / K31 seam).
+    crate::tool_hook::kick_reconcile();
     Ok(r)
 }
 
@@ -2050,8 +2063,22 @@ pub fn list_principals() -> Result<Vec<SkinPrincipal>, String> {
 }
 
 pub fn remove_principal(username: &str) -> Result<bool, String> {
+    remove_principal_as(username, crate::tool_hook::ACTOR_SYSTEM)
+}
+
+/// Remove a principal in ONE transaction (S27 §14.2): its session tokens,
+/// every grant row, and for each hooked grant (chat) the cascade
+/// (assistant grants pinned to them) plus a `deprovision` outbox row.
+pub fn remove_principal_as(username: &str, actor: &str) -> Result<bool, String> {
+    use crate::tool_hook::{outbox, registry, Cause, HookCtx, HookEvent};
     let username = normalize_username(username)?;
-    let r = with_conn(|conn| {
+    let actor = hook_actor(Some(actor));
+    let ctx = HookCtx {
+        actor: actor.clone(),
+        ..Default::default()
+    };
+    let now = now_secs();
+    let (r, enqueued) = with_conn(|conn| {
         let id: Option<String> = conn
             .query_row(
                 "SELECT id FROM principals WHERE username = ?1",
@@ -2061,11 +2088,11 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
             .optional()
             .map_err(|e| format!("skin principal lookup: {e}"))?;
         let Some(id) = id else {
-            return Ok(false);
+            return Ok((false, 0));
         };
         // S28 §12: the person's Sew sessions end with them. Check the chat
-        // grant before the grants go, in the same transaction as the
-        // deletes.
+        // grant before the grants go, in the same Immediate transaction as
+        // the deletes and the S27 outbox rows.
         let tx = immediate_tx(conn)?;
         let had_chat = principal_has_chat_grant_conn(&tx, &id)?;
         tx.execute(
@@ -2073,6 +2100,32 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
             params![id],
         )
         .map_err(|e| format!("skin session delete: {e}"))?;
+        let mut ops = Vec::new();
+        for p in registry() {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "{GRANT_SELECT} WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = ?2"
+                ))
+                .map_err(|e| format!("skin principal grants: {e}"))?;
+            let hooked: Vec<SkinGrant> = stmt
+                .query_map(params![id, p.kind()], map_grant_row)
+                .map_err(|e| format!("skin principal grants: {e}"))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("skin principal grant row: {e}"))?;
+            drop(stmt);
+            for g in &hooked {
+                let ev = HookEvent::GrantDeleted { grant: g };
+                for c in p.cascade(&tx, &ev)? {
+                    tx.execute("DELETE FROM grants WHERE id = ?1", params![c.id])
+                        .map_err(|e| format!("skin grant cascade delete: {e}"))?;
+                    ops.extend(p.plan(&tx, &HookEvent::GrantDeleted { grant: &c }, &ctx)?);
+                }
+                for mut op in p.plan(&tx, &ev, &ctx)? {
+                    op.cause = Cause::PrincipalDelete;
+                    ops.push(op);
+                }
+            }
+        }
         // No FK from grants to principals. Leave the row and app detail
         // would keep showing a raw uuid.
         tx.execute(
@@ -2089,13 +2142,40 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
                 &crate::sew_revoke::SewSessionRevoke::ExternalId(crate::sew_revoke::principal_external_id(&id)),
             )?;
         }
-        tx.commit().map_err(|e| format!("skin principal delete commit: {e}"))?;
-        Ok(n > 0)
+        let enqueued = outbox::enqueue(&tx, &ops, &actor, now)?.len();
+        hook_failpoint()?;
+        tx.commit()
+            .map_err(|e| format!("skin principal remove commit: {e}"))?;
+        Ok((n > 0, enqueued))
     })?;
     if r {
         crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+        // App user change (rev 147 / K31 seam).
+        crate::tool_hook::kick_reconcile();
+    }
+    if enqueued > 0 {
+        crate::tool_hook::kick();
     }
     Ok(r)
+}
+
+/// After a principal's email / full name change: enqueue the chat
+/// profile `update` in the same transaction (no-op without a chat grant).
+fn plan_principal_changed(
+    tx: &Connection,
+    principal: &SkinPrincipal,
+    actor: &str,
+) -> Result<usize, String> {
+    use crate::tool_hook::{outbox, registry, HookCtx, HookEvent};
+    let ctx = HookCtx {
+        actor: actor.to_string(),
+        ..Default::default()
+    };
+    let mut ops = Vec::new();
+    for p in registry() {
+        ops.extend(p.plan(tx, &HookEvent::PrincipalChanged { principal }, &ctx)?);
+    }
+    Ok(outbox::enqueue(tx, &ops, actor, now_secs())?.len())
 }
 
 fn principal_by_username(
@@ -2445,6 +2525,16 @@ pub fn set_principal_password(
 
 /// Set or clear guest email. Empty/`None` → NULL. Invalid or duplicate → Err (400).
 pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPrincipal, String> {
+    set_principal_email_as(username, email, crate::tool_hook::ACTOR_SYSTEM)
+}
+
+/// [`set_principal_email`] that records `actor` on the chat `update` row.
+pub fn set_principal_email_as(
+    username: &str,
+    email: Option<&str>,
+    actor: &str,
+) -> Result<SkinPrincipal, String> {
+    let actor = hook_actor(Some(actor));
     let username = normalize_username(username)?;
     let email = match email {
         Some(raw) => normalize_email(raw)?,
@@ -2457,12 +2547,15 @@ pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPr
         if let Some(ref em) = email {
             ensure_email_free(conn, em, Some(&p.id))?;
         }
-        conn.execute(
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin email begin: {e}"))?;
+        tx.execute(
             "UPDATE principals SET email = ?1 WHERE id = ?2",
             params![email, p.id],
         )
         .map_err(|e| unique_email_err(email.as_deref(), e, "skin email update"))?;
-        Ok(SkinPrincipal {
+        let out = SkinPrincipal {
             id: p.id,
             username: p.username,
             created_at: p.created_at,
@@ -2475,9 +2568,18 @@ pub fn set_principal_email(username: &str, email: Option<&str>) -> Result<SkinPr
             full_name: p.full_name,
             agent_workspace: p.agent_workspace,
             agent_handle: None,
-        })
+        };
+        let n = plan_principal_changed(&tx, &out, &actor)?;
+        hook_failpoint()?;
+        tx.commit().map_err(|e| format!("skin email commit: {e}"))?;
+        Ok((out, n))
     })
-    .map(attach_principal_handles)
+    .map(|(p, n)| {
+        if n > 0 {
+            crate::tool_hook::kick();
+        }
+        attach_principal_handles(p)
+    })
 }
 
 /// Set or clear the guest full name. Empty/`None` → NULL.
@@ -2487,6 +2589,16 @@ pub fn set_principal_full_name(
     username: &str,
     full_name: Option<&str>,
 ) -> Result<SkinPrincipal, String> {
+    set_principal_full_name_as(username, full_name, crate::tool_hook::ACTOR_SYSTEM)
+}
+
+/// [`set_principal_full_name`] that records `actor` on the chat `update` row.
+pub fn set_principal_full_name_as(
+    username: &str,
+    full_name: Option<&str>,
+    actor: &str,
+) -> Result<SkinPrincipal, String> {
+    let actor = hook_actor(Some(actor));
     let username = normalize_username(username)?;
     let full_name = full_name
         .map(str::trim)
@@ -2496,12 +2608,15 @@ pub fn set_principal_full_name(
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        conn.execute(
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin full name begin: {e}"))?;
+        tx.execute(
             "UPDATE principals SET full_name = ?1 WHERE id = ?2",
             params![full_name, p.id],
         )
         .map_err(|e| format!("skin full name update: {e}"))?;
-        Ok(SkinPrincipal {
+        let out = SkinPrincipal {
             id: p.id,
             username: p.username,
             created_at: p.created_at,
@@ -2514,9 +2629,19 @@ pub fn set_principal_full_name(
             full_name,
             agent_workspace: p.agent_workspace,
             agent_handle: None,
-        })
+        };
+        let n = plan_principal_changed(&tx, &out, &actor)?;
+        hook_failpoint()?;
+        tx.commit()
+            .map_err(|e| format!("skin full name commit: {e}"))?;
+        Ok((out, n))
     })
-    .map(attach_principal_handles)
+    .map(|(p, n)| {
+        if n > 0 {
+            crate::tool_hook::kick();
+        }
+        attach_principal_handles(p)
+    })
 }
 
 /// Owner-only (the HTTP writer gates it): mark a guest principal as the
@@ -3994,11 +4119,13 @@ fn grant_kind(raw: &str) -> Result<String, String> {
         "mailbox" => Ok("mailbox".to_string()),
         "database" => Ok("database".to_string()),
         "cli" => Ok("cli".to_string()),
-        _ => Err("kind must be app, mailbox, database, or cli".to_string()),
+        // Sew S27: a chat grant creates the Sew account (tool_hook).
+        "chat" => Ok("chat".to_string()),
+        _ => Err("kind must be app, mailbox, database, cli, or chat".to_string()),
     }
 }
 
-fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
+pub(crate) fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
     let role_id: Option<String> = r.get(5)?;
     let scope: Option<String> = r.get(6)?;
     let enabled: i64 = r.get(8)?;
@@ -4017,7 +4144,7 @@ fn map_grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinGrant> {
     })
 }
 
-const GRANT_SELECT: &str =
+pub(crate) const GRANT_SELECT: &str =
     "SELECT id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by FROM grants";
 
 fn principal_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
@@ -4073,6 +4200,19 @@ fn app_grant_shape(
 /// A `host` app grant also writes the shadow columns (`principals.role_id`
 /// / `default_rooms`) for one release (AM1).
 pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
+    if let Some(p) = crate::tool_hook::provisioner_for(&write.kind) {
+        return create_hooked_grant(p, write);
+    }
+    let created = create_plain_grant(write)?;
+    if created.kind == "app" {
+        // App user change: K31 derives App Space membership from App
+        // grants; S27 only asks for a sweep (rev 147).
+        crate::tool_hook::kick_reconcile();
+    }
+    Ok(created)
+}
+
+fn create_plain_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
     let subject_kind = grant_subject_kind(&write.subject_kind)?;
     let subject_id = write.subject_id.trim().to_string();
     if subject_id.is_empty() {
@@ -4189,6 +4329,369 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
     })
 }
 
+
+// ── Hooked grants (Sew S27 tool_hook) ────────────────────────────────
+//
+// A kind with a provisioner (`chat`) validates, writes the grant AND its
+// outbox rows in ONE skin.db transaction, then kicks the worker. Facts
+// from the main DB (workspace handle/name) are read BEFORE the skin lock.
+
+fn hook_actor(created_by: Option<&str>) -> String {
+    created_by
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(crate::tool_hook::ACTOR_SYSTEM)
+        .to_string()
+}
+
+/// Test-only failpoint: error after the outbox insert, before commit.
+#[cfg(any(test, feature = "test-util"))]
+pub static HOOK_FAIL_BEFORE_COMMIT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn hook_failpoint() -> Result<(), String> {
+    #[cfg(any(test, feature = "test-util"))]
+    if HOOK_FAIL_BEFORE_COMMIT.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("injected failure before commit".to_string());
+    }
+    Ok(())
+}
+
+/// A workspace subject token (uuid, handle or alias) → `projects.id`.
+fn resolve_workspace_subject(token: &str) -> Result<String, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("missing subject id".to_string());
+    }
+    match resolve_room_tokens(&[token.to_string()]) {
+        Ok(ids) if ids.len() == 1 => Ok(ids[0].clone()),
+        Ok(_) => Err(format!("unknown workspace '{token}'")),
+        Err(e) if e.starts_with("ambiguous") => Err(e),
+        Err(_) => Err(format!("unknown workspace '{token}'")),
+    }
+}
+
+fn create_hooked_grant(
+    p: &'static dyn crate::tool_hook::ToolProvisioner,
+    write: &SkinGrantWrite,
+) -> Result<SkinGrant, String> {
+    use crate::tool_hook::{outbox, HookCtx, HookEvent};
+    let subject_kind = grant_subject_kind(&write.subject_kind)?;
+    let mut write = write.clone();
+    write.subject_kind = subject_kind.clone();
+    let mut ws_ids = Vec::new();
+    if subject_kind == "workspace" {
+        write.subject_id = resolve_workspace_subject(&write.subject_id)?;
+        ws_ids.push(write.subject_id.clone());
+    } else if write.subject_id.trim().is_empty() {
+        return Err("missing subject id".to_string());
+    }
+    let actor = hook_actor(write.created_by.as_deref());
+    let ctx = HookCtx::load(&actor, &ws_ids);
+    let now = now_secs();
+    let grant = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        let w = p.validate(&tx, &write, &ctx)?;
+        let taken: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM grants
+                 WHERE subject_kind = ?1 AND subject_id = ?2 AND kind = ?3 AND target_id = ?4",
+                params![w.subject_kind, w.subject_id, w.kind, w.target_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("skin grant lookup: {e}"))?;
+        if taken > 0 {
+            return Err("grant already exists for this subject, kind, and target".to_string());
+        }
+        let grant = SkinGrant {
+            id: uuid::Uuid::new_v4().to_string(),
+            subject_kind: w.subject_kind.clone(),
+            subject_id: w.subject_id.clone(),
+            kind: w.kind.clone(),
+            target_id: w.target_id.clone(),
+            role_id: None,
+            scope: w.scope.clone(),
+            created_at: now,
+            enabled: true,
+            created_by: w.created_by.clone(),
+        };
+        tx.execute(
+            "INSERT INTO grants
+             (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 1, ?8)",
+            params![
+                grant.id,
+                grant.subject_kind,
+                grant.subject_id,
+                grant.kind,
+                grant.target_id,
+                grant.scope,
+                grant.created_at,
+                grant.created_by
+            ],
+        )
+        .map_err(|e| format!("skin grant insert: {e}"))?;
+        let ops = p.plan(&tx, &HookEvent::GrantCreated { grant: &grant }, &ctx)?;
+        outbox::enqueue(&tx, &ops, &actor, now)?;
+        hook_failpoint()?;
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
+        Ok(grant)
+    })?;
+    crate::tool_hook::kick();
+    Ok(grant)
+}
+
+/// `POST /cli/skin/grants/update`: change a hooked grant's scope (§6.4).
+/// Only hooked kinds; `coworker` ↔ `assistant:*` is refused (delete and
+/// add again). A no-op scope enqueues nothing.
+pub fn update_grant_scope(id: &str, scope: &str, actor: &str) -> Result<SkinGrant, String> {
+    use crate::tool_hook::{outbox, provisioner_for, HookCtx, HookEvent};
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing grant id".to_string());
+    }
+    let old = with_conn(|conn| grant_by_id(conn, id))?.ok_or_else(|| "unknown grant".to_string())?;
+    let Some(p) = provisioner_for(&old.kind) else {
+        return Err("only chat grants can be updated".to_string());
+    };
+    let ws_ids: Vec<String> = if old.subject_kind == "workspace" {
+        vec![old.subject_id.clone()]
+    } else {
+        Vec::new()
+    };
+    let actor = hook_actor(Some(actor));
+    let ctx = HookCtx::load(&actor, &ws_ids);
+    let now = now_secs();
+    let (grant, changed) = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        let old = grant_by_id(&tx, id)?.ok_or_else(|| "unknown grant".to_string())?;
+        let stored = p.validate_update(&tx, &old, scope, &ctx)?;
+        if old.scope.as_deref() == Some(stored.as_str()) {
+            return Ok((old, false));
+        }
+        tx.execute(
+            "UPDATE grants SET scope = ?1 WHERE id = ?2",
+            params![stored, id],
+        )
+        .map_err(|e| format!("skin grant update: {e}"))?;
+        let new = SkinGrant {
+            scope: Some(stored),
+            ..old.clone()
+        };
+        let ops = p.plan(&tx, &HookEvent::GrantUpdated { old: &old, new: &new }, &ctx)?;
+        outbox::enqueue(&tx, &ops, &actor, now)?;
+        hook_failpoint()?;
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
+        Ok((new, true))
+    })?;
+    if changed {
+        crate::tool_hook::kick();
+    }
+    Ok(grant)
+}
+
+/// Delete one hooked grant plus its cascade (assistant grants of a
+/// person) and enqueue their deprovisions, in one transaction. `None`
+/// when the grant does not exist.
+fn delete_hooked_grant(
+    p: &'static dyn crate::tool_hook::ToolProvisioner,
+    id: &str,
+    actor: &str,
+) -> Result<Option<Vec<SkinGrant>>, String> {
+    use crate::tool_hook::{outbox, HookCtx, HookEvent};
+    let ctx = HookCtx {
+        actor: actor.to_string(),
+        ..Default::default()
+    };
+    let now = now_secs();
+    let r = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        let Some(grant) = grant_by_id(&tx, id)? else {
+            return Ok(None);
+        };
+        let cascaded = p.cascade(&tx, &HookEvent::GrantDeleted { grant: &grant })?;
+        let mut ops = Vec::new();
+        for c in &cascaded {
+            tx.execute("DELETE FROM grants WHERE id = ?1", params![c.id])
+                .map_err(|e| format!("skin grant cascade delete: {e}"))?;
+            ops.extend(p.plan(&tx, &HookEvent::GrantDeleted { grant: c }, &ctx)?);
+        }
+        tx.execute("DELETE FROM grants WHERE id = ?1", params![grant.id])
+            .map_err(|e| format!("skin grant delete: {e}"))?;
+        ops.extend(p.plan(&tx, &HookEvent::GrantDeleted { grant: &grant }, &ctx)?);
+        outbox::enqueue(&tx, &ops, actor, now)?;
+        hook_failpoint()?;
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
+        Ok(Some(cascaded))
+    })?;
+    if r.is_some() {
+        crate::tool_hook::kick();
+    }
+    Ok(r)
+}
+
+/// Delete by id and return the cascaded grants (assistant grants of a
+/// person's chat grant). `Ok(None)` = unknown grant.
+pub fn delete_grant_by_id_with_cascade(
+    id: &str,
+    actor: &str,
+) -> Result<Option<Vec<SkinGrant>>, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing grant id".to_string());
+    }
+    let kind = with_conn(|conn| Ok(grant_by_id(conn, id)?.map(|g| g.kind)))?;
+    let Some(kind) = kind else {
+        return Ok(None);
+    };
+    match crate::tool_hook::provisioner_for(&kind) {
+        Some(p) => delete_hooked_grant(p, id, &hook_actor(Some(actor))),
+        None => {
+            let deleted = delete_plain_grant_by_id(id)?;
+            if deleted && kind == "app" {
+                crate::tool_hook::kick_reconcile();
+            }
+            Ok(deleted.then(Vec::new))
+        }
+    }
+}
+
+/// Delete by the unique key, with the cascade. `Ok(None)` = unknown.
+pub fn delete_grant_by_key_with_cascade(
+    subject_kind: &str,
+    subject_id: &str,
+    kind: &str,
+    target_id: &str,
+    actor: &str,
+) -> Result<Option<Vec<SkinGrant>>, String> {
+    let subject_kind = grant_subject_kind(subject_kind)?;
+    let kind = grant_kind(kind)?;
+    let Some(p) = crate::tool_hook::provisioner_for(&kind) else {
+        return Ok(delete_grant_by_key(&subject_kind, subject_id, &kind, target_id)?.then(Vec::new));
+    };
+    let mut subject_id = subject_id.trim().to_string();
+    if subject_kind == "workspace" {
+        subject_id = resolve_workspace_subject(&subject_id)?;
+    }
+    let target = match target_id.trim() {
+        "" => p.default_target().to_string(),
+        t => t.to_ascii_lowercase(),
+    };
+    let id: Option<String> = with_conn(|conn| {
+        let mut sid = subject_id.clone();
+        if subject_kind == "principal" {
+            if let Some(found) = crate::tool_hook::chat::principal_by_token(conn, &sid)? {
+                sid = found.id;
+            }
+        }
+        conn.query_row(
+            "SELECT id FROM grants
+             WHERE subject_kind = ?1 AND subject_id = ?2 AND kind = ?3 AND target_id = ?4",
+            params![subject_kind, sid, kind, target],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("skin grant lookup: {e}"))
+    })?;
+    match id {
+        Some(id) => delete_hooked_grant(p, &id, &hook_actor(Some(actor))),
+        None => Ok(None),
+    }
+}
+
+/// Enable/disable a hooked grant: re-validates on enable (the target must
+/// be on, the assistant's person must still hold a member grant), refuses
+/// a person's disable while assistants are pinned to them, and enqueues
+/// provision / deprovision in the same transaction.
+fn set_hooked_grant_enabled(
+    p: &'static dyn crate::tool_hook::ToolProvisioner,
+    old: SkinGrant,
+    enabled: bool,
+    actor: &str,
+) -> Result<SkinGrant, String> {
+    use crate::tool_hook::{outbox, HookCtx, HookEvent};
+    let ws_ids: Vec<String> = if old.subject_kind == "workspace" {
+        vec![old.subject_id.clone()]
+    } else {
+        Vec::new()
+    };
+    let actor = hook_actor(Some(actor));
+    let ctx = HookCtx::load(&actor, &ws_ids);
+    let now = now_secs();
+    let (grant, changed) = with_conn(|conn| {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("skin grant begin: {e}"))?;
+        let g = grant_by_id(&tx, &old.id)?.ok_or_else(|| "unknown grant".to_string())?;
+        if g.enabled == enabled {
+            return Ok((g, false));
+        }
+        if enabled {
+            p.validate(
+                &tx,
+                &SkinGrantWrite {
+                    subject_kind: g.subject_kind.clone(),
+                    subject_id: g.subject_id.clone(),
+                    kind: g.kind.clone(),
+                    target_id: g.target_id.clone(),
+                    role: None,
+                    scope: g.scope.clone(),
+                    created_by: g.created_by.clone(),
+                },
+                &ctx,
+            )?;
+        } else {
+            p.validate_disable(&tx, &g)?;
+        }
+        tx.execute(
+            "UPDATE grants SET enabled = ?1 WHERE id = ?2",
+            params![if enabled { 1 } else { 0 }, g.id],
+        )
+        .map_err(|e| format!("skin grant enabled: {e}"))?;
+        let new = SkinGrant { enabled, ..g };
+        let ev = if enabled {
+            HookEvent::GrantEnabled { grant: &new }
+        } else {
+            HookEvent::GrantDisabled { grant: &new }
+        };
+        let ops = p.plan(&tx, &ev, &ctx)?;
+        outbox::enqueue(&tx, &ops, &actor, now)?;
+        hook_failpoint()?;
+        tx.commit().map_err(|e| format!("skin grant commit: {e}"))?;
+        Ok((new, true))
+    })?;
+    if changed {
+        crate::tool_hook::kick();
+    }
+    Ok(grant)
+}
+
+/// [`set_grant_enabled`] with the caller recorded on hooked rows.
+pub fn set_grant_enabled_as(id: &str, enabled: bool, actor: &str) -> Result<SkinGrant, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("missing grant id".to_string());
+    }
+    let old = with_conn(|conn| grant_by_id(conn, id))?;
+    if let Some(old) = old {
+        if let Some(p) = crate::tool_hook::provisioner_for(&old.kind) {
+            return set_hooked_grant_enabled(p, old, enabled, actor);
+        }
+        let r = set_plain_grant_enabled(id, enabled)?;
+        if r.kind == "app" {
+            crate::tool_hook::kick_reconcile();
+        }
+        return Ok(r);
+    }
+    set_plain_grant_enabled(id, enabled)
+}
+
 pub fn list_grants() -> Result<Vec<SkinGrant>, String> {
     with_conn(|conn| {
         let mut stmt = conn
@@ -4223,6 +4726,11 @@ fn revoke_sessions_for_grant(
     if subject_kind != "principal" {
         return Ok(0);
     }
+    // A chat grant is not a K2 login: its Sew sessions end in Sew on
+    // deprovision. Never log the guest out of their Apps (S24 per-App).
+    if crate::tool_hook::provisioner_for(kind).is_some() {
+        return Ok(0);
+    }
     if kind == "app" {
         revoke_sessions_for_principal_app(conn, subject_id, target_id)
     } else {
@@ -4234,10 +4742,10 @@ fn revoke_sessions_for_grant(
 /// login sessions for that App are revoked (they log in again against what
 /// is left).
 pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
-    let id = id.trim();
-    if id.is_empty() {
-        return Err("missing grant id".to_string());
-    }
+    Ok(delete_grant_by_id_with_cascade(id, crate::tool_hook::ACTOR_SYSTEM)?.is_some())
+}
+
+fn delete_plain_grant_by_id(id: &str) -> Result<bool, String> {
     with_immediate(|conn| {
         let Some(grant) = grant_by_id(conn, id)? else {
             return Ok(false);
@@ -4261,6 +4769,29 @@ pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
 /// Delete by the unique (subject, kind, target) key. The role stays.
 /// A principal subject's live login sessions for that App are revoked.
 pub fn delete_grant_by_key(
+    subject_kind: &str,
+    subject_id: &str,
+    kind: &str,
+    target_id: &str,
+) -> Result<bool, String> {
+    if crate::tool_hook::provisioner_for(kind).is_some() {
+        return Ok(delete_grant_by_key_with_cascade(
+            subject_kind,
+            subject_id,
+            kind,
+            target_id,
+            crate::tool_hook::ACTOR_SYSTEM,
+        )?
+        .is_some());
+    }
+    let deleted = delete_plain_grant_by_key(subject_kind, subject_id, kind, target_id)?;
+    if deleted && kind.trim().eq_ignore_ascii_case("app") {
+        crate::tool_hook::kick_reconcile();
+    }
+    Ok(deleted)
+}
+
+fn delete_plain_grant_by_key(
     subject_kind: &str,
     subject_id: &str,
     kind: &str,
@@ -4305,6 +4836,10 @@ fn grant_by_id(conn: &Connection, id: &str) -> Result<Option<SkinGrant>, String>
 /// principal's App grant revokes that principal's live login sessions for
 /// that App; enabling never revives a revoked pass (the guest logs in again).
 pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
+    set_grant_enabled_as(id, enabled, crate::tool_hook::ACTOR_SYSTEM)
+}
+
+fn set_plain_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
     let id = id.trim();
     if id.is_empty() {
         return Err("missing grant id".to_string());
@@ -4342,7 +4877,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
 /// host ones. An existing row is left as the owner wrote it.
 pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
     let username = normalize_username(username)?;
-    with_immediate(|conn| {
+    let r = with_immediate(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -4368,7 +4903,11 @@ pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
             }
             Ok(n > 0)
         }
-    })
+    })?;
+    // App user change (Sew rev 147 / K31 seam): never provisions anyone
+    // by itself; the sweep only reconciles chat grants.
+    crate::tool_hook::kick_reconcile();
+    Ok(r)
 }
 
 // ── Per-App logins (S24) ─────────────────────────────────────────────
@@ -4699,6 +5238,8 @@ pub fn add_principal_for_app(
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    // App user change (Sew rev 147 / K31 seam).
+    crate::tool_hook::kick_reconcile();
     Ok(r)
 }
 

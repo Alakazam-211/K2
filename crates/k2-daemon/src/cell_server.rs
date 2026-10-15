@@ -908,6 +908,15 @@ mod unix_impl {
             {
                 from_cli(crate::domain_routes::dispatch_post(p, body))
             }
+            // 0.45.7: `k2 publish status` / `subdomain create|target|rm`
+            // from a sealed cell — the daemon makes the control-plane call
+            // with the token it holds. Same handler and agent rules as TCP
+            // (`connect_proxy`: own workspace's nested labels only, no
+            // primary, no reserved label, rate-limited); the principal is
+            // the validated passport, never the body. GET → 405 above.
+            "/cli/connect/proxy" if is_post => {
+                from_cli(crate::connect_proxy::handle(body, Some(principal)))
+            }
             // Published services: POST run/start/stop/rm + subdomain
             // claim/unclaim. CLI `cli_post_json` / `cli_post` send JSON or
             // query params; cell handle_conn only merges form, so flatten
@@ -1259,6 +1268,129 @@ mod unix_impl {
                 "sid-1",
             );
             assert_eq!(gstatus, "405 Method Not Allowed");
+        }
+
+        /// 0.45.7: a sealed cell's agent publishes end to end — the
+        /// connect proxy is served on the cell socket with the agent rules
+        /// (own nested labels only), and the daemon adds the tunnel token.
+        #[test]
+        fn cell_dispatch_serves_connect_proxy_with_agent_rules() {
+            use std::io::{Read, Write};
+            let _home = crate::test_support::TempHome::new();
+            let _ag = k2_core::test_env::EnvVar::remove("K2_AIRGAP");
+            let _ = k2_core::db::init_for_tests();
+            let token = "k2c_cell_test_token_51f0";
+            std::fs::write(
+                k2_core::tunnel::config::config_path(),
+                format!(r#"{{"token":"{token}","subdomain":"rosson"}}"#),
+            )
+            .expect("seed tunnel.json");
+
+            // Fake control plane: records each request, answers by method.
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind fake cp");
+            let base = format!("http://127.0.0.1:{}", listener.local_addr().expect("addr").port());
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let rec = seen.clone();
+            std::thread::spawn(move || {
+                while let Ok((mut sock, _)) = listener.accept() {
+                    sock.set_read_timeout(Some(std::time::Duration::from_secs(5))).expect("timeout");
+                    let mut raw = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        let n = sock.read(&mut buf).expect("fake cp read");
+                        if n == 0 {
+                            break;
+                        }
+                        raw.extend_from_slice(&buf[..n]);
+                        let text = String::from_utf8_lossy(&raw).into_owned();
+                        if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                            let clen = head
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|v| v.trim().parse::<usize>().expect("clen"))
+                                })
+                                .unwrap_or(0);
+                            if rest.len() >= clen {
+                                break;
+                            }
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    let (status, body) = if text.starts_with("GET ") {
+                        ("200 OK", r#"{"subdomains":[{"label":"rosson","primary":true,"tier":"pro"}]}"#)
+                    } else {
+                        ("201 Created", r#"{"host":"cellapp.rosson.k2.dev"}"#)
+                    };
+                    rec.lock().expect("seen").push(text);
+                    let resp = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    sock.write_all(resp.as_bytes()).expect("fake cp write");
+                }
+            });
+            let _cp = k2_core::test_env::EnvVar::set("K2_CONNECT_BASE", &base);
+
+            let ws_uuid = uuid::Uuid::new_v4().to_string();
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO projects (id, path, name) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ws_uuid, format!("/tmp/k2-cell-proxy-{ws_uuid}"), "cellws"],
+                )
+                .expect("insert project");
+            }
+            let p = HookPrincipal { workspace_uuid: ws_uuid.clone(), agent_address: "agent".into() };
+            let params: HashMap<String, String> = HashMap::new();
+            let call = |method: &str, body: &str| {
+                dispatch_cell_verb(method, "/cli/connect/proxy", &params, body.as_bytes(), &p, "sid-1")
+            };
+
+            // Create: served (not the sentinel), token added by the daemon,
+            // label claimed for the cell's workspace.
+            let (status, _, out) =
+                call("POST", r#"{"method":"POST","endpoint":"/subdomains","body":{"label":"cellapp","target":"localhost:3000"}}"#);
+            assert_eq!(status, "200 OK", "body={out}");
+            assert!(!out.contains("not served on cell socket"), "{out}");
+            assert!(!out.contains(token), "token never in a response: {out}");
+            let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+            assert_eq!(v["status"], serde_json::json!(201), "{v}");
+            let writes: Vec<String> =
+                seen.lock().expect("seen").iter().filter(|r| r.starts_with("POST ")).cloned().collect();
+            assert_eq!(writes.len(), 1, "{writes:?}");
+            assert!(
+                writes[0].to_ascii_lowercase().contains(&format!("authorization: bearer {token}")),
+                "{}",
+                writes[0]
+            );
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                assert_eq!(
+                    k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, "cellapp").expect("owner_of"),
+                    Some(ws_uuid.clone())
+                );
+            }
+
+            // Agent rules hold on the cell socket too.
+            let (status, _, out) =
+                call("POST", r#"{"method":"DELETE","endpoint":"/subdomains/rosson"}"#);
+            assert_eq!(status, "403 Forbidden", "primary: {out}");
+            assert!(out.contains("primary_label"), "{out}");
+            let (status, _, out) =
+                call("POST", r#"{"method":"POST","endpoint":"/subdomains","body":{"label":"meet","target":"localhost:1"}}"#);
+            assert_eq!(status, "400 Bad Request", "reserved: {out}");
+            assert!(out.contains("reserved_label"), "{out}");
+            let (status, _, out) = call("POST", r#"{"method":"GET","endpoint":"/api/account"}"#);
+            assert_eq!(status, "400 Bad Request", "not allowed: {out}");
+            assert!(out.contains("not_allowed"), "{out}");
+            let (status, _, _) = call("GET", "");
+            assert_eq!(status, "405 Method Not Allowed");
+            let writes = seen.lock().expect("seen").iter().filter(|r| !r.starts_with("GET ")).count();
+            assert_eq!(writes, 1, "refused calls sent nothing");
         }
 
         #[test]

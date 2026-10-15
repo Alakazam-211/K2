@@ -15259,9 +15259,6 @@ sys.stderr.write("Error: %s\n" % m); sys.exit(1)
 _CONNECT_NO_DAEMON=10
 _connect_curl_daemon() {
     local method="$1" endpoint="$2" body="${3:-}"
-    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
-        return "$_CONNECT_NO_DAEMON"
-    fi
     local req
     req="$(M="$method" E="$endpoint" B="$body" python3 -c '
 import json, os
@@ -15270,16 +15267,39 @@ if os.environ.get("B"):
     d["body"] = os.environ["B"]
 print(json.dumps(d))
 ')" || return 1
-    local _K2_CFG="" out rc=0
-    _k2_cfg_add url "${BASE_URL}/cli/connect/proxy?token=${TOKEN}"
-    _k2_cfg_add data-raw "$req"
-    out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \
-        --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        return "$_CONNECT_NO_DAEMON"
+    local _K2_CFG="" out="" rc=1 code="" resp=""
+    # A K2 agent terminal / sealed cell: the per-cell socket with the
+    # session passport first (a sealed cell may have no TCP route), like
+    # cli_send. A daemon that doesn't serve the route there → TCP below.
+    local sock; sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ] && [ -n "${SCOPED_TOKEN:-}" ] \
+        && [ "${TOKEN:-}" = "$SCOPED_TOKEN" ] && ! _cli_skip_uds; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        _k2_cfg_add data-raw "$req"
+        rc=0
+        out="$(_k2_curl "$_K2_CFG" -sS -X POST --unix-socket "$sock" \
+            "http://localhost/cli/connect/proxy" -H "Content-Type: application/json" \
+            --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
+        if [ "$rc" -eq 0 ] && [[ "$out" == *"not served on cell socket"* ]]; then
+            rc=1
+        fi
     fi
-    local code="${out##*$'\n'}"
-    local resp="${out%$'\n'*}"
+    if [ "$rc" -ne 0 ]; then
+        if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+            return "$_CONNECT_NO_DAEMON"
+        fi
+        _K2_CFG=""
+        _k2_cfg_add url "${BASE_URL}/cli/connect/proxy?token=${TOKEN}"
+        _k2_cfg_add data-raw "$req"
+        rc=0
+        out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \
+            --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            return "$_CONNECT_NO_DAEMON"
+        fi
+    fi
+    code="${out##*$'\n'}"
+    resp="${out%$'\n'*}"
     case "$code" in
         200)
             printf '%s' "$resp" | python3 -c '

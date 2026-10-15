@@ -264,6 +264,8 @@ expect_seen "_sidecar_send UDS carries the passport" /cli/llm/accounts/add-key u
 expect_seen "_sidecar_send UDS body carries the API key" /cli/llm/accounts/add-key uds body "$APIKEY"
 cell llm tokens list >/dev/null 2>&1 || true
 expect_seen "_sidecar_send UDS GET carries the passport" /cli/llm/accounts/list uds authorization "Bearer $SCOPED"
+cell publish status >/dev/null 2>&1 || true
+expect_seen "_connect_curl UDS carries the passport" /cli/connect/proxy uds authorization "Bearer $SCOPED"
 
 # ── 5. stale-passport probe (sourced; the e2e path needs a Codex tree) ─
 echo "== stale-passport probe =="

@@ -44,11 +44,25 @@ echo $'200\n{}' > "$RESP_FILE"
 DAEMON_FILE="$(mktemp)"
 echo ok > "$DAEMON_FILE"
 DREQ_FILE="$(mktemp)"
-trap 'rm -rf "$TEST_HOME" "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" 2>/dev/null; [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null' EXIT
+PORT_FILE="$(mktemp)"
+# The mock runs as a direct child of THIS shell (not inside a process
+# substitution), so $MOCK_PID is set here and the trap can always reach
+# it. EXIT covers a normal end and `exit`; INT/TERM/HUP exit through it.
+MOCK_PID=""
+cleanup() {
+    if [ -n "${MOCK_PID:-}" ]; then
+        kill "$MOCK_PID" 2>/dev/null
+        wait "$MOCK_PID" 2>/dev/null
+    fi
+    rm -rf "$TEST_HOME" "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" "$PORT_FILE" 2>/dev/null
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 PORT=0
 start_mock() {
-    python3 - "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" <<'PY' &
+    python3 - "$REQ_FILE" "$RESP_FILE" "$DAEMON_FILE" "$DREQ_FILE" >"$PORT_FILE" <<'PY' &
 import sys, http.server, socketserver, threading, json
 req_file, resp_file, daemon_file, dreq_file = sys.argv[1:5]
 
@@ -136,9 +150,14 @@ PY
     MOCK_PID=$!
 }
 
-# Start the mock and read the chosen port from its first stdout line.
-exec 3< <(start_mock)
-read -r PORT <&3
+# Start the mock and read the chosen port from its first stdout line
+# (written to $PORT_FILE).
+start_mock
+for _ in $(seq 1 100); do
+    PORT="$(head -1 "$PORT_FILE" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "$PORT" ] && break
+    sleep 0.1
+done
 if [ -z "$PORT" ] || [ "$PORT" = "0" ]; then
     echo "could not start mock control plane" >&2; exit 1
 fi

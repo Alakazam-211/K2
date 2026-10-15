@@ -122,7 +122,9 @@ jobs:
           VERSION="${TAG#v}"
           # The tag and the app's own version must agree, or the names
           # below would pick nothing (or the wrong build).
-          CONF_VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          # python3, not node: the k2-linux runner has no node on PATH
+          # (bun runs the build; node only exists inside bunx).
+          CONF_VERSION="$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")"
           if [ "$CONF_VERSION" != "$VERSION" ]; then
             echo "tag $TAG but tauri.conf.json says $CONF_VERSION" >&2
             exit 1

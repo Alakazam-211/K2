@@ -97,11 +97,14 @@ fn exposure_counts_are_pinned() {
     // reviewed change: update this pin in the same commit.
     // 0.45.3: + canvas.setHitRegions and window.startDrag (frame rows).
     // Garden v3 (contract-sources-v1 §6): + the six sources.* frame rows.
-    assert_eq!((widget, app), (24, 0), "per-exposure verb counts (widget, app)");
+    // Garden data (contract-garden-data-v1 §7.2, catalog v8): + the 15
+    // garden-local store.*, save.* and viewer.get rows (never widget/app).
+    let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
+    assert_eq!((widget, app, garden_local), (24, 0, 15), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        46,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag and sources.*"
+        61,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.* and the 15 Garden data rows"
     );
 }
 

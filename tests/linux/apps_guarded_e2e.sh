@@ -320,7 +320,7 @@ if [ "$rc" = 0 ]; then
 	K2 app box prepare --runtime crun >/dev/null
 else
 	grep -q youki_unavailable /tmp/py.txt || fail "youki prepare: $(cat /tmp/py.txt)"
-	info "no youki package on $PRETTY_NAME: not proven here"
+	info "no youki package on $PRETTY_NAME (phase B tries the upstream release)"
 fi
 
 echo "== uninstall --purge (owner) =="
@@ -364,7 +364,9 @@ while True:
                 p = subprocess.run(["sudo", "-n", "/usr/local/libexec/k2-root-helper"] + body.split(), capture_output=True, text=True)
                 out = json.dumps({"rc": p.returncode, "out": p.stdout, "err": p.stderr})
             else:
-                p = subprocess.run(["bash", "-c", "sudo -n /usr/local/libexec/k2-root-helper \"$@\"", "agent"] + body.split(), capture_output=True, text=True)
+                # An agent: a terminal the daemon spawned (its own session,
+                # like the daemon's PTY spawn), not the daemon's own sudo.
+                p = subprocess.run(["bash", "-c", "sudo -n /usr/local/libexec/k2-root-helper \"$@\"; exit $?", "agent"] + body.split(), capture_output=True, text=True, start_new_session=True)
                 out = json.dumps({"rc": p.returncode, "out": p.stdout, "err": p.stderr})
             with open(f"{D}/{rid}.tmp", "w") as o: o.write(out)
             os.rename(f"{D}/{rid}.tmp", f"{D}/{rid}.out")

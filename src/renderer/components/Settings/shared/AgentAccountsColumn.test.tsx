@@ -33,6 +33,7 @@ import {
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
+import { LLM_TOKENS_MANIFEST, LlmTokensSection } from '../sections/LlmTokensSection'
 
 function account(over: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -234,14 +235,29 @@ describe('Tokens column', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('another change is in progress')
   })
 
-  it('the search manifest has the Tokens entries, not the old credentials row', () => {
-    const ids = AGENTS_MANIFEST.map((e) => e.id)
-    expect(ids).toContain('agents.accounts')
-    expect(ids).toContain('agents.add-login')
-    expect(ids).not.toContain('agents.credentials')
-    const acc = AGENTS_MANIFEST.find((e) => e.id === 'agents.accounts')!
+  it('the search manifest has the Tokens entries on Settings → LLMs → Tokens, not the old credentials row', () => {
+    // 0.45.7: Tokens is its own page (id llm-tokens); the entry ids are unchanged.
+    expect(LLM_TOKENS_MANIFEST.map((e) => e.id)).toEqual(['agents.accounts', 'agents.add-login'])
+    expect(LLM_TOKENS_MANIFEST.every((e) => e.section === 'llm-tokens')).toBe(true)
+    const llms = AGENTS_MANIFEST.map((e) => e.id)
+    expect(llms).not.toContain('agents.accounts')
+    expect(llms).not.toContain('agents.add-login')
+    expect(llms).not.toContain('agents.credentials')
+    expect(AGENTS_MANIFEST.every((e) => e.section === 'agents')).toBe(true)
+    const acc = LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!
     expect(acc.label).toBe('Tokens')
     expect(acc.keywords).toEqual(expect.arrayContaining(['token', 'subscription', 'api token', 'login', 'switch']))
+  })
+
+  it('Settings → LLMs → Tokens is the same column on its own page', async () => {
+    render(<LlmTokensSection />)
+    await screen.findByTestId('llm-account-acc_work')
+    const page = document.querySelector('[data-llm-tokens-section]') as HTMLElement
+    expect(page.className).toBe('max-w-3xl')
+    expect(page.children.length).toBe(1)
+    expect(page.firstElementChild?.getAttribute('data-settings-id')).toBe('agents.accounts')
+    expect(within(page).getByRole('heading', { name: 'Tokens' })).toBeTruthy()
+    expect(page.querySelector('[data-settings-id="agents.add-login"]')).not.toBeNull()
   })
 })
 
@@ -480,8 +496,8 @@ describe('keychain repair warning', () => {
 describe('store helpers', () => {
   it('parses a malformed list into an empty doc and reads a refusal hint', () => {
     expect(parseAccountsDoc(null)).toEqual({ tools: [], logins: [], airgap: false, switchNote: '', keychainRepairs: [] })
-    expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change tokens on Settings → LLMs."}}'))).toBe(
-      'Change tokens on Settings → LLMs.',
+    expect(errorText(new Error('{"error":{"code":"owner_only","hint":"Change tokens on Settings → LLMs → Tokens."}}'))).toBe(
+      'Change tokens on Settings → LLMs → Tokens.',
     )
     expect(errorText(new Error('plain'))).toBe('plain')
   })

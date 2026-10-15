@@ -6,6 +6,7 @@ import { SettingsSearchModal } from './SettingsSearchModal'
 import type { SettingEntry } from './searchManifest'
 import { GeneralSection, GeneralRemoteHostPanel, GENERAL_MANIFEST } from './sections/GeneralSection'
 import { TokenUsageSection, TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
+import { LlmTokensSection, LLM_TOKENS_MANIFEST } from './sections/LlmTokensSection'
 import { StylesSection, STYLES_MANIFEST } from './sections/StylesSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
@@ -79,13 +80,21 @@ type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string; beta?: boolean }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
-/** The sidebar. `zenGardens`: show the Gardens group, which is
+/** The sidebar. LLMs is a group from 0.45.7 (Rosson: "Group the LLM
+ *  details under one section as well: LLMs · Tokens · Token Usage"): LLMs
+ *  (id `agents`: default agent, launch bar, presets, CLI install), Tokens
+ *  (id `llm-tokens`: the subscriptions and API tokens that were the LLMs
+ *  page's right half) and Token Usage (id `token-usage`). It sits right
+ *  after Gardens and before K2 Server: Gardens keeps its place as the first
+ *  group, and where Gardens is hidden (web, Windows) LLMs is the first
+ *  group, as high as the LLMs page was. `zenGardens`: show the Gardens group, which is
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
  *  their own section … like K2 Server and Logs"): Gardens (list, lock,
  *  sync, theme, folder) then Widget data, the first group after the
- *  top-level pages. Data Sources stays under K2 Server (it is the server's;
- *  Widget data links to it). Tickets sits directly beneath Projects
+ *  top-level pages.
+ *  Data Sources stays under K2 Server (it is the server's; Widget data
+ *  links to it). Tickets sits directly beneath Projects
  *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
@@ -110,12 +119,10 @@ export function settingsNav({
       ? ([{ kind: 'item', id: 'notifications' as const, label: 'Notifications' }] satisfies NavBlock[])
       : []),
     { kind: 'item', id: 'styles', label: 'Styles' },
-    { kind: 'item', id: 'agents', label: 'LLMs' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
-    { kind: 'item', id: 'token-usage', label: 'Token Usage' },
     { kind: 'item', id: 'compute', label: 'Compute', beta: true },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
     { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
@@ -137,6 +144,15 @@ export function settingsNav({
           },
         ] satisfies NavBlock[])
       : []),
+    {
+      kind: 'group',
+      title: 'LLMs',
+      items: [
+        { id: 'agents', label: 'LLMs' },
+        { id: 'llm-tokens', label: 'Tokens' },
+        { id: 'token-usage', label: 'Token Usage' },
+      ],
+    },
     {
       kind: 'group',
       title: 'K2 Server',
@@ -227,6 +243,7 @@ export default function Settings(): React.JSX.Element {
       ...CODE_EDITOR_MANIFEST,
       ...EDITORS_MANIFEST,
       ...AGENTS_MANIFEST,
+      ...LLM_TOKENS_MANIFEST,
       ...KEYBINDINGS_MANIFEST,
       ...TIMER_MANIFEST,
       ...ACCESS_AUDIT_MANIFEST,
@@ -497,6 +514,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'agents' && (
           <SectionErrorBoundary>
             <AgentsSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'llm-tokens' && (
+          <SectionErrorBoundary>
+            <LlmTokensSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'keybindings' && <KeybindingsSection />}

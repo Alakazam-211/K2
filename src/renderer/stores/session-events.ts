@@ -503,7 +503,7 @@ export interface TokenUsageChangedEvent {
 }
 
 /** APP-LEVEL — the LLM login wallet changed (add, sign-in state, switch,
- *  rename, remove, keep-warm refresh). Refetch signal for Settings → LLMs;
+ *  rename, remove, keep-warm refresh). Refetch signal for Settings → LLMs → Tokens;
  *  `tool` names the tool when the daemon knows it. */
 export interface LlmAccountsChangedEvent {
   kind: 'llm_accounts_changed'

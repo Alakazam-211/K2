@@ -24,7 +24,6 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
 import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
-import { AgentAccountsColumn } from '../shared/AgentAccountsColumn'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import type { DesktopOs } from '@/lib/desktop-chrome'
@@ -79,22 +78,6 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     label: 'Submit keys',
     description: 'How K2 delivers a message into this LLM’s terminal',
     keywords: ['inject', 'paste', 'keystroke', 'submit', 'esc', 'return'],
-  },
-  {
-    id: 'agents.accounts',
-    section: 'agents',
-    group: 'Tokens',
-    label: 'Tokens',
-    description: 'Which subscription or API token each agent CLI uses on this server; add, switch or remove tokens',
-    keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'account', 'login', 'sign in', 'switch', 'claude', 'codex', 'grok'],
-  },
-  {
-    id: 'agents.add-login',
-    section: 'agents',
-    group: 'Tokens',
-    label: 'Add subscription or API token',
-    description: 'Sign another Claude, Codex or Grok subscription in, or paste an API token, on this server',
-    keywords: ['add', 'token', 'subscription', 'api token', 'api key', 'account', 'login', 'sign in', 'claude', 'codex', 'grok', 'gemini'],
   },
   {
     id: 'agents.cli-claude',
@@ -564,7 +547,7 @@ export function AgentsSection(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Left: defaults, presets, CLI install */}
+      {/* Left: defaults, launch bar, presets */}
       <div className="flex-1 min-w-0 overflow-y-auto p-6 pr-3 [scrollbar-gutter:stable] space-y-8">
         <div>
           <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-3">Defaults</h2>
@@ -762,12 +745,12 @@ export function AgentsSection(): React.JSX.Element {
           </div>
         </div>
 
-        <CLIInstallGuide />
       </div>
 
-      {/* Right: Tokens (one server default token per tool per server) */}
+      {/* Right: CLI Tools Setup. Tokens (the right column before 0.45.7) is
+          its own page now: Settings → LLMs → Tokens (LlmTokensSection). */}
       <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]">
-        <AgentAccountsColumn />
+        <CLIInstallGuide />
       </div>
     </div>
   )
@@ -787,14 +770,14 @@ const CLI_INSTALL_ENTRIES: {
     command: 'claude',
     installCommand: CLI_INSTALL_COMMANDS.claude,
     docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes: 'Then add the subscription under Tokens →',
+    notes: 'Then add the subscription under LLMs → Tokens.',
   },
   {
     name: 'OpenAI Codex',
     command: 'codex',
     installCommand: CLI_INSTALL_COMMANDS.codex,
     docs: 'https://github.com/openai/codex',
-    notes: 'Then add the subscription under Tokens →',
+    notes: 'Then add the subscription under LLMs → Tokens.',
   },
   {
     name: 'Grok',
@@ -802,7 +785,7 @@ const CLI_INSTALL_ENTRIES: {
     installCommand: CLI_INSTALL_COMMANDS.grok,
     docs: 'https://docs.x.ai/build',
     notes:
-      "xAI's terminal coding agent. Then add the subscription under Tokens →. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
+      "xAI's terminal coding agent. Then add the subscription under LLMs → Tokens. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
   },
   {
     name: 'Gemini CLI',

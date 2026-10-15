@@ -1,4 +1,4 @@
-// LLM tokens (Settings → LLMs, `k2 llm tokens`), per server. People see
+// LLM tokens (Settings → LLMs → Tokens, `k2 llm tokens`), per server. People see
 // "tokens": subscriptions (a CLI sign-in) and API tokens (a key). The
 // internals (routes, types, DB) keep the older "accounts"/"login" names.
 //

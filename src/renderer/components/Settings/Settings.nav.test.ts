@@ -106,3 +106,36 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
     expect(SECTION_LABELS['zen-widget-data']).toBe('Widget data')
   })
 })
+
+describe('Settings nav LLMs group (0.45.7, Rosson: LLMs · Tokens · Token Usage)', () => {
+  it('LLMs is a group: LLMs, Tokens, Token Usage, after Gardens and before K2 Server', () => {
+    const start = src.indexOf("title: 'LLMs'")
+    const gardens = src.indexOf("title: 'Gardens'")
+    const server = src.indexOf("title: 'K2 Server'")
+    expect(start).toBeGreaterThan(gardens)
+    expect(server).toBeGreaterThan(start)
+    expect(src.slice(start, server)).toContain(
+      [
+        "{ id: 'agents', label: 'LLMs' },",
+        "{ id: 'llm-tokens', label: 'Tokens' },",
+        "{ id: 'token-usage', label: 'Token Usage' },",
+      ].join('\n        '),
+    )
+    // No longer top-level pages; the old ids are the leaves, so deep links
+    // (openSettings('agents'), openSettings('token-usage')) land in the group.
+    expect(src).not.toContain("{ kind: 'item', id: 'agents'")
+    expect(src).not.toContain("{ kind: 'item', id: 'token-usage'")
+    expect(src).toContain("activeSection === 'agents'")
+    expect(src).toContain("activeSection === 'llm-tokens'")
+    expect(src).toContain("activeSection === 'token-usage'")
+    expect(src).toContain('<AgentsSection />')
+    expect(src).toContain('<LlmTokensSection />')
+    expect(src).toContain('<TokenUsageSection />')
+    expect(src).toContain('...AGENTS_MANIFEST,')
+    expect(src).toContain('...LLM_TOKENS_MANIFEST,')
+    expect(src).toContain('...TOKEN_USAGE_MANIFEST,')
+    expect(SECTION_LABELS.agents).toBe('LLMs')
+    expect(SECTION_LABELS['llm-tokens']).toBe('Tokens')
+    expect(SECTION_LABELS['token-usage']).toBe('Token Usage')
+  })
+})

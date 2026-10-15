@@ -11499,8 +11499,8 @@ print("Allow this agent to operate compute nodes: %s for %s%s" % ("on" if v["age
 # refresh|pin|unpin (JSON bodies; route names are internal and unchanged).
 # `llm` is an `id` tool: inside a K2 terminal the request carries this
 # session's passport, and the daemon keeps passports read-only
-# (list/status/usage/pins). Change tokens on Settings → LLMs, or from a
-# terminal outside K2.
+# (list/status/usage/pins). Change tokens on Settings → LLMs → Tokens, or
+# from a terminal outside K2.
 
 _llm_accounts_usage() {
     cat <<'EOF'
@@ -11541,7 +11541,7 @@ server default, and `next` skips it.
 API tokens (add-key) are billed per token, go only to sessions that use
 them, and are never shown again. The key is read from stdin, never an argument.
 Agents and K2 terminals are read-only (list, status, usage, pins). Change
-tokens on Settings → LLMs, or run k2 from a terminal outside K2.
+tokens on Settings → LLMs → Tokens, or run k2 from a terminal outside K2.
 More: k2 study llm-tokens
 EOF
 }
@@ -24900,15 +24900,15 @@ SERVER DEFAULT
   subscription back to its folder (the tool may have refreshed it),
   then puts the chosen one in place.
   When a session hits its limit, "Use next token" is one click on
-  Settings → LLMs (k2 llm tokens next <tool>). K2 never rotates tokens
-  on its own.
+  Settings → LLMs → Tokens (k2 llm tokens next <tool>).
+  K2 never rotates tokens on its own.
 
 ADDING A SUBSCRIPTION
-  Settings → LLMs → Add subscription. K2 runs the tool's own sign-in in
-  a terminal it owns: Open sign-in page, Copy code, Paste code. This
-  works from the web app and a phone against a headless box. Over SSH:
-  k2 llm tokens add <tool> <label> [--device]; paste the code at the
-  prompt (read from stdin, never an argument).
+  Settings → LLMs → Tokens → Add subscription. K2 runs the tool's own
+  sign-in in a terminal it owns: Open sign-in page, Copy code, Paste
+  code. This works from the web app and a phone against a headless box.
+  Over SSH: k2 llm tokens add <tool> <label> [--device]; paste the code
+  at the prompt (read from stdin, never an argument).
   The sign-in goes into its own folder, so the server default is not
   touched. If a tool can't do that, K2 signs in through the tool's live
   store, saves the new subscription, and puts the previous one back; a
@@ -24948,10 +24948,10 @@ A TOKEN FOR ONE WORKSPACE OR CHAT
   unpin goes back to Server default.
 
 WHO
-  Owner, Admin and Member users change tokens on Settings → LLMs.
-  Agents and K2 terminals are read-only: list, status, usage, pins. Change
-  tokens on Settings → LLMs, or run k2 from a terminal outside K2
-  (otherwise exit 3, owner_only). No route ever returns a token.
+  Owner, Admin and Member users change tokens on Settings → LLMs →
+  Tokens. Agents and K2 terminals are read-only: list, status, usage,
+  pins. Change tokens on Settings → LLMs → Tokens, or run k2 from a
+  terminal outside K2 (otherwise exit 3, owner_only). No route ever returns a token.
 
 ISOLATION
   All agents run as the same Unix user as the daemon, so any agent with
@@ -24965,8 +24965,8 @@ MOVING A BOX
 
 NEEDS SIGN-IN
   needs_login means the tool or K2 could not refresh that subscription.
-  Click Sign in again on Settings → LLMs (or k2 llm tokens login <tool>
-  <label>). For the server default, run the tool's own /login, or switch.
+  Click Sign in again on Settings → LLMs → Tokens (or k2 llm tokens
+  login <tool> <label>). For the server default, run the tool's own /login, or switch.
 
 `k2 llm accounts` is an alias of `k2 llm tokens`; `k2 study llm-accounts`
 is an alias of this page.

@@ -39,12 +39,21 @@ import { onDaemonConnected } from '@/lib/daemon-reconnect'
 // Projects-V1 groups section (label "Projects" — Projects/ProjectSettings).
 export type SettingsSection =
   | 'general'
+  /** Settings → LLMs → Token Usage (daily token charts). Third leaf of the
+   *  LLMs group from 0.45.7; before, a top-level page. */
   | 'token-usage'
   | 'styles'
   | 'terminal'
   | 'code-editor'
   | 'editors'
+  /** Settings → LLMs → LLMs (default agent, launch bar, presets, CLI
+   *  install). The LLMs group's first leaf from 0.45.7, so
+   *  `openSettings('agents')` still lands on the LLMs group. */
   | 'agents'
+  /** Settings → LLMs → Tokens (this server's subscriptions and API tokens:
+   *  server default, switching, Sign in again, per-token usage). Its own
+   *  page from 0.45.7; before, the right half of the LLMs page. */
+  | 'llm-tokens'
   /** @deprecated Split into `editors` + `agents`; kept so old deep-links still resolve. */
   | 'editors-agents'
   | 'keybindings'

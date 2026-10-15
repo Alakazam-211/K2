@@ -44,14 +44,14 @@ describe('CLI Tools Setup install rows', () => {
     render(<AgentsSection />)
     expand(/Claude Code/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.claude)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the subscription under Tokens/).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under LLMs → Tokens\./).length).toBe(1)
     expect(document.body.textContent).not.toMatch(/Node\.js/)
     expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy()
     expand(/Claude Code/)
 
     expand(/OpenAI Codex/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.codex)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the subscription under Tokens/).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under LLMs → Tokens\./).length).toBe(1)
     expect(document.body.textContent).not.toContain('codex --login')
     expand(/OpenAI Codex/)
 
@@ -74,5 +74,33 @@ describe('CLI Tools Setup install rows', () => {
     expand(/^Grok/)
     expect(screen.getByRole('button', { name: 'Installing Grok…' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Install' })).toBeNull()
+  })
+})
+
+describe('Settings → LLMs → LLMs page (0.45.7: LLMs · Tokens · Token Usage)', () => {
+  beforeEach(() => {
+    usePresetsStore.setState({ presets: [], showPresetsBar: true, fetchPresets: vi.fn(async () => {}) })
+  })
+  afterEach(() => {
+    cleanup()
+    usePresetsStore.setState({ presets: [], showPresetsBar: true, fetchPresets: realFetch })
+  })
+
+  it('keeps setup only: Defaults, launch bar, presets on the left, CLI Tools Setup on the right; Tokens is its own page', () => {
+    render(<AgentsSection />)
+    const row = document.body.firstElementChild!.firstElementChild as HTMLElement
+    expect(row.className).toBe('flex h-full min-h-0')
+    expect(row.children.length).toBe(2)
+    const [left, right] = [...row.children] as HTMLElement[]
+    expect(left.querySelector('[data-settings-id="agents.default-agent"]')).not.toBeNull()
+    expect(left.querySelector('[data-settings-id="agents.show-launch-bar"]')).not.toBeNull()
+    expect(left.querySelector('[data-settings-id="agents.agent-presets"]')).not.toBeNull()
+    expect(left.textContent).not.toContain('CLI Tools Setup')
+    expect(right.querySelector('h2')?.textContent).toBe('CLI Tools Setup')
+    expect(right.querySelector('[data-settings-id="agents.cli-claude"]')).not.toBeNull()
+    // The Tokens column moved to Settings → LLMs → Tokens.
+    expect(document.querySelector('[data-settings-id="agents.accounts"]')).toBeNull()
+    expect(document.querySelector('[data-settings-id="agents.add-login"]')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Tokens' })).toBeNull()
   })
 })

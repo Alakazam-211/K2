@@ -473,11 +473,13 @@ describe('Settings → Gardens: where it shows', () => {
     const nav = settingsNav({ zenGardens: true })
     const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
     expect(groups[0]).toBe('Gardens')
-    expect(groups[1]).toBe('K2 Server')
+    // LLMs (0.45.7) sits between Gardens and K2 Server.
+    expect(groups[1]).toBe('LLMs')
+    expect(groups[2]).toBe('K2 Server')
     const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
-    // Every block before it is a top-level page; the next one is K2 Server.
+    // Every block before it is a top-level page; the next one is LLMs.
     expect(nav.slice(0, at).every((b) => b.kind === 'item')).toBe(true)
-    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'K2 Server' })
+    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'LLMs' })
     expect(nav[at]).toEqual({
       kind: 'group',
       title: 'Gardens',
@@ -502,7 +504,7 @@ describe('Settings → Gardens: where it shows', () => {
     expect(nav[at].kind === 'group' && nav[at].items.some((i) => i.id === 'data-sources')).toBe(false)
   })
 
-  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data) before K2 Server, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data) before LLMs and K2 Server, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -514,7 +516,7 @@ describe('Settings → Gardens: where it shows', () => {
     const at = ids.indexOf('zen-gardens')
     expect(at).toBeGreaterThan(ids.indexOf('keybindings'))
     expect(ids[at + 1]).toBe('zen-widget-data')
-    expect(ids[at + 2]).toBe('k2-access')
+    expect(ids[at + 2]).toBe('agents')
     expect(ids[ids.indexOf('tickets') + 1]).toBe('context-catalog')
     // The group header sits right above its first leaf, which is indented.
     const leaf = document.querySelector('[data-settings-nav="zen-gardens"]') as HTMLElement

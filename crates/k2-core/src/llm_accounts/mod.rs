@@ -224,7 +224,7 @@ impl std::fmt::Display for WalletError {
             WalletError::NotFound(id) => write!(f, "no such token: {id}"),
             WalletError::NotSignedIn(id) => write!(
                 f,
-                "token {id} has no saved sign-in yet; sign it in on Settings → LLMs first"
+                "token {id} has no saved sign-in yet; sign it in on Settings → LLMs → Tokens first"
             ),
             WalletError::ActiveLogin => write!(
                 f,

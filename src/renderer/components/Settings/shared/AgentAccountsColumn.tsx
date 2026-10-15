@@ -1,4 +1,5 @@
-// Settings → LLMs, right column: "Tokens" — subscriptions and API tokens.
+// Settings → LLMs → Tokens — subscriptions and API tokens (its own page
+// from 0.45.7, LlmTokensSection; before, the right column of Settings → LLMs).
 // (Internally: the LLM login wallet; routes and types keep those names.)
 //
 // The server default ("the pool" internally): one token per tool is the

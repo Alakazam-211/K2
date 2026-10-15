@@ -89,7 +89,7 @@ export const SESSION_EVENT_ROUTES = {
   projects_changed: { class: 'app', app: true, carried: true },
   chat_history_changed: { class: 'app', app: true, carried: true },
   token_usage_changed: { class: 'app', app: true },
-  // Settings → LLMs logins wallet refetch signal (onLlmAccountsChanged).
+  // Settings → LLMs → Tokens (logins wallet) refetch signal (onLlmAccountsChanged).
   llm_accounts_changed: { class: 'app', app: true },
   presence_changed: { class: 'app', app: true, carried: true },
   // Not carried: a room never opens tabs on another server's say-so.

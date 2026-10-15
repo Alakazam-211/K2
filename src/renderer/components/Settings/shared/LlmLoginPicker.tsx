@@ -4,7 +4,7 @@
 //
 // The closed control says only "Token"; the open menu marks the one in
 // use. "Server default — <name>" = the tool's server default token
-// (Settings → LLMs; "the pool" internally) and follows its rotation. A
+// (Settings → LLMs → Tokens; "the pool" internally) and follows its rotation. A
 // chat whose workspace has its own token defaults to that instead
 // ("Workspace default — <name>"). Picking a subscription or API token
 // for a workspace: its new chats run on it; a resumed chat keeps the
@@ -219,7 +219,7 @@ export function WorkspaceLlmTokens({ scope, projectId }: { scope: ServerScope; p
   return (
     <div data-settings-id="projects.llm-logins" data-testid="workspace-llm-tokens">
       <p className="text-[10px] text-[var(--color-text-muted)] mb-1 leading-relaxed">
-        Server default uses this server&apos;s default token (Settings → LLMs). Pick a subscription or API token to
+        Server default uses this server&apos;s default token (Settings → LLMs → Tokens). Pick a subscription or API token to
         use this token for this workspace&apos;s agents and sidecars instead. Resumed chats keep the token they
         started on.
       </p>

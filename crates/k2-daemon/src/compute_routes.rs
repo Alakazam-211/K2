@@ -1123,6 +1123,14 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     passport_gate(who)?;
     let v = json_body(body)?;
     let ws = target_ws(who, s(&v, "workspace"))?;
+    // `--plan` (dry run): every check `run` makes, nothing stored or sent.
+    if b(&v, "plan") == Some(true) {
+        if v.get("shards").is_some_and(|x| !x.is_null()) {
+            return Err(no(codes::BAD_REQUEST, 400, "--plan shows one job; drop --shards (each shard is planned the same way)"));
+        }
+        let sub = submit_one(who, &v, &ws, "plan-0000000000000000", "", &SubmitOpts { dry: true, ..Default::default() })?;
+        return Ok(sub.preview.unwrap_or_default());
+    }
     let client_id = s(&v, "clientJobId").ok_or_else(|| no(codes::BAD_REQUEST, 400, "clientJobId (16–64 chars) is required"))?;
     if !valid_client_id(client_id) {
         return Err(no(codes::BAD_REQUEST, 400, "clientJobId must be 16–64 of A-Z a-z 0-9 - _"));
@@ -1156,15 +1164,18 @@ struct SubmitOpts {
     prefer_not: Vec<String>,
     /// The session the wake message goes to (shards: none, the parent has it).
     session: Option<String>,
+    /// `--plan`: stop before anything is stored; `Submitted::preview`.
+    dry: bool,
 }
 
 struct Submitted {
-    job: store::JobRow,
+    job: Option<store::JobRow>,
     warnings: Vec<String>,
+    preview: Option<serde_json::Value>,
 }
 
 fn submitted_json(sub: &Submitted) -> serde_json::Value {
-    let job = &sub.job;
+    let Some(job) = sub.job.as_ref() else { return sub.preview.clone().unwrap_or_default() };
     let mut out = serde_json::json!({ "job": job_summary(job), "existing": false, "warnings": sub.warnings });
     if job.state == "queued" {
         if let Some((pos, why)) = compute_ws::decision_for(&job.node_id).waiting.get(&job.id) {
@@ -1320,6 +1331,26 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         return Err(no(codes::BAD_REQUEST, 400, format!("--timeout must be at most {max_secs}s on this grant")));
     }
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
+    if opts.dry {
+        let probe_ctl = store::JobCtl { stall_secs: stall, ..Default::default() };
+        let preview = plan_preview(&PlanFacts {
+            ws,
+            v,
+            node: &node,
+            want: &want,
+            grant: grant.as_ref(),
+            argv: &argv,
+            timeout,
+            disk_gb,
+            stall: crate::compute_place::stall_for(&probe_ctl, &node_features(&node), timeout as u64),
+            queue_timeout,
+            retries,
+            needs: &needs,
+            artifacts: &artifacts,
+            warnings: &warnings,
+        });
+        return Ok(Submitted { job: None, warnings, preview: Some(preview) });
+    }
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
@@ -1399,7 +1430,95 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         let conn = db.lock();
         store::job_by_id(&conn, &job.id).unwrap_or(job)
     };
-    Ok(Submitted { job, warnings })
+    Ok(Submitted { job: Some(job), warnings, preview: None })
+}
+
+/// What `--plan` looks at.
+struct PlanFacts<'a> {
+    ws: &'a Ws,
+    v: &'a serde_json::Value,
+    node: &'a store::NodeRow,
+    want: &'a crate::compute_place::Want,
+    grant: Option<&'a store::GrantRow>,
+    argv: &'a [String],
+    timeout: i64,
+    disk_gb: i64,
+    stall: Option<u64>,
+    queue_timeout: Option<i64>,
+    retries: u32,
+    needs: &'a [String],
+    artifacts: &'a [String],
+    warnings: &'a [String],
+}
+
+/// `--plan`: the node it would pick and whether it starts now, the queue
+/// in front of it, a warm slot at this commit, an estimate from earlier
+/// runs of the same command, and what is left of the grant.
+fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
+    let now = compute::now();
+    let n = f.node;
+    let (online, route, live) = compute_ws::live_view(&n.id);
+    let offer = live.or_else(|| n.last_offer.clone());
+    let cand = crate::compute_place::candidates(f.want, &[], now).into_iter().find(|c| c.node.id == n.id);
+    let starts_now = cand.as_ref().is_some_and(|c| c.starts_now(f.want));
+    let decision = compute_ws::decision_for(&n.id);
+    let ahead = decision.waiting.len();
+    let blocking = decision.waiting.values().min_by_key(|(pos, _)| *pos).map(|(_, r)| serde_json::json!({"code": r.code, "message": r.message}));
+    let (queued_ws, load) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (store::queued_count(&conn, &n.id, &f.ws.id), compute_ws::queued_view(&conn, &n.id).1)
+    };
+    let running_ws = load.running_by_workspace.get(&f.ws.id).copied().unwrap_or(0);
+    // Warm slot: the commit this run would use, against the node's slots.
+    let warm = (b(f.v, "noSource") != Some(true))
+        .then(|| compute::sync::repo_root(Path::new(&f.ws.path)).ok())
+        .flatten()
+        .map(|root| {
+            let pk = compute::sync::project_key(&f.ws.id, compute::sync::origin_url(&root).as_deref());
+            let commit = compute::sync::resolve_commit(&root, s(f.v, "sha").unwrap_or("HEAD")).ok();
+            let slots: Vec<_> = offer.as_ref().map(|o| o.slots.iter().filter(|x| x.project_key == pk).cloned().collect()).unwrap_or_default();
+            if commit.is_some() && slots.iter().any(|x| x.last_sha == commit) {
+                "warm (a slot built this commit)"
+            } else if !slots.is_empty() {
+                "slot (built an earlier commit: incremental)"
+            } else {
+                "cold (first build of this project there)"
+            }
+        });
+    let (here, anywhere) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (
+            store::recent_durations(&conn, &f.ws.id, f.argv, Some(&n.id), 20),
+            store::recent_durations(&conn, &f.ws.id, f.argv, None, 20),
+        )
+    };
+    let estimate = if let Some((m, p)) = store::median_p90(&here) {
+        Some(serde_json::json!({"medianSecs": m, "p90Secs": p, "samples": here.len(), "basis": "this command on this node"}))
+    } else {
+        store::median_p90(&anywhere).map(|(m, p)| serde_json::json!({"medianSecs": m, "p90Secs": p, "samples": anywhere.len(), "basis": "this command on any node"}))
+    };
+    serde_json::json!({
+        "plan": true,
+        "node": n.name,
+        "nodeId": n.id,
+        "online": online,
+        "route": route,
+        "startsNow": starts_now,
+        "queue": {"ahead": if starts_now { 0 } else { ahead }, "blockedBy": if starts_now { serde_json::Value::Null } else { blocking.unwrap_or_default() }},
+        "warmSlot": warm,
+        "estimate": estimate,
+        "grant": f.grant.map(|g| serde_json::json!({
+            "maxJobSecs": g.max_job_secs, "maxDiskGb": g.max_disk_gb,
+            "parallel": {"running": running_ws, "max": g.max_parallel, "left": (g.max_parallel - running_ws as i64).max(0)},
+            "queued": {"waiting": queued_ws, "max": g.max_queued, "left": (g.max_queued - queued_ws).max(0)},
+        })),
+        "limits": {"timeoutSecs": f.timeout, "diskGb": f.disk_gb, "stallSecs": f.stall, "queueTimeoutSecs": f.queue_timeout, "retries": f.retries},
+        "needs": f.needs,
+        "artifacts": f.artifacts,
+        "warnings": f.warnings,
+    })
 }
 
 fn pick_node(
@@ -1650,6 +1769,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
             shard: Some(store::ShardRef { parent: parent_id.clone(), index: i, of: count }),
             prefer_not: kids.iter().map(|k| k.node_id.clone()).collect(),
             session: None,
+            dry: false,
         };
         match submit_one(who, &cv, ws, &child_client, &child_sha, &opts) {
             Ok(sub) => {
@@ -1658,7 +1778,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
                         warnings.push(w);
                     }
                 }
-                kids.push(sub.job);
+                kids.extend(sub.job);
             }
             Err(e) => {
                 // All or nothing: stop the shards already placed.

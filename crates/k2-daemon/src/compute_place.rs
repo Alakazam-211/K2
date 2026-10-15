@@ -140,7 +140,7 @@ pub struct Cand {
 
 impl Cand {
     /// Starts the job now (as far as the last offer and our registry say).
-    fn starts_now(&self, w: &Want) -> bool {
+    pub fn starts_now(&self, w: &Want) -> bool {
         let probe = w.probe();
         let ask = refusal::JobAsk {
             workspace_id: &w.ws_id,

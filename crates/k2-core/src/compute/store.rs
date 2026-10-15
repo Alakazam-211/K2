@@ -841,6 +841,32 @@ pub fn finish_parent(conn: &Connection, id: &str, a: &super::shards::Aggregate) 
     .map(|_| ())
 }
 
+/// Wall times (seconds) of recent finished runs of exactly `argv` in a
+/// workspace, newest first; on `node_id` only when given.
+pub fn recent_durations(conn: &Connection, workspace_id: &str, argv: &[String], node_id: Option<&str>, limit: i64) -> Vec<i64> {
+    let Ok(argv_json) = serde_json::to_string(argv) else { return Vec::new() };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT ended_at - started_at FROM compute_jobs WHERE workspace_id = ?1 AND argv_json = ?2 AND state = 'done' \
+         AND started_at IS NOT NULL AND ended_at IS NOT NULL AND (?3 IS NULL OR node_id = ?3) ORDER BY ended_at DESC LIMIT ?4",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(params![workspace_id, argv_json, node_id, limit.clamp(1, 200)], |r| r.get::<_, i64>(0))
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+/// `(median, p90)` of durations (nearest rank).
+pub fn median_p90(samples: &[i64]) -> Option<(i64, i64)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut v = samples.to_vec();
+    v.sort_unstable();
+    let rank = |q: f64| v[(((q * v.len() as f64).ceil() as usize).max(1) - 1).min(v.len() - 1)];
+    Some((rank(0.5), rank(0.9)))
+}
+
 /// Every queued job (all nodes), oldest first.
 pub fn queued_jobs(conn: &Connection) -> Vec<JobRow> {
     let Ok(mut stmt) = conn.prepare(&format!("SELECT {JOB_COLS} FROM compute_jobs WHERE state = 'queued' ORDER BY created_at, id")) else {
@@ -1131,6 +1157,30 @@ mod tests {
         set_job_state(&c, &j.id, JobState::Assigned, None, None, 30).unwrap();
         assert!(!move_queued_job(&c, &j.id, &p, &more, "moved").unwrap(), "never moves an assigned job");
         assert_eq!(active_jobs(&c).len(), 1);
+    }
+
+    #[test]
+    fn durations_history_and_quantiles() {
+        let c = conn();
+        for (i, secs) in [(1, 60), (2, 80), (3, 100), (4, 300)] {
+            let p = plan(&format!("dur-{i:0>28}"), if i == 4 { "n2" } else { "n1" }, "ws");
+            insert_job(
+                &c,
+                &NewJob { plan: &p, client_job_id: &format!("client-dur-{i:0>8}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: JobCtl::default() },
+            )
+            .unwrap();
+            set_job_state(&c, &p.job_id, JobState::Running, None, None, 1000).unwrap();
+            set_job_state(&c, &p.job_id, JobState::Done, None, None, 1000 + secs).unwrap();
+        }
+        let argv = vec!["cargo".to_string(), "test".to_string()];
+        let mut on_n1 = recent_durations(&c, "ws", &argv, Some("n1"), 20);
+        on_n1.sort_unstable();
+        assert_eq!(on_n1, vec![60, 80, 100]);
+        assert_eq!(recent_durations(&c, "ws", &argv, None, 20).len(), 4);
+        assert!(recent_durations(&c, "ws", &["other".to_string()], None, 20).is_empty());
+        assert_eq!(median_p90(&[60, 80, 100]), Some((80, 100)));
+        assert_eq!(median_p90(&[5]), Some((5, 5)));
+        assert_eq!(median_p90(&[]), None);
     }
 
     #[test]

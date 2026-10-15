@@ -10242,6 +10242,8 @@ Agents:
                  [--artifact GLOB]... [--json]
                  [--queue-timeout 30m|off] [--retries N] [--stall-timeout 30m|off]
                  [--shards N]   (with --any: N jobs, {shard}/{shards} in the command)
+                 [--plan]       dry run: the node it would pick, queue, warm slot,
+                                estimate from earlier runs, grant left (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
@@ -10708,7 +10710,7 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace="" as_json=0 qtimeout="" retries="" stall="" nshards=""
+    local retry="" raw=0 workspace="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local -a labels=() envs=() needs=() artifacts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -10748,6 +10750,7 @@ cmd_compute_run() {
             --shards) nshards="${2:-}"; shift 2
                 case "$nshards" in ''|*[!0-9]*) echo "usage: --shards N (2–16)" >&2; exit 2 ;; esac ;;
             --json) as_json=1; shift ;;
+            --plan|--dry-run) plan=1; shift ;;
             --workspace) workspace="${2:-}"; shift 2 ;;
             -*) echo "usage: unknown flag '$1' (k2 compute --help)" >&2; exit 2 ;;
             *)
@@ -10805,7 +10808,7 @@ print(json.dumps(out))' "${needs[@]}")"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
@@ -10822,6 +10825,24 @@ print(json.dumps(out))' "${needs[@]}")"
         sleep 2
     done
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$plan" = "1" ]; then
+        # Dry run: one JSON object on stdout, a one-line summary on stderr.
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+e = v.get("estimate")
+def d(x):
+    return "%dm%02ds" % (x // 60, x % 60)
+line = "[k2 compute] plan: %s on %s" % ("starts now" if v.get("startsNow") else "waits (%s ahead%s)" % (v["queue"]["ahead"], (": " + v["queue"]["blockedBy"]["code"]) if v["queue"].get("blockedBy") else ""), v["node"])
+if not v.get("online"): line += " (offline now)"
+if v.get("warmSlot"): line += " · " + v["warmSlot"].split(" ")[0]
+line += (" · ~%s (p90 %s, %d runs: %s)" % (d(e["medianSecs"]), d(e["p90Secs"]), e["samples"], e["basis"])) if e else " · no estimate yet"
+for w in v.get("warnings") or []:
+    sys.stderr.write("[k2 compute] note: %s\n" % w)
+sys.stderr.write(line + "\n")
+print(json.dumps(v, indent=2))'
+        exit 0
+    fi
     local info
     info="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
@@ -25060,6 +25081,14 @@ RUN
   dir per project keeps cargo incremental.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
+
+KNOW BEFORE YOU RUN
+  k2 compute run --any --plan -- cargo nextest run -p k2-core
+    nothing runs; JSON: node it would pick and why it waits (startsNow,
+    queue.ahead, queue.blockedBy), warmSlot (warm/slot/cold at this commit),
+    estimate {medianSecs, p90Secs, samples} from earlier runs of the same
+    command, grant left (parallel, queued), the limits that apply. The same
+    refusals as run (not_granted, no_node_fits, …).
 
 TOOLCHAINS (what the job needs installed)
   Say it, and the node installs it into its own home before the job

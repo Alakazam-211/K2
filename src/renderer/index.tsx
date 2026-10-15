@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ConnectionGate } from './components/ConnectionGate'
 import { installExternalLinkHandler } from './lib/external-link-handler'
 import { installRandomUUIDPolyfill } from './lib/random-uuid'
+import { desktopOsFromNavigator } from './lib/desktop-chrome'
 import { bootWebHostIfNeeded } from './web/boot-host'
 import { bootZenPausedStart, noteZenWidgetsHeartbeat } from './lib/zen/zen-widgets-running'
 
@@ -14,6 +15,10 @@ import { bootZenPausedStart, noteZenWidgetsHeartbeat } from './lib/zen/zen-widge
 // secure context — crypto.randomUUID is missing and toast/tabs/transfer
 // blow up on drop. Polyfill before any store runs.
 installRandomUUIDPolyfill()
+
+// `data-os` on <html>: lets globals.css theme native form controls off
+// macOS (dark <select> on Linux/Windows) without touching macOS rendering.
+document.documentElement.setAttribute('data-os', desktopOsFromNavigator(navigator))
 
 
 // 0.39.x (Issue #6): webview liveness HEARTBEAT.

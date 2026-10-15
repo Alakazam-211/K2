@@ -135,13 +135,9 @@ set -e
 [ "$rc" = 1 ] && grep -q caller_not_daemon /tmp/e18r.txt || fail "root: rc $rc $(cat /tmp/e18r.txt)"
 ok "even root is not the daemon"
 
-echo "== gateway stand-ins (S14 listens there later) =="
-for p in 38600 38601; do
-	install -d -o k2 "/tmp/gw$p"
-	echo "gw-$p" >"/tmp/gw$p/index.html"
-	runuser -u k2 -- python3 -m http.server "$p" --bind 127.0.0.1 --directory "/tmp/gw$p" >/dev/null 2>&1 &
-done
-sleep 1
+# S14: the daemon itself listens on each App's gateway port (its link);
+# the fixture calls it at K2_GATEWAY_URL (127.0.0.1:8730 in the wall) with
+# the App pass from K2_PASS_FILE.
 
 echo "== workspace + fixture Apps =="
 runuser -u k2 -- bash -c "mkdir -p '$WS' && git -C '$WS' -c init.defaultBranch=main init -q && git -C '$WS' -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m one"
@@ -206,7 +202,7 @@ assert v["unshareU"]["ok"] is False and v["unshareR"]["ok"] is False, (v["unshar
 for k in ("daemonPort", "hostSsh", "hostIpSsh", "hostContainersInternal", "internet"):
     no(k)
 assert v["dns"] != "" and not v["dns"][0].isdigit(), v["dns"]
-assert v["gateway"]["status"] == 200 and v["gateway"]["body"] == "gw-38600", v["gateway"]
+assert v["gateway"]["status"] == 200 and v["gateway"]["link"] == "gw:38600" and v["gateway"]["url"] == "http://127.0.0.1:8730", v["gateway"]
 assert v["otherGateway"]["status"] == 0, v["otherGateway"]
 assert v["k2AppId"] == svc and v["k2AppName"] == "esc-a", (v["k2AppId"], v["k2AppName"])
 assert "--max-old-space-size=128" in v["nodeOptions"], v["nodeOptions"]
@@ -242,7 +238,7 @@ PASTA="$(pgrep -u k2app -x pasta.avx2 || pgrep -u k2app -x pasta || true)"
 for p in $PASTA; do grep -q 'k2apps-esc_a.slice' "/proc/$p/cgroup" && PCG=1; done
 [ "${PCG:-0}" = 1 ] || fail "pasta for esc-a is not in the App's slice: $(for p in $PASTA; do cat "/proc/$p/cgroup"; done)"
 nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' || fail "per-App rule: $(nft list chain inet k2app k2app_apps)"
-ok "pasta runs in the App's slice; the per-App nft rule admits only its gateway port"
+ok "pasta runs in the App's slice; the per-App nft rule admits only its gateway and proxy ports"
 
 echo "== a second App: its own slot, port and gateway =="
 K2 app install esc-b --memory 256M
@@ -251,7 +247,7 @@ r="$(wait_dep esc-b)"
 [ "$r" = live ] || fail "esc-b: $r"
 FB="$(front esc-b)"
 curl -s "http://127.0.0.1:$FB/probe" >/tmp/pb.json
-jq_ 'assert v["gateway"]["body"]=="gw-38601", v["gateway"]; assert v["otherGateway"]["status"]==0, v["otherGateway"]; assert v["writeData"]["out"]=="b1"' /tmp/pb.json
+jq_ 'assert v["gateway"]["status"]==200 and v["gateway"]["link"]=="gw:38601", v["gateway"]; assert v["otherGateway"]["status"]==0, v["otherGateway"]; assert v["writeData"]["out"]=="b1"' /tmp/pb.json
 [ "$(runuser -u k2app -- cat /var/lib/k2app/engine/slots.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["apps"])')" = "{'esc-a': 0, 'esc-b': 1}" ] || fail "slots"
 DA="$(stat -c %u /var/lib/k2app/apps/esc-a/data)"; DB="$(stat -c %u /var/lib/k2app/apps/esc-b/data)"
 [ "$DA" != "$DB" ] && [ "$DA" -ge 1048576 ] && [ "$DB" -ge 1048576 ] || fail "data owners: $DA $DB"
@@ -417,7 +413,7 @@ if [ "$rc" = 0 ]; then
 	CB="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-b--' | head -n1)"
 	case "$(asapp podman inspect "$CB" --format '{{.OCIRuntime}}')" in youki | */youki) ;; *) fail "esc-b runtime" ;; esac
 	curl -s "http://127.0.0.1:$FB/probe" >/tmp/py.json
-	jq_ 'assert v["capEff"]=="0000000000000000" and v["seccomp"]=="2" and v["unshareU"]["ok"] is False and v["gateway"]["body"]=="gw-38601", v' /tmp/py.json
+	jq_ 'assert v["capEff"]=="0000000000000000" and v["seccomp"]=="2" and v["unshareU"]["ok"] is False and v["gateway"]["link"]=="gw:38601", v' /tmp/py.json
 	ok "youki: esc-b restarted on youki, same floor from inside (CapEff 0, seccomp, no unshare -U, gateway)"
 	K2 app box prepare --runtime crun >/dev/null
 else

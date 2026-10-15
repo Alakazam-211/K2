@@ -23,9 +23,9 @@ function tcp(host, p, ms = 2000) {
     s.on("error", (e) => { clearTimeout(t); res(e.code || "error"); });
   });
 }
-function get(url, ms = 3000) {
+function get(url, ms = 3000, headers = {}) {
   return new Promise((res) => {
-    const r = http.get(url, { timeout: ms }, (x) => {
+    const r = http.get(url, { timeout: ms, headers }, (x) => {
       let b = "";
       x.on("data", (d) => (b += d));
       x.on("end", () => res({ status: x.statusCode, body: b.trim() }));
@@ -88,8 +88,18 @@ function status(field) {
 }
 function read0(p) { try { return fs.readFileSync(p, "utf8"); } catch (e) { return ""; } }
 
+// S14: the App's own gateway link, with its App pass: `/gw/me` names the
+// link (`gw:<host gateway port>`) the daemon accepted the call on.
+async function gateway() {
+  const url = process.env.K2_GATEWAY_URL || "";
+  const pass = process.env.K2_PASS_FILE ? read0(process.env.K2_PASS_FILE).trim() : "";
+  const r = await get(`${url}/gw/me`, 3000, { authorization: `Bearer ${pass}` });
+  let link = null;
+  try { link = JSON.parse(r.body).link; } catch (e) { link = null; }
+  return { url, status: r.status, link, body: r.status === 200 ? undefined : r.body.slice(0, 200) };
+}
+
 async function probe() {
-  const gwPort = Number(process.env.K2_PORT);
   return {
     tag: TAG,
     uid: process.getuid(),
@@ -122,10 +132,10 @@ async function probe() {
     // E7/E8: no direct DNS or internet.
     internet: await tcp("1.1.1.1", 443),
     dns: await dns.lookup("example.com").then((r) => r.address, (e) => e.code || "error"),
-    // The App's own gateway link (pasta -T + the per-App nft rule).
-    gateway: await get(`http://127.0.0.1:${gwPort}/`),
+    // The App's own gateway link (pasta -T 8730:<gw> + the per-App nft rule).
+    gateway: await gateway(),
     // Another App's gateway port (never forwarded into this App).
-    otherGateway: await get(`http://127.0.0.1:${gwPort === 38600 ? 38601 : 38600}/`),
+    otherGateway: await get(`http://127.0.0.1:${process.env.K2_APP_NAME === "esc-a" ? 38601 : 38600}/`),
     secretsDir: attempt(() => fs.readdirSync(process.env.K2_SECRETS_DIR || "/run/secrets").join(",")),
     passFile: process.env.K2_PASS_FILE ? attempt(() => fs.readFileSync(process.env.K2_PASS_FILE, "utf8")) : null,
     procPids: fs.readdirSync("/proc").filter((x) => /^\d+$/.test(x)).length,

@@ -1053,6 +1053,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL14):
     // approving an agent's clone proposal (`secretId` = the proposal id).
     "clone-approve",
+    // Sew chat passes (S28 §7.4, KM13): an emergency wipe of the chat-pass
+    // signing keys needs a person, not the owner token alone.
+    "chat-keys-emergency",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

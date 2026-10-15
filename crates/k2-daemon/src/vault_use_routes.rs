@@ -288,7 +288,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
         let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;
         let r = vault.resolve(&sel, Use::Env, &who)?;
         k2_vault::delivery::validate_env_file_value(r.value.expose())?;
-        let name = r.env_name.clone().unwrap_or_else(|| r.meta.name.clone());
+        let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
         k2_vault::delivery::validate_env_name(&name)?;
         lines.push_str(&name);
         lines.push('=');

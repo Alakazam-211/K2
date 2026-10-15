@@ -1234,8 +1234,9 @@ impl LocalVault {
                 Some(n.clone())
             }
             (None, Delivery::Env) => {
-                crate::delivery::validate_env_name(&m.name)?;
-                Some(m.name.clone())
+                let n = crate::delivery::default_env_name(&m.name);
+                crate::delivery::validate_env_name(&n)?;
+                Some(n)
             }
             _ => None,
         };
@@ -1558,7 +1559,7 @@ impl LocalVault {
             value: v,
             version: m.latest_version,
             delivery: d,
-            env_name: env.or_else(|| if d == Delivery::Env { Some(m.name.clone()) } else { None }),
+            env_name: env.or_else(|| if d == Delivery::Env { Some(crate::delivery::default_env_name(&m.name)) } else { None }),
             file_name: file.or_else(|| if d.level() >= Delivery::File.level() { Some(m.name.clone()) } else { None }),
             inject: m.inject.clone().unwrap_or_default(),
             meta: m,
@@ -1610,7 +1611,7 @@ impl LocalVault {
             }
             if let Some((d, env, file, _)) = best {
                 let env_name = if d == Delivery::Env {
-                    let n = env.unwrap_or_else(|| m.name.clone());
+                    let n = env.unwrap_or_else(|| crate::delivery::default_env_name(&m.name));
                     if crate::delivery::validate_env_name(&n).is_err() {
                         continue;
                     }

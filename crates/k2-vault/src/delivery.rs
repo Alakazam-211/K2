@@ -46,6 +46,25 @@ pub fn validate_env_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// The env name a secret is delivered under when nothing names one:
+/// uppercase, `-` and `.` become `_`, and a leading digit gets a `_`
+/// (`mini-k2n1-admin-pw` → `MINI_K2N1_ADMIN_PW`). The result still goes
+/// through [`validate_env_name`], so a denied name (`k2-token` →
+/// `K2_TOKEN`) is still refused.
+pub fn default_env_name(secret_name: &str) -> String {
+    let mut s: String = secret_name
+        .chars()
+        .map(|c| match c {
+            '-' | '.' => '_',
+            c => c.to_ascii_uppercase(),
+        })
+        .collect();
+    if s.starts_with(|c: char| c.is_ascii_digit()) {
+        s.insert(0, '_');
+    }
+    s
+}
+
 pub fn validate_file_name(name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && name.len() <= 64
@@ -110,6 +129,21 @@ mod tests {
         for bad in ["", ".", "..", "../x", "a/b", "a b", &"a".repeat(65)] {
             assert!(validate_file_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn default_env_names() {
+        for (secret, env) in [
+            ("mini-k2n1-admin-pw", "MINI_K2N1_ADMIN_PW"),
+            ("stripe.key", "STRIPE_KEY"),
+            ("DATABASE_URL", "DATABASE_URL"),
+            ("1password", "_1PASSWORD"),
+        ] {
+            assert_eq!(default_env_name(secret), env);
+            validate_env_name(env).unwrap_or_else(|e| panic!("{env}: {e}"));
+        }
+        assert_eq!(default_env_name("k2-token"), "K2_TOKEN");
+        assert_eq!(validate_env_name(&default_env_name("k2-token")).expect_err("denied").code, "env_name_not_allowed");
     }
 
     #[test]

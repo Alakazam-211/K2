@@ -6,6 +6,7 @@
 //! `k2-node-proto`.
 
 pub mod admin;
+pub mod artifacts;
 pub mod cgroup;
 pub mod config;
 pub mod enroll;

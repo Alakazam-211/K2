@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use k2_node_proto::frames::{Assign, ExitInfo, JobState, LedgerJob, Plan, SignedReceipt, SrcRan};
+use k2_node_proto::results::Outputs;
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// Time and boot identity, faked in tests.
@@ -62,6 +63,8 @@ pub struct Row {
     pub src: Option<SrcRan>,
     pub receipt: Option<SignedReceipt>,
     pub cleaned: bool,
+    /// Artifacts and test results (user_version 2).
+    pub outputs: Option<Outputs>,
 }
 
 impl Row {
@@ -88,7 +91,7 @@ pub struct Ledger {
 }
 
 const COLS: &str = "job_id, generation, attempt, plan_digest, plan_json, state, reason, detail, created_at, \
-    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned";
+    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json";
 
 fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     let plan_json: String = r.get(4)?;
@@ -122,6 +125,9 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
             None => None,
         },
         cleaned: r.get::<_, i64>(17)? != 0,
+        // A row the node can't read back still reconciles; only the
+        // outputs are lost.
+        outputs: r.get::<_, Option<String>>(18)?.and_then(|s| serde_json::from_str(&s).ok()),
     })
 }
 
@@ -156,6 +162,15 @@ impl Ledger {
              PRAGMA user_version = 1;",
         )
         .map_err(sqlerr)?;
+        // v2: artifacts + test results per attempt.
+        let has_outputs = conn
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'outputs_json'")
+            .and_then(|mut st| st.exists([]))
+            .map_err(sqlerr)?;
+        if !has_outputs {
+            conn.execute_batch("ALTER TABLE jobs ADD COLUMN outputs_json TEXT;").map_err(sqlerr)?;
+        }
+        conn.execute_batch("PRAGMA user_version = 2;").map_err(sqlerr)?;
         let id: Option<String> = conn
             .query_row("SELECT v FROM meta WHERE k = 'ledger_id'", [], |r| r.get(0))
             .optional()
@@ -292,6 +307,14 @@ impl Ledger {
         Ok(())
     }
 
+    pub fn set_outputs(&self, job_id: &str, generation: u32, o: &Outputs) -> Result<(), String> {
+        let j = serde_json::to_string(o).map_err(|e| format!("encode outputs: {e}"))?;
+        self.conn
+            .execute("UPDATE jobs SET outputs_json = ?3 WHERE job_id = ?1 AND generation = ?2", params![job_id, generation, j])
+            .map_err(sqlerr)?;
+        Ok(())
+    }
+
     pub fn mark_cleaned(&self, job_id: &str, generation: u32) -> Result<(), String> {
         self.conn
             .execute("UPDATE jobs SET cleaned = 1 WHERE job_id = ?1 AND generation = ?2", params![job_id, generation])
@@ -391,6 +414,7 @@ pub mod tests {
             exclusive: false,
             created_at: 1,
             needs: Vec::new(),
+            artifacts: Vec::new(),
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
     }
@@ -435,6 +459,40 @@ pub mod tests {
         let r = l.get("a", 1).unwrap().unwrap();
         assert_eq!((r.state, r.reason.as_deref()), (JobState::Interrupted, Some("node_restart")));
         assert_eq!(l.get("b", 1).unwrap().unwrap().state, JobState::Done);
+    }
+
+    #[test]
+    fn outputs_round_trip_and_an_old_ledger_gains_the_column() {
+        let d = crate::util::temp_dir("ledger-v1");
+        let path = d.join("l.sqlite");
+        {
+            // A version-1 ledger, as 0.45.x nodes wrote it.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 CREATE TABLE jobs (job_id TEXT NOT NULL, generation INTEGER NOT NULL, attempt INTEGER NOT NULL,
+                   plan_digest TEXT NOT NULL, plan_json TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, detail TEXT,
+                   created_at INTEGER NOT NULL, started_at INTEGER, ended_at INTEGER, exit_code INTEGER, signal INTEGER,
+                   log_seq INTEGER NOT NULL DEFAULT 0, pid INTEGER, boot_id TEXT NOT NULL, src_json TEXT,
+                   receipt_json TEXT, cleaned INTEGER NOT NULL DEFAULT 0, UNIQUE (job_id, generation));
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let clock = FakeClock { t: Mutex::new(10), boot: Mutex::new("b1".into()) };
+        let l = Ledger::open(&path).unwrap();
+        l.insert(&assign("j", 1), &clock).unwrap();
+        assert_eq!(l.get("j", 1).unwrap().unwrap().outputs, None);
+        let o = Outputs {
+            artifacts: vec![k2_node_proto::results::ArtifactInfo { name: "a".into(), sha256: "s".into(), bytes: 1 }],
+            tests: None,
+            notes: vec!["n".into()],
+        };
+        l.set_outputs("j", 1, &o).unwrap();
+        assert_eq!(l.get("j", 1).unwrap().unwrap().outputs, Some(o));
+        drop(l);
+        // Reopening a v2 ledger is a no-op.
+        assert!(Ledger::open(&path).is_ok());
     }
 
     #[test]

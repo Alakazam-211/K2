@@ -379,6 +379,7 @@ pub fn plan(job: &str, argv: &[&str]) -> Plan {
         exclusive: false,
         created_at: 1,
         needs: Vec::new(),
+        artifacts: Vec::new(),
     }
 }
 

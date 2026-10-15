@@ -25,7 +25,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
-use k2_core::compute::proto::{crypto, env as penv, needs, pairing};
+use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
 use k2_core::compute::{self as compute, codes, logs, scheduler, store};
 use k2_core::connect_users::Role;
 
@@ -53,6 +53,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/grants/revoke",
     "/cli/compute/grants/set",
     "/cli/compute/jobs",
+    "/cli/compute/jobs/artifact",
     "/cli/compute/jobs/cancel",
     "/cli/compute/jobs/get",
     "/cli/compute/jobs/logs",
@@ -523,6 +524,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/jobs/get" => job_get(&who, params),
         "/cli/compute/jobs/logs" => job_logs(&who, params),
         "/cli/compute/jobs/receipt" => job_receipt(&who, params),
+        "/cli/compute/jobs/artifact" => job_artifact(&who, params),
         "/cli/compute/jobs/cancel" => job_cancel(&who, body),
         "/cli/compute/jobs/retry" => job_retry(&who, body),
         "/cli/compute/usage" => usage(&who, params),
@@ -1328,6 +1330,32 @@ fn needs_from(v: &serde_json::Value) -> R<Vec<String>> {
     Ok(parsed.iter().map(|n| n.token()).collect())
 }
 
+/// `artifacts` from a run body: globs (array, or one string), checked
+/// with the same rules the node uses.
+fn artifacts_from(v: &serde_json::Value) -> R<Vec<String>> {
+    let raw: Vec<String> = match v.get("artifacts") {
+        None | Some(serde_json::Value::Null) => return Ok(Vec::new()),
+        Some(serde_json::Value::String(s)) => vec![s.trim().to_string()],
+        Some(serde_json::Value::Array(a)) => {
+            let mut out = Vec::new();
+            for x in a {
+                out.push(x.as_str().ok_or_else(|| no("artifact_glob_invalid", 400, "artifacts are glob strings like target/nextest/**/junit.xml"))?.trim().to_string());
+            }
+            out
+        }
+        Some(_) => return Err(no("artifact_glob_invalid", 400, "artifacts is a list of globs")),
+    };
+    results::check_globs(&raw).map_err(|(code, g)| {
+        let code: &'static str = match code.as_str() {
+            "artifact_glob_absolute" => "artifact_glob_absolute",
+            "artifact_glob_escapes" => "artifact_glob_escapes",
+            _ => "artifact_glob_invalid",
+        };
+        no(code, 400, format!("--artifact {g}: globs are relative to the job's working directory (target/… also reads the node's cargo target dir), without '..'"))
+    })?;
+    Ok(raw)
+}
+
 /// What a node's k2-node understands (live offer, else the last one).
 fn node_features(n: &store::NodeRow) -> Vec<String> {
     let (_, _, live) = compute_ws::live_view(&n.id);
@@ -1380,9 +1408,18 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     // Toolchains / system packages the job needs (compute polish v1).
     let needs = needs_from(&v)?;
     let (cpu_millis, mem_bytes) = job_resources(&v)?;
+    // Files to keep after the command exits (results back, G1).
+    let artifacts = artifacts_from(&v)?;
     // Node: by name, or --any.
     let node = pick_node(who, &v, &ws, gate.as_deref())?;
     let mut warnings: Vec<String> = Vec::new();
+    if !artifacts.is_empty() && !node_features(&node).iter().any(|f| f == results::FEATURE_ARTIFACTS) {
+        return Err(no(
+            "node_upgrade_required",
+            409,
+            format!("'{}' runs an older k2-node that can't keep --artifact files; update k2-node on that machine (sudo k2-node setup), or run without --artifact", node.name),
+        ));
+    }
     if !needs.is_empty() {
         let feats = node_features(&node);
         if !feats.iter().any(|f| f == needs::FEATURE_NEEDS) {
@@ -1501,6 +1538,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         exclusive: b(&v, "exclusive") == Some(true),
         created_at: compute::now(),
         needs: needs.clone(),
+        artifacts,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -1592,6 +1630,7 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
     };
     let granted = granted_node_ids(&ws.id);
     let wants_needs = !needs_from(v)?.is_empty();
+    let wants_artifacts = !artifacts_from(v)?.is_empty();
     let mut cands = Vec::new();
     let mut by_id = HashMap::new();
     for n in rows.into_iter().filter(|n| n.state == "active") {
@@ -1601,6 +1640,9 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
         let (online, _, offer) = compute_ws::live_view(&n.id);
         let Some(offer) = offer.filter(|_| online) else { continue };
         if wants_needs && !offer.features.iter().any(|f| f == needs::FEATURE_NEEDS) {
+            continue;
+        }
+        if wants_artifacts && !offer.features.iter().any(|f| f == results::FEATURE_ARTIFACTS) {
             continue;
         }
         let label = |k: &str| offer.labels.get(k).map(String::as_str);
@@ -1990,7 +2032,73 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
         }
     }
     v["nodeOnline"] = compute_ws::is_online(&j.node_id).into();
+    let node = v["node"].as_str().map(str::to_string);
+    v["result"] = compute::result::envelope(&j, node.as_deref());
     Ok(v)
+}
+
+/// Fetch failure codes as the stable `&'static str` refusals carry.
+fn fetch_code(code: &str) -> &'static str {
+    match code {
+        "node_offline" => codes::NODE_OFFLINE,
+        "node_upgrade_required" => "node_upgrade_required",
+        "relay_cap" => "relay_cap",
+        "artifact_timeout" => "artifact_timeout",
+        "artifact_gone" => "artifact_gone",
+        "artifact_changed" => "artifact_changed",
+        "artifact_not_found" => "artifact_not_found",
+        "local_write" => "local_write",
+        _ => "artifact_unavailable",
+    }
+}
+
+/// `GET /cli/compute/jobs/artifact?job=…[&name=…&offset=…&max=…]`.
+/// Without `name`: the kept artifacts. With it: pull the file from the
+/// node into this server's cache once (blocking), then a base64 slice
+/// at `offset`. The CLI loops until `eof`.
+fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    let j = job_for(who, params.get("job").map(String::as_str))?;
+    let o = compute::result::outputs(&j).unwrap_or_default();
+    let short = compute::message::short(&j.id).to_string();
+    let Some(name) = params.get("name").map(String::as_str).filter(|n| !n.is_empty()) else {
+        return Ok(serde_json::json!({
+            "job": j.id,
+            "short": short,
+            "generation": j.generation,
+            "state": j.state,
+            "artifacts": o.artifacts,
+        }));
+    };
+    let info = o.artifacts.iter().find(|a| a.name == name).ok_or_else(|| {
+        no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
+    })?;
+    let timeout = Duration::from_secs(60 + info.bytes / (1 << 20));
+    let path = compute_ws::fetch_artifact(&j, info, timeout).map_err(|(code, hint)| {
+        let c = fetch_code(&code);
+        let status = match c {
+            "artifact_gone" | "artifact_not_found" => 410,
+            "artifact_timeout" | "artifact_unavailable" => 503,
+            _ => 409,
+        };
+        no(c, status, hint)
+    })?;
+    let offset = params.get("offset").and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+    let max = params.get("max").and_then(|x| x.parse::<usize>().ok()).unwrap_or(4 << 20).clamp(64 << 10, 8 << 20);
+    let mut f = std::fs::File::open(&path).map_err(|e| no("local_write", 500, format!("cache: {e}")))?;
+    use std::io::{Read, Seek, SeekFrom};
+    f.seek(SeekFrom::Start(offset.min(info.bytes))).map_err(|e| no("local_write", 500, format!("cache: {e}")))?;
+    let mut buf = Vec::with_capacity(max.min(info.bytes as usize + 1));
+    f.take(max as u64).read_to_end(&mut buf).map_err(|e| no("local_write", 500, format!("cache: {e}")))?;
+    let end = offset.min(info.bytes) + buf.len() as u64;
+    Ok(serde_json::json!({
+        "job": j.id,
+        "name": info.name,
+        "sha256": info.sha256,
+        "bytes": info.bytes,
+        "offset": offset,
+        "data": crypto::b64(&buf),
+        "eof": end >= info.bytes,
+    }))
 }
 
 fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {

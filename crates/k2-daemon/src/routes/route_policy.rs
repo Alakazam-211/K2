@@ -373,6 +373,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/grants/revoke", Admin),
     post("/cli/compute/grants/set", Admin),
     get("/cli/compute/jobs", Member),
+    get("/cli/compute/jobs/artifact", Member),
     post("/cli/compute/jobs/cancel", Member),
     get("/cli/compute/jobs/get", Member),
     get("/cli/compute/jobs/logs", Member),

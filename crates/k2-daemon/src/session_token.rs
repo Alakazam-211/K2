@@ -695,6 +695,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/compute/jobs/get",
         "/cli/compute/jobs/logs",
         "/cli/compute/jobs/receipt",
+        "/cli/compute/jobs/artifact",
         "/cli/compute/jobs/cancel",
         "/cli/compute/jobs/retry",
         "/cli/compute/grants",

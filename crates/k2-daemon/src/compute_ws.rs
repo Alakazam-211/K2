@@ -28,10 +28,11 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use k2_core::compute::proto::crypto::{self, SigningKey};
 use k2_core::compute::proto::frames::{
-    self, Assign, Cancel, Challenge, Direction, EnrollChallenge, EnrollDone, Fence, Frame, HandshakeFrame,
-    JobState, JobsSnapshot, LogChunk, Need, Offer, ReceiptFrame, Refused, ResumeHint, Revoked, StateUpdate,
-    Transfer, TransferFailed, TransferKind, Welcome,
+    self, ArtifactChunk, ArtifactFailed, ArtifactGet, Assign, Cancel, Challenge, Direction, EnrollChallenge, EnrollDone,
+    Fence, Frame, HandshakeFrame, JobState, JobsSnapshot, LogChunk, Need, Offer, ReceiptFrame, Refused, ResumeHint,
+    Revoked, StateUpdate, Transfer, TransferFailed, TransferKind, Welcome,
 };
+use k2_core::compute::proto::results::{self, ArtifactInfo, Outputs};
 use k2_core::compute::proto::pairing;
 use k2_core::compute::{self as compute, logs, scheduler, store};
 use k2_core::log_debug;
@@ -624,6 +625,8 @@ fn frame_worker(node_id: String, route: &'static str, rx: std::sync::mpsc::Recei
             Frame::AdminResult(r) => crate::compute_admin::on_admin_result(&node_id, r),
             Frame::UpdateState(u) => crate::compute_admin::on_update_state(&node_id, u),
             Frame::Health(h) => crate::compute_admin::on_health(&node_id, h),
+            Frame::ArtifactChunk(c) => on_artifact_chunk(&node_id, c),
+            Frame::ArtifactFailed(f) => on_artifact_failed(&node_id, f),
             other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
         }
     }
@@ -781,6 +784,7 @@ pub fn finalize(job_id: &str) {
         (Some(a), Some(b)) => Some(b - a),
         _ => None,
     };
+    let tests = compute::result::outputs(&job).and_then(|o| o.tests);
     let text = compute::message::completion_text(
         &job.id,
         &node_name,
@@ -789,6 +793,7 @@ pub fn finalize(job_id: &str) {
         job.signal,
         job.reason.as_deref(),
         secs,
+        tests.as_ref(),
     );
     let session = job.session_id.clone();
     let id = job.id.clone();
@@ -855,7 +860,25 @@ fn test_sink(session: &str, text: &str) -> bool {
     }
 }
 
+/// Keep a terminal attempt's outputs (artifacts + tests). Only for this
+/// node and the attempt's own generation; capped so a node can't flood
+/// the row.
+fn store_outputs(node_id: &str, job_id: &str, generation: u32, o: Outputs) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let Some(job) = store::job_by_id(&conn, job_id) else { return };
+    if job.node_id != node_id || job.generation != generation as i64 {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(&o.capped()) {
+        store::set_job_outputs(&conn, job_id, generation as i64, &text);
+    }
+}
+
 fn on_state(node_id: &str, s: StateUpdate) {
+    if let Some(o) = s.outputs.clone().filter(|_| s.state.is_terminal()) {
+        store_outputs(node_id, &s.job_id, s.generation, o);
+    }
     apply_observation(node_id, &s.job_id, s.generation, s.state, s.reason.as_deref(), s.detail.as_deref(), s.exit.as_ref(), s.src.as_ref());
     if s.state.is_terminal() {
         kick(node_id);
@@ -907,8 +930,187 @@ fn on_receipt(node_id: &str, r: ReceiptFrame) {
         .is_some_and(|rc| rc.job_id == job.id && rc.generation == r.generation && rc.plan_digest == job.plan_digest);
     let body = serde_json::to_string(&r.receipt).unwrap_or_default();
     store::set_job_receipt(&conn, &job.id, &body, ok);
+    // The receipt lists the kept files too: if the terminal state with
+    // the outputs was missed (a reconnect snapshot ended the job first),
+    // the signed list fills in.
+    if ok && job.summary_json.is_none() {
+        let arts = crypto::pem_decode("PUBLIC KEY", &node.public_key_pem)
+            .ok()
+            .and_then(|spki| r.receipt.verify(&spki))
+            .map(|rc| rc.artifacts)
+            .unwrap_or_default();
+        if !arts.is_empty() {
+            if let Ok(text) = serde_json::to_string(&Outputs { artifacts: arts, ..Default::default() }.capped()) {
+                store::set_job_outputs(&conn, &job.id, job.generation, &text);
+            }
+        }
+    }
     drop(conn);
     notify_change();
+}
+
+// ── artifacts out (§11.4) ────────────────────────────────────────────
+
+/// One artifact being pulled from a node into the controller's cache.
+struct Pull {
+    node_id: String,
+    tmp: std::path::PathBuf,
+    dst: std::path::PathBuf,
+    file: Option<std::fs::File>,
+    hasher: Option<crypto::Sha256Stream>,
+    expect_sha: String,
+    expect_bytes: u64,
+    got: u64,
+    next_seq: u32,
+    done: Option<Result<(), (String, String)>>,
+}
+
+static PULLS: Mutex<Option<HashMap<String, Pull>>> = Mutex::new(None);
+
+fn with_pulls<T>(f: impl FnOnce(&mut HashMap<String, Pull>) -> T) -> T {
+    let mut g = PULLS.lock().unwrap_or_else(|p| p.into_inner());
+    f(g.get_or_insert_with(HashMap::new))
+}
+
+/// `~/.k2/compute/artifacts/<job>-g<gen>/<sha256>`: fetched files, by hash.
+pub fn artifact_cache_path(job_id: &str, generation: i64, sha256: &str) -> std::path::PathBuf {
+    compute::compute_dir().join("artifacts").join(format!("{job_id}-g{generation}")).join(sha256)
+}
+
+fn finish_pull(p: &mut Pull, r: Result<(), (String, String)>) {
+    p.file = None;
+    if r.is_err() {
+        let _ = std::fs::remove_file(&p.tmp);
+    }
+    p.done = Some(r);
+}
+
+fn on_artifact_chunk(node_id: &str, c: ArtifactChunk) {
+    with_pulls(|m| {
+        let Some(p) = m.get_mut(&c.request_id).filter(|p| p.node_id == node_id && p.done.is_none()) else { return };
+        let bad = |why: &str| Err(("artifact_transfer".to_string(), why.to_string()));
+        if c.seq != p.next_seq || c.sha256 != p.expect_sha || c.total_bytes != p.expect_bytes {
+            return finish_pull(p, bad("chunk out of order or for another file"));
+        }
+        let Ok(data) = crypto::unb64(&c.data) else { return finish_pull(p, bad("chunk isn't base64")) };
+        if data.len() > frames::TRANSFER_CHUNK || p.got + data.len() as u64 > p.expect_bytes {
+            return finish_pull(p, bad("more bytes than the node reported"));
+        }
+        let wrote = p.file.as_mut().map(|f| std::io::Write::write_all(f, &data));
+        if !matches!(wrote, Some(Ok(()))) {
+            return finish_pull(p, Err(("local_write".into(), "can't write the controller's artifact cache".into())));
+        }
+        if let Some(h) = p.hasher.as_mut() {
+            h.update(&data);
+        }
+        p.got += data.len() as u64;
+        p.next_seq += 1;
+        if c.last {
+            let sha = p.hasher.take().map(|h| h.finish_hex()).unwrap_or_default();
+            if p.got != p.expect_bytes || !crypto::ct_eq(sha.as_bytes(), p.expect_sha.as_bytes()) {
+                return finish_pull(p, Err(("artifact_changed".into(), "the bytes don't match the hash the node reported".into())));
+            }
+            p.file = None;
+            let r = std::fs::rename(&p.tmp, &p.dst).map_err(|e| ("local_write".to_string(), format!("cache: {e}")));
+            finish_pull(p, r);
+        }
+    });
+    notify_change();
+}
+
+fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
+    with_pulls(|m| {
+        if let Some(p) = m.get_mut(&f.request_id).filter(|p| p.node_id == node_id && p.done.is_none()) {
+            let code: String = f.code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(48).collect();
+            let msg: String = f.message.chars().take(300).collect();
+            finish_pull(p, Err((code, msg)));
+        }
+    });
+    notify_change();
+}
+
+/// Make sure the controller has `info` for this attempt, pulling it from
+/// the node when needed (blocking, up to `timeout`). `Err((code, hint))`.
+pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, timeout: Duration) -> Result<std::path::PathBuf, (String, String)> {
+    let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
+    if compute::sync::file_sha256(&dst).is_ok_and(|(sha, n)| sha == info.sha256 && n == info.bytes) {
+        return Ok(dst);
+    }
+    let (online, route, offer) = live_view(&job.node_id);
+    if !online {
+        return Err(("node_offline".into(), "the job's node is offline; artifacts stay on it for 7 days, fetch again when it's back".into()));
+    }
+    if !offer.is_some_and(|o| o.features.iter().any(|f| f == results::FEATURE_ARTIFACTS)) {
+        return Err(("node_upgrade_required".into(), "that node's k2-node can't send artifacts; update it there (sudo k2-node setup)".into()));
+    }
+    if route == Some("relay") && info.bytes > results::RELAY_MAX_FILE_BYTES {
+        return Err((
+            "relay_cap".into(),
+            format!("{} MB is over the relay cap of {} MB; fetch it over the LAN or a tailnet route", info.bytes >> 20, results::RELAY_MAX_FILE_BYTES >> 20),
+        ));
+    }
+    let dir = dst.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    std::fs::create_dir_all(&dir).map_err(|e| ("local_write".to_string(), format!("cache dir: {e}")))?;
+    let request_id = crypto::random_id().map_err(|e| ("internal".to_string(), e))?;
+    let tmp = dir.join(format!(".{request_id}.part"));
+    let file = std::fs::File::create(&tmp).map_err(|e| ("local_write".to_string(), format!("cache file: {e}")))?;
+    with_pulls(|m| {
+        m.insert(
+            request_id.clone(),
+            Pull {
+                node_id: job.node_id.clone(),
+                tmp: tmp.clone(),
+                dst: dst.clone(),
+                file: Some(file),
+                hasher: Some(crypto::Sha256Stream::default()),
+                expect_sha: info.sha256.clone(),
+                expect_bytes: info.bytes,
+                got: 0,
+                next_seq: 0,
+                done: None,
+            },
+        )
+    });
+    let sent = send_to(
+        &job.node_id,
+        Frame::ArtifactGet(ArtifactGet { request_id: request_id.clone(), job_id: job.id.clone(), generation: job.generation as u32, name: info.name.clone() }),
+    );
+    let deadline = Instant::now() + timeout;
+    let outcome = loop {
+        let seen = change_counter();
+        let done = with_pulls(|m| m.get(&request_id).and_then(|p| p.done.clone()));
+        if let Some(d) = done {
+            break d;
+        }
+        let now = Instant::now();
+        if !sent || now >= deadline {
+            break Err(("artifact_timeout".into(), "the node didn't send the file in time; try again".into()));
+        }
+        if !is_online(&job.node_id) {
+            break Err(("node_offline".into(), "the node went offline during the transfer; fetch again when it's back".into()));
+        }
+        wait_change(seen, (deadline - now).min(Duration::from_secs(1)));
+    };
+    with_pulls(|m| m.remove(&request_id));
+    let _ = std::fs::remove_file(&tmp);
+    outcome.map(|_| dst)
+}
+
+/// Drop fetched artifacts older than the node keeps them.
+fn sweep_artifact_cache() {
+    let root = compute::compute_dir().join("artifacts");
+    let Ok(rd) = std::fs::read_dir(&root) else { return };
+    for e in rd.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|d| d.as_secs() as i64 > results::KEEP_SECS);
+        if old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
 }
 
 // ── code in ──────────────────────────────────────────────────────────
@@ -1187,6 +1389,7 @@ fn ensure_ticker() {
                     }
                     if n % 17_280 == 1 {
                         logs::sweep(14);
+                        sweep_artifact_cache();
                     }
                     // Machines switched off in Settings: remove once idle.
                     crate::compute_routes::sweep_retiring();
@@ -1217,6 +1420,7 @@ mod tests {
             exclusive: false,
             created_at: 10,
             needs: Vec::new(),
+            artifacts: Vec::new(),
         };
         store::insert_job(
             conn,

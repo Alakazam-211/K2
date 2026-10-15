@@ -33,6 +33,36 @@ pub fn ok(j: &JobRow, o: Option<&Outputs>) -> bool {
         && o.and_then(|o| o.tests.as_ref()).is_none_or(|t| t.passed_all())
 }
 
+/// A split run's envelope: the parent's combined facts plus one line per
+/// shard. `children` = (row, node name), any order.
+pub fn envelope_with_shards(parent: &JobRow, children: &[(JobRow, Option<String>)]) -> Value {
+    let mut v = envelope(parent, None);
+    let mut rows: Vec<&(JobRow, Option<String>)> = children.iter().collect();
+    rows.sort_by_key(|(j, _)| j.ctl.shard.as_ref().map(|s| s.index).unwrap_or(0));
+    let shards: Vec<Value> = rows
+        .iter()
+        .map(|(j, node)| {
+            let t = outputs(j).and_then(|o| o.tests);
+            json!({
+                "index": j.ctl.shard.as_ref().map(|s| s.index),
+                "job": j.id,
+                "short": super::message::short(&j.id),
+                "node": node,
+                "state": j.state,
+                "exit": j.exit_code,
+                "reason": j.reason,
+                "attempt": j.attempt,
+                "durationSecs": match (j.started_at, j.ended_at) { (Some(a), Some(b)) => Some(b - a), _ => None },
+                "tests": t.map(|t| json!({"passed": t.passed, "failed": t.failed, "errors": t.errors, "skipped": t.skipped})),
+                "artifacts": outputs(j).map(|o| o.artifacts.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+    v["node"] = Value::Null;
+    v["shards"] = shards.into();
+    v
+}
+
 /// The envelope for one job attempt. `node` is the node's name.
 pub fn envelope(j: &JobRow, node: Option<&str>) -> Value {
     let o = outputs(j);

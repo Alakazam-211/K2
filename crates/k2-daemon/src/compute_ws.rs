@@ -750,10 +750,24 @@ fn apply_observation(
 
 /// A job reached its end: message the requesting session once (detached).
 pub fn finalize(job_id: &str) {
+    // A shard reports to its split run, never to the session: the run
+    // sends one message when its last shard ends.
+    let parent = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::job_by_id(&conn, job_id).and_then(|j| j.ctl.shard.clone().filter(|_| j.is_terminal()).map(|s| s.parent))
+    };
+    if let Some(p) = parent {
+        crate::compute_shards::child_ended(&p);
+        return;
+    }
     let (job, node_name, ws_path) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let Some(job) = store::job_by_id(&conn, job_id) else { return };
+        if job.ctl.shard.is_some() {
+            return;
+        }
         // Detached jobs always get a message. An attached job gets one too
         // when nobody is following its logs any more (the agent's shell
         // tool timed out and killed `k2 compute run`): otherwise its result
@@ -772,16 +786,20 @@ pub fn finalize(job_id: &str) {
         _ => None,
     };
     let tests = compute::result::outputs(&job).and_then(|o| o.tests);
-    let text = compute::message::completion_text(
-        &job.id,
-        &node_name,
-        &job.state,
-        job.exit_code,
-        job.signal,
-        job.reason.as_deref(),
-        secs,
-        tests.as_ref(),
-    );
+    let text = if job.ctl.shards.is_empty() {
+        compute::message::completion_text(&job.id, &node_name, &job.state, job.exit_code, job.signal, job.reason.as_deref(), secs, tests.as_ref())
+    } else {
+        compute::message::shards_completion_text(
+            &job.id,
+            job.ctl.shards.len(),
+            &job.state,
+            job.exit_code,
+            job.signal,
+            job.reason.as_deref(),
+            secs,
+            tests.as_ref(),
+        )
+    };
     let session = job.session_id.clone();
     let id = job.id.clone();
     std::thread::spawn(move || deliver_completion(&id, session.as_deref(), ws_path.as_deref(), &text));

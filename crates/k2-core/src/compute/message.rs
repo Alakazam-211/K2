@@ -64,6 +64,23 @@ pub fn completion_text(
     format!("[compute] job {id} on {node}: {what}{counts}. {look} · k2 compute get {id} --json")
 }
 
+/// One line when a split run (`--shards`) ends: the combined result.
+#[allow(clippy::too_many_arguments)]
+pub fn shards_completion_text(
+    job_id: &str,
+    shards: usize,
+    state: &str,
+    exit_code: Option<i64>,
+    signal: Option<i64>,
+    reason: Option<&str>,
+    secs: Option<i64>,
+    tests: Option<&super::proto::results::TestSummary>,
+) -> String {
+    let one = completion_text(job_id, "x", state, exit_code, signal, reason, secs, tests);
+    // Same facts, "on <node>" becomes "(<n> shards)".
+    one.replacen(" on x:", &format!(" ({shards} shards):"), 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +96,10 @@ mod tests {
         );
         assert!(completion_text("j", "n", "failed", None, None, Some("sync_failed"), None, None).contains("failed (sync_failed)"));
         assert!(completion_text("j", "n; rm -rf", "unknown", None, None, None, None, None).contains("on nrm-rf:"));
+        assert_eq!(
+            shards_completion_text("7f3a0000aaaa", 4, "done", Some(0), None, None, Some(61), None),
+            "[compute] job 7f3a0000 (4 shards): exit 0 after 1m01s. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
+        );
         let t = super::super::proto::results::TestSummary { total: 415, passed: 410, failed: 2, errors: 1, skipped: 2, ..Default::default() };
         assert_eq!(
             completion_text("7f3a0000aaaa", "mini-1", "done", Some(100), None, None, Some(61), Some(&t)),

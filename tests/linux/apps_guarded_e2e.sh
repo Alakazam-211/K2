@@ -240,7 +240,7 @@ ok "podman inspect: crun, read-only root, 256 MiB no swap, pids 512, no-new-priv
 PASTA="$(pgrep -u k2app -x pasta.avx2 || pgrep -u k2app -x pasta || true)"
 for p in $PASTA; do grep -q 'k2apps-esc_a.slice' "/proc/$p/cgroup" && PCG=1; done
 [ "${PCG:-0}" = 1 ] || fail "pasta for esc-a is not in the App's slice: $(for p in $PASTA; do cat "/proc/$p/cgroup"; done)"
-nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport 38600 accept' || fail "per-App rule: $(nft list chain inet k2app k2app_apps)"
+nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' || fail "per-App rule: $(nft list chain inet k2app k2app_apps)"
 ok "pasta runs in the App's slice; the per-App nft rule admits only its gateway port"
 
 echo "== a second App: its own slot, port and gateway =="
@@ -255,6 +255,55 @@ jq_ 'assert v["gateway"]["body"]=="gw-38601", v["gateway"]; assert v["otherGatew
 DA="$(stat -c %u /var/lib/k2app/apps/esc-a/data)"; DB="$(stat -c %u /var/lib/k2app/apps/esc-b/data)"
 [ "$DA" != "$DB" ] && [ "$DA" -ge 1048576 ] && [ "$DB" -ge 1048576 ] || fail "data owners: $DA $DB"
 ok "esc-b: slot 1, gateway 38601, its own ids for its data ($DB vs esc-a $DA)"
+
+echo "== egress (S15): only through the App's own proxy, only listed hosts =="
+nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_b.slice" oifname "lo" tcp dport { 38601, 38901 } accept' || fail "esc-b per-App rule: $(nft list chain inet k2app k2app_apps)"
+ss -ltnH 'sport = :38900' | grep -q 127.0.0.1 || fail "the daemon's proxy for esc-a isn't listening on 38900"
+curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" >/tmp/ea.json
+python3 - /tmp/ea.json <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v["proxyEnv"] == {"https": "http://127.0.0.1:38900", "no": "127.0.0.1,localhost,::1", "node": "1"}, v["proxyEnv"]
+assert v["connect"] == {"status": 403, "code": "egress_denied"}, ("not listed", v["connect"])
+assert v["metadata"] == {"status": 403, "code": "egress_denied"}, v["metadata"]
+assert v["loopback"] == {"status": 403, "code": "egress_denied"}, v["loopback"]
+assert v["otherProxy"] != "open", ("another App's proxy", v["otherProxy"])
+assert v["asK2"]["status"] == 400, ("the proxy never speaks to K2", v["asK2"])
+assert v["fetch"]["status"] in (0, 403), ("fetch goes through the proxy and is refused", v["fetch"])
+print("    egress:", v)
+PY
+ok "esc-a: proxy env set; unlisted host, metadata and loopback refused (403 egress_denied); esc-b's proxy unreachable; the proxy refuses K2-style requests"
+K2 app egress esc-a --json >/tmp/eg.json
+jq_ 'h=[x for x in v["hosts"] if x["host"]=="example.com"][0]; assert h["status"]=="seen" and h["refused"]>=1, h; assert v["enforced"] is True and v["proxy"]["listening"] is True, v' /tmp/eg.json
+K2 app egress log esc-a --json | python3 -c 'import json,sys; L=json.load(sys.stdin)["lines"]; assert any(l.get("code")=="egress_denied" and l.get("host")=="example.com" for l in L), L'
+ok "the refused host is recorded (seen, counted) and logged"
+set +e
+K2_NO_APPROVE=1 K2 app egress add esc-a example.com --reason e2e >/tmp/eadd.txt 2>&1; rc=$?
+set -e
+[ "$rc" = 2 ] && grep -q "held for the owner" /tmp/eadd.txt || fail "egress add: rc $rc $(cat /tmp/eadd.txt)"
+REQ="$(K2 app approvals --json | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin)["requests"] if r["appId"]=="esc-a"][0]["id"])')"
+set +e
+K2 app approve "$REQ" </dev/null >/tmp/eappr.txt 2>&1; rc=$?
+set -e
+[ "$rc" != 0 ] || fail "approved without an owner confirm: $(cat /tmp/eappr.txt)"
+curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["connect"]["status"]==403, v'
+ok "egress add is held for the owner (exit 2); without a confirm nothing changes"
+# The confirm (Touch ID / password) is covered by the unit tests; here the
+# approval is applied as the daemon would, then a narrowing-free reload.
+DBF="$K2HOME/.k2/k2.db"; [ -f "$DBF" ] || DBF="$K2HOME/.k2/k2so.db"
+python3 - "$DBF" "$REQ" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("UPDATE app_egress_hosts SET status='allowed', request_id=NULL WHERE app_id='esc-a' AND request_id=?", (sys.argv[2],))
+c.execute("UPDATE app_widenings SET status='approved', decided_by='e2e' WHERE id=?", (sys.argv[2],))
+c.commit()
+PY
+K2 app egress mode esc-a allowlist >/dev/null
+curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" >/tmp/ea2.json
+jq_ 'assert v["connect"]=={"status":200}, v["connect"]; assert v["fetch"]["status"]==200, ("fetch through NODE_USE_ENV_PROXY", v["fetch"]); assert v["metadata"]["status"]==403' /tmp/ea2.json
+K2 app egress rm esc-a example.com >/dev/null
+curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["connect"]["status"]==403 and v["fetch"]["status"]!=200, v'
+ok "allowed: CONNECT 200 and Node fetch() reaches https://example.com through the proxy; rm applies at once"
 
 echo "== zero-downtime switch under load =="
 LOG=/tmp/load.txt

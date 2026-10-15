@@ -15237,7 +15237,7 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
     k2 publish run agents --skin --port 8788
   → https://agents.<host>.k2.dev  (login + Thread; no grid)
   Custom static files: --skin <dir> (workspace-relative). Labels `skin`,
-  `meet` and `chat` are reserved (box front doors: Apps, K2 Meet, K2 chat).
+  `meet`, `chat` and `mail` are reserved (box front doors: Apps, K2 Meet, K2 chat, K2 webmail).
   Off-platform custom domains are not created here.
   k2 app is guests/roles/tokens — it does not serve software.
   Leftover: k2 skin.
@@ -16211,7 +16211,8 @@ PY
 }
 
 # Reserved nested labels: box-level front doors, never a publish target.
-#   skin = the App front door; meet = K2 Meet; chat = K2 chat (Sew).
+#   skin = the App front door; meet = K2 Meet; chat = K2 chat (Sew);
+#   mail = K2 webmail (web only; never a mail-server name).
 # Same set and messages as k2_core::skin::RESERVED_NESTED_LABELS.
 _refuse_reserved_nested_label() {
     local label
@@ -16225,6 +16226,9 @@ _refuse_reserved_nested_label() {
             exit 1 ;;
         chat)
             echo "Error: reserved_label: 'chat' is reserved for K2 chat (chat.<box>.k2.dev). Pick another nested label." >&2
+            exit 1 ;;
+        mail)
+            echo "Error: reserved_label: 'mail' is reserved for K2 webmail (mail.<box>.k2.dev). Pick another nested label." >&2
             exit 1 ;;
     esac
 }
@@ -18263,7 +18267,7 @@ cmd_wiki_publish() {
     if [ -z "$label" ]; then
         label="$(_wiki_default_label)"
     fi
-    # skin/meet/chat are box doors (a workspace named "chat" defaults here).
+    # skin/meet/chat/mail are box doors (a workspace named "chat" defaults here).
     _refuse_reserved_nested_label "$label"
 
     # 1) Ensure local serve is on (and capture port/url).
@@ -23471,7 +23475,7 @@ WHAT NOT TO CONFUSE
   Connect users (`k2 users`) are humans on this daemon — study people.
   Apps are guests+passes+websocket rooms. Host the UI with
   k2 publish on any nested label except the reserved box doors
-  `skin`, `meet` and `chat`. See `k2 study apps`.
+  `skin`, `meet`, `chat` and `mail`. See `k2 study apps`.
   Federation (`agent::host`) is peer messaging, not Connect login.
 
 WHAT THIS PAGE WILL NOT DO
@@ -24143,8 +24147,8 @@ STATIC DIR (--skin <dir>)
 
 NOT THIS
   Do not require Caddy, `k2 app front-door`, or port 38472.
-  Nested labels `skin`, `meet` and `chat` are reserved (box front
-  doors: Apps, K2 Meet, K2 chat) — pick any other name.
+  Nested labels `skin`, `meet`, `chat` and `mail` are reserved (box front
+  doors: Apps, K2 Meet, K2 chat, K2 webmail) — pick any other name.
   Do not CNAME a customer domain here (no Connect cert).
   Do not apt install caddy for an app. If a leftover install
   already happened: stop AND disable the systemd unit

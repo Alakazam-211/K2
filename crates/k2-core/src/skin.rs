@@ -633,6 +633,12 @@ pub const MEET_NESTED_LABEL: &str = "meet";
 /// Nested label of the future Sew chat web client (`https://chat.<sub>.k2.dev`).
 pub const CHAT_NESTED_LABEL: &str = "chat";
 
+/// Nested label of the future browser webmail front-end
+/// (`https://mail.<sub>.k2.dev`). Web only, through the tunnel: it is
+/// never a mail-server name (MX/SMTP/IMAP live on the client's own
+/// delegated domain).
+pub const MAIL_NESTED_LABEL: &str = "mail";
+
 /// One box-level nested label that no workspace, user or agent may claim
 /// as a publish / subdomain target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -666,6 +672,11 @@ pub const RESERVED_NESTED_LABELS: &[ReservedNestedLabel] = &[
     ReservedNestedLabel {
         label: CHAT_NESTED_LABEL,
         purpose: "K2 chat (chat.<box>.k2.dev)",
+        grandfathered: true,
+    },
+    ReservedNestedLabel {
+        label: MAIL_NESTED_LABEL,
+        purpose: "K2 webmail (mail.<box>.k2.dev)",
         grandfathered: true,
     },
 ];
@@ -5269,7 +5280,7 @@ mod tests {
             assert!(!is_reserved_nested_label(name), "{name:?} must stay claimable");
         }
         let labels: Vec<&str> = RESERVED_NESTED_LABELS.iter().map(|r| r.label).collect();
-        assert_eq!(labels, vec!["skin", "meet", "chat"]);
+        assert_eq!(labels, vec!["skin", "meet", "chat", "mail"]);
 
         let meet = reserved_nested_label_error(" MEET ");
         assert_eq!(
@@ -5284,6 +5295,22 @@ mod tests {
         assert!(is_grandfathered_reserved_label("meet"));
         assert!(is_grandfathered_reserved_label(" Chat "));
         assert!(!is_grandfathered_reserved_label("meeting"));
+    }
+
+    /// `mail` is the webmail front door (web only through the tunnel).
+    #[test]
+    fn reserved_nested_label_mail_is_loud_and_grandfathered() {
+        for name in ["mail", "MAIL", " Mail "] {
+            assert!(is_reserved_nested_label(name), "{name:?} must be reserved");
+        }
+        for name in ["mailbox", "mails", "webmail", "mail-1", "mai"] {
+            assert!(!is_reserved_nested_label(name), "{name:?} must stay claimable");
+        }
+        assert_eq!(
+            reserved_nested_label_error(" Mail "),
+            "reserved_label: 'mail' is reserved for K2 webmail (mail.<box>.k2.dev). Pick another nested label."
+        );
+        assert!(is_grandfathered_reserved_label("mail"));
     }
 
     #[test]

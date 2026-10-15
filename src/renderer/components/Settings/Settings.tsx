@@ -154,9 +154,7 @@ export function settingsNav({
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
-    { kind: 'item', id: 'compute', label: 'Compute', beta: true },
     { kind: 'item', id: 'email-link', label: 'Email Link' },
-    { kind: 'item', id: 'keybindings', label: 'Key Bindings' },
     ...(webFeatures.permissions
       ? ([{ kind: 'item', id: 'permissions' as const, label: 'Accessibility' }] satisfies NavBlock[])
       : []),
@@ -214,6 +212,8 @@ export function settingsNav({
       items: [
         { id: 'terminal', label: 'Terminal' },
         { id: 'code-editor', label: 'Code' },
+        // Rosson 2026-10-15: Key Bindings lives with the editors.
+        { id: 'keybindings', label: 'Key Bindings' },
         { id: 'editors', label: 'Defaults' },
       ],
     },
@@ -235,6 +235,8 @@ export function settingsNav({
         { label: 'Chat Hosting', soon: true },
         { id: 'data', label: 'Database' },
         { id: 'skin-access', label: 'Apps', beta: true },
+        // Rosson 2026-10-15: Compute is a core (it sits on the runtime).
+        { id: 'compute', label: 'Compute', beta: true },
       ],
     },
     {

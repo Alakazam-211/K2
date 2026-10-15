@@ -122,7 +122,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'data', 'skin-access'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'data', 'skin-access', 'compute'])
     const chat = group(nav, 'Cores').items[1]
     expect(chat.label).toBe('Chat Hosting')
     expect(chat.soon).toBe(true)
@@ -132,6 +132,14 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
       '<span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
     expect(settingsSrc.split(tag).length - 1).toBe(2)
     expect(settingsSrc).not.toContain('>\n                          soon\n')
+  })
+
+  it('Key Bindings is under Editors / Fonts and Compute is under Cores; neither is top-level', () => {
+    const nav = settingsNav({ zenGardens: true })
+    expect(group(nav, 'Editors / Fonts').items.map((i) => i.id)).toEqual(['terminal', 'code-editor', 'keybindings', 'editors'])
+    const top = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : []))
+    expect(top).not.toContain('keybindings')
+    expect(top).not.toContain('compute')
   })
 
   it('old ids still open the same pages', () => {

@@ -592,7 +592,11 @@ async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
         let v = wait_state(port, &a, 20, |v| v["state"] == "done").await;
         assert_eq!(v["nodeId"], nb_id, "a set-aside node takes no --any work: {v}");
     }
-    k2_daemon::compute_place::clear_set_aside(&na_id);
+    // The owner puts it back at once with `k2 compute node resume`.
+    let r = post(port, "/cli/compute/nodes/pause", OWNER, json!({"node": "na", "action": "resume"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(node_row(port, "na").await["setAsideUntil"].is_null());
+    let _ = na_id;
     k2_core::compute::retry::set_tuning_for_tests(Default::default());
     drop(na);
     drop(nb);

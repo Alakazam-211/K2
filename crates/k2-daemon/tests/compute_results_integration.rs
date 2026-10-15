@@ -776,3 +776,70 @@ async fn split_runs_spread_shards_merge_junit_and_give_one_result() {
     k2_core::compute::retry::set_tuning_for_tests(Default::default());
     drop(env);
 }
+
+// ── know before you run: --plan (G5) ─────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn plan_shows_node_queue_warmth_estimate_and_grant_without_running() {
+    let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(tuning_for_tests());
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    std::fs::create_dir_all(env.home.join("cli-tmp")).unwrap();
+    let ws = seed_ws(&env, "pl", &[]);
+    let (_p1, _) = online_node(&env, port, "p1", 1).await;
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": ws.id, "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let (agent, _) = passport(&ws);
+
+    // History: the same command three times (with source: a warm slot).
+    for i in 0..3 {
+        let r = post(port, "/cli/compute/run", &agent, json!({"node": "p1", "argv": ["sh", "-c", "sleep 1"], "clientJobId": format!("client-plan-hist-{i:04}")})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let id = j(&r)["job"]["id"].as_str().unwrap().to_string();
+        wait_state(port, &id, 30, |v| v["state"] == "done").await;
+    }
+    let jobs_now = |port: u16, ws: String| async move {
+        let r = get(port, "/cli/compute/jobs", OWNER, &format!("workspace={ws}&limit=100")).await;
+        j(&r)["jobs"].as_array().unwrap().len()
+    };
+    assert_eq!(jobs_now(port, ws.id.clone()).await, 3);
+
+    // Idle node: starts now, warm at this commit, an estimate from those runs.
+    let r = post(port, "/cli/compute/run", &agent, json!({"any": true, "argv": ["sh", "-c", "sleep 1"], "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["plan"].as_bool(), v["node"].as_str(), v["startsNow"].as_bool()), (Some(true), Some("p1"), Some(true)), "{v}");
+    assert!(v["warmSlot"].as_str().unwrap().starts_with("warm"), "{v}");
+    assert_eq!((v["estimate"]["samples"].as_u64(), v["estimate"]["basis"].as_str()), (Some(3), Some("this command on this node")), "{v}");
+    assert!((1..=3).contains(&v["estimate"]["medianSecs"].as_i64().unwrap()), "{v}");
+    assert_eq!((v["grant"]["parallel"]["left"].as_i64(), v["grant"]["queued"]["left"].as_i64()), (Some(1), Some(10)), "{v}");
+    assert_eq!(v["limits"]["retries"], 1);
+
+    // Busy node: it would wait, and says on what.
+    let long = post(port, "/cli/compute/run", &agent, json!({"node": "p1", "argv": ["sleep", "20"], "noSource": true, "clientJobId": "client-plan-long-0001"})).await;
+    let long = j(&long)["job"]["id"].as_str().unwrap().to_string();
+    wait_state(port, &long, 20, |v| v["state"] == "running").await;
+    let r = post(port, "/cli/compute/run", &agent, json!({"node": "p1", "argv": ["true"], "noSource": true, "plan": true})).await;
+    let v = j(&r);
+    assert_eq!(v["startsNow"], false, "{v}");
+    assert_eq!(v["grant"]["parallel"]["left"], 0, "{v}");
+    assert!(v["estimate"].is_null(), "no history for this command: {v}");
+
+    // The CLI: JSON on stdout, a summary line on stderr, exit 0; nothing stored.
+    let (rc, out, err) = k2(&env, port, &ws.path, &["compute", "run", "p1", "--plan", "--no-source", "--", "sh", "-c", "sleep 1"]);
+    assert_eq!(rc, 0, "{err}");
+    let p: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(p["plan"], true);
+    assert!(err.contains("[k2 compute] plan: waits (") && err.contains("on p1"), "{err}");
+    assert_eq!(jobs_now(port, ws.id.clone()).await, 4, "a plan stores nothing");
+
+    // The same refusals as run: another workspace without the switch.
+    let other = seed_ws(&env, "pl2", &[]);
+    let (agent2, _) = passport(&other);
+    let r = post(port, "/cli/compute/run", &agent2, json!({"any": true, "argv": ["true"], "plan": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "compute_off".to_string()), "{}", r.body);
+    cancel(port, &long).await;
+    k2_core::compute::retry::set_tuning_for_tests(Default::default());
+    drop(env);
+}

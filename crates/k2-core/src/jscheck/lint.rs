@@ -24,6 +24,22 @@ use crate::contract::{self, Exposure, VerbKind};
 const K2_RUNTIME_MEMBERS: &[&str] =
     &["call", "subscribe", "on", "can", "connected", "ready", "asset", "config", "widget", "motion"];
 
+/// Hand-written frame-runtime helpers on a generated surface (no catalog
+/// row of their own, so no arity check; `contract::gen::SDK_SURFACE_EXTRAS`
+/// documents their shapes): `k2.store.subscribe` streams `store.changes`;
+/// the tx / chunked helpers wrap `store.*` calls.
+const FRAME_HELPERS: &[&str] = &["store.subscribe", "store.tx", "store.putChunked", "store.getChunked"];
+
+/// Surfaces the frame makes callable: `k2.viewer()` is `viewer.get`.
+const CALLABLE_SURFACES: &[(&str, &str)] = &[("viewer", "viewer.get")];
+
+/// A row a custom widget can call: exposed to `widget` (the bridge) or
+/// `garden-local` (this computer's daemon, contract-garden-data-v1 §7.2) —
+/// the same set as `Catalog::widget_callable_verbs`.
+pub(crate) fn widget_callable(r: &contract::VerbRow) -> bool {
+    r.exposed_to(Exposure::Widget) || r.exposed_to(Exposure::GardenLocal)
+}
+
 /// A call on `x.<name>(…)` whose function arguments run again and again.
 const REGISTRARS: &[&str] = &[
     "addEventListener",
@@ -440,6 +456,10 @@ impl Lint<'_> {
                 return;
             }
             let member = outer.property.name.as_str();
+            if let Some((_, verb)) = CALLABLE_SURFACES.iter().find(|(m, _)| *m == member) {
+                self.check_verb(outer.property.span.start, verb, &format!("k2.{member}()"), None, n_args, spread);
+                return;
+            }
             if !matches!(member, "call" | "subscribe" | "on" | "can") {
                 if !K2_RUNTIME_MEMBERS.contains(&member) {
                     let names = K2_RUNTIME_MEMBERS.join(", ");
@@ -470,6 +490,9 @@ impl Lint<'_> {
             return;
         }
         let verb = format!("{surface}.{}", outer.property.name.as_str());
+        if FRAME_HELPERS.contains(&verb.as_str()) {
+            return;
+        }
         self.check_verb(inner.span.start, &verb, &format!("k2.{verb}"), None, n_args, spread);
     }
 
@@ -478,8 +501,8 @@ impl Lint<'_> {
     /// row's) or `k2.can` (no arity).
     fn check_verb(&mut self, offset: u32, verb: &str, shown: &str, as_call: Option<bool>, n: usize, spread: bool) {
         let cat = contract::catalog();
-        let exposed: Vec<&str> = cat.verbs_exposed_to(Exposure::Widget).iter().map(|v| v.verb.as_str()).collect();
-        let Some(row) = cat.verb(verb).filter(|r| r.exposure.contains(&Exposure::Widget)) else {
+        let exposed: Vec<&str> = cat.widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
+        let Some(row) = cat.verb(verb).filter(|r| widget_callable(r)) else {
             let (msg, sug) = if cat.verb(verb).is_some() {
                 (
                     format!("{shown}: '{verb}' isn't open to widgets (only K2's own pages can use it), so it's undefined in a widget"),

@@ -32,7 +32,7 @@ use serde_json::{json, Value as J};
 
 use super::inventory::{inventory, Hit, Inventory};
 use super::{check, line_col_from, script_lang, Lang, Severity, Surface};
-use crate::contract::{self, Exposure};
+use crate::contract;
 use crate::zen::bundle::inline_scripts;
 use crate::zen::schema::Diagnostic;
 use crate::zen::widgets::{self, MANIFEST_FILE};
@@ -417,7 +417,7 @@ fn report(path: &Path, kind: &str, t: &Tree) -> J {
             json!({
                 "verb": st(v),
                 "known": row.is_some(),
-                "widget": row.is_some_and(|r| r.exposure.contains(&Exposure::Widget)),
+                "widget": row.is_some_and(super::lint::widget_callable),
                 "cap": row.and_then(|r| r.cap.clone()),
                 "kind": row.map(|r| format!("{:?}", r.kind).to_ascii_lowercase()),
                 "calls": n,
@@ -448,7 +448,7 @@ fn report(path: &Path, kind: &str, t: &Tree) -> J {
     let (files_j, files_cut) = capped(files_list);
     let (refused_j, refused_cut) = capped(refused);
     let (verbs_j, verbs_cut) = capped(verbs);
-    let unknown_verbs = c.verbs.keys().filter(|v| !cat.verb(v).is_some_and(|r| r.exposure.contains(&Exposure::Widget))).count();
+    let unknown_verbs = c.verbs.keys().filter(|v| !cat.verb(v).is_some_and(super::lint::widget_callable)).count();
     json!({
         "untrusted": true,
         "notice": NOTICE,

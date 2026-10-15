@@ -1,0 +1,476 @@
+// Garden 1's activity drawer (0.45.6, Rosson 2026-10-15; ported from K2
+// Companion's `ThreadWorkingStrip.tsx` + `threadDrawer.css`). A tile pulled
+// out of the message box's top edge while the agent works on your message,
+// so what it is doing stays in view while you read back. Collapsed it is one
+// line (pulse · step · icon counters · clock); a click grows it upward to
+// the full detail in words, another click shrinks it back. The choice is
+// remembered on this computer. Nothing else is stored.
+//
+// It is the desktop Thread working strip's words (`SessionView/threadStrip`,
+// shipped 0.45.0: the daemon decides, the renderer only labels), drawn the
+// phone's way. It counts its own clock (1 Hz, from the daemon's `startedAt`
+// / `phaseSince`, corrected by `serverNow`), so the conversation around it
+// doesn't re-render every second. The Conversation widget draws it with its
+// `activity-drawer` prop (on in Garden 1); off, the three dots stay.
+//
+// No Stop: a Garden can't type into the agent's session.
+
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { ThreadTurn } from '@/components/SessionView/overlayThread'
+import {
+  COUNTER_CHECK_PX,
+  COUNTER_GAP_PX,
+  COUNTER_GROUP_GAP_PX,
+  COUNTER_ICON_GAP_PX,
+  COUNTER_ICON_PX,
+  COUNTER_SPINNER_EM,
+  STOPPED_LINGER_MS,
+  counterSpoken,
+  counterWidthPx,
+  estimateStripTextPx,
+  fitStripCounters,
+  threadDrawerLine,
+  type StripCounter,
+  type StripCounterKey,
+  type ThreadDrawerLine,
+  type ThreadStripStep,
+  type ThreadStripTone,
+} from '@/components/SessionView/threadStrip'
+
+const TONE: Record<ThreadStripTone, string> = {
+  working: 'var(--zen-working)',
+  monitoring: 'var(--zen-accent)',
+  'needs-you': 'var(--zen-needs-you)',
+  stopped: 'var(--zen-text-muted)',
+  unverifiable: 'var(--zen-text-muted)',
+}
+
+/** Slide / fade length (ms); the CSS uses the same. */
+export const ZEN_DRAWER_MS = 200
+/** Collapsed tile height (px) above the box. */
+export const ZEN_DRAWER_TILE_PX = 32
+/** Room the step keeps before counters start dropping. */
+const STEP_MIN_PX = 72
+const COUNTER_FONT_PX = 12
+/** Each counter is a borderless tinted tag: side padding (px) and height. */
+export const ZEN_DRAWER_TAG_PAD_X_PX = 5
+const TAG_H_PX = 18
+
+/** A counter's tag width (px): its glyphs plus the tag's side padding. */
+export function zenCounterTagWidthPx(c: StripCounter, fontPx = COUNTER_FONT_PX): number {
+  return counterWidthPx(c, fontPx) + 2 * ZEN_DRAWER_TAG_PAD_X_PX
+}
+
+/** Counter budget (px) for a collapsed tile `width` wide showing `clock`. */
+export function zenDrawerCounterBudget(width: number, clock: string): number {
+  if (!Number.isFinite(width) || width <= 0) return Infinity
+  // 12px padding both sides, the 8px pulse, three 8px gaps, the clock, the step's floor.
+  return width - 24 - 8 - 24 - estimateStripTextPx(clock, COUNTER_FONT_PX) - STEP_MIN_PX
+}
+
+/** Expanded or not, on this computer. */
+export const ZEN_DRAWER_EXPANDED_KEY = 'k2.zen.activityDrawerExpanded'
+
+export function readZenDrawerExpanded(): boolean {
+  try {
+    return localStorage.getItem(ZEN_DRAWER_EXPANDED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeZenDrawerExpanded(on: boolean): void {
+  try {
+    localStorage.setItem(ZEN_DRAWER_EXPANDED_KEY, on ? '1' : '0')
+  } catch {
+    /* the choice lasts this window */
+  }
+}
+
+/** Braille spinner frames (the desktop `.braille-spinner`), 80ms each. */
+const BRAILLE_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+// Tags tint by kind: the fill is the hue at ~16%, the ink the hue mixed
+// toward the text colour. Zen tokens, so every theme keeps its look.
+export const ZEN_DRAWER_CSS = `
+@keyframes zen-drawer-in { from { transform: translateY(calc(100% + 8px)); } to { transform: none; } }
+@keyframes zen-drawer-out { from { transform: none; } to { transform: translateY(calc(100% + 8px)); } }
+@keyframes zen-drawer-fade-in { from { opacity: 0; } }
+@keyframes zen-drawer-fade-out { to { opacity: 0; } }
+@keyframes zen-braille-spin { to { transform: translateY(-10em); } }
+@keyframes zen-drawer-shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
+[data-zen-root] [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
+[data-zen-root] [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
+[data-zen-root] [data-zen-drawer-tile] { transition: background-color 140ms ease; }
+[data-zen-root] [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
+[data-zen-root] .zen-braille { display: inline-block; overflow: hidden; height: 1em; line-height: 1em; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+[data-zen-root] .zen-braille > span { display: block; animation: zen-braille-spin 800ms steps(10) infinite; }
+[data-zen-root] .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
+[data-zen-root] .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
+[data-zen-root] .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
+[data-zen-root] .zen-drawer-code { --zen-tag-hue: var(--zen-text-muted); color: inherit; padding: 1px 5px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+[data-zen-root] .zen-drawer-tag-subagents { --zen-tag-hue: var(--zen-accent); }
+[data-zen-root] .zen-drawer-tag-cmd { --zen-tag-hue: var(--zen-working); }
+[data-zen-root] .zen-drawer-tag-edit { --zen-tag-hue: var(--zen-needs-you); }
+[data-zen-root] .zen-drawer-tag-read { --zen-tag-hue: #2dd4bf; }
+[data-zen-root] .zen-drawer-tag-search { --zen-tag-hue: #a855f7; }
+[data-zen-root] .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  [data-zen-root] [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
+  [data-zen-root] [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
+  [data-zen-root] .zen-braille > span, [data-zen-root] .zen-drawer-shimmer, [data-zen-root] [data-zen-pulse] { animation: none !important; }
+}
+`
+
+// ── Icons (24×24 strokes, `currentColor`; the phone's) ──────────────────
+
+function Svg({ size, children, stroke = 2 }: { size: number; children: React.ReactNode; stroke?: number }): React.JSX.Element {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={stroke}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      style={{ display: 'inline-block', verticalAlign: '-0.2em', marginRight: COUNTER_ICON_GAP_PX }}
+    >
+      {children}
+    </svg>
+  )
+}
+
+const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Element> = {
+  subagents: (s) => (
+    <Svg size={s}>
+      <rect x="4" y="7" width="16" height="12" rx="3" />
+      <path d="M12 3v4" />
+      <circle cx="9" cy="13" r="1" />
+      <circle cx="15" cy="13" r="1" />
+      <path d="M2 12v3M22 12v3" />
+    </Svg>
+  ),
+  background: (s) => (
+    <Svg size={s}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </Svg>
+  ),
+  read: (s) => (
+    <Svg size={s}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </Svg>
+  ),
+  search: (s) => (
+    <Svg size={s}>
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </Svg>
+  ),
+  cmd: (s) => (
+    <Svg size={s}>
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </Svg>
+  ),
+  edit: (s) => (
+    <Svg size={s}>
+      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+    </Svg>
+  ),
+  check: (s) => (
+    <Svg size={s} stroke={2.4}>
+      <path d="M20 6 9 17l-5-5" />
+    </Svg>
+  ),
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false
+  } catch {
+    return false
+  }
+}
+
+function BrailleSpinner({ still }: { still: boolean }): React.JSX.Element {
+  const box = { width: `${COUNTER_SPINNER_EM}em`, verticalAlign: '-0.15em' }
+  if (still) {
+    return (
+      <span className="zen-braille" data-zen-drawer-spinner="" data-static="" style={box}>
+        •
+      </span>
+    )
+  }
+  return (
+    <span className="zen-braille" data-zen-drawer-spinner="" style={box}>
+      <span>
+        {Array.from(BRAILLE_FRAMES).map((f, i) => (
+          <span key={i} style={{ display: 'block' }}>
+            {f}
+          </span>
+        ))}
+      </span>
+    </span>
+  )
+}
+
+/** One collapsed counter's visible part (aria-hidden; the words are beside it). */
+function CounterGlyphs({ c, still }: { c: StripCounter; still: boolean }): React.JSX.Element {
+  const icon = ICON[c.key](COUNTER_ICON_PX)
+  if (c.key !== 'subagents') {
+    return (
+      <span aria-hidden="true">
+        {icon}
+        {c.count}
+      </span>
+    )
+  }
+  return (
+    <span aria-hidden="true">
+      {icon}
+      {c.count > 0 ? (
+        <span data-zen-drawer-running="">
+          <BrailleSpinner still={still} />
+          {c.count}
+        </span>
+      ) : null}
+      {c.done > 0 ? (
+        <span data-zen-drawer-done="" style={{ marginLeft: c.count > 0 ? COUNTER_GROUP_GAP_PX : 0 }}>
+          {ICON.check(COUNTER_CHECK_PX)}
+          {c.done}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+/** A tool line: backtick spans become code tags. */
+function StepBody({ step }: { step: ThreadStripStep }): React.JSX.Element {
+  if (step.kind !== 'line') return <>{step.text}</>
+  const parts = step.text.split('`')
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1 && i < parts.length - 1 ? (
+          <code key={i} data-zen-drawer-code="" className="zen-drawer-tag zen-drawer-code" style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.92em' }}>
+            {p}
+          </code>
+        ) : (
+          <span key={i}>{i % 2 === 1 ? `\`${p}` : p}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+/** This client's clock, re-read every second while the turn runs, and once
+ *  more when a "Stopped" linger runs out. */
+function useDrawerNow(turn: ThreadTurn | null): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    setNow(Date.now())
+    if (!turn) return
+    if (turn.end === null) {
+      const id = setInterval(() => setNow(Date.now()), 1_000)
+      return () => clearInterval(id)
+    }
+    if (turn.end.reason === 'interrupted') {
+      const left = turn.end.at + STOPPED_LINGER_MS - (Date.now() + turn.skewMs)
+      if (left <= 0) return
+      const id = setTimeout(() => setNow(Date.now()), left + 50)
+      return () => clearTimeout(id)
+    }
+  }, [turn])
+  return now
+}
+
+type Phase = 'hidden' | 'in' | 'out'
+
+/** Whether the drawer has anything to show for `turn` now (the
+ *  conversation hides its three dots while it does). */
+export function zenDrawerShows(turn: ThreadTurn | null | undefined, now = Date.now()): boolean {
+  return !!turn && threadDrawerLine(turn, now) !== null
+}
+
+export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.JSX.Element | null {
+  const now = useDrawerNow(turn)
+  const line = turn ? threadDrawerLine(turn, now) : null
+  const shown = line !== null
+  const last = useRef<ThreadDrawerLine | null>(line)
+  if (line) last.current = line
+
+  // hidden → in (slide up) → out (slide down) → hidden.
+  const [phase, setPhase] = useState<Phase>(shown ? 'in' : 'hidden')
+  if (shown && phase !== 'in') setPhase('in')
+  if (!shown && phase === 'in') setPhase('out')
+  useEffect(() => {
+    if (phase !== 'out') return
+    const t = setTimeout(() => setPhase('hidden'), ZEN_DRAWER_MS + 60)
+    return () => clearTimeout(t)
+  }, [phase])
+
+  const [expanded, setExpanded] = useState(readZenDrawerExpanded)
+  const toggle = (): void => {
+    setExpanded((on) => {
+      writeZenDrawerExpanded(!on)
+      return !on
+    })
+  }
+
+  const tileRef = useRef<HTMLButtonElement | null>(null)
+  const [width, setWidth] = useState(0)
+  const display = line ?? (phase === 'out' ? last.current : null)
+  const mounted = display !== null
+  useLayoutEffect(() => {
+    if (!mounted) return
+    const measure = (): void => setWidth(tileRef.current?.clientWidth ?? 0)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    if (tileRef.current) ro.observe(tileRef.current)
+    return () => ro.disconnect()
+  }, [mounted])
+
+  if (!display) return null
+  const still = prefersReducedMotion()
+  const color = TONE[display.tone]
+  const counters = fitStripCounters(display.counters, zenDrawerCounterBudget(width, display.clock), (c) => zenCounterTagWidthPx(c))
+  const hollow = display.tone === 'monitoring' || display.tone === 'stopped' || display.tone === 'unverifiable'
+  const dot = (
+    <span
+      aria-hidden
+      data-zen-pulse={display.tone === 'working' ? '' : undefined}
+      style={{
+        display: 'inline-block',
+        flex: 'none',
+        width: 8,
+        height: 8,
+        borderRadius: 999,
+        boxSizing: 'border-box',
+        ...(hollow ? { border: `2px solid ${color}` } : { background: color }),
+      }}
+    />
+  )
+  const d = display.detail
+  const muted = display.tone === 'stopped' || display.tone === 'unverifiable'
+
+  return (
+    // The clip box: the tile slides up out of the message box's top edge.
+    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: '0 14px -1px' }}>
+      <style data-zen-drawer-styles="">{ZEN_DRAWER_CSS}</style>
+      <div
+        role="status"
+        data-zen-drawer=""
+        data-phase={phase}
+        data-tone={display.tone}
+        data-turn-phase={turn?.phase}
+        data-expanded={expanded ? 'true' : 'false'}
+        onAnimationEnd={(e) => {
+          if (e.target === e.currentTarget && phase === 'out') setPhase('hidden')
+        }}
+      >
+        <button
+          ref={tileRef}
+          type="button"
+          data-zen-drawer-tile=""
+          aria-expanded={expanded}
+          aria-label={display.ariaLabel}
+          title={expanded ? 'Show less' : 'Show the detail'}
+          // Keep the caret in the message box: a click doesn't steal focus.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={toggle}
+          className="block w-full min-w-0 text-left cursor-pointer"
+          style={{
+            overflow: 'hidden',
+            color: 'var(--zen-text)',
+            background: 'var(--zen-surface-raised)',
+            border: '1px solid var(--zen-border)',
+            borderStyle: display.tone === 'unverifiable' ? 'dashed' : 'solid',
+            borderBottom: 'none',
+            borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0',
+          }}
+        >
+          {expanded ? (
+            <span data-zen-drawer-detail="" className="flex min-w-0 flex-col" style={{ gap: 1, padding: '6px 12px' }}>
+              <span className="flex min-w-0 items-center" style={{ gap: 8, fontSize: 13, lineHeight: '18px' }}>
+                {dot}
+                <span data-zen-drawer-head="" className="min-w-0 break-words" style={{ color, fontWeight: 600 }}>
+                  {d.head}
+                </span>
+              </span>
+              {d.step ? (
+                <span data-zen-drawer-step-full="" className="flex min-w-0 items-baseline" style={{ gap: 8, fontSize: 13, lineHeight: '19px' }}>
+                  <span
+                    className={`min-w-0 flex-1 break-words ${d.step.kind === 'thinking' ? 'zen-drawer-shimmer' : ''}`}
+                    style={d.step.kind === 'needs' ? { color: 'var(--zen-needs-you)' } : undefined}
+                  >
+                    <StepBody step={d.step} />
+                  </span>
+                  {d.step.elapsed ? (
+                    <span data-zen-drawer-elapsed="" className="flex-none tabular-nums" style={{ fontSize: 12, color: 'var(--zen-text-muted)' }}>
+                      {d.step.elapsed}
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+              {d.tally ? (
+                <span data-zen-drawer-tally="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
+                  {d.tally}
+                </span>
+              ) : null}
+              {d.children ? (
+                <span data-zen-drawer-children="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
+                  {d.children}
+                </span>
+              ) : null}
+            </span>
+          ) : (
+            <span
+              data-zen-drawer-line=""
+              className="flex min-w-0 items-center whitespace-nowrap"
+              style={{ gap: 8, padding: '0 12px', height: ZEN_DRAWER_TILE_PX - 1 }}
+            >
+              {dot}
+              <span
+                data-zen-drawer-step=""
+                className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${display.step.kind === 'thinking' ? 'zen-drawer-shimmer' : ''}`}
+                style={{
+                  fontSize: 13,
+                  lineHeight: '18px',
+                  color: display.step.kind === 'needs' ? 'var(--zen-needs-you)' : muted ? 'var(--zen-text-muted)' : 'var(--zen-text)',
+                }}
+              >
+                <StepBody step={display.step} />
+              </span>
+              {counters.length ? (
+                <span data-zen-drawer-counters="" className="flex flex-none items-center tabular-nums" style={{ gap: COUNTER_GAP_PX, fontSize: 12, lineHeight: '18px' }}>
+                  {counters.map((c) => (
+                    <span
+                      key={c.key}
+                      data-zen-drawer-count={c.key}
+                      className={`zen-drawer-tag zen-drawer-count zen-drawer-tag-${c.key}`}
+                      style={{ height: TAG_H_PX, paddingLeft: ZEN_DRAWER_TAG_PAD_X_PX, paddingRight: ZEN_DRAWER_TAG_PAD_X_PX }}
+                    >
+                      <CounterGlyphs c={c} still={still} />
+                      <span className="sr-only">{counterSpoken(c)}</span>
+                    </span>
+                  ))}
+                </span>
+              ) : null}
+              <span data-zen-drawer-clock="" className="flex-none tabular-nums" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
+                {display.clock}
+              </span>
+            </span>
+          )}
+        </button>
+      </div>
+    </div>
+  )
+}

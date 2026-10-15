@@ -27,6 +27,7 @@ import {
   zenComposeDraft,
 } from '@/lib/zen/zen-compose-drafts'
 import { takeZenComposeFocus, useZenComposeFocusStore } from '@/lib/zen/zen-compose-focus'
+import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
 
 type Attachment = { kind: 'path'; path: string; name: string } | { kind: 'file'; file: File; name: string }
 
@@ -39,6 +40,7 @@ export function ZenCompose({
   disabled,
   attachments: allowAttachments = true,
   onSend,
+  drawer,
 }: {
   bridge: ZenWidgetBridge
   address: string
@@ -48,6 +50,8 @@ export function ZenCompose({
   attachments?: boolean
   /** A send started (the conversation scrolls to its bottom). */
   onSend?: () => void
+  /** Drawn on the box's top edge (Garden 1's activity drawer). */
+  drawer?: React.ReactNode
 }): React.JSX.Element {
   const [draft, setDraftState] = useState(() => zenComposeDraft(address))
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -122,6 +126,9 @@ export function ZenCompose({
     const paths = attachments.flatMap((a) => (a.kind === 'path' ? [a.path] : []))
     const files = attachments.flatMap((a) => (a.kind === 'file' ? [a.file] : []))
     const held = attachments
+    // "Recent agents first" (Gardens): this computer spoke to this agent
+    // now. Recorded whether the setting is on or not.
+    useZenRecentFirstStore.getState().markSent(address)
     onSend?.()
     setSending(true)
     setError(null)
@@ -209,9 +216,11 @@ export function ZenCompose({
           ))}
         </div>
       )}
+      {drawer}
       <div
         className="flex items-end gap-2"
         style={{
+          position: 'relative',
           padding: 6,
           borderRadius: 'calc(var(--zen-radius) + 4px)',
           background: 'var(--zen-surface-raised)',

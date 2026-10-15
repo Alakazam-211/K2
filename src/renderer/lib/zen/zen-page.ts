@@ -258,7 +258,8 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       id: 'agents',
       kind: 'agents',
       column: 0,
-      props: { 'home-picker': true },
+      // 0.45.6: Garden 1's pin grid and settings cog (from K2 Companion).
+      props: { 'home-picker': true, pins: true, settings: true },
       caps: ['agents:read', 'agents:add', 'presence:read'],
       source: 'builtin',
     },
@@ -266,7 +267,7 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       id: 'conversation',
       kind: 'conversation',
       column: 1,
-      props: { agents: 'agents' },
+      props: { agents: 'agents', 'activity-drawer': true },
       caps: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       source: 'builtin',
     },

@@ -207,6 +207,12 @@ export interface ZenAgentRow {
    *  PNG/JPEG/WebP/GIF data URL ≤ 256 KiB, never SVG (`agentLookImage`, the
    *  App surface's rule). */
   image: string | null
+  /** 0.45.6 Garden 1 (from K2 Companion): the agent's workspace is pinned
+   *  on its own server (`projects.pinned`, the Agents page's pin), as far as
+   *  a loaded project list says; false otherwise. Garden 1's Agents widget
+   *  draws pinned rows in its pin grid (`pins`). Never projected to a
+   *  custom widget. Optional for older fixtures: absent reads as false. */
+  pinned?: boolean
 }
 
 export type ZenConversationPhase = 'opening' | 'ready' | 'unavailable' | 'failed'
@@ -239,6 +245,12 @@ export interface ZenThreadView {
    *  (`isOwnThreadPost`). Null until known. Never projected to a custom
    *  widget (closed shapes, zen-custom-projection). */
   viewer?: ThreadViewer | null
+  /** 0.45.6 Garden 1: the whole live Thread turn (step, tool tally,
+   *  subagents, the daemon's clocks) for the activity drawer above the
+   *  box, or null when none runs. Absent when the server doesn't report
+   *  Thread turns. Built-in widgets only: never projected to a custom
+   *  widget (closed shapes, zen-custom-projection). */
+  liveTurn?: ThreadTurn | null
 }
 
 /** `thread.post` options: files on this computer, or browser files. A
@@ -760,6 +772,16 @@ function rowAvatar(row: HomeRow, onConnected: boolean): string | null {
   return homeRowAvatarFrom(row.address, activeHomeHostKey(host.activeHost), useHomeAvatarStore.getState())
 }
 
+/** Whether a row's workspace is pinned on its own server: the window
+ *  server's project list, else its open room's (another server). */
+function rowPinned(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry | undefined): boolean {
+  const list = onConnected
+    ? useProjectsStore.getState().projects
+    : (roomEntry?.room?.projects.getState().projects ?? null)
+  if (!list) return false
+  return Boolean(findWorkspaceForRow(list, row)?.pinned)
+}
+
 /** A row's color: its workspace on the window's server, else in its open
  *  room's own project list (another server), else null. */
 function rowColor(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry | undefined): string | null {
@@ -876,6 +898,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     avatarUrl,
     color: rowColor(row, onConnected, roomEntry),
     image: agentLookImage(avatarUrl),
+    pinned: rowPinned(row, onConnected, roomEntry),
   }
 }
 
@@ -1363,6 +1386,7 @@ function threadView(address: string): ZenThreadView {
     loadingOlder: f?.loadingOlder ?? false,
     error: f?.error ?? null,
     turn: zenTurn(f),
+    ...(f?.turnsReported ? { liveTurn: f.turn ?? null } : {}),
     viewer: viewerOf(address),
   }
 }

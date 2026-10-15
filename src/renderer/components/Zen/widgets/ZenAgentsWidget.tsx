@@ -39,8 +39,20 @@
 // it adds to a Home.
 //
 // Everything comes through the bridge (`agents:read`, `agents:add`).
+//
+// 0.45.6 Garden 1 (Rosson 2026-10-15, ported from K2 Companion):
+//   - `pins`: pinned agents (their workspace pin on their own server) as a
+//     grid of pictures at the top, three across, more rows as you pin more
+//     (no paging); the list below leaves them out (`zen-pin-grid.ts`).
+//   - `settings`: a cog in the header opens the Garden's own settings
+//     (`ZenGardenSettings`), not the app's Settings window.
+//   - "Recent agents first" (that settings view, this computer only, off by
+//     default): pinned agents stay first, then the agents you last messaged
+//     from a Garden, newest first (`zen-recent-first.ts`). ⌘↑ / ⌘↓ follow
+//     what's drawn; ⌘1–9 keep the Home's own order.
+// Only Gardens read any of this; the app's Agents page doesn't change.
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import { zenCountsText } from '@/lib/zen/zen-counts'
@@ -54,6 +66,17 @@ import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 import { zenAgentsSource } from '@/lib/zen/zen-rail-views'
 import type { ZenFocusGroups } from '@/lib/zen/zen-data'
 import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
+import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import {
+  ZEN_PIN_COL_GAP,
+  ZEN_PIN_GRID_BOTTOM_PX,
+  ZEN_PIN_ROW_GAP,
+  zenAgentsDisplay,
+  zenPinAvatarPx,
+  zenPinGridCentred,
+  zenPinGridColumns,
+} from '@/lib/zen/zen-pin-grid'
+import { ZenGardenSettingsButton } from './ZenGardenSettings'
 
 export const ZEN_EMPTY_HOME = 'This Home has no agents yet. Use Add agent to add some.'
 export const ZEN_EMPTY_SERVER = 'No agents on this server yet.'
@@ -419,6 +442,108 @@ function AgentRow({
   )
 }
 
+/** One pinned agent in the grid: its picture with the status mark, its
+ *  name, and while it's busy the status word under it. */
+function PinCell({ row, avatarPx, onOpen }: { row: ZenAgentRow; avatarPx: number; onOpen(address: string): void }): React.JSX.Element {
+  const busy = row.state === 'ok' && (row.activity === 'working' || row.activity === 'monitoring' || row.activity === 'needs-you')
+  const tone =
+    row.activity === 'working' ? 'var(--zen-working)' : row.activity === 'needs-you' ? 'var(--zen-needs-you)' : 'var(--zen-accent)'
+  const dotPx = Math.max(10, Math.round(avatarPx * 0.24))
+  const spoken = `Pinned ${row.label}${busy && row.activity ? `, ${ACTIVITY_TEXT[row.activity]}` : row.state !== 'ok' && row.stateLabel ? `, ${row.stateLabel}` : ''}`
+  return (
+    <li role="presentation" className="min-w-0">
+      <button
+        type="button"
+        role="option"
+        aria-selected={row.selected}
+        aria-label={spoken}
+        title={row.detail ?? (row.server ? `${row.label} on ${row.server}` : row.label)}
+        data-zen-pin={row.address}
+        data-selected={row.selected ? '' : undefined}
+        data-activity={row.activity ?? 'unknown'}
+        data-state={row.state}
+        onClick={() => onOpen(row.address)}
+        className="flex w-full min-w-0 flex-col items-center text-center cursor-pointer"
+        style={{ padding: 0, background: 'transparent', color: 'var(--zen-text)', opacity: row.state !== 'ok' ? 0.72 : 1 }}
+      >
+        <span
+          className="relative inline-flex"
+          data-zen-pin-avatar=""
+          style={{
+            marginBottom: 6,
+            borderRadius: 999,
+            boxShadow: row.selected ? '0 0 0 2px var(--zen-surface), 0 0 0 4px var(--zen-accent)' : 'none',
+          }}
+        >
+          <ZenAgentAvatar
+            label={row.label}
+            url={row.avatarUrl}
+            size={avatarPx}
+            agentColor={row.color}
+            background="var(--zen-bubble-agent)"
+            color="var(--zen-bubble-agent-text)"
+            fontSize={`${Math.max(12, Math.round(avatarPx * 0.35))}px`}
+          />
+          <span className="absolute" style={{ right: 1, bottom: 1, lineHeight: 0 }}>
+            <ZenStatusDot row={row} size={dotPx} />
+          </span>
+        </span>
+        <span className="block w-full truncate" data-zen-pin-name="" style={{ fontSize: '0.8em', maxWidth: 110 }}>
+          {row.label}
+        </span>
+        {busy && row.activity && (
+          <span className="block w-full truncate" data-zen-pin-activity={row.activity} style={{ fontSize: '0.72em', color: tone, maxWidth: 110 }}>
+            {ACTIVITY_TEXT[row.activity]}
+          </span>
+        )}
+      </button>
+    </li>
+  )
+}
+
+/** Garden 1's pin grid (`pins`): three across, more rows as you pin more;
+ *  one or two pins centred, a partial last row left-aligned. */
+function PinGrid({ rows, onOpen }: { rows: ZenAgentRow[]; onOpen(address: string): void }): React.JSX.Element {
+  const ref = useRef<HTMLUListElement | null>(null)
+  const [width, setWidth] = useState(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = (): void => {
+      const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null
+      const pad = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : 0
+      setWidth(el.clientWidth - pad)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const avatarPx = zenPinAvatarPx(width)
+  return (
+    <ul
+      ref={ref}
+      role="listbox"
+      aria-label="Pinned agents"
+      data-zen-pins=""
+      data-zen-pin-count={rows.length}
+      className="grid flex-shrink-0"
+      style={{
+        gridTemplateColumns: zenPinGridColumns(rows.length),
+        justifyContent: zenPinGridCentred(rows.length) ? 'center' : undefined,
+        gap: `${ZEN_PIN_ROW_GAP}px ${ZEN_PIN_COL_GAP}px`,
+        padding: `6px 18px ${ZEN_PIN_GRID_BOTTOM_PX}px`,
+        margin: 0,
+      }}
+    >
+      {rows.map((row) => (
+        <PinCell key={row.address} row={row} avatarPx={avatarPx} onOpen={onOpen} />
+      ))}
+    </ul>
+  )
+}
+
 /** The list's last row: Add agent (bottom left of the widget). */
 function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element {
   const { ref, onClick } = useZenAddAgentClick(bridge)
@@ -467,8 +592,15 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   // Home names only when they show (the picker, or the single-agent note).
   const homes = picker || (agent && rows.length === 0) ? bridge.homes.list() : []
   const home = homes.find((h) => h.id === homeId) ?? null
+  // 0.45.6 Garden 1: the pin grid (`pins`, not in one-agent mode) and
+  // "Recent agents first" (the Garden's own setting, this computer).
+  const recentFirst = useZenRecentFirstStore((s) => s.on)
+  const sent = useZenRecentFirstStore((s) => s.sent)
+  const { pins, list } = zenAgentsDisplay(rows, { grid: decl.props.pins === true && !agent, recentFirst, sent })
+  const settingsOn = decl.props.settings === true
+  // ⌘↑ / ⌘↓ walk what's drawn: the grid, then the list.
   const rowsRef = useRef(rows)
-  rowsRef.current = rows
+  rowsRef.current = [...pins, ...list]
   const open = (address: string): void => {
     void Promise.resolve()
       .then(() => bridge.call('conversation.open', address))
@@ -535,6 +667,7 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
         <span>{agent ? 'Agent' : 'Agents'}</span>
         {picker && <HomePicker homes={homes} current={home} onPick={pickHome} />}
         {groups?.enabled && <FocusGroupPicker bridge={bridge} groups={groups} />}
+        {settingsOn && <ZenGardenSettingsButton />}
       </div>
       {rows.length === 0 ? (
         <div
@@ -551,16 +684,21 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
               : ZEN_EMPTY_HOME}
         </div>
       ) : (
-        <ul
-          role="listbox"
-          aria-label="Agents"
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-          style={{ padding: '2px 8px 10px', gap: 2 }}
-        >
-          {rows.map((row) => (
-            <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={pick} />
-          ))}
-        </ul>
+        // One scroller: the pin grid scrolls away with the list.
+        <div data-zen-agents-scroll="" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {pins.length > 0 && <PinGrid rows={pins.map((row) => displayRow(row, decl.props))} onOpen={pick} />}
+          <ul
+            role="listbox"
+            aria-label="Agents"
+            data-zen-agents-order={recentFirst ? 'recent-first' : 'home'}
+            className="flex flex-shrink-0 flex-col"
+            style={{ padding: '2px 8px 10px', gap: 2, margin: 0 }}
+          >
+            {list.map((row) => (
+              <AgentRow key={row.address} row={displayRow(row, decl.props)} nowSec={nowSec} onOpen={pick} />
+            ))}
+          </ul>
+        </div>
       )}
       {!agent && !workspaces && bridge.caps.has('agents:add') && <AddAgentRow bridge={bridge} />}
     </div>

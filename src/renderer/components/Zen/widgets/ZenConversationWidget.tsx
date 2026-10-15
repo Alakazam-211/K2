@@ -16,6 +16,10 @@
 // (`agents` prop, else the page's first), or, with `agent` (and `home`),
 // is pinned to that one agent with no list needed. Display props:
 // `compose`, `attachments`, `load-older` (the daemon sends every prop).
+//
+// 0.45.6 (Rosson 2026-10-15, from K2 Companion): with `activity-drawer` (on
+// in Garden 1) the live Thread turn shows in `ZenActivityDrawer`, pulled
+// out of the message box's top edge, instead of the typing dots.
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
@@ -29,6 +33,7 @@ import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
+import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
 import { ZenStatusDot } from './ZenAgentsWidget'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
 
@@ -172,6 +177,8 @@ export interface ZenConversationOptions {
   compose: boolean
   attachments: boolean
   loadOlder: boolean
+  /** 0.45.6 Garden 1: the activity drawer above the box (`activity-drawer`). */
+  activityDrawer?: boolean
 }
 
 const ALL_ON: ZenConversationOptions = { compose: true, attachments: true, loadOlder: true }
@@ -192,8 +199,13 @@ export function ZenConversation({
   const ready = view?.phase === 'ready'
   // TW14: the dots follow the Thread turn when the server reports turns,
   // else the row's rollup (an older server).
+  // Garden 1's activity drawer (`activity-drawer`) stands in for the dots
+  // while it has a turn to show (a server that reports Thread turns).
+  const drawerTurn = options.activityDrawer && options.compose && view?.liveTurn !== undefined ? view.liveTurn : undefined
+  const drawerOn = drawerTurn !== undefined && zenDrawerShows(drawerTurn)
   const typing =
-    view?.turn !== undefined ? view.turn !== null && (view.turn.state === 'working' || view.turn.state === 'monitoring') : row.working
+    !drawerOn &&
+    (view?.turn !== undefined ? view.turn !== null && (view.turn.state === 'working' || view.turn.state === 'monitoring') : row.working)
 
   // The card awaits this: a secret card's refusal (a red warning, a scope
   // only an admin may pick) shows on the card. Never logs the payload.
@@ -390,6 +402,7 @@ export function ZenConversation({
           disabled={!ready || note !== null}
           attachments={options.attachments}
           onSend={scrollToBottom}
+          drawer={drawerTurn !== undefined && ready ? <ZenActivityDrawer turn={drawerTurn} /> : undefined}
         />
       )}
     </div>
@@ -415,6 +428,7 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
     compose: decl.props.compose !== false,
     attachments: decl.props.attachments !== false,
     loadOlder: decl.props['load-older'] !== false,
+    activityDrawer: decl.props['activity-drawer'] === true,
   }
   // A pinned conversation opens itself.
   const opened = useRef<string | null>(null)

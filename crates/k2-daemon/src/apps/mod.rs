@@ -6,6 +6,7 @@
 
 pub mod alerts;
 pub mod app_key_routes;
+pub mod approvals;
 pub mod attribution;
 pub mod box_prep;
 pub mod egress_proxy;

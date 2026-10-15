@@ -20,10 +20,17 @@
 -- apps.config_json          = the §4.4 App config fields that have no column
 --                             (resources, egress, ports, recycle, risk, db).
 --                             NULL = the defaults.
--- app_requests              = held requests (§5.6): what an agent (or a
---                             non-owner) proposed; the owner approves with a
---                             fresh confirm, or denies; the requester may
---                             withdraw. Expire after 7 days.
+-- app_widenings             = held App requests (§5.6), one table for every
+--                             kind: the grace kinds (config, publish_run,
+--                             app_key, clean_mode) and S15's egress kinds
+--                             (egress, egress_mode; their host list is in
+--                             0169). An agent or a non-owner proposes; the
+--                             owner approves in person with a fresh confirm
+--                             (vault action `app-approve` bound to the id);
+--                             an Owner/Admin denies; the requester may
+--                             withdraw its own. Expire after 7 days.
+--                             app_id NULL = a `--cmd` service with no
+--                             runtime App row (service_id names it).
 -- app_owner_token_uses      = per published service: which routes it called
 --                             with the owner token (Linux attribution), so
 --                             the 0.46.0 warnings can name them before the
@@ -38,27 +45,35 @@ ALTER TABLE projects ADD COLUMN agents_can_publish_open_apps INTEGER NOT NULL DE
 --> statement-breakpoint
 ALTER TABLE apps ADD COLUMN config_json TEXT;
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS app_requests (
+CREATE TABLE IF NOT EXISTS app_widenings (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('config', 'publish_run', 'app_key', 'clean_mode')),
+  kind TEXT NOT NULL CHECK (kind IN ('config', 'publish_run', 'app_key', 'clean_mode', 'egress', 'egress_mode')),
+  app_id TEXT REFERENCES apps(app_id) ON DELETE CASCADE,
   service_id TEXT,
   app_label TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
   body_json TEXT NOT NULL,
   diff_json TEXT NOT NULL,
+  summary TEXT NOT NULL,
   reasons_json TEXT NOT NULL,
-  requested_by TEXT NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('held', 'approved', 'denied', 'withdrawn', 'expired', 'failed')),
-  result_json TEXT,
-  decided_by TEXT,
-  decided_via TEXT,
-  decided_at INTEGER,
   reason TEXT,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
+  deployment_id TEXT,
+  requested_by TEXT NOT NULL,
+  requester_workspace TEXT,
+  requester_session TEXT,
+  requested_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'withdrawn', 'expired', 'failed')),
+  decided_by TEXT,
+  decided_at INTEGER,
+  confirm_via TEXT,
+  decision_reason TEXT,
+  result_json TEXT
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS app_requests_ws_state ON app_requests (workspace_id, state, created_at);
+CREATE INDEX IF NOT EXISTS app_widenings_ws_status ON app_widenings (workspace_id, status, requested_at);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS app_widenings_app_status ON app_widenings (app_id, status);
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS app_owner_token_uses (
   service_id TEXT NOT NULL,

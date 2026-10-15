@@ -8,9 +8,11 @@
 //! narrows one thing and widens another applies the narrowing now and
 //! holds only the widening (§5.6 "narrowing never waits").
 //!
-//! In 0.46.0 the walls that enforce egress, ports and the private database
+//! In 0.46.0 the walls that enforce extra ports and the private database
 //! aren't on yet (0.46.1); the values are stored and approved now so the
-//! wall starts from the owner's decisions.
+//! wall starts from the owner's decisions. Egress is not here: a guarded
+//! App's host list and mode are `deploy::egress` (S15, enforced by its
+//! proxy), and `/cli/app/config`'s egress fields go there.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -20,7 +22,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     pub resources: Resources,
-    pub egress: Egress,
     /// Extra ports beyond the one front port (`$PORT`). Any entry is an
     /// open-path feature.
     pub ports: Vec<PortSpec>,
@@ -34,7 +35,6 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             resources: Resources::default(),
-            egress: Egress::default(),
             ports: Vec::new(),
             recycle: Recycle::default(),
             risk: "normal".into(),
@@ -49,21 +49,6 @@ pub struct Resources {
     pub cpu_weight: Option<u32>,
     pub tasks: Option<u32>,
     pub disk_bytes: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Egress {
-    /// `allowlist` | `broad`.
-    pub mode: String,
-    /// `host:port`.
-    pub hosts: Vec<String>,
-}
-
-impl Default for Egress {
-    fn default() -> Self {
-        Self { mode: "allowlist".into(), hosts: Vec::new() }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +83,10 @@ pub struct State {
     /// `guarded` | `open`.
     pub path: String,
     pub config: AppConfig,
+    /// The disk ceilings column (`apps.io_max_json`, 0170): `None` = K2's
+    /// default ceiling. The daemon compares ceilings (it owns the wall's
+    /// numbers); here it is stored and applied.
+    pub io_max_json: Option<String>,
 }
 
 /// One change. Serialized into held requests and applied on approve.
@@ -108,9 +97,6 @@ pub enum Op {
     CpuWeight(Option<u32>),
     Tasks(Option<u32>),
     Disk(Option<i64>),
-    EgressAdd(String),
-    EgressRm(String),
-    EgressMode(String),
     PortAdd(PortSpec),
     PortRm(PortSpec),
     RecycleEvery(Option<i64>),
@@ -120,6 +106,10 @@ pub enum Op {
     Risk(String),
     DbPrivate(bool),
     DbRaw(bool),
+    /// The disk ceilings (§6.2, runtime lane D): the new column value
+    /// (`None` = K2's default). The daemon classifies it (tightening
+    /// narrows; raising a ceiling is the owner's) and holds only a raise.
+    Io(Option<String>),
 }
 
 /// How a change sits against the App's approved set.
@@ -168,23 +158,6 @@ pub fn classify(op: &Op, s: &State) -> Class {
         Op::Tasks(v) => cmp_opt(v, &c.resources.tasks),
         Op::Disk(v) => cmp_opt(v, &c.resources.disk_bytes),
         Op::RecycleEvery(_) | Op::RecycleAt(_) => Class::Narrow,
-        Op::EgressAdd(h) => {
-            if c.egress.hosts.contains(h) || (s.path == "open" && c.egress.mode == "broad") {
-                // Already allowed (broad egress on the open path audits
-                // first-seen hosts instead).
-                Class::Narrow
-            } else {
-                Class::PerEvent
-            }
-        }
-        Op::EgressRm(_) => Class::Narrow,
-        Op::EgressMode(m) => {
-            if m == "broad" && c.egress.mode != "broad" {
-                Class::Open
-            } else {
-                Class::Narrow
-            }
-        }
         Op::PortAdd(p) => {
             if c.ports.contains(p) {
                 Class::Narrow
@@ -231,6 +204,15 @@ pub fn classify(op: &Op, s: &State) -> Class {
                 Class::Narrow
             }
         }
+        // The daemon compares ceilings before an Io op gets here; one
+        // that reaches the classifier is treated as a raise.
+        Op::Io(col) => {
+            if *col == s.io_max_json {
+                Class::Narrow
+            } else {
+                Class::Owner
+            }
+        }
     }
 }
 
@@ -242,9 +224,6 @@ pub fn describe(op: &Op, s: &State) -> String {
         Op::CpuWeight(v) => format!("CPU weight {:?} → {:?}", s.config.resources.cpu_weight, v),
         Op::Tasks(v) => format!("task limit {:?} → {:?}", s.config.resources.tasks, v),
         Op::Disk(v) => format!("disk budget {} → {}", mib(&s.config.resources.disk_bytes), mib(v)),
-        Op::EgressAdd(h) => format!("allow outbound calls to {h}"),
-        Op::EgressRm(h) => format!("stop outbound calls to {h}"),
-        Op::EgressMode(m) => format!("egress mode {} → {m}", s.config.egress.mode),
         Op::PortAdd(p) => format!("open port {}/{}", p.port, p.proto),
         Op::PortRm(p) => format!("close port {}/{}", p.port, p.proto),
         Op::RecycleEvery(v) => format!("recycle every {v:?} s"),
@@ -254,6 +233,11 @@ pub fn describe(op: &Op, s: &State) -> String {
         Op::Risk(r) => format!("risk {} → {r}", s.config.risk),
         Op::DbPrivate(on) => format!("private database {}", if *on { "on" } else { "off" }),
         Op::DbRaw(on) => format!("raw private-database connection {}", if *on { "on" } else { "off" }),
+        Op::Io(col) => format!(
+            "disk ceilings {} → {}",
+            s.io_max_json.as_deref().unwrap_or("K2's default"),
+            col.as_deref().unwrap_or("K2's default")
+        ),
     }
 }
 
@@ -265,13 +249,6 @@ pub fn apply(op: &Op, s: &mut State) {
         Op::CpuWeight(v) => c.resources.cpu_weight = *v,
         Op::Tasks(v) => c.resources.tasks = *v,
         Op::Disk(v) => c.resources.disk_bytes = *v,
-        Op::EgressAdd(h) => {
-            if !c.egress.hosts.contains(h) {
-                c.egress.hosts.push(h.clone());
-            }
-        }
-        Op::EgressRm(h) => c.egress.hosts.retain(|x| x != h),
-        Op::EgressMode(m) => c.egress.mode = m.clone(),
         Op::PortAdd(p) => {
             if !c.ports.contains(p) {
                 c.ports.push(p.clone());
@@ -285,23 +262,8 @@ pub fn apply(op: &Op, s: &mut State) {
         Op::Risk(r) => c.risk = r.clone(),
         Op::DbPrivate(on) => c.db.private = *on,
         Op::DbRaw(on) => c.db.raw = *on,
+        Op::Io(col) => s.io_max_json = col.clone(),
     }
-}
-
-/// Validate a host for the egress allowlist: `host:port`, a DNS name or
-/// IP, port 1–65535. Lower-cased.
-pub fn parse_egress_host(raw: &str) -> Result<String, String> {
-    let t = raw.trim().to_ascii_lowercase();
-    let (host, port) = t.rsplit_once(':').ok_or_else(|| format!("egress host {raw:?}: use host:port (api.stripe.com:443)"))?;
-    let port: u16 = port.parse().ok().filter(|p| *p > 0).ok_or_else(|| format!("egress host {raw:?}: bad port"))?;
-    let ok = !host.is_empty()
-        && host.len() <= 253
-        && !host.contains('*')
-        && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
-    if !ok {
-        return Err(format!("egress host {raw:?}: a plain host name (no wildcards or schemes)"));
-    }
-    Ok(format!("{host}:{port}"))
 }
 
 /// `3000/tcp`, `5000/udp`, `8080` (tcp).
@@ -322,12 +284,13 @@ pub fn load(conn: &Connection, app_id: &str) -> rusqlite::Result<AppConfig> {
     Ok(raw.flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default())
 }
 
-/// Write the state back (memory, isolation, path and the JSON in one
-/// statement).
+/// Write the state back (memory, isolation, path, disk ceilings and the
+/// JSON in one statement).
 pub fn store(conn: &Connection, app_id: &str, s: &State, now: i64) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE apps SET memory_limit_bytes = ?2, isolation = ?3, path = ?4, config_json = ?5, updated_at = ?6 WHERE app_id = ?1",
-        params![app_id, s.memory_limit_bytes, s.isolation, s.path, serde_json::to_string(&s.config).unwrap_or_default(), now],
+        "UPDATE apps SET memory_limit_bytes = ?2, isolation = ?3, path = ?4, config_json = ?5, io_max_json = ?6, updated_at = ?7 \
+         WHERE app_id = ?1",
+        params![app_id, s.memory_limit_bytes, s.isolation, s.path, serde_json::to_string(&s.config).unwrap_or_default(), s.io_max_json, now],
     )?;
     Ok(())
 }
@@ -337,7 +300,13 @@ mod tests {
     use super::*;
 
     fn st() -> State {
-        State { memory_limit_bytes: Some(512 << 20), isolation: "container".into(), path: "guarded".into(), config: AppConfig::default() }
+        State {
+            memory_limit_bytes: Some(512 << 20),
+            isolation: "container".into(),
+            path: "guarded".into(),
+            config: AppConfig::default(),
+            io_max_json: None,
+        }
     }
 
     #[test]
@@ -345,9 +314,6 @@ mod tests {
         let s = st();
         assert_eq!(classify(&Op::Memory(Some(256 << 20)), &s), Class::Narrow);
         assert_eq!(classify(&Op::Memory(None), &s), Class::Budget, "removing the limit raises it");
-        assert_eq!(classify(&Op::EgressAdd("api.stripe.com:443".into()), &s), Class::PerEvent);
-        assert_eq!(classify(&Op::EgressRm("api.stripe.com:443".into()), &s), Class::Narrow);
-        assert_eq!(classify(&Op::EgressMode("broad".into()), &s), Class::Open);
         assert_eq!(classify(&Op::PortAdd(parse_port("5000/udp").unwrap()), &s), Class::Open);
         assert_eq!(classify(&Op::Path("open".into()), &s), Class::Open);
         assert_eq!(classify(&Op::Isolation("vm".into()), &s), Class::Narrow);
@@ -364,26 +330,28 @@ mod tests {
     }
 
     #[test]
-    fn broad_open_apps_only_audit_new_hosts_and_apply_is_idempotent() {
+    fn ports_apply_idempotently_and_ops_round_trip() {
         let mut s = st();
         apply(&Op::Path("open".into()), &mut s);
-        apply(&Op::EgressMode("broad".into()), &mut s);
-        assert_eq!(classify(&Op::EgressAdd("x.example.com:443".into()), &s), Class::Narrow);
-        apply(&Op::EgressAdd("a.example.com:443".into()), &mut s);
-        apply(&Op::EgressAdd("a.example.com:443".into()), &mut s);
-        assert_eq!(s.config.egress.hosts, vec!["a.example.com:443"]);
-        let ops = vec![Op::Memory(None), Op::PortAdd(parse_port("9000").unwrap())];
+        assert_eq!(classify(&Op::PortAdd(parse_port("9000").unwrap()), &s), Class::Open);
+        apply(&Op::PortAdd(parse_port("9000").unwrap()), &mut s);
+        apply(&Op::PortAdd(parse_port("9000").unwrap()), &mut s);
+        assert_eq!(s.config.ports, vec![parse_port("9000").unwrap()]);
+        assert_eq!(classify(&Op::PortAdd(parse_port("9000").unwrap()), &s), Class::Narrow, "already open");
+        // Disk ceilings: the same column narrows; any other is the owner's
+        // (the daemon only lets a raise reach the classifier).
+        assert_eq!(classify(&Op::Io(None), &s), Class::Narrow);
+        assert_eq!(classify(&Op::Io(Some("{\"wbps\":1}".into())), &s), Class::Owner);
+        apply(&Op::Io(Some("{\"wbps\":1}".into())), &mut s);
+        assert_eq!(s.io_max_json.as_deref(), Some("{\"wbps\":1}"));
+        let ops = vec![Op::Memory(None), Op::PortAdd(parse_port("9000").unwrap()), Op::Io(None)];
         let j = serde_json::to_string(&ops).unwrap();
         let back: Vec<Op> = serde_json::from_str(&j).unwrap();
         assert_eq!(back, ops, "ops round-trip through a held request");
     }
 
     #[test]
-    fn hosts_and_ports_parse_strictly() {
-        assert_eq!(parse_egress_host("API.Stripe.com:443").unwrap(), "api.stripe.com:443");
-        assert!(parse_egress_host("api.stripe.com").is_err());
-        assert!(parse_egress_host("*.stripe.com:443").is_err());
-        assert!(parse_egress_host("https://x:443").is_err());
+    fn ports_parse_strictly() {
         assert_eq!(parse_port("8080").unwrap(), PortSpec { port: 8080, proto: "tcp".into() });
         assert!(parse_port("0").is_err() && parse_port("80/sctp").is_err());
     }

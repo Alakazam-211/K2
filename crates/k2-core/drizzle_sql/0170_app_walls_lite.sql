@@ -1,6 +1,6 @@
--- 0168: the 0.46.0 wall knobs on `apps` (prd-k2-app-runtime-v1 §4.3, §4.4,
+-- 0170: the 0.46.0 wall knobs on `apps` (prd-k2-app-runtime-v1 §4.3, §4.4,
 -- §6.2; runtime lane D). New nullable/defaulted columns only. 0166/0167
--- are Sew's; the integrator renumbers on slips. The full `app_walls`
+-- are Sew's, 0168 is the App grace release and 0169 App egress. The full `app_walls`
 -- migration (path/egress/ports/capabilities config, 0.46.1) folds these in.
 --
 -- io_max_json     per-App disk ceilings (cgroup v2 io.max via systemd

@@ -1,9 +1,11 @@
-//! `/cli/app/egress*` and the held-widening routes (`prd-k2-app-runtime-v1`
-//! §5.6, §8.1, S15). `k2 app egress …`, `k2 app approvals|approve|deny`.
+//! `/cli/app/egress*` (`prd-k2-app-runtime-v1` §5.6, §8.1, S15).
+//! `k2 app egress …`. Its held widenings are ordinary held App requests:
+//! `k2 app approvals|approve|deny` (`super::approvals`, one set of routes
+//! for every kind).
 //!
 //! Who may do what:
-//! - **Read** (`egress`, `egress/log`, `approvals`): anyone who sees the
-//!   App. A passport sees only its own workspace's Apps.
+//! - **Read** (`egress`, `egress/log`): anyone who sees the App. A
+//!   passport sees only its own workspace's Apps.
 //! - **Propose** (`egress/add`, `egress/mode broad`): the same. Always a
 //!   held request, whoever asks, the owner token included (§5.6 "always
 //!   per event", K25, AR14): a new egress host is never live until the
@@ -11,42 +13,30 @@
 //! - **Narrow** (`egress/rm`, `egress/mode allowlist`): the same, at once,
 //!   no switch needed (narrowing never waits). Open tunnels to a removed
 //!   host are cut.
-//! - **Approve**: the server's owner only (owner token or an Owner login),
-//!   never a passport (a K2 shell tab included), with a vault confirm
-//!   token for action `app-approve` bound to the request id (Touch ID or
-//!   the login/vault password; 60 s, single use).
-//! - **Deny**: an Owner/Admin human; the requester (its own workspace's
-//!   passport, or the same human) withdraws instead.
+//! - **Approve / deny**: `super::approvals` (the owner in person with a
+//!   confirm bound to the request; an admin denies; the requester
+//!   withdraws its own).
 
 use std::collections::HashMap;
 
-use k2_core::connect_users::Role;
 use k2_core::deploy::egress::{self as pol, HostSpec};
 use k2_core::deploy::{self, codes as dcodes};
 use serde_json::{json, Value as J};
 
-use super::routes::{actor, agent_ws, app_for, db_err, json_body, need_credential, no, s, Refusal, Who, R};
+use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, Who, R};
 
-pub const ROUTES: &[&str] = &[
-    "/cli/app/egress",
-    "/cli/app/egress/log",
-    "/cli/app/egress/add",
-    "/cli/app/egress/rm",
-    "/cli/app/egress/mode",
-    "/cli/app/approvals",
-    "/cli/app/approve",
-    "/cli/app/deny",
-];
+pub const ROUTES: &[&str] = &["/cli/app/egress", "/cli/app/egress/log", "/cli/app/egress/add", "/cli/app/egress/rm", "/cli/app/egress/mode"];
 
-pub const POST_ROUTES: &[&str] = &["/cli/app/egress/add", "/cli/app/egress/rm", "/cli/app/egress/mode", "/cli/app/approve", "/cli/app/deny"];
+pub const POST_ROUTES: &[&str] = &["/cli/app/egress/add", "/cli/app/egress/rm", "/cli/app/egress/mode"];
 
-/// The vault confirm action for approving a held App widening (§5.6 step 4).
-pub const CONFIRM_ACTION: &str = "app-approve";
+/// The vault confirm action for approving any held App request.
+pub use super::approvals::CONFIRM_ACTION;
 
 pub mod codes {
     pub const HELD: &str = "held";
     pub const OWNER_ONLY: &str = "owner_only";
-    pub const OWNER_CONFIRM_REQUIRED: &str = "owner_confirm_required";
+    /// The house code for "this needs a fresh vault confirm".
+    pub const OWNER_CONFIRM_REQUIRED: &str = "vault_confirm_required";
     pub const REQUEST_NOT_FOUND: &str = "request_not_found";
     pub const NOT_PENDING: &str = "not_pending";
     pub const REQUEST_EXPIRED: &str = "request_expired";
@@ -63,9 +53,9 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/egress/add" => add(who, body),
         "/cli/app/egress/rm" => rm(who, body),
         "/cli/app/egress/mode" => set_mode(who, body),
-        "/cli/app/approvals" => approvals(who, params),
-        "/cli/app/approve" => approve(who, body),
-        "/cli/app/deny" => deny(who, body),
+        // The held-request routes are served with the grace routes; the
+        // same handlers answer here (tests call this module directly).
+        p if super::approvals::ROUTES.contains(&p) => super::approvals::handle(p, who, body, params),
         _ => Err(no("not_found", 404, "no such App egress route")),
     }
 }
@@ -91,19 +81,6 @@ fn changed(app: &str) {
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({ "apps": "egress", "app": app }));
 }
 
-/// The confirm stamp for an owner (the vault actor the token was minted for).
-fn confirm_stamp(who: &Who) -> Option<String> {
-    match who {
-        Who::Owner => Some("owner".into()),
-        Who::Login { username, role: Role::Owner } => Some(format!("connect:{username}")),
-        _ => None,
-    }
-}
-
-fn is_admin_human(who: &Who) -> bool {
-    matches!(who, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
-}
-
 fn session_of(who: &Who) -> Option<&str> {
     match who {
         Who::Agent { session_id, .. } | Who::Shell { session_id, .. } => Some(session_id.as_str()),
@@ -118,8 +95,7 @@ fn workspace_of(who: &Who) -> Option<&str> {
     }
 }
 
-/// Specs from `hosts` (array) or `host` (one), each checked: parseable,
-/// never this box's own names.
+/// Specs from `hosts` (array) or `host` (one), each checked.
 fn specs_from(v: &J) -> R<Vec<HostSpec>> {
     let mut raw: Vec<String> = match v.get("hosts") {
         Some(J::Array(a)) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
@@ -128,10 +104,16 @@ fn specs_from(v: &J) -> R<Vec<HostSpec>> {
     if let Some(h) = s(v, "host") {
         raw.push(h.to_string());
     }
+    check_specs(&raw)
+}
+
+/// Hosts an App may ask for: parseable, never this box's own names, never
+/// a private, local or metadata address. Shared with `/cli/app/config`.
+pub(crate) fn check_specs(raw: &[String]) -> R<Vec<HostSpec>> {
     if raw.is_empty() {
         return Err(no(dcodes::BAD_REQUEST, 400, "name a host (host[:port], 443 by default)"));
     }
-    let specs = pol::parse_specs(&raw).map_err(|e| no(codes::EGRESS_HOST_INVALID, 400, e))?;
+    let specs = pol::parse_specs(raw).map_err(|e| no(codes::EGRESS_HOST_INVALID, 400, e))?;
     for sp in &specs {
         if !sp.is_ip() && super::egress_proxy::is_own_name(&sp.host) {
             return Err(no(
@@ -159,23 +141,20 @@ fn enforced(app: &deploy::store::AppRow) -> bool {
 }
 
 fn request_json(w: &pol::Widening) -> J {
-    let mut v = serde_json::to_value(w).unwrap_or(J::Null);
-    v["hosts"] = json!(w.hosts().iter().map(HostSpec::display).collect::<Vec<_>>());
-    v
+    super::approvals::request_json(w)
 }
 
+/// The held answer (`202`, the one shape every held App request has),
+/// plus the hosts that were already allowed.
 fn held_answer(w: &pol::Widening, already: &[HostSpec]) -> J {
-    json!({
-        "ok": true,
-        "status": codes::HELD,
-        "request": request_json(w),
-        "alreadyAllowed": already.iter().map(HostSpec::display).collect::<Vec<_>>(),
-        "hint": format!(
-            "held for the owner: they approve it in Settings → Apps → Approvals, or k2 app approve {} from a terminal outside K2. \
-             Until then the App can't reach it.",
-            w.id
-        ),
-    })
+    let mut v = super::approvals::held_answer(w);
+    v["alreadyAllowed"] = json!(already.iter().map(HostSpec::display).collect::<Vec<_>>());
+    v["hint"] = json!(format!(
+        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Apps → \
+         Approvals). Until then the App can't reach it.",
+        w.id
+    ));
+    v
 }
 
 // ── read ─────────────────────────────────────────────────────────────
@@ -218,28 +197,6 @@ fn log(who: &Who, params: &HashMap<String, String>) -> R<J> {
     Ok(json!({ "ok": true, "app": app.app_id, "lines": super::egress_proxy::tail(&app.app_id, n) }))
 }
 
-/// GET `/cli/app/approvals?app=&state=pending|all|<state>`.
-fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
-    need_credential(who)?;
-    let app = match params.get("app").map(|a| a.trim()).filter(|a| !a.is_empty()) {
-        Some(a) => Some(app_for(who, Some(a))?.app_id),
-        None => None,
-    };
-    let state = match params.get("state").map(String::as_str).unwrap_or("pending") {
-        "all" => None,
-        s @ ("pending" | "approved" | "denied" | "withdrawn" | "expired") => Some(s.to_string()),
-        other => return Err(no(dcodes::BAD_REQUEST, 400, format!("state is pending, approved, denied, withdrawn, expired or all, not '{other}'"))),
-    };
-    let ws = agent_ws(who).map(str::to_string);
-    let rows = db(|c| {
-        for w in pol::expire_due(c, deploy::now())? {
-            notify_requester(&w, &format!("[k2 apps] request {} expired after 7 days without an answer: {}", w.id, w.summary));
-        }
-        pol::list_requests(c, app.as_deref(), state.as_deref(), ws.as_deref(), 200)
-    })?;
-    Ok(json!({ "ok": true, "requests": rows.iter().map(request_json).collect::<Vec<_>>() }))
-}
-
 // ── propose ──────────────────────────────────────────────────────────
 
 /// POST `/cli/app/egress/add {app, host|hosts, reason?}` → held (or
@@ -249,16 +206,20 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let specs = specs_from(&v)?;
+    ask_specs(who, &app, &specs, s(&v, "reason"), pol::SOURCE_REQUEST, None)
+}
+
+/// Ask for hosts on `app` (`/cli/app/egress/add`, `/cli/app/config`
+/// `egressAdd`): a held `egress` request, or "already allowed".
+pub(crate) fn ask_hosts(who: &Who, app: &deploy::store::AppRow, raw: &[String], reason: Option<&str>, deployment: Option<&str>) -> R<J> {
+    let specs = check_specs(raw)?;
+    ask_specs(who, app, &specs, reason, pol::SOURCE_REQUEST, deployment)
+}
+
+fn ask_specs(who: &Who, app: &deploy::store::AppRow, specs: &[HostSpec], reason: Option<&str>, source: &str, deployment: Option<&str>) -> R<J> {
     let by = actor(who);
-    let ask = pol::Ask {
-        source: pol::SOURCE_REQUEST,
-        reason: s(&v, "reason"),
-        deployment_id: None,
-        by: &by,
-        workspace: workspace_of(who),
-        session: session_of(who),
-    };
-    let (w, already) = db(|c| Ok(pol::request_hosts(c, &app.app_id, &specs, &ask, deploy::now())))?.map_err(|e| no(codes::EGRESS_HOST_INVALID, 409, e))?;
+    let ask = pol::Ask { source, reason, deployment_id: deployment, by: &by, workspace: workspace_of(who), session: session_of(who) };
+    let (w, already) = db(|c| Ok(pol::request_hosts(c, &app.app_id, specs, &ask, deploy::now())))?.map_err(|e| no(codes::EGRESS_HOST_INVALID, 409, e))?;
     let Some(w) = w else {
         return Ok(json!({
             "ok": true,
@@ -317,6 +278,12 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let raw = s(&v, "host").ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "name the host to remove"))?;
+    remove_host(who, &app, raw)
+}
+
+/// Take one host off an App's list at once (`/cli/app/egress/rm`,
+/// `/cli/app/config` `egressRm`).
+pub(crate) fn remove_host(who: &Who, app: &deploy::store::AppRow, raw: &str) -> R<J> {
     let spec = pol::parse_spec(raw).map_err(|e| no(codes::EGRESS_HOST_INVALID, 400, e))?;
     let row = db(|c| pol::get_host(c, &app.app_id, &spec))?;
     let removed = db(|c| pol::remove(c, &app.app_id, &spec))?;
@@ -341,7 +308,12 @@ fn set_mode(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
-    let mode = s(&v, "mode").unwrap_or("");
+    change_mode(who, &app, s(&v, "mode").unwrap_or(""), s(&v, "reason"))
+}
+
+/// Set an App's egress mode (`/cli/app/egress/mode`, `/cli/app/config`
+/// `egressMode`).
+pub(crate) fn change_mode(who: &Who, app: &deploy::store::AppRow, mode: &str, reason: Option<&str>) -> R<J> {
     let by = actor(who);
     match mode {
         pol::MODE_ALLOWLIST => {
@@ -373,7 +345,7 @@ fn set_mode(who: &Who, body: &[u8]) -> R<J> {
                         kind: pol::KIND_EGRESS_MODE,
                         diff: json!({ "egressMode": pol::MODE_BROAD }),
                         summary: format!("let App {} reach any public host (broad egress, every first-seen host audited)", app.app_id),
-                        reason: s(&v, "reason"),
+                        reason,
                         deployment_id: None,
                         requested_by: &by,
                         requester_workspace: workspace_of(who),
@@ -389,120 +361,6 @@ fn set_mode(who: &Who, body: &[u8]) -> R<J> {
     }
 }
 
-// ── decide ───────────────────────────────────────────────────────────
-
-fn vault() -> R<std::sync::Arc<k2_vault::LocalVault>> {
-    #[cfg(test)]
-    if let Some(v) = test_seams::vault() {
-        return Ok(v);
-    }
-    crate::vault::get().map_err(|e| no(codes::VAULT_CLOSED, 503, format!("the vault isn't open ({}): {}", e.code, e.hint)))
-}
-
-fn find(token: Option<&str>) -> R<pol::Widening> {
-    let t = token.ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "name the request (its w_… id)"))?;
-    db(|c| pol::find_request(c, t))?.ok_or_else(|| no(codes::REQUEST_NOT_FOUND, 404, format!("no request '{t}' (k2 app approvals)")))
-}
-
-fn decide_err(code: &'static str) -> Refusal {
-    match code {
-        "request_expired" => no(codes::REQUEST_EXPIRED, 410, "this request expired (7 days); ask again"),
-        "not_pending" => no(codes::NOT_PENDING, 409, "this request was already decided"),
-        _ => no(codes::REQUEST_NOT_FOUND, 404, "no such request"),
-    }
-}
-
-/// POST `/cli/app/approve {request, confirmToken}`: the owner, in person.
-fn approve(who: &Who, body: &[u8]) -> R<J> {
-    need_credential(who)?;
-    let Some(stamp) = confirm_stamp(who) else {
-        return Err(no(
-            codes::OWNER_ONLY,
-            403,
-            "only the server's owner approves App widenings, in person: Settings → Apps → Approvals, or k2 app approve <id> \
-             from a terminal outside K2. An agent can never approve.",
-        ));
-    };
-    let v = json_body(body)?;
-    let w = find(s(&v, "request"))?;
-    let Some(token) = s(&v, "confirmToken") else {
-        return Err(no(
-            codes::OWNER_CONFIRM_REQUIRED,
-            403,
-            "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 app approve <id> asks for it",
-        ));
-    };
-    let vault = vault()?;
-    let proof = vault
-        .confirm
-        .take(token, CONFIRM_ACTION, Some(&w.id), &stamp)
-        .map_err(|_| no(codes::OWNER_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
-    let via = match proof {
-        k2_vault::HumanProof::Confirmed { method } => method,
-        k2_vault::HumanProof::None => return Err(no(codes::OWNER_CONFIRM_REQUIRED, 403, "no owner confirm")),
-    };
-    let by = actor(who);
-    let d = db(|c| Ok(pol::decide(c, &w.id, pol::REQ_APPROVED, &by, Some(&via), None, deploy::now())))?.map_err(decide_err)?;
-    audit(&d.app_id, "widening_approved", &by, json!({ "request": d.id, "kind": d.kind, "diff": d.diff, "via": via }));
-    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
-        "app-approve",
-        &by,
-        format!("ok {} ({}) via {via}", d.id, d.summary),
-        "cli",
-        "-",
-        "apps",
-    ));
-    changed(&d.app_id);
-    notify_requester(&d, &format!("[k2 apps] the owner approved {}: {}. It applies now.", d.id, d.summary));
-    Ok(json!({ "ok": true, "request": request_json(&d), "note": "approved; it applies to the App's next connection" }))
-}
-
-/// POST `/cli/app/deny {request, reason?}`: an admin denies; the
-/// requester withdraws.
-fn deny(who: &Who, body: &[u8]) -> R<J> {
-    need_credential(who)?;
-    let v = json_body(body)?;
-    let w = find(s(&v, "request"))?;
-    let by = actor(who);
-    let reason = s(&v, "reason").map(|r| r.chars().take(500).collect::<String>());
-    let mine = match who {
-        Who::Agent { project_id, .. } | Who::Shell { project_id, .. } => w.requester_workspace.as_deref() == Some(project_id.as_str()),
-        _ => w.requested_by == by,
-    };
-    let status = if who.passport().is_none() && is_admin_human(who) && !mine {
-        pol::REQ_DENIED
-    } else if mine {
-        pol::REQ_WITHDRAWN
-    } else {
-        // Hide requests on other workspaces' Apps from passports.
-        if agent_ws(who).is_some() {
-            return Err(no(codes::REQUEST_NOT_FOUND, 404, "no such request"));
-        }
-        return Err(no(codes::OWNER_ONLY, 403, "only the owner or an admin denies a request (the requester withdraws it)"));
-    };
-    let d = db(|c| Ok(pol::decide(c, &w.id, status, &by, None, reason.as_deref(), deploy::now())))?.map_err(decide_err)?;
-    let event = if status == pol::REQ_DENIED { "widening_denied" } else { "widening_withdrawn" };
-    audit(&d.app_id, event, &by, json!({ "request": d.id, "kind": d.kind, "reason": reason }));
-    changed(&d.app_id);
-    if status == pol::REQ_DENIED {
-        notify_requester(
-            &d,
-            &format!(
-                "[k2 apps] the owner denied {}{}: {}",
-                d.id,
-                reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default(),
-                d.summary
-            ),
-        );
-    }
-    Ok(json!({ "ok": true, "request": request_json(&d) }))
-}
-
-fn notify_requester(w: &pol::Widening, text: &str) {
-    if let Some(ws) = w.requester_workspace.as_deref() {
-        super::alerts::notify(ws, text);
-    }
-}
 
 #[cfg(test)]
 pub(crate) mod test_seams {
@@ -525,7 +383,7 @@ pub(crate) mod test_seams {
             .clone()
     }
 
-    pub(super) fn vault() -> Option<Arc<k2_vault::LocalVault>> {
+    pub(crate) fn vault() -> Option<Arc<k2_vault::LocalVault>> {
         Some(vault_handle())
     }
 }

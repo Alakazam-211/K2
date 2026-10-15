@@ -324,6 +324,9 @@ pub fn never_proxy(path: &str) -> bool {
             | "/events"
     ) || p.starts_with("/cli/terminal/")
         || p == "/cli/terminal"
+        // Sew S28 §15.3: the pass mint and key routes are never reachable
+        // from a browser through the gateway.
+        || p.starts_with("/cli/sew/")
         || p.starts_with("/v1/")
         || p == "/v1"
 }

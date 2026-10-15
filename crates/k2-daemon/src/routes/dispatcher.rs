@@ -5917,6 +5917,56 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Sew chat passes (S28 §9, K7) and the owner handoff mint (S32
+        // §11.1, person-confirmed). POST-only; loopback/LAN only; the pass
+        // route reads ONLY `Authorization: Bearer` (never `?token=` or a
+        // cookie, which the folded `query` would carry) and refuses browser
+        // headers. Responses are `Cache-Control: no-store`.
+        p if crate::chat_pass::mint::is_route(p) => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes =
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::chat_pass::mint::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::chat_pass::routes::error(413, "body_too_large", "chat-pass bodies are at most 4 KiB", None);
+                        super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, "Cache-Control: no-store\r\n").await;
+                        return DispatchOutcome::Done;
+                    }
+                };
+            let ingress_label = ingress.as_str().to_string();
+            let ip = peer_ip(stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+            let reply = if p == crate::chat_pass::mint::PASS {
+                let browser = crate::chat_pass::mint::has_browser_headers(&headers_blob);
+                let bearer = bearer_token.clone();
+                let owner = state.token.as_str().to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::chat_pass::mint::handle_pass(&crate::chat_pass::mint::PassRequest {
+                        ingress: &ingress_label,
+                        ip: &ip,
+                        browser,
+                        bearer: bearer.as_deref(),
+                        owner_token: &owner,
+                        body: &body_bytes,
+                    })
+                })
+                .await
+            } else {
+                let caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+                tokio::task::spawn_blocking(move || {
+                    crate::chat_pass::mint::handle_owner_handoff(&ingress_label, caller, &body_bytes)
+                })
+                .await
+            };
+            let reply = reply.unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")).into());
+            let mut extra = String::from("Cache-Control: no-store\r\n");
+            if let Some(secs) = reply.retry_after_secs {
+                extra.push_str(&format!("Retry-After: {secs}\r\n"));
+            }
+            let r = reply.response;
+            super::http::send_response_with_headers(&mut *stream, r.status, r.content_type, &r.body, &extra).await;
+        }
         // Sew chat-pass keys (S28 §10, K6): Owner/Admin people, loopback/
         // LAN only; the emergency wipe needs a vault confirm. POST-only rows
         // 405 on GET; bodies are capped; no key material in any response.

@@ -181,6 +181,8 @@ struct StoredConnectUser {
     must_change_password: bool,
     #[serde(default)]
     was_viewer: bool,
+    #[serde(default)]
+    id: String,
 }
 
 impl From<StoredConnectUser> for ConnectUser {
@@ -195,6 +197,7 @@ impl From<StoredConnectUser> for ConnectUser {
             StoredRole::Owner => Role::Owner,
         };
         ConnectUser {
+            id: s.id,
             username: s.username,
             password_hash: s.password_hash,
             created_at: s.created_at,
@@ -218,6 +221,16 @@ impl From<StoredConnectUser> for ConnectUser {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(from = "StoredConnectUser")]
 pub struct ConnectUser {
+    /// Stable, never-reused account id (uuid v4; Sew S28 rev 134 / K7).
+    /// Connect users are otherwise keyed by username, which can be removed
+    /// and added again; Sew needs an id that names one person forever
+    /// (`k2:connect:<id>`). Minted on add, backfilled for older rows on the
+    /// first store write (and at boot, [`backfill_user_ids`]); the id of a
+    /// removed account goes on the store's `retired_ids` list so it is
+    /// never handed out again. Empty only in memory for a row read from a
+    /// file written before ids existed and not yet rewritten.
+    #[serde(default)]
+    pub id: String,
     /// Unique, lowercased, `^[a-z0-9_-]{2,}$`.
     pub username: String,
     /// argon2id PHC hash string. Secret — only ever lives on the 0600
@@ -467,6 +480,39 @@ struct Store {
     /// files without the field still load (yielding the permissive default).
     #[serde(default)]
     policy: PasswordPolicy,
+    /// Ids of removed accounts (K7). A new or backfilled id is never one
+    /// of these, so a removed person's id never names someone else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired_ids: Vec<String>,
+}
+
+/// A fresh account id: uuid v4, not held by any account and never retired.
+fn fresh_user_id(store: &Store) -> String {
+    loop {
+        let id = uuid::Uuid::new_v4().to_string();
+        let taken = store.users.iter().any(|u| u.id == id) || store.retired_ids.iter().any(|r| r == &id);
+        if !taken {
+            return id;
+        }
+    }
+}
+
+/// Give every account without an id (rows from before K7) a fresh one, and
+/// re-mint an id that two rows share (a hand-edited file). Returns how many
+/// rows changed.
+fn backfill_ids(store: &mut Store) -> usize {
+    let mut changed = 0;
+    for i in 0..store.users.len() {
+        let id = store.users[i].id.clone();
+        let dup = !id.is_empty() && store.users[..i].iter().any(|u| u.id == id);
+        let retired = !id.is_empty() && store.retired_ids.iter().any(|r| r == &id);
+        if id.is_empty() || dup || retired {
+            let fresh = fresh_user_id(store);
+            store.users[i].id = fresh;
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Load the store. A missing/empty file yields an empty store; a
@@ -514,9 +560,35 @@ fn store_lock() -> std::sync::MutexGuard<'static, ()> {
 fn update_store<R>(f: impl FnOnce(&mut Store) -> Result<R, String>) -> Result<R, String> {
     let _g = store_lock();
     let mut store = load_store()?;
+    // K7: every write also persists account ids for older rows.
+    backfill_ids(&mut store);
     let r = f(&mut store)?;
     save_store(&store)?;
     Ok(r)
+}
+
+/// Boot step (K7): give every older account its stable id. Returns how
+/// many rows got one (0 and no write on a normal boot).
+pub fn backfill_user_ids() -> Result<usize, String> {
+    let _g = store_lock();
+    let mut store = load_store()?;
+    let n = backfill_ids(&mut store);
+    if n > 0 {
+        save_store(&store)?;
+    }
+    Ok(n)
+}
+
+/// The stable id of `username` (K7), backfilling older rows first.
+/// `Ok(None)` when there is no such account.
+pub fn user_uuid(username: &str) -> Result<Option<String>, String> {
+    let username = normalize_username(username)?;
+    let _g = store_lock();
+    let mut store = load_store()?;
+    if backfill_ids(&mut store) > 0 {
+        save_store(&store)?;
+    }
+    Ok(store.users.iter().find(|u| u.username == username).map(|u| u.id.clone()))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -578,7 +650,9 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
         if store.users.iter().any(|u| u.username == username) {
             return Err(format!("user '{username}' already exists"));
         }
+        let id = fresh_user_id(store);
         store.users.push(ConnectUser {
+            id,
             username,
             password_hash: hash,
             created_at: Utc::now(),
@@ -605,10 +679,13 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
 pub fn remove_user(username: &str) -> Result<(), String> {
     let username = normalize_username(username)?;
     update_store(|store| {
-        let before = store.users.len();
-        store.users.retain(|u| u.username != username);
-        if store.users.len() == before {
+        let Some(pos) = store.users.iter().position(|u| u.username == username) else {
             return Err(format!("user '{username}' not found"));
+        };
+        let gone = store.users.remove(pos);
+        // K7: the removed person's id is never handed out again.
+        if !gone.id.is_empty() && !store.retired_ids.contains(&gone.id) {
+            store.retired_ids.push(gone.id);
         }
         Ok(())
     })?;
@@ -1413,12 +1490,51 @@ pub fn validate_session(token: &str) -> Option<String> {
 /// kick route reports it as `revokedSessions`).
 pub fn revoke_user_sessions(username: &str) -> usize {
     let target = normalize_username(username).unwrap_or_else(|_| username.to_string());
-    update_sessions(|store| {
-        let before = store.sessions.len();
-        store.sessions.retain(|s| s.username != target);
-        Ok(before - store.sessions.len())
+    let removed: Vec<String> = update_sessions(|store| {
+        let mut gone = Vec::new();
+        store.sessions.retain(|s| {
+            if s.username == target {
+                gone.push(s.token_digest.clone());
+                false
+            } else {
+                true
+            }
+        });
+        Ok(gone)
     })
-    .unwrap_or(0)
+    .unwrap_or_default();
+    // K8: every ended session's chat passes (`cu_…`) end in Sew too.
+    queue_sew_revokes(&removed);
+    removed.len()
+}
+
+/// The chat-pass `sid` of a Connect session (Sew S28 §5, rev 134):
+/// `cu_` + the first 32 hex of SHA-256(token) — the digest K2 already
+/// stores, so it can be computed again at revoke time without the token.
+/// Never a secret (a truncated hash of a 256-bit random token).
+pub fn session_sid(token: &str) -> String {
+    sid_from_digest(&token_digest(token))
+}
+
+fn sid_from_digest(digest: &str) -> String {
+    format!("cu_{}", &digest[..digest.len().min(32)])
+}
+
+/// K8: queue `sew_session_revoke {k2_sid: cu_…}` for ended sessions. The
+/// session file is JSON, not `skin.db`, so this follows the write (S28
+/// §12) instead of sharing its transaction. Failures are logged, never
+/// fatal to the logout.
+fn queue_sew_revokes(digests: &[String]) {
+    if digests.is_empty() {
+        return;
+    }
+    let ops: Vec<crate::sew_revoke::SewSessionRevoke> = digests
+        .iter()
+        .map(|d| crate::sew_revoke::SewSessionRevoke::K2Sid(sid_from_digest(d)))
+        .collect();
+    if let Err(e) = crate::skin::enqueue_sew_revokes(&ops) {
+        crate::log_debug!("[connect_users] WARN sew_session_revoke not queued: {e}");
+    }
 }
 
 /// Log out the single session identified by `token`: delete ITS persisted
@@ -1431,7 +1547,7 @@ pub fn logout_session(token: &str) -> Option<String> {
     }
     let presented = token_digest(token);
     let presented_bytes = presented.as_bytes();
-    update_sessions(|store| {
+    let r = update_sessions(|store| {
         let mut found: Option<(usize, String)> = None;
         for (i, rec) in store.sessions.iter().enumerate() {
             let eq: bool = rec.token_digest.as_bytes().ct_eq(presented_bytes).into();
@@ -1447,7 +1563,12 @@ pub fn logout_session(token: &str) -> Option<String> {
             None => Ok(None),
         }
     })
-    .unwrap_or(None)
+    .unwrap_or(None);
+    if r.is_some() {
+        // K8: this session's chat passes end in Sew too.
+        queue_sew_revokes(&[presented]);
+    }
+    r
 }
 
 /// Daemon-canonical reaper step: delete every persisted session whose hard

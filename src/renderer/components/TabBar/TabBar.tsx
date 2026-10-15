@@ -48,6 +48,7 @@ import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
+import { metaChordLabel } from '@/lib/shortcut-label'
 
 interface TabBarProps {
   cwd: string
@@ -69,8 +70,8 @@ function buildPlusMenuItems(
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
-    { id: 'terminal', label: 'Terminal', shortcut: '⌘T' },
-    { id: 'new-file', label: 'New File', shortcut: '⌘N' },
+    { id: 'terminal', label: 'Terminal', shortcut: metaChordLabel('Meta+T') ?? undefined },
+    { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
     { id: 'browser', label: 'Browser' },
   ]
   if (enabled.length === 0) return items
@@ -80,7 +81,7 @@ function buildPlusMenuItems(
       id: `preset:${preset.id}`,
       label: preset.label,
       icon: presetMenuIcon(preset),
-      shortcut: sandboxHint || preset.id !== defaultPresetId ? undefined : '⇧⌘T',
+      shortcut: sandboxHint || preset.id !== defaultPresetId ? undefined : metaChordLabel('Shift+Meta+T') ?? undefined,
       hint: sandboxHint ? 'open in sandbox' : undefined,
       badge: sandboxHint ? 'Beta' : undefined,
     })

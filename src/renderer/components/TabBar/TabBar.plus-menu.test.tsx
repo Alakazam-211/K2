@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+// The chord labels below are the macOS glyphs (shortcut-label.ts paints
+// Super+… on Linux and none on Windows). Pin a Mac navigator before any
+// module computes a label.
+const setPlatform = vi.hoisted(() => {
+  const set = (platform: string): void => {
+    Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true })
+  }
+  set('MacIntel')
+  return set
+})
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -303,6 +314,21 @@ describe('tab bar plus menu', () => {
     expect(symbols[0]?.parentElement?.textContent).toBe('⌘T')
     expect(symbols[1]?.textContent).toBe('⌘')
     expect(symbols[1]?.parentElement?.textContent).toBe('⌘N')
+  })
+
+  it('off macOS the Terminal and New File rows show no Mac glyphs', async () => {
+    setPlatform('Linux x86_64')
+    try {
+      seedTabs(0, 1)
+      renderBar(0)
+      await openPlus()
+      const items = useContextMenuStore.getState().items
+      expect(items.find((item) => item.id === 'terminal')?.shortcut).toBe('Super+T')
+      expect(items.find((item) => item.id === 'new-file')?.shortcut).toBe('Super+N')
+      expect(document.querySelector('[data-context-menu]')?.textContent).not.toMatch(/[⌘⇧]/)
+    } finally {
+      setPlatform('MacIntel')
+    }
   })
 
   it('puts ⇧⌘T on the workspace default agent, not the first preset', async () => {

@@ -26,6 +26,14 @@ import { KeyCombo } from '@/components/KeySymbol'
 import { SettingDropdown } from '../controls/SettingControls'
 import { AgentAccountsColumn } from '../shared/AgentAccountsColumn'
 import type { SettingEntry } from '../searchManifest'
+import { metaChordLabel } from '@/lib/shortcut-label'
+import type { DesktopOs } from '@/lib/desktop-chrome'
+
+/** "Launched with ⇧⌘T …" with the chord this platform really uses. */
+export function defaultAgentLaunchCopy(os?: DesktopOs): string {
+  const chord = metaChordLabel('Shift+Meta+T', os)
+  return chord ? `Launched with ${chord} or from the assistant` : 'Launched from the tab + menu or the assistant'
+}
 
 export const AGENTS_MANIFEST: SettingEntry[] = [
   {
@@ -33,7 +41,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     section: 'agents',
     group: 'Defaults',
     label: 'Default AI Agent',
-    description: 'Launched with ⇧⌘T or from the assistant',
+    description: defaultAgentLaunchCopy(),
     keywords: ['agent', 'default', 'claude', 'codex', 'gemini'],
   },
   {
@@ -367,7 +375,7 @@ function DefaultAgentPickerInline({
       <div>
         <div className="text-xs text-[var(--color-text-secondary)]">Default AI Agent</div>
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          Launched with <KeyCombo combo="⇧⌘" />T or from the assistant
+          <KeyCombo combo={defaultAgentLaunchCopy()} />
         </div>
       </div>
       <SettingDropdown value={selectedId} options={agentOptions} onChange={setDefaultAgent} />

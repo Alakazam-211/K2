@@ -15,6 +15,7 @@ import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
 import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
+import { withChord } from '@/lib/shortcut-label'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -155,7 +156,7 @@ export default function PageTabs(): React.JSX.Element {
             useSettingsStore.getState().openSettings()
           }
         }}
-        title="Settings (⌘,)"
+        title={withChord('Settings', 'Meta+,')}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" />

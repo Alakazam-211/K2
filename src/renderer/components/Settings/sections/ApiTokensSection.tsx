@@ -34,6 +34,17 @@ import {
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
+import { currentShortcutOs } from '@/lib/shortcut-label'
+import type { DesktopOs } from '@/lib/desktop-chrome'
+
+/** The hire-key confirm copy. Touch ID (`local-auth`) exists only for the
+ *  owner on a Mac; Linux and Windows confirm with a password (the Connect
+ *  login password or the vault password, `vault_routes.rs` `methods`). */
+export function hireConfirmCopy(os: DesktopOs = currentShortcutOs()): string {
+  return os === 'mac'
+    ? 'Creating it asks you to confirm (Touch ID or a password).'
+    : 'Creating it asks for your password to confirm.'
+}
 
 export const API_TOKENS_MANIFEST: SettingEntry[] = [
   {
@@ -711,8 +722,7 @@ function CreateKeyModal({
             <div className="border border-[var(--color-border)] p-2 space-y-1.5">
               <p className="text-[10px] text-[var(--color-text-muted)]">
                 Agents this key hires never get more than the key allows. Only the App access limit can be
-                changed later; for the rest, mint a new key and revoke this one. Creating it asks you to
-                confirm (Touch ID or a password).
+                changed later; for the rest, mint a new key and revoke this one. {hireConfirmCopy()}
               </p>
               {(
                 [

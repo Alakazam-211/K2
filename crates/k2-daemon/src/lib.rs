@@ -186,6 +186,7 @@ pub mod ticket_settings_routes;
 pub mod compute_admin;
 pub mod compute_advertise;
 pub mod compute_local;
+pub mod compute_place;
 pub mod compute_routes;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.

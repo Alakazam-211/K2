@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use k2_core::compute::proto::frames::{Blob, Control, JobLimits, JobState, Plan, Src};
 use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
-use k2_core::compute::{self as compute, codes, logs, scheduler, store};
+use k2_core::compute::{self as compute, codes, logs, store};
 use k2_core::connect_users::Role;
 
 use crate::cli_response::CliResponse;
@@ -417,6 +417,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
     if !compute::enabled() {
         return dark();
     }
+    // Queue timeouts and moves need the ticker even before any node attached.
+    compute_ws::ensure_ticker_started();
     let r = match path {
         "/cli/compute/nodes" => nodes_list(&who),
         "/cli/compute/nodes/info" => node_info(&who, params),
@@ -498,6 +500,10 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
         v["sas"] = n.sas.as_deref().map(pairing::display_sas).into();
     }
     v["retiring"] = compute::access::retiring_at(&compute::access::retiring_path()).contains_key(&n.id).into();
+    if let Some(u) = crate::compute_place::set_aside_until(&n.id, compute::now()) {
+        // Infra failures in a row: `--any` skips it until then.
+        v["setAsideUntil"] = u.into();
+    }
     v
 }
 
@@ -1113,7 +1119,8 @@ fn node_features(n: &store::NodeRow) -> Vec<String> {
 
 fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_credential(who)?;
-    let gate = passport_gate(who)?;
+    // The workspace switch (`compute_off`) for passports.
+    passport_gate(who)?;
     let v = json_body(body)?;
     let ws = target_ws(who, s(&v, "workspace"))?;
     let client_id = s(&v, "clientJobId").ok_or_else(|| no(codes::BAD_REQUEST, 400, "clientJobId (16–64 chars) is required"))?;
@@ -1158,9 +1165,55 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let needs = needs_from(&v)?;
     // Files to keep after the command exits (results back, G1).
     let artifacts = artifacts_from(&v)?;
+    let cpu_millis = match v.get("cpus").and_then(|x| x.as_f64()) {
+        Some(c) if c > 0.0 && c <= 1024.0 => Some((c * 1000.0) as u64),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--cpus must be between 0 and 1024")),
+        None => None,
+    };
+    let mem_bytes = match n(&v, "memBytes") {
+        Some(m) if m > 0 => Some(m as u64),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--mem must be positive")),
+        None => None,
+    };
+    let detach = b(&v, "detach") == Some(true);
+    // Never stuck (G3/G4): queue timeout, infra retries.
+    let tun = compute::retry::tuning();
+    let queue_timeout = match n(&v, "queueTimeoutSecs") {
+        Some(0) => None,
+        Some(x) if (1..=7 * 86_400).contains(&x) => Some(x),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--queue-timeout is between 1s and 7d, or off")),
+        None => Some(if detach { tun.queue_timeout_detached_secs } else { tun.queue_timeout_attached_secs }),
+    };
+    let retries = match n(&v, "retries") {
+        Some(r) if (0..=compute::retry::MAX_RETRIES as i64).contains(&r) => r as u32,
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, format!("--retries is 0–{}", compute::retry::MAX_RETRIES))),
+        None if b(&v, "retryInterrupted") == Some(false) => 0,
+        None => 1,
+    };
+    let any = s(&v, "node").is_none() && b(&v, "any") == Some(true);
+    let filter = store::AnyFilter {
+        os: s(&v, "os").map(str::to_string),
+        arch: s(&v, "arch").map(str::to_string),
+        labels: v
+            .get("labels")
+            .and_then(|l| l.as_object())
+            .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+            .unwrap_or_default(),
+    };
+    let want = crate::compute_place::Want {
+        ws_id: ws.id.clone(),
+        admin: who.is_admin(),
+        filter: filter.clone(),
+        needs: needs.clone(),
+        artifacts: !artifacts.is_empty(),
+        exclusive: b(&v, "exclusive") == Some(true),
+        needs_git: b(&v, "noSource") != Some(true),
+        cpu_millis,
+        mem_bytes,
+    };
     // Node: by name, or --any.
-    let node = pick_node(who, &v, &ws, gate.as_deref())?;
     let mut warnings: Vec<String> = Vec::new();
+    let node = pick_node(&v, &ws, &want, queue_timeout, &mut warnings)?;
     if !artifacts.is_empty() && !node_features(&node).iter().any(|f| f == results::FEATURE_ARTIFACTS) {
         return Err(no(
             "node_upgrade_required",
@@ -1217,16 +1270,6 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Err(no(codes::BAD_REQUEST, 400, format!("--timeout must be at most {max_secs}s on this grant")));
     }
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
-    let cpu_millis = match v.get("cpus").and_then(|x| x.as_f64()) {
-        Some(c) if c > 0.0 && c <= 1024.0 => Some((c * 1000.0) as u64),
-        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--cpus must be between 0 and 1024")),
-        None => None,
-    };
-    let mem_bytes = match n(&v, "memBytes") {
-        Some(m) if m > 0 => Some(m as u64),
-        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--mem must be positive")),
-        None => None,
-    };
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
@@ -1235,8 +1278,15 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     } else {
         Some(source_for(&ws, &v, &job_id, &mut warnings)?)
     };
-    let detach = b(&v, "detach") == Some(true);
-    let retry_interrupted = b(&v, "retryInterrupted").unwrap_or(detach);
+    let ctl = store::JobCtl {
+        any: any.then_some(filter),
+        admin: who.is_admin(),
+        timeout_secs: n(&v, "timeoutSecs"),
+        queue_timeout_secs: queue_timeout,
+        queued_at: compute::now(),
+        retries,
+        ..Default::default()
+    };
     let plan = Plan {
         job_id: job_id.clone(),
         node_id: node.id.clone(),
@@ -1265,7 +1315,15 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let session = who.passport().map(|(_, sid)| sid);
         let j = store::insert_job(
             &conn,
-            &store::NewJob { plan: &plan, client_job_id: client_id, session_id: session, request_sha256: &request_sha, detach, retry_interrupted },
+            &store::NewJob {
+                plan: &plan,
+                client_job_id: client_id,
+                session_id: session,
+                request_sha256: &request_sha,
+                detach,
+                retry_interrupted: retries > 0,
+                ctl,
+            },
         )
         .map_err(|e| no("internal", 500, e))?;
         store::record_event(
@@ -1275,7 +1333,8 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             Some(&node.id),
             Some(&ws.id),
             Some(&j.id),
-            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs}),
+            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
+                "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout}),
         );
         j
     };
@@ -1295,83 +1354,51 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     Ok(out)
 }
 
-fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R<store::NodeRow> {
+fn pick_node(
+    v: &serde_json::Value,
+    ws: &Ws,
+    want: &crate::compute_place::Want,
+    queue_timeout: Option<i64>,
+    warnings: &mut Vec<String>,
+) -> R<store::NodeRow> {
     if let Some(name) = s(v, "node") {
         let n = node_or_404(Some(name))?;
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }
-        // An ungranted node is refused below with a teaching `not_granted`.
-        let _ = gate;
+        // An ungranted node is refused by the caller with a teaching `not_granted`.
         return Ok(n);
     }
     if b(v, "any") != Some(true) {
         return Err(no(codes::BAD_REQUEST, 400, "name a node, or pass --any"));
     }
-    let want_os = s(v, "os");
-    let want_arch = s(v, "arch");
-    let want_labels: BTreeMap<String, String> = v
-        .get("labels")
-        .and_then(|l| l.as_object())
-        .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
-        .unwrap_or_default();
-    let rows = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::list_nodes(&conn, false)
-    };
-    let granted = granted_node_ids(&ws.id);
-    let wants_needs = !needs_from(v)?.is_empty();
-    let wants_artifacts = !artifacts_from(v)?.is_empty();
-    let mut cands = Vec::new();
-    let mut by_id = HashMap::new();
-    for n in rows.into_iter().filter(|n| n.state == "active") {
-        if !who.is_admin() && !granted.contains(&n.id) {
-            continue;
-        }
-        let (online, _, offer) = compute_ws::live_view(&n.id);
-        let Some(offer) = offer.filter(|_| online) else { continue };
-        if wants_needs && !offer.features.iter().any(|f| f == needs::FEATURE_NEEDS) {
-            continue;
-        }
-        if wants_artifacts && !offer.features.iter().any(|f| f == results::FEATURE_ARTIFACTS) {
-            continue;
-        }
-        let label = |k: &str| offer.labels.get(k).map(String::as_str);
-        if want_os.is_some_and(|o| label("os") != Some(o)) || want_arch.is_some_and(|a| label("arch") != Some(a)) {
-            continue;
-        }
-        if want_labels.iter().any(|(k, x)| label(k) != Some(x.as_str())) {
-            continue;
-        }
-        let load = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            compute_ws::queued_view(&conn, &n.id).1
-        };
-        cands.push((n.id.clone(), offer, load));
-        by_id.insert(n.id.clone(), n);
+    use crate::compute_place::{candidates, choose, Tier};
+    let cands = candidates(want, &[], compute::now());
+    if cands.is_empty() {
+        return Err(no(
+            codes::NO_NODE_FITS,
+            404,
+            "no node granted to this workspace matches --any (os/arch/labels, --needs/--artifact support, queue room); k2 compute nodes",
+        ));
     }
-    let probe = scheduler::QueuedJob {
-        id: "probe".into(),
-        workspace_id: ws.id.clone(),
-        created_at: compute::now(),
-        exclusive: b(v, "exclusive") == Some(true),
-        cpu_millis: None,
-        mem_bytes: None,
-        disk_bytes: 0,
-        needs_git: b(v, "noSource") != Some(true),
-    };
     let pk = compute::sync::repo_root(Path::new(&ws.path))
         .ok()
         .map(|root| compute::sync::project_key(&ws.id, compute::sync::origin_url(&root).as_deref()));
-    let id = scheduler::pick_any(&cands, pk.as_deref(), None, &probe)
-        .map(str::to_string)
-        // Nothing free right now: queue on the first fitting online node.
-        .or_else(|| cands.first().map(|c| c.0.clone()));
-    id.and_then(|i| by_id.remove(&i)).ok_or_else(|| {
-        no(codes::NO_NODE_FITS, 404, "no online node granted to this workspace matches --any (k2 compute nodes)")
-    })
+    let Some((c, tier)) = choose(&cands, want, &[], pk.as_deref(), None) else {
+        return Err(no(
+            codes::NO_NODE_FITS,
+            404,
+            "every node that matches --any is paused, draining or unavailable right now; k2 compute nodes says why",
+        ));
+    };
+    if tier == Tier::Offline {
+        warnings.push(format!(
+            "no matching node is online: queued on {} (offline); it moves to the first matching node that comes online{}",
+            c.node.name,
+            queue_timeout.map(|t| format!(", or fails with queue_timeout after {}", compute::message::duration(t))).unwrap_or_default()
+        ));
+    }
+    Ok(c.node.clone())
 }
 
 fn source_for(ws: &Ws, v: &serde_json::Value, job_id: &str, warnings: &mut Vec<String>) -> R<Src> {
@@ -1653,6 +1680,12 @@ fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let r = store::requeue_new_attempt(&conn, &j.id, "retry").map_err(|e| no("internal", 500, e))?;
+        let mut ctl = r.ctl.clone();
+        ctl.queued_at = compute::now();
+        ctl.not_before = None;
+        ctl.retries_used = 0;
+        let _ = store::set_job_ctl(&conn, &r.id, &ctl);
+        let r = store::job_by_id(&conn, &r.id).unwrap_or(r);
         store::record_event(&conn, &who.label(), "job_retry", Some(&j.node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": r.generation}));
         r
     };

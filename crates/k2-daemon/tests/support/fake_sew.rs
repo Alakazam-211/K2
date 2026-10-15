@@ -21,13 +21,17 @@
 //! - deprovision of an unknown id → 404; of the owner → 422 `is_owner`;
 //!   deactivating a person deactivates assistants pinned to them.
 //! - owner/set naming the current owner → 200 `changed:false` (G6).
-//! - HC2: a banned external id is answered 2xx with `skipped: [member_id]`
-//!   and NOT added.
+//! - provision is DECLARATIVE (A8, live Sew): absent optional profile
+//!   fields (`email`, `title`, `pronouns`) are cleared; `update` takes a
+//!   ProfilePatch (omitted = kept).
+//! - `GET /mgmt/v1/principals` filters by `external_id` and carries
+//!   `email`/`title`/`pronouns` (SW14) unless `set_list_profile_fields(false)`
+//!   (a pre-SW14 Sew). Provision has no `skipped` field (HC2 is on member-add).
 //! - Unknown paths → 404 and recorded in `bad_paths`.
 
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -54,6 +58,8 @@ pub struct Member {
     pub username: String,
     pub display_name: String,
     pub email: Option<String>,
+    pub title: Option<String>,
+    pub pronouns: Option<String>,
     pub deactivated: bool,
 }
 
@@ -92,7 +98,8 @@ struct State {
     idem: HashMap<String, (String, u16, String)>,
     calls: Vec<Call>,
     faults: VecDeque<Fault>,
-    banned: HashSet<String>,
+    /// Pre-SW14 Sew when false: the list omits email/title/pronouns.
+    list_profile_fields: bool,
     bad_paths: Vec<String>,
     bad_bodies: Vec<String>,
 }
@@ -116,6 +123,7 @@ impl FakeSew {
             install_id: "1001".into(),
             provider: "k2".into(),
             next_id: 1,
+            list_profile_fields: true,
             ..Default::default()
         }));
         let mut f = FakeSew {
@@ -184,9 +192,23 @@ impl FakeSew {
     pub fn set_token(&self, t: &str) {
         self.with(|s| s.token = t.into())
     }
-    pub fn ban(&self, ext: &str) {
+    pub fn set_list_profile_fields(&self, on: bool) {
+        self.with(|s| s.list_profile_fields = on)
+    }
+    /// A person edits their Sew-local profile (or an admin sets an agent's
+    /// email in Sew).
+    pub fn set_sew_profile(
+        &self,
+        ext: &str,
+        email: Option<&str>,
+        title: Option<&str>,
+        pronouns: Option<&str>,
+    ) {
         self.with(|s| {
-            s.banned.insert(ext.into());
+            let m = s.members.get_mut(ext).expect("member to edit");
+            m.email = email.map(str::to_string);
+            m.title = title.map(str::to_string);
+            m.pronouns = pronouns.map(str::to_string);
         })
     }
     /// Wipe members (a fresh install: new id, no owner).
@@ -215,6 +237,8 @@ impl FakeSew {
                     username: username.into(),
                     display_name: display.into(),
                     email: None,
+                    title: None,
+                    pronouns: None,
                     deactivated: false,
                 },
             );
@@ -573,15 +597,6 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
             json!({"field": "profile.username", "reason": "username_taken"}),
         );
     }
-    if s.banned.contains(&ext) {
-        let id = s.members.get(&ext).map(|m| m.member_id).unwrap_or(0);
-        return (
-            200,
-            json!({"member_id": id.to_string(), "created": false, "reactivated": false,
-                   "changed": false, "skipped": [id.to_string()]})
-            .to_string(),
-        );
-    }
     let (created, reactivated);
     let id = match s.members.get_mut(&ext) {
         Some(m) => {
@@ -593,7 +608,10 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
             m.assistant_of = req.assistant_of.as_ref().map(ExternalId::to_string);
             m.username = req.profile.username.clone();
             m.display_name = req.profile.display_name.clone();
+            // Declarative: absent clears (live Sew, S9 §6.4 step 4).
             m.email = req.profile.email.clone();
+            m.title = req.profile.title.clone();
+            m.pronouns = req.profile.pronouns.clone();
             m.member_id
         }
         None => {
@@ -613,6 +631,8 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
                     username: req.profile.username.clone(),
                     display_name: req.profile.display_name.clone(),
                     email: req.profile.email.clone(),
+                    title: req.profile.title.clone(),
+                    pronouns: req.profile.pronouns.clone(),
                     deactivated: false,
                 },
             );
@@ -655,6 +675,16 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
         Patch::Keep => {}
         Patch::Clear => m.email = None,
         Patch::Set(e) => m.email = Some(e),
+    }
+    for (slot, patch) in [
+        (&mut m.title, req.profile.title),
+        (&mut m.pronouns, req.profile.pronouns),
+    ] {
+        match patch {
+            Patch::Keep => {}
+            Patch::Clear => *slot = None,
+            Patch::Set(v) => *slot = Some(v),
+        }
     }
     (
         200,
@@ -728,15 +758,30 @@ fn owner_set(s: &mut State, body: &str) -> (u16, String) {
 fn list(s: &State, query: &str) -> (u16, String) {
     let mut after: u64 = 0;
     let mut limit: usize = 100;
+    let mut only: Option<String> = None;
     for kv in query.split('&') {
         match kv.split_once('=') {
             Some(("after", v)) => after = v.parse().unwrap_or(0),
             Some(("limit", v)) => limit = v.parse().unwrap_or(100),
-            _ => {}
+            Some(("external_id", v)) => {
+                let raw = v.replace("%3A", ":").replace("%3a", ":");
+                assert!(
+                    ExternalId::parse(&raw).is_ok(),
+                    "external_id filter {raw:?} is not an external id"
+                );
+                only = Some(raw);
+            }
+            Some((k, _)) => panic!("unknown principals query key {k:?}"),
+            None => {}
         }
     }
     assert!((1..=500).contains(&limit), "limit {limit} outside 1–500");
-    let mut all: Vec<&Member> = s.members.values().filter(|m| m.member_id > after).collect();
+    let mut all: Vec<&Member> = s
+        .members
+        .values()
+        .filter(|m| m.member_id > after)
+        .filter(|m| only.as_deref().is_none_or(|o| o == m.external_id))
+        .collect();
     all.sort_by_key(|m| m.member_id);
     let has_more = all.len() > limit;
     let items: Vec<Value> = all
@@ -761,6 +806,11 @@ fn list(s: &State, query: &str) -> (u16, String) {
             }
             if let Some(a) = &m.assistant_of {
                 v["assistant_of"] = json!(a);
+            }
+            if s.list_profile_fields {
+                v["email"] = json!(m.email);
+                v["title"] = json!(m.title);
+                v["pronouns"] = json!(m.pronouns);
             }
             v
         })

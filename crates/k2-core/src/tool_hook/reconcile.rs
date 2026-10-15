@@ -16,7 +16,8 @@ use serde::Serialize;
 
 use super::chat;
 use super::sew_wire::{
-    AgentKind, ExternalId, InstallRole, MemberKind, MgmtPrincipal, ProfilePatch, ProvisionRequest,
+    AgentKind, ExternalId, InstallRole, MemberKind, MgmtPrincipal, Patch, ProfilePatch,
+    ProvisionRequest,
 };
 use super::{grant_rev, Cause, HookCtx, NewOp, Op, CHAT_KIND, OWNER_GRANT_REV};
 use crate::skin::SkinGrant;
@@ -229,8 +230,13 @@ pub fn plan(
             s.provisioned += 1;
             continue;
         };
+        // A8 (b): any provision that reaches this EXISTING member (even a
+        // deactivated one: provision reactivates and sets the profile)
+        // round-trips the fields K2 does not own.
+        let mut filled = d.clone();
+        chat::fill_provision_from_member(&mut filled.request, m);
         if m.deactivated {
-            out.push(provision(d));
+            out.push(provision(&filled));
             s.provisioned += 1;
             continue;
         }
@@ -239,24 +245,38 @@ pub fn plan(
             || (d.request.kind == MemberKind::Agent && m.agent_kind != want_agent_kind)
         {
             out.push(deprovision(d.ext(), Some(d.grant_rev.clone())));
-            out.push(provision(d));
+            out.push(provision(&filled));
             s.deprovisioned += 1;
             s.provisioned += 1;
             continue;
         }
         let is_guest = m.install_role == InstallRole::Guest;
         if is_guest != d.request.guest || m.assistant_of != d.request.assistant_of {
-            out.push(provision(d));
+            out.push(provision(&filled));
             s.provisioned += 1;
             continue;
         }
         let want_user = &d.request.profile.username;
         let want_name = &d.request.profile.display_name;
         let user_ok = username_ok(want_user, &m.username, d.ext());
-        if !user_ok || &m.display_name != want_name {
+        // A8 (a): profile-only drift is repaired with `update` (a
+        // ProfilePatch keeps omitted fields), never a provision. Email is
+        // K2's only for principals, and only diffable when Sew's list
+        // carries it (SW14; absent = unknown).
+        let email_drift: Option<Patch<String>> = match (&d.request.external_id, &m.email) {
+            (ExternalId::K2Principal(_), Some(have)) if have != &d.request.profile.email => {
+                Some(match &d.request.profile.email {
+                    Some(e) => Patch::Set(e.clone()),
+                    None => Patch::Clear,
+                })
+            }
+            _ => None,
+        };
+        if !user_ok || &m.display_name != want_name || email_drift.is_some() {
             let patch = ProfilePatch {
                 display_name: (&m.display_name != want_name).then(|| want_name.clone()),
                 username: (!user_ok).then(|| want_user.clone()),
+                email: email_drift.unwrap_or_default(),
                 ..Default::default()
             };
             out.push(PlannedOp {

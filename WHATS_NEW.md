@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.0
+
+- **Guarded Apps can reach the internet, only where you allow.** (Apps preview, Linux.) A guarded App gets its own egress proxy: it reaches only the hosts on its list, K2 looks up the names itself, and private, local and cloud-metadata addresses and this server's own names are always refused. An App's `manifest.json` can ask for hosts (`egress.hosts`), and agents ask with `k2 app egress add <app> <host>`. Every new host waits for you: approve it in person with `k2 app approve <id>` (Touch ID or your password, from a terminal outside K2), or deny it with `k2 app deny`. Not even your own owner token approves without that confirm. Taking a host off (`k2 app egress rm`) works at once and cuts open connections to it. `k2 app egress <app>` shows the list, how often each host was used or refused, and what the App tried; `k2 app egress log` shows each connection (host and port only). An agent hears when its App tries a host that isn't allowed, with the command to ask for it.
+
 ## 0.45.7 — Grok Bots at home
 
 - **Grok Bots on your server show up in K2.** If Grok Bot runs on the same computer as your K2 server, K2 can find its agents and list them in Agents with a **Grok Bot** tag. Click one to read its chat, or right-click → **Add to Home** to keep it on My Home and in your Gardens, with live Working / Needs you / Idle status. Questions, connect requests and credential requests from a Grok Bot show as cards you answer in Grok Bot itself; K2 never asks for or shows a secret. Turn it on in Settings → K2 Server → **Local Grok Bots**, which first shows the folder and the agents it found. It's off until you turn it on, and only the owner or an admin can change it. Agents and App guests never see Grok Bot chats.

@@ -112,6 +112,7 @@ export function GeneralSection(): React.JSX.Element {
   const updateVersion = useUpdateStore((s) => s.version)
   const updateProgress = useUpdateStore((s) => s.progress)
   const updateError = useUpdateStore((s) => s.error)
+  const updatePackageUrl = useUpdateStore((s) => s.archDownloadUrl)
 
   // Load current version on mount
   useEffect(() => {
@@ -248,6 +249,11 @@ export function GeneralSection(): React.JSX.Element {
             <div>
               <p className="text-xs text-[var(--color-text-primary)]">K2 v{updateVersion} is available</p>
               <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">You&apos;re on v{currentVersion}</p>
+              {updatePackageUrl && (
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
+                  Updates on Linux come from your package (deb, rpm or Arch). Download opens the new version on GitHub releases.
+                </p>
+              )}
             </div>
             <button
               className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"

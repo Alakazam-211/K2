@@ -53,8 +53,8 @@ fn update_http_client() -> Result<reqwest::blocking::Client, String> {
 }
 
 /// `appimage` when `APPIMAGE` is set, else `arch` for an Arch/Omarchy
-/// install, else `other`. `APPIMAGE` wins so an AppImage launched on Arch
-/// is not offered the pacman package.
+/// install, else `linux-package` (a deb or rpm install). `APPIMAGE` wins so
+/// an AppImage launched on Arch is not offered the pacman package.
 #[cfg(any(target_os = "linux", test))]
 fn classify_install_kind(
     appimage_set: bool,
@@ -67,7 +67,7 @@ fn classify_install_kind(
     if arch_release_exists || os_release_is_arch(os_release) {
         return "arch";
     }
-    "other"
+    "linux-package"
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -140,6 +140,19 @@ fn manifest_version(body: &str) -> Result<String, String> {
     }
 }
 
+/// Linux installs updated by their package, not the Tauri updater:
+/// `latest.json` only has darwin entries, so plugin-updater `check()`
+/// fails there with "None of the fallback platforms ... linux-x86_64".
+fn is_package_install(kind: &str) -> bool {
+    kind == "arch" || kind == "linux-package"
+}
+
+/// deb/rpm: the release page lists every package for that version.
+fn linux_release_page_url(version: &str) -> String {
+    let version = version.trim().trim_start_matches('v');
+    format!("https://github.com/Alakazam-211/K2/releases/tag/v{version}")
+}
+
 fn arch_pacman_download_url(version: &str) -> String {
     let version = version.trim().trim_start_matches('v');
     format!(
@@ -164,28 +177,33 @@ fn non_arch_probe(kind: &str) -> InstallUpdateProbe {
     }
 }
 
-/// Kind plus a manifest body. Non-Arch kinds ignore the body (platforms
-/// included). Arch reads `version` only and compares with [`is_newer`].
+/// Kind plus a manifest body. Non-package kinds ignore the body (platforms
+/// included). Arch and deb/rpm read `version` only and compare with
+/// [`is_newer`]; Arch gets the pacman package, deb/rpm the release page.
 fn decide_install_update(
     kind: &str,
     current: &str,
     manifest_body: &str,
 ) -> Result<InstallUpdateProbe, String> {
-    if kind != "arch" {
+    if !is_package_install(kind) {
         return Ok(non_arch_probe(kind));
     }
     let version = manifest_version(manifest_body)?;
     if is_newer(current, &version) {
-        let download_url = arch_pacman_download_url(&version);
+        let download_url = if kind == "arch" {
+            arch_pacman_download_url(&version)
+        } else {
+            linux_release_page_url(&version)
+        };
         Ok(InstallUpdateProbe {
-            kind: "arch".to_string(),
+            kind: kind.to_string(),
             version: Some(version),
             has_update: true,
             download_url: Some(download_url),
         })
     } else {
         Ok(InstallUpdateProbe {
-            kind: "arch".to_string(),
+            kind: kind.to_string(),
             version: None,
             has_update: false,
             download_url: None,
@@ -264,12 +282,12 @@ pub fn get_current_version() -> String {
 /// Install kind, and on Arch the updater manifest version.
 ///
 /// The webview cannot see `APPIMAGE` or `/etc/os-release`, and it cannot
-/// follow the `latest.json` redirect. Arch skips plugin-updater `check()`
-/// (that manifest has no `linux-x86_64`). Only `version` is read.
+/// follow the `latest.json` redirect. Arch and deb/rpm skip plugin-updater
+/// `check()` (that manifest has no `linux-x86_64`). Only `version` is read.
 #[tauri::command]
 pub async fn probe_install_update() -> Result<InstallUpdateProbe, String> {
     let kind = detect_install_kind();
-    if kind != "arch" {
+    if !is_package_install(kind) {
         return Ok(non_arch_probe(kind));
     }
     let body = tokio::task::spawn_blocking(fetch_latest_manifest)
@@ -359,6 +377,32 @@ mod tests {
     }
 
     #[test]
+    fn deb_rpm_newer_manifest_offers_the_release_page_not_a_platform_error() {
+        let probe = decide_install_update("linux-package", "0.41.1", DARWIN_ONLY).unwrap();
+        assert_eq!(
+            probe,
+            InstallUpdateProbe {
+                kind: "linux-package".into(),
+                version: Some("0.41.2".into()),
+                has_update: true,
+                download_url: Some("https://github.com/Alakazam-211/K2/releases/tag/v0.41.2".into()),
+            }
+        );
+        let same = r#"{"version":"0.41.1","platforms":{"darwin-aarch64":{}}}"#;
+        let probe = decide_install_update("linux-package", "0.41.1", same).unwrap();
+        assert!(!probe.has_update);
+        assert!(probe.download_url.is_none());
+        assert_eq!(probe.kind, "linux-package");
+    }
+
+    #[test]
+    fn rpm_os_release_is_a_linux_package() {
+        let text = "NAME=\"Fedora Linux\"\nID=fedora\n";
+        assert_eq!(classify_install_kind(false, false, text), "linux-package");
+        assert_eq!(classify_install_kind(true, false, text), "appimage");
+    }
+
+    #[test]
     fn arch_manifest_without_version_is_not_a_missing_platform_error() {
         let body = r#"{"platforms":{"darwin-aarch64":{}}}"#;
         let err = decide_install_update("arch", "0.41.1", body).unwrap_err();
@@ -395,7 +439,7 @@ mod tests {
     fn os_release_ubuntu_is_not_arch() {
         let text = "ID=ubuntu\nID_LIKE=debian\n";
         assert!(!os_release_is_arch(text));
-        assert_eq!(classify_install_kind(false, false, text), "other");
+        assert_eq!(classify_install_kind(false, false, text), "linux-package");
         assert!(!os_release_is_arch("ID=archlinux\n"));
     }
 

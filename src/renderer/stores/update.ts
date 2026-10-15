@@ -33,7 +33,8 @@ interface UpdateState {
   notes: string | null
   progress: number
   error: string | null
-  /** Pacman asset for an Arch offer. Set only when plugin-updater is skipped. */
+  /** Linux package offer (Arch: the pacman asset; deb/rpm: the release
+   *  page). Set only when plugin-updater is skipped. */
   archDownloadUrl: string | null
   checkForUpdate: () => Promise<boolean>
   /** Available-row Download: Arch opens the pkg, anything else runs the installer. */
@@ -83,7 +84,9 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     set({ status: 'checking', error: null, archDownloadUrl: null })
     try {
       const probe = await invoke<InstallUpdateProbe>('probe_install_update')
-      if (probe.kind === 'arch') {
+      // Linux packages (Arch, deb, rpm) update from their package, not the
+      // Tauri updater: latest.json has no linux-x86_64 entry.
+      if (probe.kind === 'arch' || probe.kind === 'linux-package') {
         pendingUpdate = null
         if (probe.has_update && probe.version && probe.download_url) {
           set({
@@ -106,7 +109,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       }
     } catch (err) {
       // Fetch failed. Do not throw: the hook's catch only looks for a .dmg.
-      console.error('[updater] Arch manifest check failed:', err)
+      console.error('[updater] Linux package manifest check failed:', err)
       pendingUpdate = null
       set({
         status: 'error',

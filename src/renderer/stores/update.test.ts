@@ -99,6 +99,48 @@ describe('checkForUpdate install kind', () => {
     expect(useUpdateStore.getState().archDownloadUrl).toBeNull()
   })
 
+  it('deb/rpm newer skips check() and Download opens the release page', async () => {
+    const page = 'https://github.com/Alakazam-211/K2/releases/tag/v9.9.9'
+    mockProbe({
+      kind: 'linux-package',
+      version: '9.9.9',
+      has_update: true,
+      download_url: page,
+    })
+    vi.mocked(check).mockRejectedValue(MISSING_PLATFORM)
+    const hasUpdate = await useUpdateStore.getState().checkForUpdate()
+    expect(hasUpdate).toBe(true)
+    expect(check).not.toHaveBeenCalled()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('available')
+    expect(state.version).toBe('9.9.9')
+    expect(state.error).toBeNull()
+    expect(state.archDownloadUrl).toBe(page)
+
+    await useUpdateStore.getState().openAvailableDownload()
+    expect(invoke).toHaveBeenCalledWith('plugin:opener|open_url', { url: page })
+    await useUpdateStore.getState().installAndRelaunch()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).not.toContain('relaunch_via_open')
+  })
+
+  it('deb/rpm current is idle with no red platform error', async () => {
+    mockProbe({
+      kind: 'linux-package',
+      version: null,
+      has_update: false,
+      download_url: null,
+    })
+    vi.mocked(check).mockRejectedValue(MISSING_PLATFORM)
+    await checkForUpdate(true)
+    expect(check).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().status).toBe('idle')
+    expect(useUpdateStore.getState().error).toBeNull()
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
+      'K2 is up to date',
+    )
+  })
+
   it.each(['macos', 'appimage', 'other'])(
     'kind %s still calls plugin check()',
     async (kind) => {

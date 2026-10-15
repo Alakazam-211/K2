@@ -128,9 +128,13 @@ pub fn proxy_env(px_port: u16) -> Vec<(&'static str, String)> {
 
 // ── signed builds ───────────────────────────────────────────────────────
 
-/// What this build of the engine speaks on its socket. 2 (S15): each
-/// container gets its egress proxy forward and proxy variables, and the
-/// prepare/start/adopt answers carry `pxPort`.
+/// What this build of the engine speaks on its socket. One bump for all of
+/// 0.46.0 (the daemon refuses any other; boxes reinstall the engine):
+/// 2 = S14 `pass-write` and the pass folder (the in-wall gateway at 8730);
+/// S15 the egress proxy forward and proxy variables, `pxPort` in the
+/// prepare/start/adopt answers; lane D the MAC shim, `io` on start, exec
+/// timeouts, `exec-tty` terminals and the process exception's staging
+/// (`process-stage|activate|state`, its pass refreshed by `pass-write`).
 pub const ENGINE_PROTOCOL: u32 = 2;
 
 pub fn asset_name(arch: &str) -> String {

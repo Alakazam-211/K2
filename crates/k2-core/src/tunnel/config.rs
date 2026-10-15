@@ -181,6 +181,16 @@ pub struct TunnelConfig {
     /// older files keep their shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relays_fetched_at: Option<u64>,
+
+    /// 0.45.7: set by [`load`] when the token lives in the K2 vault and
+    /// the vault could NOT be read (locked, unavailable, a transient
+    /// keychain error). `token` is then empty, but that empty means
+    /// "unknown", not "no token": [`save`] never clears the vault, and
+    /// callers that need the token (start, relay-list fetch, release)
+    /// treat it as a soft failure and retry later. In memory only — never
+    /// serialized, never read from `tunnel.json`.
+    #[serde(skip)]
+    pub token_read_error: Option<String>,
 }
 
 /// True when K2 Connect end-to-end encryption (Option A) is enabled for
@@ -275,6 +285,7 @@ impl Default for TunnelConfig {
             // (PRD tunnel-disable-unpair §2A).
             enabled: default_enabled(),
             relays_fetched_at: None,
+            token_read_error: None,
         }
     }
 }
@@ -287,6 +298,13 @@ impl TunnelConfig {
     /// primary namespace".)
     pub fn is_connectable(&self) -> bool {
         !self.token.trim().is_empty() && !self.server_addr.trim().is_empty()
+    }
+
+    /// True when [`load`] could not read the vault-held token (see
+    /// [`token_read_error`](TunnelConfig::token_read_error)): the token is
+    /// unknown right now, which is NOT the same as unpaired.
+    pub fn token_unreadable(&self) -> bool {
+        self.token_read_error.is_some()
     }
 
     /// The effective ordered relay list — ALWAYS at least one entry.
@@ -350,7 +368,11 @@ fn restrict_mode(_file: &Path) {}
 /// `tunnel.json` keeps every field except `token`. Every caller of
 /// [`load`] still sees `cfg.token` (resolved in memory).
 pub trait TokenVault: Send + Sync {
-    fn get(&self) -> Option<String>;
+    /// `Ok(None)` = the vault holds no token; `Err` = the vault could not
+    /// be read (locked, unavailable, a transient error). The two must stay
+    /// apart: an `Err` folded into `None` reads as "unpaired" and a later
+    /// save would wipe the real token (0.45.7).
+    fn get(&self) -> Result<Option<String>, String>;
     fn set(&self, token: &str) -> Result<(), String>;
     fn clear(&self) -> Result<(), String>;
 }
@@ -389,6 +411,51 @@ impl Drop for TestTokenVault {
     }
 }
 
+/// In-memory stand-in for the K2 vault holder (desktops since 0.45.4 keep
+/// the tunnel token there and `tunnel.json`'s token empty). `fail_reads`
+/// makes `get` error like a locked / unavailable vault; writes still work
+/// so a test can see whether anything tried to replace or clear the token.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct MemTokenVault {
+    pub(crate) token: std::sync::Mutex<Option<String>>,
+    pub(crate) fail_reads: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl MemTokenVault {
+    pub(crate) fn holding(token: Option<&str>) -> std::sync::Arc<Self> {
+        let v = Self::default();
+        *v.token.lock().expect("mem vault") = token.map(str::to_string);
+        std::sync::Arc::new(v)
+    }
+    pub(crate) fn set_fail_reads(&self, fail: bool) {
+        self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// What the vault holds, read past the failure switch.
+    pub(crate) fn stored(&self) -> Option<String> {
+        self.token.lock().expect("mem vault").clone()
+    }
+}
+
+#[cfg(test)]
+impl TokenVault for MemTokenVault {
+    fn get(&self) -> Result<Option<String>, String> {
+        if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("test vault: read failed (locked)".to_string());
+        }
+        Ok(self.stored())
+    }
+    fn set(&self, token: &str) -> Result<(), String> {
+        *self.token.lock().expect("mem vault") = Some(token.to_string());
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), String> {
+        *self.token.lock().expect("mem vault") = None;
+        Ok(())
+    }
+}
+
 /// Run `f` with the installed token vault (if any).
 fn with_vault<R>(f: impl FnOnce(Option<&dyn TokenVault>) -> R) -> R {
     #[cfg(test)]
@@ -417,14 +484,49 @@ pub fn file_token() -> Result<String, String> {
 /// Load the tunnel config from disk. A missing file yields
 /// [`TunnelConfig::default`]; a malformed file is an error (fail loud —
 /// we never silently fall back over a corrupt secret store).
+///
+/// A vault that can't be read is NOT an error here (every status read
+/// would fail with it) and NOT an empty token: the config comes back with
+/// `token` empty and [`TunnelConfig::token_read_error`] set, logged once
+/// per failing stretch.
 pub fn load() -> Result<TunnelConfig, String> {
     let mut cfg = load_file()?;
     if cfg.token.trim().is_empty() {
-        if let Some(t) = with_vault(|v| v.map(|v| v.get().unwrap_or_default())) {
-            cfg.token = t;
+        match with_vault(|v| v.map(|v| v.get())) {
+            None | Some(Ok(None)) => note_vault_read(None),
+            Some(Ok(Some(t))) => {
+                note_vault_read(None);
+                cfg.token = t;
+            }
+            Some(Err(e)) => {
+                note_vault_read(Some(&e));
+                cfg.token_read_error = Some(e);
+            }
         }
     }
     Ok(cfg)
+}
+
+/// Log a failed vault read once per failing stretch (status polls load
+/// the config every few seconds), and its recovery once.
+fn note_vault_read(err: Option<&str>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAILING: AtomicBool = AtomicBool::new(false);
+    match err {
+        Some(e) => {
+            if !FAILING.swap(true, Ordering::SeqCst) {
+                crate::log_debug!(
+                    "[tunnel] could not read the tunnel token from the K2 vault ({e}); \
+                     the stored token is kept and the tunnel left as it is — retrying later"
+                );
+            }
+        }
+        None => {
+            if FAILING.swap(false, Ordering::SeqCst) {
+                crate::log_debug!("[tunnel] the tunnel token reads from the K2 vault again");
+            }
+        }
+    }
 }
 
 fn load_file() -> Result<TunnelConfig, String> {
@@ -443,6 +545,14 @@ fn load_file() -> Result<TunnelConfig, String> {
 
 /// Persist the tunnel config via tmp+rename, then chmod 0600 so the
 /// token is owner-only. Creates `~/.k2/` if absent.
+///
+/// With the vault holder installed, a non-empty `token` is written to the
+/// vault (when it differs) and an EMPTY token leaves the vault untouched
+/// (0.45.7): an empty token in memory may be a vault read that failed
+/// ([`TunnelConfig::token_read_error`]), and treating it as "clear" let one
+/// transient keychain error unpair the device at the next unrelated
+/// config write. Forgetting the token is explicit: [`clear_vault_token`]
+/// (Release / unpair).
 pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
     // With the vault holder installed, the token goes to the vault and the
     // file keeps everything else.
@@ -451,10 +561,13 @@ pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
         match v {
             Some(v) => {
                 let t = cfg.token.trim();
-                if t.is_empty() {
-                    v.clear()?;
-                } else if v.get().as_deref() != Some(t) {
-                    v.set(t)?;
+                if !t.is_empty() {
+                    // A read error here just means "write it": the caller
+                    // holds a real token (an unreadable load leaves it empty).
+                    match v.get() {
+                        Ok(Some(cur)) if cur.trim() == t => {}
+                        _ => v.set(t)?,
+                    }
                 }
                 Ok(true)
             }
@@ -588,6 +701,7 @@ mod tests {
                 e2e: true,
                 enabled: true,
                 relays_fetched_at: Some(1_792_060_000),
+                token_read_error: None,
             };
             save(&cfg).expect("save");
             let back = load().expect("load");
@@ -860,6 +974,150 @@ mod tests {
                 !raw.contains("enabled"),
                 "default (enabled) must be skipped on serialize\n{raw}"
             );
+        });
+    }
+
+    fn on_disk() -> TunnelConfig {
+        serde_json::from_str(&std::fs::read_to_string(config_path()).expect("read tunnel.json"))
+            .expect("parse tunnel.json")
+    }
+
+    fn seed_vaulted(vault: &MemTokenVault, token: &str) {
+        save(&TunnelConfig {
+            token: token.to_string(),
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        })
+        .expect("seed");
+        assert_eq!(vault.stored().as_deref(), Some(token), "setup: token in the vault");
+        assert_eq!(on_disk().token, "", "setup: tunnel.json keeps no token");
+    }
+
+    #[test]
+    fn an_unreadable_vault_loads_as_unknown_not_as_no_token() {
+        with_temp_home(|| {
+            let vault = MemTokenVault::holding(None);
+            let _v = TestTokenVault::install(vault.clone());
+            seed_vaulted(&vault, "tok_kept");
+            vault.set_fail_reads(true);
+            let cfg = load().expect("an unreadable vault is not a load error");
+            assert_eq!(cfg.token, "");
+            assert!(cfg.token_unreadable(), "the read failure must be carried");
+            assert!(
+                cfg.token_read_error.as_deref().is_some_and(|e| e.contains("read failed")),
+                "{:?}",
+                cfg.token_read_error
+            );
+            assert!(!cfg.is_connectable());
+            // Never serialized.
+            let json = serde_json::to_string(&cfg).expect("serialize");
+            assert!(!json.contains("token_read_error") && !json.contains("read failed"), "{json}");
+
+            vault.set_fail_reads(false);
+            let back = load().expect("load");
+            assert_eq!(back.token, "tok_kept");
+            assert!(!back.token_unreadable());
+
+            // An empty vault is "no token", not a read failure.
+            vault.clear().expect("clear");
+            assert!(!load().expect("load").token_unreadable());
+        });
+    }
+
+    #[test]
+    fn an_update_during_a_failed_vault_read_keeps_the_stored_token() {
+        with_temp_home(|| {
+            let vault = MemTokenVault::holding(None);
+            let _v = TestTokenVault::install(vault.clone());
+            seed_vaulted(&vault, "tok_kept");
+            vault.set_fail_reads(true);
+
+            let relays = vec![
+                RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+            ];
+            let cfg = update(|c| c.relays = relays.clone()).expect("unrelated update");
+            assert!(cfg.token_unreadable());
+            assert_eq!(on_disk().relays, relays, "the unrelated field is written");
+            assert_eq!(
+                vault.stored().as_deref(),
+                Some("tok_kept"),
+                "a failed vault read must never clear the stored token"
+            );
+            update(|c| c.enabled = false).expect("another update");
+            update_if(|c| {
+                c.auto_start = true;
+                true
+            })
+            .expect("update_if");
+            assert_eq!(vault.stored().as_deref(), Some("tok_kept"));
+            assert_eq!(on_disk().token, "", "the token never lands in tunnel.json");
+
+            vault.set_fail_reads(false);
+            let back = load().expect("load");
+            assert_eq!(back.token, "tok_kept", "the token survives the failing stretch");
+            assert_eq!(back.relays, relays);
+            assert!(!back.enabled && back.auto_start);
+        });
+    }
+
+    #[test]
+    fn saving_an_empty_token_never_clears_the_vault() {
+        with_temp_home(|| {
+            let vault = MemTokenVault::holding(None);
+            let _v = TestTokenVault::install(vault.clone());
+            seed_vaulted(&vault, "tok_kept");
+            save(&TunnelConfig { subdomain: "rosson".to_string(), ..Default::default() })
+                .expect("save without a token");
+            assert_eq!(vault.stored().as_deref(), Some("tok_kept"));
+            assert_eq!(load().expect("load").token, "tok_kept");
+        });
+    }
+
+    #[test]
+    fn pairing_a_new_token_replaces_the_vault_token_even_when_reads_fail() {
+        with_temp_home(|| {
+            let vault = MemTokenVault::holding(None);
+            let _v = TestTokenVault::install(vault.clone());
+            seed_vaulted(&vault, "tok_old");
+            // Desktop pairing: POST /cli/tunnel/config with the new token.
+            super::super::set_config(super::super::TunnelConfigUpdate {
+                token: Some("tok_new".to_string()),
+                ..Default::default()
+            })
+            .expect("pair");
+            assert_eq!(vault.stored().as_deref(), Some("tok_new"));
+            assert_eq!(load().expect("load").token, "tok_new");
+
+            // An explicit new token is written even while reads fail.
+            vault.set_fail_reads(true);
+            update(|c| c.token = "tok_newer".to_string()).expect("pair again");
+            assert_eq!(vault.stored().as_deref(), Some("tok_newer"));
+            assert_eq!(on_disk().token, "", "the token never lands in tunnel.json");
+        });
+    }
+
+    #[test]
+    fn release_clears_the_vault_token_and_refuses_while_the_vault_is_unreadable() {
+        use super::super::unpair::{perform_release_mode, ReleaseMode};
+        with_temp_home(|| {
+            let vault = MemTokenVault::holding(None);
+            let _v = TestTokenVault::install(vault.clone());
+            seed_vaulted(&vault, "tok_kept");
+
+            vault.set_fail_reads(true);
+            let err = perform_release_mode(ReleaseMode::ForgetLocal)
+                .expect_err("a release without a readable token must refuse");
+            assert!(err.contains("could not be read from the K2 vault"), "{err}");
+            assert_eq!(vault.stored().as_deref(), Some("tok_kept"), "nothing released");
+            assert!(config_path().exists(), "tunnel.json kept");
+
+            vault.set_fail_reads(false);
+            let report = perform_release_mode(ReleaseMode::ForgetLocal).expect("release");
+            assert!(report.local_only);
+            assert_eq!(vault.stored(), None, "release (unpair) clears the vault token");
+            assert!(!config_path().exists(), "release deletes tunnel.json");
+            assert_eq!(load().expect("load").token, "");
         });
     }
 

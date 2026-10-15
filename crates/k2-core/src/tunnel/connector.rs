@@ -688,6 +688,18 @@ fn unhealthy_reason(st: &ConnectorState) -> Option<String> {
     None
 }
 
+/// Prefix of the [`start`] error for a vault-held token that could not be
+/// read. A soft failure: nothing was stopped or cleared; boot auto-start
+/// matches it to retry later.
+pub const TOKEN_UNREADABLE_PREFIX: &str = "tunnel token unreadable";
+
+fn token_unreadable_error(e: &str) -> String {
+    format!(
+        "{TOKEN_UNREADABLE_PREFIX}: the K2 vault could not be read ({e}); the stored \
+         token is kept and nothing was changed — try again once the vault is readable"
+    )
+}
+
 /// Start the tunnel.
 ///
 /// * `subdomain_override` — when `Some`, supersedes the stored config's
@@ -735,6 +747,17 @@ pub fn start(
             let mut desired = config::load()?;
             if let Some(sub) = subdomain_override.as_deref() {
                 desired.subdomain = sub.to_string();
+            }
+            // The vault-held token could not be read (0.45.7): the identity
+            // on disk is unknown, not changed. Keep the live tunnel; the
+            // next start re-reads the vault.
+            if let Some(e) = desired.token_read_error.as_deref() {
+                crate::log_debug!(
+                    "[tunnel] start: the tunnel token could not be read from the K2 vault \
+                     ({e}) — keeping the running tunnel for {:?} up",
+                    st.cfg.subdomain
+                );
+                return Ok(status_from(st));
             }
             let stop_reason;
             if super::identity::TunnelIdentity::of(&desired)
@@ -804,6 +827,9 @@ pub fn start(
     let mut cfg = config::load()?;
     if let Some(sub) = subdomain_override {
         cfg.subdomain = sub;
+    }
+    if let Some(e) = cfg.token_read_error.as_deref() {
+        return Err(token_unreadable_error(e));
     }
     if !cfg.is_connectable() {
         return Err(

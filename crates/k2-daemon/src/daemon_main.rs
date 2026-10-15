@@ -1458,14 +1458,37 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
             Err(e) => log_debug!("[daemon/tunnel] relay list boot refresh join error: {e}"),
         }
 
-        // Cheap read of the opt-in flag off the boot path.
-        let cfg = match k2_core::tunnel::config::load() {
-            Ok(c) => c,
-            Err(e) => {
-                log_debug!("[daemon/tunnel] auto-start: skipped (load tunnel.json failed: {e})");
-                return;
+        // Cheap read of the opt-in flag off the boot path. A vault-held
+        // token that can't be read yet (locked / unavailable right after
+        // boot or a wake) is a soft failure (0.45.7): log once, re-read on
+        // a backoff until it reads, and never clear or rewrite anything.
+        let mut wait = std::time::Duration::from_secs(15);
+        let mut logged_unreadable = false;
+        let cfg = loop {
+            let cfg = match k2_core::tunnel::config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    log_debug!("[daemon/tunnel] auto-start: skipped (load tunnel.json failed: {e})");
+                    return;
+                }
+            };
+            if !cfg.auto_start || !cfg.enabled {
+                break cfg;
             }
+            let Some(e) = cfg.token_read_error.as_deref() else { break cfg };
+            if !logged_unreadable {
+                log_debug!(
+                    "[daemon/tunnel] auto-start waiting: the tunnel token could not be read from \
+                     the K2 vault ({e}); retrying (the stored token is kept)"
+                );
+                logged_unreadable = true;
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(std::time::Duration::from_secs(300));
         };
+        if logged_unreadable {
+            log_debug!("[daemon/tunnel] auto-start: the tunnel token reads from the K2 vault again");
+        }
         if !cfg.auto_start {
             return; // not opted in — the common case, no log noise
         }

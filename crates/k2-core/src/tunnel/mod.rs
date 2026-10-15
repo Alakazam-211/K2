@@ -85,6 +85,11 @@ pub struct TunnelConfigView {
     pub relays: Vec<RelayEndpoint>,
     pub subdomain: String,
     pub token_set: bool,
+    /// 0.45.7: the token lives in the K2 vault and could not be read just
+    /// now (`tokenSet` is then false, but the device is NOT unpaired; the
+    /// stored token is kept). Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub token_unreadable: bool,
     pub public_url: Option<String>,
     /// Re-launch this tunnel on daemon boot (camelCase `autoStart`).
     pub auto_start: bool,
@@ -117,6 +122,7 @@ impl From<&TunnelConfig> for TunnelConfigView {
             relays: c.relays.clone(),
             subdomain: c.subdomain.clone(),
             token_set: !c.token.trim().is_empty(),
+            token_unreadable: c.token_unreadable(),
             public_url: c.public_url(),
             auto_start: c.auto_start,
             e2e: c.e2e,

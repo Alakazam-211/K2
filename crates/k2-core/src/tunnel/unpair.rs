@@ -401,6 +401,16 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     let cfg = config::load()?;
     let token = cfg.token.trim().to_string();
 
+    // An unreadable vault is not "no identity" (0.45.7): without the token
+    // there is no tombstone fingerprint and no upstream report, so refuse
+    // loudly and touch nothing; the release can be retried.
+    if let Some(e) = cfg.token_read_error.as_deref() {
+        return Err(format!(
+            "the tunnel token could not be read from the K2 vault ({e}); nothing was \
+             released — try again once the vault is readable"
+        ));
+    }
+
     if token.is_empty() {
         // No live identity. Already tombstoned → idempotent success;
         // otherwise there is genuinely nothing to release.

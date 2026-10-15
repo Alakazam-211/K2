@@ -169,6 +169,25 @@ fn reconcile_locked(
             }
         }
     };
+    // The vault-held token could not be read (0.45.7): the identity is
+    // unknown, not changed. Moving the listener, routes or tunnel off it
+    // would take a working tunnel down over a read error — leave all of it.
+    if let Some(e) = cfg.token_read_error.as_deref() {
+        let msg = format!(
+            "the tunnel token could not be read from the K2 vault ({e}); the tunnel, \
+             listener and routes were left as they are — try again once the vault is readable"
+        );
+        return IdentityChangeReport {
+            ok: false,
+            changed: false,
+            previous_subdomain: non_empty(&previous.subdomain),
+            subdomain: non_empty(&cfg.subdomain.trim().to_ascii_lowercase()),
+            steps: vec![IdentityStep::failed("config", msg.clone())],
+            error: Some(msg),
+            rolled_back: false,
+            status: connector::status(),
+        };
+    }
     let current = TunnelIdentity::of(&cfg);
     let changed = current != *previous;
     let mut error: Option<String> = None;
@@ -463,6 +482,13 @@ pub fn switch_subdomain(
             && !before.token.trim().is_empty() =>
         {
             before.token.trim().to_string()
+        }
+        None if before.token_unreadable() => {
+            return Err(format!(
+                "the tunnel token could not be read from the K2 vault ({}); nothing was \
+                 changed — try again once the vault is readable, or pass --token",
+                before.token_read_error.as_deref().unwrap_or_default()
+            ))
         }
         None => {
             return Err(format!(
@@ -914,8 +940,9 @@ mod tests {
 
     #[test]
     fn start_after_a_pause_keeps_a_registered_tunnel_when_the_token_reads_empty() {
-        // Right after a wake the vault-held token can read back empty
-        // (`config::load` turns a failed vault read into ""). A start then
+        // Right after a wake the token can read back empty (before 0.45.7
+        // `config::load` turned a failed vault read into ""; the vault case
+        // is now its own test below). A start then
         // saw "another identity", stopped the live frpc and failed with
         // "tunnel not configured", leaving the box dark.
         with_temp_home(|| {
@@ -938,6 +965,75 @@ mod tests {
             assert!(st.running, "{st:?}");
             assert_eq!(connector::spawn_generation(), gen, "frpc must not be restarted");
             assert!(connector::proxy_registered(), "the live frpc stays registered");
+            let _ = connector::stop("test teardown");
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn an_unreadable_vault_token_never_stops_the_tunnel_or_clears_the_token() {
+        with_temp_home(|| {
+            let _env = env();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            seed("afs", "tok-afs");
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"), "setup: token in the vault");
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start afs");
+            wait_registered();
+            let gen = connector::spawn_generation();
+
+            vault.set_fail_reads(true);
+            // A start (wake, Settings, CLI) keeps the live tunnel.
+            let st = connector::start(None, 57839, &registered_frpc("afs"))
+                .expect("start must not fail over a live tunnel");
+            assert!(st.running, "{st:?}");
+            // So does a start naming the same subdomain.
+            connector::start(Some("afs".to_string()), 57839, &registered_frpc("afs"))
+                .expect("start with the same subdomain");
+            // An unrelated config write: written, identity left alone.
+            let (_view, report) = apply_config(
+                super::super::TunnelConfigUpdate {
+                    device_id: Some("dev-2".to_string()),
+                    ..Default::default()
+                },
+                57839,
+                &registered_frpc("afs"),
+            )
+            .expect("unrelated config write");
+            if let Some(r) = report {
+                assert!(!r.ok && !r.changed, "an unreadable token is no identity change: {r:?}");
+            }
+            // A switch that needs the stored token refuses without touching anything.
+            let err = switch_subdomain(
+                SwitchRequest { subdomain: "afs".into(), ..Default::default() },
+                57839,
+                &registered_frpc("afs"),
+            )
+            .expect_err("switch without a readable token");
+            assert!(err.contains("could not be read from the K2 vault"), "{err}");
+
+            assert_eq!(connector::spawn_generation(), gen, "frpc must not be restarted");
+            assert!(connector::proxy_registered(), "the live frpc stays registered");
+            assert_eq!(running_sub().as_deref(), Some("afs"));
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"), "the vault token is untouched");
+            assert_eq!(
+                config::load().expect("load").device_id.as_deref(),
+                Some("dev-2"),
+                "the unrelated field was written"
+            );
+
+            // A stopped tunnel: start fails softly, names the vault, clears nothing.
+            connector::stop("test: stopped before the unreadable start").expect("stop");
+            let err = connector::start(None, 57839, &registered_frpc("afs"))
+                .expect_err("no token to start with");
+            assert!(err.starts_with(connector::TOKEN_UNREADABLE_PREFIX), "{err}");
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"));
+
+            // The vault reads again: start works with the kept token.
+            vault.set_fail_reads(false);
+            let st = connector::start(None, 57839, &registered_frpc("afs")).expect("start again");
+            assert!(st.running, "{st:?}");
+            assert!(frpc_toml().contains("tok-afs"), "frpc renders the kept token");
             let _ = connector::stop("test teardown");
             reset_routing();
         });

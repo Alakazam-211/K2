@@ -20,8 +20,10 @@ fn store() -> Result<VaultRefStore, String> {
 }
 
 impl k2_core::tunnel::config::TokenVault for Holder {
-    fn get(&self) -> Option<String> {
-        store().ok()?.resolve(NAME).ok().flatten()
+    /// A vault that is closed or fails to read is an `Err`, never `None`:
+    /// `None` means "no token stored" (0.45.7).
+    fn get(&self) -> Result<Option<String>, String> {
+        store()?.resolve(NAME)
     }
     fn set(&self, token: &str) -> Result<(), String> {
         store()?.put_exact(NAME, token)

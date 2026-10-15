@@ -202,6 +202,9 @@ pub enum FetchError {
     Invalid(String),
     /// The list was fine but writing `tunnel.json` failed.
     Persist(String),
+    /// The vault-held tunnel token could not be read (0.45.7); nothing was
+    /// fetched or written, retried like a network error.
+    TokenUnreadable(String),
 }
 
 impl std::fmt::Display for FetchError {
@@ -212,6 +215,9 @@ impl std::fmt::Display for FetchError {
             FetchError::Network(e) => write!(f, "network: {e}"),
             FetchError::Invalid(e) => write!(f, "invalid list: {e}"),
             FetchError::Persist(e) => write!(f, "save tunnel.json: {e}"),
+            FetchError::TokenUnreadable(e) => {
+                write!(f, "tunnel token unreadable from the K2 vault: {e}")
+            }
         }
     }
 }
@@ -339,7 +345,8 @@ fn refresh_lock() -> &'static Mutex<()> {
 
 /// Why a refresh must not run right now, if it must not.
 fn skip_reason(cfg: &TunnelConfig) -> Option<String> {
-    if cfg.token.trim().is_empty() {
+    // An unreadable token is not "not paired": refresh_once fails it softly.
+    if cfg.token.trim().is_empty() && !cfg.token_unreadable() {
         return Some("no tunnel token (not paired)".to_string());
     }
     if !cfg.enabled {
@@ -370,12 +377,19 @@ pub fn refresh_once() -> RefreshOutcome {
         return RefreshOutcome::Skipped(format!("{RELAY_LIST_URL_ENV} is not set"));
     };
     let token = cfg.token.trim().to_string();
-    lock_state().attempts += 1;
-    let result = fetch(&url, &token).and_then(|list| {
-        persist_if_changed(&list.relays, &token)
-            .map(|wrote| (list, wrote))
-            .map_err(FetchError::Persist)
-    });
+    // Vault unreadable: keep the old list, log once, retry on the error
+    // interval. Never a fetch with an empty bearer, never a write.
+    let result = match cfg.token_read_error {
+        Some(e) => Err(FetchError::TokenUnreadable(e)),
+        None => {
+            lock_state().attempts += 1;
+            fetch(&url, &token).and_then(|list| {
+                persist_if_changed(&list.relays, &token)
+                    .map(|wrote| (list, wrote))
+                    .map_err(FetchError::Persist)
+            })
+        }
+    };
     let mut st = lock_state();
     match result {
         Ok((list, wrote)) => {
@@ -496,7 +510,10 @@ pub fn next_wait(outcome: &RefreshOutcome) -> Duration {
     match outcome {
         RefreshOutcome::Failed(FetchError::Network(_))
         | RefreshOutcome::Failed(FetchError::Http(_))
-        | RefreshOutcome::Failed(FetchError::Persist(_)) => jittered(RETRY_AFTER_ERROR, 0.1),
+        | RefreshOutcome::Failed(FetchError::Persist(_))
+        | RefreshOutcome::Failed(FetchError::TokenUnreadable(_)) => {
+            jittered(RETRY_AFTER_ERROR, 0.1)
+        }
         _ => jittered(refresh, 0.1),
     }
 }
@@ -1089,28 +1106,53 @@ mod tests {
         assert_eq!(relay_list_url().as_deref(), Some("http://127.0.0.1:1/x"));
     }
 
-    /// An in-memory stand-in for the K2 vault holder (desktops since
-    /// 0.45.4 keep the tunnel token there and `tunnel.json`'s token empty).
-    struct MemVault(Mutex<Option<String>>);
-    impl config::TokenVault for MemVault {
-        fn get(&self) -> Option<String> {
-            self.0.lock().expect("mem vault").clone()
-        }
-        fn set(&self, token: &str) -> Result<(), String> {
-            *self.0.lock().expect("mem vault") = Some(token.to_string());
-            Ok(())
-        }
-        fn clear(&self) -> Result<(), String> {
-            *self.0.lock().expect("mem vault") = None;
-            Ok(())
-        }
+    #[test]
+    fn an_unreadable_vault_token_fetches_nothing_writes_nothing_and_retries() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            seed("k2c_kept");
+            assert_eq!(vault.stored().as_deref(), Some("k2c_kept"), "setup: token in the vault");
+            let before = std::fs::read(config::config_path()).expect("read tunnel.json");
+            let srv = FakeServer::start(200, GOOD);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+
+            vault.set_fail_reads(true);
+            let outcome = refresh_once();
+            match &outcome {
+                RefreshOutcome::Failed(FetchError::TokenUnreadable(e)) => {
+                    assert!(e.contains("read failed"), "{e}")
+                }
+                other => panic!("expected Failed(TokenUnreadable), got {other:?}"),
+            }
+            srv.no_request();
+            let w = next_wait(&outcome);
+            assert!(
+                w >= RETRY_AFTER_ERROR.mul_f64(0.9) && w <= RETRY_AFTER_ERROR.mul_f64(1.1),
+                "an unreadable token retries on the error interval, got {w:?}"
+            );
+            assert_eq!(std::fs::read(config::config_path()).expect("read"), before, "nothing written");
+            assert_eq!(vault.stored().as_deref(), Some("k2c_kept"), "the vault token is untouched");
+            let st = status_for(&config::load().expect("load"));
+            assert!(
+                st.last_error.as_deref().is_some_and(|e| e.contains("unreadable")),
+                "the status names the unreadable token: {st:?}"
+            );
+
+            // The vault reads again: the next refresh fetches with the kept token.
+            vault.set_fail_reads(false);
+            assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            let req = srv.next_request().to_ascii_lowercase();
+            assert!(req.contains("authorization: bearer k2c_kept"), "{req}");
+        });
     }
 
     #[test]
     fn fetch_uses_the_connectors_resolved_token_from_the_vault() {
         with_temp_home(|| {
             reset_state_for_test();
-            let _v = config::TestTokenVault::install(Arc::new(MemVault(Mutex::new(None))));
+            let _v = config::TestTokenVault::install(config::MemTokenVault::holding(None));
             // Save through the vault: the file keeps everything but the token.
             seed("k2c_from_vault");
             let raw = std::fs::read_to_string(config::config_path()).expect("read");

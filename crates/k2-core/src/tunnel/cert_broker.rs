@@ -305,9 +305,16 @@ pub fn provision_via_broker(subdomain: &str) -> Result<(String, String), BrokerE
     let csr_pem = super::tls::build_csr_pem(sub, &key_pair)
         .map_err(|e| BrokerError::Protocol(format!("build CSR: {e}")))?;
 
-    let token = super::config::load()
-        .map_err(|e| BrokerError::Protocol(format!("load tunnel config: {e}")))?
-        .token;
+    let cfg = super::config::load()
+        .map_err(|e| BrokerError::Protocol(format!("load tunnel config: {e}")))?;
+    if let Some(e) = cfg.token_read_error.as_deref() {
+        // Not an invalid token (0.45.7): the vault read failed; retry later.
+        return Err(BrokerError::Protocol(format!(
+            "the tunnel token could not be read from the K2 vault ({e}); try again \
+             once the vault is readable"
+        )));
+    }
+    let token = cfg.token;
     if token.trim().is_empty() {
         return Err(BrokerError::InvalidToken(
             "no tunnel bearer token in ~/.k2/tunnel.json (select a subdomain in \

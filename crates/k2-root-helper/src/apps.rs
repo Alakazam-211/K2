@@ -336,6 +336,120 @@ pub fn ensure_user(ctx: &Ctx) -> HResult<J> {
     )
 }
 
+// ── the process exception's user (k2appx) ───────────────────────────────
+
+/// Why an existing `k2appx` is not the user box prep makes. Same rules as
+/// `k2app`, plus: never `k2app`'s uid (the owner of every container's user
+/// namespace) and its home is the state root systemd makes.
+fn process_user_problem(ctx: &Ctx, pw: &Pw, all: &[Pw]) -> HResult<Option<&'static str>> {
+    if pw.uid == 0 || pw.gid == 0 {
+        return Ok(Some("k2appx has uid or gid 0"));
+    }
+    if pw.uid >= 1000 {
+        return Ok(Some("k2appx is not a system user (uid >= 1000)"));
+    }
+    if all.iter().filter(|p| p.uid == pw.uid).count() > 1 {
+        return Ok(Some("another user shares k2appx's uid"));
+    }
+    if all.iter().any(|p| p.name == APP_USER && (p.uid == pw.uid || p.gid == pw.gid)) {
+        return Ok(Some("k2appx shares k2app's uid or group"));
+    }
+    if let Ok(daemons) = caller::load_daemons(ctx) {
+        if daemons
+            .iter()
+            .any(|d| all.iter().any(|p| p.name == d.user && p.uid == pw.uid))
+        {
+            return Ok(Some("k2appx's uid is the K2 daemon user's"));
+        }
+    }
+    if !NOLOGIN.contains(&pw.shell.as_str()) {
+        return Ok(Some("k2appx has a login shell"));
+    }
+    if pw.home != PROCESS_HOME {
+        return Ok(Some("k2appx's home is not /var/lib/k2appx"));
+    }
+    let groups = read_cfg_text(ctx, GROUP_FILE)?;
+    for l in groups.lines() {
+        let f: Vec<&str> = l.split(':').collect();
+        if f.len() != 4 {
+            continue;
+        }
+        let member = f[2].parse::<u32>().is_ok_and(|g| g == pw.gid)
+            || f[3].split(',').any(|m| m == PROCESS_USER);
+        if member && (PRIVILEGED_GROUPS.contains(&f[0]) || f[0] == APP_USER) {
+            return Ok(Some("k2appx is in a privileged group"));
+        }
+    }
+    let shadow = read_cfg_text(ctx, SHADOW_FILE)?;
+    for l in shadow.lines() {
+        let mut f = l.split(':');
+        if f.next() == Some(PROCESS_USER) {
+            let h = f.next().unwrap_or("");
+            if !(h.starts_with('!') || h.starts_with('*')) {
+                return Ok(Some("k2appx has a password"));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The proven `k2appx` entry.
+fn process_user(ctx: &Ctx) -> HResult<Pw> {
+    let all = passwd(ctx)?;
+    let pw = all
+        .iter()
+        .find(|p| p.name == PROCESS_USER)
+        .cloned()
+        .ok_or_else(|| {
+            Fail::state("box_not_prepared: the k2appx user does not exist (apps ensure-process-user)")
+        })?;
+    if let Some(why) = process_user_problem(ctx, &pw, &all)? {
+        return Err(Fail::state(format!("refused: {why}")));
+    }
+    Ok(pw)
+}
+
+/// `apps ensure-process-user` (open): the `process` exception's own system
+/// user. No home is made (systemd makes `/var/lib/k2appx/<id>` per App).
+pub fn ensure_process_user(ctx: &Ctx) -> HResult<J> {
+    app_user(ctx)?;
+    let all = passwd(ctx)?;
+    let created = if all.iter().any(|p| p.name == PROCESS_USER) {
+        false
+    } else {
+        ctx.run_ok(
+            USERADD,
+            &[
+                "--system",
+                "--user-group",
+                "--home-dir",
+                PROCESS_HOME,
+                "--no-create-home",
+                "--shell",
+                APP_SHELL,
+                "--comment",
+                "K2 process Apps",
+                PROCESS_USER,
+            ],
+            None,
+        )?;
+        true
+    };
+    let pw = process_user(ctx)?;
+    Ok(json!({"user": PROCESS_USER, "uid": pw.uid, "gid": pw.gid, "home": PROCESS_HOME, "created": created}))
+}
+
+fn process_user_json(ctx: &Ctx) -> J {
+    let Ok(all) = passwd(ctx) else { return json!({"exists": false}) };
+    match all.iter().find(|p| p.name == PROCESS_USER) {
+        None => json!({"exists": false}),
+        Some(p) => {
+            let problem = process_user_problem(ctx, p, &all).ok().flatten();
+            json!({"exists": true, "uid": p.uid, "ok": problem.is_none(), "problem": problem})
+        }
+    }
+}
+
 // ── subordinate ids ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -816,7 +930,9 @@ pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: PortRange) -> HRes
     let pw = app_user(ctx)?;
     let apps = load_nft_apps(ctx)?;
     let rules = app_rules(ctx, pw.uid, &apps, gw);
-    let text = nft_ruleset(pw.uid, gw, px, db, &rules);
+    // Process Apps (k2appx) get the same chain when their user exists.
+    let pu = process_user(ctx).ok().map(|p| p.uid);
+    let text = nft_ruleset(pw.uid, pu, gw, px, db, &rules);
     ctx.run_ok(NFT, &["-f", "-"], Some(text.as_bytes()))?;
     let mut v = nft_json(ctx, Some(pw.uid));
     v["ranges"] = json!({"gateway": gw.token(), "proxy": px.token(), "db": db.token()});
@@ -1326,6 +1442,50 @@ pub fn process_unit_set(ctx: &Ctx, on: bool) -> HResult<J> {
     Ok(json!({"processUnit": process_unit_state(ctx), "changed": changed}))
 }
 
+/// `/run/systemd/system/k2app-process@<id>.service.d` (runtime: gone at
+/// reboot; the daemon writes it before every start).
+fn process_caps_dir(id: &AppId) -> String {
+    format!("{RUNTIME_SYSTEMD_DIR}/{}.d", id.process_unit())
+}
+
+/// `apps process caps`: the App's memory and disk ceilings and its device
+/// grants, as a runtime drop-in on its instance. Rendered here from
+/// validated tokens; nothing else reaches the file.
+pub fn process_caps(
+    ctx: &Ctx,
+    id: &AppId,
+    mem_mib: u64,
+    io: &IoMax,
+    devices: &[String],
+) -> HResult<J> {
+    app_user(ctx)?;
+    let grants: Vec<DeviceGrant> = devices
+        .iter()
+        .map(|t| device(t).ok_or_else(|| Fail::state("refused: unknown device")))
+        .collect::<HResult<_>>()?;
+    for g in &grants {
+        if !exists(ctx, &g.path) {
+            return Err(Fail::state(format!(
+                "device_missing: {} is not on this box",
+                g.token
+            )));
+        }
+    }
+    let body = process_caps_dropin(mem_mib, io, &grants);
+    let (run, systemd) = split(RUNTIME_SYSTEMD_DIR);
+    let (run_parent, run_name) = split(run);
+    ensure_subdir(ctx, run_parent, run_name)?;
+    ensure_subdir(ctx, run, systemd)?;
+    let dir = process_caps_dir(id);
+    let d = ensure_subdir(ctx, RUNTIME_SYSTEMD_DIR, split(&dir).1)?;
+    let changed = put(ctx, &d, PROCESS_CAPS_DROPIN, body.as_bytes())?;
+    if changed {
+        reload(ctx)?;
+    }
+    Ok(json!({"app": id.as_str(), "caps": format!("{dir}/{PROCESS_CAPS_DROPIN}"), "changed": changed,
+              "memoryMiB": mem_mib, "io": io, "devices": devices}))
+}
+
 pub fn process_start(ctx: &Ctx, id: &AppId) -> HResult<J> {
     app_user(ctx)?;
     if process_unit_state(ctx) != "ok" {
@@ -1338,13 +1498,181 @@ pub fn process_start(ctx: &Ctx, id: &AppId) -> HResult<J> {
             "engine_missing: k2-app-engine is not installed on this box",
         ));
     }
+    // Its own user, never k2app (see PROCESS_USER), and the nft table must
+    // already cover that user (no unfiltered moment after the start).
+    let pu = process_user(ctx)?;
+    if !nft_list(ctx).is_some_and(|t| t.contains(&format!("meta skuid {} ", pu.uid))) {
+        return Err(Fail::state(
+            "box_not_prepared: the k2app nftables table doesn't cover process Apps yet (apps nft apply)",
+        ));
+    }
+    // Never an uncapped App: the caps drop-in comes first.
+    if !exists(ctx, &format!("{}/{PROCESS_CAPS_DROPIN}", process_caps_dir(id))) {
+        return Err(Fail::state(
+            "caps_missing: write the App's caps first (apps process caps)",
+        ));
+    }
+    // AppArmor box: the template must carry the profile drop-in.
+    if lsm(ctx) == Lsm::AppArmor
+        && file_state(ctx, &process_apparmor_dropin_path(), process_apparmor_dropin().as_bytes()) != "ok"
+    {
+        return Err(Fail::state(
+            "mac_missing: AppArmor is on but the k2-app profile isn't set up (apps apparmor on)",
+        ));
+    }
     ctx.run_ok(SYSTEMCTL, &["start", &id.process_unit()], None)?;
     Ok(json!({"app": id.as_str(), "unit": id.process_unit(), "started": true}))
+}
+
+/// `apps process purge <id>` (daemon): delete a stopped process App's
+/// state (`/var/lib/k2appx/<id>`, owned by k2appx, so the engine can't)
+/// and its runtime caps drop-in. Never while it runs.
+pub fn process_purge(ctx: &Ctx, id: &AppId) -> HResult<J> {
+    if process_instances(ctx).iter().any(|a| a == id.as_str()) {
+        return Err(Fail::state("refused: the App is running (stop it first)"));
+    }
+    let mut removed = false;
+    let (parent, name) = split(PROCESS_HOME);
+    if let Ok(base) = ctx.dir(parent) {
+        match base.kind(OsStr::new(name)).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Dir => {
+                let home = base.sub(OsStr::new(name)).map_err(|e| Fail::io_err("open", e))?;
+                if home.kind(OsStr::new(id.as_str())).map_err(|e| Fail::io_err("stat", e))? != Kind::Missing {
+                    home.remove_tree(OsStr::new(id.as_str())).map_err(|e| Fail::io_err("remove", e))?;
+                    removed = true;
+                }
+            }
+            Kind::Missing => {}
+            _ => return Err(Fail::state("refused: /var/lib/k2appx is not a directory")),
+        }
+    }
+    let dir = process_caps_dir(id);
+    let caps = unput(ctx, RUNTIME_SYSTEMD_DIR, Some(split(&dir).1), PROCESS_CAPS_DROPIN)?;
+    if caps {
+        reload(ctx)?;
+    }
+    Ok(json!({"app": id.as_str(), "purged": removed, "capsRemoved": caps}))
 }
 
 pub fn process_stop(ctx: &Ctx, id: &AppId) -> HResult<J> {
     ctx.run_ok(SYSTEMCTL, &["stop", &id.process_unit()], None)?;
     Ok(json!({"app": id.as_str(), "unit": id.process_unit(), "stopped": true}))
+}
+
+// ── MAC: the k2-app AppArmor profile ────────────────────────────────────
+
+fn lsm(ctx: &Ctx) -> Lsm {
+    Lsm::detect(
+        kread(ctx, APPARMOR_ENABLED).as_deref(),
+        kread(ctx, SELINUX_ENFORCE).as_deref(),
+    )
+}
+
+fn apparmor_parser(ctx: &Ctx) -> Option<&'static str> {
+    APPARMOR_PARSER.iter().copied().find(|p| exists(ctx, p))
+}
+
+fn process_apparmor_dropin_path() -> String {
+    format!("{SYSTEMD_SYSTEM_DIR}/{PROCESS_DROPIN_DIR}/{PROCESS_APPARMOR_DROPIN}")
+}
+
+/// `mac` in `apps status`: which LSM is on, and whether K2's profile, the
+/// engine's marker and the process drop-in are in place.
+fn mac_json(ctx: &Ctx) -> J {
+    let l = lsm(ctx);
+    let loaded = kread(ctx, APPARMOR_PROFILES)
+        .as_deref()
+        .and_then(|t| profile_mode(t, APPARMOR_PROFILE));
+    let profile = file_state(ctx, APPARMOR_FILE, apparmor_profile().as_bytes());
+    let marker = file_state(ctx, MAC_MARKER, mac_marker().as_bytes());
+    let dropin = file_state(
+        ctx,
+        &process_apparmor_dropin_path(),
+        process_apparmor_dropin().as_bytes(),
+    );
+    let applied = match l {
+        // SELinux: rootless Podman labels containers itself.
+        Lsm::SeLinux => true,
+        Lsm::AppArmor => {
+            loaded.as_deref() == Some("enforce")
+                && profile == "ok"
+                && marker == "ok"
+                && dropin == "ok"
+        }
+        Lsm::None => false,
+    };
+    json!({
+        "lsm": l.as_str(),
+        "profile": profile,
+        "loaded": loaded,
+        "marker": marker,
+        "processDropin": dropin,
+        "parser": apparmor_parser(ctx),
+        "applied": applied,
+    })
+}
+
+/// `apps apparmor on`: where AppArmor is the LSM, write the canned profile
+/// and load it (enforce), then the engine's marker and the process
+/// template's drop-in, in that order (nothing points at the profile before
+/// it is loaded). Elsewhere a no-op that says why. `off` (daemon-only)
+/// removes the pointers first, then unloads the profile.
+pub fn apparmor(ctx: &Ctx, on: bool) -> HResult<J> {
+    let l = lsm(ctx);
+    let mut changed = false;
+    if on {
+        if l != Lsm::AppArmor {
+            let mut v = mac_json(ctx);
+            v["changed"] = json!(false);
+            v["skipped"] = json!(match l {
+                Lsm::SeLinux => "SELinux is enforcing: Podman's container_t labels are the MAC layer",
+                _ => "no MAC layer on this box (AppArmor and SELinux are off)",
+            });
+            return Ok(v);
+        }
+        let parser = apparmor_parser(ctx).ok_or_else(|| {
+            Fail::state("apparmor_missing: AppArmor is on but apparmor_parser isn't installed")
+        })?;
+        let ad = ctx
+            .dir(APPARMOR_DIR)
+            .map_err(|e| Fail::io_err("open /etc/apparmor.d", e))?;
+        changed |= put(ctx, &ad, split(APPARMOR_FILE).1, apparmor_profile().as_bytes())?;
+        let loaded = kread(ctx, APPARMOR_PROFILES)
+            .as_deref()
+            .and_then(|t| profile_mode(t, APPARMOR_PROFILE));
+        if changed || loaded.as_deref() != Some("enforce") {
+            // --replace loads or reloads; never --complain.
+            ctx.run_ok(parser, &["--replace", "--write-cache", APPARMOR_FILE], None)?;
+            changed = true;
+        }
+        let ed = ensure_subdir(ctx, "/etc", split(APP_ETC).1)?;
+        changed |= put(ctx, &ed, MAC_MARKER_FILE, mac_marker().as_bytes())?;
+        let dd = ensure_subdir(ctx, SYSTEMD_SYSTEM_DIR, PROCESS_DROPIN_DIR)?;
+        if put(ctx, &dd, PROCESS_APPARMOR_DROPIN, process_apparmor_dropin().as_bytes())? {
+            changed = true;
+            reload(ctx)?;
+        }
+    } else {
+        if unput(ctx, SYSTEMD_SYSTEM_DIR, Some(PROCESS_DROPIN_DIR), PROCESS_APPARMOR_DROPIN)? {
+            changed = true;
+            reload(ctx)?;
+        }
+        changed |= unput(ctx, "/etc", Some(split(APP_ETC).1), MAC_MARKER_FILE)?;
+        let loaded = kread(ctx, APPARMOR_PROFILES)
+            .as_deref()
+            .and_then(|t| profile_mode(t, APPARMOR_PROFILE))
+            .is_some();
+        if loaded && exists(ctx, APPARMOR_FILE) {
+            if let Some(parser) = apparmor_parser(ctx) {
+                ctx.run_ok(parser, &["--remove", APPARMOR_FILE], None)?;
+                changed = true;
+            }
+        }
+        changed |= unput(ctx, APPARMOR_DIR, None, split(APPARMOR_FILE).1)?;
+    }
+    let mut v = mac_json(ctx);
+    v["changed"] = json!(changed);
+    Ok(v)
 }
 
 // ── cores slice and the Apps budget ─────────────────────────────────────
@@ -1547,6 +1875,7 @@ pub fn unprep(ctx: &Ctx, who: &Caller) -> HResult<J> {
             .map(|c| json!({"changed": c})),
     )?;
     step("nft remove", nft_remove(ctx))?;
+    step("apparmor off", apparmor(ctx, false))?;
     step("process-unit off", process_unit_set(ctx, false))?;
     step("cores-slice off", cores_slice(ctx, who, None))?;
     step("io-cost off", io_cost(ctx, false))?;
@@ -1639,6 +1968,8 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "nft": nft_json(ctx, pw.as_ref().map(|p| p.uid)),
         "processUnit": process_unit_state(ctx),
         "processApps": process_instances(ctx),
+        "processUser": process_user_json(ctx),
+        "mac": mac_json(ctx),
         "coresSlice": {"present": !cores.is_empty(), "memoryMin": cores_min,
                        "daemonUnits": daemons.iter().filter(|d| d.scope == "system").map(|d| d.unit.clone()).collect::<Vec<_>>()},
         "engine": engine_json(ctx),

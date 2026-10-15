@@ -319,6 +319,11 @@ impl T {
         let mut t = self.procs.0.borrow_mut();
         t.procs.get_mut(&SUDO_PID).unwrap().ppid = AGENT_PID;
     }
+    /// The caller is the daemon's main process again.
+    fn as_daemon(&self) {
+        let mut t = self.procs.0.borrow_mut();
+        t.procs.get_mut(&SUDO_PID).unwrap().ppid = DAEMON_PID;
+    }
     fn calls(&self) -> Vec<(String, Vec<String>, Option<Vec<u8>>)> {
         self.exec.0.borrow().calls.clone()
     }

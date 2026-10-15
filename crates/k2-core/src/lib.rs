@@ -102,6 +102,9 @@ pub mod skin;
 // Skin front door (slice 3): Caddy path-filter renderer + apply (nested
 // `skin.<sub>.k2.dev` on the existing tunnel; never a second frpc).
 pub mod skin_door;
+// Sew S27 generic grant hook: `chat` grant kind, durable `tool_outbox` in
+// skin.db, reconcile diff. Decisions here; Sew IO in the daemon worker.
+pub mod tool_hook;
 // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): HTTP JSON
 // checks the daemon polls, their state, card view and triggers. Pure half;
 // the poller and routes live in k2-daemon. See module docs.

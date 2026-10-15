@@ -259,6 +259,8 @@ pub fn set_agent_display_name(project_path: &str, name: &str) -> Result<(), Stri
     }
 
     invalidate_agent_display_name_cache(project_path);
+    // Sew S27: chat profiles mirror this; the grant-hook sweep fixes drift.
+    crate::tool_hook::kick_reconcile();
 
     Ok(())
 }

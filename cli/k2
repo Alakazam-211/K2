@@ -6904,6 +6904,16 @@ See and run it:
                                        Memory: none (the default) lets the App
                                        use any memory outside K2's reserve.
 
+Egress (guarded Apps reach only listed hosts, through their own proxy):
+  k2 app egress <app-id>               Mode, hosts, pending requests, proxy.
+  k2 app egress add <app-id> <host[:port]>... [--reason TEXT]
+                                       Always held for the owner (exit 2).
+  k2 app egress rm <app-id> <host>     At once; open tunnels are cut.
+  k2 app egress log <app-id>           The last connections (host, port).
+  k2 app approvals | approve <id> | deny <id>
+                                       Held requests; approve is the owner's,
+                                       in person. k2 app egress --help.
+
 The box (Linux):
   k2 app doctor [--json]               Is this box ready for Apps? Kernel, cgroup
                                        v2, Podman 5+, pasta, crun/youki, the k2app
@@ -7685,6 +7695,17 @@ MEMORY
   No per-App limit by default: the user decides. Set one with
   k2 app config <app-id> --memory 8G (or none to clear).
 
+EGRESS (guarded Apps, --engine guarded)
+  A guarded App reaches the internet only through its own proxy
+  (HTTP(S)_PROXY are set; Node: fetch and http use them), and only the
+  hosts on its list. Ask for them in the manifest
+  ("egress":{"hosts":["api.stripe.com"]}) or with
+  k2 app egress add <app-id> <host[:port]>. Every new host waits for the
+  owner (exit 2, a w_… request); you can't approve it. Removing one
+  (k2 app egress rm) is instant. k2 app egress <app-id> shows what the
+  App tried; K2 tells you when it tries a host that isn't allowed. Keys
+  never go in the App: use the vault.
+
 WHO MAY
   An agent needs "Allow this agent to manage Apps" on its workspace and
   sees only its workspace's Apps. uninstall --purge is the owner's.
@@ -7693,6 +7714,266 @@ EXIT CODES
   0 live/ok · 1 failed check or health gate · 2 usage or still pending
   · 3 infra/permission (JSON {error, hint}).
 EOF
+}
+
+# ── App egress (runtime S15) and held widenings ──────────────────────
+# A guarded App reaches only the hosts on its egress allowlist, through
+# its own proxy. New hosts are held for the owner (every caller, the owner
+# token included); narrowing is immediate.
+
+_app_egress_usage() {
+    cat <<'EOF'
+k2 app egress — what a guarded App may reach on the internet
+
+  k2 app egress <app-id> [--json]      Mode, hosts (allowed / pending / seen,
+                                       with counts), pending requests, proxy.
+  k2 app egress add <app-id> <host[:port]>... [--reason TEXT] [--json]
+                                       Ask for hosts (443 by default; *.suffix
+                                       for any name under a suffix). Always
+                                       held for the owner: exit 2 with the
+                                       request id until they approve.
+  k2 app egress rm <app-id> <host[:port]> [--json]
+                                       Take a host off at once (open tunnels to
+                                       it are cut). No approval needed.
+  k2 app egress mode <app-id> allowlist|broad [--reason TEXT]
+                                       allowlist applies at once; broad is the
+                                       open path's (held for the owner).
+  k2 app egress log <app-id> [--tail N] [--json]
+                                       The last connections: host, port, result,
+                                       bytes (never paths or queries).
+
+  k2 app approvals [--app A] [--all] [--json]
+                                       Held requests (an agent sees its own
+                                       workspace's).
+  k2 app approve <request-id>          Owner, in person: Touch ID or your
+                                       password, outside K2. Agents never can.
+  k2 app deny <request-id> [--reason TEXT]
+                                       Owner/admin denies; the requester
+                                       withdraws its own.
+
+Always refused, even if listed: private, local, link-local and metadata
+addresses, this box's own names (reach K2 through K2_GATEWAY_URL), and a
+TLS name that isn't the CONNECT name. A manifest's egress.hosts are asked
+for at deploy. Keys never go through this proxy (use the vault).
+
+Exit codes: 0 ok · 2 usage or held (pending the owner) · 3 refused/infra.
+EOF
+}
+
+_app_held_exit() {
+    # stdin: a held answer. Print it; exit 2 (loopable) unless already allowed.
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("status") != "held":
+    print("already allowed: " + ", ".join(v.get("alreadyAllowed") or []))
+    sys.exit(0)
+r = v["request"]
+print("held for the owner: %s" % r["id"])
+print("  %s" % r["summary"])
+if v.get("alreadyAllowed"):
+    print("  already allowed: " + ", ".join(v["alreadyAllowed"]))
+print("  " + v.get("hint", ""))
+sys.exit(2)'
+}
+
+cmd_app_egress() {
+    local sub="${1:-}"
+    case "$sub" in
+        add|rm|remove|mode|log) shift ;;
+        ""|-h|--help|help) _app_egress_usage; return 0 ;;
+        *) sub="show" ;;
+    esac
+    local app="" json_out=0 reason="" tail="" hosts=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --tail) tail="${2:-}"; shift 2 ;;
+            -h|--help) _app_egress_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app egress --help)" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else hosts+=("$1"); fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { _app_egress_usage >&2; exit 2; }
+    case "$sub" in
+        show)
+            [ "${#hosts[@]}" -eq 0 ] || { echo "usage: k2 app egress <app-id> (to ask for a host: k2 app egress add <app-id> <host>)" >&2; exit 2; }
+            _compute_call GET /cli/app/egress "app=$(urlencode "$app")"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s  egress %s%s" % (v["app"], v["mode"], "" if v.get("enforced") else "  (NOT enforced: process engine)"))
+print("  " + v.get("note", ""))
+hosts = v.get("hosts") or []
+if not hosts:
+    print("  no hosts: this App reaches nothing outside K2")
+for h in hosts:
+    hp = ("[%s]:%s" % (h["host"], h["port"])) if ":" in h["host"] else ("%s:%s" % (h["host"], h["port"]))
+    extra = "  request " + h["requestId"] if h.get("requestId") else ""
+    print("  %-8s %-40s %-10s hits %-6s refused %s%s" % (h["status"], hp, h["source"], h["hits"], h["refused"], extra))
+for r in v.get("pending") or []:
+    print("  pending  %s  %s (by %s)" % (r["id"], r["summary"], r["requestedBy"]))
+p = v.get("proxy") or {}
+if p.get("listening"):
+    print("  proxy    127.0.0.1:%s  %s open, %s total, %s refused" % (p["port"], p["active"], p["connections"], p["refused"]))
+else:
+    print("  proxy    not listening (it opens when the guarded App starts)")'
+            ;;
+        add)
+            [ "${#hosts[@]}" -gt 0 ] || { echo "usage: k2 app egress add <app-id> <host[:port]>... [--reason TEXT]" >&2; exit 2; }
+            local hj
+            hj="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${hosts[@]}")"
+            _app_rt_post /cli/app/egress/add "$(_compute_json K2_CJ_app="$app" K2_CJ_hosts_j="$hj" K2_CJ_reason="$reason")"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then
+                printf '%s\n' "$_CP_BODY"
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(2 if json.load(sys.stdin).get("status") == "held" else 0)'
+                return $?
+            fi
+            local rc=0
+            printf '%s' "$_CP_BODY" | _app_held_exit || rc=$?
+            if [ "$rc" = 2 ] && ! _compute_in_session && [ -t 0 ] && [ "${K2_NO_APPROVE:-}" != "1" ]; then
+                # The owner at a terminal outside K2: approve right here.
+                local id
+                id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request"]["id"])')"
+                _app_approve "$id"
+                return 0
+            fi
+            return "$rc"
+            ;;
+        rm|remove)
+            [ "${#hosts[@]}" -eq 1 ] || { echo "usage: k2 app egress rm <app-id> <host[:port]>" >&2; exit 2; }
+            _app_rt_post /cli/app/egress/rm "$(_compute_json K2_CJ_app="$app" K2_CJ_host="${hosts[0]}")"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print(("removed %s (at once)" % v["host"]) if v.get("removed") else v.get("hint", "not on the list"))'
+            ;;
+        mode)
+            [ "${#hosts[@]}" -eq 1 ] || { echo "usage: k2 app egress mode <app-id> allowlist|broad" >&2; exit 2; }
+            _app_rt_post /cli/app/egress/mode "$(_compute_json K2_CJ_app="$app" K2_CJ_mode="${hosts[0]}" K2_CJ_reason="$reason")"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "held" else 1)'; then
+                printf '%s' "$_CP_BODY" | _app_held_exit
+                return $?
+            fi
+            echo "$app: egress mode $(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+            ;;
+        log)
+            local q="app=$(urlencode "$app")"
+            [ -n "$tail" ] && q="${q}&tail=$(urlencode "$tail")"
+            _compute_call GET /cli/app/egress/log "$q"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+for l in json.load(sys.stdin).get("lines") or []:
+    at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l.get("at", 0)))
+    hp = "%s:%s" % (l.get("host", "-"), l.get("port", "-"))
+    if l.get("result") == "ok":
+        print("%s  ok       %-6s %-40s up %s down %s  %sms (%s)" % (at, l.get("kind", ""), hp, l.get("up"), l.get("down"), l.get("ms"), l.get("end")))
+    else:
+        print("%s  %-8s %-6s %-40s %s" % (at, l.get("result"), l.get("kind", ""), hp, l.get("code")))'
+            ;;
+    esac
+}
+
+# Owner confirm bound to the request, then approve. Never for an agent:
+# the daemon refuses passports, and the confirm needs a person.
+_app_approve() {
+    local id="$1"
+    if _compute_in_session; then
+        echo '{"error":"owner_only","hint":"approve in Settings → Apps → Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}' >&2
+        exit 3
+    fi
+    _compute_call GET /cli/app/approvals "state=all" tcp
+    local found
+    found="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+want = sys.argv[1]
+rows = [r for r in json.load(sys.stdin)["requests"] if r["id"] == want or r["id"].startswith(want)]
+if len(rows) != 1:
+    sys.exit(1)
+r = rows[0]
+print(r["id"]); print(r["status"]); print(r["summary"][:64])
+print("---"); print(r["summary"])
+print("asked by %s%s" % (r["requestedBy"], (": " + r["reason"]) if r.get("reason") else ""))
+' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single request matches '$id' (k2 app approvals)\"}" >&2; exit 3; }
+    local full state label
+    full="$(printf '%s\n' "$found" | sed -n 1p)"
+    state="$(printf '%s\n' "$found" | sed -n 2p)"
+    label="$(printf '%s\n' "$found" | sed -n 3p)"
+    if [ "$state" != "pending" ]; then
+        echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
+        exit 3
+    fi
+    printf '%s\n' "$found" | sed -n '5,$p' >&2
+    local tok
+    tok="$(_vault_confirm_token app-approve "$full" "$label")" || exit 3
+    _compute_call POST /cli/app/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
+    tok=""
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin); r=v["request"]
+print("approved %s: %s\n  %s" % (r["id"], r["summary"], v.get("note","")))'
+}
+
+cmd_app_approvals() {
+    local app="" all=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --app) app="${2:-}"; shift 2 ;;
+            --all) all=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_egress_usage; return 0 ;;
+            *) echo "Unknown argument: $1 (k2 app approvals [--app A] [--all])" >&2; exit 2 ;;
+        esac
+    done
+    local q="state=pending"
+    [ "$all" = 1 ] && q="state=all"
+    [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
+    _compute_call GET /cli/app/approvals "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("requests") or []
+if not rows:
+    print("No requests.")
+for r in rows:
+    print("%s  %-9s %s  (by %s)" % (r["id"], r["status"], r["summary"], r["requestedBy"]))
+    if r.get("reason"):
+        print("    why: " + r["reason"])
+    if r.get("decidedBy"):
+        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))'
+}
+
+cmd_app_approve() {
+    case "${1:-}" in
+        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner, outside K2)" >&2; exit 2 ;;
+    esac
+    _app_approve "$1"
+}
+
+cmd_app_deny() {
+    local id="" reason="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]" >&2; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) id="$1"; shift ;;
+        esac
+    done
+    [ -z "$id" ] && { echo "usage: k2 app deny <request-id> [--reason TEXT]" >&2; exit 2; }
+    _app_rt_post /cli/app/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_reason="$reason")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+r=json.load(sys.stdin)["request"]; print("%s %s: %s" % (r["id"], r["status"], r["summary"]))'
 }
 
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
@@ -8077,6 +8358,10 @@ cmd_app() {
         deny) shift; cmd_app_deny "$@" ;;
         access) shift; cmd_app_access "$@" ;;
         grace|crossover) shift; _app_grace_usage ;;
+        egress) shift; cmd_app_egress "$@" ;;
+        approvals) shift; cmd_app_approvals "$@" ;;
+        approve) shift; cmd_app_approve "$@" ;;
+        deny) shift; cmd_app_deny "$@" ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"

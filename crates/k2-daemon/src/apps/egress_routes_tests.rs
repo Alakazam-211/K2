@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::test_seams;
 use super::*;
+use k2_core::connect_users::Role;
 
 static MSGS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 

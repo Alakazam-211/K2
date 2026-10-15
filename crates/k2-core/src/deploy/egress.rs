@@ -437,31 +437,16 @@ pub fn record_rule_hit(conn: &Connection, app: &str, rule: &HostSpec, at: i64) -
 }
 
 // ── widening requests ────────────────────────────────────────────────
+//
+// Egress requests live in the one held-request table (`app_widenings`,
+// `app_grace::requests`), next to the 0.46.0 grace kinds: one list, one
+// approve (owner, in person), one deny. These helpers keep the host list
+// in step with them.
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Widening {
-    pub id: String,
-    pub app_id: String,
-    pub kind: String,
-    pub diff: J,
-    pub summary: String,
-    pub reason: Option<String>,
-    pub deployment_id: Option<String>,
-    pub requested_by: String,
-    pub requester_workspace: Option<String>,
-    #[serde(skip)]
-    pub requester_session: Option<String>,
-    pub requested_at: i64,
-    pub expires_at: i64,
-    pub status: String,
-    pub decided_by: Option<String>,
-    pub decided_at: Option<i64>,
-    pub confirm_via: Option<String>,
-    pub decision_reason: Option<String>,
-}
+pub use crate::app_grace::requests::AppRequest as Widening;
+use crate::app_grace::requests as reqs;
 
-impl Widening {
+impl reqs::AppRequest {
     /// The hosts an `egress` request adds.
     pub fn hosts(&self) -> Vec<HostSpec> {
         self.diff["egress"]["add"]
@@ -476,32 +461,8 @@ impl Widening {
     }
 }
 
-const W_COLS: &str = "id, app_id, kind, diff_json, summary, reason, deployment_id, requested_by, requester_workspace, requester_session, \
-                      requested_at, expires_at, status, decided_by, decided_at, confirm_via, decision_reason";
-
-fn w_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Widening> {
-    let diff: String = r.get(3)?;
-    Ok(Widening {
-        id: r.get(0)?,
-        app_id: r.get(1)?,
-        kind: r.get(2)?,
-        diff: serde_json::from_str(&diff).unwrap_or(J::Null),
-        summary: r.get(4)?,
-        reason: r.get(5)?,
-        deployment_id: r.get(6)?,
-        requested_by: r.get(7)?,
-        requester_workspace: r.get(8)?,
-        requester_session: r.get(9)?,
-        requested_at: r.get(10)?,
-        expires_at: r.get(11)?,
-        status: r.get(12)?,
-        decided_by: r.get(13)?,
-        decided_at: r.get(14)?,
-        confirm_via: r.get(15)?,
-        decision_reason: r.get(16)?,
-    })
-}
-
+/// An egress request on a runtime App (its service, label and workspace
+/// come from the App's row).
 pub struct NewWidening<'a> {
     pub app_id: &'a str,
     pub kind: &'a str,
@@ -515,76 +476,53 @@ pub struct NewWidening<'a> {
 }
 
 pub fn new_request_id() -> String {
-    format!("w_{}", &uuid::Uuid::new_v4().simple().to_string()[..12])
+    reqs::new_id()
 }
 
 pub fn file_request(conn: &Connection, w: &NewWidening<'_>, now: i64) -> rusqlite::Result<Widening> {
-    let id = new_request_id();
-    conn.execute(
-        &format!("INSERT INTO app_widenings ({W_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending', NULL, NULL, NULL, NULL)"),
-        params![
-            id,
-            w.app_id,
-            w.kind,
-            w.diff.to_string(),
-            w.summary,
-            w.reason,
-            w.deployment_id,
-            w.requested_by,
-            w.requester_workspace,
-            w.requester_session,
-            now,
-            now + REQUEST_TTL_SECS
-        ],
-    )?;
-    get_request(conn, &id).map(|r| r.expect("just inserted"))
+    let app = super::store::get_app(conn, w.app_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    reqs::insert(
+        conn,
+        &reqs::NewRequest {
+            kind: w.kind,
+            app_id: Some(w.app_id),
+            service_id: Some(&app.service_id),
+            app_label: w.app_id,
+            workspace_id: &app.owner_workspace,
+            body: J::Object(Default::default()),
+            diff: w.diff.clone(),
+            summary: w.summary.clone(),
+            reasons: vec!["always per event: a fresh owner confirm, even from the owner token".into()],
+            reason: w.reason,
+            deployment_id: w.deployment_id,
+            requested_by: w.requested_by,
+            requester_workspace: w.requester_workspace,
+            requester_session: w.requester_session,
+        },
+        now,
+    )
 }
 
 pub fn get_request(conn: &Connection, id: &str) -> rusqlite::Result<Option<Widening>> {
-    conn.query_row(&format!("SELECT {W_COLS} FROM app_widenings WHERE id = ?1"), params![id], w_row).optional()
+    reqs::get(conn, id)
 }
 
 /// A request by id or a unique id prefix (at least 6 characters).
 pub fn find_request(conn: &Connection, token: &str) -> rusqlite::Result<Option<Widening>> {
-    let t = token.trim();
-    if let Some(r) = get_request(conn, t)? {
-        return Ok(Some(r));
-    }
-    if t.len() < 6 || !t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-        return Ok(None);
-    }
-    let mut st = conn.prepare(&format!("SELECT {W_COLS} FROM app_widenings WHERE id LIKE ?1 || '%' LIMIT 2"))?;
-    let rows = st.query_map(params![t], w_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(if rows.len() == 1 { rows.into_iter().next() } else { None })
+    reqs::find(conn, token)
 }
 
 /// Requests, newest first. `app` / `status` filter; `workspace` keeps
 /// only requests on Apps that workspace owns.
 pub fn list_requests(conn: &Connection, app: Option<&str>, status: Option<&str>, workspace: Option<&str>, limit: i64) -> rusqlite::Result<Vec<Widening>> {
-    let mut st = conn.prepare(&format!(
-        "SELECT {} FROM app_widenings w WHERE (?1 IS NULL OR w.app_id = ?1) AND (?2 IS NULL OR w.status = ?2) \
-         AND (?3 IS NULL OR w.app_id IN (SELECT app_id FROM apps WHERE owner_workspace = ?3)) \
-         ORDER BY w.requested_at DESC, w.id LIMIT ?4",
-        W_COLS.split(", ").map(|c| format!("w.{}", c.trim())).collect::<Vec<_>>().join(", ")
-    ))?;
-    let rows = st.query_map(params![app, status, workspace, limit.clamp(1, 1000)], w_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+    reqs::list(conn, &reqs::Filter { app_id: app, service_id: None, workspace, status }, limit)
 }
 
 /// The pending `egress` request on an App, if any (new hosts join it).
 pub fn pending_egress_request(conn: &Connection, app: &str) -> rusqlite::Result<Option<Widening>> {
-    conn.query_row(
-        &format!("SELECT {W_COLS} FROM app_widenings WHERE app_id = ?1 AND kind = 'egress' AND status = 'pending' ORDER BY requested_at DESC LIMIT 1"),
-        params![app],
-        w_row,
-    )
-    .optional()
+    reqs::pending_of_kind(conn, app, KIND_EGRESS)
 }
 
-/// Ask for `specs` on `app`: the ones not allowed and not already
-/// pending go into a held request (a new one, or added to the App's open
-/// one when the same requester filed it). Returns the request (None when
-/// nothing new was asked for) and the specs that were already allowed.
 /// Who asks for hosts, and why.
 #[derive(Debug, Clone, Copy)]
 pub struct Ask<'a> {
@@ -598,6 +536,10 @@ pub struct Ask<'a> {
     pub session: Option<&'a str>,
 }
 
+/// Ask for `specs` on `app`: the ones not allowed and not already
+/// pending go into a held request (a new one, or added to the App's open
+/// one when the same requester filed it). Returns the request (None when
+/// nothing new was asked for) and the specs that were already allowed.
 pub fn request_hosts(conn: &Connection, app: &str, specs: &[HostSpec], ask: &Ask<'_>, now: i64) -> Result<(Option<Widening>, Vec<HostSpec>), String> {
     let Ask { source, reason, deployment_id, by, workspace, session } = *ask;
     let allowed = already_allowed(conn, app, specs).map_err(|e| e.to_string())?;
@@ -622,12 +564,7 @@ pub fn request_hosts(conn: &Connection, app: &str, specs: &[HostSpec], ask: &Ask
                 return Ok((Some(w), allowed));
             }
             let diff = serde_json::json!({ "egress": { "add": hosts.iter().map(HostSpec::display).collect::<Vec<_>>() } });
-            let summary = summary_for_hosts(app, &hosts);
-            conn.execute(
-                "UPDATE app_widenings SET diff_json = ?2, summary = ?3, reason = COALESCE(?4, reason) WHERE id = ?1",
-                params![w.id, diff.to_string(), summary, reason],
-            )
-            .map_err(|e| e.to_string())?;
+            reqs::update_diff(conn, &w.id, &diff, &summary_for_hosts(app, &hosts), reason).map_err(|e| e.to_string())?;
             get_request(conn, &w.id).map_err(|e| e.to_string())?.expect("exists")
         }
         None => file_request(
@@ -660,69 +597,42 @@ pub fn summary_for_hosts(app: &str, hosts: &[HostSpec]) -> String {
 /// Close a pending request. `Err` codes: `request_not_found`,
 /// `not_pending`, `request_expired`.
 pub fn decide(conn: &Connection, id: &str, status: &str, by: &str, via: Option<&str>, reason: Option<&str>, now: i64) -> Result<Widening, &'static str> {
-    let w = get_request(conn, id).map_err(|_| "request_not_found")?.ok_or("request_not_found")?;
-    if w.status != REQ_PENDING {
-        return Err("not_pending");
-    }
-    if w.expires_at <= now && status == REQ_APPROVED {
-        expire_one(conn, &w, now).map_err(|_| "request_not_found")?;
-        return Err("request_expired");
-    }
-    let n = conn
-        .execute(
-            "UPDATE app_widenings SET status = ?2, decided_by = ?3, decided_at = ?4, confirm_via = ?5, decision_reason = ?6 \
-             WHERE id = ?1 AND status = 'pending'",
-            params![id, status, by, now, via, reason],
-        )
-        .map_err(|_| "request_not_found")?;
-    if n == 0 {
-        return Err("not_pending");
-    }
+    reqs::decide(conn, id, status, by, via, reason, now)
+}
+
+/// What closing an egress request does to the host list (called by
+/// `app_grace::requests` for every close: approve, deny, withdraw,
+/// expire). Approving an `egress` request allows its pending hosts; any
+/// other close releases them. Approving `egress_mode` sets the mode.
+pub fn on_closed(conn: &Connection, w: &Widening, status: &str, by: &str) -> rusqlite::Result<()> {
+    let Some(app) = w.app_id.as_deref() else { return Ok(()) };
     if w.kind == KIND_EGRESS {
         if status == REQ_APPROVED {
-            let hosts: Vec<HostSpec> = list_hosts(conn, &w.app_id)
-                .map_err(|_| "request_not_found")?
+            let hosts: Vec<HostSpec> = list_hosts(conn, app)?
                 .into_iter()
-                .filter(|r| r.status == STATUS_PENDING && r.request_id.as_deref() == Some(id))
+                .filter(|r| r.status == STATUS_PENDING && r.request_id.as_deref() == Some(w.id.as_str()))
                 .map(|r| r.spec())
                 .collect();
             for h in hosts {
-                let src = get_host(conn, &w.app_id, &h).ok().flatten().map(|r| r.source).unwrap_or_else(|| SOURCE_REQUEST.into());
-                allow(conn, &w.app_id, std::slice::from_ref(&h), &src, by).map_err(|_| "request_not_found")?;
+                let src = get_host(conn, app, &h).ok().flatten().map(|r| r.source).unwrap_or_else(|| SOURCE_REQUEST.into());
+                allow(conn, app, std::slice::from_ref(&h), &src, by)?;
             }
         } else {
-            release_pending(conn, &w.app_id, id).map_err(|_| "request_not_found")?;
+            release_pending(conn, app, &w.id)?;
         }
     }
     if w.kind == KIND_EGRESS_MODE && status == REQ_APPROVED {
         if let Some(m) = w.mode() {
-            set_mode(conn, &w.app_id, m, by).map_err(|_| "request_not_found")?;
+            set_mode(conn, app, m, by)?;
         }
-    }
-    get_request(conn, id).map_err(|_| "request_not_found")?.ok_or("request_not_found")
-}
-
-fn expire_one(conn: &Connection, w: &Widening, now: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE app_widenings SET status = 'expired', decided_by = 'system', decided_at = ?2 WHERE id = ?1 AND status = 'pending'",
-        params![w.id, now],
-    )?;
-    if w.kind == KIND_EGRESS {
-        release_pending(conn, &w.app_id, &w.id)?;
     }
     Ok(())
 }
 
 /// Expire every pending request past its 7 days; returns them.
 pub fn expire_due(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Widening>> {
-    let mut st = conn.prepare(&format!("SELECT {W_COLS} FROM app_widenings WHERE status = 'pending' AND expires_at <= ?1"))?;
-    let due = st.query_map(params![now], w_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    for w in &due {
-        expire_one(conn, w, now)?;
-    }
-    Ok(due)
+    reqs::expire_due(conn, now)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,7 +640,14 @@ mod tests {
 
     fn conn() -> Connection {
         let c = store::tests::conn();
-        c.execute_batch(include_str!("../../drizzle_sql/0168_app_egress.sql").replace("--> statement-breakpoint", "").as_str())
+        // 0168's held-request table (its ALTERs need the full schema), then
+        // 0169's egress tables.
+        for stmt in include_str!("../../drizzle_sql/0168_app_grace.sql").split("--> statement-breakpoint") {
+            if stmt.contains("CREATE TABLE IF NOT EXISTS app_widenings") || stmt.contains("ON app_widenings") {
+                c.execute_batch(stmt).unwrap();
+            }
+        }
+        c.execute_batch(include_str!("../../drizzle_sql/0169_app_egress.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
         c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         for (app, ws) in [("jobs", "ws-a"), ("other", "ws-b")] {
@@ -910,7 +827,8 @@ mod tests {
         assert_eq!(list_requests(&c, Some("jobs"), None, None, 50).unwrap().len(), 1);
         let mine = list_requests(&c, None, Some(REQ_PENDING), Some("ws-b"), 50).unwrap();
         assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].app_id, "other");
+        assert_eq!(mine[0].app_id.as_deref(), Some("other"));
+        assert_eq!((mine[0].workspace_id.as_str(), mine[0].service_id.as_deref()), ("ws-b", Some("svc-other")), "the App row fills its workspace and service");
         let id = &mine[0].id;
         assert_eq!(find_request(&c, &id[..8]).unwrap().unwrap().id, *id);
         assert!(find_request(&c, "w_").unwrap().is_none(), "too short a prefix");

@@ -776,6 +776,19 @@ fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
 }
 
 // ── S13: App config (§4.4) — narrowing applies now, widening is held ─
+//
+// One call, one classifier: every field is classified on its own; what
+// the caller may make at once applies now and the rest is one held
+// request for the owner. Two families have their own truth and rules:
+// - egress (`egressAdd`, `egressRm`, `egressMode`) is the guarded App's
+//   enforced host list (S15, `super::egress_routes`): a new host or broad
+//   mode is always its own held `egress` request (every caller, the owner
+//   token included); removing a host or going back to allowlist applies
+//   at once;
+// - disk ceilings (`io`, runtime lane D): tightening applies at once; a
+//   raise is the owner's (an agent's raise is held).
+// The process exception (path open + isolation process) has its own
+// owner-only switch (`k2 app exception`); config never enters or leaves it.
 
 use k2_core::app_grace::config::{self as appcfg, Class, Op};
 
@@ -786,7 +799,13 @@ pub(crate) fn config_state(app: &AppRow) -> R<appcfg::State> {
         let conn = db.lock();
         appcfg::load(&conn, &app.app_id).map_err(db_err)?
     };
-    Ok(appcfg::State { memory_limit_bytes: app.memory_limit_bytes, isolation: app.isolation.clone(), path: app.path.clone(), config })
+    Ok(appcfg::State {
+        memory_limit_bytes: app.memory_limit_bytes,
+        isolation: app.isolation.clone(),
+        path: app.path.clone(),
+        config,
+        io_max_json: app.io_max_json.clone(),
+    })
 }
 
 fn str_list(v: &J, k: &str) -> Vec<String> {
@@ -837,7 +856,8 @@ fn one_of(v: &J, k: &str, allowed: &[&str]) -> R<Option<String>> {
     }
 }
 
-/// The ops one config body asks for (§4.4 names, camelCase).
+/// The ops one config body asks for (§4.4 names, camelCase). Egress and
+/// disk ceilings are read separately ([`egress_asks`], [`io_after`]).
 pub(crate) fn config_ops(v: &J) -> R<Vec<Op>> {
     let mut ops = Vec::new();
     if let Some(m) = opt_size(v, "memory")? {
@@ -851,15 +871,6 @@ pub(crate) fn config_ops(v: &J) -> R<Vec<Op>> {
     }
     if let Some(d) = opt_size(v, "disk")? {
         ops.push(Op::Disk(d));
-    }
-    for h in str_list(v, "egressAdd") {
-        ops.push(Op::EgressAdd(appcfg::parse_egress_host(&h).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
-    }
-    for h in str_list(v, "egressRm") {
-        ops.push(Op::EgressRm(appcfg::parse_egress_host(&h).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
-    }
-    if let Some(m) = one_of(v, "egressMode", &["allowlist", "broad"])? {
-        ops.push(Op::EgressMode(m));
     }
     for p in str_list(v, "portAdd") {
         ops.push(Op::PortAdd(appcfg::parse_port(&p).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
@@ -907,6 +918,68 @@ pub(crate) fn config_ops(v: &J) -> R<Vec<Op>> {
     Ok(ops)
 }
 
+/// The egress part of a config body, checked before anything changes.
+#[derive(Default)]
+pub(crate) struct EgressAsks {
+    add: Vec<String>,
+    rm: Vec<String>,
+    mode: Option<String>,
+}
+
+impl EgressAsks {
+    fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.rm.is_empty() && self.mode.is_none()
+    }
+}
+
+fn egress_asks(v: &J) -> R<EgressAsks> {
+    let a = EgressAsks { add: str_list(v, "egressAdd"), rm: str_list(v, "egressRm"), mode: one_of(v, "egressMode", &["allowlist", "broad"])? };
+    if !a.add.is_empty() {
+        super::egress_routes::check_specs(&a.add)?;
+    }
+    for h in &a.rm {
+        k2_core::deploy::egress::parse_spec(h).map_err(|e| no(super::egress_routes::codes::EGRESS_HOST_INVALID, 400, e))?;
+    }
+    Ok(a)
+}
+
+/// The App's disk ceilings after `v`'s `io` (an object with `rbps`,
+/// `wbps`, `riops`, `wiops`: a rate like `40M`, a number, or `none`; or
+/// the string `default` / `none` for all of them). `None` = no `io` asked.
+pub(crate) fn io_after(app: &AppRow, v: &J) -> R<Option<k2_root_proto::apps::IoMax>> {
+    use k2_root_proto::apps::{parse_rate, IoMax};
+    let Some(io) = v.get("io") else { return Ok(None) };
+    let cur = IoMax::from_column(app.io_max_json.as_deref());
+    let out = match io {
+        J::String(x) if x == "default" => IoMax::k2_default(),
+        J::String(x) if x == "none" => IoMax::unlimited(),
+        J::Object(m) => {
+            let mut n = cur;
+            for (k, val) in m {
+                let txt = match val {
+                    J::String(t) => t.clone(),
+                    J::Number(x) => x.to_string(),
+                    J::Null => "none".into(),
+                    _ => return Err(no(codes::BAD_REQUEST, 400, format!("io.{k}: a rate (40M), a number or none"))),
+                };
+                let iops = matches!(k.as_str(), "riops" | "wiops");
+                let r = parse_rate(&txt, iops).map_err(|e| no(codes::BAD_REQUEST, 400, format!("io.{k}: {e}")))?;
+                match k.as_str() {
+                    "rbps" => n.rbps = r,
+                    "wbps" => n.wbps = r,
+                    "riops" => n.riops = r,
+                    "wiops" => n.wiops = r,
+                    other => return Err(no(codes::BAD_REQUEST, 400, format!("io.{other}: the knobs are rbps, wbps, riops, wiops"))),
+                }
+            }
+            n
+        }
+        _ => return Err(no(codes::BAD_REQUEST, 400, "io is default, none, or {rbps, wbps, riops, wiops}")),
+    };
+    out.check().map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    Ok(Some(out))
+}
+
 fn parse_secs(x: &str) -> Option<i64> {
     let x = x.trim();
     let (n, mul) = match x.chars().last()? {
@@ -917,6 +990,32 @@ fn parse_secs(x: &str) -> Option<i64> {
         _ => (x, 1),
     };
     n.parse::<i64>().ok().filter(|v| *v > 0).map(|v| v * mul)
+}
+
+/// The process exception (path `open` + isolation `process`) is its own
+/// owner-only switch with its own setup (devices, the `k2appx` unit):
+/// config never enters it or leaves it, now or on approve.
+fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
+    let enters = after.path == "open" && after.isolation == "process";
+    if app.is_process_exception() && !enters {
+        return Err(no(
+            codes::ENGINE_UNAVAILABLE,
+            409,
+            format!("{} runs as the process exception; turn that off first (k2 app exception {} off)", app.app_id, app.app_id),
+        ));
+    }
+    if !app.is_process_exception() && enters {
+        return Err(no(
+            codes::ENGINE_UNAVAILABLE,
+            409,
+            format!(
+                "path open with isolation process is the process exception: the owner turns it on in person with \
+                 k2 app exception {} on (it is never a config change)",
+                app.app_id
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Apply ops to an App now (callers decided they may). Audited, mirrored.
@@ -932,6 +1031,8 @@ pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
     for op in ops {
         appcfg::apply(op, &mut state);
     }
+    // Re-checked here too: a held request approved later meets today's App.
+    exception_guard(&app, &state)?;
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -965,41 +1066,114 @@ fn hold_reason(class: Class) -> &'static str {
 
 /// POST `/cli/app/config {app, memory?, cpuWeight?, tasks?, disk?,
 /// egressAdd?, egressRm?, egressMode?, portAdd?, portRm?, recycleEvery?,
-/// recycleAt?, isolation?, path?, risk?, dbPrivate?, dbRaw?}` (S13, §4.4).
-/// Each change is classified on its own: what the caller may make at once
-/// applies now; the rest becomes one held request for the owner.
+/// recycleAt?, isolation?, path?, risk?, dbPrivate?, dbRaw?, io?}` (S13,
+/// §4.4, §6.2). Every value is checked before anything changes; then each
+/// change is classified on its own: what the caller may make at once
+/// applies now; the rest becomes one held request for the owner (egress
+/// widenings are their own `egress` request).
 fn config(who: &Who, body: &[u8]) -> R<J> {
     need_manage(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
-    let ops = config_ops(&v)?;
-    if ops.is_empty() {
+    let mut ops = config_ops(&v)?;
+    let egress = egress_asks(&v)?;
+    let io = io_after(&app, &v)?;
+    if ops.is_empty() && egress.is_empty() && io.is_none() {
         return Err(no(
             codes::BAD_REQUEST,
             400,
-            "nothing to change (memory, cpuWeight, tasks, disk, egressAdd/Rm, egressMode, portAdd/Rm, recycleEvery/At, isolation, path, risk, dbPrivate, dbRaw)",
+            "nothing to change (memory, cpuWeight, tasks, disk, egressAdd/Rm, egressMode, portAdd/Rm, recycleEvery/At, isolation, path, \
+             risk, dbPrivate, dbRaw, io)",
         ));
     }
     let state = config_state(&app)?;
+    // Disk ceilings: tightening narrows; a raise is the owner's.
+    let mut io_raise = false;
+    if let Some(new) = io {
+        use k2_root_proto::apps::IoMax;
+        let cur = IoMax::from_column(app.io_max_json.as_deref());
+        let col = if new == IoMax::k2_default() { None } else { Some(new.to_column()) };
+        if col != app.io_max_json {
+            io_raise = !cur.loosened_by(&new).is_empty();
+            ops.push(Op::Io(col));
+        }
+    }
+    // The whole call, as if every change applied: never into or out of
+    // the process exception.
+    let mut after = state.clone();
+    for op in &ops {
+        appcfg::apply(op, &mut after);
+    }
+    exception_guard(&app, &after)?;
+    if egress.mode.as_deref() == Some("broad") && after.path != "open" {
+        return Err(no(
+            super::egress_routes::codes::OPEN_PATH_ONLY,
+            409,
+            format!("broad egress is the open path's; App {} is guarded. Ask for the hosts it needs (egressAdd)", app.app_id),
+        ));
+    }
     let open_on = agent_ws(who).is_some_and(k2_core::workspace::settings::agents_can_publish_open_apps);
     let mut now_ops: Vec<Op> = Vec::new();
     let mut held: Vec<(Op, Class)> = Vec::new();
     for op in ops {
-        let class = appcfg::classify(&op, &state);
+        let class = match op {
+            Op::Io(_) if io_raise => Class::Owner,
+            Op::Io(_) => Class::Narrow,
+            _ => appcfg::classify(&op, &state),
+        };
         if may_apply(who, class, open_on) {
             now_ops.push(op);
         } else {
             held.push((op, class));
         }
     }
+    let io_changed = now_ops.iter().any(|o| matches!(o, Op::Io(_)));
     let applied = if now_ops.is_empty() { None } else { Some(apply_config_ops(&app.app_id, &now_ops, &actor(who))?) };
+    let mut applied_lines: Vec<J> = applied.as_ref().and_then(|a| a["applied"].as_array().cloned()).unwrap_or_default();
+    let after_app = app_for(who, Some(&app.app_id))?;
+    // Egress: narrowing at once, widening held (its own request).
+    let mut egress_out: Vec<J> = Vec::new();
+    let mut egress_held = None;
+    for h in &egress.rm {
+        let r = super::egress_routes::remove_host(who, &after_app, h)?;
+        if r["removed"] == json!(true) {
+            applied_lines.push(json!(format!("stop outbound calls to {}", r["host"].as_str().unwrap_or(h))));
+        }
+        egress_out.push(r);
+    }
+    if let Some(m) = egress.mode.as_deref() {
+        let r = super::egress_routes::change_mode(who, &after_app, m, s(&v, "reason"))?;
+        if r["status"] == json!("held") {
+            egress_held = Some(r.clone());
+        } else {
+            applied_lines.push(json!(format!("egress mode → {m}")));
+        }
+        egress_out.push(r);
+    }
+    if !egress.add.is_empty() {
+        let r = super::egress_routes::ask_hosts(who, &after_app, &egress.add, s(&v, "reason"), None)?;
+        if r["status"] == json!("held") {
+            egress_held = Some(r.clone());
+        }
+        egress_out.push(r);
+    }
+    let mut note = String::from(
+        "Stored now. Egress is enforced for guarded Apps (their own proxy); the walls for extra ports and the private database \
+         arrive in 0.46.1. The process engine in this preview doesn't enforce memory limits; the walled engines do.",
+    );
+    if io_changed {
+        note.push_str(" Walled engines apply disk ceilings at the App's next deploy or restart (k2 app restart).");
+    }
     let mut out = json!({
         "ok": true,
-        "app": app_for(who, Some(&app.app_id))?,
-        "applied": applied.as_ref().map(|a| a["applied"].clone()).unwrap_or(json!([])),
-        "note": "Stored now; the walls that enforce egress, ports and the private database arrive in 0.46.1. \
-                 The process engine in this preview doesn't enforce memory limits; the walled engines do.",
+        "app": after_app,
+        "applied": applied_lines,
+        "io": k2_root_proto::apps::IoMax::from_column(after_app.io_max_json.as_deref()),
+        "note": note,
     });
+    if !egress_out.is_empty() {
+        out["egress"] = json!(egress_out);
+    }
     if !held.is_empty() {
         let t = super::grace::target(&Who::Owner, Some(&app.service_id))?;
         let diff: Vec<String> = held.iter().map(|(op, _)| appcfg::describe(op, &state)).collect();
@@ -1018,6 +1192,10 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         )?;
         out["status"] = json!("held");
         out["held"] = h;
+    }
+    if let Some(e) = egress_held {
+        out["status"] = json!("held");
+        out["egressHeld"] = e;
     }
     Ok(out)
 }

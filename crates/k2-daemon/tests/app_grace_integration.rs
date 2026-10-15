@@ -134,7 +134,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let r = post(d.port, "/cli/app/clean-mode", &mine, json!({"app": "jobsw", "on": false})).await;
     assert_eq!(r.status, 202, "{}", r.body);
     assert_eq!(r.json()["status"], "held");
-    let req = r.json()["request"].as_str().unwrap().to_string();
+    let req = r.json()["request"]["id"].as_str().unwrap().to_string();
     assert!(k2_daemon::vault::publish_env::is_clean_mode(&svc), "held: nothing changed");
     let r = get(d.port, "/cli/app/approvals", &mine, "").await;
     assert_eq!(r.json()["requests"][0]["id"], req.as_str());
@@ -145,7 +145,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     assert_eq!(r.status, 403, "{}", r.body);
     let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": req, "reason": "keep it clean"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["request"]["state"], "denied");
+    assert_eq!(r.json()["request"]["status"], "denied");
     assert!(seen.lock().unwrap().iter().any(|(w, t)| w == &ws.id && t.contains("denied") && t.contains("keep it clean")));
     let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": req})).await;
     assert_eq!(r.status, 409, "decided once: {}", r.body);
@@ -201,14 +201,14 @@ async fn app_key_is_minted_in_person_held_for_agents_and_opens_only_its_app() {
     let agent = passport(&ws);
     let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "jobs", "scopes": "users,fetch"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
-    let req = r.json()["request"].as_str().unwrap().to_string();
+    let req = r.json()["request"]["id"].as_str().unwrap().to_string();
     let r = post(d.port, "/cli/app/key/mint", &agent, json!({"app": "jobs", "scopes": "users", "deliver": "show"})).await;
     assert_eq!(r.status, 403, "an agent never sees a key: {}", r.body);
     let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req})).await;
     assert_eq!((r.status, r.code()), (403, "vault_confirm_required".to_string()), "{}", r.body);
     let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req, "confirmToken": confirm("app-approve", &req)})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(r.json()["state"], "approved");
+    assert_eq!(r.json()["status"], "approved");
     assert!(r.json()["result"]["key"].is_null(), "approved keys go to the vault, never the response");
     let secret = r.json()["result"]["delivered"]["vaultSecret"].as_str().unwrap().to_string();
     let vault = k2_daemon::vault::get().unwrap();
@@ -354,6 +354,47 @@ async fn fetch_calls_out_with_a_secret_by_name_and_the_app_never_sees_it() {
     let r = v1(d.port, "POST", &format!("/v1/apps/{svc}/fetch"), &key, Some(json!({"secret": "STRIPE_KEY", "url": "http://127.0.0.1:1/x"}))).await;
     assert_eq!(r.status, 403, "{}", r.body);
     assert_eq!(conns.load(Ordering::SeqCst), 1);
+
+    // One host policy for both ways out (S15): once the service is a walled
+    // runtime App, the key proxy passes the App's egress allowlist first.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::insert_app(
+            &conn,
+            &k2_core::deploy::store::NewApp {
+                app_id: "bff",
+                service_id: &svc,
+                seed_id: None,
+                owner_workspace: &ws.id,
+                isolation: "container",
+                memory_limit_bytes: None,
+                front_port: 0,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+    }
+    let r = v1(d.port, "POST", &format!("/v1/apps/{svc}/fetch"), &key, Some(json!({"secret": "STRIPE_KEY", "url": url}))).await;
+    assert_eq!((r.status, r.code()), (403, "egress_denied".to_string()), "not on the App's allowlist: {}", r.body);
+    assert!(r.body.contains("k2 app egress add bff"), "{}", r.body);
+    assert_eq!(conns.load(Ordering::SeqCst), 1, "refused before any connection");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let spec = k2_core::deploy::egress::parse_spec(&format!("127.0.0.1:{up}")).unwrap();
+        k2_core::deploy::egress::allow(&conn, "bff", &[spec], k2_core::deploy::egress::SOURCE_REQUEST, "owner").unwrap();
+    }
+    k2_daemon::apps::egress_proxy::reload("bff");
+    let r = v1(d.port, "POST", &format!("/v1/apps/{svc}/fetch"), &key, Some(json!({"secret": "STRIPE_KEY", "url": url}))).await;
+    assert_eq!(r.status, 200, "on the allowlist now: {}", r.body);
+    assert_eq!(conns.load(Ordering::SeqCst), 2);
+    let hits: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::egress::list_hosts(&conn, "bff").unwrap().iter().map(|h| h.hits).sum()
+    };
+    assert_eq!(hits, 1, "the key proxy's call counts on the same host list");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -389,10 +430,10 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
         let r = post(d.port, "/cli/publish/run", &agent, run("svc-b", port)).await;
         assert_eq!(r.status, 202, "{}", r.body);
         assert_eq!(r.json()["kind"], "publish_run");
-        let req = r.json()["request"].as_str().unwrap().to_string();
+        let req = r.json()["request"]["id"].as_str().unwrap().to_string();
         let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req, "confirmToken": confirm("app-approve", &req)})).await;
         assert_eq!(r.status, 200, "{}", r.body);
-        assert_eq!(r.json()["state"], "approved", "{}", r.body);
+        assert_eq!(r.json()["status"], "approved", "{}", r.body);
         assert_eq!(r.json()["result"]["name"], "svc-b");
         let r = post(d.port, "/cli/publish/rm", OWNER, json!({"name": "svc-b", "project": ws.id})).await;
         assert_eq!(r.status, 200, "{}", r.body);
@@ -417,6 +458,41 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     k2_daemon::apps::alerts::set_sink(None);
 }
 
+/// Lane D's reported hole: an agent with "Allow this agent to manage Apps"
+/// moving a guarded App to the unwalled process engine. A deploy flag
+/// never lowers the wall (for anyone); the config route holds it for the
+/// owner's in-person approval.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deploy_engine_process_never_lowers_a_guarded_apps_wall() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "engws");
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "eng-app", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "eng-app", "isolation": "container"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["app"]["isolation"], "container");
+    allow_manage(&ws, true);
+    let agent = passport(&ws);
+    for who in [agent.as_str(), OWNER] {
+        let r = post(d.port, "/cli/app/deploy", who, json!({"app": "eng-app", "engine": "process", "folder": ws.path})).await;
+        assert_eq!((r.status, r.code()), (409, "widening_held".to_string()), "{}", r.body);
+        assert!(r.body.contains("k2 app config eng-app --isolation process"), "{}", r.body);
+    }
+    // The agent's config ask is held for the owner (always per event).
+    let r = post(d.port, "/cli/app/config", &agent, json!({"app": "eng-app", "isolation": "process"})).await;
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.json()["held"]["request"]["kind"], "config", "{}", r.body);
+    let req = r.json()["held"]["request"]["id"].as_str().unwrap().to_string();
+    let r = post(d.port, "/cli/app/approve", &agent, json!({"request": req, "confirmToken": confirm("app-approve", &req)})).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "an agent never approves: {}", r.body);
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=eng-app").await;
+    assert_eq!(r.json()["app"]["isolation"], "container", "still walled: {}", r.body);
+    k2_daemon::apps::alerts::set_sink(None);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s13_config_applies_narrowing_now_and_holds_widening() {
     let env = setup(&[]);
@@ -429,13 +505,18 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     allow_manage(&ws, true);
     let agent = passport(&ws);
 
-    // One call: the memory change applies, the new egress host is held.
+    // One call: the memory change applies, the new egress host is held as
+    // its own egress request (the S15 host list is the one egress truth).
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "memory": "1G", "egressAdd": ["api.stripe.com:443"]})).await;
     assert_eq!(r.status, 202, "{}", r.body);
     assert_eq!(r.json()["app"]["memoryLimitBytes"], 1i64 << 30, "narrowing applied now: {}", r.body);
-    let held = r.json()["held"]["request"].as_str().unwrap().to_string();
-    assert!(r.json()["held"]["diff"][0].as_str().unwrap().contains("api.stripe.com:443"));
+    let held = r.json()["egressHeld"]["request"]["id"].as_str().unwrap().to_string();
+    assert_eq!(r.json()["egressHeld"]["request"]["kind"], "egress", "{}", r.body);
+    assert_eq!(r.json()["egressHeld"]["request"]["hosts"], json!(["api.stripe.com:443"]), "{}", r.body);
+    assert!(r.json().get("held").is_none(), "nothing else was held: {}", r.body);
     // Open-path features: held without "…and publish open Apps", applied with it.
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "isolation": "container"})).await;
+    assert_eq!(r.status, 200, "raising the wall narrows: {}", r.body);
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "path": "open", "portAdd": "5000/udp"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
     let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
@@ -443,10 +524,15 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "path": "open"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["app"]["path"], "open");
+    // Path open + isolation process is the process exception: never a
+    // config change, even for the owner (k2 app exception, in person).
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "isolation": "process"})).await;
+    assert_eq!((r.status, r.code()), (409, "engine_unavailable".to_string()), "{}", r.body);
+    assert!(r.body.contains("k2 app exception"), "{}", r.body);
     // The per-event list waits even for the owner token.
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "dbRaw": "on"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
-    let raw_req = r.json()["held"]["request"].as_str().unwrap().to_string();
+    let raw_req = r.json()["held"]["request"]["id"].as_str().unwrap().to_string();
     // An owner-only widening: the agent proposes, the owner applies.
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "dbPrivate": "on"})).await;
     assert_eq!(r.status, 202, "{}", r.body);
@@ -455,19 +541,35 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     // Approving applies the held ops.
     for req in [&held, &raw_req] {
         let r = post(d.port, "/cli/app/approve", OWNER, json!({"request": req, "confirmToken": confirm("app-approve", req)})).await;
-        assert_eq!(r.json()["state"], "approved", "{}", r.body);
+        assert_eq!(r.json()["status"], "approved", "{}", r.body);
     }
-    let cfg = {
+    let (cfg, allowed) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::app_grace::config::load(&conn, "cfg-app").unwrap()
+        let allowed: Vec<String> =
+            k2_core::deploy::egress::policy(&conn, "cfg-app").unwrap().allowed.iter().map(k2_core::deploy::egress::HostSpec::display).collect();
+        (k2_core::app_grace::config::load(&conn, "cfg-app").unwrap(), allowed)
     };
-    assert_eq!(cfg.egress.hosts, vec!["api.stripe.com:443"]);
+    assert_eq!(allowed, vec!["api.stripe.com:443"], "the approved host is on the enforced list");
     assert!(cfg.db.raw && cfg.db.private, "{cfg:?}");
     assert!(cfg.ports.is_empty(), "the held port request was never approved");
+    // Disk ceilings: an agent tightens at once; its raise waits for the
+    // owner; the owner raises at once.
+    let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "io": {"wbps": "20M"}})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["io"]["wbps"], 20i64 << 20, "{}", r.body);
+    let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "io": {"wbps": "80M"}})).await;
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.json()["held"]["request"]["kind"], "config", "{}", r.body);
+    assert_eq!(r.json()["io"]["wbps"], 20i64 << 20, "held: nothing changed: {}", r.body);
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "io": "default"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["io"]["wbps"], 40i64 << 20, "K2's default ceiling: {}", r.body);
     // Bad values are refused before anything changes.
-    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "egressAdd": ["*.stripe.com:443"]})).await;
-    assert_eq!(r.status, 400, "{}", r.body);
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "memory": "2G", "egressAdd": ["10.0.0.5:443"]})).await;
+    assert_eq!((r.status, r.code()), (400, "egress_host_invalid".to_string()), "{}", r.body);
+    let r = get(d.port, "/cli/app/inspect", OWNER, "app=cfg-app").await;
+    assert_eq!(r.json()["app"]["memoryLimitBytes"], 1i64 << 30, "nothing changed: {}", r.body);
     k2_daemon::apps::alerts::set_sink(None);
 }
 

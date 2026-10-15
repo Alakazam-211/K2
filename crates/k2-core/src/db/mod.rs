@@ -1336,23 +1336,23 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
+        // 0166/0167 are Sew's (they land with Sew; never reuse them here).
         // 0168 — the 0.46.0 App grace release: the App-scoped key
         // (api_keys.app_service_id / app_key), the nested "…and publish
-        // open Apps" switch, apps.config_json (S13), held App requests and
-        // per-service owner-token uses. 0166/0167 are Sew's; the integrator
-        // renumbers on slips.
+        // open Apps" switch, apps.config_json (S13), `app_widenings` (every
+        // held App request: grace and egress kinds) and per-service
+        // owner-token uses.
         ("0168_app_grace", include_str!("../../drizzle_sql/0168_app_grace.sql")),
-        // 0168 — App egress (runtime S15, 0.46.0): per-App egress policy,
-        // host list and held widening requests. New tables only. 0166–0167
-        // are Sew's; the integrator renumbers on slips.
-        ("0168_app_egress", include_str!("../../drizzle_sql/0168_app_egress.sql")),
-        // 0168 — the 0.46.0 wall knobs on `apps` (runtime lane D: per-App
+        // 0169 — App egress (runtime S15, 0.46.0): per-App egress policy and
+        // host list. New tables only (its held requests live in 0168's
+        // `app_widenings`).
+        ("0169_app_egress", include_str!("../../drizzle_sql/0169_app_egress.sql")),
+        // 0170 — the 0.46.0 wall knobs on `apps` (runtime lane D: per-App
         // io.max, the process exception's devices and approval). New
-        // columns only. 0166/0167 are reserved for Sew; the integrator
-        // renumbers on slips (the 0.46.1 app_walls migration folds it in).
+        // columns only (the 0.46.1 app_walls migration folds it in).
         (
-            "0168_app_walls_lite",
-            include_str!("../../drizzle_sql/0168_app_walls_lite.sql"),
+            "0170_app_walls_lite",
+            include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
     ];
 
@@ -2014,7 +2014,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0168_app_walls_lite",
+            last_name, "0170_app_walls_lite",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2049,10 +2049,50 @@ mod tests {
                 "0164_garden_data",
                 "0165_app_runtime_core",
                 "0168_app_grace",
-                "0168_app_walls_lite",
+                "0169_app_egress",
+                "0170_app_walls_lite",
             ],
             "tail migrations out of order: {names:?}"
         );
+    }
+
+    /// 0.46.0: one held-request table for every kind (grace and egress), a
+    /// `--cmd` service's request has no runtime App row, and the egress
+    /// host list (0169) and wall knobs (0170) sit next to it.
+    #[test]
+    fn app_runtime_046_migrations_hold_every_request_kind_in_one_table() {
+        let conn = fresh_memory();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in ["app_widenings", "app_owner_token_uses", "app_egress_policy", "app_egress_hosts"] {
+            assert!(tables.iter().any(|n| n == t), "{t} missing: {tables:?}");
+        }
+        assert!(!tables.iter().any(|n| n == "app_requests"), "the grace requests folded into app_widenings");
+        let ins = |id: &str, kind: &str, app: Option<&str>, status: &str| {
+            conn.execute(
+                "INSERT INTO app_widenings (id, kind, app_id, service_id, app_label, workspace_id, body_json, diff_json, summary, \
+                 reasons_json, requested_by, requested_at, expires_at, status) \
+                 VALUES (?1, ?2, ?3, 'svc-1', 'jobs', 'ws-1', '{}', '[]', 's', '[]', 'agent:ws-1', 1, 2, ?4)",
+                params![id, kind, app, status],
+            )
+        };
+        for (i, kind) in ["config", "publish_run", "app_key", "clean_mode"].iter().enumerate() {
+            ins(&format!("w_{i}"), kind, None, "pending").expect("a grace kind on a --cmd service");
+        }
+        assert!(ins("w_x", "egress", Some("no-such-app"), "pending").is_err(), "an egress request names a real App");
+        assert!(ins("w_y", "bogus", None, "pending").is_err(), "unknown kind");
+        assert!(ins("w_z", "config", None, "held").is_err(), "one status vocabulary: pending, not held");
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('apps')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        for c in ["config_json", "io_max_json", "devices_json", "exception_json"] {
+            assert!(cols.iter().any(|n| n == c), "apps.{c} missing: {cols:?}");
+        }
     }
 
     /// The tables 0164 creates (contract-garden-data-v1 §2.1).
@@ -2170,21 +2210,22 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0165 (App runtime core, 0.46.0) came after 0164; roll it back too.
-            for t in ["deploy_audit", "deployments", "apps", "seeds"] {
-                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
-            }
-            conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
-            // 0168 (App grace, 0.46.0) came after 0165; roll it back too.
+            // The 0.46.0 App runtime migrations came after 0164; roll them
+            // back too, newest first: 0170's columns go with `apps`, and
+            // 0169's and 0168's tables go before the `apps` they point at.
             conn.execute_batch(
-                "DROP TABLE app_requests; DROP TABLE app_owner_token_uses; DROP INDEX idx_api_keys_app;
+                "DROP TABLE app_egress_hosts; DROP TABLE app_egress_policy;
+                 DROP TABLE app_widenings; DROP TABLE app_owner_token_uses; DROP INDEX idx_api_keys_app;
                  ALTER TABLE api_keys DROP COLUMN app_service_id; ALTER TABLE api_keys DROP COLUMN app_key;
                  ALTER TABLE projects DROP COLUMN agents_can_publish_open_apps;",
             )
             .unwrap();
-            conn.execute("DELETE FROM _migrations WHERE name = '0168_app_grace'", []).unwrap();
-            // 0168 (its columns on `apps`) went with the table.
-            conn.execute("DELETE FROM _migrations WHERE name = '0168_app_walls_lite'", []).unwrap();
+            for t in ["deploy_audit", "deployments", "apps", "seeds"] {
+                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
+            }
+            for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite"] {
+                conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
+            }
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

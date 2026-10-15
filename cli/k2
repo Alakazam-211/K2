@@ -1,3 +1,6 @@
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; [ "$_CP_STATUS" = 202 ] && return 2; return 0; fi            # 202 = held for the owner (the body says status: held).
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
 #!/bin/bash
 # K2 CLI — Agent interface to K2 workspace orchestration
 # This script communicates with the K2 daemon via HTTP.
@@ -8153,7 +8156,8 @@ else:
             local hj
             hj="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${hosts[@]}")"
             _app_rt_post /cli/app/egress/add "$(_compute_json K2_CJ_app="$app" K2_CJ_hosts_j="$hj" K2_CJ_reason="$reason")"
-            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            # 202 = held for the owner (the body says status: held).
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
             if [ "$json_out" = 1 ]; then
                 printf '%s\n' "$_CP_BODY"
                 printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(2 if json.load(sys.stdin).get("status") == "held" else 0)'
@@ -8183,8 +8187,8 @@ print(("removed %s (at once)" % v["host"]) if v.get("removed") else v.get("hint"
         mode)
             [ "${#hosts[@]}" -eq 1 ] || { echo "usage: k2 app egress mode <app-id> allowlist|broad" >&2; exit 2; }
             _app_rt_post /cli/app/egress/mode "$(_compute_json K2_CJ_app="$app" K2_CJ_mode="${hosts[0]}" K2_CJ_reason="$reason")"
-            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
-            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; [ "$_CP_STATUS" = 202 ] && return 2; return 0; fi
             if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") == "held" else 1)'; then
                 printf '%s' "$_CP_BODY" | _app_held_exit
                 return $?
@@ -8209,99 +8213,6 @@ for l in json.load(sys.stdin).get("lines") or []:
     esac
 }
 
-# Owner confirm bound to the request, then approve. Never for an agent:
-# the daemon refuses passports, and the confirm needs a person.
-_app_approve() {
-    local id="$1"
-    if _compute_in_session; then
-        echo '{"error":"owner_only","hint":"approve in Settings → Apps → Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}' >&2
-        exit 3
-    fi
-    _compute_call GET /cli/app/approvals "state=all" tcp
-    local found
-    found="$(printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
-want = sys.argv[1]
-rows = [r for r in json.load(sys.stdin)["requests"] if r["id"] == want or r["id"].startswith(want)]
-if len(rows) != 1:
-    sys.exit(1)
-r = rows[0]
-print(r["id"]); print(r["status"]); print(r["summary"][:64])
-print("---"); print(r["summary"])
-print("asked by %s%s" % (r["requestedBy"], (": " + r["reason"]) if r.get("reason") else ""))
-' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single request matches '$id' (k2 app approvals)\"}" >&2; exit 3; }
-    local full state label
-    full="$(printf '%s\n' "$found" | sed -n 1p)"
-    state="$(printf '%s\n' "$found" | sed -n 2p)"
-    label="$(printf '%s\n' "$found" | sed -n 3p)"
-    if [ "$state" != "pending" ]; then
-        echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
-        exit 3
-    fi
-    printf '%s\n' "$found" | sed -n '5,$p' >&2
-    local tok
-    tok="$(_vault_confirm_token app-approve "$full" "$label")" || exit 3
-    _compute_call POST /cli/app/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
-    tok=""
-    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
-v=json.load(sys.stdin); r=v["request"]
-print("approved %s: %s\n  %s" % (r["id"], r["summary"], v.get("note","")))'
-}
-
-cmd_app_approvals() {
-    local app="" all=0 json_out=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --app) app="${2:-}"; shift 2 ;;
-            --all) all=1; shift ;;
-            --json) json_out=1; shift ;;
-            -h|--help) _app_egress_usage; return 0 ;;
-            *) echo "Unknown argument: $1 (k2 app approvals [--app A] [--all])" >&2; exit 2 ;;
-        esac
-    done
-    local q="state=pending"
-    [ "$all" = 1 ] && q="state=all"
-    [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
-    _compute_call GET /cli/app/approvals "$q"
-    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
-rows = json.load(sys.stdin).get("requests") or []
-if not rows:
-    print("No requests.")
-for r in rows:
-    print("%s  %-9s %s  (by %s)" % (r["id"], r["status"], r["summary"], r["requestedBy"]))
-    if r.get("reason"):
-        print("    why: " + r["reason"])
-    if r.get("decidedBy"):
-        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))'
-}
-
-cmd_app_approve() {
-    case "${1:-}" in
-        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner, outside K2)" >&2; exit 2 ;;
-    esac
-    _app_approve "$1"
-}
-
-cmd_app_deny() {
-    local id="" reason="" json_out=0
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --reason) reason="${2:-}"; shift 2 ;;
-            --json) json_out=1; shift ;;
-            -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]" >&2; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) id="$1"; shift ;;
-        esac
-    done
-    [ -z "$id" ] && { echo "usage: k2 app deny <request-id> [--reason TEXT]" >&2; exit 2; }
-    _app_rt_post /cli/app/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_reason="$reason")"
-    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
-    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
-r=json.load(sys.stdin)["request"]; print("%s %s: %s" % (r["id"], r["status"], r["summary"]))'
-}
 
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
@@ -8362,16 +8273,18 @@ _app_grace_done() {
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-h = v.get("held") if isinstance(v.get("held"), dict) else v
 for line in v.get("applied") or []:
     print("applied: %s" % line)
-print("held for the owner: %s" % h.get("request"))
-d = h.get("diff")
-for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
-    print("  %s" % line)
-for r in h.get("reasons") or []:
-    print("  why: %s" % r)
-print(h.get("hint", ""))'
+helds = [h for h in (v.get("held"), v.get("egressHeld")) if isinstance(h, dict)] or [v]
+for h in helds:
+    r = h.get("request") if isinstance(h.get("request"), dict) else {}
+    print("held for the owner: %s  %s" % (r.get("id"), r.get("summary", "")))
+    d = h.get("diff")
+    for line in (d if isinstance(d, list) else []):
+        print("  %s" % line)
+    for why in h.get("reasons") or []:
+        print("  why: %s" % why)
+    print(h.get("hint", ""))'
         fi
         exit 2
     fi
@@ -8537,6 +8450,9 @@ for k in ks:
     print("%s  %-8s %-24s scopes=%s rooms=%s" % (k["id"], k["state"], (k.get("label") or "-")[:24], ",".join(k.get("scopes") or []), ",".join(k.get("rooms") or []) or "-"))'
 }
 
+# Held App requests of every kind (an agent's widening, an App key, clean
+# mode off, a new --cmd service, new egress hosts, broad egress): one list,
+# one approve (the owner, in person), one deny.
 cmd_app_approvals() {
     local app="" all=0 json_out=0
     while [ $# -gt 0 ]; do
@@ -8545,85 +8461,101 @@ cmd_app_approvals() {
             --all) all=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
-            *) echo "Unknown argument: $1" >&2; exit 2 ;;
+            *) echo "Unknown argument: $1 (k2 app approvals [--app A] [--all])" >&2; exit 2 ;;
         esac
     done
-    local q="all=${all}"
+    local q="state=pending"
+    [ "$all" = 1 ] && q="state=all"
     [ -n "$app" ] && q="${q}&app=$(urlencode "$app")"
     _compute_call GET /cli/app/approvals "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
-v = json.load(sys.stdin)
-rs = v.get("requests") or []
+rs = json.load(sys.stdin).get("requests") or []
 if not rs:
     print("No held App requests."); sys.exit(0)
 for r in rs:
-    print("%s  %-9s %-11s %s (%s) by %s" % (r["id"], r["state"], r["kind"], r["appLabel"], r.get("workspaceHandle"), r["requestedBy"]))
-    d = r.get("diff")
-    for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
-        print("    %s" % line)
+    print("%s  %-9s %-11s %s (%s) by %s" % (r["id"], r["status"], r["kind"], r["appLabel"], r.get("workspaceHandle"), r["requestedBy"]))
+    print("    %s" % r["summary"])
+    if r.get("reason"):
+        print("    why: %s" % r["reason"])
     for why in r.get("reasons") or []:
-        print("    why: %s" % why)'
+        print("    held: %s" % why)
+    if r.get("decidedBy"):
+        print("    %s by %s%s" % (r["status"], r["decidedBy"], (" via " + r["confirmVia"]) if r.get("confirmVia") else ""))'
 }
 
-cmd_app_approve() {
-    local id="${1:-}"
-    [ -n "$id" ] || { echo "usage: k2 app approve <request-id>" >&2; exit 2; }
+# Owner confirm bound to the request, then approve. Never for an agent:
+# the daemon refuses passports, and the confirm needs a person.
+_app_approve() {
+    local id="$1"
     if _compute_in_session; then
-        echo '{"error":"owner_only","hint":"the owner approves in person, from a terminal outside K2 (or Settings); an agent can never approve"}' >&2
+        echo '{"error":"owner_only","hint":"the owner approves in person: Settings → Apps → Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}' >&2
         exit 3
     fi
-    _compute_call GET /cli/app/approvals "all=1"
+    _compute_call GET /cli/app/approvals "state=all" tcp
     local found
     found="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 want = sys.argv[1]
-for r in json.load(sys.stdin).get("requests") or []:
-    if r["id"] == want:
-        print(r["state"]); print("%s for %s" % (r["kind"], r["appLabel"]))
-        d = r.get("diff")
-        for line in (d if isinstance(d, list) else ([json.dumps(d)] if d else [])):
-            print("  " + line)
-        sys.exit(0)
-sys.exit(1)' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no App request '$id' (k2 app approvals)\"}" >&2; exit 3; }
-    local state
-    state="$(printf '%s\n' "$found" | sed -n 1p)"
-    if [ "$state" != "held" ]; then
-        echo "{\"error\":\"not_pending\",\"hint\":\"$id is $state\"}" >&2
+rows = [r for r in json.load(sys.stdin).get("requests") or [] if r["id"] == want or r["id"].startswith(want)]
+if len(rows) != 1:
+    sys.exit(1)
+r = rows[0]
+print(r["id"]); print(r["status"]); print(r["summary"][:64])
+print("---"); print(r["summary"])
+print("asked by %s%s" % (r["requestedBy"], (": " + r["reason"]) if r.get("reason") else ""))
+' "$id")" || { echo "{\"error\":\"request_not_found\",\"hint\":\"no single App request matches '$id' (k2 app approvals)\"}" >&2; exit 3; }
+    local full state label
+    full="$(printf '%s\n' "$found" | sed -n 1p)"
+    state="$(printf '%s\n' "$found" | sed -n 2p)"
+    label="$(printf '%s\n' "$found" | sed -n 3p)"
+    if [ "$state" != "pending" ]; then
+        echo "{\"error\":\"not_pending\",\"hint\":\"$full is $state\"}" >&2
         exit 3
     fi
-    printf '%s\n' "$found" | sed -n '2,$p' >&2
+    printf '%s\n' "$found" | sed -n '5,$p' >&2
     local tok
-    tok="$(_vault_confirm_token app-approve "$id" "approve $id")" || exit 3
-    _compute_call POST /cli/app/approve "$(_compute_json K2_CJ_request="$id" K2_CJ_confirmToken="$tok")" tcp
+    tok="$(_vault_confirm_token app-approve "$full" "$label")" || exit 3
+    _compute_call POST /cli/app/approve "$(_compute_json K2_CJ_request="$full" K2_CJ_confirmToken="$tok")" tcp
     tok=""
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("%s: %s" % (v.get("request"), v.get("state")))
+r = v["request"]
+print("%s %s: %s" % (r["id"], v.get("status"), r["summary"]))
+if v.get("note"):
+    print("  %s" % v["note"])
 if v.get("error"):
     print("  %s" % v["error"].get("hint")); sys.exit(1)'
 }
 
+cmd_app_approve() {
+    case "${1:-}" in
+        ""|-h|--help) echo "usage: k2 app approve <request-id>   (the owner, in person, from a terminal outside K2)" >&2; exit 2 ;;
+    esac
+    _app_approve "$1"
+}
+
 cmd_app_deny() {
-    local id="" reason=""
+    local id="" reason="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --reason) reason="${2:-}"; shift 2 ;;
-            -h|--help) _app_grace_usage; return 0 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) echo "usage: k2 app deny <request-id> [--reason TEXT]   (an owner/admin denies; the requester withdraws its own)" >&2; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) id="$1"; shift ;;
         esac
     done
-    [ -n "$id" ] || { echo "usage: k2 app deny <request-id> [--reason R]" >&2; exit 2; }
+    [ -n "$id" ] || { echo "usage: k2 app deny <request-id> [--reason TEXT]" >&2; exit 2; }
     _compute_call POST /cli/app/deny "$(_compute_json K2_CJ_request="$id" K2_CJ_reason="$reason")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 r = json.load(sys.stdin)["request"]
-print("%s: %s" % (r["id"], r["state"]))'
+print("%s %s: %s" % (r["id"], r["status"], r["summary"]))'
 }
-
 cmd_app_access() {
     local ws="" manage="" open=""
     while [ $# -gt 0 ]; do
@@ -8689,9 +8621,6 @@ cmd_app() {
         access) shift; cmd_app_access "$@" ;;
         grace|crossover) shift; _app_grace_usage ;;
         egress) shift; cmd_app_egress "$@" ;;
-        approvals) shift; cmd_app_approvals "$@" ;;
-        approve) shift; cmd_app_approve "$@" ;;
-        deny) shift; cmd_app_deny "$@" ;;
         token|tokens)
             shift || true
             cmd_skin_token "$@"

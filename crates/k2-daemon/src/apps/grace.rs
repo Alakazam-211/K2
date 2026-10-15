@@ -10,7 +10,7 @@
 //! POST /cli/app/key/mint   {app, scopes, rooms?, roles?, label?, deliver?, confirmToken?}
 //! GET  /cli/app/keys       [app]           App-scoped keys (never the key)
 //! POST /cli/app/key/revoke {id}
-//! GET  /cli/app/approvals  [app, all]      held requests
+//! GET  /cli/app/approvals  [app, all]      held requests (every kind: super::approvals)
 //! POST /cli/app/approve    {request, confirmToken}   owner, in person
 //! POST /cli/app/deny       {request, reason?}        admin; the requester withdraws
 //! ```
@@ -56,8 +56,8 @@ pub const ROUTES: &[&str] = &[
 pub const POST_ROUTES: &[&str] =
     &["/cli/app/approve", "/cli/app/clean-mode", "/cli/app/deny", "/cli/app/key/mint", "/cli/app/key/revoke"];
 
-/// Vault confirm actions this module takes (`vault_routes::CONFIRM_ACTIONS`).
-pub const CONFIRM_APPROVE: &str = "app-approve";
+/// Vault confirm actions this module takes (`vault_routes::CONFIRM_ACTIONS`;
+/// approving is `super::approvals::CONFIRM_ACTION`, `app-approve`).
 pub const CONFIRM_KEY_MINT: &str = "app-key-mint";
 /// The file name an App key arrives under (`$K2_SECRETS_DIR/K2_APP_KEY`).
 pub const KEY_FILE: &str = "K2_APP_KEY";
@@ -81,9 +81,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/key/mint" => key_mint(&who, body),
         "/cli/app/keys" => key_list(&who, params),
         "/cli/app/key/revoke" => key_revoke(&who, body),
-        "/cli/app/approvals" => approvals(&who, params),
-        "/cli/app/approve" => approve(&who, body),
-        "/cli/app/deny" => deny(&who, body),
+        // Held requests of every kind (grace and egress): one set of routes.
+        p if super::approvals::ROUTES.contains(&p) => super::approvals::handle(p, &who, body, params),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     super::routes::respond(r)
@@ -249,9 +248,33 @@ fn all_targets(who: &Who) -> R<Vec<Target>> {
 
 // ── held requests ────────────────────────────────────────────────────
 
+/// One line for a held grace request (the approvals list, the owner's
+/// confirm prompt and the requester's notice).
+fn summary(kind: &str, label: &str, diff: &J) -> String {
+    let lines: Vec<String> = match diff {
+        J::Array(a) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+        _ => Vec::new(),
+    };
+    let what = match kind {
+        requests::KIND_CONFIG => format!("change App {label}'s settings"),
+        requests::KIND_PUBLISH_RUN => format!("start the service {label}"),
+        requests::KIND_APP_KEY => format!("mint an App key for {label}"),
+        requests::KIND_CLEAN_MODE => format!("turn clean mode off for {label}"),
+        other => format!("{other} for {label}"),
+    };
+    if lines.is_empty() {
+        what
+    } else {
+        let shown = if lines.len() > 4 { format!("{} and {} more", lines[..4].join("; "), lines.len() - 4) } else { lines.join("; ") };
+        format!("{what}: {shown}")
+    }
+}
+
 /// Hold a change for the owner (`202`, `status: held`). Returns the
 /// answer the route sends.
 pub(crate) fn hold(who: &Who, kind: &str, t: Option<&Target>, label: &str, workspace_id: &str, body: J, diff: J, reasons: Vec<String>) -> R<J> {
+    let by = actor(who);
+    let app_id = t.and_then(|t| t.app_id.clone());
     let req = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -259,33 +282,26 @@ pub(crate) fn hold(who: &Who, kind: &str, t: Option<&Target>, label: &str, works
             &conn,
             &requests::NewRequest {
                 kind,
+                app_id: app_id.as_deref(),
                 service_id: t.map(|t| t.service_id.as_str()),
                 app_label: label,
                 workspace_id,
-                body: &body,
-                diff: &diff,
-                reasons: &reasons,
-                requested_by: &actor(who),
+                summary: summary(kind, label, &diff),
+                body,
+                diff,
+                reasons,
+                reason: None,
+                deployment_id: None,
+                requested_by: &by,
+                requester_workspace: super::approvals::own_ws(who),
+                requester_session: super::approvals::session_of(who),
             },
             deploy::now(),
         )
         .map_err(db_err)?
     };
-    audit("app-request", &actor(who), &format!("held {} {kind} {label}", req.id));
-    Ok(json!({
-        "status": "held",
-        "request": req.id,
-        "kind": kind,
-        "app": label,
-        "diff": req.diff,
-        "reasons": req.reasons,
-        "expiresAt": req.expires_at,
-        "hint": format!(
-            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings), \
-             or deny it. Check with k2 app approvals.",
-            req.id
-        ),
-    }))
+    audit("app-request", &by, &format!("held {} {kind} {label}", req.id));
+    Ok(super::approvals::held_answer(&req))
 }
 
 // ── warnings ─────────────────────────────────────────────────────────
@@ -756,49 +772,18 @@ fn key_revoke(who: &Who, body: &[u8]) -> R<J> {
 }
 
 // ── approvals ────────────────────────────────────────────────────────
-
-fn request_json(r: &requests::AppRequest) -> J {
-    let mut v = serde_json::to_value(r).unwrap_or(J::Null);
-    v["workspaceHandle"] = json!(ws_handle(&r.workspace_id));
-    v
-}
-
-/// GET `/cli/app/approvals?app=&all=1`.
-fn approvals(who: &Who, params: &HashMap<String, String>) -> R<J> {
-    need_credential(who)?;
-    let service = match params.get("app").map(String::as_str).filter(|s| !s.trim().is_empty()) {
-        Some(raw) => Some(target(who, Some(raw))?.service_id),
-        None => None,
-    };
-    let all = params.get("all").is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"));
-    let rows = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        requests::list(&conn, own_ws(who), service.as_deref(), all, deploy::now()).map_err(db_err)?
-    };
-    Ok(json!({ "requests": rows.iter().map(request_json).collect::<Vec<_>>() }))
-}
-
-fn request_or_404(id: Option<&str>) -> R<requests::AppRequest> {
-    let id = id.ok_or_else(|| no(codes::BAD_REQUEST, 400, "request is required (k2 app approvals)"))?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    requests::get(&conn, id).map_err(db_err)?.ok_or_else(|| no("request_not_found", 404, format!("no App request '{id}' (k2 app approvals)")))
-}
-
-fn decided_err(code: &'static str) -> Refusal {
-    match code {
-        "not_held" => no("not_pending", 409, "this request was already decided (or expired after 7 days)"),
-        _ => no("db_error", 500, "could not record the decision"),
-    }
-}
+//
+// Listing, approving and denying held requests is `super::approvals` (one
+// set of routes for the grace kinds and the egress kinds). This module
+// carries out an approved grace request.
 
 fn target_by_id(service_id: Option<&str>) -> R<Target> {
     target(&Who::Owner, service_id).map_err(|_| no(codes::APP_NOT_FOUND, 404, "the App was removed"))
 }
 
-/// Carry out an approved request. Returns the result JSON.
-fn apply_request(r: &requests::AppRequest, by: &str) -> R<J> {
+/// Carry out an approved grace request (`config`, `publish_run`,
+/// `app_key`, `clean_mode`). Returns the result JSON.
+pub(crate) fn apply_request(r: &requests::AppRequest, by: &str) -> R<J> {
     match r.kind.as_str() {
         requests::KIND_CLEAN_MODE => {
             let t = target_by_id(r.service_id.as_deref())?;
@@ -812,13 +797,8 @@ fn apply_request(r: &requests::AppRequest, by: &str) -> R<J> {
                 .map_err(|_| no(codes::BAD_REQUEST, 400, "the held key request is unreadable"))?;
             let label = r.body.get("label").and_then(J::as_str).unwrap_or("App key").to_string();
             // Re-check the ceiling against today's rooms and roles.
-            let g = keys::grant_for_app(
-                &t.service_id,
-                &grant.scopes,
-                &grant.rooms,
-                &grant.roles,
-            )
-            .map_err(|e| no(codes::BAD_REQUEST, 400, format!("the request no longer fits: {e}")))?;
+            let g = keys::grant_for_app(&t.service_id, &grant.scopes, &grant.rooms, &grant.roles)
+                .map_err(|e| no(codes::BAD_REQUEST, 400, format!("the request no longer fits: {e}")))?;
             mint_and_deliver(&t, &g, &label, "vault", by)
         }
         requests::KIND_CONFIG => {
@@ -828,97 +808,9 @@ fn apply_request(r: &requests::AppRequest, by: &str) -> R<J> {
             super::routes::apply_config_ops(app, &ops, by)
         }
         requests::KIND_PUBLISH_RUN => crate::publish_routes::run_approved(&r.body),
-        _ => Err(no(codes::BAD_REQUEST, 400, "unknown request kind")),
+        _ => Err(no(codes::BAD_REQUEST, 400, "this request kind is not a grace change")),
     }
 }
-
-/// POST `/cli/app/approve {request, confirmToken}`: the owner, in person.
-fn approve(who: &Who, body: &[u8]) -> R<J> {
-    need_credential(who)?;
-    if !is_owner(who) {
-        return Err(no(
-            codes::OWNER_ONLY,
-            403,
-            "only the server's owner approves App requests, in person: k2 app approve <id> from a terminal outside K2, \
-             or Settings. An agent can propose, never approve.",
-        ));
-    }
-    let v = json_body(body)?;
-    let req = request_or_404(s(&v, "request"))?;
-    if req.state != requests::STATE_HELD {
-        return Err(no("not_pending", 409, format!("{} is {}", req.id, req.state)));
-    }
-    let token = s(&v, "confirmToken").ok_or_else(|| {
-        no("vault_confirm_required", 403, "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 app approve <id> asks for it")
-    })?;
-    let stamp = confirm_stamp(who).unwrap_or_default();
-    let vault = crate::vault::get().map_err(|e| no("vault_closed", 503, format!("the vault isn't open ({}): {}", e.code, e.hint)))?;
-    let proof = vault
-        .confirm
-        .take(token, CONFIRM_APPROVE, Some(&req.id), &stamp)
-        .map_err(|_| no("vault_confirm_required", 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
-    let via = match proof {
-        k2_vault::HumanProof::Confirmed { method } => method,
-        k2_vault::HumanProof::None => return Err(no("vault_confirm_required", 403, "no owner confirm")),
-    };
-    let by = actor(who);
-    let decided = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        requests::decide(&conn, &req.id, requests::STATE_APPROVED, &by, Some(&via), None, None, deploy::now()).map_err(decided_err)?
-    };
-    let applied = apply_request(&decided, &by);
-    let (state, result) = match &applied {
-        Ok(v) => (requests::STATE_APPROVED, v.clone()),
-        Err(e) => (requests::STATE_FAILED, json!({ "code": e.code, "hint": e.hint })),
-    };
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        requests::set_result(&conn, &req.id, state, &result).map_err(db_err)?;
-    }
-    audit("app-approve", &by, &format!("{} {} {} via {via}", req.id, req.kind, state));
-    tell_requester(&decided, &format!("[k2 app] the owner approved {} ({} for {}){}", req.id, req.kind, req.app_label, if state == requests::STATE_FAILED { ", but it failed to apply" } else { "" }));
-    let mut out = json!({ "ok": state == requests::STATE_APPROVED, "request": req.id, "state": state, "result": result });
-    if let Err(e) = applied {
-        out["error"] = json!({ "code": e.code, "hint": e.hint });
-    }
-    Ok(out)
-}
-
-/// POST `/cli/app/deny {request, reason?}`: an Owner/Admin denies; the
-/// requesting workspace's passport withdraws its own.
-fn deny(who: &Who, body: &[u8]) -> R<J> {
-    need_credential(who)?;
-    let v = json_body(body)?;
-    let req = request_or_404(s(&v, "request"))?;
-    let reason = s(&v, "reason").map(|r| r.chars().take(500).collect::<String>());
-    let state = match who {
-        Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. } => requests::STATE_DENIED,
-        Who::Agent { project_id, .. } | Who::Shell { project_id, .. } if *project_id == req.workspace_id => requests::STATE_WITHDRAWN,
-        Who::Agent { .. } | Who::Shell { .. } => return Err(no("request_not_found", 404, format!("no App request '{}' (k2 app approvals)", req.id))),
-        _ => return Err(no(codes::OWNER_ONLY, 403, "an Owner or Admin login denies App requests")),
-    };
-    let by = actor(who);
-    let decided = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        requests::decide(&conn, &req.id, state, &by, None, reason.as_deref(), None, deploy::now()).map_err(decided_err)?
-    };
-    audit("app-deny", &by, &format!("{} {state}", req.id));
-    if state == requests::STATE_DENIED {
-        tell_requester(&decided, &format!("[k2 app] the owner denied {} ({} for {}){}", req.id, req.kind, req.app_label, reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default()));
-    }
-    Ok(json!({ "ok": true, "request": request_json(&decided) }))
-}
-
-/// Tell the requesting agent (a `k2 msg` wake of its workspace).
-fn tell_requester(r: &requests::AppRequest, text: &str) {
-    if r.requested_by.starts_with("agent:") {
-        super::alerts::notify(&r.workspace_id, text);
-    }
-}
-
 /// One line in `~/.k2/auth-audit.jsonl` (Settings → Logs → Access Audit).
 pub(crate) fn audit(event: &str, user: &str, outcome: &str) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, user, outcome.to_string(), "-", "-", "apps"));

@@ -513,7 +513,7 @@ pub(crate) mod tests {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(include_str!("../../drizzle_sql/0165_app_runtime_core.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
-        c.execute_batch(include_str!("../../drizzle_sql/0168_app_walls_lite.sql").replace("--> statement-breakpoint", "").as_str())
+        c.execute_batch(include_str!("../../drizzle_sql/0170_app_walls_lite.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
         c
     }

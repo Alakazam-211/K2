@@ -240,6 +240,13 @@ impl GrokBot {
         let obj = self.read_json(&self.root.join(schema::GATEWAY_FILE))?;
         let scheme = str_of(&obj, schema::GATEWAY_SCHEME_KEY).unwrap_or(schema::DEFAULT_SCHEME);
         let host = str_of(&obj, schema::GATEWAY_HOST_KEY).unwrap_or(schema::DEFAULT_HOST);
+        // A gateway listening on every address (`0.0.0.0` / `::`, seen on a
+        // real box 2026-10-15) is dialled on this computer's loopback.
+        let host = match host {
+            "0.0.0.0" => "127.0.0.1",
+            "::" | "[::]" => "::1",
+            h => h,
+        };
         let port = obj.get(schema::GATEWAY_PORT_KEY).and_then(Value::as_u64)?;
         if port == 0 || port > 65_535 {
             return None;

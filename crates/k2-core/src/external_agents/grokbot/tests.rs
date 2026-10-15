@@ -54,6 +54,33 @@ fn gateway_url_is_built_from_scheme_host_port_and_must_be_loopback() {
     assert!(g.gateway().is_none(), "a non-loopback gateway is refused");
 }
 
+/// The real grokbot box (2026-10-15) writes `"host":"0.0.0.0"`: the gateway
+/// listens on every address and K2 dials it on loopback, never elsewhere.
+#[test]
+fn a_gateway_listening_on_every_address_is_dialled_on_loopback() {
+    let gw = FakeGateway::start(json!([]));
+    let (_home, sand) = setup(&gw);
+    let g = GrokBot::for_current_user();
+    for (host, want) in [("0.0.0.0", "127.0.0.1"), ("::", "[::1]")] {
+        std::fs::write(
+            sand.root.join("gateway.json"),
+            serde_json::to_vec(&json!({"port": gw.port, "scheme": "http", "host": host, "token": FAKE_TOKEN}))
+                .expect("json"),
+        )
+        .expect("write");
+        let parsed = g.gateway().expect("an all-addresses gateway is usable");
+        assert_eq!(parsed.base(), format!("http://{want}:{}", gw.port), "host {host}");
+    }
+    std::fs::write(
+        sand.root.join("gateway.json"),
+        serde_json::to_vec(&json!({"port": gw.port, "scheme": "http", "host": "0.0.0.0", "token": FAKE_TOKEN}))
+            .expect("json"),
+    )
+    .expect("write");
+    let agents = g.list_agents().expect("the roster comes from the gateway, not the disk fallback");
+    assert!(agents.is_empty(), "the fake gateway's empty roster: {agents:?}");
+}
+
 #[test]
 fn gateway_roster_carries_per_agent_status_and_hides_hidden_agents() {
     let mut busy = fixture::list_item(A, "Cortana");

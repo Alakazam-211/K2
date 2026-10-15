@@ -587,6 +587,9 @@ async fn linux_owner_token_calls_are_counted_then_refused_in_clean_mode() {
     require_python3();
     let env = setup(&[("K2_PUBLISH_PROBE_MS", "8000")]);
     let d = k2_daemon::test_harness::start(OWNER).await;
+    // A booted vault, like a real box: a new service starts in the clean
+    // env (with PORT), not the pre-vault inherited one (which has none).
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let ws = seed_ws(&env, "tokws");
     let app = ws.path.join("bff");
     std::fs::create_dir_all(&app).unwrap();
@@ -602,10 +605,15 @@ PORT = open(os.path.join(D, "port.txt")).read().strip()
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
-        try:
-            code = urllib.request.urlopen("http://127.0.0.1:%s/cli/app/keys?token=%s" % (PORT, TOK)).status
-        except urllib.error.HTTPError as e:
-            code = e.code
+        # Only /call reaches K2 (the daemon's start probe hits / and must
+        # not count as a use).
+        if self.path != "/call":
+            code = "ok"
+        else:
+            try:
+                code = urllib.request.urlopen("http://127.0.0.1:%s/cli/app/keys?token=%s" % (PORT, TOK)).status
+            except urllib.error.HTTPError as e:
+                code = e.code
         body = str(code).encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
@@ -618,7 +626,11 @@ http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever(
     let cmd = format!("exec {} bff.py", python.trim());
     let r = post(d.port, "/cli/publish/run", OWNER, json!({"name": "tokbff", "project": ws.id, "cmd": cmd, "cwd": app, "port": port, "noTunnel": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let (_, code) = tokio::task::spawn_blocking(move || http_get(port, "/call")).await.unwrap().expect("bff answers");
+    let bff_log = k2_daemon::publish_runtime::log_path(&ws.id, "tokbff");
+    let (_, code) = tokio::task::spawn_blocking(move || http_get(port, "/call"))
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("bff answers; its log:\n{}", std::fs::read_to_string(&bff_log).unwrap_or_default()));
     assert_eq!(code.trim(), "200", "the owner token still works in 0.46.0");
     let r = get(d.port, "/cli/app/warnings", OWNER, "app=tokbff").await;
     assert_eq!(r.json()["ownerTokenUses"][0]["route"], "/cli/app/keys", "{}", r.body);

@@ -149,7 +149,7 @@ impl RuntimeEngine for ProcessException {
             .ok_or_else(|| err(codes::ENGINE_UNAVAILABLE, "start before prepare"))?;
         // The same environment a guarded App gets (the engine adds the
         // gateway address and the paths), and its granted secrets.
-        let mut env = guarded::guarded_env(spec, 0, std::env::var("LANG").ok(), std::env::var("TZ").ok());
+        let mut env = guarded::guarded_env(spec, std::env::var("LANG").ok(), std::env::var("TZ").ok());
         for k in ["K2_HOST", "K2_PORT", "K2_GATEWAY_URL"] {
             env.remove(k);
         }
@@ -170,15 +170,48 @@ impl RuntimeEngine for ProcessException {
         wire::check_process(&ps).map_err(|w| err(codes::MANIFEST_INVALID, format!("the process exception can't run this: {w}")))?;
         let staged = guarded::call(&Request::ProcessStage(Box::new(ps)), None, Duration::from_secs(600))?;
         let gw = staged["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()).ok_or_else(|| err(codes::ENGINE_UNAVAILABLE, "stage gave no gateway port"))?;
+        // S14: the App's gateway link on its own gateway port (host
+        // loopback; no in-wall forward here), with a fresh pass. A redeploy
+        // keeps the listener.
+        let (link_caps, rooms, dropped_caps) = super::gateway::link_policy(&guarded::seed_caps(&p.workdir)?, &spec.workspace_id);
+        if !dropped_caps.is_empty() {
+            k2_core::log_debug!("[apps] {}: caps the App pass can't carry (owner widenings, 0.46.1): {}", app.as_str(), dropped_caps.join(", "));
+        }
+        let had_link = super::gateway::port_of(app.as_str()).is_some();
+        let link = super::gateway::LinkSpec {
+            app_id: app.as_str().into(),
+            service_id: spec.service_id.clone(),
+            workspace_id: spec.workspace_id.clone(),
+            port: gw,
+            caps: link_caps,
+            rooms,
+        };
+        let deliver = guarded::deliver_for(app.as_str());
+        let pass = super::gateway::open(link, Some(deliver.clone())).map_err(|e| err(codes::ENGINE_UNAVAILABLE, format!("the App's gateway link: {e}")))?;
+        let close_new_link = || {
+            if !had_link {
+                super::gateway::close(app.as_str(), Some(&spec.service_id), true);
+            }
+        };
         // One instance per App: stop what runs, swap the code, start.
         let _ = helper(&["apps", "process", "stop", app.as_str()]);
         self.current.lock().unwrap_or_else(|e| e.into_inner()).remove(&spec.app_id);
-        guarded::call(&Request::ProcessActivate { app: app.as_str().into(), deployment: spec.deployment_id.clone() }, None, Duration::from_secs(120))?;
-        let io = IoMax::from_column(spec.io_max_json.as_deref());
-        let caps = caps_argv(&app, memory_mib, &io, &spec.devices);
-        let caps_ref: Vec<&str> = caps.iter().map(String::as_str).collect();
-        helper(&caps_ref)?;
-        helper(&["apps", "process", "start", app.as_str()])?;
+        let started = (|| -> Result<()> {
+            guarded::call(&Request::ProcessActivate { app: app.as_str().into(), deployment: spec.deployment_id.clone() }, None, Duration::from_secs(120))?;
+            // The pass lands in the App's process folder (`K2_PASS_FILE`);
+            // rotations replace it there through the same `pass-write`.
+            deliver(&pass).map_err(|e| err(codes::ENGINE_UNAVAILABLE, format!("the App pass: {e}")))?;
+            let io = IoMax::from_column(spec.io_max_json.as_deref());
+            let caps = caps_argv(&app, memory_mib, &io, &spec.devices);
+            let caps_ref: Vec<&str> = caps.iter().map(String::as_str).collect();
+            helper(&caps_ref)?;
+            helper(&["apps", "process", "start", app.as_str()])?;
+            Ok(())
+        })();
+        if let Err(e) = started {
+            close_new_link();
+            return Err(e);
+        }
         self.current.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.app_id.clone(), spec.deployment_id.clone());
         if let Err(e) = guarded::install_gateway_rule(app.as_str(), gw) {
             k2_core::log_debug!("[apps] {}: process exception gateway rule not installed: {e}", app.as_str());
@@ -264,6 +297,16 @@ impl RuntimeEngine for ProcessException {
             };
             if let Some(gw) = v["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()) {
                 let _ = guarded::install_gateway_rule(id.as_str(), gw);
+                // S14: the link listener is the daemon's, so it re-opens;
+                // the App gets a fresh pass in its process folder.
+                if super::gateway::port_of(id.as_str()).is_none() {
+                    if let Some(spec) = guarded::link_spec_for(&a.app_id, gw) {
+                        let deliver = guarded::deliver_for(id.as_str());
+                        if let Err(e) = super::gateway::open(spec, Some(deliver.clone())).and_then(|raw| deliver(&raw)) {
+                            k2_core::log_debug!("[apps] adopt {}: gateway link: {e}", a.app_id);
+                        }
+                    }
+                }
             }
             self.current.lock().unwrap_or_else(|e| e.into_inner()).insert(a.app_id.clone(), dep.to_string());
             out.push(RunHandle {

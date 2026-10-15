@@ -918,13 +918,16 @@ pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
 const LOGS_CAP: usize = 1024 * 1024;
 
 /// `apps logs <id> <deployment> <lines>` (daemon): the unit's lines from
-/// the journal, matched on k2app's uid AND the deployment's user unit (two
+/// the journal, matched on k2app's user manager AND the deployment's user unit (two
 /// fields journald ANDs). Nothing from argv but validated tokens.
 pub fn logs(ctx: &Ctx, id: &AppId, deployment: &str, lines: u32) -> HResult<J> {
     let pw = app_user(ctx)?;
     let unit = format!("{}.service", k2_root_proto::engine::unit_stem(id, deployment));
     let n = lines.to_string();
-    let uid = format!("_UID={}", pw.uid);
+    // `_SYSTEMD_OWNER_UID`: the user manager the unit runs in (journald
+    // derives it from the cgroup). Not `_UID`: an App writes as its own
+    // mapped id (its slot), never as k2app.
+    let uid = format!("_SYSTEMD_OWNER_UID={}", pw.uid);
     let um = format!("_SYSTEMD_USER_UNIT={unit}");
     let out = ctx.run_ok(
         k2_root_proto::paths::JOURNALCTL,

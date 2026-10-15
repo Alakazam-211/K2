@@ -275,13 +275,21 @@ async fn fill_provision(
     client: &MgmtClient,
     row: &OutboxRow,
 ) -> Result<Option<Value>, Outcome> {
-    let lookup_failed = |error: String, status: Option<u16>, target: bool| Outcome::Retry {
+    let retry =
+        |error: String, status: Option<u16>, target: bool, delay: Duration| Outcome::Retry {
+            status,
+            error: format!("member lookup: {error}"),
+            delay,
+            target_error: target.then(|| format!("member lookup: {error}")),
+            stop_target: target,
+        };
+    // A bug-class answer (a 4xx, a body that is not a principals page):
+    // fail loudly, never send a body that could clear what K2 can't see.
+    let blocked = |error: String, status: Option<u16>| Outcome::Blocked {
         status,
         error: format!("member lookup: {error}"),
-        delay: backoff(cfg, row.attempts + 1),
-        target_error: target.then(|| format!("member lookup: {error}")),
-        stop_target: target,
     };
+    let b = backoff(cfg, row.attempts + 1);
     let mut req: sew_wire::ProvisionRequest = match serde_json::from_str(&row.payload_raw) {
         Ok(r) => r,
         // Not a provision body this worker built: send it unchanged and
@@ -292,26 +300,25 @@ async fn fill_provision(
     let resp = client
         .get(&path)
         .await
-        .map_err(|e| lookup_failed(e.0, None, true))?;
-    if resp.status == 401 {
-        return Err(lookup_failed("mgmt token rejected".into(), Some(401), true));
-    }
-    if !resp.is_success() {
-        return Err(lookup_failed(
-            resp.error_line(),
-            Some(resp.status),
-            resp.status >= 500,
-        ));
+        .map_err(|e| retry(e.0, None, true, b))?;
+    match resp.status {
+        s if (200..300).contains(&s) => {}
+        401 => return Err(retry("mgmt token rejected".into(), Some(401), true, b)),
+        429 => {
+            let d = resp.retry_after().map_or(b, |ra| ra.max(b));
+            return Err(retry(resp.error_line(), Some(429), false, d));
+        }
+        s if s >= 500 => return Err(retry(resp.error_line(), Some(s), true, b)),
+        s => return Err(blocked(resp.error_line(), Some(s))),
     }
     let page: sew_wire::MgmtPrincipalPage = serde_json::from_slice(&resp.body)
-        .map_err(|e| lookup_failed(format!("unexpected body ({e})"), Some(resp.status), false))?;
+        .map_err(|e| blocked(format!("unexpected body ({e})"), Some(resp.status)))?;
     let Some(m) = page.items.iter().find(|m| m.external_id == req.external_id) else {
         return Ok(None);
     };
     if hook::chat::fill_provision_from_member(&mut req, m) {
-        Ok(Some(serde_json::to_value(&req).map_err(|e| {
-            lookup_failed(format!("encode ({e})"), None, false)
-        })?))
+        let v = serde_json::to_value(&req).map_err(|e| blocked(format!("encode ({e})"), None))?;
+        Ok(Some(v))
     } else {
         Ok(None)
     }

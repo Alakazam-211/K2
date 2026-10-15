@@ -79,12 +79,27 @@ pub fn slot_base(slot: u64) -> u64 {
     1 + slot * SLOT_SIZE
 }
 
-/// The App's gateway link port (S14 listens there; pasta `-T` forwards it
-/// from the container's loopback; the per-App nft rule admits it).
+/// The App's gateway link port on host loopback (S14 listens there; the
+/// per-App nft rule admits only that App's cgroup to it).
 pub fn gateway_port(slot: u64) -> Option<u16> {
     let p = GATEWAY_PORTS.lo as u64 + slot;
     (p <= GATEWAY_PORTS.hi as u64).then_some(p as u16)
 }
+
+/// The gateway link's port **inside** every guarded container: pasta
+/// (`-T 8730:<gateway port>`) forwards the container's `127.0.0.1:8730` to
+/// the App's own link on host loopback, so every App's code dials the same
+/// `K2_GATEWAY_URL=http://127.0.0.1:8730` (§5.1). Never an App's own port.
+pub const IN_WALL_GATEWAY_PORT: u16 = 8730;
+
+/// Where the engine keeps each App's current pass on the host (tmpfs, under
+/// [`RUN_DIR`]): `pass/` is `k2app` 0700 (the daemon user's ACL on
+/// `/run/k2app` stops there, so no agent reads an App's pass), and
+/// `pass/<app>/` (0755) is bind-mounted read-only at [`PASS_MOUNT`] in the
+/// App's containers. The daemon rotates the file through `pass-write`; a
+/// rename swaps it, so the container sees the new pass at once.
+pub const PASS_ROOT: &str = "/run/k2app/pass";
+pub const PASS_FILE_NAME: &str = "pass";
 
 // ── signed builds ───────────────────────────────────────────────────────
 
@@ -273,6 +288,9 @@ pub enum Request {
     /// Stop every instance of an App; `data` also deletes its folders and
     /// frees its slot (uninstall --purge).
     RemoveApp { app: String, data: bool },
+    /// Replace the App's pass file (S14 rotation). Every running instance
+    /// of the App mounts the same folder and reads the new pass.
+    PassWrite { app: String, pass_hex: String },
 }
 
 /// One secret for a container: a Podman secret, never in the unit file.
@@ -305,11 +323,14 @@ pub struct StartSpec {
     /// (AR45: `StopTimeout` ≥ drain).
     pub drain_secs: u64,
     pub secrets: Vec<SecretItem>,
-    /// The App pass (S14), hex; a Podman secret mounted at
-    /// [`PASS_TARGET`].
+    /// The App pass (S14), hex: written to the App's pass folder
+    /// ([`PASS_ROOT`]) and mounted at [`PASS_MOUNT`] (never a Podman
+    /// secret: a secret is copied once at start and can't rotate).
     pub pass_hex: Option<String>,
 }
 
+/// The pass folder inside the container, read-only.
+pub const PASS_MOUNT: &str = "/run/k2";
 /// Where the App pass appears inside the container (`K2_PASS_FILE`).
 pub const PASS_TARGET: &str = "/run/k2/pass";
 pub const SECRETS_TARGET_DIR: &str = "/run/secrets";
@@ -386,9 +407,18 @@ pub fn image_ok(i: &str) -> bool {
         && tag.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
 }
 
-/// The App's own published port: ≥ 1024, outside K2's reserved range.
+/// The App's own published port: ≥ 1024, outside K2's reserved range, and
+/// never the in-wall gateway port.
 pub fn app_port_ok(p: u16) -> bool {
-    p >= 1024 && !(RESERVED_PORTS.0..=RESERVED_PORTS.1).contains(&p)
+    p >= 1024 && p != IN_WALL_GATEWAY_PORT && !(RESERVED_PORTS.0..=RESERVED_PORTS.1).contains(&p)
+}
+
+/// A pass on the wire: hex of a `k2skn_` pass (`k2skn_` + base62), bounded.
+/// The engine writes it to a file and never parses it further.
+pub fn pass_hex_ok(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 1024
+        && hex_decode(p).is_some_and(|b| b.starts_with(b"k2skn_") && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_'))
 }
 
 /// POSIX-ish env name, not one K2 sets for the container itself.
@@ -454,7 +484,7 @@ pub fn check_start(s: &StartSpec) -> Result<AppId, &'static str> {
         }
     }
     if let Some(p) = &s.pass_hex {
-        if p.len() > 64 * 1024 || hex_decode(p).is_none() {
+        if !pass_hex_ok(p) {
             return Err("pass");
         }
     }
@@ -523,6 +553,9 @@ mod tests {
             Box::new(|s| s.secrets[0].env = Some("X".into())),
             Box::new(|s| s.secrets[0].value_hex = "zz".into()),
             Box::new(|s| s.pass_hex = Some("abc".into())),
+            Box::new(|s| s.pass_hex = Some(hex_encode(b"not-a-pass"))),
+            Box::new(|s| s.pass_hex = Some(hex_encode(b"k2skn_a\nb"))),
+            Box::new(|s| s.port = IN_WALL_GATEWAY_PORT),
         ];
         for (i, f) in bad.iter().enumerate() {
             let mut s = spec();
@@ -536,6 +569,10 @@ mod tests {
         let r = Request::Start(Box::new(spec()));
         let line = serde_json::to_string(&r).unwrap();
         assert!(line.starts_with("{\"verb\":\"start\""), "{line}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
+        let r = Request::PassWrite { app: "jobs".into(), pass_hex: hex_encode(b"k2skn_abc") };
+        let line = serde_json::to_string(&r).unwrap();
+        assert!(line.starts_with("{\"verb\":\"pass-write\""), "{line}");
         assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
         let r = Request::SeedPut { hash: "a".repeat(64), len: 9 };
         assert_eq!(serde_json::to_string(&r).unwrap(), format!("{{\"verb\":\"seed-put\",\"hash\":\"{}\",\"len\":9}}", "a".repeat(64)));

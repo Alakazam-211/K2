@@ -8,3 +8,5 @@ Released files are immutable: ship <short>-<n+1>.toml instead.
 
 The first entry, diary-1.toml (template k2.diary@1, widget k2:diary@1),
 is written by B2 (page) and B1 (widget) during the Zen v2 build.
+kanban-1.toml (template k2.kanban@1, widget k2:kanban@1) is the Kanban
+board, new in 0.45.7: its board lives in Garden data, not in the file.

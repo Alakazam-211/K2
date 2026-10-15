@@ -73,6 +73,36 @@ export function ZenGardenSketch({ entry }: { entry: ZenTemplateInfo }): React.JS
         <rect x="66" y="52" width="58" height="12" rx="6" fill="var(--zen-text-muted, #999)" opacity="0.3" />
       </svg>
     )
+  } else if (entry.short === 'kanban') {
+    // Three columns of cards (To do / Doing / Done), in the Garden's theme.
+    const cards: Array<[number, number[]]> = [
+      [10, [22, 40, 58]],
+      [58, [22, 40]],
+      [106, [22]],
+    ]
+    art = (
+      <svg {...common}>
+        <rect width="160" height="90" fill="var(--zen-canvas, #f7f8fa)" />
+        {cards.map(([x, ys]) => (
+          <g key={x}>
+            <rect x={x} y="8" width="44" height="74" rx="4" fill="var(--zen-surface, #fff)" stroke="var(--zen-border, #e3e6ec)" />
+            <rect x={x + 5} y="13" width="18" height="4" rx="2" fill="var(--zen-text-muted, #5f6672)" opacity="0.6" />
+            {ys.map((y) => (
+              <rect
+                key={y}
+                x={x + 4}
+                y={y}
+                width="36"
+                height="14"
+                rx="3"
+                fill="var(--zen-surface-raised, #fff)"
+                stroke={x === 58 && y === 22 ? 'var(--zen-accent, #2563eb)' : 'var(--zen-border, #e3e6ec)'}
+              />
+            ))}
+          </g>
+        ))}
+      </svg>
+    )
   } else if (entry.short === 'blank') {
     art = (
       <svg {...common}>

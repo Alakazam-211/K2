@@ -817,7 +817,8 @@ fn gs51_news_catalog_updates_and_seen() {
     let f = ZenFiles::with_defaults(&z, fake_set(|s| with_diary(s, 1)));
     let news = f.news().expect("news");
     let ids: Vec<&str> = news["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str()).collect();
-    assert_eq!(ids, vec!["catalog:diary"], "the first run lists the Diary: {news}");
+    // The Kanban is new catalog data in 0.45.7 (Rosson 2026-10-15).
+    assert_eq!(ids, vec!["catalog:diary", "catalog:kanban"], "the first run lists the catalog: {news}");
     assert_eq!(news["items"][0]["label"], "Diary");
     // The binary's newest Diary (k2.diary@2 since 0.45.2) is the one offered.
     assert_eq!(news["items"][0]["template"], zen::garden_catalog::DIARY_TEMPLATE_ID);
@@ -844,8 +845,9 @@ fn gs51_news_catalog_updates_and_seen() {
     let uid = update["id"].as_str().expect("id").to_string();
     f.news_seen(&[uid], false).expect("seen");
     let left: Vec<String> = f.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
-    assert_eq!(left, vec!["catalog:diary".to_string()]);
+    assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string()]);
     f.news_mark_template_seen("k2.diary@1").expect("made a Diary");
+    f.news_mark_template_seen("k2.kanban@1").expect("made a Kanban");
     assert_eq!(f.news().expect("news")["items"], json!([]), "creating from the catalog marks it seen");
     assert!(f.news_seen(&["nonsense".into()], false).is_err(), "unknown id shapes are refused");
     assert!(f.news_seen(&[], false).is_err(), "ids or all");
@@ -857,6 +859,43 @@ fn gs51_news_catalog_updates_and_seen() {
     }));
     let news = f.news().expect("news");
     assert!(!news["items"].as_array().expect("items").iter().any(|i| i["kind"] == "catalog"), "diary@2 isn't new: {news}");
+}
+
+/// 0.45.7 (Rosson 2026-10-15): a computer that already saw the Diary
+/// (every 0.45.x one) gets the Kanban as one "New in the Garden catalog"
+/// item; making a Kanban Garden, or Seen, clears it. A fresh computer sees
+/// it as the catalog, not as new (GS38).
+#[test]
+fn gs51_the_kanban_is_new_in_the_catalog() {
+    let (_t, z) = temp_dir("news-kanban");
+    let f = ZenFiles::new(&z);
+    legacy_setup(&f);
+    f.news_seen(&["catalog:diary".into()], false).expect("the Diary was seen on 0.45.x");
+    let news = f.news().expect("news");
+    let items = news["items"].as_array().expect("items");
+    let catalog: Vec<&J> = items.iter().filter(|i| i["kind"] == "catalog").collect();
+    assert_eq!(catalog.len(), 1, "only the Kanban is new: {news}");
+    let k = catalog[0];
+    assert_eq!(k["id"], "catalog:kanban");
+    assert_eq!(k["short"], "kanban");
+    assert_eq!(k["label"], "Kanban");
+    assert_eq!(k["template"], "k2.kanban@1");
+    assert_eq!(k["version"], 1);
+    assert!(k["description"].as_str().is_some_and(|d| d.contains("To do, Doing and Done")), "{k}");
+    // Making a Kanban Garden marks it seen.
+    let g = f.new_garden("Kanban", Some("kanban"), None, None).expect("new Kanban");
+    assert_eq!(g.template, "k2.kanban@1");
+    let after = f.news().expect("news");
+    assert!(!after["items"].as_array().expect("items").iter().any(|i| i["id"] == "catalog:kanban"), "{after}");
+    assert_eq!(f.read_news().catalog_seen.get("kanban"), Some(&1));
+
+    // A fresh computer: the Kanban is part of the catalog it starts with.
+    let (_t2, z2) = temp_dir("news-kanban-fresh");
+    let fresh = ZenFiles::new(&z2);
+    fresh.setup().expect("setup");
+    assert_eq!(fresh.news().expect("news")["items"], json!([]));
+    assert_eq!(fresh.read_news().catalog_seen.get("kanban"), Some(&1));
+    assert!(fresh.find_garden("Kanban").is_none(), "never preinstalled");
 }
 
 /// K2's defaults as 0.45.5 shipped them: this build's set without Garden

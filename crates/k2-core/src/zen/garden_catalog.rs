@@ -309,6 +309,48 @@ kind = "columns"
         assert_eq!(wire["section"], "catalog");
     }
 
+    /// Rosson 2026-10-15 (0.45.7): the Kanban Garden is new catalog data,
+    /// offered in New Garden after the Diary, never seeded on a new
+    /// computer, with no theme of its own (it follows the person's).
+    #[test]
+    fn the_kanban_is_offered_after_the_diary_and_not_preinstalled() {
+        let e = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@1").expect("kanban-1.toml ships");
+        assert_eq!((e.file, e.version), ("kanban-1.toml", 1));
+        assert_eq!(e.meta.label, "Kanban");
+        assert!(e.meta.description.contains("To do, Doing and Done"), "{}", e.meta.description);
+        assert!(!e.meta.new_users, "offered, not preinstalled");
+        assert_eq!(e.meta.theme, None, "the board follows the person's theme");
+        assert_eq!(template_theme("k2.kanban@1"), None);
+        assert!(super::super::schema::is_template_id("k2.kanban@1"));
+        let list = template_list();
+        let rows: Vec<(&str, TemplateSection)> = list.iter().map(|t| (t.short.as_str(), t.section)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("texting", TemplateSection::Start),
+                ("blank", TemplateSection::Start),
+                ("diary", TemplateSection::Catalog),
+                ("kanban", TemplateSection::Catalog)
+            ]
+        );
+        let row = list.iter().find(|t| t.short == "kanban").expect("listed");
+        assert_eq!((row.id.as_str(), row.new_users), ("k2.kanban@1", false));
+        let wire = serde_json::to_value(row).expect("serializes");
+        assert_eq!(wire["section"], "catalog");
+        assert!(wire.get("needsGrant").is_none(), "{wire}");
+        // The page: one full-canvas custom widget, the built-in board.
+        let v: toml::Value = toml::from_str(e.toml).expect("parses");
+        assert_eq!(v["layout"]["canvas"].as_str(), Some("full"));
+        let custom: Vec<&str> = v["widget"]
+            .as_array()
+            .expect("widgets")
+            .iter()
+            .filter(|w| w.get("kind").and_then(toml::Value::as_str) == Some("custom"))
+            .filter_map(|w| w.get("widget").and_then(toml::Value::as_str))
+            .collect();
+        assert_eq!(custom, [crate::zen::builtin_widgets::KANBAN_WIDGET]);
+    }
+
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped
     /// version, names only built-in widgets that exist in this build. A
     /// catalog Garden has no widget folder of its own, so a `custom` widget

@@ -305,6 +305,35 @@ fn catalog_templates_check_clean_and_carry_both_controls() {
     assert_eq!(content, vec!["custom"], "the Diary page is the Diary alone: {page}");
 }
 
+/// 0.45.7 (Rosson 2026-10-15): New Garden → Kanban makes a full-canvas
+/// Garden whose one widget is the built-in board, working at once with
+/// its Garden data and Thread caps; its ⋯ menu holds the Garden switcher,
+/// the theme picker and the Zen toggle. Setup never adds it.
+#[test]
+fn a_kanban_garden_from_the_catalog_is_the_board_with_its_caps() {
+    let (_t, f) = set_up("kanban");
+    assert!(f.find_garden("Kanban").is_none(), "setup doesn't preinstall the Kanban");
+    let g = f.new_garden("Kanban", Some("kanban"), None, None).expect("new from catalog");
+    assert_eq!(g.template, "k2.kanban@1");
+    let page = f.resolve(Some(&g.id)).expect("resolve kanban");
+    assert_eq!(page["page"]["layout"]["canvas"], "full", "{page}");
+    let widgets = page["page"]["widgets"].as_array().expect("widgets");
+    assert_eq!(widgets.len(), 1, "the board alone: {page}");
+    let w = &widgets[0];
+    assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some("k2:kanban@1")), "{page}");
+    assert_eq!(w["origin"], "local");
+    assert_eq!(
+        w["caps"],
+        json!(["agents:read", "thread:read", "thread:post", "store:read", "store:write"]),
+        "the board works with zero clicks: {w}"
+    );
+    let items = page["page"]["chrome"]["items"].as_array().expect("chrome items");
+    let kinds: Vec<&str> = items.iter().filter_map(|i| i["kind"].as_str()).collect();
+    assert_eq!(kinds, vec!["menu", "garden-switcher", "theme-picker", "zen-toggle"], "{page}");
+    assert_eq!((items[0]["slot"].as_str(), items[0]["align"].as_str()), (Some("top"), Some("start")));
+    assert!(!kinds.contains(&"usage"), "no usage chip, as the Diary");
+}
+
 /// 0.45.2 (Rosson 2026-10-08, "not haunted enough"): a Diary shows the
 /// creepier study, and the first image is still compiled in for a theme
 /// that names it (an own copy on an archived set keeps its look; the

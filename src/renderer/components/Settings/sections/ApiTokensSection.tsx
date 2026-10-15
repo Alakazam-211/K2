@@ -35,7 +35,17 @@ import {
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { currentShortcutOs } from '@/lib/shortcut-label'
+import { isAirgap } from '@/lib/airgap'
 import type { DesktopOs } from '@/lib/desktop-chrome'
+
+/** Where the "Enable public API (/v1)" toggle lives: the Policies column
+ *  of K2 Server → Tunnel, or of Connected Servers under air-gap (Tunnel is
+ *  hidden then; `K2ConnectSettingsShell`). */
+export function publicApiToggleLocation(airgap: boolean = isAirgap()): string {
+  return airgap
+    ? 'Settings → K2 Server → Connected Servers → Policies'
+    : 'Settings → K2 Server → Tunnel → Policies'
+}
 
 /** The hire-key confirm copy. Touch ID (`local-auth`) exists only for the
  *  owner on a Mac; Linux and Windows confirm with a password (the Connect
@@ -152,7 +162,8 @@ export function ApiTokensSection(): React.JSX.Element {
         {!apiEnabled && (
           <p className="text-[11px] text-[var(--color-status-warning-soft)] mt-1 max-w-2xl" data-testid="api-surface-off">
             The public /v1 API is off on this server, so no key works yet (hiring agents included).
-            Turn it on under Settings → K2 Connect → Public API, or <code className="text-[10px]">k2 api on</code>.
+            Turn it on under {publicApiToggleLocation()} → Enable public API (/v1), or{' '}
+            <code className="text-[10px]">k2 api on</code>.
           </p>
         )}
       </div>

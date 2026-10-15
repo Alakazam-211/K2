@@ -20,7 +20,7 @@ vi.mock('@/stores/settings', () => {
   return { useSettingsStore }
 })
 
-import { ApiTokensSection } from './ApiTokensSection'
+import { ApiTokensSection, publicApiToggleLocation } from './ApiTokensSection'
 
 const HIRE_KEY = {
   id: 'key-1',
@@ -71,7 +71,16 @@ describe('ApiTokensSection hire scope', () => {
   it('warns when the /v1 surface is off', async () => {
     settingsState.apiEnabled = false
     render(<ApiTokensSection />)
-    expect(await screen.findByTestId('api-surface-off')).toBeTruthy()
+    const hint = await screen.findByTestId('api-surface-off')
+    // The toggle moved: there is no "K2 Connect" item in Settings now.
+    expect(hint.textContent).not.toContain('K2 Connect')
+    expect(hint.textContent).toContain('Settings → K2 Server → Tunnel → Policies → Enable public API (/v1)')
+    expect(hint.textContent).toContain('k2 api on')
+  })
+
+  it('names Connected Servers for the toggle under air-gap (Tunnel is hidden)', () => {
+    expect(publicApiToggleLocation(true)).toBe('Settings → K2 Server → Connected Servers → Policies')
+    expect(publicApiToggleLocation(false)).toBe('Settings → K2 Server → Tunnel → Policies')
   })
 
   it('confirms on the Mac, then mints a hire-only key with the limits', async () => {

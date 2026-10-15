@@ -328,92 +328,10 @@ pub fn never_proxy(path: &str) -> bool {
         || p == "/v1"
 }
 
-/// Every `(method, path)` the helper forwards with the guest's pass. The
-/// one list: [`allowlisted_http`] reads it, and the cross-origin tests walk
-/// it, so a new mutating route is covered the moment it is added here.
-pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
-    ("GET", "/cli/skin/agents"),
-    ("HEAD", "/cli/skin/agents"),
-    ("GET", "/cli/thread"),
-    ("HEAD", "/cli/thread"),
-    ("POST", "/cli/thread/post"),
-    ("POST", "/cli/thread/answer"),
-    ("POST", "/cli/thread/void"),
-    ("GET", "/cli/fs/read-dir"),
-    ("HEAD", "/cli/fs/read-dir"),
-    ("GET", "/cli/fs/read-file"),
-    ("HEAD", "/cli/fs/read-file"),
-    ("GET", "/cli/fs/read-binary"),
-    ("HEAD", "/cli/fs/read-binary"),
-    ("GET", "/cli/fs/read-range"),
-    ("HEAD", "/cli/fs/read-range"),
-    ("POST", "/cli/fs/write-file"),
-    ("POST", "/cli/fs/upload-binary"),
-    // Resumable large upload: one chunk per request, body capped by
-    // `request_body_cap`; the guest form is jailed and bound to the guest.
-    ("POST", "/cli/fs/upload-chunk"),
-    ("POST", "/cli/fs/create"),
-    ("POST", "/cli/fs/copy"),
-    ("POST", "/cli/fs/move"),
-    ("POST", "/cli/fs/rename"),
-    ("GET", "/cli/workspace/resources"),
-    ("POST", "/cli/workspace/resources/add"),
-    ("POST", "/cli/workspace/resources/remove"),
-    ("POST", "/cli/workspace/ensure-pinned-chat"),
-    ("GET", "/cli/feedback/list"),
-    ("HEAD", "/cli/feedback/list"),
-    ("GET", "/cli/feedback/show"),
-    ("HEAD", "/cli/feedback/show"),
-    ("POST", "/cli/feedback/create"),
-    ("POST", "/cli/feedback/comment"),
-    ("POST", "/cli/feedback/answer"),
-    ("POST", "/cli/feedback/resolve"),
-    ("POST", "/cli/feedback/assign"),
-    ("GET", "/cli/wiki/index"),
-    ("HEAD", "/cli/wiki/index"),
-    ("GET", "/cli/wiki/note"),
-    ("HEAD", "/cli/wiki/note"),
-    ("GET", "/cli/store/list"),
-    ("HEAD", "/cli/store/list"),
-    ("GET", "/cli/store/get"),
-    ("HEAD", "/cli/store/get"),
-    ("GET", "/cli/store/query"),
-    ("HEAD", "/cli/store/query"),
-    ("GET", "/cli/db/tables"),
-    ("HEAD", "/cli/db/tables"),
-    ("GET", "/cli/db/rows"),
-    ("HEAD", "/cli/db/rows"),
-    ("POST", "/cli/db/rows"),
-    ("POST", "/cli/db/rows/update"),
-    ("POST", "/cli/db/rows/delete"),
-    ("POST", "/cli/db/query"),
-    ("POST", "/cli/skin/password/change"),
-    // App heartbeats (prd-app-heartbeats-surface-v1 AH5/AH6).
-    // Reads: heartbeats:read. Writes: POST only, heartbeats:write.
-    ("GET", "/cli/heartbeat/list"),
-    ("HEAD", "/cli/heartbeat/list"),
-    ("GET", "/cli/heartbeat/show"),
-    ("HEAD", "/cli/heartbeat/show"),
-    ("GET", "/cli/heartbeat/status"),
-    ("HEAD", "/cli/heartbeat/status"),
-    ("GET", "/cli/heartbeat/fires-list"),
-    ("HEAD", "/cli/heartbeat/fires-list"),
-    ("POST", "/cli/heartbeat/add"),
-    ("POST", "/cli/heartbeat/edit"),
-    ("POST", "/cli/heartbeat/enable"),
-    ("POST", "/cli/heartbeat/rename"),
-    ("POST", "/cli/heartbeat/archive"),
-    ("POST", "/cli/heartbeat/fire"),
-    // Agent working (prd-daemon-activity-and-thread-working-v1 AP3): the
-    // room's guest snapshot, activity:read. GET only.
-    ("GET", "/cli/activity/snapshot"),
-    // App identity surface (0.45.5): read needs only the room; writes are
-    // POST only, agent:identity (name, color, picture) and agent:handle.
-    ("GET", "/cli/agent/identity"),
-    ("HEAD", "/cli/agent/identity"),
-    ("POST", "/cli/agent/identity"),
-    ("POST", "/cli/agent/handle"),
-];
+// The App-facing route table is one k2-core const shared with the App
+// gateway link (runtime S14, §5.1, AR8); S23 generates it from
+// `contract/catalog.json`.
+pub use k2_core::app_surface::HTTP_ALLOWLIST;
 
 /// POST routes the helper answers itself (login, logout, password). They
 /// are not proxied as-is but they change state, so the cross-origin check
@@ -468,15 +386,7 @@ pub fn allowlisted_http(method: &str, path: &str) -> bool {
         .any(|(am, ap)| *am == m.as_str() && *ap == p)
 }
 
-/// The one table of sockets the helper forwards, and the query parameter
-/// each one must carry. A socket cannot be allowlisted without naming its
-/// parameter (GA1). `/cli/activity/events` was once allowlisted without it,
-/// so the helper asked it for `conversation=` and refused every app.
-pub const WS_ALLOWLIST: &[(&str, &str)] = &[
-    ("/cli/overlay/events", "conversation"),
-    ("/cli/fs/events", "workspace"),
-    ("/cli/activity/events", "workspace"),
-];
+pub use k2_core::app_surface::WS_ALLOWLIST;
 
 pub fn ws_required_param(path: &str) -> Option<&'static str> {
     let p = path_only(path);

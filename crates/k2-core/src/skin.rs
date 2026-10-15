@@ -64,8 +64,15 @@ pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 ///   1 = AM1 sync: the host grant is the login truth (role or rooms).
 ///   2 = `tokens.app_service_id` (+ index) and `grants.created_by`.
 ///   3 = mark the one-time `--skin` App backfill pending (run at boot).
-///   4 = RESERVED for room-scope R3 path scope (RS-A1..A3). Not built here.
-pub const SKIN_SCHEMA_VERSION: i64 = 3;
+///   4 = `tokens.link_id` (+ index): App link passes (runtime S14, 0.46.0,
+///       [`link`]). A K2 older than this refuses the file, so a downgrade
+///       can never accept a link pass on its main port.
+///   5 = RESERVED for room-scope R3 path scope (RS-A1..A3; it was 4 until
+///       the link landed first, AR39). Not built here.
+pub const SKIN_SCHEMA_VERSION: i64 = 4;
+
+#[path = "skin_link.rs"]
+pub mod link;
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
@@ -1555,6 +1562,10 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
                 step3_mark_app_backfill(&tx)?;
                 Vec::new()
             }
+            4 => {
+                step4_link_column(&tx)?;
+                Vec::new()
+            }
             other => return Err(format!("skin.db: no schema step {other}")),
         };
         tx.execute_batch(&format!("PRAGMA user_version = {next};"))
@@ -1680,6 +1691,17 @@ fn step3_mark_app_backfill(conn: &Connection) -> Result<(), String> {
          INSERT OR IGNORE INTO skin_app_backfill (id, pending) VALUES (1, 1);",
     )
     .map_err(|e| format!("skin.db step 3: {e}"))
+}
+
+/// Step 4 (runtime S14): `tokens.link_id`, the App link a pass is bound
+/// to. NULL on every existing row (no existing pass is a link pass).
+fn step4_link_column(conn: &Connection) -> Result<(), String> {
+    if !column_exists(conn, "tokens", "link_id")? {
+        conn.execute("ALTER TABLE tokens ADD COLUMN link_id TEXT", [])
+            .map_err(|e| format!("skin.db step 4 tokens: {e}"))?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS tokens_app_link ON tokens(app_service_id, link_id);")
+        .map_err(|e| format!("skin.db step 4 index: {e}"))
 }
 
 struct TokenRebuildRow {
@@ -2985,7 +3007,7 @@ pub fn list_tokens() -> Result<Vec<SkinTokenMeta>, String> {
             .prepare(
                 "SELECT t.id, t.name, t.key_prefix, t.caps, t.rooms, t.created_at, t.revoked_at
                  FROM tokens t
-                 WHERE t.session = 0
+                 WHERE t.session = 0 AND t.link_id IS NULL
                  ORDER BY t.created_at DESC",
             )
             .map_err(|e| format!("skin token list: {e}"))?;
@@ -3088,7 +3110,7 @@ pub fn set_token_rooms(id: &str, rooms: &[String]) -> Result<SkinTokenMeta, Stri
     with_conn(|conn| {
         let n = conn
             .execute(
-                "UPDATE tokens SET rooms = ?1 WHERE id = ?2",
+                "UPDATE tokens SET rooms = ?1 WHERE id = ?2 AND link_id IS NULL",
                 params![stored, id],
             )
             .map_err(|e| format!("skin token rooms: {e}"))?;
@@ -5111,6 +5133,8 @@ pub fn live_agents(ids: &[String]) -> Vec<SkinAgent> {
 /// `kind=app` grant **for the App the session is bound to** (S24-5; NULL
 /// on a pre-0.45.5 row = `host`) at the moment of use: a backstop behind the
 /// revocations the grant writers do. Platform passes (`session=0`) skip it.
+/// An App **link pass** (`link_id` set, runtime S14) is never returned
+/// here: it is valid only on its own link ([`link::resolve_link_pass`]).
 pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
     if !is_skin_token(presented_raw) || is_api_key_prefix(presented_raw) {
         return None;
@@ -5126,6 +5150,7 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                  LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?2)
+                   AND t.link_id IS NULL
                    AND (t.session = 0 OR (p.id IS NOT NULL AND EXISTS (
                         SELECT 1 FROM grants g
                         WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id

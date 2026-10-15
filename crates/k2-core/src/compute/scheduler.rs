@@ -54,6 +54,31 @@ pub const GRANT_PARALLEL_FULL: &str = "grant_parallel_full";
 /// The controller owner paused or is draining the node.
 pub const CONTROLLER_PAUSED: &str = "controller_paused";
 
+/// The job asks for more CPU or memory than the node's caps (its policy
+/// totals), so it can never start there. Never queued: refused at submit,
+/// failed if already queued, and never blocks the jobs behind it.
+pub const EXCEEDS_NODE_CAPS: &str = "exceeds_node_caps";
+
+/// `Some` when `job` can never start on the node behind `offer`, whatever
+/// else is running: its `--cpus` / `--mem` exceed the node's caps. A cap of
+/// 0 means the node didn't say, and never refuses.
+pub fn never_fits(offer: &Offer, job: &QueuedJob) -> Option<Refusal> {
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    if let Some(m) = job.mem_bytes.filter(|m| offer.caps.mem_bytes > 0 && *m > offer.caps.mem_bytes) {
+        return Some(Refusal::new(
+            EXCEEDS_NODE_CAPS,
+            format!("the job asks for {:.1} GB of memory; the node allows at most {:.1} GB", gb(m), gb(offer.caps.mem_bytes)),
+        ));
+    }
+    if let Some(c) = job.cpu_millis.filter(|c| offer.caps.cpu_millis > 0 && *c > offer.caps.cpu_millis) {
+        return Some(Refusal::new(
+            EXCEEDS_NODE_CAPS,
+            format!("the job asks for {:.2} CPUs; the node allows at most {:.2}", c as f64 / 1000.0, offer.caps.cpu_millis as f64 / 1000.0),
+        ));
+    }
+    None
+}
+
 fn ask(j: &QueuedJob) -> JobAsk<'_> {
     JobAsk {
         workspace_id: &j.workspace_id,
@@ -101,6 +126,18 @@ pub fn decide(
         wait_all(Refusal::new("node_offline", "the node is offline; the job starts when it reconnects"), &mut waiting);
         return Decision { place: None, waiting };
     };
+    // A job over the node's caps can never start: report it (the daemon
+    // fails it) and leave it out, so it never holds the jobs behind it.
+    jobs.retain(|j| match never_fits(offer, j) {
+        Some(r) => {
+            waiting.insert(j.id.clone(), (position[j.id.as_str()], r));
+            false
+        }
+        None => true,
+    });
+    if jobs.is_empty() {
+        return Decision { place: None, waiting };
+    }
 
     // Workspace rotation over a STABLE cyclic order (sorted ids), starting
     // just after the last-served workspace, so every workspace with work
@@ -174,9 +211,9 @@ fn grant_full() -> Refusal {
     Refusal::new(GRANT_PARALLEL_FULL, "this workspace already runs as many jobs on the node as its grant allows")
 }
 
-/// `--any`: among candidate nodes whose offer takes the job, prefer the
-/// one with a warm slot for `project_key` at `commit`, then any slot for
-/// the project, then the most free CPU. Pure.
+/// `--any`: among candidate nodes whose offer takes the job now, prefer
+/// the one with a warm slot for `project_key` at `commit`, then any slot
+/// for the project, then the most free CPU. Pure.
 pub fn pick_any<'a>(
     candidates: &'a [(String, Offer, Load)],
     project_key: Option<&str>,
@@ -188,25 +225,50 @@ pub fn pick_any<'a>(
         if refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(job)).is_some() {
             continue;
         }
-        let warmth = match project_key {
-            Some(pk) => {
-                let slots: Vec<_> = offer.slots.iter().filter(|s| s.project_key == pk && !s.busy).collect();
-                if commit.is_some() && slots.iter().any(|s| s.last_sha.as_deref() == commit) {
-                    2
-                } else if !slots.is_empty() {
-                    1
-                } else {
-                    0
-                }
-            }
-            None => 0,
-        };
-        let score = (warmth, offer.free.cpu_millis);
+        let score = (warmth(offer, project_key, commit), offer.free.cpu_millis);
         if best.is_none_or(|(_, b)| score > b) {
             best = Some((id.as_str(), score));
         }
     }
     best.map(|(id, _)| id)
+}
+
+/// `--any` when no candidate takes the job now: the node to queue it on.
+/// Only a node whose caps can fit the job (see [`never_fits`]) — a job
+/// queued where it can never start would hold every later job from its
+/// workspace there. Warmest first, then the biggest CPU cap. `None` = no
+/// candidate could ever run it. Pure.
+pub fn pick_any_queue<'a>(
+    candidates: &'a [(String, Offer, Load)],
+    project_key: Option<&str>,
+    commit: Option<&str>,
+    job: &QueuedJob,
+) -> Option<&'a str> {
+    let mut best: Option<(&str, (u8, u64))> = None;
+    for (id, offer, _) in candidates {
+        if never_fits(offer, job).is_some() {
+            continue;
+        }
+        let score = (warmth(offer, project_key, commit), offer.caps.cpu_millis);
+        if best.is_none_or(|(_, b)| score > b) {
+            best = Some((id.as_str(), score));
+        }
+    }
+    best.map(|(id, _)| id)
+}
+
+/// 2 = an idle slot for the project at `commit`, 1 = an idle slot for the
+/// project, 0 = none.
+fn warmth(offer: &Offer, project_key: Option<&str>, commit: Option<&str>) -> u8 {
+    let Some(pk) = project_key else { return 0 };
+    let slots: Vec<_> = offer.slots.iter().filter(|s| s.project_key == pk && !s.busy).collect();
+    if commit.is_some() && slots.iter().any(|s| s.last_sha.as_deref() == commit) {
+        2
+    } else if !slots.is_empty() {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -390,5 +452,71 @@ mod tests {
         assert_eq!(pick_any(&cands, Some("pk"), Some("c1"), &j), Some("warm"));
         assert_eq!(pick_any(&cands, None, None, &j), Some("big"));
         assert_eq!(pick_any(&cands[2..], None, None, &j), None);
+    }
+
+    fn small(mem_gb: u64) -> Offer {
+        let mut o = offer(2);
+        o.caps.mem_bytes = mem_gb << 30;
+        o.free.mem_bytes = mem_gb << 30;
+        o
+    }
+
+    fn mem_job(id: &str, ws: &str, at: i64, gb: u64) -> QueuedJob {
+        let mut j = job(id, ws, at);
+        j.mem_bytes = Some(gb << 30);
+        j
+    }
+
+    /// k2n1-m4 (2 GB caps) took a --mem 4G job from --any and held it at
+    /// position 1 forever; every later job from the workspace waited behind it.
+    #[test]
+    fn never_fits_compares_against_the_node_caps_not_free() {
+        assert_eq!(never_fits(&small(2), &mem_job("j", "A", 1, 4)).expect("over caps").code, EXCEEDS_NODE_CAPS);
+        assert_eq!(never_fits(&small(6), &mem_job("j", "A", 1, 4)), None);
+        // Busy (no free memory now) but within caps: it can start later.
+        let mut busy = small(6);
+        busy.free.mem_bytes = 0;
+        assert_eq!(never_fits(&busy, &mem_job("j", "A", 1, 4)), None);
+        let mut cpu = job("j", "A", 1);
+        cpu.cpu_millis = Some(16_000);
+        assert_eq!(never_fits(&offer(2), &cpu).expect("over cpu caps").code, EXCEEDS_NODE_CAPS);
+        // A node that reports no caps never refuses on them.
+        let mut unknown = small(0);
+        unknown.caps.cpu_millis = 0;
+        assert_eq!(never_fits(&unknown, &cpu), None);
+        assert_eq!(never_fits(&unknown, &mem_job("j", "A", 1, 4)), None);
+    }
+
+    #[test]
+    fn any_queues_only_where_the_job_can_ever_fit() {
+        let mut busy6 = small(6);
+        busy6.free.mem_bytes = 1 << 30;
+        let cands = vec![
+            ("k2n1-m4".to_string(), small(2), Load::default()),
+            ("k2n2-m1".to_string(), busy6, Load::default()),
+        ];
+        let j = mem_job("j", "A", 1, 4);
+        assert_eq!(pick_any(&cands, None, None, &j), None, "nothing takes it now");
+        assert_eq!(pick_any_queue(&cands, None, None, &j), Some("k2n2-m1"));
+        assert_eq!(pick_any_queue(&cands[..1], None, None, &j), None, "no node could ever run it");
+        // A job that fits now still goes where it runs now.
+        let fits = vec![("k2n1-m4".to_string(), small(2), Load::default()), ("k2n3-m1".to_string(), small(6), Load::default())];
+        assert_eq!(pick_any(&fits, None, None, &j), Some("k2n3-m1"));
+    }
+
+    #[test]
+    fn a_job_over_the_node_caps_never_blocks_the_jobs_behind_it() {
+        let q = vec![mem_job("big", "A", 1, 4), job("a2", "A", 2), job("a3", "A", 3)];
+        let d = decide(&q, None, &Load::default(), &cap1, Some(&small(2)), None);
+        assert_eq!(d.place.as_deref(), Some("a2"));
+        let (pos, why) = d.waiting.get("big").expect("big is reported");
+        assert_eq!((*pos, why.code.as_str()), (1, EXCEEDS_NODE_CAPS));
+        assert_eq!(d.waiting.get("a3").expect("a3 waits").1.code, "behind_older_job");
+        // Same for an exclusive job over the caps.
+        let mut ex = mem_job("ex", "A", 1, 4);
+        ex.exclusive = true;
+        let d = decide(&[ex, job("b1", "B", 2)], None, &Load::default(), &cap1, Some(&small(2)), None);
+        assert_eq!(d.place.as_deref(), Some("b1"));
+        assert_eq!(d.waiting.get("ex").expect("ex is reported").1.code, EXCEEDS_NODE_CAPS);
     }
 }

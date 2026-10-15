@@ -28,7 +28,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
-use super::live_tail::LiveSummary;
+use super::collect::LiveSummary;
 use super::{
     valid_agent_id, AgentRef, Author, Card, CardOption, CardState, Detection, ExtError,
     ExternalAgent, ExternalAgentProvider, ProviderStatus, SendReceipt, ThreadMessage, ThreadPage,
@@ -67,7 +67,7 @@ pub mod schema {
     /// `POST` + bearer: `{prompt, agentId, clientNonce}`. Runs a billed
     /// turn. UNTESTED by Grok Bot: the response body and what happens when
     /// the agent is busy. K2 treats any 2xx as accepted and shows the reply
-    /// when it lands in `store.db` (a stale agent: in the live tail).
+    /// when it lands in `store.db` (a stale agent: collected from the roster).
     pub const SEND_PROMPT_PATH: &str = "/api/sendPrompt";
     /// Whether K2 lets the human send while the agent is running a turn.
     /// Unknown on Grok Bot's side (queued / refused / interrupted), so K2
@@ -99,10 +99,10 @@ pub mod schema {
     pub const AGENT_NEWEST_ENTRY: &str = "newestEntryId";
     /// One-line preview of the latest message, current even when stale.
     pub const AGENT_LAST_PREVIEW: &str = "lastMessagePreview";
-    /// The latest message's id: the live tail's entry id (falls back to
+    /// The latest message's id: the collected line's entry id (falls back to
     /// [`AGENT_NEWEST_ENTRY`]).
     pub const AGENT_LAST_MESSAGE_ID: &str = "lastMessageId";
-    /// `{kind, text}` of the latest entry. `text` is the live tail's line
+    /// `{kind, text}` of the latest entry. `text` is the collected line
     /// (as much as the gateway gives; unverified whether it is ever cut).
     pub const AGENT_LAST_ENTRY: &str = "lastEntry";
     pub const LAST_ENTRY_KIND: &str = "kind";
@@ -332,7 +332,7 @@ impl GrokBot {
                 kind: KIND,
                 name: str_of(&profile, schema::AGENT_NAME)
                     .map(str::to_string)
-                    .unwrap_or_else(|| fallback_name(&id)),
+                    .unwrap_or_else(|| fallback_name_for(&id)),
                 title: str_of(&profile, schema::AGENT_TITLE).map(str::to_string),
                 avatar: None,
                 color: str_of(&profile, schema::AGENT_COLOR).map(str::to_string),
@@ -410,7 +410,7 @@ impl GrokBot {
                 kind: KIND,
                 name: str_of(o, schema::AGENT_NAME)
                     .map(str::to_string)
-                    .unwrap_or_else(|| fallback_name(&id)),
+                    .unwrap_or_else(|| fallback_name_for(&id)),
                 title: str_of(o, schema::AGENT_TITLE).map(str::to_string),
                 avatar: str_of(o, schema::AGENT_AVATAR)
                     .filter(|a| is_inline_image(a))
@@ -507,6 +507,105 @@ impl GrokBot {
                 .insert(key);
         }
         Some(found)
+    }
+
+    /// The highest `store.db` cursor right now (the collection start mark:
+    /// K2 collects only rows after it).
+    pub fn store_max_seq(&self, agent_id: &str) -> Result<StoreRead<i64>, ExtError> {
+        let Some(conn) = self.open_store(agent_id)? else {
+            return Ok(StoreRead::NoStore);
+        };
+        if !transcript_layout_known(&conn) {
+            return Ok(StoreRead::Unsupported(UNKNOWN_LAYOUT.into()));
+        }
+        match conn.query_row(
+            &format!(
+                "SELECT COALESCE(MAX({}), 0) FROM {}",
+                schema::SEQ_COLUMN,
+                schema::TRANSCRIPT_TABLE
+            ),
+            [],
+            |r| r.get::<_, i64>(0),
+        ) {
+            Ok(n) => Ok(StoreRead::Ok(n)),
+            Err(_) => Ok(StoreRead::Unsupported(UNREADABLE.into())),
+        }
+    }
+
+    /// Human-visible-candidate rows after cursor `after`, ascending.
+    /// `newest = Some(n)`: only the newest `n` of them (the window K2
+    /// re-reads for lines Grok Bot updates in place); else the oldest
+    /// `limit`.
+    pub fn store_lines(
+        &self,
+        agent_id: &str,
+        after: i64,
+        newest: Option<usize>,
+        limit: usize,
+    ) -> Result<StoreRead<Vec<StoreLine>>, ExtError> {
+        let Some(conn) = self.open_store(agent_id)? else {
+            return Ok(StoreRead::NoStore);
+        };
+        if !transcript_layout_known(&conn) {
+            return Ok(StoreRead::Unsupported(UNKNOWN_LAYOUT.into()));
+        }
+        let has_id = table_columns(&conn).iter().any(|c| c == schema::ID_COLUMN);
+        let id_sel = if has_id {
+            format!("CAST({} AS TEXT)", schema::ID_COLUMN)
+        } else {
+            "NULL".to_string()
+        };
+        let (order, n) = match newest {
+            Some(n) => ("DESC", n),
+            None => ("ASC", limit),
+        };
+        let sql = format!(
+            "SELECT {seq}, {id_sel}, CAST({entry} AS TEXT) FROM {t} WHERE {skip} AND {seq} > ?1 \
+             ORDER BY {seq} {order} LIMIT ?2",
+            seq = schema::SEQ_COLUMN,
+            entry = schema::ENTRY_COLUMN,
+            t = schema::TRANSCRIPT_TABLE,
+            skip = schema::SKIP_WHERE,
+        );
+        let rows: rusqlite::Result<Vec<(i64, Option<String>, String)>> = conn
+            .prepare(&sql)
+            .and_then(|mut stmt| {
+                stmt.query_map(rusqlite::params![after, n.max(1) as i64], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    ))
+                })?
+                .collect()
+            });
+        let Ok(mut rows) = rows else {
+            return Ok(StoreRead::Unsupported(UNREADABLE.into()));
+        };
+        if newest.is_some() {
+            rows.reverse();
+        }
+        Ok(StoreRead::Ok(
+            rows.into_iter()
+                .map(|(seq, id, entry)| {
+                    let client_nonce = serde_json::from_str::<Value>(&entry)
+                        .ok()
+                        .and_then(|v| {
+                            v.get(schema::CLIENT_NONCE)
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        });
+                    StoreLine {
+                        seq,
+                        entry_id: id
+                            .filter(|i| !i.is_empty())
+                            .unwrap_or_else(|| format!("seq-{seq}")),
+                        client_nonce,
+                        message: entry_to_message(seq, &entry),
+                    }
+                })
+                .collect(),
+        ))
     }
 
     /// Cheap stat-based change marker for an agent's chat (size + mtime of
@@ -706,7 +805,7 @@ impl ExternalAgentProvider for GrokBot {
         // the gateway delivers it to the live conversation wherever it runs
         // (seen on a real box 2026-10-15: `lastActivityAt` moved 3 s after a
         // K2 send while this computer's store did not). The caller records
-        // it in the live tail, since the local store won't show it.
+        // it in the bot's Thread (see `collect`).
         let agent_stale = agent.stale;
         if agent.working && !schema::SEND_WHILE_BUSY_ALLOWED {
             return Err(ExtError::BadInput("the agent is busy".into()));
@@ -764,8 +863,8 @@ pub fn k2_nonce() -> String {
 
 // ── live summary (stale agents) ─────────────────────────────────────────
 
-/// What `listAgents` says about an agent's latest entry, for the live tail
-/// ([`super::live_tail`]). Only the LATEST entry is ever visible this way.
+/// What `listAgents` says about an agent's latest entry, for collection
+/// ([`super::collect`]). Only the LATEST entry is ever visible this way.
 fn live_summary(
     agent_id: &str,
     o: &Map<String, Value>,
@@ -829,15 +928,45 @@ fn clean_entry_text(raw: &str) -> Option<String> {
 
 // ── transcript reading ──────────────────────────────────────────────────
 
-fn transcript_layout_known(conn: &Connection) -> bool {
+const UNKNOWN_LAYOUT: &str = "Grok Bot's chat store has a layout K2 doesn't know yet";
+const UNREADABLE: &str = "Grok Bot's chat store could not be read";
+
+/// What a read of an agent's `store.db` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreRead<T> {
+    /// No `store.db` (yet) for this agent.
+    NoStore,
+    /// A layout K2 doesn't know, or unreadable (the reason, for people).
+    Unsupported(String),
+    Ok(T),
+}
+
+/// One `store.db` row after the collection mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreLine {
+    pub seq: i64,
+    /// `transcript_entries.id` (the id `listAgents` names too), else
+    /// `seq-<n>`.
+    pub entry_id: String,
+    /// The row's `clientNonce` (a K2 send carries K2's mark).
+    pub client_nonce: Option<String>,
+    /// The chat line, or None when the row is not human-visible.
+    pub message: Option<ThreadMessage>,
+}
+
+fn table_columns(conn: &Connection) -> Vec<String> {
     let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({})", schema::TRANSCRIPT_TABLE))
     else {
-        return false;
+        return Vec::new();
     };
     let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) else {
-        return false;
+        return Vec::new();
     };
-    let names: Vec<String> = rows.flatten().collect();
+    rows.flatten().collect()
+}
+
+fn transcript_layout_known(conn: &Connection) -> bool {
+    let names = table_columns(conn);
     names.iter().any(|n| n == schema::SEQ_COLUMN) && names.iter().any(|n| n == schema::ENTRY_COLUMN)
 }
 
@@ -1055,7 +1184,7 @@ fn agent_ref(v: &Value) -> Option<AgentRef> {
         .get("name")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| fallback_name(&id));
+        .unwrap_or_else(|| fallback_name_for(&id));
     Some(AgentRef { id, name })
 }
 
@@ -1145,7 +1274,7 @@ fn sort_agents(v: &mut [ExternalAgent]) {
     });
 }
 
-fn fallback_name(id: &str) -> String {
+pub fn fallback_name_for(id: &str) -> String {
     format!("Grok Bot {}", id.chars().take(8).collect::<String>())
 }
 

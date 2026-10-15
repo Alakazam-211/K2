@@ -54,16 +54,45 @@ struct Env {
 }
 
 fn env() -> Env {
-    let gw = FakeGateway::start(json!([fixture::list_item(A, "Cortana")]));
+    env_for(A)
+}
+
+/// The test Thread store is shared by the whole test process: tests that
+/// read a bot's Thread use their own agent id.
+fn fresh() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn env_for(id: &str) -> Env {
+    let gw = FakeGateway::start(json!([fixture::list_item(id, "Cortana")]));
     let home = TempHome::new();
     let sand = FakeSandData::create(home.path(), gw.port);
-    sand.add_agent(A, "Cortana", "Chief of staff");
-    sand.add_sample_chat(A);
+    sand.add_agent(id, "Cortana", "Chief of staff");
+    sand.add_sample_chat(id);
     Env {
         gw,
         sand,
         _home: home,
     }
+}
+
+/// `(author, text)` of each message of a thread page.
+fn said(t: &Value) -> Vec<(String, String)> {
+    t["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .map(|m| {
+            (
+                m["author"].as_str().expect("author").to_string(),
+                m["text"].as_str().expect("text").to_string(),
+            )
+        })
+        .collect()
+}
+
+fn s(a: &str, t: &str) -> (String, String) {
+    (a.to_string(), t.to_string())
 }
 
 fn turn_on(show: bool, send: bool) {
@@ -121,8 +150,10 @@ fn detect_previews_path_and_names_for_admins_only() {
 }
 
 #[test]
-fn show_on_lists_with_tag_status_and_reads_thread() {
-    let e = env();
+fn show_on_lists_with_tag_status_and_reads_the_collected_thread() {
+    let id = fresh();
+    let id = id.as_str();
+    let e = env_for(id);
     turn_on(true, false);
     let b = body(&get("/cli/grokbots/list", login(Role::Member), &[]));
     assert_eq!(b["enabled"], json!(true));
@@ -131,28 +162,39 @@ fn show_on_lists_with_tag_status_and_reads_thread() {
     let a = &b["agents"][0];
     assert_eq!(
         (a["id"].clone(), a["kind"].clone(), a["name"].clone()),
-        (json!(A), json!("grokbot"), json!("Cortana"))
+        (json!(id), json!("grokbot"), json!("Cortana"))
     );
+    // The Thread starts when collection starts: no older store.db history.
     let t = body(&get(
         "/cli/grokbots/thread",
         login(Role::Member),
-        &[("agent", A), ("limit", "50")],
+        &[("agent", id), ("limit", "50")],
     ));
     assert_eq!(t["supported"], json!(true));
-    assert_eq!(t["messages"][0]["author"], json!("human"));
-    assert_eq!(t["messages"][0]["text"], json!("Can you check the build?"));
+    assert_eq!((t["addr"].clone(), t["conversationId"].clone()), (json!("gb:Cortana"), json!(format!("grokbot:{id}"))));
+    assert_eq!(t["messages"].as_array().expect("arr").len(), 1, "{t}");
+    assert_eq!(t["messages"][0]["system"], json!("start"));
+    assert!(t["messages"][0]["text"]
+        .as_str()
+        .expect("text")
+        .starts_with("K2 started collecting Cortana's messages here on "));
+    assert!(!t.to_string().contains("Can you check the build?"), "old history is not shown: {t}");
     let since = t["nextSince"].as_i64().expect("nextSince");
+    assert_eq!(since, 1);
     e.sand.add_entry(
-        A,
+        id,
         json!({"kind":"send-message","message":{"type":"text","content":"later"}}),
     );
     let t2 = body(&get(
         "/cli/grokbots/thread",
         Who::Owner,
-        &[("agent", A), ("since", &since.to_string())],
+        &[("agent", id), ("since", &since.to_string())],
     ));
-    assert_eq!(t2["messages"].as_array().expect("arr").len(), 1);
-    assert_eq!(t2["messages"][0]["text"], json!("later"));
+    assert_eq!(said(&t2), vec![s("agent", "later")]);
+    assert_eq!(t2["messages"][0]["seq"], json!(2));
+    // Read again: the same line is not collected twice.
+    let t3 = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", id)]));
+    assert_eq!(t3["messages"].as_array().expect("arr").len(), 2);
     let bad = get(
         "/cli/grokbots/thread",
         Who::Owner,
@@ -317,19 +359,24 @@ fn the_token_never_appears_in_any_response() {
 
 #[test]
 fn unknown_layout_is_a_soft_200() {
-    let e = env();
+    let id = fresh();
+    let id = id.as_str();
+    let e = env_for(id);
     turn_on(true, false);
-    std::fs::write(e.sand.agent_dir(A).join("store.db"), b"not sqlite").expect("w");
-    let _ = std::fs::remove_file(e.sand.agent_dir(A).join("store.db-wal"));
-    let _ = std::fs::remove_file(e.sand.agent_dir(A).join("store.db-shm"));
-    let r = get("/cli/grokbots/thread", Who::Owner, &[("agent", A)]);
+    std::fs::write(e.sand.agent_dir(id).join("store.db"), b"not sqlite").expect("w");
+    let _ = std::fs::remove_file(e.sand.agent_dir(id).join("store.db-wal"));
+    let _ = std::fs::remove_file(e.sand.agent_dir(id).join("store.db-shm"));
+    let r = get("/cli/grokbots/thread", Who::Owner, &[("agent", id)]);
     assert_eq!(r.status, "200 OK");
     assert_eq!(body(&r)["supported"], json!(false));
     // and the agent still lists
     assert_eq!(
         body(&get("/cli/grokbots/list", Who::Owner, &[]))["agents"][0]["id"],
-        json!(A)
+        json!(id)
     );
+    // A bot K2 never collected and the roster doesn't list: 404.
+    let r = get("/cli/grokbots/thread", Who::Owner, &[("agent", &fresh())]);
+    assert_eq!((r.status, body(&r)["error"].clone()), ("404 Not Found", json!("unknown_agent")));
 }
 
 fn sent_prompts(e: &Env) -> Vec<Value> {
@@ -421,27 +468,18 @@ fn stale_item(id: &str, name: &str, entry: &str, kind: &str, text: &str, seq: i6
     item
 }
 
-fn tail_ids(t: &Value) -> Vec<String> {
-    t["liveTail"]["entries"]
-        .as_array()
-        .expect("liveTail.entries")
-        .iter()
-        .map(|e| e["id"].as_str().expect("id").to_string())
-        .collect()
-}
-
 #[test]
-fn a_stale_bot_takes_sends_and_its_thread_adds_the_live_tail_after_the_old_history() {
-    // Own agent ids: the send limiter is process-wide.
-    const S: &str = "c0ffee00-0000-4000-8000-0000000000e5";
-    const N: &str = "c0ffee00-0000-4000-8000-0000000000e6";
-    let e = env();
-    e.sand.add_agent(S, "Grok", "x");
-    e.sand.add_sample_chat(S);
-    e.sand.add_agent(N, "Zed", "x");
-    e.sand.add_sample_chat(N);
-    let stale = stale_item(S, "Grok", "r1", "send-message", "Shipped the October report.", 5);
-    let mut current = fixture::list_item(N, "Zed");
+fn a_stale_bots_thread_collects_sends_and_new_latest_lines() {
+    // Own agent ids: the send limiter and the test Thread store are
+    // process-wide.
+    let sid = fresh();
+    let nid = fresh();
+    let (sid, nid) = (sid.as_str(), nid.as_str());
+    let e = env_for(sid);
+    e.sand.add_agent(nid, "Zed", "x");
+    e.sand.add_sample_chat(nid);
+    let stale = stale_item(sid, "Grok", "r1", "send-message", "Shipped the October report.", 5);
+    let mut current = fixture::list_item(nid, "Zed");
     current["newestEntryId"] = json!("s1");
     e.gw.set(|s| s.agents = json!([stale.clone(), current.clone()]));
     turn_on(true, true);
@@ -451,59 +489,121 @@ fn a_stale_bot_takes_sends_and_its_thread_adds_the_live_tail_after_the_old_histo
     assert_eq!((a["name"].clone(), a["stale"].clone()), (json!("Grok"), json!(true)), "{b}");
     assert_eq!(a["lastMessagePreview"], json!("Shipped the October report."));
 
-    // The thread: the old local history, then the live tail.
-    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
+    // Collection starts now: the bot's latest line then is history.
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
     assert_eq!(t["stale"], json!(true), "{t}");
-    assert_eq!(t["messages"][2]["text"], json!("Build is green."), "old history kept: {t}");
-    assert!(t["liveTail"]["sinceMs"].as_i64().expect("sinceMs") > 0);
-    assert_eq!(tail_ids(&t), vec!["r1"]);
-    let r1 = &t["liveTail"]["entries"][0];
-    assert_eq!(
-        (r1["author"].clone(), r1["text"].clone()),
-        (json!("agent"), json!("Shipped the October report."))
-    );
-    assert!(r1.get("viaK2").is_none() && r1.get("gapBefore").is_none(), "{r1}");
+    assert_eq!(t["messages"].as_array().expect("arr").len(), 1, "{t}");
+    assert_eq!(t["messages"][0]["system"], json!("start"));
 
-    // Sends go through to the live conversation (no 409 any more).
-    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": S, "text": "hi"}));
+    // Sends go through to the live conversation and land in the Thread.
+    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": sid, "text": "hi"}));
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let nonce = body(&r)["clientNonce"].as_str().expect("nonce").to_string();
     assert_eq!(sent_prompts(&e), vec![json!("[from the owner] hi")]);
-    // ...and show at once in the tail, as sent from K2.
-    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
-    assert_eq!(tail_ids(&t), vec!["r1".to_string(), format!("k2-{nonce}")]);
-    let own = &t["liveTail"]["entries"][1];
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
+    assert_eq!(said(&t)[1..].to_vec(), vec![s("human", "[from the owner] hi")]);
+    let own = &t["messages"][1];
     assert_eq!(
-        (own["author"].clone(), own["text"].clone(), own["viaK2"].clone()),
-        (json!("human"), json!("[from the owner] hi"), json!(true))
+        (own["viaK2"].clone(), own["entryId"].clone(), own["sentBy"]["kind"].clone()),
+        (json!(true), json!(format!("k2-{nonce}")), json!("owner"))
     );
-    // The row preview is the tail's newest line.
+    // The row preview is the newest collected line.
     let b = body(&get("/cli/grokbots/list", Who::Owner, &[]));
     assert_eq!(b["agents"][0]["lastMessagePreview"], json!("[from the owner] hi"));
 
     // Grok Bot reports our line (linked, not shown twice), then a reply
-    // after a counter jump (a line may be missing → gap marker).
-    e.gw.set(|s| s.agents[0] = stale_item(S, "Grok", "u1", "message", "[from the owner] hi", 6));
-    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
-    assert_eq!(tail_ids(&t).len(), 2, "{t}");
-    assert_eq!(t["liveTail"]["entries"][1]["gatewayId"], json!("u1"));
-    // The reply's activity time is after our send (lines are kept in time
-    // order).
-    let mut reply = stale_item(S, "Grok", "r2", "send-message", "Done: report sent.", 9);
+    // after a counter jump (a line may be missing → a gap line).
+    e.gw.set(|s| s.agents[0] = stale_item(sid, "Grok", "u1", "message", "[from the owner] hi", 6));
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
+    assert_eq!(t["messages"].as_array().expect("arr").len(), 2, "{t}");
+    let mut reply = stale_item(sid, "Grok", "r2", "send-message", "Done: report sent.", 9);
     reply["lastActivityAt"] = json!(now_ms() + 1_000);
     e.gw.set(|s| s.agents[0] = reply);
-    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
-    assert_eq!(tail_ids(&t), vec!["r1".to_string(), format!("k2-{nonce}"), "r2".to_string()]);
-    assert_eq!(t["liveTail"]["entries"][2]["gapBefore"], json!(true), "{t}");
-    assert_eq!(t["liveTail"]["entries"][2]["text"], json!("Done: report sent."));
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", sid)]));
+    assert_eq!(
+        said(&t)[1..].to_vec(),
+        vec![
+            s("human", "[from the owner] hi"),
+            s("system", k2_core::external_agents::collect::GAP_TEXT),
+            s("agent", "Done: report sent."),
+        ]
+    );
+    assert_eq!(t["messages"][2]["system"], json!("gap"));
 
-    // A current bot is unchanged: no stale flag, no tail.
-    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", N)]));
-    assert!(t.get("stale").is_none() && t.get("liveTail").is_none(), "{t}");
-    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": N, "text": "yo"}));
+    // A current bot: no stale flag; its sends are in its Thread too, and
+    // the row Grok Bot stores for it (our nonce) is linked, not repeated.
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", nid)]));
+    assert!(t.get("stale").is_none(), "{t}");
+    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": nid, "text": "yo"}));
     assert_eq!(r.status, "200 OK", "{}", r.body);
-    assert!(
-        k2_core::external_agents::live_tail::tail(N).is_none(),
-        "a current bot's sends are not recorded in a tail"
+    let n2 = body(&r)["clientNonce"].as_str().expect("nonce").to_string();
+    e.sand.add_entry(nid, json!({"kind":"message","id":"y1","role":"user","content":"[from the owner] yo","clientNonce": n2}));
+    e.sand.add_entry(nid, json!({"kind":"send-message","id":"y2","message":{"type":"text","content":"yo back"}}));
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", nid)]));
+    assert_eq!(
+        said(&t)[1..].to_vec(),
+        vec![s("human", "[from the owner] yo"), s("agent", "yo back")]
     );
 }
+
+#[test]
+fn gb_addresses_read_the_thread_for_people_only_and_never_post_or_inject() {
+    let id = fresh();
+    let id = id.as_str();
+    let e = env_for(id);
+    let q = |addr: &str| -> HashMap<String, String> {
+        [("addr".to_string(), addr.to_string())].into()
+    };
+    turn_on(false, false);
+    let r = thread_by_addr(Who::Owner, &q("gb:Cortana"));
+    assert_eq!(body(&r)["error"], json!("grokbots_off"));
+    turn_on(true, true);
+    for who in [Who::Owner, login(Role::Member), login(Role::Admin)] {
+        let r = thread_by_addr(who.clone(), &q("gb:Cortana"));
+        assert_eq!(r.status, "200 OK", "{who:?}: {}", r.body);
+        let b = body(&r);
+        assert_eq!(
+            (b["collection"].clone(), b["addr"].clone(), b["conversation_id"].clone()),
+            (json!("thread"), json!("gb:Cortana"), json!(format!("grokbot:{id}")))
+        );
+        assert_eq!(b["items"][0]["doc"]["external"]["origin"], json!("system"));
+        assert_eq!(b["items"][0]["doc"]["from"], json!("k2"));
+    }
+    // By id, any case.
+    assert_eq!(thread_by_addr(Who::Owner, &q(&format!("GB:{}", id.to_uppercase()))).status, "200 OK");
+    assert_eq!(thread_by_addr(Who::Owner, &q("gb:cortana")).status, "200 OK");
+    for who in [agent(), shell(), Who::Wrong, Who::Invalid] {
+        let r = thread_by_addr(who.clone(), &q("gb:Cortana"));
+        assert_eq!(body(&r)["error"], json!("grokbots_humans_only"), "{who:?}");
+    }
+    let r = thread_by_addr(Who::Owner, &q("gb:Nobody"));
+    assert_eq!((r.status, body(&r)["error"].clone()), ("404 Not Found", json!("unknown_agent")));
+    let (t1, t2) = (fresh(), fresh());
+    e.gw.set(|s| {
+        s.agents = json!([
+            fixture::list_item(id, "Cortana"),
+            fixture::list_item(&t1, "Twin"),
+            fixture::list_item(&t2, "Twin")
+        ])
+    });
+    let r = thread_by_addr(Who::Owner, &q("gb:Twin"));
+    assert_eq!((r.status, body(&r)["error"].clone()), ("409 Conflict", json!("ambiguous_agent")));
+
+    // The workspace overlay path (an agent's cell socket, posts, cards)
+    // refuses gb: outright: nothing is posted, nothing reaches a PTY.
+    let r = crate::overlay_routes::dispatch("/cli/thread", &q("gb:Cortana")).expect("routed");
+    assert_eq!((r.status, body(&r)["error"]["code"].clone()), ("403 Forbidden", json!("grokbots_humans_only")));
+    let r = crate::overlay_routes::dispatch_post(
+        "/cli/thread/post",
+        &HashMap::new(),
+        json!({"addr": "gb:Cortana", "text": "gb-inject-probe", "via": "compose"}).to_string().as_bytes(),
+    );
+    assert_eq!((r.status, body(&r)["error"]["code"].clone()), ("403 Forbidden", json!("grokbots_humans_only")));
+    assert!(
+        crate::overlay_routes::recorded_injects().iter().all(|l| !l.contains("gb-inject-probe")),
+        "no PTY inject"
+    );
+    let b = body(&thread_by_addr(Who::Owner, &q("gb:Cortana")));
+    assert!(!b.to_string().contains("gb-inject-probe"), "nothing posted: {b}");
+}
+

@@ -8,12 +8,13 @@
 //! gateway is down it falls back to a stat of `store.db` + WAL (size and
 //! mtime; no file is opened).
 //!
-//! For a **stale** agent (live conversation outside this computer) it also
-//! records each new latest entry the roster reports into the agent's live
-//! tail (`k2_core::external_agents::live_tail`). That is only what the
-//! roster summary exposes — the latest entry at each poll — so a burst of
-//! several lines between two polls shows only the last one (marked as a
-//! possible gap when the snapshot counter jumped).
+//! Each poll also COLLECTS every bot's new messages into its K2 Thread
+//! (`k2_core::external_agents::collect`), headless: new `store.db` rows
+//! after the collection start (read when the chat marker moved), and for a
+//! **stale** agent (live conversation outside this computer) each new
+//! latest entry the roster reports. The roster only exposes the latest
+//! entry at each poll, so a burst between two polls shows only its last
+//! line (after a gap line when the snapshot counter jumped).
 //!
 //! It does nothing — reads nothing under `~/sand-data` — while
 //! Settings → 3rd Party Bots → Grok Bot → Show is off.
@@ -23,7 +24,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use k2_core::external_agents::grokbot::GrokBot;
-use k2_core::external_agents::{live_tail, settings, ExtError, ExternalAgentProvider};
+use k2_core::external_agents::{collect, settings, ExtError, ExternalAgentProvider};
 use k2_core::log_debug;
 
 use crate::session_events::{emit, SessionEvent};
@@ -63,15 +64,15 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
     };
     let status = p.status();
     let now = chrono::Utc::now().timestamp_millis();
-    let mut tail_moved = Vec::new();
-    for a in list.iter().filter(|a| a.stale) {
-        let Some(live) = &a.live else { continue };
-        if live_tail::observe(&a.id, live, now, |id| {
-            p.store_has_entry(&a.id, id) == Some(true)
-        }) {
-            tail_moved.push(a.id.clone());
+    let names: HashMap<String, String> = list.iter().map(|a| (a.id.clone(), a.name.clone())).collect();
+    // The 0.45.7 live tail file: moved into Threads once.
+    let mut tail_moved = match collect::migrate_legacy_tail(p, &names) {
+        Ok(v) => v,
+        Err(e) => {
+            log_debug!("[grokbots] old live tail not migrated yet: {e}");
+            Vec::new()
         }
-    }
+    };
     let mut revs = HashMap::new();
     let mut roster_parts = vec![format!(
         "busy={}:{:?}:{}",
@@ -83,6 +84,15 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
         } else {
             a.rev.clone()
         };
+        // Collect into the bot's Thread: store rows only when its chat
+        // marker moved (or on first sight), the roster's latest entry
+        // every poll.
+        let read_store = seen.revs.get(&a.id) != Some(&rev);
+        match collect::sync_agent(p, a, read_store, now) {
+            Ok(s) if s.changed => tail_moved.push(a.id.clone()),
+            Ok(_) => {}
+            Err(e) => log_debug!("[grokbots] collect {}: {e}", a.id),
+        }
         revs.insert(a.id.clone(), rev);
         roster_parts.push(format!(
             "{}|{}|{:?}|{}|{}|{}|{}|{}|{:?}|{:?}",
@@ -101,7 +111,7 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
     let roster_key = roster_parts.join("\n");
     let mut change = Change::default();
     if seen.primed {
-        // A new live-tail line also changes the row's preview.
+        // A newly collected line may also change the row's preview.
         change.roster = roster_key != seen.roster_key || !tail_moved.is_empty();
         let mut agents: Vec<String> = revs
             .iter()
@@ -165,8 +175,8 @@ pub fn nudge_roster() {
     wake_now();
 }
 
-/// `agent`'s chat changed outside a poll (a send recorded in its live
-/// tail): tell clients now (roster too: the row preview moved).
+/// `agent`'s Thread changed outside a poll (a send recorded, a read that
+/// collected): tell clients now (roster too: the row preview may move).
 pub fn announce_agent(agent: &str) {
     announce(&Change {
         roster: true,
@@ -224,17 +234,23 @@ mod tests {
     use k2_core::external_agents::grokbot::fixture::{self, FakeGateway, FakeSandData};
     use serde_json::json;
 
-    const A: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2346";
+    // Every test uses its own agent id: the test Thread store is shared
+    // by the whole test process.
+    fn fresh() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
 
     #[test]
     fn tick_primes_then_reports_chat_and_status_changes() {
-        let gw = FakeGateway::start(json!([fixture::list_item(A, "Cortana")]));
+        let a = fresh();
+        let a = a.as_str();
+        let gw = FakeGateway::start(json!([fixture::list_item(a, "Cortana")]));
         let home = crate::test_support::TempHome::new();
         let sand = FakeSandData::create(home.path(), gw.port);
-        sand.add_agent(A, "Cortana", "x");
+        sand.add_agent(a, "Cortana", "x");
         // The entry the gateway will name as newest is in store.db (else
         // the agent would turn stale, a roster change).
-        sand.add_entry(A, json!({"kind":"message","id":"e1","role":"user","content":"hi"}));
+        sand.add_entry(a, json!({"kind":"message","id":"e1","role":"user","content":"hi"}));
         let p = GrokBot::for_current_user();
         let mut seen = Seen::default();
         assert!(tick(&p, &mut seen).is_empty(), "first poll only primes");
@@ -243,7 +259,7 @@ mod tests {
         // newestEntryId moves → that agent's chat changed
         gw.set(|s| s.agents[0]["newestEntryId"] = json!("e1"));
         let c = tick(&p, &mut seen);
-        assert_eq!(c.agents, vec![A.to_string()]);
+        assert_eq!(c.agents, vec![a.to_string()]);
         assert!(!c.roster);
 
         // the agent starts a turn → roster/status changed
@@ -264,11 +280,22 @@ mod tests {
         assert!(tick(&p, &mut seen).roster);
     }
 
+    /// The bodies of a bot's collected Thread lines.
+    fn thread_bodies(id: &str) -> Vec<String> {
+        collect::page(id, None, None, 0)
+            .expect("page")
+            .items
+            .iter()
+            .map(|i| i.doc.body.clone().unwrap_or_default())
+            .collect()
+    }
+
     #[test]
-    fn tick_records_a_stale_agents_new_latest_lines_in_its_live_tail() {
-        use k2_core::external_agents::live_tail;
+    fn tick_collects_a_stale_agents_new_latest_lines_into_its_thread() {
+        // Its own id: the test Thread store is shared by the process.
+        let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp_millis();
-        let mut item = fixture::list_item(A, "Grok");
+        let mut item = fixture::list_item(&id, "Grok");
         item["lastActivityAt"] = json!(now - 5_000);
         item["localActivityAt"] = json!(now - 40 * 86_400_000_i64);
         item["lastMessageId"] = json!("r1");
@@ -277,46 +304,66 @@ mod tests {
         let gw = FakeGateway::start(json!([item]));
         let home = crate::test_support::TempHome::new();
         let sand = FakeSandData::create(home.path(), gw.port);
-        sand.add_agent(A, "Grok", "x");
+        sand.add_agent(&id, "Grok", "x");
         let p = GrokBot::for_current_user();
         let mut seen = Seen::default();
         assert!(tick(&p, &mut seen).is_empty(), "first poll only primes");
-        let t = live_tail::tail(A).expect("followed from the first poll");
-        assert_eq!(t.entries.len(), 1);
-        assert_eq!(t.entries[0].text, "first reply");
+        let t = thread_bodies(&id);
+        assert_eq!(t.len(), 1, "collection starts; the latest line then is history: {t:?}");
+        assert!(t[0].starts_with("K2 started collecting Grok's messages here on "), "{t:?}");
 
-        // A new latest line → the tail grows and clients hear about it.
+        // A new latest line → collected, and clients hear about it.
         gw.set(|s| {
             s.agents[0]["lastMessageId"] = json!("r2");
             s.agents[0]["lastEntry"] = json!({"kind": "send-message", "text": "second reply"});
             s.agents[0]["snapshotSeq"] = json!(4);
         });
         let c = tick(&p, &mut seen);
-        assert_eq!(c.agents, vec![A.to_string()]);
+        assert_eq!(c.agents, vec![id.clone()]);
         assert!(c.roster, "the row preview moved");
-        let t = live_tail::tail(A).expect("tail");
-        let texts: Vec<&str> = t.entries.iter().map(|e| e.text.as_str()).collect();
-        assert_eq!(texts, vec!["first reply", "second reply"]);
-        assert!(!t.entries[1].gap_before);
+        assert_eq!(thread_bodies(&id)[1..].to_vec(), vec!["second reply".to_string()]);
 
         // Nothing new → nothing announced, nothing added.
         assert!(tick(&p, &mut seen).is_empty());
-        assert_eq!(live_tail::tail(A).expect("tail").entries.len(), 2);
+        assert_eq!(thread_bodies(&id).len(), 2);
+    }
+
+    #[test]
+    fn tick_collects_every_new_store_row_of_a_current_agent_headless() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let gw = FakeGateway::start(json!([fixture::list_item(&id, "Cortana")]));
+        let home = crate::test_support::TempHome::new();
+        let sand = FakeSandData::create(home.path(), gw.port);
+        sand.add_agent(&id, "Cortana", "x");
+        sand.add_sample_chat(&id);
+        let p = GrokBot::for_current_user();
+        let mut seen = Seen::default();
+        tick(&p, &mut seen);
+        // Two lines land between two polls: both are collected.
+        sand.add_entry(&id, json!({"kind":"message","id":"q1","role":"user","content":"one"}));
+        sand.add_entry(&id, json!({"kind":"send-message","id":"q2","message":{"type":"text","content":"two"}}));
+        gw.set(|s| s.agents[0]["newestEntryId"] = json!("q2"));
+        let c = tick(&p, &mut seen);
+        assert_eq!(c.agents, vec![id.clone()]);
+        let t = thread_bodies(&id);
+        assert_eq!(t[1..].to_vec(), vec!["one".to_string(), "two".to_string()], "no older history: {t:?}");
     }
 
     #[test]
     fn tick_falls_back_to_store_stat_when_the_gateway_is_down() {
+        let a = fresh();
+        let a = a.as_str();
         let home = crate::test_support::TempHome::new();
         let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = closed.local_addr().expect("addr").port();
         drop(closed);
         let sand = FakeSandData::create(home.path(), port);
-        sand.add_agent(A, "Cortana", "x");
+        sand.add_agent(a, "Cortana", "x");
         let p = GrokBot::for_current_user();
         let mut seen = Seen::default();
         let _ = tick(&p, &mut seen);
-        sand.add_entry(A, json!({"kind":"message","role":"user","content":"new"}));
+        sand.add_entry(a, json!({"kind":"message","role":"user","content":"new"}));
         let c = tick(&p, &mut seen);
-        assert_eq!(c.agents, vec![A.to_string()], "store stat moved");
+        assert_eq!(c.agents, vec![a.to_string()], "store stat moved");
     }
 }

@@ -1333,8 +1333,23 @@ fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R
 }
 
 fn source_for(ws: &Ws, v: &serde_json::Value, job_id: &str, warnings: &mut Vec<String>) -> R<Src> {
-    let root = compute::sync::repo_root(Path::new(&ws.path))
+    let ws_root = compute::sync::repo_root(Path::new(&ws.path))
         .map_err(|_| no(codes::NOT_A_REPO, 400, format!("workspace {} isn't a git repo; pass --no-source to run without code", ws.handle)))?;
+    // Run from a git worktree inside the workspace (e.g.
+    // .claude/worktrees/x): HEAD and --dirty come from that checkout, not
+    // the main one. Objects are shared, so bundling by commit still works
+    // from the workspace repo.
+    let root = match s(v, "repoDir").filter(|d| !d.is_empty()) {
+        Some(d) => match compute::sync::caller_checkout(Path::new(&ws.path), &ws_root, Path::new(d)) {
+            Ok(Some(wt)) => wt,
+            Ok(None) => ws_root,
+            Err(e) => {
+                warnings.push(format!("{e}; using workspace {}'s own checkout", ws.handle));
+                ws_root
+            }
+        },
+        None => ws_root,
+    };
     let dirty = b(v, "dirty") == Some(true);
     let rev = s(v, "sha").unwrap_or("HEAD");
     if dirty && rev != "HEAD" {
@@ -1704,5 +1719,61 @@ mod tests {
         assert!(valid_cwd("crates/k2-core"));
         assert!(!valid_cwd("/abs"));
         assert!(!valid_cwd("a/../../b"));
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn source_comes_from_the_callers_worktree_inside_the_workspace() {
+        let d = std::env::temp_dir().join(format!("k2-compute-src-wt-{}-{}", std::process::id(), compute::now()));
+        let _ = std::fs::remove_dir_all(&d);
+        let r = d.join("ws");
+        std::fs::create_dir_all(&r).expect("mkdir");
+        git(&r, &["init", "-q"]);
+        std::fs::write(r.join("a.txt"), "one\n").expect("write");
+        git(&r, &["add", "."]);
+        git(&r, &["commit", "-q", "-m", "one"]);
+        let main_head = git(&r, &["rev-parse", "HEAD"]);
+        let wt = r.join(".claude/worktrees/x");
+        git(&r, &["worktree", "add", "-q", "-b", "wt", wt.to_str().expect("utf8")]);
+        std::fs::write(wt.join("a.txt"), "two\n").expect("write");
+        git(&wt, &["commit", "-q", "-am", "two"]);
+        let wt_head = git(&wt, &["rev-parse", "HEAD"]);
+        assert_ne!(wt_head, main_head);
+        let ws = Ws { id: "ws-test".into(), path: r.to_str().expect("utf8").into(), handle: "ws".into() };
+        let commit_for = |v: serde_json::Value| -> (String, Vec<String>) {
+            let mut warnings = vec![];
+            match source_for(&ws, &v, "job-test", &mut warnings) {
+                Ok(src) => (src.commit, warnings),
+                Err(_) => panic!("source_for refused {v}"),
+            }
+        };
+        // From the worktree: its HEAD, not the main checkout's.
+        let (c, w) = commit_for(serde_json::json!({ "repoDir": wt.to_str().expect("utf8") }));
+        assert_eq!(c, wt_head);
+        assert!(w.iter().all(|x| !x.contains("own checkout")), "{w:?}");
+        // From the main checkout, or no repoDir (older CLI): the main HEAD.
+        assert_eq!(commit_for(serde_json::json!({ "repoDir": r.to_str().expect("utf8") })).0, main_head);
+        assert_eq!(commit_for(serde_json::json!({})).0, main_head);
+        // A repo outside the workspace: refused as a source, with a note.
+        let other = d.join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        git(&other, &["init", "-q"]);
+        let (c, w) = commit_for(serde_json::json!({ "repoDir": other.to_str().expect("utf8") }));
+        assert_eq!(c, main_head);
+        assert!(w.iter().any(|x| x.contains("outside the workspace")), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

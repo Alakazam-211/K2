@@ -10683,9 +10683,12 @@ cmd_compute_run() {
         echo "usage: name a node or pass --any (k2 compute nodes)" >&2
         exit 2
     fi
-    local cwd=""
+    local cwd="" repo_dir=""
     cwd="$(git rev-parse --show-prefix 2>/dev/null || true)"
     cwd="${cwd%/}"
+    # The checkout we're in: from a git worktree inside the workspace the
+    # daemon takes HEAD (and --dirty) from it, not the main checkout.
+    repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
     local client
     client="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
     local argv_json labels_json env_json
@@ -10723,7 +10726,7 @@ print(json.dumps(out))' "${needs[@]}")"
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
-        K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client")"
+        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0

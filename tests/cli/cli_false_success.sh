@@ -142,6 +142,18 @@ set -e
 assert_eq "workspace triage /tmp/nope exit 2" "$triage_rc" "2"
 assert_contains "triage usage mentions inbox" "$triage_out" "inbox"
 
+# ── 4b. vault delivery must not drop --env-name / --file-name ────────
+echo "== vault delivery --env-name / --file-name =="
+for flag in --env-name --file-name; do
+    set +e
+    vd_out="$(run_k2 vault delivery mini-pw env "$flag" MINI_PW 2>&1)"
+    vd_rc=$?
+    set -e
+    assert_eq "vault delivery $flag exit 2" "$vd_rc" "2"
+    assert_contains "vault delivery $flag points at grant" "$vd_out" "k2 vault grant mini-pw --to ws:<name>"
+    assert_contains "vault delivery $flag names the flag" "$vd_out" "$flag MINI_PW"
+done
+
 # ── 5. workspace --help ──────────────────────────────────────────────
 echo "== workspace --help =="
 set +e

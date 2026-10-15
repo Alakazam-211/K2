@@ -13445,6 +13445,7 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault rotate NAME < value             a new version
   k2 vault hosts NAME --add <host> | --remove <host>
   k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]
+                                           (no --env-name here: names live on grants)
   k2 vault grant NAME --to ws:<name>|ws:*|session:<id>|service:<label> [--as <d>] [--env-name X]
   k2 vault revoke NAME --from <who>        (or --grant <id>)
   k2 vault disable|enable NAME             destroy NAME --yes
@@ -13950,6 +13951,15 @@ print("use: " + (v.get("use") or ""))'
             ;;
         delivery)
             [ -n "$name" ] && [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault delivery NAME fetch|file|env|api [--ceiling <d>]" >&2; exit 2; }
+            # A secret has no env/file name of its own; only a grant does.
+            # Refuse rather than drop the flag and print success.
+            if [ -n "$env_name" ] || [ -n "$file_name" ]; then
+                local nflag="--env-name" nval="$env_name" nas="env"
+                [ -n "$env_name" ] || { nflag="--file-name"; nval="$file_name"; nas="file"; }
+                echo "usage: k2 vault delivery doesn't take $nflag; a secret has no $nas name of its own. Name it on a grant:" >&2
+                echo "  k2 vault grant ${name} --to ws:<name> --as ${nas} ${nflag} ${nval}" >&2
+                exit 2
+            fi
             local dj
             dj="$(python3 -c 'import json,sys; o={"delivery": sys.argv[1]};
 if sys.argv[2]: o["ceiling"]=sys.argv[2]

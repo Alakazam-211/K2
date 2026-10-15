@@ -12176,7 +12176,7 @@ except Exception:
     fi
     case "$code" in
         person_only|owner_only|confirm_required|lan_owner_only|field_person_only)
-            echo "This needs a person. Run it outside K2, or use Settings → Gardens → Data Sources." >&2
+            echo "This needs a person. Run it outside K2, or use Settings → Gardens → External Data." >&2
             exit 3 ;;
         source_not_found|trigger_not_found|removed) exit 4 ;;
         *) exit 1 ;;
@@ -12670,7 +12670,7 @@ _sources_create() {
     printf '%s' "$_SRC_BODY" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-how = {"one_click": "one click in Settings → Gardens → Data Sources (or k2 sources approve)",
+how = {"one_click": "one click in Settings → Gardens → External Data (or k2 sources approve)",
        "needs_confirm": "a person binds the secret with a confirm (Settings, or k2 sources approve --secret)",
        "owner_only": "the server owner approves it"}.get(d.get("approval"), "")
 print("%s: %s" % (d["name"], d["status"]))
@@ -13058,7 +13058,7 @@ print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>"
 _sources_b2_confirm() {
     local action="$1" id="$2" label="$3"
     if [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
-        echo "This needs a person. Run it outside K2, or use Settings → Gardens → Data Sources." >&2
+        echo "This needs a person. Run it outside K2, or use Settings → Gardens → External Data." >&2
         exit 3
     fi
     _vault_confirm_token "$action" "$id" "$label"
@@ -13341,7 +13341,7 @@ import json, sys
 v = json.load(sys.stdin)
 print("trigger %s: %s" % (v["id"], v["status"]))
 if v["status"] == "proposed":
-    print("A person approves it in Settings → Gardens → Data Sources (or k2 sources trigger approve %s)." % v["id"][:8])'
+    print("A person approves it in Settings → Gardens → External Data (or k2 sources trigger approve %s)." % v["id"][:8])'
             fi ;;
         edit)
             local set
@@ -13385,7 +13385,7 @@ THE LOOP
      Fetch once, see the shape (pointer · type · sample). Nothing is saved.
   2. k2 sources propose --name fleet --label "Fleet" --target a=https://… …
      (or --preset k2-fleet --preset-arg boxes=a,b). It waits as "proposed".
-  3. A person approves it: one click in Settings → Gardens → Data Sources
+  3. A person approves it: one click in Settings → Gardens → External Data
      for a secretless public source; a vault confirm when it uses a secret.
   4. k2 sources trigger propose --source fleet --on item_went_crit
      wakes YOU when a box goes red. A person approves it too.
@@ -45045,7 +45045,7 @@ except Exception:
     fi
     case "$code" in
         person_only|owner_only)
-            echo "This needs a person. Run it outside K2, or use Settings → Gardens → Widget data." >&2
+            echo "This needs a person. Run it outside K2, or use Settings → Gardens → Local Data." >&2
             exit 3 ;;
         not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
         space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot) exit 4 ;;
@@ -45150,7 +45150,7 @@ Each custom widget has its own keyspace (data:<widget>) that it reads and
 writes with k2.store, and that agents you allow read and write with
 `k2 store --widget`. These commands are for you, the person: inside a K2
 terminal they're refused (run them outside K2, or use Settings → Gardens →
-Widget data).
+Local Data).
 
 USAGE
   k2 zen data list [--json]
@@ -46780,7 +46780,7 @@ WHO MAY TOUCH IT
   its data; made by an agent = that agent's grants; nobody signed this
   version = no data (author_unknown). `k2 zen validate --widget <w>` signs
   a clean version as whoever runs it. Agents need a grant from the person
-  (Settings → Gardens → Widget data, or k2 zen data grant): per agent (a
+  (Settings → Gardens → Local Data, or k2 zen data grant): per agent (a
   wall), per K2 project (a convenience: any agent can join a project) or
   per key prefix. A grant admin grants inside its own prefix.
 
@@ -46833,7 +46833,7 @@ fields), a batch id per gesture, and subscribe for live changes.
    The widget shows each change at once, labelled with the agent's handle.
 
 If the widget says nobody signed it: k2 zen validate --widget board-lite,
-or It's mine in Settings → Gardens → Widget data. Data and grants: k2 zen
+or It's mine in Settings → Gardens → Local Data. Data and grants: k2 zen
 guide services.
 EOF
 }
@@ -47858,7 +47858,7 @@ if err is not None:
     code = err.get("code") if isinstance(err, dict) else err
     msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
     if code in ("owner_only", "zen_local_only"):
-        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → Widget data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
+        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → Local Data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
     print("Error: %s" % msg, file=sys.stderr)
     sys.exit(4 if code in ("unknown_widget", "not_found") else 1)

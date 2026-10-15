@@ -124,7 +124,7 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  with what: Admin Access, User Access, User Templates, API Keys, Vault;
  *  the login log stays in Logs → Access Audit, which each Access page links
  *  to) and Network (how this server is reached: Tunnel, Custom Domains,
- *  Connected Servers, K2 Companion). Data Sources moved into Gardens;
+ *  Connected Servers, K2 Companion). External Data (was Data Sources) moved into Gardens;
  *  where the Gardens group is hidden (web, Windows) it is Network's last
  *  leaf, so it stays reachable. Local Grok Bots is 3rd Party Bots → Grok
  *  Bot. Old ids are unchanged, so deep links land on the same pages.
@@ -132,7 +132,7 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
  *  their own section … like K2 Server and Logs"): Gardens (list, lock,
- *  sync, theme, folder), Widget data, then Data Sources. Tickets sits directly beneath Projects
+ *  sync, theme, folder), Local Data, then External Data (0.45.7, Rosson: was Widget data and Data Sources). Tickets sits directly beneath Projects
  *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
@@ -188,8 +188,8 @@ export function settingsNav({
             title: 'Gardens',
             items: [
               { id: 'zen-gardens', label: 'Gardens' },
-              { id: 'zen-widget-data', label: 'Widget data' },
-              { id: 'data-sources', label: 'Data Sources' },
+              { id: 'zen-widget-data', label: 'Local Data' },
+              { id: 'data-sources', label: 'External Data' },
             ],
           },
         ] satisfies NavBlock[])
@@ -202,8 +202,8 @@ export function settingsNav({
         { id: 'domains', label: 'Custom Domains' },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'companion', label: 'K2 Companion' },
-        // No Gardens group here (web, Windows): Data Sources stays reachable.
-        ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'Data Sources' }]),
+        // No Gardens group here (web, Windows): External Data stays reachable.
+        ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),
       ],
     },
     {

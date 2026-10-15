@@ -336,10 +336,10 @@ impl DataError {
                 "you have no grant for this key. Ask the person (k2 feedback or the Thread), or a grant admin".into()
             }
             DataError::AuthorUnknown => {
-                "nobody signed this widget version. Run `k2 zen validate --widget <name>`, or click It's mine in Settings → Gardens → Widget data".into()
+                "nobody signed this widget version. Run `k2 zen validate --widget <name>`, or click It's mine in Settings → Gardens → Local Data".into()
             }
             DataError::PersonOnly => {
-                "this needs a person. Run it outside K2, or use Settings → Gardens → Widget data".into()
+                "this needs a person. Run it outside K2, or use Settings → Gardens → Local Data".into()
             }
             DataError::SpaceFull { what } => format!("this widget's data is full ({what})"),
             DataError::StoreFull => "Garden data on this computer is full (512 MiB)".into(),

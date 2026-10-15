@@ -1,4 +1,4 @@
-// Shared bits for Settings → Gardens → Data Sources (contract-sources-v1
+// Shared bits for Settings → Gardens → External Data (contract-sources-v1
 // §8). Owner: B2. Pure helpers (no React) so they're easy to test.
 //
 // Times are SECONDS. Ages come from the server's own clock
@@ -44,7 +44,7 @@ export function sourcesErrorOf(e: unknown): SourcesError | null {
 export function sourcesErrorText(e: unknown): string {
   const info = sourcesErrorOf(e)
   if (info) {
-    if (info.code === 'not_built') return 'This part of data sources is not on this server yet.'
+    if (info.code === 'not_built') return 'This part of External Data is not on this server yet.'
     if (info.code === 'person_only') return 'This needs a person (Owner or Admin) on this server.'
     if (info.code === 'cap_not_granted') return 'Your login on this server can’t see that source (admins only).'
     if (info.code === 'role_required') return 'Your login on this server can’t do that.'

@@ -102,7 +102,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'project-groups': 'Projects',
   tickets: 'Tickets',
   'zen-gardens': 'Gardens',
-  'zen-widget-data': 'Widget data',
+  'zen-widget-data': 'Local Data',
   'context-catalog': 'Context Catalog',
   /** @deprecated — content under General → Workspaces */
   'agent-skills': 'General',
@@ -129,7 +129,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'user-templates': 'User Templates',
   'api-tokens': 'API Keys',
   vault: 'Vault',
-  'data-sources': 'Data Sources',
+  'data-sources': 'External Data',
   'local-grokbots': 'Grok Bot',
   'bots-hermes': 'Hermes',
   'bots-instinct': 'Instinct',

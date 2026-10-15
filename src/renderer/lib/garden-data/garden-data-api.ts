@@ -30,7 +30,7 @@ import type {
   GardenSpacesResponse,
 } from './garden-data-types'
 
-// ── the person's views (Settings → Gardens → Widget data) ─────────
+// ── the person's views (Settings → Gardens → Local Data) ──────────
 
 export function listGardenSpaces(): Promise<GardenSpacesResponse> {
   return daemonCliGet<GardenSpacesResponse>(zenLocalScope(), 'zen/data/spaces')

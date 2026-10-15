@@ -1,7 +1,7 @@
 // Settings → Gardens → Gardens (prd-zen-gardens-v1 item 17;
 // prd-garden-lock-and-sync-v1 §3, Rosson 2026-10-13). The first page of the
 // Gardens group (0.45.7, Rosson: Gardens get their own section, like K2
-// Server and Logs); Widget data is the group's second page
+// Server and Logs); Local Data is the group's second page
 // (`ZenWidgetDataSection`). This computer's Zen Gardens, one row each: the
 // grip to drag it into place, the name as an in-place editor with Save,
 // Delete (asks in K2's confirm dialog) (Rosson 2026-10-13), and two checkboxes,

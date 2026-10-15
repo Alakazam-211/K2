@@ -113,7 +113,7 @@ step_1() {
     run k2 zen validate --widget "$W" --no-sign
     expect_rc "the edited widget validates (not signed)" 0
     confirm "In Zen, that Garden's board says nobody signed this version (author_unknown)"
-    confirm "Settings → Gardens → Widget data: board-lite offers It's mine"
+    confirm "Settings → Gardens → Local Data: board-lite offers It's mine"
 }
 
 step_2() {

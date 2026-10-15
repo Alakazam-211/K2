@@ -246,7 +246,7 @@ fn try_route(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         return Err(SourceErr::new(
             "person_only",
             403,
-            "Try with a secret is for a person: ask the person to Try this in Settings → Gardens → Data Sources.",
+            "Try with a secret is for a person: ask the person to Try this in Settings → Gardens → External Data.",
         ));
     }
     if s.row.lan && !who.is_owner() {

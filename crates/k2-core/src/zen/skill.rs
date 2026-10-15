@@ -422,7 +422,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   ≤ 60 KiB. Write with `{ifRev}`; on `conflict` read again and re-apply only the fields\n\
   you changed. `k2.store.subscribe(prefix, cb)` shows anyone's change live.\n\
 - **Agents use `k2 store --widget <name>`** (`get put rm list changes batch grants\n\
-  export`). Every call needs a grant the person gave (Settings → Gardens → Widget data,\n\
+  export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n\
   or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`\n\
   says what you can touch and why.\n\
 - **After editing a widget, run `k2 zen validate --widget <w>`: it signs the widget as\n\

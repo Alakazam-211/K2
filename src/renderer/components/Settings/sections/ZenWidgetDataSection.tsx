@@ -1,4 +1,4 @@
-// Settings → Gardens → Widget data (0.45.7, Rosson: Gardens get their own
+// Settings → Gardens → Local Data (0.45.7, Rosson: Gardens get their own
 // section, like K2 Server and Logs). The page around `ZenWidgetData` (each
 // custom widget's data on this computer: grants, It's mine, export, delete),
 // which used to sit under the Gardens list. It shows the same thing it did
@@ -6,9 +6,10 @@
 // that, a pointer to Settings → Gardens → Gardens, where the person sets
 // them up.
 //
-// Data Sources (the checks a K2 server runs for Garden cards and agents) is
+// External Data (the checks a K2 server runs for Garden cards and agents) is
 // the next page in the Gardens group from 0.45.7 (Rosson; before, under K2
-// Server). This page links to it.
+// Server). This page links to it. Rosson 2026-10-15: Widget data is Local
+// Data and Data Sources is External Data (ids unchanged).
 //
 // Like the Gardens page, Settings shows this only where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
@@ -26,9 +27,9 @@ export const ZEN_WIDGET_DATA_MANIFEST: SettingEntry[] = [
     // The id is unchanged from when this lived on the Gardens page.
     id: 'zen-gardens.data',
     section: 'zen-widget-data',
-    label: 'Widget Data',
+    label: 'Local Data',
     description: "Each custom widget's data on this computer: size, agent grants, grant admin, export, delete",
-    keywords: ['zen', 'garden', 'widget', 'data', 'store', 'grant', 'grants', 'agent', 'export', 'delete', "it's mine", 'admin'],
+    keywords: ['local data', 'widget data', 'zen', 'garden', 'widget', 'data', 'store', 'grant', 'grants', 'agent', 'export', 'delete', "it's mine", 'admin'],
   },
 ]
 
@@ -36,20 +37,20 @@ const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const MUTED = 'text-xs text-[var(--color-text-muted)]'
 
-/** Data Sources is the next page in the Gardens group; Garden cards read from it. */
+/** External Data is the next page in the Gardens group; Garden cards read from it. */
 function DataSourcesLink(): React.JSX.Element {
   return (
     <section className="mt-8 pt-4 border-t border-[var(--color-border)]" data-zen-widget-data-sources-link="">
-      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Data Sources</h3>
+      <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">External Data</h3>
       <p className={`${MUTED} mt-1 mb-2`}>
-        Garden cards that show checks a server runs (sites, status, triggers) get them from Data Sources, the next page in this group.
+        Garden cards that show checks a server runs (sites, status, triggers) get them from External Data, the next page in this group.
       </p>
       <button
         type="button"
         className={BTN}
         onClick={() => useSettingsStore.getState().setSection('data-sources')}
       >
-        Open Data Sources
+        Open External Data
       </button>
     </section>
   )
@@ -72,7 +73,7 @@ export function ZenWidgetDataSection(): React.JSX.Element {
         <ZenWidgetData />
       ) : (
         <>
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Widget data</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Local Data</h2>
           <p className={`${MUTED} mb-6`}>Each custom widget’s data on this computer.</p>
           {st.failure ? (
             <div className="mb-4">

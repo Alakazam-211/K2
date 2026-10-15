@@ -1,4 +1,4 @@
-// Settings → Gardens → Widget data (prd-gardens-local-services-v1 §4.6,
+// Settings → Gardens → Local Data (prd-gardens-local-services-v1 §4.6,
 // §5.8; contract-garden-data-v1 §11.4, B3). The body of its own page in the
 // Gardens group from 0.45.7 (`ZenWidgetDataSection` gates it on Gardens
 // being set up); before, a block under the Gardens list. One Data line per custom
@@ -457,7 +457,7 @@ export function ZenWidgetData(): React.JSX.Element {
 
   return (
     <section data-settings-id="zen-gardens.data" data-garden-data="">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Widget data</h2>
+      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Local Data</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-6">
         Each custom widget keeps its data on this computer. An agent reads or writes it only with a grant you give (or one a
         grant admin you named gives).

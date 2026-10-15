@@ -76,7 +76,7 @@ pub(crate) mod util {
         SourceErr::new(
             "person_only",
             403,
-            "This needs a person. Run it outside K2, or use Settings → Gardens → Data Sources.",
+            "This needs a person. Run it outside K2, or use Settings → Gardens → External Data.",
         )
     }
 

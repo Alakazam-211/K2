@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → Gardens → Data Sources (contract-sources-v1 §8; B2).
+// Settings → Gardens → External Data (contract-sources-v1 §8; B2).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
@@ -322,7 +322,7 @@ describe('DataSourcesSection', () => {
       throw new Error('501: {"error":{"code":"not_built","hint":"x"}}')
     })
     render(<DataSourcesSection />)
-    expect((await screen.findByTestId('sources-error')).textContent).toBe('This part of data sources is not on this server yet.')
+    expect((await screen.findByTestId('sources-error')).textContent).toBe('This part of External Data is not on this server yet.')
   })
 })
 

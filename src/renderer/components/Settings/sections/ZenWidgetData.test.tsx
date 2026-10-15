@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → Gardens → Widget data (contract-garden-data-v1 §11.4, §12.3).
+// Settings → Gardens → Local Data (contract-garden-data-v1 §11.4, §12.3).
 // The real component; only the edges are faked: the Garden data API (an
 // in-memory model of `spaces` / `show` / grant changes / export pages),
 // `GET zen/widgets`, and the local `garden_data_changed` / `zen_changed`

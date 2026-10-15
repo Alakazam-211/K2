@@ -47,8 +47,8 @@ describe('Settings nav Apps', () => {
         "{ id: 'companion', label: 'K2 Companion' },",
       ].join('\n        '),
     )
-    // Data Sources is in Network only where the Gardens group is hidden.
-    expect(network).toContain("...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'Data Sources' }]),")
+    // External Data is in Network only where the Gardens group is hidden.
+    expect(network).toContain("...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),")
     expect(access).not.toContain("id: 'data-sources'")
     expect(access + network).not.toContain("id: 'local-grokbots'")
     expect(access + network).not.toContain("id: 'skin-access'")
@@ -69,8 +69,8 @@ describe('Settings nav Apps', () => {
     expect(src).toContain("activeSection === 'vault'")
     expect(src).toContain('<VaultSection />')
     expect(src).toContain('...VAULT_MANIFEST,')
-    // contract-sources-v1 §8: Settings → Gardens → Data Sources.
-    expect(SECTION_LABELS['data-sources']).toBe('Data Sources')
+    // contract-sources-v1 §8: Settings → Gardens → External Data.
+    expect(SECTION_LABELS['data-sources']).toBe('External Data')
     expect(src).toContain("activeSection === 'data-sources'")
     expect(src).toContain('<DataSourcesSection />')
     expect(src).toContain('...DATA_SOURCES_MANIFEST,')
@@ -93,7 +93,7 @@ describe('Settings nav Apps', () => {
 })
 
 describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own section)', () => {
-  it('Gardens is a group like Access and Logs: Gardens, Widget data, Data Sources, beneath Access', () => {
+  it('Gardens is a group like Access and Logs: Gardens, Local Data, External Data, beneath Access', () => {
     const start = src.indexOf("title: 'Gardens'")
     const access = src.indexOf("title: 'Access'")
     const network = src.indexOf("title: 'Network'")
@@ -103,8 +103,8 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
     expect(gardens).toContain(
       [
         "{ id: 'zen-gardens', label: 'Gardens' },",
-        "{ id: 'zen-widget-data', label: 'Widget data' },",
-        "{ id: 'data-sources', label: 'Data Sources' },",
+        "{ id: 'zen-widget-data', label: 'Local Data' },",
+        "{ id: 'data-sources', label: 'External Data' },",
       ].join('\n              '),
     )
     // No longer a top-level page.
@@ -118,7 +118,7 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
     expect(src).toContain('...(zenAvailable() ? ZEN_WIDGET_DATA_MANIFEST : []),')
     expect(src).toContain("(activeSection === 'zen-gardens' || activeSection === 'zen-widget-data')")
     expect(SECTION_LABELS['zen-gardens']).toBe('Gardens')
-    expect(SECTION_LABELS['zen-widget-data']).toBe('Widget data')
+    expect(SECTION_LABELS['zen-widget-data']).toBe('Local Data')
   })
 })
 

@@ -72,10 +72,10 @@ describe('no Settings → Gardens on the web client', () => {
     expect(nav).toContain('project-groups')
     expect(nav).toContain('context-catalog')
     expect(nav).not.toContain('zen-gardens')
-    // 0.45.7: nor the Gardens group's Widget data page.
+    // 0.45.7: nor the Gardens group's Local Data page.
     expect(nav).not.toContain('zen-widget-data')
     expect(screen.queryByRole('button', { name: 'Gardens' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Widget data' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Local Data' })).toBeNull()
     expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
     expect(document.querySelector('[data-zen-widget-data-section]')).toBeNull()
     expect(useSettingsStore.getState().activeSection).toBe('general')

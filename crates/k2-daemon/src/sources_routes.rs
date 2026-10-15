@@ -284,7 +284,7 @@ pub(crate) fn person_only(who: &Who) -> R<()> {
         Err(SourceErr::new(
             "person_only",
             403,
-            "this needs a person: run it outside K2, or use Settings → Gardens → Data Sources",
+            "this needs a person: run it outside K2, or use Settings → Gardens → External Data",
         ))
     }
 }

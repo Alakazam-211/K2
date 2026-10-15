@@ -1,4 +1,4 @@
-// Settings → Gardens → Data Sources (prd-garden-v3-external-data-cards-v1
+// Settings → Gardens → External Data (prd-garden-v3-external-data-cards-v1
 // §10.2; contract-sources-v1 §8). Owner: B2.
 //
 // A thin client on `/cli/sources/*` of the window's server
@@ -27,9 +27,9 @@ export const DATA_SOURCES_MANIFEST: SettingEntry[] = [
   {
     id: 'data-sources.list',
     section: 'data-sources',
-    label: 'Data Sources',
+    label: 'External Data',
     description: 'Checks this server runs for Garden cards and agents: sites, state, approvals and triggers',
-    keywords: ['data sources', 'sources', 'garden', 'cards', 'monitor', 'status', 'trigger', 'fleet', 'health'],
+    keywords: ['external data', 'data sources', 'sources', 'garden', 'cards', 'monitor', 'status', 'trigger', 'fleet', 'health'],
   },
 ]
 
@@ -128,7 +128,7 @@ export function DataSourcesSection(): React.JSX.Element {
   return (
     <div className="max-w-4xl space-y-3" data-settings-id="data-sources.list" data-testid="sources-section">
       <div>
-        <h2 className="text-base font-medium text-[var(--color-text-primary)]">Data Sources</h2>
+        <h2 className="text-base font-medium text-[var(--color-text-primary)]">External Data</h2>
         <p className={`text-[11px] ${muted} mt-1 max-w-2xl`}>
           Checks this server runs for Garden cards and agents. They keep running when no window is open.
         </p>

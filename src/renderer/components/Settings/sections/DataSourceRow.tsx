@@ -1,4 +1,4 @@
-// One source in Settings → Gardens → Data Sources (contract-sources-v1
+// One source in Settings → Gardens → External Data (contract-sources-v1
 // §8). Owner: B2.
 //
 // State dot, label, the one-word state, counts ("18 ok, 2 unknown": unknown

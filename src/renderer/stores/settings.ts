@@ -68,7 +68,7 @@ export type SettingsSection =
    *  sync, theme, folder; desktop only, like the Zen toggle). The Gardens
    *  group's first page, so `openSettings('zen-gardens')` lands here (0.45.7). */
   | 'zen-gardens'
-  /** Settings → Gardens → Widget data (each custom widget's data on this
+  /** Settings → Gardens → Local Data (each custom widget's data on this
    *  computer: grants, It's mine, export, delete). Its own page from 0.45.7;
    *  before, a block under the Gardens list. */
   | 'zen-widget-data'
@@ -96,7 +96,7 @@ export type SettingsSection =
   | 'api-tokens'
   /** Settings → Access → Vault (prd-k2-vault-v1 §16.1, KV39). */
   | 'vault'
-  /** Settings → Gardens → Data Sources (contract-sources-v1 §8). */
+  /** Settings → Gardens → External Data (contract-sources-v1 §8). */
   | 'data-sources'
   /** Settings → 3rd Party Bots → Grok Bot (0.45.7). */
   | 'local-grokbots'

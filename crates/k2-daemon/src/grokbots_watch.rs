@@ -56,7 +56,10 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
     };
     let status = p.status();
     let mut revs = HashMap::new();
-    let mut roster_parts = vec![format!("busy={}:{:?}:{}", status.busy, status.active_agent_id, status.reachable)];
+    let mut roster_parts = vec![format!(
+        "busy={}:{:?}:{}",
+        status.busy, status.active_agent_id, status.reachable
+    )];
     for a in &list {
         let rev = if a.rev.is_empty() {
             p.store_fingerprint(&a.id).unwrap_or_default()
@@ -81,7 +84,11 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
         agents.sort();
         change.agents = agents;
     }
-    *seen = Seen { revs, roster_key, primed: true };
+    *seen = Seen {
+        revs,
+        roster_key,
+        primed: true,
+    };
     change
 }
 
@@ -103,8 +110,15 @@ fn shared() -> &'static Shared {
 }
 
 fn announce(c: &Change) {
-    let rev = shared().rev.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    let _ = emit(SessionEvent::GrokbotsChanged { rev, roster: c.roster, agents: c.agents.clone() });
+    let rev = shared()
+        .rev
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    let _ = emit(SessionEvent::GrokbotsChanged {
+        rev,
+        roster: c.roster,
+        agents: c.agents.clone(),
+    });
 }
 
 fn wake_now() {
@@ -115,7 +129,10 @@ fn wake_now() {
 
 /// The setting changed: tell clients to refetch now, and poll at once.
 pub fn nudge_roster() {
-    announce(&Change { roster: true, agents: Vec::new() });
+    announce(&Change {
+        roster: true,
+        agents: Vec::new(),
+    });
     wake_now();
 }
 
@@ -130,29 +147,34 @@ pub fn start() {
     if STARTED.set(()).is_err() {
         return;
     }
-    let spawned = std::thread::Builder::new().name("grokbots-watch".into()).spawn(|| {
-        log_debug!("[grokbots] poller started");
-        loop {
-            {
-                let s = shared();
-                let mut woke = s.wake.lock().unwrap_or_else(|p| p.into_inner());
-                if !*woke {
-                    woke = s.cv.wait_timeout(woke, POLL).map(|(g, _)| g).unwrap_or_else(|p| p.into_inner().0);
+    let spawned = std::thread::Builder::new()
+        .name("grokbots-watch".into())
+        .spawn(|| {
+            log_debug!("[grokbots] poller started");
+            loop {
+                {
+                    let s = shared();
+                    let mut woke = s.wake.lock().unwrap_or_else(|p| p.into_inner());
+                    if !*woke {
+                        woke =
+                            s.cv.wait_timeout(woke, POLL)
+                                .map(|(g, _)| g)
+                                .unwrap_or_else(|p| p.into_inner().0);
+                    }
+                    *woke = false;
                 }
-                *woke = false;
+                let mut seen = shared().seen.lock().unwrap_or_else(|p| p.into_inner());
+                if !settings::load().show {
+                    *seen = Seen::default();
+                    continue;
+                }
+                let change = tick(&GrokBot::for_current_user(), &mut seen);
+                drop(seen);
+                if !change.is_empty() {
+                    announce(&change);
+                }
             }
-            let mut seen = shared().seen.lock().unwrap_or_else(|p| p.into_inner());
-            if !settings::load().show {
-                *seen = Seen::default();
-                continue;
-            }
-            let change = tick(&GrokBot::for_current_user(), &mut seen);
-            drop(seen);
-            if !change.is_empty() {
-                announce(&change);
-            }
-        }
-    });
+        });
     if let Err(e) = spawned {
         log_debug!("[grokbots] could not start poller: {e}");
     }

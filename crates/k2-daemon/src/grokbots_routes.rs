@@ -73,15 +73,26 @@ pub fn who_from_tcp(query: &str, bearer: Option<&str>, owner_token: &str) -> Who
 }
 
 fn resp(status: &'static str, body: J) -> CliResponse {
-    CliResponse { status, content_type: "application/json", body: body.to_string() }
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: body.to_string(),
+    }
 }
 
 fn refuse(status: &'static str, code: &str, message: impl Into<String>) -> CliResponse {
-    resp(status, json!({ "ok": false, "error": code, "message": message.into() }))
+    resp(
+        status,
+        json!({ "ok": false, "error": code, "message": message.into() }),
+    )
 }
 
 pub fn too_large() -> CliResponse {
-    refuse("413 Payload Too Large", "body_too_large", format!("Bodies here are at most {} KiB.", MAX_BODY / 1024))
+    refuse(
+        "413 Payload Too Large",
+        "body_too_large",
+        format!("Bodies here are at most {} KiB.", MAX_BODY / 1024),
+    )
 }
 
 const SETTINGS_HINT: &str = "Settings → K2 Server → Local Grok Bots";
@@ -111,7 +122,11 @@ fn send_off() -> CliResponse {
 }
 
 fn admin_only() -> CliResponse {
-    refuse("403 Forbidden", "grokbots_admin_only", "Only the owner or an admin can do this.")
+    refuse(
+        "403 Forbidden",
+        "grokbots_admin_only",
+        "Only the owner or an admin can do this.",
+    )
 }
 
 fn ext_err(e: ExtError) -> CliResponse {
@@ -141,7 +156,13 @@ fn settings_json(s: &LocalGrokBotsSettings, can_edit: bool) -> J {
     json!({ "show": s.show, "send": s.send, "canEdit": can_edit })
 }
 
-pub fn handle(path: &str, is_post: bool, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+pub fn handle(
+    path: &str,
+    is_post: bool,
+    who: Who,
+    body: &[u8],
+    params: &HashMap<String, String>,
+) -> CliResponse {
     if !is_human(&who) {
         return humans_only();
     }
@@ -153,7 +174,10 @@ pub fn handle(path: &str, is_post: bool, who: Who, body: &[u8], params: &HashMap
                 return admin_only();
             }
             let d = provider().detect();
-            resp("200 OK", json!({ "ok": true, "installed": d.installed, "dataPath": d.data_path, "agents": d.agents }))
+            resp(
+                "200 OK",
+                json!({ "ok": true, "installed": d.installed, "dataPath": d.data_path, "agents": d.agents }),
+            )
         }
         ("/cli/grokbots/list", false) => list(),
         ("/cli/grokbots/status", false) => status(),
@@ -186,7 +210,13 @@ fn write_settings(who: &Who, body: &[u8]) -> CliResponse {
     }
     let b: SettingsBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return refuse("400 Bad Request", "bad_body", format!("expected {{show?, send?}}: {e}")),
+        Err(e) => {
+            return refuse(
+                "400 Bad Request",
+                "bad_body",
+                format!("expected {{show?, send?}}: {e}"),
+            )
+        }
     };
     let mut s = settings::load();
     if let Some(v) = b.show {
@@ -198,7 +228,12 @@ fn write_settings(who: &Who, body: &[u8]) -> CliResponse {
     if let Err(e) = settings::save(&s) {
         return CliResponse::internal_error(format!("save setting: {e}"));
     }
-    log_debug!("[grokbots] settings show={} send={} by {}", s.show, s.send, who.label());
+    log_debug!(
+        "[grokbots] settings show={} send={} by {}",
+        s.show,
+        s.send,
+        who.label()
+    );
     crate::grokbots_watch::nudge_roster();
     ok(settings_json(&s, true))
 }
@@ -218,7 +253,11 @@ fn list() -> CliResponse {
         Err(ExtError::NotInstalled) => (false, Vec::new()),
         Err(e) => return ext_err(e),
     };
-    let status = if installed { p.status() } else { Default::default() };
+    let status = if installed {
+        p.status()
+    } else {
+        Default::default()
+    };
     resp(
         "200 OK",
         json!({
@@ -237,7 +276,10 @@ fn list() -> CliResponse {
 fn status() -> CliResponse {
     let s = settings::load();
     if !s.show {
-        return resp("200 OK", json!({ "ok": true, "enabled": false, "sendEnabled": false }));
+        return resp(
+            "200 OK",
+            json!({ "ok": true, "enabled": false, "sendEnabled": false }),
+        );
     }
     resp(
         "200 OK",
@@ -299,7 +341,13 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
     }
     let b: SendBody = match serde_json::from_slice(body) {
         Ok(b) => b,
-        Err(e) => return refuse("400 Bad Request", "bad_body", format!("expected {{agent, text}}: {e}")),
+        Err(e) => {
+            return refuse(
+                "400 Bad Request",
+                "bad_body",
+                format!("expected {{agent, text}}: {e}"),
+            )
+        }
     };
     if !k2_core::external_agents::valid_agent_id(&b.agent) {
         return refuse("400 Bad Request", "bad_input", "invalid agent id");
@@ -321,12 +369,25 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
     }
     match provider().send(&b.agent, &b.text) {
         Ok(r) => {
-            log_debug!("[grokbots] send to {} by {} ({} bytes)", b.agent, who.label(), b.text.len());
+            log_debug!(
+                "[grokbots] send to {} by {} ({} bytes)",
+                b.agent,
+                who.label(),
+                b.text.len()
+            );
             crate::grokbots_watch::nudge_agent(&b.agent);
-            resp("200 OK", json!({ "ok": true, "clientNonce": r.client_nonce }))
+            resp(
+                "200 OK",
+                json!({ "ok": true, "clientNonce": r.client_nonce }),
+            )
         }
         Err(e) => {
-            log_debug!("[grokbots] send to {} by {} failed: {}", b.agent, who.label(), e.code());
+            log_debug!(
+                "[grokbots] send to {} by {} failed: {}",
+                b.agent,
+                who.label(),
+                e.code()
+            );
             ext_err(e)
         }
     }

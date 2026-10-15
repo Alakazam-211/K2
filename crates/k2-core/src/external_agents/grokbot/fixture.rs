@@ -20,7 +20,10 @@ static OPENED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Called by the adapter's single file door for every path it opens.
 pub(crate) fn record_open(p: &Path) {
-    OPENED.lock().unwrap_or_else(|e| e.into_inner()).push(p.to_path_buf());
+    OPENED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(p.to_path_buf());
 }
 
 /// Every path the adapter opened under `root` so far (other tests' roots
@@ -129,7 +132,8 @@ impl FakeSandData {
     /// A read-write connection to an agent's store (WAL), like Grok Bot's
     /// own writer.
     pub fn writer(&self, id: &str) -> Connection {
-        let c = Connection::open(self.agent_dir(id).join(schema::STORE_FILE)).expect("open store rw");
+        let c =
+            Connection::open(self.agent_dir(id).join(schema::STORE_FILE)).expect("open store rw");
         c.pragma_update(None, "journal_mode", "WAL").expect("wal");
         c
     }

@@ -32,7 +32,9 @@ impl LocalGrokBotsSettings {
 }
 
 fn path() -> PathBuf {
-    crate::paths::k2_home().join("external-agents").join("grokbots.json")
+    crate::paths::k2_home()
+        .join("external-agents")
+        .join("grokbots.json")
 }
 
 /// Read the setting. A missing or unreadable file is the default (both off).
@@ -62,12 +64,26 @@ mod tests {
     fn both_switches_are_off_by_default_and_round_trip() {
         let _home = TempHome::new();
         let s = load();
-        assert_eq!(s, LocalGrokBotsSettings { show: false, send: false });
+        assert_eq!(
+            s,
+            LocalGrokBotsSettings {
+                show: false,
+                send: false
+            }
+        );
         assert!(!s.send_allowed());
-        save(&LocalGrokBotsSettings { show: true, send: true }).expect("save");
+        save(&LocalGrokBotsSettings {
+            show: true,
+            send: true,
+        })
+        .expect("save");
         let back = load();
         assert!(back.show && back.send && back.send_allowed());
-        save(&LocalGrokBotsSettings { show: false, send: true }).expect("save");
+        save(&LocalGrokBotsSettings {
+            show: false,
+            send: true,
+        })
+        .expect("save");
         assert!(!load().send_allowed(), "send needs show");
     }
 }

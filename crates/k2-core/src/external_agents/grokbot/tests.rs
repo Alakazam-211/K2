@@ -26,7 +26,10 @@ fn not_installed_without_gateway_json() {
     let d = g.detect();
     assert!(!d.installed);
     assert!(d.agents.is_empty());
-    assert_eq!(g.list_agents().expect_err("not installed"), ExtError::NotInstalled);
+    assert_eq!(
+        g.list_agents().expect_err("not installed"),
+        ExtError::NotInstalled
+    );
 }
 
 #[test]
@@ -38,7 +41,10 @@ fn gateway_url_is_built_from_scheme_host_port_and_must_be_loopback() {
     assert_eq!(parsed.base(), format!("http://127.0.0.1:{}", gw.port));
     assert!(parsed.has_token());
     let dbg = format!("{parsed:?}");
-    assert!(!dbg.contains(FAKE_TOKEN), "Debug must redact the token: {dbg}");
+    assert!(
+        !dbg.contains(FAKE_TOKEN),
+        "Debug must redact the token: {dbg}"
+    );
 
     std::fs::write(
         sand.root.join("gateway.json"),
@@ -65,12 +71,21 @@ fn gateway_roster_carries_per_agent_status_and_hides_hidden_agents() {
     assert_eq!(c.source, "gateway");
     assert!(c.working && c.needs_you);
     assert_eq!(c.unread_count, 3);
-    assert_eq!(c.avatar.as_deref(), Some("data:image/png;base64,iVBORw0KGgo="));
+    assert_eq!(
+        c.avatar.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgo=")
+    );
     assert!(!list[1].working && !list[1].needs_you);
     let seen = gw.seen();
-    let la = seen.iter().find(|r| r.path == "/api/listAgents").expect("listAgents called");
+    let la = seen
+        .iter()
+        .find(|r| r.path == "/api/listAgents")
+        .expect("listAgents called");
     assert_eq!(la.method, "POST");
-    assert_eq!(la.authorization.as_deref(), Some(format!("Bearer {FAKE_TOKEN}").as_str()));
+    assert_eq!(
+        la.authorization.as_deref(),
+        Some(format!("Bearer {FAKE_TOKEN}").as_str())
+    );
     let s = serde_json::to_string(&list).expect("json");
     assert!(!s.contains(FAKE_TOKEN));
     assert!(!s.contains("rev"), "rev is internal: {s}");
@@ -103,7 +118,12 @@ fn status_reads_health_box_wide() {
     let g = GrokBot::for_current_user();
     assert_eq!(
         g.status(),
-        ProviderStatus { reachable: true, busy: false, active_agent_id: None, last_busy_at_ms: Some(1_791_993_525_941) }
+        ProviderStatus {
+            reachable: true,
+            busy: false,
+            active_agent_id: None,
+            last_busy_at_ms: Some(1_791_993_525_941)
+        }
     );
     gw.set(|s| {
         s.busy = true;
@@ -119,7 +139,9 @@ fn thread_maps_the_sampled_rows_and_skips_hidden_kinds() {
     let gw = FakeGateway::start(json!([]));
     let (_home, sand) = setup(&gw);
     sand.add_sample_chat(A);
-    let page = GrokBot::for_current_user().read_thread(A, None, 50).expect("thread");
+    let page = GrokBot::for_current_user()
+        .read_thread(A, None, 50)
+        .expect("thread");
     assert!(page.supported);
     let got: Vec<_> = page
         .messages
@@ -136,8 +158,17 @@ fn thread_maps_the_sampled_rows_and_skips_hidden_kinds() {
             (Author::Agent, "", Some("widget")),
         ]
     );
-    assert_eq!(page.messages[1].from_agent.as_ref().map(|a| a.name.as_str()), Some("Cortana"));
-    assert_eq!(page.messages[3].to_agent.as_ref().map(|a| a.name.as_str()), Some("Jarvis"));
+    assert_eq!(
+        page.messages[1]
+            .from_agent
+            .as_ref()
+            .map(|a| a.name.as_str()),
+        Some("Cortana")
+    );
+    assert_eq!(
+        page.messages[3].to_agent.as_ref().map(|a| a.name.as_str()),
+        Some("Jarvis")
+    );
     assert_eq!(page.messages[0].at_ms, Some(1_791_990_000_000));
     assert!(!page.has_more_before);
     // event / spend / feedback rows are hidden, but the cursor moves past
@@ -152,11 +183,18 @@ fn non_text_send_messages_become_read_only_cards() {
     for e in fixture::card_entries() {
         sand.add_entry(A, e);
     }
-    let page = GrokBot::for_current_user().read_thread(A, None, 50).expect("thread");
+    let page = GrokBot::for_current_user()
+        .read_thread(A, None, 50)
+        .expect("thread");
     let m = &page.messages;
     assert_eq!(m.len(), 5);
-    assert!(m.iter().all(|x| x.open_in_app.is_some() && x.text.is_empty()));
-    let v: Vec<serde_json::Value> = m.iter().map(|x| serde_json::to_value(&x.card).expect("json")).collect();
+    assert!(m
+        .iter()
+        .all(|x| x.open_in_app.is_some() && x.text.is_empty()));
+    let v: Vec<serde_json::Value> = m
+        .iter()
+        .map(|x| serde_json::to_value(&x.card).expect("json"))
+        .collect();
     assert_eq!(
         v[0],
         json!({"type":"choice","prompt":"Which environment should I deploy to?","helpText":"You can change this later.",
@@ -165,7 +203,10 @@ fn non_text_send_messages_become_read_only_cards() {
                "state":"answered"})
     );
     assert_eq!(v[1]["state"], json!("skipped"));
-    assert_eq!(v[2], json!({"type":"connector","connector":"example-connector","variant":"connect"}));
+    assert_eq!(
+        v[2],
+        json!({"type":"connector","connector":"example-connector","variant":"connect"})
+    );
     assert_eq!(
         v[3],
         json!({"type":"secret-request","label":"Bot token",
@@ -179,7 +220,9 @@ fn non_text_send_messages_become_read_only_cards() {
     );
     // A custom free-text answer that matches no option is shown as such.
     sand.add_entry(A, json!({"kind":"send-message","message":{"type":"widget","widget":{"prompt":"P?","options":[{"label":"A","value":"a"}]}},"respondedValue":"my own words"}));
-    let p = GrokBot::for_current_user().read_thread(A, Some(5), 10).expect("since");
+    let p = GrokBot::for_current_user()
+        .read_thread(A, Some(5), 10)
+        .expect("since");
     let c = serde_json::to_value(&p.messages[0].card).expect("json");
     assert_eq!(c["state"], json!("answered"));
     assert_eq!(c["customAnswer"], json!("my own words"));
@@ -191,7 +234,10 @@ fn thread_pages_by_seq() {
     let gw = FakeGateway::start(json!([]));
     let (_home, sand) = setup(&gw);
     for i in 0..10 {
-        sand.add_entry(A, json!({"kind":"message","role":"user","content":format!("m{i}"),"timestampMs":1}));
+        sand.add_entry(
+            A,
+            json!({"kind":"message","role":"user","content":format!("m{i}"),"timestampMs":1}),
+        );
     }
     let g = GrokBot::for_current_user();
     let first = g.read_thread(A, None, 4).expect("latest");
@@ -213,10 +259,18 @@ fn k2_sent_rows_are_marked() {
     let gw = FakeGateway::start(json!([]));
     let (_home, sand) = setup(&gw);
     let nonce = k2_nonce();
-    assert!(uuid::Uuid::parse_str(&nonce).is_ok(), "nonce stays a UUID: {nonce}");
-    sand.add_entry(A, json!({"kind":"message","role":"user","content":"hi from K2","clientNonce":nonce}));
+    assert!(
+        uuid::Uuid::parse_str(&nonce).is_ok(),
+        "nonce stays a UUID: {nonce}"
+    );
+    sand.add_entry(
+        A,
+        json!({"kind":"message","role":"user","content":"hi from K2","clientNonce":nonce}),
+    );
     sand.add_entry(A, json!({"kind":"message","role":"user","content":"typed in Grok Bot","clientNonce":"11111111-0000-4000-8000-000000000000"}));
-    let page = GrokBot::for_current_user().read_thread(A, None, 10).expect("thread");
+    let page = GrokBot::for_current_user()
+        .read_thread(A, None, 10)
+        .expect("thread");
     assert!(page.messages[0].via_k2);
     assert!(!page.messages[1].via_k2);
 }
@@ -229,18 +283,24 @@ fn unknown_store_layout_fails_soft() {
     std::fs::create_dir_all(&d).expect("mk");
     std::fs::write(d.join("profile.json"), br#"{"name":"Odd"}"#).expect("w");
     let c = rusqlite::Connection::open(d.join("store.db")).expect("open");
-    c.execute_batch("CREATE TABLE transcript_entries (rowid_alias INTEGER PRIMARY KEY, blob TEXT);")
-        .expect("odd schema");
+    c.execute_batch(
+        "CREATE TABLE transcript_entries (rowid_alias INTEGER PRIMARY KEY, blob TEXT);",
+    )
+    .expect("odd schema");
     drop(c);
     let g = GrokBot::for_current_user();
-    let page = g.read_thread("aaaaaaaa-0000-4000-8000-00000000000a", None, 10).expect("soft");
+    let page = g
+        .read_thread("aaaaaaaa-0000-4000-8000-00000000000a", None, 10)
+        .expect("soft");
     assert!(!page.supported);
     assert!(page.reason.is_some());
     // the agent still lists
     assert!(g.disk_agents().iter().any(|a| a.name == "Odd"));
     // and a store that isn't SQLite at all
     std::fs::write(d.join("store.db"), b"garbage, not sqlite").expect("w");
-    let page = g.read_thread("aaaaaaaa-0000-4000-8000-00000000000a", None, 10).expect("soft");
+    let page = g
+        .read_thread("aaaaaaaa-0000-4000-8000-00000000000a", None, 10)
+        .expect("soft");
     assert!(!page.supported);
 }
 
@@ -253,7 +313,10 @@ fn unknown_agent_and_bad_ids_are_refused() {
         g.read_thread("bbbbbbbb-0000-4000-8000-00000000000b", None, 10),
         Err(ExtError::UnknownAgent(_))
     ));
-    assert!(matches!(g.read_thread("../../etc", None, 10), Err(ExtError::BadInput(_))));
+    assert!(matches!(
+        g.read_thread("../../etc", None, 10),
+        Err(ExtError::BadInput(_))
+    ));
 }
 
 #[test]
@@ -265,7 +328,8 @@ fn reads_stay_read_only_while_the_host_keeps_writing() {
     let root = sand.root.clone();
     let st = stop.clone();
     let writer = std::thread::spawn(move || {
-        let c = rusqlite::Connection::open(root.join("agents").join(A).join("store.db")).expect("rw");
+        let c =
+            rusqlite::Connection::open(root.join("agents").join(A).join("store.db")).expect("rw");
         c.pragma_update(None, "journal_mode", "WAL").expect("wal");
         let mut n = 0;
         while !st.load(Ordering::SeqCst) {
@@ -284,7 +348,9 @@ fn reads_stay_read_only_while_the_host_keeps_writing() {
     let g = GrokBot::for_current_user();
     let mut since = 0;
     for _ in 0..50 {
-        let p = g.read_thread(A, Some(since), 500).expect("read while writing");
+        let p = g
+            .read_thread(A, Some(since), 500)
+            .expect("read while writing");
         assert!(p.supported);
         since = p.next_since;
     }
@@ -304,10 +370,20 @@ fn send_posts_prompt_agent_and_k2_nonce_with_bearer() {
     let r = g.send(A, "  hello there  ").expect("send");
     assert!(r.client_nonce.starts_with(schema::K2_NONCE_MARK));
     let seen = gw.seen();
-    let sp = seen.iter().find(|r| r.path == "/api/sendPrompt").expect("sendPrompt");
+    let sp = seen
+        .iter()
+        .find(|r| r.path == "/api/sendPrompt")
+        .expect("sendPrompt");
     assert_eq!(sp.method, "POST");
-    assert_eq!(sp.authorization.as_deref(), Some(format!("Bearer {FAKE_TOKEN}").as_str()));
-    assert_eq!(sp.body["prompt"], json!("hello there"), "human send has no envelope");
+    assert_eq!(
+        sp.authorization.as_deref(),
+        Some(format!("Bearer {FAKE_TOKEN}").as_str())
+    );
+    assert_eq!(
+        sp.body["prompt"],
+        json!("hello there"),
+        "human send has no envelope"
+    );
     assert_eq!(sp.body["agentId"], json!(A));
     assert_eq!(sp.body["clientNonce"], json!(r.client_nonce));
 }
@@ -319,12 +395,21 @@ fn send_refuses_unknown_agent_empty_text_and_reports_gateway_errors() {
     let g = GrokBot::for_current_user();
     assert!(matches!(g.send(B, "hi"), Err(ExtError::UnknownAgent(_))));
     assert!(matches!(g.send(A, "   "), Err(ExtError::BadInput(_))));
-    assert!(matches!(g.send(A, &"x".repeat(MAX_SEND_BYTES + 1)), Err(ExtError::BadInput(_))));
+    assert!(matches!(
+        g.send(A, &"x".repeat(MAX_SEND_BYTES + 1)),
+        Err(ExtError::BadInput(_))
+    ));
     gw.set(|s| s.send_status = 500);
     let e = g.send(A, "hi").expect_err("500");
     assert_eq!(e.code(), "protocol");
     assert!(!e.to_string().contains(FAKE_TOKEN));
-    assert!(gw.seen().iter().filter(|r| r.path == "/api/sendPrompt").count() == 1);
+    assert!(
+        gw.seen()
+            .iter()
+            .filter(|r| r.path == "/api/sendPrompt")
+            .count()
+            == 1
+    );
 }
 
 #[test]
@@ -346,20 +431,36 @@ fn adapter_opens_only_gateway_profiles_and_stores() {
     assert!(!opened.is_empty());
     for p in &opened {
         let rel = p.strip_prefix(&sand.root).expect("under root");
-        let parts: Vec<_> = rel.iter().map(|c| c.to_string_lossy().to_string()).collect();
+        let parts: Vec<_> = rel
+            .iter()
+            .map(|c| c.to_string_lossy().to_string())
+            .collect();
         let ok = parts == ["gateway.json"]
             || (parts.len() == 3
                 && parts[0] == "agents"
                 && (parts[2] == "profile.json" || parts[2] == "store.db"));
-        assert!(ok, "adapter opened a path outside its allowlist: {}", p.display());
+        assert!(
+            ok,
+            "adapter opened a path outside its allowlist: {}",
+            p.display()
+        );
     }
     // The single door refuses the secret files outright.
     for f in fixture::SECRET_FILES {
-        assert!(g.open_allowed(&sand.root.join(f)).is_err(), "{f} must be refused");
+        assert!(
+            g.open_allowed(&sand.root.join(f)).is_err(),
+            "{f} must be refused"
+        );
     }
-    assert!(g.open_allowed(&sand.agent_dir(A).join("conversation-blobs.db")).is_err());
-    assert!(g.open_allowed(&sand.agent_dir(A).join("settings.json")).is_err());
-    assert!(g.open_allowed(&sand.root.join("agents/../box-secrets.json")).is_err());
+    assert!(g
+        .open_allowed(&sand.agent_dir(A).join("conversation-blobs.db"))
+        .is_err());
+    assert!(g
+        .open_allowed(&sand.agent_dir(A).join("settings.json"))
+        .is_err());
+    assert!(g
+        .open_allowed(&sand.root.join("agents/../box-secrets.json"))
+        .is_err());
 }
 
 #[test]

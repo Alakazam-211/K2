@@ -179,7 +179,11 @@ impl GrokBot {
     /// The daemon OS user's own Grok Bot. Never another user's home.
     pub fn for_current_user() -> Self {
         let root = dirs::home_dir().unwrap_or_default().join(schema::DATA_DIR);
-        Self { root, http_timeout: Duration::from_secs(3), send_timeout: Duration::from_secs(20) }
+        Self {
+            root,
+            http_timeout: Duration::from_secs(3),
+            send_timeout: Duration::from_secs(20),
+        }
     }
 
     pub fn data_path(&self) -> &Path {
@@ -325,14 +329,18 @@ impl GrokBot {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .ok_or_else(|| ExtError::Protocol("listAgents body".into()))?;
-        let items = v.as_array().ok_or_else(|| ExtError::Protocol("listAgents shape".into()))?;
+        let items = v
+            .as_array()
+            .ok_or_else(|| ExtError::Protocol("listAgents shape".into()))?;
         let mut out = Vec::new();
         for it in items {
             let Some(o) = it.as_object() else { continue };
             let Some(id) = str_of(o, schema::AGENT_ID).map(str::to_string) else {
                 continue;
             };
-            if !valid_agent_id(&id) || o.get(schema::AGENT_HIDDEN).and_then(Value::as_bool) == Some(true) {
+            if !valid_agent_id(&id)
+                || o.get(schema::AGENT_HIDDEN).and_then(Value::as_bool) == Some(true)
+            {
                 continue;
             }
             let rev = schema::AGENT_REV_KEYS
@@ -428,7 +436,11 @@ impl ExternalAgentProvider for GrokBot {
         Detection {
             installed,
             data_path: self.root.display().to_string(),
-            agents: if installed { self.disk_agents() } else { Vec::new() },
+            agents: if installed {
+                self.disk_agents()
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -449,14 +461,24 @@ impl ExternalAgentProvider for GrokBot {
         let Ok(client) = self.client(self.http_timeout) else {
             return ProviderStatus::default();
         };
-        let Ok(resp) = client.get(format!("{}{}", gw.base, schema::HEALTH_PATH)).send() else {
+        let Ok(resp) = client
+            .get(format!("{}{}", gw.base, schema::HEALTH_PATH))
+            .send()
+        else {
             return ProviderStatus::default();
         };
         if !resp.status().is_success() {
             return ProviderStatus::default();
         }
-        let Some(v) = resp.bytes().ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
-            return ProviderStatus { reachable: true, ..Default::default() };
+        let Some(v) = resp
+            .bytes()
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            return ProviderStatus {
+                reachable: true,
+                ..Default::default()
+            };
         };
         let busy = v.get("isBusy").and_then(Value::as_bool).unwrap_or(false);
         let active = v
@@ -498,7 +520,10 @@ impl ExternalAgentProvider for GrokBot {
         let rows = match fetch_rows(&conn, since, limit) {
             Ok(r) => r,
             Err(_) => {
-                return Ok(ThreadPage::unsupported("Grok Bot's chat store could not be read", since_v))
+                return Ok(ThreadPage::unsupported(
+                    "Grok Bot's chat store could not be read",
+                    since_v,
+                ))
             }
         };
         let (rows, has_more_before) = if since.is_none() && rows.len() > limit {
@@ -506,10 +531,23 @@ impl ExternalAgentProvider for GrokBot {
         } else {
             (rows, false)
         };
-        let next_since = rows.iter().map(|r| r.0).max().unwrap_or(since_v).max(since_v);
-        let messages: Vec<ThreadMessage> =
-            rows.into_iter().filter_map(|(seq, entry)| entry_to_message(seq, &entry)).collect();
-        Ok(ThreadPage { supported: true, reason: None, messages, next_since, has_more_before })
+        let next_since = rows
+            .iter()
+            .map(|r| r.0)
+            .max()
+            .unwrap_or(since_v)
+            .max(since_v);
+        let messages: Vec<ThreadMessage> = rows
+            .into_iter()
+            .filter_map(|(seq, entry)| entry_to_message(seq, &entry))
+            .collect();
+        Ok(ThreadPage {
+            supported: true,
+            reason: None,
+            messages,
+            next_since,
+            has_more_before,
+        })
     }
 
     fn thread_cursor(&self, agent_id: &str) -> Option<i64> {
@@ -542,7 +580,10 @@ impl ExternalAgentProvider for GrokBot {
             return Err(ExtError::BadInput("message is empty".into()));
         }
         if text.len() > MAX_SEND_BYTES {
-            return Err(ExtError::BadInput(format!("message is over {} KB", MAX_SEND_BYTES / 1024)));
+            return Err(ExtError::BadInput(format!(
+                "message is over {} KB",
+                MAX_SEND_BYTES / 1024
+            )));
         }
         if !self.installed() {
             return Err(ExtError::NotInstalled);
@@ -584,24 +625,32 @@ impl ExternalAgentProvider for GrokBot {
             return Err(ExtError::Unreachable("Grok Bot refused K2's token".into()));
         }
         if !status.is_success() {
-            return Err(ExtError::Protocol(format!("sendPrompt HTTP {}", status.as_u16())));
+            return Err(ExtError::Protocol(format!(
+                "sendPrompt HTTP {}",
+                status.as_u16()
+            )));
         }
         // Any 2xx is accepted (the body is untested on Grok Bot's side).
-        Ok(SendReceipt { client_nonce: nonce })
+        Ok(SendReceipt {
+            client_nonce: nonce,
+        })
     }
 }
 
 /// A fresh `clientNonce` carrying K2's mark (see [`schema::K2_NONCE_MARK`]).
 pub fn k2_nonce() -> String {
     let u = uuid::Uuid::new_v4().to_string();
-    format!("{}{}", schema::K2_NONCE_MARK, &u[schema::K2_NONCE_MARK.len()..])
+    format!(
+        "{}{}",
+        schema::K2_NONCE_MARK,
+        &u[schema::K2_NONCE_MARK.len()..]
+    )
 }
 
 // ── transcript reading ──────────────────────────────────────────────────
 
 fn transcript_layout_known(conn: &Connection) -> bool {
-    let Ok(mut stmt) =
-        conn.prepare(&format!("PRAGMA table_info({})", schema::TRANSCRIPT_TABLE))
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({})", schema::TRANSCRIPT_TABLE))
     else {
         return false;
     };
@@ -612,7 +661,11 @@ fn transcript_layout_known(conn: &Connection) -> bool {
     names.iter().any(|n| n == schema::SEQ_COLUMN) && names.iter().any(|n| n == schema::ENTRY_COLUMN)
 }
 
-fn fetch_rows(conn: &Connection, since: Option<i64>, limit: usize) -> rusqlite::Result<Vec<(i64, String)>> {
+fn fetch_rows(
+    conn: &Connection,
+    since: Option<i64>,
+    limit: usize,
+) -> rusqlite::Result<Vec<(i64, String)>> {
     let select = format!(
         "SELECT {seq}, CAST({entry} AS TEXT) FROM {t} WHERE {skip}",
         seq = schema::SEQ_COLUMN,
@@ -621,7 +674,10 @@ fn fetch_rows(conn: &Connection, since: Option<i64>, limit: usize) -> rusqlite::
         skip = schema::SKIP_WHERE,
     );
     let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, String)> {
-        Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default()))
+        Ok((
+            r.get(0)?,
+            r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        ))
     };
     match since {
         Some(s) => {
@@ -652,8 +708,12 @@ fn entry_to_message(seq: i64, entry: &str) -> Option<ThreadMessage> {
         _ => return None,
     };
     let kind = str_of(&o, "kind")?;
-    let at_ms = o.get(schema::TIMESTAMP).and_then(Value::as_i64).filter(|t| *t > 0);
-    let via_k2 = str_of(&o, schema::CLIENT_NONCE).is_some_and(|n| n.starts_with(schema::K2_NONCE_MARK));
+    let at_ms = o
+        .get(schema::TIMESTAMP)
+        .and_then(Value::as_i64)
+        .filter(|t| *t > 0);
+    let via_k2 =
+        str_of(&o, schema::CLIENT_NONCE).is_some_and(|n| n.starts_with(schema::K2_NONCE_MARK));
     let mut msg = ThreadMessage {
         seq,
         author: Author::Agent,
@@ -719,12 +779,26 @@ fn card_of(ty: &str, m: &Map<String, Value>, entry: &Map<String, Value>) -> Opti
             let responded = str_of(entry, schema::WIDGET_RESPONDED).map(str::to_string);
             let mut matched = false;
             let mut options = Vec::new();
-            for op in w.get("options").and_then(Value::as_array).into_iter().flatten().take(12) {
+            for op in w
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(12)
+            {
                 let Some(op) = op.as_object() else { continue };
-                let Some(label) = card_str(op, "label") else { continue };
-                let chosen = responded.as_deref().is_some_and(|r| str_of(op, "value") == Some(r));
+                let Some(label) = card_str(op, "label") else {
+                    continue;
+                };
+                let chosen = responded
+                    .as_deref()
+                    .is_some_and(|r| str_of(op, "value") == Some(r));
                 matched |= chosen;
-                options.push(CardOption { label, description: card_str(op, "description"), chosen });
+                options.push(CardOption {
+                    label,
+                    description: card_str(op, "description"),
+                    chosen,
+                });
             }
             let flag = |k: &str| entry.get(k).and_then(Value::as_bool) == Some(true);
             let state = if responded.is_some() {
@@ -736,9 +810,18 @@ fn card_of(ty: &str, m: &Map<String, Value>, entry: &Map<String, Value>) -> Opti
             } else {
                 CardState::Open
             };
-            let custom_answer =
-                if matched { None } else { responded.map(|r| r.chars().take(MAX_CARD_TEXT).collect()) };
-            Some(Card::Choice { prompt, help_text: card_str(w, "helpText"), options, state, custom_answer })
+            let custom_answer = if matched {
+                None
+            } else {
+                responded.map(|r| r.chars().take(MAX_CARD_TEXT).collect())
+            };
+            Some(Card::Choice {
+                prompt,
+                help_text: card_str(w, "helpText"),
+                options,
+                state,
+                custom_answer,
+            })
         }
         schema::SEND_MESSAGE_CONNECTOR_TYPE => Some(Card::Connector {
             connector: card_str(m, "connector")?,
@@ -749,7 +832,10 @@ fn card_of(ty: &str, m: &Map<String, Value>, entry: &Map<String, Value>) -> Opti
             Some(Card::SecretRequest {
                 label: card_str(r, "label")?,
                 description: card_str(r, "description"),
-                platform: r.get("target").and_then(Value::as_object).and_then(|t| card_str(t, "platform")),
+                platform: r
+                    .get("target")
+                    .and_then(Value::as_object)
+                    .and_then(|t| card_str(t, "platform")),
                 provided: entry.get(schema::SECRET_PROVIDED).and_then(Value::as_bool) == Some(true),
             })
         }
@@ -796,15 +882,26 @@ fn agent_ref(v: &Value) -> Option<AgentRef> {
 // ── small helpers ───────────────────────────────────────────────────────
 
 fn denied() -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::PermissionDenied, "path outside K2's Grok Bot allowlist")
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "path outside K2's Grok Bot allowlist",
+    )
 }
 
 fn str_of<'a>(o: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    o.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    o.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 fn sort_agents(v: &mut [ExternalAgent]) {
-    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
+    v.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.id.cmp(&b.id))
+    });
 }
 
 fn fallback_name(id: &str) -> String {

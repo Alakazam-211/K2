@@ -36,8 +36,11 @@ struct Conn {
 impl Conn {
     fn open(port: u16) -> Conn {
         let s = TcpStream::connect(("127.0.0.1", port)).expect("connect daemon");
-        s.set_read_timeout(Some(Duration::from_secs(15))).expect("timeout");
-        Conn { reader: BufReader::new(s) }
+        s.set_read_timeout(Some(Duration::from_secs(15)))
+            .expect("timeout");
+        Conn {
+            reader: BufReader::new(s),
+        }
     }
 
     fn request(&mut self, method: &str, path: &str, body: Option<&str>) -> (u16, String) {
@@ -46,10 +49,20 @@ impl Conn {
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
-        self.reader.get_mut().write_all(head.as_bytes()).expect("write request");
+        self.reader
+            .get_mut()
+            .write_all(head.as_bytes())
+            .expect("write request");
         let mut status_line = String::new();
-        self.reader.read_line(&mut status_line).expect("status line");
-        let status: u16 = status_line.split_whitespace().nth(1).expect("status").parse().expect("num");
+        self.reader
+            .read_line(&mut status_line)
+            .expect("status line");
+        let status: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .expect("status")
+            .parse()
+            .expect("num");
         let mut len = 0usize;
         loop {
             let mut line = String::new();
@@ -85,16 +98,21 @@ fn mint_passport() -> String {
     session_token::mint_session_token(
         &SessionId::new(),
         "pane-grokbots",
-        HookPrincipal { workspace_uuid: "ws-grokbots".into(), agent_address: "agent-grokbots".into() },
+        HookPrincipal {
+            workspace_uuid: "ws-grokbots".into(),
+            agent_address: "agent-grokbots".into(),
+        },
         CredMode::ApiKey,
         Provider::Anthropic,
     )
 }
 
 fn login(username: &str, role: Option<connect_users::Role>) -> String {
-    connect_users::add_user(username, "password123").unwrap_or_else(|e| panic!("add_user {username}: {e:?}"));
+    connect_users::add_user(username, "password123")
+        .unwrap_or_else(|e| panic!("add_user {username}: {e:?}"));
     if let Some(r) = role {
-        connect_users::set_role(username, r).unwrap_or_else(|e| panic!("set_role {username}: {e:?}"));
+        connect_users::set_role(username, r)
+            .unwrap_or_else(|e| panic!("set_role {username}: {e:?}"));
     }
     connect_users::create_session(username)
 }
@@ -118,7 +136,10 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
     assert_eq!(s, 200, "{b}");
     assert_eq!(b["enabled"], json!(false));
     assert_eq!(b["agents"], json!([]));
-    assert!(fixture::opened_under(&sand.root).is_empty(), "off: sand-data untouched");
+    assert!(
+        fixture::opened_under(&sand.root).is_empty(),
+        "off: sand-data untouched"
+    );
     assert!(gw.seen().is_empty(), "off: gateway untouched");
 
     // GET on the POST-only send row → 405, and the socket keeps serving.
@@ -134,10 +155,22 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
         for (m, p, body) in [
             ("GET", "/cli/grokbots/list", None),
             ("GET", "/cli/grokbots/thread", None),
-            ("POST", "/cli/grokbots/send", Some(json!({"agent": A, "text": "hi"}))),
-            ("POST", "/cli/grokbots/settings", Some(json!({"show": true, "send": true}))),
+            (
+                "POST",
+                "/cli/grokbots/send",
+                Some(json!({"agent": A, "text": "hi"})),
+            ),
+            (
+                "POST",
+                "/cli/grokbots/settings",
+                Some(json!({"show": true, "send": true})),
+            ),
         ] {
-            let path = if p.ends_with("thread") { format!("{p}?agent={A}&token={tok}") } else { q(p, tok) };
+            let path = if p.ends_with("thread") {
+                format!("{p}?agent={A}&token={tok}")
+            } else {
+                q(p, tok)
+            };
             let (s, b, _) = call(port, m, &path, body);
             assert_eq!(s, 403, "{m} {p} with {}: {b}", &tok[..6]);
         }
@@ -147,16 +180,38 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
 
     // Member login: settings write and send stop at the policy gate.
     let member = login("gbmember", None);
-    let (s, b, _) = call(port, "POST", &q("/cli/grokbots/settings", &member), Some(json!({"show": true})));
+    let (s, b, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/settings", &member),
+        Some(json!({"show": true})),
+    );
     assert_eq!(s, 403, "{b}");
     assert_eq!(b["error"], json!("role_required"), "{b}");
-    let (s, b, _) = call(port, "POST", &q("/cli/grokbots/send", &member), Some(json!({"agent": A, "text": "x"})));
-    assert_eq!((s, b["error"].clone()), (403, json!("role_required")), "{b}");
+    let (s, b, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/send", &member),
+        Some(json!({"agent": A, "text": "x"})),
+    );
+    assert_eq!(
+        (s, b["error"].clone()),
+        (403, json!("role_required")),
+        "{b}"
+    );
 
     // Owner turns Show on → event on the bus.
-    let (s, b, _) = call(port, "POST", &q("/cli/grokbots/settings", OWNER), Some(json!({"show": true})));
+    let (s, b, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/settings", OWNER),
+        Some(json!({"show": true})),
+    );
     assert_eq!(s, 200, "{b}");
-    assert_eq!((b["show"].clone(), b["send"].clone()), (json!(true), json!(false)));
+    assert_eq!(
+        (b["show"].clone(), b["send"].clone()),
+        (json!(true), json!(false))
+    );
     let mut saw = false;
     for _ in 0..50 {
         match events.try_recv() {
@@ -179,23 +234,51 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
     assert_eq!(b["agents"][0]["kind"], json!("grokbot"));
     assert_eq!(b["agents"][0]["name"], json!("Cortana"));
     assert!(!raw.contains(FAKE_TOKEN));
-    let (s, b, raw) = call(port, "GET", &format!("/cli/grokbots/thread?agent={A}&token={member}"), None);
+    let (s, b, raw) = call(
+        port,
+        "GET",
+        &format!("/cli/grokbots/thread?agent={A}&token={member}"),
+        None,
+    );
     assert_eq!(s, 200, "{b}");
     assert_eq!(b["messages"][2]["text"], json!("Build is green."));
     assert!(!raw.contains(FAKE_TOKEN));
 
     // Send is still off.
-    let (s, b, _) = call(port, "POST", &q("/cli/grokbots/send", OWNER), Some(json!({"agent": A, "text": "x"})));
-    assert_eq!((s, b["error"].clone()), (403, json!("grokbots_send_off")), "{b}");
+    let (s, b, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/send", OWNER),
+        Some(json!({"agent": A, "text": "x"})),
+    );
+    assert_eq!(
+        (s, b["error"].clone()),
+        (403, json!("grokbots_send_off")),
+        "{b}"
+    );
 
     // Admin login turns Send on and sends.
     let admin = login("gbadmin", Some(connect_users::Role::Admin));
-    let (s, _, _) = call(port, "POST", &q("/cli/grokbots/settings", &admin), Some(json!({"send": true})));
+    let (s, _, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/settings", &admin),
+        Some(json!({"send": true})),
+    );
     assert_eq!(s, 200);
-    let (s, b, raw) = call(port, "POST", &q("/cli/grokbots/send", &admin), Some(json!({"agent": A, "text": "ping"})));
+    let (s, b, raw) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/send", &admin),
+        Some(json!({"agent": A, "text": "ping"})),
+    );
     assert_eq!(s, 200, "{b}");
     assert!(!raw.contains(FAKE_TOKEN));
-    let sent: Vec<_> = gw.seen().into_iter().filter(|r| r.path == "/api/sendPrompt").collect();
+    let sent: Vec<_> = gw
+        .seen()
+        .into_iter()
+        .filter(|r| r.path == "/api/sendPrompt")
+        .collect();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].body["prompt"], json!("ping"));
     assert_eq!(sent[0].body["clientNonce"], b["clientNonce"]);

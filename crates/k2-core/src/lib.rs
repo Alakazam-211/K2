@@ -110,6 +110,10 @@ pub mod sources;
 // widget keyspaces in a daemon-owned SQLite file, grants, authorship,
 // transactions and snapshots. Pure half; routes live in k2-daemon.
 pub mod garden_data;
+// Local Grok Bots (0.45.7): agent products on this computer that are not K2
+// workspaces. Provider trait + Grok Bot adapter; routes and the poller live
+// in k2-daemon. See module docs.
+pub mod external_agents;
 // Phase 1 (prd-wiki-public-chat-api-loopback-v1): daemon-held host_sessions
 // API key for public wiki chat (`~/.k2/wiki-public-chat/`). See module docs.
 pub mod wiki_public_chat;

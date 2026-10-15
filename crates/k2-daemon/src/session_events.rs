@@ -602,7 +602,7 @@ pub enum SessionEvent {
     /// agents' chats grew. Wire: `{ "kind": "grokbots_changed", "rev": 9,
     /// "roster": true, "agents": ["<uuid>", …] }`. App-level refetch signal:
     /// ids only, never names, text or the gateway token. Only emitted while
-    /// Settings → K2 Server → Local Grok Bots → Show is on.
+    /// Settings → 3rd Party Bots → Grok Bot → Show is on.
     GrokbotsChanged { rev: i64, roster: bool, agents: Vec<String> },
 
     /// S1 (presence/multiplayer arc) — the connected-users roster
@@ -724,8 +724,8 @@ pub enum SessionEvent {
     /// attached or removed, a manual check ran, the box's own pending-zone
     /// re-check saw k2.dev flip a zone (`pending_ns` → `active`, or to a
     /// read-only `winddown`/`suspended`), or a bound zone went missing from
-    /// k2.dev's list. APP-LEVEL refetch signal: Settings → K2 Server →
-    /// Domains re-reads `GET /cli/domains`.
+    /// k2.dev's list. APP-LEVEL refetch signal: Settings → Network →
+    /// Custom Domains re-reads `GET /cli/domains`.
     ///
     /// Wire: `{ "kind": "domains_changed", "reason": string, "apex":
     /// string|null }`. `reason` is one of `attached` | `removed` |

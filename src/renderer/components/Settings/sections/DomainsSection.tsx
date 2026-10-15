@@ -1,4 +1,4 @@
-// Settings → K2 Server → Domains (prd-custom-domains-and-certs-v1 D4/D11).
+// Settings → Network → Custom Domains (prd-custom-domains-and-certs-v1 D4/D11).
 // Thin client on GET /cli/domains. Attach ≠ NS transfer.
 
 import React, { useCallback, useEffect, useState } from 'react'

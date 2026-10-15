@@ -118,7 +118,7 @@ pub fn suggestion_for(widget: &str, message: &str) -> String {
         return match code {
             "cap_not_granted" => "add the verb's cap to manifest.json \"caps\" (k2 zen guide api names each verb's cap), then save".into(),
             "not_bound" => "use an address this widget reaches (k2.agents.list() lists them; for sources, the placement's config.source / config.sources)".into(),
-            "server_not_saved" => "the source's server isn't one of the person's saved servers: ask them to add it in Settings → K2 Server → Connected Servers".into(),
+            "server_not_saved" => "the source's server isn't one of the person's saved servers: ask them to add it in Settings → Network → Connected Servers".into(),
             "unreachable" => "the source's server didn't answer: draw the `last` view greyed and try again later".into(),
             "removed" => "the source was removed on its server: show that, and ask the person which source to use instead".into(),
             "no_history" => "this source keeps states only (keep: states): it has no history to chart".into(),

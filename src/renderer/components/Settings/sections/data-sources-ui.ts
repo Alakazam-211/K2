@@ -1,4 +1,4 @@
-// Shared bits for Settings → K2 Server → Data Sources (contract-sources-v1
+// Shared bits for Settings → Gardens → Data Sources (contract-sources-v1
 // §8). Owner: B2. Pure helpers (no React) so they're easy to test.
 //
 // Times are SECONDS. Ages come from the server's own clock

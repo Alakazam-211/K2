@@ -38,14 +38,15 @@ import { currentShortcutOs } from '@/lib/shortcut-label'
 import { isAirgap } from '@/lib/airgap'
 import { useDialogEscape } from '../settings-esc'
 import type { DesktopOs } from '@/lib/desktop-chrome'
+import { AccessAuditLink } from '../shared/AccessAuditLink'
 
 /** Where the "Enable public API (/v1)" toggle lives: the Policies column
- *  of K2 Server → Tunnel, or of Connected Servers under air-gap (Tunnel is
+ *  of Network → Tunnel, or of Connected Servers under air-gap (Tunnel is
  *  hidden then; `K2ConnectSettingsShell`). */
 export function publicApiToggleLocation(airgap: boolean = isAirgap()): string {
   return airgap
-    ? 'Settings → K2 Server → Connected Servers → Policies'
-    : 'Settings → K2 Server → Tunnel → Policies'
+    ? 'Settings → Network → Connected Servers → Policies'
+    : 'Settings → Network → Tunnel → Policies'
 }
 
 /** The hire-key confirm copy. Touch ID (`local-auth`) exists only for the
@@ -160,6 +161,7 @@ export function ApiTokensSection(): React.JSX.Element {
           is shown only once when created. Disable for emergencies (re-enableable); revoke is
           permanent.
         </p>
+        <AccessAuditLink className="mt-1" />
         {!apiEnabled && (
           <p className="text-[11px] text-[var(--color-status-warning-soft)] mt-1 max-w-2xl" data-testid="api-surface-off">
             The public /v1 API is off on this server, so no key works yet (hiring agents included).

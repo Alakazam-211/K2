@@ -1520,7 +1520,7 @@ export function onMailChanged(scope: ServerScope, fn: MailChangedHandler): Unsub
 /** prd-dns-pending-and-cutover-safety-v1 DN12e — subscribe to APP-LEVEL
  *  `domains_changed` on `scope`'s server (custom domains attached, removed,
  *  re-checked, or flipped by the daemon's own pending-zone re-check).
- *  Refetch signal; Settings → K2 Server → Domains is the consumer. */
+ *  Refetch signal; Settings → Network → Custom Domains is the consumer. */
 export function onDomainsChanged(scope: ServerScope, fn: DomainsChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.domainsChanged, fn)
 }

@@ -157,7 +157,7 @@ class H(BaseHTTPRequestHandler):
                 "ok": False,
                 "error": {
                     "code": "zone_pending_ns",
-                    "hint": "Pending: point nameservers to ns1.k2.dev, ns2.k2.dev at the registrar for pending.example, then check again (Settings → K2 Server → Domains → Check again, or `k2 domain refresh pending.example`). DNS record writes open once the zone is active.",
+                    "hint": "Pending: point nameservers to ns1.k2.dev, ns2.k2.dev at the registrar for pending.example, then check again (Settings → Network → Custom Domains → Check again, or `k2 domain refresh pending.example`). DNS record writes open once the zone is active.",
                 },
             }).encode()
             self.send_response(403)

@@ -469,13 +469,13 @@ afterEach(() => {
 })
 
 describe('Settings → Gardens: where it shows', () => {
-  it('0.45.7: a Gardens group (Gardens, Widget data), the first group after the top-level pages', () => {
+  it('0.45.7: a Gardens group (Gardens, Widget data, Data Sources), the first group after the top-level pages', () => {
     const nav = settingsNav({ zenGardens: true })
     const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
     expect(groups[0]).toBe('Gardens')
-    // LLMs (0.45.7) sits between Gardens and K2 Server.
+    // LLMs, then Access (0.45.7).
     expect(groups[1]).toBe('LLMs')
-    expect(groups[2]).toBe('K2 Server')
+    expect(groups[2]).toBe('Access')
     const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
     // Every block before it is a top-level page; the next one is LLMs.
     expect(nav.slice(0, at).every((b) => b.kind === 'item')).toBe(true)
@@ -486,6 +486,7 @@ describe('Settings → Gardens: where it shows', () => {
       items: [
         { id: 'zen-gardens', label: 'Gardens' },
         { id: 'zen-widget-data', label: 'Widget data' },
+        { id: 'data-sources', label: 'Data Sources' },
       ],
     })
     // Gardens is no longer a top-level page; Tickets → Context Catalog close up.
@@ -498,13 +499,17 @@ describe('Settings → Gardens: where it shows', () => {
     const offIds = off.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
     expect(offIds).not.toContain('zen-gardens')
     expect(offIds).not.toContain('zen-widget-data')
-    // Data Sources stays under K2 Server (it is the server's).
-    const server = nav.find((b) => b.kind === 'group' && b.title === 'K2 Server')
-    expect(server?.kind === 'group' && server.items.some((i) => i.id === 'data-sources')).toBe(true)
-    expect(nav[at].kind === 'group' && nav[at].items.some((i) => i.id === 'data-sources')).toBe(false)
+    // Data Sources is in Gardens, once; without Gardens it stays reachable,
+    // as Network's last leaf.
+    const where = (n: typeof nav) =>
+      n.flatMap((b) => (b.kind === 'group' && b.items.some((i) => i.id === 'data-sources') ? [b.title] : []))
+    expect(where(nav)).toEqual(['Gardens'])
+    expect(where(off)).toEqual(['Network'])
+    const network = off.find((b) => b.kind === 'group' && b.title === 'Network')
+    expect(network?.kind === 'group' && network.items.at(-1)).toEqual({ id: 'data-sources', label: 'Data Sources' })
   })
 
-  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data) before LLMs and K2 Server, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data, Data Sources) before LLMs, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -516,7 +521,9 @@ describe('Settings → Gardens: where it shows', () => {
     const at = ids.indexOf('zen-gardens')
     expect(at).toBeGreaterThan(ids.indexOf('keybindings'))
     expect(ids[at + 1]).toBe('zen-widget-data')
-    expect(ids[at + 2]).toBe('agents')
+    expect(ids[at + 2]).toBe('data-sources')
+    expect(ids[at + 3]).toBe('agents')
+    expect(ids.filter((id) => id === 'data-sources').length).toBe(1)
     expect(ids[ids.indexOf('tickets') + 1]).toBe('context-catalog')
     // The group header sits right above its first leaf, which is indented.
     const leaf = document.querySelector('[data-settings-nav="zen-gardens"]') as HTMLElement
@@ -1411,7 +1418,7 @@ describe('Settings → Gardens → Widget data: its own page (0.45.7)', () => {
     expect(document.querySelector('[data-zen-gardens-setup]')).not.toBeNull()
   })
 
-  it('links to Data Sources, which stays under K2 Server', async () => {
+  it('links to Data Sources, the next page in the Gardens group', async () => {
     // The page alone: the link only routes; Data Sources itself isn't faked here.
     useSettingsStore.setState({ activeSection: 'zen-widget-data' })
     render(<ZenWidgetDataSection />)

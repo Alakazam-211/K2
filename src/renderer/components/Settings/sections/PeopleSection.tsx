@@ -1,4 +1,4 @@
-// Settings → K2 Server → User Access. Principals (username + full name)
+// Settings → Access → User Access. Principals (username + full name)
 // plus that person's grants. Access templates live under User Templates.
 // Not Admin Access (Connect users) and not Sidecars → Apps.
 
@@ -7,6 +7,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
+import { AccessAuditLink } from '../shared/AccessAuditLink'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -443,6 +444,7 @@ export function PeopleSection(): React.JSX.Element {
             Username and full name for app guests on this box. This reads principals.
             It is not Admin Access and not a separate people list.
           </p>
+          <AccessAuditLink className="mt-1" />
         </div>
         <div data-settings-id="people.roster" className="flex-1 overflow-y-auto min-h-0">
           <div className="px-3 pt-2 pb-1">

@@ -6,9 +6,9 @@
 // that, a pointer to Settings → Gardens → Gardens, where the person sets
 // them up.
 //
-// Data Sources (the checks a K2 server runs for Garden cards and agents)
-// stays under K2 Server: it belongs to the server, not to this computer's
-// Gardens. This page links to it.
+// Data Sources (the checks a K2 server runs for Garden cards and agents) is
+// the next page in the Gardens group from 0.45.7 (Rosson; before, under K2
+// Server). This page links to it.
 //
 // Like the Gardens page, Settings shows this only where the Zen toggle shows
 // (`useZenGardensSettingsShown`); the web client never mounts it.
@@ -36,13 +36,13 @@ const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
 const MUTED = 'text-xs text-[var(--color-text-muted)]'
 
-/** Data Sources lives under K2 Server; Garden cards read from it. */
+/** Data Sources is the next page in the Gardens group; Garden cards read from it. */
 function DataSourcesLink(): React.JSX.Element {
   return (
     <section className="mt-8 pt-4 border-t border-[var(--color-border)]" data-zen-widget-data-sources-link="">
       <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Data Sources</h3>
       <p className={`${MUTED} mt-1 mb-2`}>
-        Garden cards that show checks a server runs (sites, status, triggers) get them from Data Sources, under K2 Server.
+        Garden cards that show checks a server runs (sites, status, triggers) get them from Data Sources, the next page in this group.
       </p>
       <button
         type="button"

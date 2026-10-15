@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → K2 Server → Vault (prd-k2-vault-v1 §16.1, KV39).
+// Settings → Access → Vault (prd-k2-vault-v1 §16.1, KV39).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within, act } from '@testing-library/react'

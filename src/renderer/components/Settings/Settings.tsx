@@ -33,6 +33,8 @@ import { VaultSection, VAULT_MANIFEST } from './sections/VaultSection'
 import { DataSourcesSection, DATA_SOURCES_MANIFEST } from './sections/DataSourcesSection'
 import { LocalGrokBotsSection, LOCAL_GROKBOTS_MANIFEST } from './sections/LocalGrokBotsSection'
 import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
+import type { FeatureKey } from '@/lib/server-capabilities'
+import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
@@ -80,21 +82,47 @@ type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string; beta?: boolean }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
-/** The sidebar. LLMs is a group from 0.45.7 (Rosson: "Group the LLM
- *  details under one section as well: LLMs · Tokens · Token Usage"): LLMs
- *  (id `agents`: default agent, launch bar, presets, CLI install), Tokens
- *  (id `llm-tokens`: the subscriptions and API tokens that were the LLMs
- *  page's right half) and Token Usage (id `token-usage`). It sits right
- *  after Gardens and before K2 Server: Gardens keeps its place as the first
- *  group, and where Gardens is hidden (web, Windows) LLMs is the first
- *  group, as high as the LLMs page was. `zenGardens`: show the Gardens group, which is
+/** Settings → 3rd Party Bots (0.45.7): one leaf per outside bot provider
+ *  K2 can find on this server. Each leaf shows only when the window's server
+ *  reports that provider's capability. Future providers (Hermes `hm`,
+ *  Instinct `in`, Muse `ms`, Dots `dt`) add a row here. */
+export const THIRD_PARTY_BOTS: { id: SettingsSection; label: string; capability: FeatureKey | ReportedFeatureKey }[] = [
+  { id: 'local-grokbots', label: 'Grok Bot', capability: 'grokbots-v1' },
+]
+
+function thirdPartyBotLeaves(): NavLeaf[] {
+  return THIRD_PARTY_BOTS.map((bot) => {
+    let hide = true
+    try {
+      hide = !settingsPrimaryScope().serverSupports(bot.capability)
+    } catch {
+      hide = true
+    }
+    return { id: bot.id, label: bot.label, hide }
+  })
+}
+
+/** The sidebar. Top-level pages, then groups: Gardens, LLMs, Access,
+ *  Network, Editors / Fonts, Logs, Sidecars, 3rd Party Bots.
+ *  LLMs is a group from 0.45.7 (Rosson: "Group the LLM details under one
+ *  section as well: LLMs · Tokens · Token Usage"): LLMs (id `agents`:
+ *  default agent, launch bar, presets, CLI install), Tokens (id
+ *  `llm-tokens`: the subscriptions and API tokens that were the LLMs page's
+ *  right half) and Token Usage (id `token-usage`).
+ *  K2 Server split in two in 0.45.7 (Rosson): Access (who may get in and
+ *  with what: Admin Access, User Access, User Templates, API Keys, Vault;
+ *  the login log stays in Logs → Access Audit, which each Access page links
+ *  to) and Network (how this server is reached: Tunnel, Custom Domains,
+ *  Connected Servers, K2 Companion). Data Sources moved into Gardens;
+ *  where the Gardens group is hidden (web, Windows) it is Network's last
+ *  leaf, so it stays reachable. Local Grok Bots is 3rd Party Bots → Grok
+ *  Bot. Old ids are unchanged, so deep links land on the same pages.
+ *  `zenGardens`: show the Gardens group, which is
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
  *  their own section … like K2 Server and Logs"): Gardens (list, lock,
- *  sync, theme, folder) then Widget data, the first group after the
- *  top-level pages.
- *  Data Sources stays under K2 Server (it is the server's; Widget data
- *  links to it). Tickets sits directly beneath Projects
+ *  sync, theme, folder), Widget data, then Data Sources; the first group
+ *  after the top-level pages. Tickets sits directly beneath Projects
  *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
@@ -106,13 +134,6 @@ export function settingsNav({
   notifications?: boolean
 }): NavBlock[] {
   const hideTunnel = isAirgap()
-  // Local Grok Bots (0.45.7): only on a server that has the routes.
-  let hideGrokBots = true
-  try {
-    hideGrokBots = !settingsPrimaryScope().serverSupports('grokbots-v1')
-  } catch {
-    hideGrokBots = true
-  }
   const blocks: NavBlock[] = [
     { kind: 'item', id: 'general', label: 'General' },
     ...(notifications
@@ -140,6 +161,7 @@ export function settingsNav({
             items: [
               { id: 'zen-gardens', label: 'Gardens' },
               { id: 'zen-widget-data', label: 'Widget data' },
+              { id: 'data-sources', label: 'Data Sources' },
             ],
           },
         ] satisfies NavBlock[])
@@ -155,19 +177,25 @@ export function settingsNav({
     },
     {
       kind: 'group',
-      title: 'K2 Server',
+      title: 'Access',
       items: [
         { id: 'k2-access', label: 'Admin Access' },
         { id: 'people', label: 'User Access', beta: true },
         { id: 'user-templates', label: 'User Templates', beta: true },
-        { id: 'domains', label: 'Custom Domains' },
-        { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
-        { id: 'connections', label: 'Connected Servers' },
         { id: 'api-tokens', label: 'API Keys' },
         { id: 'vault', label: 'Vault' },
-        { id: 'data-sources', label: 'Data Sources' },
-        { id: 'local-grokbots', label: 'Local Grok Bots', hide: hideGrokBots },
+      ],
+    },
+    {
+      kind: 'group',
+      title: 'Network',
+      items: [
+        { id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },
+        { id: 'domains', label: 'Custom Domains' },
+        { id: 'connections', label: 'Connected Servers' },
         { id: 'companion', label: 'K2 Companion' },
+        // No Gardens group here (web, Windows): Data Sources stays reachable.
+        ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'Data Sources' }]),
       ],
     },
     {
@@ -196,6 +224,11 @@ export function settingsNav({
         { id: 'data', label: 'Database' },
         { id: 'skin-access', label: 'Apps', beta: true },
       ],
+    },
+    {
+      kind: 'group',
+      title: '3rd Party Bots',
+      items: thirdPartyBotLeaves(),
     },
   ]
   return blocks

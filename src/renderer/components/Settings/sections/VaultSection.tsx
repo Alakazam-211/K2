@@ -1,4 +1,4 @@
-// Settings → K2 Server → Vault (prd-k2-vault-v1 §16.1, KV39; §18 copy).
+// Settings → Access → Vault (prd-k2-vault-v1 §16.1, KV39; §18 copy).
 //
 // A thin client on `/cli/vault/*`. The daemon decides who sees what: a
 // Member's list comes back filtered, and K2's own (`system`) secrets only
@@ -36,6 +36,7 @@ import {
   type VaultSecret,
   type VaultStatus,
 } from './vault-api'
+import { AccessAuditLink } from '../shared/AccessAuditLink'
 
 export const VAULT_MANIFEST: SettingEntry[] = [
   {
@@ -1248,6 +1249,7 @@ export function VaultSection(): React.JSX.Element {
           Secrets your agents use: API keys, passwords, tokens. Each one is only sent to the sites you pick, and every
           use is logged.
         </p>
+        <AccessAuditLink className="mt-1" />
       </div>
 
       {status && <VaultStatusCard status={status} onRecoveryConfirmed={() => void refresh()} />}

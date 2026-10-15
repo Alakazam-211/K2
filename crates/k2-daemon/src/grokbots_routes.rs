@@ -114,7 +114,7 @@ pub fn too_large() -> CliResponse {
     )
 }
 
-const SETTINGS_HINT: &str = "Settings → K2 Server → Local Grok Bots";
+const SETTINGS_HINT: &str = "Settings → 3rd Party Bots → Grok Bot";
 
 fn humans_only() -> CliResponse {
     refuse(

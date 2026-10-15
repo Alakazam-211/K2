@@ -426,7 +426,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::MailChanged { .. } => None,
 
         // prd-dns-pending-and-cutover-safety-v1 DN12e — APP-LEVEL: custom
-        // domains are host-wide (Settings → K2 Server → Domains), not tied
+        // domains are host-wide (Settings → Network → Custom Domains), not tied
         // to one workspace.
         SessionEvent::DomainsChanged { .. } => None,
 

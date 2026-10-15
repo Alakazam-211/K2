@@ -18,31 +18,39 @@ describe('Settings nav Apps', () => {
     expect(src).not.toContain("id: 'k2-access', label: 'Admin Access', beta")
   })
 
-  it('K2 Server order is Admin Access, User Access, User Templates, Custom Domains, Tunnel, Connected Servers, API Keys, Vault, Data Sources, Local Grok Bots, K2 Companion', () => {
-    const serverStart = src.indexOf("title: 'K2 Server'")
-    const serverEnd = src.indexOf("title: 'Editors / Fonts'")
-    expect(serverStart).toBeGreaterThan(0)
-    expect(serverEnd).toBeGreaterThan(serverStart)
-    const server = src.slice(serverStart, serverEnd)
-    expect(server).toContain(
+  it('K2 Server is two groups (0.45.7): Access (Admin Access, User Access, User Templates, API Keys, Vault) and Network (Tunnel, Custom Domains, Connected Servers, K2 Companion)', () => {
+    expect(src).not.toContain("title: 'K2 Server'")
+    const accessStart = src.indexOf("title: 'Access'")
+    const networkStart = src.indexOf("title: 'Network'")
+    const editors = src.indexOf("title: 'Editors / Fonts'")
+    expect(accessStart).toBeGreaterThan(src.indexOf("title: 'LLMs'"))
+    expect(networkStart).toBeGreaterThan(accessStart)
+    expect(editors).toBeGreaterThan(networkStart)
+    const access = src.slice(accessStart, networkStart)
+    const network = src.slice(networkStart, editors)
+    expect(access).toContain(
       [
         "{ id: 'k2-access', label: 'Admin Access' },",
         "{ id: 'people', label: 'User Access', beta: true },",
         "{ id: 'user-templates', label: 'User Templates', beta: true },",
-        "{ id: 'domains', label: 'Custom Domains' },",
-        "{ id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },",
-        "{ id: 'connections', label: 'Connected Servers' },",
         "{ id: 'api-tokens', label: 'API Keys' },",
         "{ id: 'vault', label: 'Vault' },",
-        "{ id: 'data-sources', label: 'Data Sources' },",
-        "{ id: 'local-grokbots', label: 'Local Grok Bots', hide: hideGrokBots },",
+      ].join('\n        '),
+    )
+    expect(network).toContain(
+      [
+        "{ id: 'k2-connect', label: 'Tunnel', hide: hideTunnel },",
+        "{ id: 'domains', label: 'Custom Domains' },",
+        "{ id: 'connections', label: 'Connected Servers' },",
         "{ id: 'companion', label: 'K2 Companion' },",
       ].join('\n        '),
     )
-    expect(server).not.toContain("id: 'skin-access'")
-    expect(server).not.toContain("{ id: 'skin-access', label: 'People' }")
-    expect(src).toContain("id: 'k2-access'")
-    expect(src).toContain("id: 'people'")
+    // Data Sources is in Network only where the Gardens group is hidden.
+    expect(network).toContain("...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'Data Sources' }]),")
+    expect(access).not.toContain("id: 'data-sources'")
+    expect(access + network).not.toContain("id: 'local-grokbots'")
+    expect(access + network).not.toContain("id: 'skin-access'")
+    expect(src).not.toContain("{ id: 'skin-access', label: 'People' }")
     expect(src).toContain("id: 'skin-access'")
     expect(src).toContain("activeSection === 'people'")
     expect(src).toContain("activeSection === 'user-templates'")
@@ -54,16 +62,20 @@ describe('Settings nav Apps', () => {
     expect(SECTION_LABELS.people).toBe('User Access')
     expect(SECTION_LABELS['k2-access']).toBe('Admin Access')
     expect(SECTION_LABELS['skin-access']).toBe('Apps')
-    // prd-k2-vault-v1 KV39: Settings → K2 Server → Vault.
+    // prd-k2-vault-v1 KV39: Settings → Access → Vault.
     expect(SECTION_LABELS.vault).toBe('Vault')
     expect(src).toContain("activeSection === 'vault'")
     expect(src).toContain('<VaultSection />')
     expect(src).toContain('...VAULT_MANIFEST,')
-    // contract-sources-v1 §8: Settings → K2 Server → Data Sources, after Vault.
+    // contract-sources-v1 §8: Settings → Gardens → Data Sources.
     expect(SECTION_LABELS['data-sources']).toBe('Data Sources')
     expect(src).toContain("activeSection === 'data-sources'")
     expect(src).toContain('<DataSourcesSection />')
     expect(src).toContain('...DATA_SOURCES_MANIFEST,')
+    // Local Grok Bots is 3rd Party Bots → Grok Bot, from a provider table.
+    expect(src).toContain("{ id: 'local-grokbots', label: 'Grok Bot', capability: 'grokbots-v1' },")
+    expect(src).toContain("title: '3rd Party Bots'")
+    expect(SECTION_LABELS['local-grokbots']).toBe('Grok Bot')
   })
 
   it('User Access, User Templates, and Apps rows carry a right-side BETA tag', () => {
@@ -79,21 +91,21 @@ describe('Settings nav Apps', () => {
 })
 
 describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own section)', () => {
-  it('Gardens is a group like K2 Server and Logs: Gardens then Widget data, before K2 Server', () => {
+  it('Gardens is a group like Access and Logs: Gardens, Widget data, Data Sources, before LLMs', () => {
     const start = src.indexOf("title: 'Gardens'")
-    const server = src.indexOf("title: 'K2 Server'")
+    const llms = src.indexOf("title: 'LLMs'")
     expect(start).toBeGreaterThan(0)
-    expect(server).toBeGreaterThan(start)
-    const gardens = src.slice(start, server)
+    expect(llms).toBeGreaterThan(start)
+    const gardens = src.slice(start, llms)
     expect(gardens).toContain(
       [
         "{ id: 'zen-gardens', label: 'Gardens' },",
         "{ id: 'zen-widget-data', label: 'Widget data' },",
+        "{ id: 'data-sources', label: 'Data Sources' },",
       ].join('\n              '),
     )
-    // No longer a top-level page; Data Sources stays under K2 Server.
+    // No longer a top-level page.
     expect(src).not.toContain("{ kind: 'item', id: 'zen-gardens'")
-    expect(gardens).not.toContain("id: 'data-sources'")
     // Both pages route, search and fall back like the rest.
     expect(src).toContain("activeSection === 'zen-gardens'")
     expect(src).toContain("activeSection === 'zen-widget-data'")
@@ -108,10 +120,10 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
 })
 
 describe('Settings nav LLMs group (0.45.7, Rosson: LLMs · Tokens · Token Usage)', () => {
-  it('LLMs is a group: LLMs, Tokens, Token Usage, after Gardens and before K2 Server', () => {
+  it('LLMs is a group: LLMs, Tokens, Token Usage, after Gardens and before Access', () => {
     const start = src.indexOf("title: 'LLMs'")
     const gardens = src.indexOf("title: 'Gardens'")
-    const server = src.indexOf("title: 'K2 Server'")
+    const server = src.indexOf("title: 'Access'")
     expect(start).toBeGreaterThan(gardens)
     expect(server).toBeGreaterThan(start)
     expect(src.slice(start, server)).toContain(

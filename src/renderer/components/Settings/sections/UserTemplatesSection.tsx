@@ -1,4 +1,4 @@
-// Settings → K2 Server → User Templates. Named access_templates recipes.
+// Settings → Access → User Templates. Named access_templates recipes.
 // A line stores kind and, for kind=app, a role_id. No target_id on a line.
 // Apply inserts real grants and collects target_id (and scope) then.
 // Editing a template does not rewrite grants already written.
@@ -8,6 +8,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
+import { AccessAuditLink } from '../shared/AccessAuditLink'
 
 export const USER_TEMPLATES_MANIFEST: SettingEntry[] = [
   {
@@ -332,6 +333,7 @@ export function UserTemplatesSection(): React.JSX.Element {
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
             A template is a named recipe. Applying it writes grants. Editing it does not rewrite grants already written.
           </p>
+          <AccessAuditLink className="mt-1" />
         </div>
         <div data-settings-id="user-templates.list" className="flex-1 overflow-y-auto min-h-0">
           <div className="px-3 pt-2 pb-1">

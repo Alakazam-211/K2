@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-// Settings → K2 Server → Domains: custom-domain attach A8.1 states
+// Settings → Network → Custom Domains: custom-domain attach A8.1 states
 // (pending nameservers, auto-added, Check again, 409 owned elsewhere).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'

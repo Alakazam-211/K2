@@ -102,7 +102,7 @@ pub fn handle(
                 return refuse(
                     "403 Forbidden",
                     "owner_only",
-                    "updating or rolling back the root helper is an owner/admin step: Settings → K2 Server, or `k2 root-helper` outside a K2 terminal",
+                    "updating or rolling back the root helper is an owner/admin step: run `k2 root-helper` outside a K2 terminal",
                 );
             };
             if !cfg!(target_os = "linux") {

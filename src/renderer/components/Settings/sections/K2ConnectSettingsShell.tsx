@@ -1,6 +1,7 @@
-// Settings → K2 Server nested pages (sidebar). Tunnel is a middle split
-// (expose left, policies right). Deep-link: `connections` → Connected
-// Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
+// Settings → Network → Tunnel / Connected Servers and Settings → Access →
+// Admin Access (sidebar; one K2 Server group before 0.45.7). Tunnel is a
+// middle split (expose left, policies right). Deep-link: `connections` →
+// Connected Servers; `k2-connect` → Tunnel; `k2-access` → Admin Access.
 
 import React from 'react'
 import { useSettingsStore } from '@/stores/settings'
@@ -8,6 +9,7 @@ import { isAirgap } from '@/lib/airgap'
 import { K2ConnectSection } from './K2ConnectSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
+import { AccessAuditLink } from '../shared/AccessAuditLink'
 
 type ConnectTab = 'tunnel' | 'people' | 'servers'
 
@@ -47,6 +49,7 @@ export function K2ConnectSettingsShell(): React.JSX.Element {
           {PAGE[tab].title}
         </h2>
         <p className="text-[10px] text-[var(--color-text-muted)]">{PAGE[tab].blurb}</p>
+        {tab === 'people' && <AccessAuditLink />}
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">

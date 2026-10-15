@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → K2 Server → User Access. Principals (username + full name).
+// Settings → Access → User Access. Principals (username + full name).
 // Not Admin Access's ConnectTab 'people', not skin-access.
 
 import { readFileSync } from 'node:fs'

@@ -16,7 +16,7 @@
 //! possible gap when the snapshot counter jumped).
 //!
 //! It does nothing — reads nothing under `~/sand-data` — while
-//! Settings → K2 Server → Local Grok Bots → Show is off.
+//! Settings → 3rd Party Bots → Grok Bot → Show is off.
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex, OnceLock};

@@ -154,7 +154,7 @@ pub fn pending_ns_hint(b: &DomainBinding) -> String {
     format!(
         "Pending: point nameservers to {ns} at the registrar for {apex}. This server re-checks \
 with k2.dev by itself and opens DNS record writes once the zone is active (to check now: \
-Settings → K2 Server → Domains → Check again, or `k2 domain refresh {apex}`).",
+Settings → Network → Custom Domains → Check again, or `k2 domain refresh {apex}`).",
         apex = b.apex
     )
 }

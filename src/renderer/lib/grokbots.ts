@@ -18,7 +18,7 @@ import type { RowStatus } from '@/lib/home-status'
 
 export const GROK_BOT_LABEL = 'Grok Bot'
 export const GROK_BOTS_FEATURE = 'grokbots-v1' as const
-export const GROK_BOTS_SETTINGS_PATH = 'Settings → K2 Server → Local Grok Bots'
+export const GROK_BOTS_SETTINGS_PATH = 'Settings → 3rd Party Bots → Grok Bot'
 
 export interface GrokBotAgent {
   id: string

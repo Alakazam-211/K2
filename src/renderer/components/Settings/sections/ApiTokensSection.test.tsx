@@ -77,13 +77,13 @@ describe('ApiTokensSection hire scope', () => {
     const hint = await screen.findByTestId('api-surface-off')
     // The toggle moved: there is no "K2 Connect" item in Settings now.
     expect(hint.textContent).not.toContain('K2 Connect')
-    expect(hint.textContent).toContain('Settings → K2 Server → Tunnel → Policies → Enable public API (/v1)')
+    expect(hint.textContent).toContain('Settings → Network → Tunnel → Policies → Enable public API (/v1)')
     expect(hint.textContent).toContain('k2 api on')
   })
 
   it('names Connected Servers for the toggle under air-gap (Tunnel is hidden)', () => {
-    expect(publicApiToggleLocation(true)).toBe('Settings → K2 Server → Connected Servers → Policies')
-    expect(publicApiToggleLocation(false)).toBe('Settings → K2 Server → Tunnel → Policies')
+    expect(publicApiToggleLocation(true)).toBe('Settings → Network → Connected Servers → Policies')
+    expect(publicApiToggleLocation(false)).toBe('Settings → Network → Tunnel → Policies')
   })
 
   it('confirms on the Mac, then mints a hire-only key with the limits', async () => {

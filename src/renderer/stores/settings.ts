@@ -85,20 +85,20 @@ export type SettingsSection =
   | 'dictation-lab'
   | 'connections'
   | 'k2-connect'
-  /** Settings → K2 Server → Domains (custom-domain inventory + certs). */
+  /** Settings → Network → Custom Domains (custom-domain inventory + certs). */
   | 'domains'
-  /** Settings → K2 Server → Admin Access (K2 Connect people/roles). */
+  /** Settings → Access → Admin Access (K2 Connect people/roles). */
   | 'k2-access'
-  /** Settings → K2 Server → User Access (skin principals). Not Connect users. */
+  /** Settings → Access → User Access (skin principals). Not Connect users. */
   | 'people'
-  /** Settings → K2 Server → User Templates (access_templates recipes). */
+  /** Settings → Access → User Templates (access_templates recipes). */
   | 'user-templates'
   | 'api-tokens'
-  /** Settings → K2 Server → Vault (prd-k2-vault-v1 §16.1, KV39). */
+  /** Settings → Access → Vault (prd-k2-vault-v1 §16.1, KV39). */
   | 'vault'
-  /** Settings → K2 Server → Data Sources (contract-sources-v1 §8). */
+  /** Settings → Gardens → Data Sources (contract-sources-v1 §8). */
   | 'data-sources'
-  /** Settings → K2 Server → Local Grok Bots (0.45.7). */
+  /** Settings → 3rd Party Bots → Grok Bot (0.45.7). */
   | 'local-grokbots'
   | 'email-hosting'
   | 'email-link'

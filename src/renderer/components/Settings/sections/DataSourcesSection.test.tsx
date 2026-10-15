@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Settings → K2 Server → Data Sources (contract-sources-v1 §8; B2).
+// Settings → Gardens → Data Sources (contract-sources-v1 §8; B2).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'

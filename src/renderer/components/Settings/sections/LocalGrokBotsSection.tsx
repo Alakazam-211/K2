@@ -1,7 +1,7 @@
-// Settings → K2 Server → Local Grok Bots (0.45.7).
+// Settings → 3rd Party Bots → Grok Bot (0.45.7).
 //
-// A per-server integration, so it lives with the other server-owned
-// switches (Vault, Data Sources): the daemon stores it, applies it for
+// A per-server integration (under K2 Server before 0.45.7; now the first
+// leaf of the 3rd Party Bots group): the daemon stores it, applies it for
 // every client and headless, and only the owner or an admin can change it.
 // Both switches are OFF by default:
 //   - Show: detect Grok Bot on that server's computer, list its agents in
@@ -121,7 +121,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
 
   return (
     <div className="max-w-xl" data-testid="local-grokbots-settings">
-      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Local Grok Bots</h2>
+      <h2 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Grok Bot</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-6">
         Grok Bot agents running on this server's computer can show up in Agents and on your Homes, tagged
         "Grok Bot". K2 reads only Grok Bot's agent list and their chats, for the user K2 runs as. Off until you

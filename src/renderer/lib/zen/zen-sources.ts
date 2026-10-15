@@ -5,7 +5,7 @@
 //
 // Addresses: `name` is this computer's daemon (the local owner token, so no
 // role floor; GV44a); `name::host` is another server, resolved against your
-// SAVED servers (Settings → K2 Server → Connected Servers), never Home rows,
+// SAVED servers (Settings → Network → Connected Servers), never Home rows,
 // and read with your own Connect login there, so its floors apply. A host
 // that isn't saved is `server_not_saved`.
 //
@@ -244,7 +244,7 @@ export function createZenSourcesReader(deps: ZenSourcesDeps): ZenSourcesReader {
         throw new ZenSourceError(c.code === 'unreachable' ? 'server_not_saved' : c.code, c.message)
       }
       if (!scope) {
-        throw new ZenSourceError('server_not_saved', `Add ${p.host} to your servers (Settings → K2 Server → Connected Servers).`)
+        throw new ZenSourceError('server_not_saved', `Add ${p.host} to your servers (Settings → Network → Connected Servers).`)
       }
       s = { key, scope, rev: 0, views: new Map(), listeners: new Map(), stop: null, timer: null, inFlight: false, down: false }
       servers.set(key, s)

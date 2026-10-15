@@ -201,7 +201,7 @@ describe('chat view', () => {
   it('is read-only with a "Sending is off" note while Send is off; cards render read-only', async () => {
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     await screen.findByText('Build is green.')
-    expect(screen.getByTestId('grokbot-send-off').textContent).toContain('Settings → K2 Server → Local Grok Bots')
+    expect(screen.getByTestId('grokbot-send-off').textContent).toContain('Settings → 3rd Party Bots → Grok Bot')
     expect(screen.queryByTestId('grokbot-compose')).toBeNull()
     expect(screen.getAllByTestId('grokbot-message').map((e) => e.getAttribute('data-author'))).toEqual([
       'human',

@@ -58,7 +58,9 @@ export function FanoutConfirmModal({
   // Escape closes (== Cancel) unless an action is mid-flight.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && busy === null) onCancel()
+      if (e.key !== 'Escape') return
+      e.preventDefault() // claim it: Settings must not close too
+      if (busy === null) onCancel()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)

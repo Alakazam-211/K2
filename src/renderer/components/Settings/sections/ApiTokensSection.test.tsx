@@ -21,6 +21,9 @@ vi.mock('@/stores/settings', () => {
 })
 
 import { ApiTokensSection, publicApiToggleLocation } from './ApiTokensSection'
+import { escOwnedByDialog } from '../settings-esc'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const HIRE_KEY = {
   id: 'key-1',
@@ -368,5 +371,52 @@ describe('ApiTokensSection App access limit', () => {
     fireEvent.click(screen.getByText('Confirm and save'))
     await waitFor(() => expect(screen.queryByTestId('edit-app-access')).toBeNull())
     expect(saves).toBe(2)
+  })
+})
+
+describe('Esc in the Create API key dialog (0.45.6 Linux check)', () => {
+  // Settings closes on Escape from a window listener registered before any
+  // dialog inside it opens. Same order here, same guard as Settings.tsx.
+  let settingsClose: ReturnType<typeof vi.fn>
+  let settingsEsc: (e: KeyboardEvent) => void
+  beforeEach(() => {
+    settingsClose = vi.fn()
+    settingsEsc = (e) => {
+      if (e.key !== 'Escape' || escOwnedByDialog(e)) return
+      settingsClose()
+    }
+    window.addEventListener('keydown', settingsEsc)
+  })
+  afterEach(() => window.removeEventListener('keydown', settingsEsc))
+
+  const esc = () => fireEvent.keyDown(window, { key: 'Escape' })
+
+  it('one Esc closes the dialog only; the next closes Settings', async () => {
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByText('Create API key'))
+    expect(screen.getByRole('dialog', { name: 'Create API key' })).toBeTruthy()
+    esc()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create API key' })).toBeNull())
+    expect(settingsClose).not.toHaveBeenCalled()
+    esc()
+    expect(settingsClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('Settings stands down even when the dialog listener ran first', () => {
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    ev.preventDefault()
+    expect(escOwnedByDialog(ev)).toBe(true)
+    const plain = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    expect(escOwnedByDialog(plain)).toBe(false)
+  })
+
+  it('Settings.tsx checks the guard before closing', () => {
+    const src = readFileSync(resolve(__dirname, '../Settings.tsx'), 'utf8')
+    const at = src.indexOf("if (e.key === 'Escape' && !searchOpen) {")
+    expect(at).toBeGreaterThan(-1)
+    const guard = src.indexOf('if (escOwnedByDialog(e)) return', at)
+    const close = src.indexOf('closeSettings()', at)
+    expect(guard).toBeGreaterThan(at)
+    expect(guard).toBeLessThan(close)
   })
 })

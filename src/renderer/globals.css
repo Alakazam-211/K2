@@ -152,6 +152,23 @@ a,
 }
 
 
+/* Native <select> off macOS (Linux WebKitGTK, Windows WebView2) paints with
+   the OS's light control theme: in a dark K2 scheme that was a white box (and
+   a white option list) under our light text. Tie the controls' color-scheme
+   to the app scheme and give options theme colours. `data-os` is stamped in
+   index.tsx; macOS is left exactly as it was. */
+html[data-os]:not([data-os="mac"])[data-scheme="dark"] select {
+  color-scheme: dark;
+}
+html[data-os]:not([data-os="mac"])[data-scheme="light"] select {
+  color-scheme: light;
+}
+html[data-os]:not([data-os="mac"]) select option,
+html[data-os]:not([data-os="mac"]) select optgroup {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
 /* Opt-in text selection for Tickets / Project chat (and similar).
    Resize handlers often set document.body { user-select: none }; CSS
    inheritance then blocks selection unless descendants re-enable it.

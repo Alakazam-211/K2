@@ -14,8 +14,9 @@
 //! 5. read-only root, tmpfs `/tmp` and HOME, the Seed read-only at `/app`,
 //!    `data/` and `cache/` read-write;
 //! 6. nothing privileged, no host namespaces, no devices, no sockets;
-//! 7. pasta with one forward: the App's gateway link port on its own
-//!    loopback (`-T`), the App's port published on host loopback only;
+//! 7. pasta with two forwards from its own loopback (`-T`): the App's
+//!    gateway link port and its egress proxy port (S15; the container has
+//!    no other way out); the App's port published on host loopback only;
 //! 9. environment from an env file (never systemd-expanded) and secrets as
 //!    Podman secrets (never in the unit);
 //! 10. caps: memory (no swap), pids, open files.
@@ -52,6 +53,8 @@ pub struct Render<'a> {
     pub env_file: &'a str,
     pub seccomp: &'a str,
     pub gw_port: u16,
+    /// The App's egress proxy port (S15), forwarded like the gateway.
+    pub px_port: u16,
     pub port: u16,
     pub argv: &'a [String],
     pub memory_mib: u64,
@@ -114,7 +117,7 @@ pub fn render(r: &Render) -> String {
     line(format!("Volume={}:/data:rw", r.data_dir));
     line(format!("Volume={}:/cache:rw", r.cache_dir));
     line("WorkingDir=/app".into());
-    line(format!("Network=pasta:-T,{}", r.gw_port));
+    line(format!("Network=pasta:-T,{},-T,{}", r.gw_port, r.px_port));
     line(format!("PublishPort=127.0.0.1:{p}:{p}", p = r.port));
     line("RunInit=true".into());
     line("PidsLimit=512".into());
@@ -156,6 +159,7 @@ mod tests {
             env_file: "/var/lib/k2app/engine/run/nsi-skin/d-0123456789ab.env",
             seccomp: "/var/lib/k2app/engine/seccomp-k2-v1.json",
             gw_port: 38_601,
+            px_port: 38_901,
             port: 41_234,
             argv,
             memory_mib: 512,
@@ -183,7 +187,7 @@ mod tests {
             "\nSeccompProfile=/var/lib/k2app/engine/seccomp-k2-v1.json\n",
             "\nReadOnly=true\n",
             "\nVolume=/var/lib/k2app/seeds/aaaa:/app:ro\n",
-            "\nNetwork=pasta:-T,38601\n",
+            "\nNetwork=pasta:-T,38601,-T,38901\n",
             "\nPublishPort=127.0.0.1:41234:41234\n",
             "\nRunInit=true\n",
             "\nPidsLimit=512\n",

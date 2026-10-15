@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use k2_root_proto::apps::{AppId, APP_HOME, APP_USER, CONTAINERS_CONF, SUBGID_FILE, SUBUID_FILE};
 use k2_root_proto::engine::{
-    self as wire, app_slice, check_start, codes, deployment_ok, gateway_port, hex_decode, image_ok, seed_hash_ok, slot_base,
+    self as wire, app_slice, check_start, codes, deployment_ok, gateway_port, hex_decode, image_ok, proxy_port, seed_hash_ok, slot_base,
     unit_stem, Answer, Request, StartSpec, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES, PASS_TARGET, SECRETS_TARGET_DIR,
 };
 use serde_json::{json, Value};
@@ -50,6 +50,10 @@ pub struct RunState {
     pub deployment: String,
     pub port: u16,
     pub gw_port: u16,
+    /// The App's egress proxy port (S15). 0 in a state file written by a
+    /// protocol-1 engine (that container has no proxy forward).
+    #[serde(default)]
+    pub px_port: u16,
     pub slot: u64,
     pub unit: String,
     pub secrets: Vec<String>,
@@ -282,6 +286,7 @@ impl Engine {
             n
         };
         let gw = gateway_port(slot).ok_or((codes::NO_SLOT, "slot outside the gateway range".into()))?;
+        let px = proxy_port(slot).ok_or((codes::NO_SLOT, "slot outside the proxy range".into()))?;
         let base = slot_base(slot);
         let dir = self.apps().join(app.as_str());
         {
@@ -310,7 +315,7 @@ impl Engine {
         self.podman(&[&rt, "create", "--pull=never", "--name", &warm, "--uidmap", &map, "--gidmap", &map, image, "true"], None, 900)?;
         let warm_ms = t0.elapsed().as_millis() as u64;
         let _ = self.run(PODMAN, &["rm", "-f", "-i", &warm], None, 60);
-        Ok(json!({ "slot": slot, "gwPort": gw, "base": base, "warmMs": warm_ms }))
+        Ok(json!({ "slot": slot, "gwPort": gw, "pxPort": px, "base": base, "warmMs": warm_ms }))
     }
 
     fn secret_name(app: &AppId, dep: &str, tag: &str) -> String {
@@ -321,6 +326,7 @@ impl Engine {
         let app = check_start(s).map_err(|w| bad(format!("start: {w}")))?;
         let slot = self.slot_of(&app)?;
         let gw = gateway_port(slot).ok_or((codes::NO_SLOT, "slot outside the gateway range".into()))?;
+        let px = proxy_port(slot).ok_or((codes::NO_SLOT, "slot outside the proxy range".into()))?;
         let seed_dir = self.seeds().join(&s.seed);
         if !seed_dir.is_dir() {
             return Err((codes::NOT_FOUND, "Seed not on the engine".into()));
@@ -342,6 +348,12 @@ impl Engine {
         env.insert("TMPDIR".into(), "/tmp".into());
         env.insert("K2_APP_DATA".into(), "/data".into());
         env.insert("K2_APP_CACHE".into(), "/cache".into());
+        // S15: the App's only way out is its own egress proxy (the daemon
+        // listens on the forwarded port and enforces the allowlist). These
+        // replace any value the daemon's env carried.
+        for (k, v) in wire::proxy_env(px) {
+            env.insert(k.into(), v);
+        }
         // AR45: V8 heap at 50% of the cap, so the heap error (with a stack)
         // comes before the kernel's kill; a fatal-error report for agents.
         env.insert(
@@ -410,6 +422,7 @@ impl Engine {
             env_file: &env_s,
             seccomp: &sec_s,
             gw_port: gw,
+            px_port: px,
             port: s.port,
             argv: &s.argv,
             memory_mib: s.memory_mib,
@@ -417,7 +430,7 @@ impl Engine {
             secrets: &mounts,
         });
         let qfile = self.quadlets().join(format!("{stem}.container"));
-        let state = RunState { app: app.as_str().into(), deployment: s.deployment.clone(), port: s.port, gw_port: gw, slot, unit: unit.clone(), secrets: made.clone() };
+        let state = RunState { app: app.as_str().into(), deployment: s.deployment.clone(), port: s.port, gw_port: gw, px_port: px, slot, unit: unit.clone(), secrets: made.clone() };
         let undo = |this: &Self| {
             let _ = std::fs::remove_file(&qfile);
             let _ = std::fs::remove_file(&env_file);
@@ -451,7 +464,7 @@ impl Engine {
             return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: k2 app logs)", r.why())));
         }
         let pid = self.show(&unit, "MainPID").and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 0);
-        Ok(json!({ "unit": unit, "gwPort": gw, "slot": slot, "pid": pid, "slice": app_slice(&app) }))
+        Ok(json!({ "unit": unit, "gwPort": gw, "pxPort": px, "slot": slot, "pid": pid, "slice": app_slice(&app) }))
     }
 
     fn show(&self, unit: &str, prop: &str) -> Option<String> {
@@ -552,7 +565,7 @@ impl Engine {
         for s in self.run_states() {
             let st = self.liveness(&s.app, &s.deployment)?;
             if st["state"] == "running" {
-                live.push(json!({ "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "unit": s.unit, "pid": st["pid"] }));
+                live.push(json!({ "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "pxPort": s.px_port, "unit": s.unit, "pid": st["pid"] }));
             }
         }
         Ok(json!({ "instances": live }))
@@ -819,9 +832,12 @@ mod tests {
 
     #[test]
     fn run_state_round_trip() {
-        let s = RunState { app: "jobs".into(), deployment: "d-0123456789ab".into(), port: 41000, gw_port: 38600, slot: 0, unit: "k2app-jobs--d-0123456789ab.service".into(), secrets: vec![] };
+        let s = RunState { app: "jobs".into(), deployment: "d-0123456789ab".into(), port: 41000, gw_port: 38600, px_port: 38900, slot: 0, unit: "k2app-jobs--d-0123456789ab.service".into(), secrets: vec![] };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<RunState>(&j).unwrap(), s);
+        // A protocol-1 state file (no proxy forward) still reads.
+        let old = r#"{"app":"jobs","deployment":"d-0123456789ab","port":41000,"gwPort":38600,"slot":0,"unit":"u.service","secrets":[]}"#;
+        assert_eq!(serde_json::from_str::<RunState>(old).unwrap().px_port, 0);
         let _ = StartSpec::clone;
     }
 }

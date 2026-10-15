@@ -2150,6 +2150,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
+            // 0165 (App runtime core, 0.46.0) came after 0164; roll it back too.
+            for t in ["deploy_audit", "deployments", "apps", "seeds"] {
+                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
+            }
+            conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

@@ -20,7 +20,9 @@
 //!
 //! Caps: `thread:read`, `thread:post`, `files:read`, `files:write`,
 //! `tickets:read`, `tickets:post`, `wiki:read`, `store:read`, `store:write`,
-//! `activity:read`. Empty/missing caps stay Thread-only — never silent-add
+//! `activity:read`, plus the opt-in `files:agentconfig` modifier (lets
+//! `files:write` reach the agent's `.k2/` folder; off by default, owner
+//! only). Empty/missing caps stay Thread-only — never silent-add
 //! files, tickets, wiki, store, or activity. Never `pty:*`. `store:write`
 //! is dump insert/update/delete only — it does not grant `_k2_store` PUT.
 //! `files:read` and `files:write` do not imply `activity:read`.
@@ -109,6 +111,15 @@ pub const CAP_AGENT_IDENTITY: &str = "agent:identity";
 /// The room agent's handle, its address (`POST /cli/agent/handle`). Does not
 /// imply `agent:identity`, and `agent:identity` does not imply it.
 pub const CAP_AGENT_HANDLE: &str = "agent:handle";
+/// Opt-in modifier of `files:write` (GH#72, Rosson 2026-10-14): also let
+/// that room's `files:write` reach the agent's own config folder `.k2/`.
+/// Off by default — without it every guest write route refuses a target
+/// in `.k2/` with 403 `agent_config_protected`. Means nothing without
+/// `files:write` in the same room ([`parse_caps`] refuses it alone), never
+/// opens `.k2/heartbeats/` (heartbeats:write rules stay), and reads are
+/// unaffected. Owner tooling only: an agent with "manage Apps" can never
+/// add it (`skin_routes` refuses with 403 `owner_only`).
+pub const CAP_FILES_AGENT_CONFIG: &str = "files:agentconfig";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -130,6 +141,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_HEARTBEATS_WRITE,
     CAP_AGENT_IDENTITY,
     CAP_AGENT_HANDLE,
+    CAP_FILES_AGENT_CONFIG,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -347,9 +359,36 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
                     accepted_caps_csv()
                 ));
             }
+            if out.iter().any(|c| c == CAP_FILES_AGENT_CONFIG)
+                && !out.iter().any(|c| c == CAP_FILES_WRITE)
+            {
+                return Err(format!(
+                    "{CAP_FILES_AGENT_CONFIG} only widens {CAP_FILES_WRITE}; list {CAP_FILES_WRITE} too"
+                ));
+            }
         }
     }
     Ok(out)
+}
+
+/// `true` when any room line of `policy` carries [`CAP_FILES_AGENT_CONFIG`].
+pub fn policy_has_agent_config(policy: &RoomPolicy) -> bool {
+    policy
+        .values()
+        .any(|caps| caps.iter().any(|c| c == CAP_FILES_AGENT_CONFIG))
+}
+
+/// Rooms where `new` carries [`CAP_FILES_AGENT_CONFIG`] and `old` (the
+/// stored policy, `None` = nothing stored) does not. Empty = no widening.
+pub fn agent_config_added(old: Option<&RoomPolicy>, new: &RoomPolicy) -> Vec<String> {
+    new.iter()
+        .filter(|(_, caps)| caps.iter().any(|c| c == CAP_FILES_AGENT_CONFIG))
+        .filter(|(room, _)| {
+            !old.and_then(|o| o.get(*room))
+                .is_some_and(|caps| caps.iter().any(|c| c == CAP_FILES_AGENT_CONFIG))
+        })
+        .map(|(room, _)| room.clone())
+        .collect()
 }
 
 fn caps_json(caps: &[String]) -> String {
@@ -3421,6 +3460,12 @@ pub fn list_roles() -> Result<Vec<SkinRole>, String> {
     })
 }
 
+/// One role by id or name (case-insensitive), with its stored
+/// `room_policy`. `None` when no such role.
+pub fn find_role(id_or_name: &str) -> Result<Option<SkinRole>, String> {
+    with_conn(|conn| role_by_id_or_name(conn, id_or_name))
+}
+
 /// Present policy replaces the whole map. `None` is a no-op persist of the
 /// current snapshot (still R8-rewrites live sessions).
 pub fn update_role(id_or_name: &str, policy: Option<&RoomPolicy>) -> Result<SkinRole, String> {
@@ -5629,6 +5674,41 @@ mod tests {
             assert!(!pass_with(&[cap]).has_cap_in_room(&room, CAP_AGENT_HANDLE), "{cap}");
         }
         assert!(!ident.has_cap_in_room("other-room", CAP_AGENT_IDENTITY));
+    }
+
+    /// GH#72: the `.k2/` write opt-in is never a default, never implied by
+    /// files:write, and refused without files:write beside it.
+    #[test]
+    fn agent_config_opt_in_is_explicit_and_needs_files_write() {
+        assert_eq!(CAP_FILES_AGENT_CONFIG, "files:agentconfig");
+        let empty = parse_caps(None).expect("empty default");
+        assert!(!empty.iter().any(|c| c == CAP_FILES_AGENT_CONFIG));
+        let write = parse_caps(Some(&["files:write".into()])).expect("files:write");
+        assert!(!write.iter().any(|c| c == CAP_FILES_AGENT_CONFIG), "files:write must not imply it");
+        let alone = parse_caps(Some(&["files:agentconfig".into()])).expect_err("alone is refused");
+        assert!(alone.contains("only widens files:write"), "{alone}");
+        let alone = parse_caps(Some(&["files:read".into(), "files:agentconfig".into()]))
+            .expect_err("with files:read only is refused");
+        assert!(alone.contains("only widens files:write"), "{alone}");
+        let both = parse_caps(Some(&["files:write".into(), "files:agentconfig".into()]))
+            .expect("with files:write");
+        assert_eq!(both, vec![CAP_FILES_WRITE, CAP_FILES_AGENT_CONFIG]);
+
+        let mut old = RoomPolicy::new();
+        old.insert("a".into(), vec![CAP_FILES_WRITE.into(), CAP_FILES_AGENT_CONFIG.into()]);
+        old.insert("b".into(), vec![CAP_FILES_WRITE.into()]);
+        assert!(policy_has_agent_config(&old));
+        let mut same = old.clone();
+        same.insert("c".into(), vec![CAP_THREAD_READ.into()]);
+        assert!(agent_config_added(Some(&old), &same).is_empty(), "keeping it is not adding it");
+        let mut widened = old.clone();
+        widened.insert("b".into(), vec![CAP_FILES_WRITE.into(), CAP_FILES_AGENT_CONFIG.into()]);
+        assert_eq!(agent_config_added(Some(&old), &widened), vec!["b".to_string()]);
+        assert_eq!(agent_config_added(None, &old), vec!["a".to_string()]);
+        let mut tightened = old.clone();
+        tightened.insert("a".into(), vec![CAP_FILES_WRITE.into()]);
+        assert!(agent_config_added(Some(&old), &tightened).is_empty());
+        assert!(!policy_has_agent_config(&tightened));
     }
 
     #[test]

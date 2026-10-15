@@ -78,6 +78,54 @@ export const SKIN_HEARTBEAT_CAPS = ['heartbeats:read', 'heartbeats:write'] as co
 // grant because a handle change breaks links. Neither implies the other.
 // Offered only when the window's server supports `agent-identity`.
 export const SKIN_AGENT_IDENTITY_CAPS = ['agent:identity', 'agent:handle'] as const
+// GH#72 (0.45.6): `files:write` stops at the agent's own `.k2/` folder.
+// This opt-in modifier lifts that for one room. Off by default, owner only
+// (an agent can't set it), and offered only beside a checked `files:write`
+// — never in the plain cap grid.
+export const SKIN_AGENT_CONFIG_CAP = 'files:agentconfig' as const
+export const SKIN_AGENT_CONFIG_LABEL: string = K2_CAPS[SKIN_AGENT_CONFIG_CAP].label
+
+/** Toggle `cap` in a room's cap set. Dropping `files:write` also drops the
+ *  `.k2/` opt-in (it means nothing alone and the daemon refuses it). */
+export function toggleSkinCap(prev: ReadonlySet<string>, cap: string, on: boolean): Set<string> {
+  const next = new Set(prev)
+  if (on) next.add(cap)
+  else {
+    next.delete(cap)
+    if (cap === 'files:write') next.delete(SKIN_AGENT_CONFIG_CAP)
+  }
+  return next
+}
+
+/** The "Also allow writing the agent's .k2 folder" box, shown under a
+ *  checked `files:write`. Renders nothing otherwise. */
+function AgentConfigOption({
+  caps,
+  enabled,
+  ariaLabel,
+  onChange,
+}: {
+  caps: ReadonlySet<string>
+  enabled: boolean
+  ariaLabel: string
+  onChange: (on: boolean) => void
+}): React.JSX.Element | null {
+  if (!enabled || !caps.has('files:write')) return null
+  return (
+    <label
+      title="Lets this app's guests change the agent's own instructions, inbox and settings. Leave off unless you trust them with the agent itself."
+      className="flex items-center gap-1.5 cursor-pointer select-none no-drag basis-full"
+    >
+      <SquareCheckbox
+        aria-label={ariaLabel}
+        checked={caps.has(SKIN_AGENT_CONFIG_CAP)}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="text-[10px] text-[var(--color-text-secondary)]">{SKIN_AGENT_CONFIG_LABEL}</span>
+    </label>
+  )
+}
+
 export const SKIN_CAP_CHOICES = [...DEFAULT_SKIN_CAPS, ...SKIN_FILE_CAPS, ...SKIN_TICKET_CAPS, ...SKIN_WIKI_CAPS, ...SKIN_STORE_CAPS, ...SKIN_ACTIVITY_CAPS, ...SKIN_HEARTBEAT_CAPS, ...SKIN_AGENT_IDENTITY_CAPS] as const
 export type SkinCap = (typeof SKIN_CAP_CHOICES)[number]
 
@@ -548,6 +596,7 @@ export function prefixLabel(prefix: string): string {
 export function SkinAccessSection(): React.JSX.Element {
   const appHeartbeats = useServerSupports('app-heartbeats')
   const agentIdentity = useServerSupports('agent-identity')
+  const agentConfigOptIn = useServerSupports('agent-config-write')
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity),
     [appHeartbeats, agentIdentity],
@@ -1119,12 +1168,14 @@ export function SkinAccessSection(): React.JSX.Element {
                                   aria-label={`Role ${ws.handle} ${cap}`}
                                   checked={caps.has(cap)}
                                   onChange={(e) => {
-                                    setNewRoleCapsByRoom((prev) => {
-                                      const nextSet = new Set(prev[ws.handle] ?? DEFAULT_SKIN_CAPS)
-                                      if (e.target.checked) nextSet.add(cap)
-                                      else nextSet.delete(cap)
-                                      return { ...prev, [ws.handle]: nextSet }
-                                    })
+                                    setNewRoleCapsByRoom((prev) => ({
+                                      ...prev,
+                                      [ws.handle]: toggleSkinCap(
+                                        prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
+                                        cap,
+                                        e.target.checked,
+                                      ),
+                                    }))
                                   }}
                                 />
                                 <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
@@ -1132,6 +1183,21 @@ export function SkinAccessSection(): React.JSX.Element {
                                 </span>
                               </label>
                             ))}
+                            <AgentConfigOption
+                              caps={caps}
+                              enabled={agentConfigOptIn}
+                              ariaLabel={`Role ${ws.handle} agent .k2 folder`}
+                              onChange={(on) => {
+                                setNewRoleCapsByRoom((prev) => ({
+                                  ...prev,
+                                  [ws.handle]: toggleSkinCap(
+                                    prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
+                                    SKIN_AGENT_CONFIG_CAP,
+                                    on,
+                                  ),
+                                }))
+                              }}
+                            />
                           </div>
                         ) : null}
                       </div>
@@ -1267,14 +1333,14 @@ export function SkinAccessSection(): React.JSX.Element {
                                             aria-label={`Edit role ${r.name} ${ws.handle} ${cap}`}
                                             checked={caps.has(cap)}
                                             onChange={(ev) => {
-                                              setEditRoleCapsByRoom((prev) => {
-                                                const nextSet = new Set(
-                                                  prev[ws.handle] ?? DEFAULT_SKIN_CAPS,
-                                                )
-                                                if (ev.target.checked) nextSet.add(cap)
-                                                else nextSet.delete(cap)
-                                                return { ...prev, [ws.handle]: nextSet }
-                                              })
+                                              setEditRoleCapsByRoom((prev) => ({
+                                                ...prev,
+                                                [ws.handle]: toggleSkinCap(
+                                                  prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
+                                                  cap,
+                                                  ev.target.checked,
+                                                ),
+                                              }))
                                             }}
                                           />
                                           <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
@@ -1282,6 +1348,21 @@ export function SkinAccessSection(): React.JSX.Element {
                                           </span>
                                         </label>
                                       ))}
+                                      <AgentConfigOption
+                                        caps={caps}
+                                        enabled={agentConfigOptIn}
+                                        ariaLabel={`Edit role ${r.name} ${ws.handle} agent .k2 folder`}
+                                        onChange={(on) => {
+                                          setEditRoleCapsByRoom((prev) => ({
+                                            ...prev,
+                                            [ws.handle]: toggleSkinCap(
+                                              prev[ws.handle] ?? new Set(DEFAULT_SKIN_CAPS),
+                                              SKIN_AGENT_CONFIG_CAP,
+                                              on,
+                                            ),
+                                          }))
+                                        }}
+                                      />
                                     </div>
                                   ) : null}
                                 </div>
@@ -1510,12 +1591,7 @@ export function SkinAccessSection(): React.JSX.Element {
                       aria-label={`Mint cap ${cap}`}
                       checked={mintCaps.has(cap)}
                       onChange={(e) => {
-                        setMintCaps((prev) => {
-                          const next = new Set(prev)
-                          if (e.target.checked) next.add(cap)
-                          else next.delete(cap)
-                          return next
-                        })
+                        setMintCaps((prev) => toggleSkinCap(prev, cap, e.target.checked))
                       }}
                     />
                     <span className="text-[10px] font-mono text-[var(--color-text-secondary)]">
@@ -1523,6 +1599,14 @@ export function SkinAccessSection(): React.JSX.Element {
                     </span>
                   </label>
                 ))}
+                <AgentConfigOption
+                  caps={mintCaps}
+                  enabled={agentConfigOptIn}
+                  ariaLabel="Mint cap agent .k2 folder"
+                  onChange={(on) => {
+                    setMintCaps((prev) => toggleSkinCap(prev, SKIN_AGENT_CONFIG_CAP, on))
+                  }}
+                />
               </div>
               {workspaces.length > 0 ? (
                 <div className="flex flex-wrap gap-x-3 gap-y-1">

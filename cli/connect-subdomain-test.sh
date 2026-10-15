@@ -52,11 +52,48 @@ start_mock() {
 import sys, http.server, socketserver, threading, json
 req_file, resp_file, daemon_file, dreq_file = sys.argv[1:5]
 
+def cp_reply():
+    with open(resp_file) as f:
+        raw = f.read()
+    nl = raw.find("\n")
+    return int(raw[:nl].strip()), raw[nl+1:]
+
+def record_cp(method, path, auth, body):
+    with open(req_file, "w") as f:
+        f.write("%s %s\n" % (method, path))
+        f.write("AUTH:%s\n" % auth)
+        f.write(body)
+
 class H(http.server.BaseHTTPRequestHandler):
-    def _daemon(self):
+    def _daemon(self, raw_body=""):
         with open(dreq_file, "a") as f:
             f.write("%s %s\n" % (self.command, self.path))
         mode = open(daemon_file).read().strip()
+        if self.path.startswith("/cli/connect/proxy") and self.command == "POST":
+            # 0.45.7: the daemon makes the control-plane call with the token
+            # IT holds (the K2 vault on a desktop) — here "tok_test_123",
+            # whatever tunnel.json says. DAEMON_FILE modes: forbidden (an
+            # agent passport / Member login), unreadable (vault locked),
+            # notoken (unpaired), old (a pre-0.45.7 daemon: no route).
+            req = json.loads(raw_body or "{}")
+            if mode == "forbidden":
+                code, body = 403, json.dumps({"error": "invalid or missing token"})
+            elif mode == "unreadable":
+                code, body = 503, json.dumps({"error": "the K2 Connect tunnel token is in the K2 vault, which could not be read right now (locked); nothing was sent", "code": "token_unreadable"})
+            elif mode == "notoken":
+                code, body = 400, json.dumps({"error": "no K2 Connect tunnel token on this device", "code": "no_token"})
+            elif mode == "old":
+                code, body = 405, json.dumps({"error": "method not allowed for this route"})
+            else:
+                record_cp(req["method"], req["endpoint"], "Bearer tok_test_123", req.get("body") or "")
+                cstatus, cbody = cp_reply()
+                code, body = 200, json.dumps({"status": cstatus, "body": cbody})
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body.encode())))
+            self.end_headers()
+            self.wfile.write(body.encode())
+            return
         if self.path.startswith("/cli/publish/subdomain/claim") and "check=1" in self.path:
             if mode == "foreign":
                 code, body = 409, json.dumps({
@@ -78,16 +115,9 @@ class H(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
         if self.path.startswith("/cli/") or self.path.startswith("/boot-status"):
-            return self._daemon()
-        with open(req_file, "w") as f:
-            f.write("%s %s\n" % (self.command, self.path))
-            f.write("AUTH:%s\n" % self.headers.get("Authorization", ""))
-            f.write(body)
-        with open(resp_file) as f:
-            raw = f.read()
-        nl = raw.find("\n")
-        code = int(raw[:nl].strip())
-        rbody = raw[nl+1:]
+            return self._daemon(body)
+        record_cp(self.command, self.path, self.headers.get("Authorization", ""), body)
+        code, rbody = cp_reply()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(rbody.encode())))
@@ -269,7 +299,8 @@ echo "$out" | grep -qi "Usage: k2 publish subdomain create" && [ $rc -ne 0 ] && 
 
 # ── publish status (plan display) ─────────────────────────────────────────
 # `publish status` (not `subdomain`) — uses its own dispatch path.
-runc() { HOME="$TEST_HOME" K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish "$@" 2>&1; }
+runc() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish "$@" 2>&1; }
+runc_d() { HOME="$TEST_HOME" K2_PORT="$PORT" K2_HOOK_TOKEN=fake K2SO_PORT= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish "$@" 2>&1; }
 
 # Pro plan on the connected (tunnel.json: rosson) subdomain.
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true},{"label":"z3thon","host":"z3thon.k2.dev","tier":"free"}]}'
@@ -293,6 +324,88 @@ echo "$out" | grep -qi "Plan: Free" && ok "status shows Free plan" || bad "statu
 set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"free"},{"label":"other","host":"other.k2.dev","tier":"pro","connected":true}]}'
 out="$(runc status)"; rc=$?
 echo "$out" | grep -q "Connected: other.k2.dev" && echo "$out" | grep -qi "Plan: Pro" && ok "status honours server 'connected' flag" || bad "status connected-flag: $out"
+
+# ── 0.45.7: the token lives in the K2 vault (tunnel.json has none) ─────
+# A desktop since 0.45.4: tunnel.json keeps every field but `token`. The
+# daemon makes the control-plane call (POST /cli/connect/proxy) with the
+# token it holds; the CLI never reads one.
+cat > "${TEST_HOME}/.k2/tunnel.json" <<'JSON'
+{ "token": "", "subdomain": "rosson" }
+JSON
+echo ok > "$DAEMON_FILE"
+: > "$DREQ_FILE"
+set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true}]}'
+out="$(runc_d status)"; rc=$?
+echo "$out" | grep -q "Connected: rosson.k2.dev" && echo "$out" | grep -qi "Plan: Pro" && [ $rc -eq 0 ] \
+    && ok "vault desktop: status works through the daemon" || bad "vault status: $out (rc=$rc)"
+grep -q "^POST /cli/connect/proxy" "$DREQ_FILE" && ok "vault desktop: status asks the daemon" \
+    || bad "vault status daemon request: $(cat "$DREQ_FILE")"
+[ "$(req_line)" = "GET /subdomains" ] && [ "$(req_auth)" = "AUTH:Bearer tok_test_123" ] \
+    && ok "vault desktop: the control plane sees the daemon's token" || bad "vault status cp: $(req_line) $(req_auth)"
+out="$(runc_d status --json)"; rc=$?
+echo "$out" | grep -q '"host":"rosson.k2.dev"' && [ $rc -eq 0 ] \
+    && ok "vault desktop: status --json" || bad "vault status --json: $out (rc=$rc)"
+set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","primary":true,"tier":"pro"},{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000","tier":"pro"}]}'
+out="$(run_d list)"; rc=$?
+echo "$out" | grep -q "staging.rosson.k2.dev" && [ $rc -eq 0 ] \
+    && ok "vault desktop: subdomain list" || bad "vault list: $out (rc=$rc)"
+set_resp 200 '{"label":"staging","host":"staging.rosson.k2.dev","target":"localhost:3000","status":"active","effective":"live"}'
+out="$(run_d create staging --target localhost:3000)"; rc=$?
+[ "$(req_line)" = "POST /subdomains" ] && echo "$(req_body)" | grep -q '"label": "staging"' \
+    && echo "$out" | grep -q "Created staging.rosson.k2.dev" \
+    && ok "vault desktop: subdomain create reaches the control plane with its body" \
+    || bad "vault create: $(req_line) $(req_body) / $out"
+set_resp 200 '{"removed":"staging"}'
+out="$(run_d rm staging)"; rc=$?
+[ "$(req_line)" = "DELETE /subdomains/staging" ] && echo "$out" | grep -q "Removed staging" \
+    && ok "vault desktop: subdomain rm" || bad "vault rm: $(req_line) / $out"
+# A control-plane error still renders as before.
+set_resp 401 '{"error":"invalid_token"}'
+out="$(run_d list)"; rc=$?
+echo "$out" | grep -qi "Tunnel token rejected" && [ $rc -ne 0 ] \
+    && ok "vault desktop: control-plane errors map as before" || bad "vault cp error: $out (rc=$rc)"
+
+# The daemon's refusals: one clear line, non-zero, control plane untouched.
+for mode in forbidden unreadable notoken; do
+    echo "$mode" > "$DAEMON_FILE"
+    echo "SENTINEL" > "$REQ_FILE"
+    out="$(run_d list)"; rc=$?
+    [ "$(req_line)" = "SENTINEL" ] && [ $rc -ne 0 ] \
+        && ok "daemon $mode: non-zero, nothing sent" || bad "daemon $mode: $(req_line) rc=$rc"
+    case "$mode" in
+        forbidden) echo "$out" | grep -qi "an Owner/Admin login" && [ $rc -eq 3 ] \
+            && ok "daemon forbidden: says who may, exit 3" || bad "forbidden msg: $out (rc=$rc)" ;;
+        unreadable) echo "$out" | grep -qi "K2 vault, which could not be read" \
+            && ok "daemon unreadable: says the vault could not be read" || bad "unreadable msg: $out" ;;
+        notoken) echo "$out" | grep -qi "no K2 Connect tunnel token" \
+            && ok "daemon notoken: says no token" || bad "notoken msg: $out" ;;
+    esac
+done
+out="$(runc_d status --json)"; rc=$?
+echo "$out" | grep -q '"code": "no_token"' && [ $rc -ne 0 ] \
+    && ok "daemon notoken: status --json error code" || bad "status --json no_token: $out (rc=$rc)"
+# A pre-0.45.7 daemon (no route) and no file token: clear error, nothing sent.
+echo old > "$DAEMON_FILE"
+echo "SENTINEL" > "$REQ_FILE"
+out="$(run_d list)"; rc=$?
+echo "$out" | grep -qi "could not reach the K2 daemon" && [ $rc -ne 0 ] && [ "$(req_line)" = "SENTINEL" ] \
+    && ok "old daemon + no file token: clear error, nothing sent" || bad "old daemon: $out (rc=$rc)"
+# No daemon and no file token: same.
+out="$(runc status)"; rc=$?
+echo "$out" | grep -qi "could not reach the K2 daemon" && [ $rc -ne 0 ] && [ "$(req_line)" = "SENTINEL" ] \
+    && ok "no daemon + no file token: clear error, nothing sent" || bad "no daemon no token: $out (rc=$rc)"
+# A pre-0.45.7 daemon and a file token (headless box): falls back to it.
+cat > "${TEST_HOME}/.k2/tunnel.json" <<'JSON'
+{ "token": "tok_file_only", "subdomain": "rosson" }
+JSON
+set_resp 200 '{"subdomains":[]}'
+out="$(run_d list)"; rc=$?
+[ "$(req_auth)" = "AUTH:Bearer tok_file_only" ] && [ $rc -eq 0 ] \
+    && ok "old daemon + file token: falls back to the file token" || bad "old daemon fallback: $(req_auth) $out (rc=$rc)"
+echo ok > "$DAEMON_FILE"
+cat > "${TEST_HOME}/.k2/tunnel.json" <<'JSON'
+{ "token": "tok_test_123", "subdomain": "rosson" }
+JSON
 
 # `k2 publish upgrade` is dead (dashboard-only). Do not re-add.
 

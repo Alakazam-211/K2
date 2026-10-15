@@ -644,6 +644,13 @@ fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
 fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
     k2_core::airgap::refuse().map_err(PublishError::fail)?;
     let cfg = tunnel_config::load().map_err(PublishError::fail)?;
+    // 0.45.7: a vault that can't be read right now is not "no token".
+    if let Some(e) = cfg.token_read_error.as_deref() {
+        return Err(PublishError::fail(format!(
+            "token_unreadable: the K2 Connect tunnel token is in the K2 vault, which could not be \
+             read right now ({e}); nothing was published — try again once the vault is readable"
+        )));
+    }
     if cfg.token.trim().is_empty() {
         return Err(PublishError::fail(gate_hint("no_token")));
     }

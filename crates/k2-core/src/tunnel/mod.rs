@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 pub mod cert_broker;
 pub mod config;
 pub mod connector;
+pub mod cp_proxy;
 pub mod failover;
 pub mod identity;
 pub mod ingress;

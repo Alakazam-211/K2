@@ -98,6 +98,17 @@ class H(BaseHTTPRequestHandler):
         }
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write(json.dumps(rec) + "\n")
+        if parsed.path == "/cli/connect/proxy":
+            # A pre-0.45.7 daemon (no route): the CLI then calls the
+            # control plane itself with tunnel.json's token (its argv
+            # must stay clean too).
+            data = b'{"error":"not found"}'
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if parsed.path == "/echo":
             data = body
             ctype = "application/octet-stream"
@@ -228,6 +239,7 @@ expect_seen "daemon restart --host carries ?token=" /cli/daemon/restart tcp toke
 printf '{"token":"%s","subdomain":"me"}' "$CONNECT" >"$HOME/.k2/tunnel.json"
 chmod 600 "$HOME/.k2/tunnel.json"
 clean_env K2_PORT="$PORT" K2_CONNECT_BASE="http://127.0.0.1:${PORT}" "$K2_CLI" publish status --json >/dev/null 2>&1 || true
+expect_seen "_connect_curl asks the daemon first (?token=)" /cli/connect/proxy tcp token_query "$OWNER"
 expect_seen "_connect_curl carries the Connect bearer" /subdomains tcp authorization "Bearer $CONNECT"
 
 # ── 3. scoped session without a socket (TCP, passport) ────────────────

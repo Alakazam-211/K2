@@ -2982,6 +2982,83 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // POST /cli/connect/proxy — the `k2` CLI's control-plane calls
+        // (`k2 publish status`, `subdomain list|create|point|rm`) made by
+        // the daemon with the tunnel token it holds (vault-aware since
+        // 0.45.4; the token never reaches the CLI). Allowlisted method +
+        // endpoint only (`k2_core::tunnel::cp_proxy`).
+        //
+        // Auth: the owner token or an Owner/Admin login (whole allowlist),
+        // OR an agent passport (an agent verb, like `/cli/publish/run`):
+        // `connect_proxy` lets an agent list and manage only its OWN
+        // workspace's nested labels. Member logins and app passes are
+        // refused. Mutating, so POST only. The audit line names the
+        // caller, method and endpoint — never the token or the body.
+        "/cli/connect/proxy" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let principal = if super::http::token_is_owner_or_admin(&query, state.token.as_str()) {
+                None
+            } else {
+                match scoped_hook_auth(&path, &query, bearer_token.as_deref()) {
+                    (true, Some(p)) => Some(p),
+                    _ => {
+                        let _ = stream.read(&mut buf).await;
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"invalid or missing token"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            };
+            let body_bytes = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                k2_core::tunnel::cp_proxy::MAX_BODY_BYTES * 2,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
+                        &mut *stream,
+                        &refused,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"error":"connect proxy body too large","code":"bad_request"}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let caller = super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref())
+                .unwrap_or_else(|| "unknown".to_string());
+            let result = tokio::task::spawn_blocking(move || {
+                let r = crate::connect_proxy::handle(&body_bytes, principal.as_ref());
+                let what = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                    .ok()
+                    .map(|v| {
+                        // Debug-quoted: client text never forges a log line.
+                        let field = |k: &str| {
+                            let s = v.get(k).and_then(|m| m.as_str()).unwrap_or("?");
+                            format!("{:?}", s.chars().take(120).collect::<String>())
+                        };
+                        format!("{} {}", field("method"), field("endpoint"))
+                    })
+                    .unwrap_or_else(|| "?".to_string());
+                k2_core::log_debug!("[connect/proxy] {what} caller={caller} -> {}", r.status);
+                r
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli::CliResponse::bad_request(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // POST /cli/daemon/restart — K2SO #651, supervisor-agnostic remote
         // daemon restart (the foundational slice: bounce a remote K2 server
         // with no GUI).

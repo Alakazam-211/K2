@@ -567,6 +567,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/agents/hire",
         "/cli/agent-teams/links",
         "/cli/msg/who",
+        // 0.45.7: `k2 publish status` / `subdomain create|target|rm` from
+        // an agent — the daemon makes the control-plane call with the
+        // token it holds. `connect_proxy` admits a passport for its OWN
+        // workspace's nested labels only (no primary, no reserved, no
+        // other workspace's label, rate-limited). Exact path only.
+        "/cli/connect/proxy",
         // k2 sidecar v1 (SC36): new / list / stop. The handler classifies
         // the validated session (canonical harness, sidecar, shell tab,
         // api cell) and applies the agent gate. `/cli/agent-access/set`
@@ -1484,6 +1490,11 @@ mod tests {
             !is_agent_verb("/cli/tunnel/publish/run"),
             "must not hang publish under owner-only /cli/tunnel/"
         );
+        assert!(
+            is_agent_verb("/cli/connect/proxy"),
+            "agents publish their own nested labels end to end (0.45.7)"
+        );
+        assert!(!is_agent_verb("/cli/connect/other"), "exact path only");
         assert!(
             !is_agent_verb("/cli/auth/whoami"),
             "/cli/auth/whoami is connect-user identity — not an agent verb"

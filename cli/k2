@@ -570,7 +570,7 @@ if [ "${1:-}" = "publish" ]; then
             case "${3:-}" in
                 # create/point/rm stamp 0074 on the daemon — need PORT/TOKEN.
                 # list (empty action) and help still skip.
-                claim|unclaim|create|point|rm|remove|delete) ;;
+                claim|unclaim|create|point|target|rm|remove|delete) ;;
                 *) _skip_conn_gate=1 ;;
             esac
             ;;
@@ -15140,13 +15140,15 @@ EOF
 # ── K2 Connect — Pro multi-subdomain (PRD k2-connect-e2e-encryption.md §7) ──
 #
 # `k2 publish subdomain <create|list|point|rm>` manages the nested
-# `<label>.<sub>.k2.dev` routing entries for a Pro account. Unlike the rest
-# of this CLI (which calls the LOCAL daemon), these talk DIRECTLY to the
-# hosted control plane — the daemon doesn't proxy account management. The
-# bearer token is the SAME tunnel token the cert broker uses, read from
-# `~/.k2/tunnel.json` (0600). The control-plane base defaults to
-# https://connect.k2.dev and is overridable via $K2_CONNECT_BASE for
-# staging / integration tests.
+# `<label>.<sub>.k2.dev` routing entries for a Pro account against the
+# hosted control plane. The bearer is the SAME tunnel token the cert broker
+# uses. Since 0.45.7 the daemon makes these calls (POST /cli/connect/proxy,
+# see _connect_curl_daemon): a desktop keeps the token in the K2 vault and
+# `~/.k2/tunnel.json`'s `token` is empty. The CLI reads tunnel.json's token
+# and calls the control plane itself only when no daemon answers. The
+# control-plane base defaults to https://connect.k2.dev and is overridable
+# via $K2_CONNECT_BASE (for the daemon: in ITS environment) for staging /
+# integration tests.
 K2_CONNECT_BASE="${K2_CONNECT_BASE:-https://connect.k2.dev}"
 
 # Read the tunnel bearer token from ~/.k2/tunnel.json. Returns empty when
@@ -15244,16 +15246,107 @@ sys.stderr.write("Error: %s\n" % m); sys.exit(1)
 ' "$pretty"
 }
 
+# 0.45.7 — the daemon makes the control-plane call (POST /cli/connect/proxy)
+# with the tunnel token it holds. Since 0.45.4 a desktop keeps that token
+# in the K2 vault and tunnel.json's `token` is empty, so the CLI cannot
+# read it, and must not: the token never leaves the daemon.
+#
+# Prints "<http_status>\n<body>" (the control plane's answer) and returns
+# 0; returns $_CONNECT_NO_DAEMON when no daemon answered (none configured,
+# connection refused, or one too old to have the route) so the caller may
+# fall back; otherwise prints why on stderr (_publish_err: JSON under
+# --json) and returns the exit code to use (3 = needs the owner).
+_CONNECT_NO_DAEMON=10
+_connect_curl_daemon() {
+    local method="$1" endpoint="$2" body="${3:-}"
+    if [ -z "${PORT:-}" ] || [ -z "${TOKEN:-}" ]; then
+        return "$_CONNECT_NO_DAEMON"
+    fi
+    local req
+    req="$(M="$method" E="$endpoint" B="$body" python3 -c '
+import json, os
+d = {"method": os.environ["M"], "endpoint": os.environ["E"]}
+if os.environ.get("B"):
+    d["body"] = os.environ["B"]
+print(json.dumps(d))
+')" || return 1
+    local _K2_CFG="" out rc=0
+    _k2_cfg_add url "${BASE_URL}/cli/connect/proxy?token=${TOKEN}"
+    _k2_cfg_add data-raw "$req"
+    out="$(_k2_curl "$_K2_CFG" -sS -X POST -H "Content-Type: application/json" \
+        --connect-timeout 5 --max-time 45 -w $'\n%{http_code}' 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        return "$_CONNECT_NO_DAEMON"
+    fi
+    local code="${out##*$'\n'}"
+    local resp="${out%$'\n'*}"
+    case "$code" in
+        200)
+            printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    status, body = int(d["status"]), d["body"]
+except Exception as e:
+    sys.stderr.write("Error: unexpected reply from the K2 daemon for a K2 Connect request (%s)\n" % e)
+    sys.exit(1)
+sys.stdout.write("%d\n%s" % (status, body))
+'
+            return $?
+            ;;
+        # A daemon from before 0.45.7 has no such route.
+        404|405) return "$_CONNECT_NO_DAEMON" ;;
+    esac
+    local pair
+    pair="$(printf '%s' "$resp" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+err = d.get("error")
+if isinstance(err, dict):
+    err = err.get("hint") or err.get("code")
+print(d.get("code") or "")
+print(err or "")
+' 2>/dev/null)" || pair=""
+    local ecode="${pair%%$'\n'*}" emsg="${pair#*$'\n'}"
+    if [ "$code" = "403" ] && [ -z "$ecode" ]; then
+        _publish_err "forbidden" "K2 Connect commands need the server owner, an Owner/Admin login, or a K2 agent session's own passport; this credential was refused."
+        return 3
+    fi
+    [ -n "$ecode" ] || ecode="http_${code}"
+    [ -n "$emsg" ] || emsg="the K2 daemon refused the K2 Connect request (HTTP ${code})"
+    _publish_err "$ecode" "$emsg"
+    return 1
+}
+
 # Issue a control-plane request, echoing "<http_status>\n<body>" for the
 # renderer. Usage: _connect_curl METHOD ENDPOINT [json-body].
+# Exits (1, or 3 = needs the owner) after printing why when there is no
+# answer. Callers capture it (`raw="$(_connect_curl …)" || exit $?`) so
+# that exit stops them.
+#
+# The daemon makes the call (_connect_curl_daemon). Only when no daemon
+# answers AND tunnel.json still holds a token (a headless box before the
+# daemon is up) does the CLI call the control plane itself, as before
+# 0.45.7.
 _connect_curl() {
     _k2_refuse_if_airgap
     local method="$1" endpoint="$2" body="${3:-}"
+    local drc=0
+    _connect_curl_daemon "$method" "$endpoint" "$body" || drc=$?
+    if [ "$drc" -eq 0 ]; then
+        return 0
+    elif [ "$drc" -ne "$_CONNECT_NO_DAEMON" ]; then
+        exit "$drc"
+    fi
     local token
     token="$(_connect_bearer_token)"
     if [ -z "$token" ]; then
-        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
-        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
+        _publish_err "no_token" "could not reach the K2 daemon, which holds the K2 Connect tunnel token (${K2_HOME}/tunnel.json has none). Start K2 and try again — or, if this device is not paired, select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first."
         exit 1
     fi
     local args=(-sS -X "$method" "${K2_CONNECT_BASE}${endpoint}"
@@ -15297,7 +15390,7 @@ USAGE
   k2 publish ps|status [--json]       (ps = list)
   k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
-  k2 publish subdomain <create|list|point|rm|claim|unclaim> ...
+  k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ...
 
 run
   Starts <name> from --cmd, listening on --port.
@@ -15367,8 +15460,8 @@ EOF
 _publish_err() {
     local code="$1" hint="$2"
     if [ "${AS_JSON:-false}" = "true" ] || [ "${as_json:-false}" = "true" ]; then
-        python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}}), file=sys.stderr)' \
-            "$code" "$hint" 2>/dev/null || echo "{\"error\":{\"code\":\"$code\",\"hint\":\"$hint\"}}" >&2
+        python3 -c 'import json,sys; print(json.dumps({"error":{"code":sys.argv[1],"hint":sys.argv[2]}}))' \
+            "$code" "$hint" 1>&2 2>/dev/null || echo "{\"error\":{\"code\":\"$code\",\"hint\":\"$hint\"}}" >&2
     else
         echo "Error: $hint" >&2
     fi
@@ -16040,15 +16133,13 @@ EOF
                 exit 2 ;;
         esac
     done
-    if [ -z "$(_connect_bearer_token)" ]; then
-        as_json="$as_json" _publish_err "no_token" \
-            "no K2 Connect tunnel token in ${K2_HOME}/tunnel.json — Settings → K2 Connect or k2 tunnel start"
-        exit 1
-    fi
-    local self
+    # 0.45.7: no tunnel.json token check here — a desktop keeps the token
+    # in the K2 vault; the daemon reports a missing one (_connect_curl).
+    local self cp_raw
     self="$(_connect_self_subdomain)"
+    cp_raw="$(_connect_curl GET "/subdomains")" || exit $?
     if [ "$as_json" = "true" ]; then
-        _connect_curl GET "/subdomains" | SELF="$self" python3 -c '
+        printf '%s' "$cp_raw" | SELF="$self" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 nl = raw.find("\n")
@@ -16110,7 +16201,7 @@ print(json.dumps({
 '
         return 0
     fi
-    _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
+    printf '%s' "$cp_raw" | SELF="$self" _connect_subdomain_render '
 import os
 self_label = (os.environ.get("SELF") or "").strip().lower()
 subs = d.get("subdomains", []) if isinstance(d, dict) else []
@@ -16409,13 +16500,11 @@ else:
             return 0
             ;;
     esac
-    # Token gate up front (NOT inside the pipeline below, where a subshell
-    # `exit` wouldn't stop the renderer half of the pipe).
-    if [ -z "$(_connect_bearer_token)" ]; then
-        echo "Error: no K2 Connect tunnel token found in ${K2_HOME}/tunnel.json." >&2
-        echo "Select a subdomain in Settings -> K2 Connect (or run 'k2 tunnel start') first." >&2
-        exit 1
-    fi
+    # 0.45.7: no tunnel.json token gate — a desktop keeps the token in the
+    # K2 vault. Each control-plane call is captured first
+    # (`cp_raw="$(_connect_curl …)" || exit $?`): a subshell `exit` inside a
+    # pipeline would not stop the renderer half of the pipe.
+    local cp_raw
     case "$action" in
         create)
             local label="" target="" transfer=0
@@ -16436,7 +16525,8 @@ else:
             _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
-            _connect_curl POST "/subdomains" "$body" | _connect_subdomain_render '
+            cp_raw="$(_connect_curl POST "/subdomains" "$body")" || exit $?
+            printf '%s' "$cp_raw" | _connect_subdomain_render '
 host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
 print("Created %s" % host)
 print("  target:    %s" % d.get("target","?"))
@@ -16479,8 +16569,9 @@ EOF
             done
             local self
             self="$(_connect_self_subdomain)"
+            cp_raw="$(_connect_curl GET "/subdomains")" || exit $?
             if [ "$as_json" = "true" ]; then
-                _connect_curl GET "/subdomains" | SELF="$self" python3 -c '
+                printf '%s' "$cp_raw" | SELF="$self" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 nl = raw.find("\n")
@@ -16535,7 +16626,7 @@ print(json.dumps({"subdomains": out}, separators=(",", ":")))
 '
                 return 0
             fi
-            _connect_curl GET "/subdomains" | SELF="$self" _connect_subdomain_render '
+            printf '%s' "$cp_raw" | SELF="$self" _connect_subdomain_render '
 import os
 self_label = (os.environ.get("SELF") or "").strip().lower()
 subs = d.get("subdomains", []) if isinstance(d, dict) else []
@@ -16574,25 +16665,32 @@ else:
         print("  %-*s  %-*s  %-*s  %-*s  %s" % (hw,h,tw,t,pw,pl,sw,st,fl))
 '
             ;;
-        point)
+        point|target)
+            # `target <label> <endpoint>` (0.45.7) = `point <label> --target <endpoint>`.
             local label="" target="" transfer=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --target) target="${2:-}"; shift 2 ;;
                     --transfer) transfer=1; shift ;;
                     --*) shift ;;
-                    *) [ -z "$label" ] && label="$1"; shift ;;
+                    *)
+                        if [ -z "$label" ]; then label="$1"
+                        elif [ -z "$target" ]; then target="$1"
+                        fi
+                        shift ;;
                 esac
             done
             if [ -z "$label" ] || [ -z "$target" ]; then
                 echo "Usage: k2 publish subdomain point <label> --target <endpoint> [--transfer]" >&2
+                echo "       k2 publish subdomain target <label> <endpoint>" >&2
                 exit 1
             fi
             _refuse_reserved_nested_label "$label"
             _subdomain_label_preflight "$label" "$transfer" || exit 1
             local body
             body="$(python3 -c 'import json,sys; print(json.dumps({"target": sys.argv[1]}))' "$target")"
-            _connect_curl PUT "/subdomains/$(urlencode "$label")" "$body" | _connect_subdomain_render '
+            cp_raw="$(_connect_curl PUT "/subdomains/$(urlencode "$label")" "$body")" || exit $?
+            printf '%s' "$cp_raw" | _connect_subdomain_render '
 host = d.get("host") or (str(d.get("label","?")) + ".k2.dev")
 print("Repointed %s -> %s" % (host, d.get("target","?")))
 print("  status:    %s" % d.get("status","?"))
@@ -16618,7 +16716,8 @@ print("  effective: %s" % d.get("effective","?"))
             if [ "$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')" != "skin" ]; then
                 _subdomain_label_preflight "$label" 0 release || exit 1
             fi
-            _connect_curl DELETE "/subdomains/$(urlencode "$label")" | _connect_subdomain_render '
+            cp_raw="$(_connect_curl DELETE "/subdomains/$(urlencode "$label")")" || exit $?
+            printf '%s' "$cp_raw" | _connect_subdomain_render '
 print("Removed %s" % (d.get("removed") or "(subdomain)"))
 '
             # 0074 — the label is gone from the control plane; drop its
@@ -16628,10 +16727,11 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
             _nudge_subdomain_refresh
             ;;
         *)
-            echo "Usage: k2 publish subdomain <create|list|point|rm|claim|unclaim> ..." >&2
+            echo "Usage: k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ..." >&2
             echo "  create  <label> --target <endpoint>  Create a nested subdomain (attributed to this workspace)" >&2
             echo "  list                                 List your subdomains" >&2
             echo "  point   <label> --target <endpoint>  Repoint to a new endpoint" >&2
+            echo "  target  <label> <endpoint>           Same as point (change where the label points)" >&2
             echo "  rm      <label>                      Remove a subdomain" >&2
             echo "  claim   <label>                      Adopt an existing label for THIS workspace (daemon-local)" >&2
             echo "  unclaim <label>                      Drop a label's workspace attribution (daemon-local)" >&2
@@ -17585,6 +17685,23 @@ print("sub=%r" % sub)
 print("token_set=%r" % ("yes" if tok else "no"))
 ' "${K2_HOME}/tunnel.json" 2>/dev/null)"
     fi
+    # 0.45.7: a desktop keeps the token in the K2 vault (tunnel.json's is
+    # empty since 0.45.4) — ask the daemon, which reads both.
+    if [ "$token_set" = "no" ] && _connect_require_daemon 2>/dev/null; then
+        token_set="$(cli_send cli_request "/cli/tunnel/config" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    d = {}
+if isinstance(d, dict) and d.get("tokenSet"):
+    print("yes")
+elif isinstance(d, dict) and d.get("tokenUnreadable"):
+    print("unknown (the K2 vault could not be read)")
+else:
+    print("no")
+' 2>/dev/null)" || token_set="no"
+    fi
     echo "K2 Connect account"
     echo "  Account session: $acc_present$([ -n "$acc_email" ] && echo "  ($acc_email)")"
     echo "  Paired subdomain: ${sub:-'(none)'}$([ -n "$sub" ] && echo " → https://${sub}.k2.dev")"
@@ -18433,12 +18550,13 @@ print("")
     echo "  label:              $label"
     echo ""
 
-    # 2) Try automated subdomain create when Connect token is present.
+    # 2) Try automated subdomain create. The daemon holds the Connect token
+    # (0.45.7: in the K2 vault on desktops); with no token the create
+    # fails quietly and we fall through to the manual instructions.
     local created=0
     # One owner per label: never create/point a name another workspace
     # on this server owns (falls through to the manual instructions).
-    if [ -n "$(_connect_bearer_token 2>/dev/null || true)" ] \
-        && _subdomain_label_preflight "$label" 0; then
+    if _subdomain_label_preflight "$label" 0; then
         local cp_body cp_raw
         cp_body="$(python3 -c 'import json,sys; print(json.dumps({"label": sys.argv[1], "target": sys.argv[2]}))' "$label" "$target")"
         # Prefer create; on "already exists" style errors, try point.
@@ -29644,6 +29762,7 @@ PUBLISH (host a process on this machine, optionally a nested URL)
   publish subdomain list [--json]               Nested hostnames (DNS) + plan/status
   publish subdomain create <label> --target <e> Hostname for an ALREADY-listening port (Pro)
   publish subdomain point <label> --target <e>  Repoint a subdomain (Pro)
+  publish subdomain target <label> <e>          Same as point
   publish subdomain rm <label>                  Remove a hostname (not the process)
   publish subdomain claim <label>               Adopt an existing label for THIS workspace (daemon-local)
   publish subdomain unclaim <label>             Drop a label's workspace attribution (daemon-local)

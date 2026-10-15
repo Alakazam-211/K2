@@ -275,6 +275,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/update", Admin),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),
+    // 0.45.7: the CLI's K2 Connect control-plane calls, made with the
+    // daemon-held tunnel token. Logins: Owner/Admin (the handler's
+    // `token_is_owner_or_admin`). Agent passports are not logins; they
+    // pass as an agent verb and `connect_proxy` limits them to their own
+    // workspace's nested labels (like `/cli/publish/run`).
+    post("/cli/connect/proxy", Admin),
     both("/cli/connections", Member),
     post("/cli/context/add", Member),
     get("/cli/context/catalog", Member),

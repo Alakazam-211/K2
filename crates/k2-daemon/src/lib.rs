@@ -87,6 +87,7 @@ pub mod dns_routes;
 // Custom-domain inventory + certs (prd-custom-domains-and-certs-v1).
 pub mod domains;
 pub mod domain_routes;
+pub mod connect_proxy;
 pub mod misc_routes;
 pub mod token_usage_scan;
 pub mod usage_routes;

@@ -68,6 +68,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
+import { metaChordLabel } from '@/lib/shortcut-label'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -3004,7 +3005,7 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
       <div>
         <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
         <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-          The agent ⇧⌘T launches for this workspace. Edit-with-AI uses Settings → Default AI Agent.
+          {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit-with-AI uses Settings → Default AI Agent.
         </p>
       </div>
       <SettingDropdown

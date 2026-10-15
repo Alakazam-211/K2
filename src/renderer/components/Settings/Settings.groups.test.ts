@@ -126,6 +126,12 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     const chat = group(nav, 'Cores').items[1]
     expect(chat.label).toBe('Chat Hosting')
     expect(chat.soon).toBe(true)
+    // Its tag matches the 3rd Party Bots SOON tag: same classes, right-justified.
+    const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
+    const tag =
+      '<span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
+    expect(settingsSrc.split(tag).length - 1).toBe(2)
+    expect(settingsSrc).not.toContain('>\n                          soon\n')
   })
 
   it('old ids still open the same pages', () => {

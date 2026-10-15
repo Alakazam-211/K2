@@ -462,12 +462,12 @@ export default function Settings(): React.JSX.Element {
                     return (
                       <div
                         key={it.label}
-                        className="w-full text-left pl-7 pr-4 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center gap-2"
+                        data-settings-soon={it.label}
+                        className="w-full text-left pl-7 pr-4 py-1.5 text-xs text-[var(--color-text-muted)] flex items-center justify-between"
                       >
                         <span>{it.label}</span>
-                        <span className="text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 border border-[var(--color-border)]">
-                          soon
-                        </span>
+                        {/* The same right-hand SOON tag as 3rd Party Bots (Rosson 2026-10-15). */}
+                        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
                       </div>
                     )
                   }

@@ -168,6 +168,16 @@ pub enum HookEvent {
     /// `send --wait` learns via its own poll; this event refreshes the
     /// Approvals tab + outbox views.
     MailSendDecided,
+    /// Sew chat S30 (plan-sew-s30-s32-on-k2-v1 K18): an agent's post landed
+    /// in the chat approval queue (`approval required`). Payload:
+    /// `{outboxId, projectId, agentName}` — CONTENT-FREE (never the body,
+    /// the channel or the person it's for). Not the KM13 widget-library
+    /// approvals; the queues stay separate.
+    SewChatApprovalRequested,
+    /// Sew chat S30: a queued post was decided — approved (and posted or
+    /// failed), denied (with note, or expired) or cancelled. Payload:
+    /// `{outboxId, status, decidedKind}`.
+    SewChatApprovalDecided,
 }
 
 impl HookEvent {
@@ -199,6 +209,8 @@ impl HookEvent {
             Self::MailServerStateChanged => "mail:server-state-changed",
             Self::MailSendApprovalRequested => "mail:send-approval-requested",
             Self::MailSendDecided => "mail:send-decided",
+            Self::SewChatApprovalRequested => "sew-chat:approval-requested",
+            Self::SewChatApprovalDecided => "sew-chat:approval-decided",
         }
     }
 }
@@ -543,6 +555,9 @@ mod tests {
             "mail:send-approval-requested"
         );
         assert_eq!(HookEvent::MailSendDecided.event_name(), "mail:send-decided");
+        // Sew chat S30 — chat approvals (not the KM13 widget approvals).
+        assert_eq!(HookEvent::SewChatApprovalRequested.event_name(), "sew-chat:approval-requested");
+        assert_eq!(HookEvent::SewChatApprovalDecided.event_name(), "sew-chat:approval-decided");
     }
 
     #[test]

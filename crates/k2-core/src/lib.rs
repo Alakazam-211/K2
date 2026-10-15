@@ -106,6 +106,10 @@ pub mod skin_door;
 // checks the daemon polls, their state, card view and triggers. Pure half;
 // the poller and routes live in k2-daemon. See module docs.
 pub mod sources;
+// Sew chat for agents (`k2 chat`, slice S30 core): levels, approval modes,
+// addressed rules, limits, and the access / action / approval-queue store
+// (migration 0167). Pure half; routes and the Sew seam live in k2-daemon.
+pub mod sew_chat;
 // Garden data (prd-gardens-local-services-v1 1A, contract-garden-data-v1):
 // widget keyspaces in a daemon-owned SQLite file, grants, authorship,
 // transactions and snapshots. Pure half; routes live in k2-daemon.

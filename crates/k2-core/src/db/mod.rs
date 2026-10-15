@@ -1336,6 +1336,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
+        // 0167 — Sew chat for agents, S30 core (plan-sew-s30-s32-on-k2-v1
+        // K16/K18): the "Manage Sew" switch (projects.agents_can_manage_chat,
+        // DEFAULT 0), per-Space agent access, the write-attempt audit, the
+        // approval queue and the per-box approvals policy. 0166 is reserved
+        // for Sew's `sew_server` (K12); the integrator renumbers on slips.
+        ("0167_sew_chat", include_str!("../../drizzle_sql/0167_sew_chat.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1996,7 +2002,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0165_app_runtime_core",
+            last_name, "0167_sew_chat",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2030,6 +2036,7 @@ mod tests {
                 "0163_sources",
                 "0164_garden_data",
                 "0165_app_runtime_core",
+                "0167_sew_chat",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2037,6 +2044,83 @@ mod tests {
 
     /// The tables 0164 creates (contract-garden-data-v1 §2.1).
     const GARDEN_DATA_TABLES: &[&str] = &["zen_data_grants", "zen_widget_authors"];
+
+    /// The tables 0167 creates (Sew chat for agents, S30 K16).
+    const SEW_CHAT_TABLES: &[&str] = &["sew_chat_access", "sew_chat_actions", "sew_chat_outbox", "sew_chat_settings"];
+
+    /// 0167 on a fresh database: the tables exist, the "Manage Sew" switch
+    /// defaults OFF, the CHECKs refuse unknown levels/modes/statuses, and a
+    /// live idempotency key is unique per workspace while a refused one may
+    /// repeat.
+    #[test]
+    fn sew_chat_migration_creates_tables_switch_and_checks() {
+        let conn = fresh_memory();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in SEW_CHAT_TABLES {
+            assert!(tables.iter().any(|n| n == t), "0167 table {t} missing: {tables:?}");
+        }
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('w-sew', 'Sew', '/t/sew', 'sewws')", [])
+            .unwrap();
+        let on: i64 = conn
+            .query_row("SELECT agents_can_manage_chat FROM projects WHERE id = 'w-sew'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(on, 0, "Manage Sew is OFF by default");
+        let access = |level: &str, approval: &str| {
+            conn.execute(
+                "INSERT OR REPLACE INTO sew_chat_access (project_id, space_id, space_slug, level, approval, updated_by, updated_at)
+                 VALUES ('w-sew', 's1', 'hearth', ?1, ?2, 'owner', 1)",
+                params![level, approval],
+            )
+        };
+        for level in ["read", "reply", "send", "manage"] {
+            access(level, "required").unwrap_or_else(|e| panic!("level {level}: {e}"));
+        }
+        assert!(access("post", "none").is_err(), "the stored level word is 'send'");
+        assert!(access("admin", "none").is_err());
+        assert!(access("send", "on").is_err(), "approval is none|required");
+        let act = |id: &str, status: &str, key: &str| {
+            conn.execute(
+                "INSERT INTO sew_chat_actions (id, project_id, k2_session, action, addr, status, client_key, created_at, updated_at)
+                 VALUES (?1, 'w-sew', 'sess', 'send', 'hearth/general', ?2, ?3, 1, 1)",
+                params![id, status, key],
+            )
+        };
+        act("a1", "refused", "k1").unwrap();
+        act("a2", "refused", "k1").expect("a refused attempt may be retried under its key");
+        act("a3", "posted", "k1").unwrap();
+        assert!(act("a4", "queued", "k1").is_err(), "a live key is unique per workspace");
+        assert!(act("a5", "exploded", "k2").is_err(), "unknown status");
+        assert!(conn
+            .execute(
+                "INSERT INTO sew_chat_actions (id, project_id, k2_session, action, addr, status, client_key, created_at, updated_at)
+                 VALUES ('a6', 'w-sew', 's', 'react', 'x', 'posted', 'k3', 1, 1)",
+                [],
+            )
+            .is_err());
+        for kind in ["answer", "decline", "void", "ask"] {
+            conn.execute(
+                "INSERT INTO sew_chat_actions (id, project_id, k2_session, action, addr, status, client_key, created_at, updated_at)
+                 VALUES (?1, 'w-sew', 's', ?2, 'x', 'refused', 'k4', 1, 1)",
+                params![format!("km1-{kind}"), kind],
+            )
+            .unwrap_or_else(|e| panic!("KM1 action {kind} has room: {e}"));
+        }
+        let outbox = |status: &str, kind: Option<&str>| {
+            conn.execute(
+                "INSERT INTO sew_chat_outbox (id, action_id, project_id, k2_session, agent_name, action, channel_id, addr,
+                  client_key, body, body_sha256, body_bytes, status, decided_kind, created_at, expires_at)
+                 VALUES (?1, 'a3', 'w-sew', 's', 'sewws', 'send', 'c1', 'hearth/general', 'k1', 'hi', 'h', 2, ?2, ?3, 1, 2)",
+                params![format!("out_{status}_{}", kind.unwrap_or("none")), status, kind],
+            )
+        };
+        for s in ["queued", "approved", "denied", "cancelled"] {
+            outbox(s, None).unwrap_or_else(|e| panic!("outbox {s}: {e}"));
+        }
+        assert!(outbox("expired", None).is_err(), "expiry is a denial, not a fifth state");
+        outbox("approved", Some("agent")).unwrap();
+        assert!(outbox("approved", Some("robot")).is_err());
+    }
 
     /// 0164 on a fresh database: both tables exist; a delegation is a
     /// person-made workspace row; a delegate-made row names its
@@ -2155,6 +2239,12 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
+            // 0167 (Sew chat) came after 0165; roll it back too.
+            for t in SEW_CHAT_TABLES {
+                conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
+            }
+            conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_chat;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0167_sew_chat'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

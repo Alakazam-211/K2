@@ -24095,7 +24095,7 @@ HOW TO MAKE ONE (copy this)
        k2 publish run <label> --skin <dir> --port N
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
-  2. Owner adds guests and passwords (Settings → Sidecars →
+  2. Owner adds guests and passwords (Settings → Cores →
      Apps, or `k2 app user add` / `password` / `email`; leftover
      `k2 skin user …`).
      Email is optional. Guests log in; they never copy a key.

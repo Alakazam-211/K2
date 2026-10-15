@@ -100,10 +100,16 @@ export type SettingsSection =
   | 'data-sources'
   /** Settings → 3rd Party Bots → Grok Bot (0.45.7). */
   | 'local-grokbots'
+  /** Settings → 3rd Party Bots → Hermes / Instinct / Muse / Dots (0.45.7):
+   *  "coming soon" placeholder pages (ComingSoonBotSection). */
+  | 'bots-hermes'
+  | 'bots-instinct'
+  | 'bots-muse'
+  | 'bots-dots'
   | 'email-hosting'
   | 'email-link'
   | 'data'
-  /** Settings → Sidecars → Apps (route id skin-access; per-app roles and users). */
+  /** Settings → Cores → Apps (route id skin-access; per-app roles and users). */
   | 'skin-access'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'

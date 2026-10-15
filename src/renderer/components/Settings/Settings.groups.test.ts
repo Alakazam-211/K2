@@ -9,6 +9,8 @@ import { join } from 'node:path'
 import { settingsNav, THIRD_PARTY_BOTS } from './Settings'
 import { useSettingsStore, type SettingsSection } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
+import { SECTION_LABELS } from './searchManifest'
+import { COMING_SOON_BOTS, COMING_SOON_BOTS_MANIFEST } from './sections/ComingSoonBotSection'
 
 type Nav = ReturnType<typeof settingsNav>
 const titles = (nav: Nav): string[] => nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
@@ -57,12 +59,12 @@ describe('Settings → LLMs group', () => {
 })
 
 describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
-  it('group order: Gardens, LLMs, Access, Network, Editors / Fonts, Logs, Sidecars, 3rd Party Bots', () => {
+  it('group order: Gardens, LLMs, Access, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
     expect(titles(settingsNav({ zenGardens: true }))).toEqual([
-      'Gardens', 'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Sidecars', '3rd Party Bots',
+      'Gardens', 'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
     expect(titles(settingsNav({ zenGardens: false }))).toEqual([
-      'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Sidecars', '3rd Party Bots',
+      'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
   })
 
@@ -87,8 +89,14 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     expect(group(settingsNav({ zenGardens: true }), 'Logs').items.map((i) => i.id)).toContain('access-audit')
   })
 
-  it('3rd Party Bots: one leaf per provider, Grok Bot first, hidden without grokbots-v1', () => {
+  it('3rd Party Bots: Grok Bot (hidden without grokbots-v1), then Hermes, Instinct, Muse, Dots tagged Soon; the group always shows', () => {
     expect(THIRD_PARTY_BOTS).toEqual([{ id: 'local-grokbots', label: 'Grok Bot', capability: 'grokbots-v1' }])
+    const soon = [
+      { id: 'bots-hermes', label: 'Hermes', comingSoon: true },
+      { id: 'bots-instinct', label: 'Instinct', comingSoon: true },
+      { id: 'bots-muse', label: 'Muse', comingSoon: true },
+      { id: 'bots-dots', label: 'Dots', comingSoon: true },
+    ]
     // The window's server decides: stub what it reports.
     let supported = new Set<string>()
     const spy = vi
@@ -96,12 +104,25 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
       .mockImplementation((f: unknown) => supported.has(String(f)))
     expect(group(settingsNav({ zenGardens: true }), '3rd Party Bots').items).toEqual([
       { id: 'local-grokbots', label: 'Grok Bot', hide: true },
+      ...soon,
     ])
     supported = new Set(['grokbots-v1'])
     expect(group(settingsNav({ zenGardens: true }), '3rd Party Bots').items).toEqual([
       { id: 'local-grokbots', label: 'Grok Bot', hide: false },
+      ...soon,
     ])
     spy.mockRestore()
+    expect(COMING_SOON_BOTS.map((b) => b.cliPrefix)).toEqual(['hm', 'in', 'ms', 'dt'])
+    for (const b of COMING_SOON_BOTS) {
+      expect(SECTION_LABELS[b.id]).toBe(b.name)
+      expect(COMING_SOON_BOTS_MANIFEST.find((e) => e.section === b.id)?.label).toBe(b.name)
+    }
+  })
+
+  it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
+    const nav = settingsNav({ zenGardens: true })
+    expect(titles(nav)).not.toContain('Sidecars')
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'data', 'skin-access'])
   })
 
   it('old ids still open the same pages', () => {

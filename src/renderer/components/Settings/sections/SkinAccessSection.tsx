@@ -1,4 +1,4 @@
-// Settings → Sidecars → Apps. Master-detail: Host plus each published
+// Settings → Cores → Apps. Master-detail: Host plus each published
 // service. Roles and app grants live on the selected detail. Platform
 // tokens and Hydra are box-level and render on Host only.
 

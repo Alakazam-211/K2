@@ -88,7 +88,7 @@ describe('Logs nav', () => {
   it('includes Access Audit after Heartbeats/Timer in Settings.tsx blocks', () => {
     const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../Settings.tsx'), 'utf8')
     const logsStart = src.indexOf("title: 'Logs'")
-    const logsEnd = src.indexOf("title: 'Sidecars'")
+    const logsEnd = src.indexOf("title: 'Cores'")
     expect(logsStart).toBeGreaterThan(0)
     expect(logsEnd).toBeGreaterThan(logsStart)
     const logs = src.slice(logsStart, logsEnd)

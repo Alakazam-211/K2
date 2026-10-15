@@ -1,6 +1,6 @@
 // Settings → Access → User Access. Principals (username + full name)
 // plus that person's grants. Access templates live under User Templates.
-// Not Admin Access (Connect users) and not Sidecars → Apps.
+// Not Admin Access (Connect users) and not Cores → Apps.
 
 import React, { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'

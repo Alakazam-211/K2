@@ -27,6 +27,7 @@ import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSectio
 import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
+import { COMING_SOON_BOTS, COMING_SOON_BOTS_MANIFEST, ComingSoonBotSection } from './sections/ComingSoonBotSection'
 import { DomainsSection, DOMAINS_MANIFEST } from './sections/DomainsSection'
 import { ApiTokensSection, API_TOKENS_MANIFEST } from './sections/ApiTokensSection'
 import { VaultSection, VAULT_MANIFEST } from './sections/VaultSection'
@@ -74,24 +75,30 @@ import { escOwnedByDialog } from './settings-esc'
 type NavLeaf = {
   id?: SettingsSection
   label: string
+  /** Not clickable, muted, "soon" tag (no page). */
   soon?: boolean
   hide?: boolean
   beta?: boolean
+  /** Clickable placeholder page with a right-side SOON tag (3rd Party Bots). */
+  comingSoon?: boolean
 }
 type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string; beta?: boolean }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
 /** Settings → 3rd Party Bots (0.45.7): one leaf per outside bot provider
- *  K2 can find on this server. Each leaf shows only when the window's server
- *  reports that provider's capability. Future providers (Hermes `hm`,
- *  Instinct `in`, Muse `ms`, Dots `dt`) add a row here. */
+ *  K2 can find on this server. A live provider's leaf shows only when the
+ *  window's server reports its capability (Grok Bot: `grokbots-v1`; hidden
+ *  otherwise). Providers that aren't built yet (Hermes `hm`, Instinct `in`,
+ *  Muse `ms`, Dots `dt`, from COMING_SOON_BOTS) always show, tagged SOON,
+ *  with a placeholder page; when one ships it moves into THIRD_PARTY_BOTS
+ *  with its capability. The group always shows. */
 export const THIRD_PARTY_BOTS: { id: SettingsSection; label: string; capability: FeatureKey | ReportedFeatureKey }[] = [
   { id: 'local-grokbots', label: 'Grok Bot', capability: 'grokbots-v1' },
 ]
 
 function thirdPartyBotLeaves(): NavLeaf[] {
-  return THIRD_PARTY_BOTS.map((bot) => {
+  const live = THIRD_PARTY_BOTS.map((bot): NavLeaf => {
     let hide = true
     try {
       hide = !settingsPrimaryScope().serverSupports(bot.capability)
@@ -100,10 +107,13 @@ function thirdPartyBotLeaves(): NavLeaf[] {
     }
     return { id: bot.id, label: bot.label, hide }
   })
+  const soon = COMING_SOON_BOTS.map((bot): NavLeaf => ({ id: bot.id, label: bot.name, comingSoon: true }))
+  return [...live, ...soon]
 }
 
 /** The sidebar. Top-level pages, then groups: Gardens, LLMs, Access,
- *  Network, Editors / Fonts, Logs, Sidecars, 3rd Party Bots.
+ *  Network, Editors / Fonts, Logs, Cores (Sidecars before 0.45.7; ids
+ *  unchanged), 3rd Party Bots.
  *  LLMs is a group from 0.45.7 (Rosson: "Group the LLM details under one
  *  section as well: LLMs · Tokens · Token Usage"): LLMs (id `agents`:
  *  default agent, launch bar, presets, CLI install), Tokens (id
@@ -218,7 +228,7 @@ export function settingsNav({
     },
     {
       kind: 'group',
-      title: 'Sidecars',
+      title: 'Cores',
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
         { id: 'data', label: 'Database' },
@@ -293,6 +303,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
+      ...COMING_SOON_BOTS_MANIFEST,
       ...PEOPLE_MANIFEST,
       ...USER_TEMPLATES_MANIFEST,
       ...WAKE_SCHEDULER_MANIFEST,
@@ -466,6 +477,7 @@ export default function Settings(): React.JSX.Element {
                       label={it.label}
                       nested
                       beta={it.beta}
+                      comingSoon={it.comingSoon}
                       active={activeSection === id}
                       onClick={() => setSection(id)}
                     />
@@ -609,6 +621,11 @@ export default function Settings(): React.JSX.Element {
             <DataSourcesSection />
           </SectionErrorBoundary>
         )}
+        {COMING_SOON_BOTS.some((b) => b.id === activeSection) && (
+          <SectionErrorBoundary>
+            <ComingSoonBotSection id={activeSection} />
+          </SectionErrorBoundary>
+        )}
         {activeSection === 'local-grokbots' && (
           <SectionErrorBoundary>
             <LocalGrokBotsSection />
@@ -712,6 +729,7 @@ function SettingsNavButton({
   active,
   nested,
   beta,
+  comingSoon,
   onClick,
 }: {
   id: SettingsSection
@@ -719,6 +737,7 @@ function SettingsNavButton({
   active: boolean
   nested?: boolean
   beta?: boolean
+  comingSoon?: boolean
   onClick: () => void
 }): React.JSX.Element {
   return (
@@ -735,6 +754,9 @@ function SettingsNavButton({
       <span>{label}</span>
       {beta ? (
         <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-accent)]/15 text-[var(--color-accent)]">BETA</span>
+      ) : null}
+      {comingSoon ? (
+        <span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>
       ) : null}
     </button>
   )

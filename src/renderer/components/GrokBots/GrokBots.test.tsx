@@ -276,6 +276,8 @@ describe('chat view', () => {
     }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     const banner = await screen.findByTestId('grokbot-stale-banner')
+    // It sits in the top section with the bot's name (Rosson 2026-10-15).
+    expect(screen.getByTestId('grokbot-chat-header').contains(banner)).toBe(true)
     expect(banner.textContent).toContain("Grok's latest conversation runs outside this computer.")
     expect(banner.textContent).toContain('Showing history up to')
     expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Done: report sent.')

@@ -3,12 +3,18 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { daemonErrorText } from '@/lib/daemon-error'
+import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import {
   capsSummary,
+  ceilingFormFromLimits,
+  ceilingFromForm,
+  ceilingSummary,
+  EMPTY_CEILING_FORM,
+  fetchCeilingOptions,
+  finishCeilingConfirm,
   finishHireKeyConfirm,
   formatGrant,
   HIRE_FORM_DEFAULTS,
@@ -16,8 +22,14 @@ import {
   hireSummary,
   keyGrantsWorkspace,
   keyState,
+  NO_APP_ACCESS,
+  saveHireCeiling,
+  SELF_ROOM,
   startHireKeyConfirm,
   type ApiKeyRow,
+  type CeilingForm,
+  type CeilingOptions,
+  type CeilingRoom,
   type HireForm,
 } from './api-keys-api'
 import { primaryScope } from '@/kessel/server-scope'
@@ -67,6 +79,9 @@ export function ApiTokensSection(): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false)
   const [mintedSecret, setMintedSecret] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [ceilingOpts, setCeilingOpts] = useState<CeilingOptions>({ apps: [], rooms: [] })
+  const [ceilingOptsError, setCeilingOptsError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<ApiKeyRow | null>(null)
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -78,6 +93,12 @@ export function ApiTokensSection(): React.JSX.Element {
       setKeys([])
     } finally {
       setLoading(false)
+    }
+    try {
+      setCeilingOpts(await fetchCeilingOptions())
+      setCeilingOptsError(null)
+    } catch (e) {
+      setCeilingOptsError(daemonErrorText(e))
     }
   }, [])
 
@@ -206,8 +227,24 @@ export function ApiTokensSection(): React.JSX.Element {
                       Hires agents: {hireSummary(k.hireLimits)}
                     </p>
                   )}
+                  {k.capabilities?.hire && k.hireLimits && (
+                    <p className="text-[11px] text-[var(--color-text-secondary)]" data-testid={`hire-ceiling-${k.id}`}>
+                      App access: {ceilingSummary(k.hireLimits.apps, ceilingOpts)}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-1.5 flex-shrink-0">
+                  {state !== 'revoked' && k.capabilities?.hire && k.hireLimits && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setEditing(k)}
+                      aria-label={`Change App access for ${k.label || k.id}`}
+                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-50"
+                    >
+                      App access…
+                    </button>
+                  )}
                   {state === 'active' && (
                     <button
                       type="button"
@@ -252,6 +289,8 @@ export function ApiTokensSection(): React.JSX.Element {
             name: p.name,
             path: p.path,
           }))}
+          ceilingOpts={ceilingOpts}
+          ceilingOptsError={ceilingOptsError}
           onClose={() => setCreateOpen(false)}
           onCreated={(secret) => {
             setCreateOpen(false)
@@ -260,16 +299,244 @@ export function ApiTokensSection(): React.JSX.Element {
           }}
         />
       )}
+
+      {editing && (
+        <EditCeilingModal
+          keyRow={editing}
+          ceilingOpts={ceilingOpts}
+          ceilingOptsError={ceilingOptsError}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            void refresh()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * The owner confirm (Touch ID / login password, or the vault password) for
+ * a hire-key mint or an App access raise. `begin(then)` runs `then(token)`
+ * right away on a Mac, or after the password prompt.
+ */
+function useOwnerConfirm(finish: (method: string, password?: string) => Promise<{ token: string }>) {
+  const [step, setStep] = useState<'idle' | 'mac' | 'password'>('idle')
+  const [pwMethod, setPwMethod] = useState('vault-password')
+  const pwRef = useRef<HTMLInputElement>(null)
+  const pending = useRef<((token: string) => Promise<void>) | null>(null)
+
+  const begin = async (then: (token: string) => Promise<void>): Promise<void> => {
+    try {
+      const { methods } = await startHireKeyConfirm()
+      if (methods.includes('local-auth')) {
+        setStep('mac')
+        const { token } = await finish('local-auth')
+        setStep('idle')
+        await then(token)
+        return
+      }
+      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
+      if (pw) {
+        pending.current = then
+        setPwMethod(pw)
+        setStep('password')
+        return
+      }
+    } catch (e) {
+      setStep('idle')
+      throw e
+    }
+    throw new Error('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
+  }
+
+  const submitPassword = async (): Promise<void> => {
+    const el = pwRef.current
+    if (!el) return
+    const pw = el.value
+    el.value = ''
+    const { token } = await finish(pwMethod, pw)
+    setStep('idle')
+    const then = pending.current
+    pending.current = null
+    if (then) await then(token)
+  }
+
+  return { step, pwMethod, pwRef, begin, submitPassword }
+}
+
+function ConfirmPrompt({
+  confirm,
+  submitting,
+  onSubmit,
+  buttonLabel,
+}: {
+  confirm: ReturnType<typeof useOwnerConfirm>
+  submitting: boolean
+  onSubmit: () => void
+  buttonLabel: string
+}): React.JSX.Element | null {
+  if (confirm.step === 'mac') {
+    return <p className="text-[11px] text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
+  }
+  if (confirm.step !== 'password') return null
+  return (
+    <div className="space-y-1">
+      <p className="text-[11px] text-[var(--color-text-secondary)]">
+        {confirm.pwMethod === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm
+      </p>
+      <input
+        ref={confirm.pwRef}
+        type="password"
+        aria-label="Confirm password"
+        className="w-full px-2 py-1.5 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onSubmit()
+        }}
+      />
+      <button
+        type="button"
+        disabled={submitting}
+        onClick={onSubmit}
+        className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+      >
+        {buttonLabel}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * "App access limit": the most an App login made for a hired agent may
+ * get — one App, its rooms, and the highest role. "No App access" (the
+ * empty choice) means hired agents get no App login.
+ */
+function AppAccessLimit({
+  form,
+  onChange,
+  opts,
+  optsError,
+}: {
+  form: CeilingForm
+  onChange: (f: CeilingForm) => void
+  opts: CeilingOptions
+  optsError: string | null
+}): React.JSX.Element {
+  const app = opts.apps.find((a) => a.id === form.app)
+  const appRooms = app ? app.roomIds : []
+  const roomRows = useMemo(() => {
+    const self = opts.rooms.filter((r) => r.id === SELF_ROOM)
+    const used = opts.rooms.filter((r) => r.id !== SELF_ROOM && appRooms.includes(r.id))
+    const other = opts.rooms.filter((r) => r.id !== SELF_ROOM && !appRooms.includes(r.id))
+    // A stored room this list no longer has stays visible (and removable).
+    const gone = form.rooms
+      .filter((id) => !opts.rooms.some((r) => r.id === id))
+      .map((id) => ({ id, handle: id, name: '(no longer on this server)' }))
+    return { first: [...self, ...used, ...gone], other }
+  }, [opts.rooms, appRooms, form.rooms])
+
+  const toggleRoom = (id: string, on: boolean) => {
+    const rooms = on ? [...form.rooms.filter((r) => r !== id), id] : form.rooms.filter((r) => r !== id)
+    onChange({ ...form, rooms })
+  }
+  const roomBox = (r: CeilingRoom) => (
+    <label key={r.id} className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)] cursor-pointer">
+      <SquareCheckbox
+        checked={form.rooms.includes(r.id)}
+        onChange={(e) => toggleRoom(r.id, e.target.checked)}
+        aria-label={`Room ${r.handle || r.id}`}
+      />
+      <span className="truncate">{r.id === SELF_ROOM ? r.name : r.handle || r.name}</span>
+      {r.id !== SELF_ROOM && r.name && r.name !== r.handle && (
+        <span className="text-[10px] text-[var(--color-text-muted)] truncate">{r.name}</span>
+      )}
+    </label>
+  )
+
+  return (
+    <div className="space-y-1.5 border-t border-[var(--color-border)] pt-1.5" data-testid="app-access-limit">
+      <p className="text-[11px] text-[var(--color-text-secondary)]">App access limit</p>
+      <p className="text-[10px] text-[var(--color-text-muted)]">
+        The most an App login made for a hired agent may get: one App, its rooms, and the highest role.
+      </p>
+      {optsError && <p className="text-[10px] text-[var(--color-status-error-soft)]">Couldn&apos;t load Apps: {optsError}</p>}
+      <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+        App
+        <select
+          aria-label="App"
+          value={form.app}
+          onChange={(e) => onChange({ app: e.target.value, rooms: e.target.value ? [SELF_ROOM] : [], role: '' })}
+          className="max-w-[60%] px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+        >
+          <option value="">{NO_APP_ACCESS}</option>
+          {opts.apps.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.workspace ? `${a.name} (${a.workspace})` : a.name}
+            </option>
+          ))}
+          {form.app && !app && <option value={form.app}>{form.app} (not published any more)</option>}
+        </select>
+      </label>
+      {!form.app ? (
+        <p className="text-[10px] text-[var(--color-text-muted)]" data-testid="app-access-none">
+          {NO_APP_ACCESS}: agents hired with this key get no App login.
+          {opts.apps.length === 0 && ' No Apps are published on this server yet.'}
+        </p>
+      ) : (
+        <>
+          <p className="text-[10px] text-[var(--color-text-muted)]">Rooms</p>
+          <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
+            {roomRows.first.map(roomBox)}
+            {roomRows.other.length > 0 && (
+              <p className="text-[10px] text-[var(--color-text-muted)] pt-1">Other rooms on this server</p>
+            )}
+            {roomRows.other.map(roomBox)}
+          </div>
+          {form.rooms.length === 0 && (
+            <p className="text-[10px] text-[var(--color-status-warning-soft)]">Pick at least one room.</p>
+          )}
+          <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+            Highest role
+            <select
+              aria-label="Highest role"
+              value={form.role}
+              onChange={(e) => onChange({ ...form, role: e.target.value })}
+              className="max-w-[60%] px-2 py-1 text-[11px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+            >
+              <option value="">No role (Thread only in these rooms)</option>
+              {(app?.roles ?? []).map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.appId ? r.name : `${r.name} (all Apps)`}
+                </option>
+              ))}
+              {form.role && !app?.roles.some((r) => r.id === form.role) && (
+                <option value={form.role}>{form.role} (not found)</option>
+              )}
+            </select>
+          </label>
+          <p className="text-[10px] text-[var(--color-text-muted)]">
+            A hired agent may get this role, or one no wider, when all its rooms are ticked above.
+          </p>
+        </>
+      )}
+      <p className="text-[10px] text-[var(--color-status-warning-soft)]" data-testid="hire-whole-room-warning">
+        App logins for hired agents cover whole rooms until folder grants exist.
+      </p>
     </div>
   )
 }
 
 function CreateKeyModal({
   workspaceOptions,
+  ceilingOpts,
+  ceilingOptsError,
   onClose,
   onCreated,
 }: {
   workspaceOptions: Array<{ id: string; name: string; path: string }>
+  ceilingOpts: CeilingOptions
+  ceilingOptsError: string | null
   onClose: () => void
   onCreated: (secret: string) => void
 }): React.JSX.Element {
@@ -282,9 +549,8 @@ function CreateKeyModal({
   const [db, setDb] = useState(false)
   const [hire, setHire] = useState(false)
   const [hireForm, setHireForm] = useState<HireForm>(HIRE_FORM_DEFAULTS)
-  const [confirmStep, setConfirmStep] = useState<'idle' | 'mac' | 'password'>('idle')
-  const [pwMethod, setPwMethod] = useState('vault-password')
-  const pwRef = useRef<HTMLInputElement>(null)
+  const [ceiling, setCeiling] = useState<CeilingForm>(EMPTY_CEILING_FORM)
+  const confirm = useOwnerConfirm(finishHireKeyConfirm)
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const setHireField = <K extends keyof HireForm>(k: K, v: HireForm[K]) =>
@@ -298,6 +564,12 @@ function CreateKeyModal({
       })),
     [workspaceOptions],
   )
+
+  const hireBody = (): Record<string, unknown> => {
+    const h = hireLimitsFromForm(hireForm, db)
+    const apps = ceilingFromForm(ceiling, ceilingOpts)
+    return apps.length ? { ...h, apps } : h
+  }
 
   const mint = async (confirmToken?: string) => {
     const body: Record<string, unknown> = {
@@ -315,7 +587,7 @@ function CreateKeyModal({
       body.workspaces = [...selected]
     }
     if (hire) {
-      body.hire = hireLimitsFromForm(hireForm, db)
+      body.hire = hireBody()
       body.confirmToken = confirmToken
     }
     const res = await daemonCliPost<{ id?: string; key?: string; error?: string }>(primaryScope(),
@@ -335,26 +607,11 @@ function CreateKeyModal({
         return
       }
       // Validate the limits before asking for the confirm.
-      hireLimitsFromForm(hireForm, db)
+      hireBody()
       // A key that can hire agents needs a fresh owner confirm (Touch ID /
       // login password, or the vault password), owner token included.
-      const { methods } = await startHireKeyConfirm()
-      if (methods.includes('local-auth')) {
-        setConfirmStep('mac')
-        const { token } = await finishHireKeyConfirm('local-auth')
-        setConfirmStep('idle')
-        await mint(token)
-        return
-      }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      if (pw) {
-        setPwMethod(pw)
-        setConfirmStep('password')
-        return
-      }
-      setErr('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
+      await confirm.begin(mint)
     } catch (e) {
-      setConfirmStep('idle')
       setErr(daemonErrorText(e))
     } finally {
       setSubmitting(false)
@@ -362,16 +619,10 @@ function CreateKeyModal({
   }
 
   const submitPassword = async () => {
-    const el = pwRef.current
-    if (!el) return
-    const pw = el.value
-    el.value = ''
     setSubmitting(true)
     setErr(null)
     try {
-      const { token } = await finishHireKeyConfirm(pwMethod, pw)
-      setConfirmStep('idle')
-      await mint(token)
+      await confirm.submitPassword()
     } catch (e) {
       setErr(daemonErrorText(e))
     } finally {
@@ -381,7 +632,7 @@ function CreateKeyModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
+      <div className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Create API key</h3>
         <label className="block text-[11px] text-[var(--color-text-muted)]">
           Label
@@ -459,8 +710,9 @@ function CreateKeyModal({
           {hire && (
             <div className="border border-[var(--color-border)] p-2 space-y-1.5">
               <p className="text-[10px] text-[var(--color-text-muted)]">
-                Agents this key hires never get more than the key allows. Limits can&apos;t be edited later:
-                mint a new key and revoke this one. Creating it asks you to confirm (Touch ID or a password).
+                Agents this key hires never get more than the key allows. Only the App access limit can be
+                changed later; for the rest, mint a new key and revoke this one. Creating it asks you to
+                confirm (Touch ID or a password).
               </p>
               {(
                 [
@@ -524,40 +776,16 @@ function CreateKeyModal({
                 <SquareCheckbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
                 May retire the agents it hired
               </label>
-              <p className="text-[10px] text-[var(--color-status-warning-soft)]" data-testid="hire-whole-room-warning">
-                App logins for hired agents cover whole rooms until folder grants exist. Name the Apps a key
-                may give logins on from a terminal: k2 api-key create --hire --app-login APP[:ROOMS[:ROLES]].
-              </p>
+              <AppAccessLimit form={ceiling} onChange={setCeiling} opts={ceilingOpts} optsError={ceilingOptsError} />
             </div>
           )}
         </div>
-        {confirmStep === 'mac' && (
-          <p className="text-[11px] text-[var(--color-text-secondary)]">Confirm on this Mac (Touch ID or your login password)…</p>
-        )}
-        {confirmStep === 'password' && (
-          <div className="space-y-1">
-            <p className="text-[11px] text-[var(--color-text-secondary)]">
-              {pwMethod === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm
-            </p>
-            <input
-              ref={pwRef}
-              type="password"
-              aria-label="Confirm password"
-              className="w-full px-2 py-1.5 text-[12px] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submitPassword()
-              }}
-            />
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => void submitPassword()}
-              className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-            >
-              Confirm and create
-            </button>
-          </div>
-        )}
+        <ConfirmPrompt
+          confirm={confirm}
+          submitting={submitting}
+          onSubmit={() => void submitPassword()}
+          buttonLabel="Confirm and create"
+        />
         {err && <p className="text-[11px] text-[var(--color-status-error-soft)]">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button
@@ -574,6 +802,114 @@ function CreateKeyModal({
             className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
           >
             {submitting ? 'Creating…' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Change a hire key's App access limit. The daemon decides: lowering
+ * (fewer rooms, a lower role, no App access) saves straight away; widening
+ * answers `vault_confirm_required`, and this asks for the same owner
+ * confirm as minting, then saves with the token.
+ */
+function EditCeilingModal({
+  keyRow,
+  ceilingOpts,
+  ceilingOptsError,
+  onClose,
+  onSaved,
+}: {
+  keyRow: ApiKeyRow
+  ceilingOpts: CeilingOptions
+  ceilingOptsError: string | null
+  onClose: () => void
+  onSaved: () => void
+}): React.JSX.Element {
+  const stored = keyRow.hireLimits?.apps ?? []
+  const [form, setForm] = useState<CeilingForm>(() => ceilingFormFromLimits(stored))
+  const confirm = useOwnerConfirm(finishCeilingConfirm)
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const save = async () => {
+    setSubmitting(true)
+    setErr(null)
+    try {
+      const apps = ceilingFromForm(form, ceilingOpts)
+      try {
+        await saveHireCeiling(keyRow.id, apps)
+        onSaved()
+      } catch (e) {
+        if (daemonErrorOf(e)?.code !== 'vault_confirm_required') throw e
+        // Widening: confirm, then save again with the one-use token.
+        await confirm.begin(async (token) => {
+          await saveHireCeiling(keyRow.id, apps, token)
+          onSaved()
+        })
+      }
+    } catch (e) {
+      setErr(daemonErrorText(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const submitPassword = async () => {
+    setSubmitting(true)
+    setErr(null)
+    try {
+      await confirm.submitPassword()
+    } catch (e) {
+      setErr(daemonErrorText(e))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+          App access for {keyRow.label || keyRow.id}
+        </h3>
+        <p className="text-[11px] text-[var(--color-text-secondary)]">
+          Now: {ceilingSummary(stored, ceilingOpts)}
+        </p>
+        <p className="text-[10px] text-[var(--color-text-muted)]">
+          Lowering it saves right away. Widening it (another App, a new room or a higher role) asks you to
+          confirm, like creating the key. Logins already made keep what they have.
+        </p>
+        {stored.length > 1 && (
+          <p className="text-[10px] text-[var(--color-status-warning-soft)]">
+            This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
+          </p>
+        )}
+        <AppAccessLimit form={form} onChange={setForm} opts={ceilingOpts} optsError={ceilingOptsError} />
+        <ConfirmPrompt
+          confirm={confirm}
+          submitting={submitting}
+          onSubmit={() => void submitPassword()}
+          buttonLabel="Confirm and save"
+        />
+        {err && <p className="text-[11px] text-[var(--color-status-error-soft)]">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-[11px] text-[var(--color-text-muted)] cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void save()}
+            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+          >
+            {submitting ? 'Saving…' : 'Save'}
           </button>
         </div>
       </div>

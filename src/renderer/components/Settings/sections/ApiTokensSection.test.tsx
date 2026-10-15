@@ -155,3 +155,209 @@ describe('ApiTokensSection hire scope', () => {
     expect(body.hire).toBeUndefined()
   })
 })
+
+// ── App access limit (0.45.6, Rosson 2026-10-14) ─────────────────────────
+
+const OPTIONS = {
+  apps: [
+    {
+      id: 'svc-jobs',
+      name: 'jobs',
+      kind: 'skin',
+      workspaceId: 'ws-portal',
+      workspace: 'portal',
+      roomIds: ['ws-portal', 'ws-a'],
+      roles: [
+        { id: 'role-member', name: 'Member', appId: 'svc-jobs', rooms: ['ws-a'] },
+        { id: 'role-viewer', name: 'Viewer', appId: null, rooms: ['ws-a'] },
+      ],
+    },
+  ],
+  rooms: [
+    { id: 'self', handle: 'self', name: "The hired agent's own workspace" },
+    { id: 'ws-portal', handle: 'portal', name: 'Portal' },
+    { id: 'ws-a', handle: 'job-a', name: 'Job A' },
+    { id: 'ws-b', handle: 'job-b', name: 'Job B' },
+  ],
+}
+
+const CEILING_KEY = {
+  ...HIRE_KEY,
+  id: 'key-c',
+  label: 'jobs-ceiling',
+  hireLimits: {
+    ...HIRE_KEY.hireLimits,
+    apps: [{ app: 'svc-jobs', rooms: ['self', 'ws-a', 'ws-b'], roles: ['role-member'] }],
+  },
+}
+
+function routeGets(keys: unknown[]) {
+  daemonCliGet.mockImplementation(async (_scope: string, route: string) => {
+    if (route === 'api-keys/list') return { keys }
+    if (route === 'api-keys/hire-ceiling-options') return OPTIONS
+    throw new Error(`unexpected GET ${route}`)
+  })
+}
+
+const confirmRequired = () =>
+  new Error(JSON.stringify({ ok: false, error: { code: 'vault_confirm_required', hint: 'confirm first' } }))
+
+describe('ApiTokensSection App access limit', () => {
+  it('shows the limit in one line on the key row', async () => {
+    routeGets([CEILING_KEY])
+    render(<ApiTokensSection />)
+    await waitFor(() =>
+      expect(screen.getByTestId('hire-ceiling-key-c').textContent).toBe('App access: jobs · 3 rooms · up to Member'),
+    )
+  })
+
+  it('says "No App access" for a hire key with an empty limit', async () => {
+    routeGets([HIRE_KEY])
+    render(<ApiTokensSection />)
+    const line = await screen.findByTestId('hire-ceiling-key-1')
+    expect(line.textContent).toBe('App access: No App access')
+  })
+
+  it('the create form starts empty and says agents get no App login', async () => {
+    routeGets([])
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByText('Create API key'))
+    fireEvent.click(screen.getByLabelText('Allow hiring agents'))
+    const none = screen.getByTestId('app-access-none')
+    expect(none.textContent).toContain('No App access: agents hired with this key get no App login.')
+    expect((screen.getByLabelText('App') as HTMLSelectElement).value).toBe('')
+    expect(screen.queryByLabelText('Highest role')).toBeNull()
+  })
+
+  it('mints a hire key with the App, rooms and highest role picked in the form', async () => {
+    routeGets([])
+    daemonCliPost.mockImplementation(async (_scope: string, route: string) => {
+      if (route === 'vault/confirm/start') return { methods: ['local-auth'] }
+      if (route === 'vault/confirm/finish') return { token: 'tok-c' }
+      if (route === 'api-keys/create') return { id: 'k9', key: 'k2sk_ceiling' }
+      throw new Error(`unexpected ${route}`)
+    })
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByText('Create API key'))
+    fireEvent.click(screen.getByLabelText('Allow hiring agents'))
+    await waitFor(() => expect(screen.getByLabelText('App').querySelectorAll('option').length).toBe(2))
+    fireEvent.change(screen.getByLabelText('App'), { target: { value: 'svc-jobs' } })
+    expect((screen.getByLabelText('Room self') as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(screen.getByLabelText('Room job-a'))
+    const role = screen.getByLabelText('Highest role') as HTMLSelectElement
+    expect([...role.options].map((o) => o.textContent)).toEqual([
+      'No role (Thread only in these rooms)',
+      'Member',
+      'Viewer (all Apps)',
+    ])
+    fireEvent.change(role, { target: { value: 'role-member' } })
+    fireEvent.click(screen.getByText('Create'))
+    await waitFor(() => expect(screen.getByText('k2sk_ceiling')).toBeTruthy())
+    const body = daemonCliPost.mock.calls[2][2] as { hire: Record<string, unknown>; confirmToken: string }
+    expect(body.confirmToken).toBe('tok-c')
+    expect(body.hire.apps).toEqual([{ app: 'svc-jobs', rooms: ['self', 'ws-a'], roles: ['role-member'] }])
+  })
+
+  it('refuses an App with no rooms before any confirm', async () => {
+    routeGets([])
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByText('Create API key'))
+    fireEvent.click(screen.getByLabelText('Allow hiring agents'))
+    await waitFor(() => expect(screen.getByLabelText('App').querySelectorAll('option').length).toBe(2))
+    fireEvent.change(screen.getByLabelText('App'), { target: { value: 'svc-jobs' } })
+    fireEvent.click(screen.getByLabelText('Room self'))
+    fireEvent.click(screen.getByText('Create'))
+    expect(await screen.findByText(/Pick at least one room on jobs/)).toBeTruthy()
+    expect(daemonCliPost).not.toHaveBeenCalled()
+  })
+
+  it('lowering to "No App access" saves without a confirm', async () => {
+    routeGets([CEILING_KEY])
+    daemonCliPost.mockImplementation(async (_scope: string, route: string) => {
+      if (route === 'api-keys/hire-ceiling') return { id: 'key-c', change: 'lower', confirmed: false, hireLimits: {} }
+      throw new Error(`unexpected ${route}`)
+    })
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByLabelText('Change App access for jobs-ceiling'))
+    const dialog = screen.getByTestId('edit-app-access')
+    await waitFor(() => expect(dialog.textContent).toContain('Now: jobs · 3 rooms · up to Member'))
+    expect((screen.getByLabelText('App') as HTMLSelectElement).value).toBe('svc-jobs')
+    expect((screen.getByLabelText('Room job-b') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('Highest role') as HTMLSelectElement).value).toBe('role-member')
+    fireEvent.change(screen.getByLabelText('App'), { target: { value: '' } })
+    expect(screen.getByTestId('app-access-none').textContent).toContain('get no App login')
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(screen.queryByTestId('edit-app-access')).toBeNull())
+    expect(daemonCliPost.mock.calls.map((c) => c[1])).toEqual(['api-keys/hire-ceiling'])
+    expect(daemonCliPost.mock.calls[0][2]).toEqual({ id: 'key-c', apps: [] })
+  })
+
+  it('raising asks for the owner confirm on the Mac, then saves with the token', async () => {
+    routeGets([CEILING_KEY])
+    let saves = 0
+    daemonCliPost.mockImplementation(async (_scope: string, route: string) => {
+      if (route === 'api-keys/hire-ceiling') {
+        saves += 1
+        if (saves === 1) throw confirmRequired()
+        return { id: 'key-c', change: 'raise', confirmed: true, hireLimits: {} }
+      }
+      if (route === 'vault/confirm/start') return { methods: ['local-auth'] }
+      if (route === 'vault/confirm/finish') return { token: 'tok-raise' }
+      throw new Error(`unexpected ${route}`)
+    })
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByLabelText('Change App access for jobs-ceiling'))
+    fireEvent.click(await screen.findByLabelText('Room portal'))
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(screen.queryByTestId('edit-app-access')).toBeNull())
+    expect(daemonCliPost.mock.calls.map((c) => c[1])).toEqual([
+      'api-keys/hire-ceiling',
+      'vault/confirm/start',
+      'vault/confirm/finish',
+      'api-keys/hire-ceiling',
+    ])
+    expect(daemonCliPost.mock.calls[0][2]).toEqual({
+      id: 'key-c',
+      apps: [{ app: 'svc-jobs', rooms: ['self', 'ws-a', 'ws-b', 'ws-portal'], roles: ['role-member'] }],
+    })
+    expect(daemonCliPost.mock.calls[1][2]).toEqual({ action: 'hire-key-mint' })
+    expect(daemonCliPost.mock.calls[2][2]).toMatchObject({ action: 'hire-key-mint', method: 'local-auth' })
+    expect(daemonCliPost.mock.calls[3][2]).toMatchObject({ id: 'key-c', confirmToken: 'tok-raise' })
+  })
+
+  it('raising without Touch ID asks for the password; a wrong one saves nothing and keeps the dialog', async () => {
+    routeGets([CEILING_KEY])
+    let saves = 0
+    daemonCliPost.mockImplementation(async (_scope: string, route: string, body: Record<string, unknown>) => {
+      if (route === 'api-keys/hire-ceiling') {
+        saves += 1
+        if (saves === 1) throw confirmRequired()
+        expect(body.confirmToken).toBe('tok-pw')
+        return { id: 'key-c', change: 'raise', confirmed: true, hireLimits: {} }
+      }
+      if (route === 'vault/confirm/start') return { methods: ['vault-password'] }
+      if (route === 'vault/confirm/finish') {
+        if (body.password !== 'right one') {
+          throw new Error(JSON.stringify({ error: { code: 'bad_password', hint: 'That password is not right.' } }))
+        }
+        return { token: 'tok-pw' }
+      }
+      throw new Error(`unexpected ${route}`)
+    })
+    render(<ApiTokensSection />)
+    fireEvent.click(await screen.findByLabelText('Change App access for jobs-ceiling'))
+    fireEvent.change(await screen.findByLabelText('Highest role'), { target: { value: 'role-viewer' } })
+    fireEvent.click(screen.getByLabelText('Room portal'))
+    fireEvent.click(screen.getByText('Save'))
+    const pw = await screen.findByLabelText('Confirm password')
+    fireEvent.change(pw, { target: { value: 'wrong' } })
+    fireEvent.click(screen.getByText('Confirm and save'))
+    expect(await screen.findByText('That password is not right.')).toBeTruthy()
+    expect(saves).toBe(1)
+    expect(screen.getByTestId('edit-app-access')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'right one' } })
+    fireEvent.click(screen.getByText('Confirm and save'))
+    await waitFor(() => expect(screen.queryByTestId('edit-app-access')).toBeNull())
+    expect(saves).toBe(2)
+  })
+})

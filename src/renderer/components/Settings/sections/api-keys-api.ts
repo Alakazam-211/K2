@@ -1,6 +1,6 @@
 // Shared types + helpers for Settings → K2 API Tokens and workspace API tab.
 
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 
 export type ApiCapabilities = {
@@ -150,7 +150,7 @@ export function hireSummary(l: HireLimits | null | undefined): string {
   if (l.retire) parts.push('retire')
   if (l.reach !== 'none') parts.push(`reach ${l.reach}`)
   if (l.folder) parts.push(`folder ${l.folder}`)
-  if (l.apps && l.apps.length) parts.push(`app logins on ${l.apps.length} App${l.apps.length === 1 ? '' : 's'}`)
+  // The App access limit has its own line (ceilingSummary).
   return parts.join(' · ')
 }
 
@@ -188,6 +188,142 @@ export async function finishHireKeyConfirm(method: string, password?: string): P
     action: 'hire-key-mint',
     method,
     label: 'API key that can hire agents',
+    ...(password !== undefined ? { password } : {}),
+  })
+}
+
+// ── App access limit (hire keys, 0.45.6) ────────────────────────────────
+// The most an App login made through a hire key may get: which App, which
+// rooms (`self` = the hired agent's own workspace) and the highest role.
+// Empty = no App access. The daemon validates and stores; these helpers
+// only shape the form and the one-line summary.
+
+/** One App in a hire key's App access limit (as the daemon stores it). */
+export type AppCeiling = { app: string; rooms: string[]; roles: string[] }
+
+export type CeilingRole = { id: string; name: string; appId: string | null; rooms: string[] }
+export type CeilingApp = {
+  id: string
+  name: string
+  kind: string
+  workspaceId: string
+  workspace: string
+  /** Rooms this App already uses (its workspace, its roles, its logins). */
+  roomIds: string[]
+  /** Roles usable on this App (its own and box-wide ones). */
+  roles: CeilingRole[]
+}
+export type CeilingRoom = { id: string; handle: string; name: string }
+export type CeilingOptions = { apps: CeilingApp[]; rooms: CeilingRoom[] }
+
+/** The Settings form: one App, its rooms, the highest role ('' = none). */
+export type CeilingForm = { app: string; rooms: string[]; role: string }
+
+export const SELF_ROOM = 'self'
+export const EMPTY_CEILING_FORM: CeilingForm = { app: '', rooms: [], role: '' }
+export const NO_APP_ACCESS = 'No App access'
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+const strList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+const rec = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+
+/** Parse `GET /cli/api-keys/hire-ceiling-options`; anything odd → empty. */
+export function parseCeilingOptions(raw: unknown): CeilingOptions {
+  const o = rec(raw)
+  const apps = (Array.isArray(o.apps) ? o.apps : []).flatMap((a): CeilingApp[] => {
+    const r = rec(a)
+    const id = str(r.id)
+    if (!id) return []
+    const roles = (Array.isArray(r.roles) ? r.roles : []).flatMap((x): CeilingRole[] => {
+      const q = rec(x)
+      const rid = str(q.id)
+      return rid ? [{ id: rid, name: str(q.name) || rid, appId: str(q.appId) || null, rooms: strList(q.rooms) }] : []
+    })
+    return [
+      {
+        id,
+        name: str(r.name) || id,
+        kind: str(r.kind),
+        workspaceId: str(r.workspaceId),
+        workspace: str(r.workspace),
+        roomIds: strList(r.roomIds),
+        roles,
+      },
+    ]
+  })
+  const rooms = (Array.isArray(o.rooms) ? o.rooms : []).flatMap((x): CeilingRoom[] => {
+    const q = rec(x)
+    const id = str(q.id)
+    return id ? [{ id, handle: str(q.handle), name: str(q.name) || str(q.handle) || id }] : []
+  })
+  return { apps, rooms }
+}
+
+/** The Apps, roles and rooms this server offers for the limit. */
+export async function fetchCeilingOptions(): Promise<CeilingOptions> {
+  return parseCeilingOptions(await daemonCliGet<unknown>(primaryScope(), 'api-keys/hire-ceiling-options'))
+}
+
+/** Display name of an App in the limit (its publish name; the id when unknown). */
+export function ceilingAppName(appId: string, opts: CeilingOptions): string {
+  return opts.apps.find((a) => a.id === appId)?.name ?? appId
+}
+
+/** One line for a key's App access limit, e.g. "jobs · 3 rooms · up to Member". */
+export function ceilingSummary(apps: AppCeiling[] | null | undefined, opts: CeilingOptions): string {
+  if (!apps || apps.length === 0) return NO_APP_ACCESS
+  return apps
+    .map((a) => {
+      const app = opts.apps.find((x) => x.id === a.app)
+      const rooms =
+        a.rooms.length === 1 && a.rooms[0] === SELF_ROOM
+          ? 'its own room'
+          : `${a.rooms.length} room${a.rooms.length === 1 ? '' : 's'}`
+      const roleNames = a.roles.map((r) => app?.roles.find((x) => x.id === r || x.name === r)?.name ?? r)
+      const role = roleNames.length ? `up to ${roleNames.join(', ')}` : 'no role (Thread only)'
+      return [app?.name ?? a.app, rooms, role].join(' · ')
+    })
+    .join('; ')
+}
+
+/** The form for an existing limit (the first App; Settings edits one). */
+export function ceilingFormFromLimits(apps: AppCeiling[] | null | undefined): CeilingForm {
+  const a = apps?.[0]
+  if (!a) return EMPTY_CEILING_FORM
+  return { app: a.app, rooms: [...a.rooms], role: a.roles[0] ?? '' }
+}
+
+/** The form → the `apps` list the daemon takes. Throws on an App with no rooms. */
+export function ceilingFromForm(f: CeilingForm, opts: CeilingOptions): AppCeiling[] {
+  if (!f.app) return []
+  if (f.rooms.length === 0) {
+    throw new Error(`Pick at least one room on ${ceilingAppName(f.app, opts)}, or choose “${NO_APP_ACCESS}”`)
+  }
+  return [{ app: f.app, rooms: [...f.rooms], roles: f.role ? [f.role] : [] }]
+}
+
+/** Change a hire key's App access limit. A raise answers 403
+ *  `vault_confirm_required` without `confirmToken`; a lowering needs none. */
+export async function saveHireCeiling(
+  id: string,
+  apps: AppCeiling[],
+  confirmToken?: string,
+): Promise<{ id: string; change: 'raise' | 'lower'; confirmed: boolean; hireLimits: HireLimits }> {
+  return daemonCliPost(primaryScope(), 'api-keys/hire-ceiling', {
+    id,
+    apps,
+    ...(confirmToken !== undefined ? { confirmToken } : {}),
+  })
+}
+
+/** A confirm for widening a key's App access (same action as minting). */
+export async function finishCeilingConfirm(method: string, password?: string): Promise<{ token: string }> {
+  return daemonCliPost(primaryScope(), 'vault/confirm/finish', {
+    action: 'hire-key-mint',
+    method,
+    label: "Widen an API key's App access",
     ...(password !== undefined ? { password } : {}),
   })
 }

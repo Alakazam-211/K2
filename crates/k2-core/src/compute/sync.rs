@@ -44,6 +44,39 @@ fn common_dir(root: &Path) -> Result<PathBuf, String> {
     run(c, "find the git dir").map(PathBuf::from)
 }
 
+/// The checkout a job takes HEAD (and the `--dirty` diff) from when the
+/// caller ran from `caller_dir` (its repo top level): a git worktree of the
+/// workspace's own repo that lives inside the workspace folder.
+///
+/// `Ok(None)` = use the workspace's own checkout (the caller is in it, or
+/// `caller_dir` doesn't exist on this machine). `Err` = the caller is in
+/// some other repo or outside the workspace; the caller warns and falls
+/// back. Never reads a repo outside `ws_dir`.
+pub fn caller_checkout(ws_dir: &Path, ws_root: &Path, caller_dir: &Path) -> Result<Option<PathBuf>, String> {
+    if !caller_dir.is_absolute() {
+        return Err("your repo path isn't absolute".into());
+    }
+    let Ok(caller) = caller_dir.canonicalize() else { return Ok(None) };
+    let ws = ws_dir.canonicalize().map_err(|e| format!("the workspace folder: {e}"))?;
+    if !caller.starts_with(&ws) {
+        return Err(format!("{} is outside the workspace", caller_dir.display()));
+    }
+    let root = repo_root(&caller)?.canonicalize().map_err(|e| format!("your repo: {e}"))?;
+    let ws_root = ws_root.canonicalize().map_err(|e| format!("the workspace repo: {e}"))?;
+    if root == ws_root {
+        return Ok(None);
+    }
+    if !root.starts_with(&ws) {
+        return Err(format!("{} is outside the workspace", root.display()));
+    }
+    let mine = common_dir(&root)?.canonicalize().map_err(|e| format!("your git dir: {e}"))?;
+    let theirs = common_dir(&ws_root)?.canonicalize().map_err(|e| format!("the workspace git dir: {e}"))?;
+    if mine != theirs {
+        return Err(format!("{} is a different repo, not a worktree of the workspace's", root.display()));
+    }
+    Ok(Some(root))
+}
+
 /// Full 40-hex commit for `rev`.
 pub fn resolve_commit(root: &Path, rev: &str) -> Result<String, String> {
     if rev.starts_with('-') {
@@ -341,6 +374,52 @@ mod tests {
             .output()
             .unwrap();
         assert!(!fail.status.success(), "a have..commit bundle needs the have");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn caller_checkout_picks_a_worktree_inside_the_workspace_only() {
+        let d = temp("wt");
+        let r = repo(&d);
+        let main_head = g(&r, &["rev-parse", "HEAD"]);
+        // A worktree inside the workspace, one commit ahead (ignored by the
+        // main checkout, as K2's own .gitignore does for .claude/).
+        std::fs::create_dir_all(r.join(".git/info")).unwrap();
+        std::fs::write(r.join(".git/info/exclude"), ".claude/\n").unwrap();
+        let wt = r.join(".claude/worktrees/x");
+        g(&r, &["worktree", "add", "-q", "-b", "wt", wt.to_str().unwrap()]);
+        std::fs::write(wt.join("a.txt"), "worktree\n").unwrap();
+        g(&wt, &["commit", "-q", "-am", "wt"]);
+        let wt_head = g(&wt, &["rev-parse", "HEAD"]);
+        assert_ne!(wt_head, main_head);
+        let ws_root = repo_root(&r).unwrap();
+
+        let got = caller_checkout(&r, &ws_root, &wt).unwrap().expect("the worktree");
+        assert_eq!(got, wt.canonicalize().unwrap());
+        assert_eq!(resolve_commit(&got, "HEAD").unwrap(), wt_head);
+        // Its own dirty state, not the main checkout's.
+        assert!(!is_dirty(&r).unwrap());
+        std::fs::write(wt.join("a.txt"), "dirty in the worktree\n").unwrap();
+        assert!(is_dirty(&got).unwrap());
+
+        // The workspace's own checkout (or a folder in it): no override.
+        assert_eq!(caller_checkout(&r, &ws_root, &r).unwrap(), None);
+        // Not on this machine: no override.
+        assert_eq!(caller_checkout(&r, &ws_root, &d.join("nope")).unwrap(), None);
+        // Relative: refused.
+        assert!(caller_checkout(&r, &ws_root, Path::new("ws")).is_err());
+        // A worktree outside the workspace folder: refused.
+        let outside = d.join("outside-wt");
+        g(&r, &["worktree", "add", "-q", "-b", "out", outside.to_str().unwrap()]);
+        assert!(caller_checkout(&r, &ws_root, &outside).unwrap_err().contains("outside the workspace"));
+        // A different repo nested inside the workspace: refused.
+        let nested = r.join("vendor/other");
+        std::fs::create_dir_all(&nested).unwrap();
+        g(&nested, &["init", "-q"]);
+        std::fs::write(nested.join("b.txt"), "b\n").unwrap();
+        g(&nested, &["add", "."]);
+        g(&nested, &["commit", "-q", "-m", "b"]);
+        assert!(caller_checkout(&r, &ws_root, &nested).unwrap_err().contains("different repo"));
         let _ = std::fs::remove_dir_all(&d);
     }
 

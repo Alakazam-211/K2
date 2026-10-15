@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::apps::{AppId, APP_HOME, GATEWAY_PORTS, RESERVED_PORTS};
+use crate::apps::{AppId, IoMax, APP_HOME, GATEWAY_PORTS, RESERVED_PORTS};
 use crate::keys::{key_id_of, TrustedKey};
 use crate::sig::parse_trusted_comment;
 use crate::version::{arch_ok, elf_matches, Semver};
@@ -268,11 +268,127 @@ pub enum Request {
     Stop { app: String, deployment: String },
     Liveness { app: String, deployment: String },
     Stats { app: String, deployment: String },
-    Exec { app: String, deployment: String, argv: Vec<String> },
+    /// One command in the App's container, as the App (S28): its own
+    /// user, capabilities, seccomp and MAC. Killed at `timeoutSecs`
+    /// ([`EXEC_TIMEOUT_BOUNDS`]).
+    #[serde(rename_all = "camelCase")]
+    Exec { app: String, deployment: String, argv: Vec<String>, timeout_secs: u64 },
+    /// An interactive command on a terminal (S28 `k2 app shell`). After an
+    /// `ok` answer line the connection carries [`tty`] frames both ways
+    /// until the command exits.
+    ExecTty { app: String, deployment: String, argv: Vec<String>, cols: u16, rows: u16 },
     Adopt,
     /// Stop every instance of an App; `data` also deletes its folders and
     /// frees its slot (uninstall --purge).
     RemoveApp { app: String, data: bool },
+    /// The `process` exception (§4.3): stage a deployment's code (a copy
+    /// of the Seed) and its spec under `apps/<id>/stage-<deployment>/`,
+    /// world-readable inside the App's own folder (the unit runs as
+    /// `k2appx` and sees only that folder). Gives the App its gateway
+    /// slot. Starts nothing: the root helper starts the system unit.
+    ProcessStage(Box<ProcessSpec>),
+    /// Make a staged deployment the one `k2app-process@<id>` runs (the
+    /// unit must be stopped: the daemon stops it first).
+    ProcessActivate { app: String, deployment: String },
+    /// Which deployment the App's process folder holds (adopt, liveness).
+    ProcessState { app: String },
+}
+
+/// One `process` exception deployment (no image: the host's own
+/// programs; the Seed is the code).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessSpec {
+    pub app: String,
+    pub deployment: String,
+    pub seed: String,
+    pub port: u16,
+    pub argv: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub memory_mib: u64,
+    pub secrets: Vec<SecretItem>,
+    pub pass_hex: Option<String>,
+}
+
+/// What `k2-app-engine process-run` reads inside the unit
+/// (`apps/<id>/process/spec.json`): the command and its whole
+/// environment, already resolved by the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessRun {
+    pub app: String,
+    pub deployment: String,
+    pub port: u16,
+    pub gw_port: u16,
+    pub argv: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+/// The `process` exception's paths, inside and outside the unit.
+pub mod process {
+    use crate::apps::{AppId, APP_HOME, PROCESS_HOME};
+    /// `apps/<id>/process` (bound read-only into the unit, same path).
+    pub fn dir(app: &AppId) -> String {
+        format!("{APP_HOME}/apps/{}/process", app.as_str())
+    }
+    pub fn spec(app: &AppId) -> String {
+        format!("{}/spec.json", dir(app))
+    }
+    pub fn code(app: &AppId) -> String {
+        format!("{}/code", dir(app))
+    }
+    /// The App's writable state (`StateDirectory=k2appx/<id>`).
+    pub fn state(app: &AppId) -> String {
+        format!("{PROCESS_HOME}/{}", app.as_str())
+    }
+}
+
+/// Bounds for one-shot exec timeouts (§5.10: 60 s default, up to 10 min).
+pub const EXEC_TIMEOUT_BOUNDS: (u64, u64) = (1, 600);
+pub const EXEC_TIMEOUT_DEFAULT: u64 = 60;
+
+/// The terminal stream after an `exec-tty` answer: `[kind u8][len u32 BE]
+/// [payload]`, payload ≤ [`tty::MAX_FRAME`].
+pub mod tty {
+    /// Daemon → engine: bytes for the command's terminal.
+    pub const INPUT: u8 = 1;
+    /// Daemon → engine: `[cols u16 BE][rows u16 BE]`.
+    pub const RESIZE: u8 = 2;
+    /// Daemon → engine: hang up (the command gets SIGHUP from its tty).
+    pub const HANGUP: u8 = 3;
+    /// Engine → daemon: bytes the command wrote.
+    pub const OUTPUT: u8 = 17;
+    /// Engine → daemon: `[code i32 BE]` (-1 = killed or unknown); last.
+    pub const EXIT: u8 = 18;
+    pub const MAX_FRAME: usize = 64 * 1024;
+
+    pub fn encode(kind: u8, payload: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(5 + payload.len());
+        v.push(kind);
+        v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        v.extend_from_slice(payload);
+        v
+    }
+
+    /// Read one frame; `Ok(None)` at a clean end of stream.
+    pub fn read(r: &mut dyn std::io::Read) -> std::io::Result<Option<(u8, Vec<u8>)>> {
+        let mut h = [0u8; 5];
+        let mut got = 0;
+        while got < 5 {
+            match r.read(&mut h[got..])? {
+                0 if got == 0 => return Ok(None),
+                0 => return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "short frame header")),
+                n => got += n,
+            }
+        }
+        let len = u32::from_be_bytes([h[1], h[2], h[3], h[4]]) as usize;
+        if len > MAX_FRAME {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "frame too large"));
+        }
+        let mut p = vec![0u8; len];
+        r.read_exact(&mut p)?;
+        Ok(Some((h[0], p)))
+    }
 }
 
 /// One secret for a container: a Podman secret, never in the unit file.
@@ -308,6 +424,8 @@ pub struct StartSpec {
     /// The App pass (S14), hex; a Podman secret mounted at
     /// [`PASS_TARGET`].
     pub pass_hex: Option<String>,
+    /// The App's disk ceilings (§6.2, `io.max` through the unit).
+    pub io: IoMax,
 }
 
 /// Where the App pass appears inside the container (`K2_PASS_FILE`).
@@ -458,6 +576,56 @@ pub fn check_start(s: &StartSpec) -> Result<AppId, &'static str> {
             return Err("pass");
         }
     }
+    if s.io.check().is_err() {
+        return Err("io");
+    }
+    Ok(app)
+}
+
+/// A one-shot or terminal exec's argv (no empty word, no control chars).
+pub fn exec_argv_ok(argv: &[String]) -> bool {
+    !argv.is_empty() && argv.len() <= 64 && argv.iter().all(|a| !a.is_empty() && value_ok(a, 4096))
+}
+
+/// Every field of a process deployment (the engine runs this first).
+pub fn check_process(s: &ProcessSpec) -> Result<AppId, &'static str> {
+    let app = AppId::parse(&s.app).ok_or("app id")?;
+    if !deployment_ok(&s.deployment) {
+        return Err("deployment id");
+    }
+    if !seed_hash_ok(&s.seed) {
+        return Err("seed hash");
+    }
+    if !app_port_ok(s.port) {
+        return Err("port");
+    }
+    if !exec_argv_ok(&s.argv) {
+        return Err("argv");
+    }
+    if s.env.len() > 256 || !s.env.iter().all(|(k, v)| env_name_ok(k) && value_ok(v, 32 * 1024)) {
+        return Err("env");
+    }
+    if !(64..=65_536).contains(&s.memory_mib) {
+        return Err("memory");
+    }
+    if s.secrets.len() > 64 {
+        return Err("secrets");
+    }
+    for it in &s.secrets {
+        match (&it.env, &it.file) {
+            (Some(e), None) if env_name_ok(e) => {}
+            (None, Some(f)) if secret_file_ok(f) => {}
+            _ => return Err("secret target"),
+        }
+        if it.value_hex.len() > 2 * 1024 * 1024 || hex_decode(&it.value_hex).is_none() {
+            return Err("secret value");
+        }
+    }
+    if let Some(p) = &s.pass_hex {
+        if p.len() > 64 * 1024 || hex_decode(p).is_none() {
+            return Err("pass");
+        }
+    }
     Ok(app)
 }
 
@@ -478,6 +646,7 @@ mod tests {
             drain_secs: 30,
             secrets: vec![SecretItem { env: None, file: Some("db.json".into()), value_hex: hex_encode(b"{}") }],
             pass_hex: Some(hex_encode(b"k2skn_x")),
+            io: IoMax::k2_default(),
         }
     }
 
@@ -523,6 +692,8 @@ mod tests {
             Box::new(|s| s.secrets[0].env = Some("X".into())),
             Box::new(|s| s.secrets[0].value_hex = "zz".into()),
             Box::new(|s| s.pass_hex = Some("abc".into())),
+            Box::new(|s| s.io.wbps = Some(1)),
+            Box::new(|s| s.io.wiops = Some(u64::MAX)),
         ];
         for (i, f) in bad.iter().enumerate() {
             let mut s = spec();
@@ -542,7 +713,79 @@ mod tests {
         assert!(serde_json::from_str::<Request>(&format!("{{\"verb\":\"seed-has\",\"hash\":\"{}\",\"x\":1}}", "a".repeat(64))).is_err());
         assert!(serde_json::from_str::<Request>("{\"verb\":\"stop\",\"app\":\"a\",\"deployment\":\"d-0123456789ab\",\"graceSecs\":1}").is_err());
         assert!(serde_json::from_str::<Request>("{\"verb\":\"shell\",\"cmd\":\"id\"}").is_err());
+        // exec carries its timeout; exec-tty its terminal size.
+        let e = Request::Exec { app: "jobs".into(), deployment: "d-0123456789ab".into(), argv: vec!["ls".into()], timeout_secs: 60 };
+        let line = serde_json::to_string(&e).unwrap();
+        assert!(line.contains("\"timeoutSecs\":60"), "{line}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), e);
+        assert!(serde_json::from_str::<Request>("{\"verb\":\"exec\",\"app\":\"a\",\"deployment\":\"d-0123456789ab\",\"argv\":[\"ls\"]}").is_err(), "no timeout: refused");
+        let t = Request::ExecTty { app: "jobs".into(), deployment: "d-0123456789ab".into(), argv: vec!["/bin/sh".into()], cols: 120, rows: 40 };
+        assert!(serde_json::to_string(&t).unwrap().starts_with("{\"verb\":\"exec-tty\""));
+        let ps = Request::ProcessStage(Box::new(pspec()));
+        let line = serde_json::to_string(&ps).unwrap();
+        assert!(line.starts_with("{\"verb\":\"process-stage\""), "{line}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), ps);
         assert_eq!(hex_decode(&hex_encode(b"\x00\xffk2")).unwrap(), b"\x00\xffk2");
+    }
+
+    fn pspec() -> ProcessSpec {
+        ProcessSpec {
+            app: "gpu-job".into(),
+            deployment: "d-0123456789ab".into(),
+            seed: "b".repeat(64),
+            port: 41_000,
+            argv: vec!["python3".into(), "serve.py".into()],
+            env: [("MODEL".to_string(), "small".to_string())].into(),
+            memory_mib: 2048,
+            secrets: vec![SecretItem { env: Some("HF_TOKEN".into()), file: None, value_hex: hex_encode(b"x") }],
+            pass_hex: None,
+        }
+    }
+
+    #[test]
+    fn process_checks_and_paths() {
+        assert!(check_process(&pspec()).is_ok());
+        type Tweak = Box<dyn Fn(&mut ProcessSpec)>;
+        let bad: Vec<Tweak> = vec![
+            Box::new(|s| s.app = "../x".into()),
+            Box::new(|s| s.deployment = "d-1".into()),
+            Box::new(|s| s.seed = "x".into()),
+            Box::new(|s| s.port = 38_650),
+            Box::new(|s| s.argv = vec![]),
+            Box::new(|s| s.argv = vec!["a\nb".into()]),
+            Box::new(|s| s.memory_mib = 32),
+            Box::new(|s| {
+                s.env.insert("A-B".into(), "x".into());
+            }),
+            Box::new(|s| s.secrets[0].env = Some("1X".into())),
+        ];
+        for (i, f) in bad.iter().enumerate() {
+            let mut s = pspec();
+            f(&mut s);
+            assert!(check_process(&s).is_err(), "case {i}");
+        }
+        let a = AppId::parse("gpu-job").unwrap();
+        assert_eq!(process::spec(&a), "/var/lib/k2app/apps/gpu-job/process/spec.json");
+        assert_eq!(process::code(&a), "/var/lib/k2app/apps/gpu-job/process/code");
+        assert_eq!(process::state(&a), "/var/lib/k2appx/gpu-job");
+        assert!(exec_argv_ok(&["ls".into(), "-la".into()]));
+        assert!(!exec_argv_ok(&[]));
+        assert!(!exec_argv_ok(&["".into()]));
+        assert!(!exec_argv_ok(&["x\u{1b}]52;c;x\u{7}".into()]));
+    }
+
+    #[test]
+    fn tty_frames_round_trip_and_cap() {
+        let mut buf = tty::encode(tty::OUTPUT, b"hello");
+        buf.extend(tty::encode(tty::EXIT, &7i32.to_be_bytes()));
+        let mut r = &buf[..];
+        assert_eq!(tty::read(&mut r).unwrap(), Some((tty::OUTPUT, b"hello".to_vec())));
+        assert_eq!(tty::read(&mut r).unwrap(), Some((tty::EXIT, 7i32.to_be_bytes().to_vec())));
+        assert_eq!(tty::read(&mut r).unwrap(), None);
+        let mut big = vec![tty::INPUT];
+        big.extend_from_slice(&((tty::MAX_FRAME as u32) + 1).to_be_bytes());
+        assert!(tty::read(&mut &big[..]).is_err());
+        assert!(tty::read(&mut &[tty::INPUT, 0, 0][..]).is_err(), "a short header is an error, not an end");
     }
 
     #[test]

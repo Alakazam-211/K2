@@ -11,6 +11,10 @@
 //! 2. `DropCapability=all`, `NoNewPrivileges=true`;
 //! 3. K2's seccomp profile (Podman's default plus denies for
 //!    `CLONE_NEWUSER`/`unshare`, keys, bpf, userfaultfd, perf; W §5.6);
+//! 4. MAC: Podman runs the OCI runtime through the engine's shim
+//!    (`GlobalArgs=--runtime=<state>/oci/<rt>`), which puts the container
+//!    and every exec into it under the `k2-app` AppArmor profile where box
+//!    prep loaded it (`oci.rs`); SELinux boxes get Podman's `container_t`;
 //! 5. read-only root, tmpfs `/tmp` and HOME, the Seed read-only at `/app`,
 //!    `data/` and `cache/` read-write;
 //! 6. nothing privileged, no host namespaces, no devices, no sockets;
@@ -42,7 +46,8 @@ pub struct Render<'a> {
     pub app: &'a AppId,
     pub deployment: &'a str,
     pub image: &'a str,
-    /// `crun` or `youki` (`/etc/k2app/containers.conf`).
+    /// The OCI shim for `crun` or `youki` (`/etc/k2app/containers.conf`
+    /// picks which; `oci.rs` puts the App under its AppArmor profile).
     pub runtime: &'a str,
     /// First id of the App's slot in `k2app`'s namespace.
     pub base: u64,
@@ -57,6 +62,9 @@ pub struct Render<'a> {
     pub memory_mib: u64,
     pub drain_secs: u64,
     pub secrets: &'a [SecretMount],
+    /// Disk ceilings (§6.2): `IO*Max=` on the unit; the user manager owns
+    /// the delegated `io` controller (box prep's `Delegate=`).
+    pub io: &'a k2_root_proto::apps::IoMax,
 }
 
 /// Container stop timeout: the drain window plus 10 s (AR45).
@@ -136,6 +144,9 @@ pub fn render(r: &Render) -> String {
     line("Restart=no".into());
     line("TimeoutStartSec=300".into());
     line(format!("TimeoutStopSec={}", stop + 20));
+    for l in r.io.unit_lines() {
+        line(l);
+    }
     o
 }
 
@@ -148,7 +159,7 @@ mod tests {
             app,
             deployment: "d-0123456789ab",
             image: "localhost/k2-base/node24:ec857ea6bb60",
-            runtime: "crun",
+            runtime: "/var/lib/k2app/engine/oci/crun",
             base: 65_537,
             seed_dir: "/var/lib/k2app/seeds/aaaa",
             data_dir: "/var/lib/k2app/apps/nsi-skin/data",
@@ -161,8 +172,16 @@ mod tests {
             memory_mib: 512,
             drain_secs: 30,
             secrets,
+            io: &IO,
         }
     }
+
+    static IO: k2_root_proto::apps::IoMax = k2_root_proto::apps::IoMax {
+        rbps: None,
+        wbps: Some(41_943_040),
+        riops: None,
+        wiops: Some(2000),
+    };
 
     #[test]
     fn the_floor_is_in_every_unit() {
@@ -176,6 +195,7 @@ mod tests {
         for want in [
             "\nContainerName=k2app-nsi-skin--d-0123456789ab\n",
             "\nPull=never\n",
+            "\nGlobalArgs=--runtime=/var/lib/k2app/engine/oci/crun\n",
             "\nUIDMap=0:65537:65536\n",
             "\nGIDMap=0:65537:65536\n",
             "\nDropCapability=all\n",
@@ -195,6 +215,8 @@ mod tests {
             "\nSlice=k2apps-nsi_skin.slice\n",
             "\nRestart=no\n",
             "\nTimeoutStopSec=60\n",
+            "\nIOWriteBandwidthMax=/var/lib/k2app 41943040\n",
+            "\nIOWriteIOPSMax=/var/lib/k2app 2000\n",
         ] {
             assert!(u.contains(want), "missing {want:?} in\n{u}");
         }

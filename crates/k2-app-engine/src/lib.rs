@@ -10,19 +10,24 @@
 //! - [`quadlet`]: the per-deployment `.container` from a canned template;
 //! - [`seccomp`]: Podman's default profile + K2's denies;
 //! - [`seeds`]: Seeds unpacked defensively under `k2app`'s home;
-//! - [`slots`]: each App's pinned id range and gateway port.
+//! - [`slots`]: each App's pinned id range and gateway port;
+//! - [`oci`]: the OCI runtime shim that puts every App process under the
+//!   `k2-app` AppArmor profile.
 //!
 //! Signed with the root-helper key (trusted comment
 //! `file:k2-app-engine-linux-<arch>`), installed and updated only through
 //! the root helper. Links nothing from k2-daemon or k2-core.
 
+pub mod oci;
 pub mod peer;
 pub mod quadlet;
 pub mod seccomp;
+pub mod process;
 pub mod seeds;
 pub mod server;
 pub mod slots;
 pub mod sys;
+pub mod tty;
 
 /// The marker a signed build must carry exactly once.
 #[cfg(target_arch = "x86_64")]

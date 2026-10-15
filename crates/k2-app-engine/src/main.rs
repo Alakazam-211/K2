@@ -1,5 +1,12 @@
 //! `k2-app-engine serve | version | process-run <app-id>`.
 fn main() {
+    // Called through a link in the engine's `oci/` dir: the OCI runtime
+    // shim (Podman runs it as `crun` / `youki`).
+    let argv0 = std::env::args().next().unwrap_or_default();
+    if let Some(rt) = k2_app_engine::oci::runtime_for_argv0(&argv0) {
+        let rest: Vec<String> = std::env::args().skip(1).collect();
+        std::process::exit(k2_app_engine::oci::main(rt, &rest));
+    }
     let a: Vec<String> = std::env::args().skip(1).collect();
     let code = match a.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["serve"] => {
@@ -24,15 +31,11 @@ fn main() {
             );
             0
         }
-        ["process-run", _id] => {
-            // The `process` exception (S13) runs through this entry point
-            // from the root helper's k2app-process@.service. Not built yet:
-            // fail closed, never run App code here.
-            eprintln!("k2-app-engine: the process exception arrives with the open path (S13); refusing");
-            78
-        }
+        // The `process` exception: inside k2app-process@<id>.service, as
+        // k2appx (process.rs). Returns only on failure.
+        ["process-run", id] => k2_app_engine::process::run(id),
         _ => {
-            eprintln!("usage: k2-app-engine serve | version");
+            eprintln!("usage: k2-app-engine serve | version | process-run <app-id>");
             2
         }
     };

@@ -23,6 +23,7 @@ pub mod message;
 pub mod result;
 pub mod retry;
 pub mod scheduler;
+pub mod shards;
 pub mod store;
 pub mod sync;
 pub mod ticket;

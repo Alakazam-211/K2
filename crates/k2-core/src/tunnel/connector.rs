@@ -278,9 +278,14 @@ impl ProxyRegistration {
         run
     }
 
+    /// Whether `run` is the current child (not a previous child's late output).
+    pub(crate) fn is_current_run(&self, run: u64) -> bool {
+        self.run.load(Ordering::SeqCst) == run
+    }
+
     /// One frpc log line from the child of `run`.
     pub(crate) fn observe_line(&self, run: u64, line: &str) {
-        if self.run.load(Ordering::SeqCst) != run {
+        if !self.is_current_run(run) {
             return; // a previous child's late output
         }
         // The control session to frps went away (frp 0.61 lines, e.g.
@@ -2147,16 +2152,29 @@ fn pump(
             match line {
                 Ok(l) => {
                     let _ = writeln!(sink, "{l}");
-                    if let Some(w) = &watch {
-                        w.observe_line(&l);
-                    }
-                    proxy.0.observe_line(proxy.1, &l);
-                    health.observe_line(&l);
+                    handle_line(&l, watch.as_deref(), &proxy, &health);
                 }
                 Err(_) => break,
             }
         }
     });
+}
+
+/// One frpc log line from the child of `proxy.1`.
+fn handle_line(
+    line: &str,
+    watch: Option<&SessionWatch>,
+    proxy: &(Arc<ProxyRegistration>, u64),
+    health: &FrpcHealth,
+) {
+    if let Some(w) = watch {
+        w.observe_line(line);
+    }
+    proxy.0.observe_line(proxy.1, line);
+    // A dead run's late error line must not land on a healthy new run.
+    if proxy.0.is_current_run(proxy.1) {
+        health.observe_line(line);
+    }
 }
 
 fn open_log() -> Result<std::fs::File, String> {
@@ -2873,6 +2891,24 @@ mod tests {
         assert!(!reg.is_registered(), "a stale run's success must not count");
         reg.observe_line(r2, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson] start proxy success");
         assert!(reg.is_registered());
+    }
+
+    #[test]
+    fn a_dead_runs_late_error_line_does_not_mark_a_healthy_run() {
+        let reg = Arc::new(ProxyRegistration::new(&TunnelConfig {
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        }));
+        let health = FrpcHealth::new();
+        let r1 = reg.begin_run();
+        let r2 = reg.begin_run();
+        health.record_up();
+        assert_eq!(health.last_error(), None);
+        let err = "[E] [sub/root.go:142] open /tmp/x/.k2/frpc.toml: no such file or directory";
+        handle_line(err, None, &(reg.clone(), r1), &health);
+        assert_eq!(health.last_error(), None, "a dead run's late error must be ignored");
+        handle_line(err, None, &(reg.clone(), r2), &health);
+        assert_eq!(health.last_error().as_deref(), Some(err));
     }
 
     #[test]

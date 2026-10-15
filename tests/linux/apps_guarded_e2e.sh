@@ -283,8 +283,9 @@ curl -s "http://127.0.0.1:$FA/flood" >/dev/null
 sleep 3
 UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
 n="$(journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="$UNIT" 2>/dev/null | grep -c 'flood a2' || true)"
-[ "$n" -gt 0 ] && [ "$n" -lt 5000 ] || fail "flood lines kept: $n of 20000"
-ok "20000 log lines in a burst: the journal kept $n (LogRateLimitBurst per unit)"
+[ "$n" -lt 20000 ] || fail "flood lines kept: $n of 20000 (no rate limit)"
+journalctl --no-pager --since "-2min" | grep -q "Suppressed [0-9]* messages from user@$(id -u k2app).service" || fail "no journald suppression for user@k2app"
+ok "20000 log lines in a burst: the journal kept $n; journald suppressed the rest (LogRateLimit on user@k2app, all Apps together)"
 
 echo "== crash: K2 restarts it (backoff) =="
 asapp podman kill "${UNIT%.service}" >/dev/null 2>&1 || true

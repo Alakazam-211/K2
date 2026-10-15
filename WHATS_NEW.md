@@ -5,6 +5,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.45.7
 
+- **A Kanban board Garden.** New Garden → **Kanban** gives you a board that starts with To do, Doing and Done and three small cards that show how it works; change everything after that. Add, edit and delete cards (notes take markdown), drag them between columns or up and down, and add, rename, reorder or delete columns (a column with cards asks where they go). Your agents can add and move cards too, inside the grant you give them (Settings → Gardens → **Widget data**); **For agents** on the board shows the exact command. The board follows your Garden's theme, light or dark, can open a Thread beside it, and exports as markdown.
 - **Your tunnel finds a working relay by itself.** K2 now asks k2.dev for the current list of relays when it starts, every few hours, and right after you pair, so every computer and server knows all of them, not just the first. If a relay goes down, your tunnel moves to another one. When the main relay is healthy again, K2 checks it a few times and then moves back by itself, so nobody has to restart anything. `k2 tunnel status` shows which relay you're on and where the list came from.
 - **The sign-in button opens the whole link.** When you add an AI login in Settings → LLMs, **Open sign-in page** now opens the complete sign-in link. Before, a long Claude link could be cut short, so you had to copy it from the login terminal instead.
 

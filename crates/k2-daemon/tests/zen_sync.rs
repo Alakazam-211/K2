@@ -242,14 +242,17 @@ fn guide(args: &[&str]) -> String {
 const FROZEN: &[(&str, &str)] = &[
     ("frame", "5964f47ab2376b7f"),
     ("template:k2.blank@1", "3243f8b8edef13c3"),
-    ("template:k2.texting@1", "c81d84543be1ef49"),
+    // 0.45.6 (GS45, Rosson 2026-10-15): Garden 1 gets K2 Companion's pin
+    // grid, settings cog and activity drawer (`pins`, `settings`,
+    // `activity-drawer`; off by default in widget-props).
+    ("template:k2.texting@1", "a00b851026ae72d0"),
     ("theme:basic", "7fc5a1fb5062b263"),
     // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
     // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
     ("theme:haunted", "ccd919524b13e5f9"),
     ("theme:midnight", "ff5f017a77ab1206"),
     ("theme:paper", "08fe35e01810ae29"),
-    ("widget-props", "1f7a0792e682fa1e"),
+    ("widget-props", "243e9c43200d40ea"),
 ];
 
 fn frozen_hashes() -> BTreeMap<String, String> {
@@ -854,6 +857,81 @@ fn gs51_news_catalog_updates_and_seen() {
     }));
     let news = f.news().expect("news");
     assert!(!news["items"].as_array().expect("items").iter().any(|i| i["kind"] == "catalog"), "diary@2 isn't new: {news}");
+}
+
+/// K2's defaults as 0.45.5 shipped them: this build's set without Garden
+/// 1's K2 Companion port (the `pins`, `settings` and `activity-drawer`
+/// props and the texting template lines that turn them on).
+fn release_0455() -> Defaults {
+    fake_set(|s| {
+        let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
+        for line in ["pins = true\n", "settings = true\n", "activity-drawer = true\n"] {
+            replace_in(t, line, "");
+        }
+        for k in ["agents.pins", "agents.settings", "conversation.activity-drawer"] {
+            assert!(s.widget_props.remove(k).is_some(), "this build ships the {k} default");
+        }
+    })
+}
+
+/// Rosson 2026-10-15 (0.45.6): upgrading from 0.45.5 puts Garden 1's K2
+/// Companion port on the What's new side card (the dog ear): one update
+/// item for the synced Garden 1, none for Garden 2, and the copies line
+/// for an own copy of Garden 1's page, whose look doesn't move.
+#[test]
+fn gs51_garden1_companion_port_is_news_after_0455() {
+    let (_t, z) = temp_dir("garden1-news");
+    let old = release_0455();
+    let old_fp = old.fingerprint().to_string();
+    let f = ZenFiles::with_defaults(&z, old);
+    legacy_setup(&f);
+    let g1 = gid(&f, 0);
+    let g2 = gid(&f, 1);
+    write_garden(&f, &g2, CONTENT_ONLY.as_bytes());
+    let mine = new_garden(&f, "mine", "texting", Some(LAYOUT_ONLY));
+    // 0.45.5's first read: the upgrade pass, then the person reads the card
+    // and keeps "mine" as their own copy (Settings → Gardens).
+    f.news().expect("news on 0.45.5");
+    f.set_garden_sync(&mine, Parts::Both, false).expect("mine: own copy");
+    f.news_seen(&[], true).expect("0.45.5: everything seen");
+    assert_eq!(f.news().expect("news on 0.45.5")["items"], json!([]), "nothing new on 0.45.5");
+    assert!(!f.sync_state().garden(&g1).part(Part::Page).is_copy(), "Garden 1 untouched: synced");
+    assert!(f.sync_state().garden(&mine).part(Part::Page).is_copy(), "a Garden with its own layout: own copy");
+    let mine_before = resolve_now(&f, &mine);
+
+    // This build (the binary's own set) starts on the same folder.
+    let f = ZenFiles::with_defaults(&z, fake_set(|_| {}));
+    let news = f.news().expect("news after the upgrade");
+    assert_eq!(news["previousDefaults"], old_fp.as_str(), "0.45.5's set is the previous one: {news}");
+    let items = news["items"].as_array().expect("items");
+    let updates: Vec<&J> = items.iter().filter(|i| i["kind"] == "update").collect();
+    assert_eq!(updates.len(), 1, "exactly one update item, Garden 1's: {news}");
+    assert_eq!(updates[0]["garden"], g1.as_str(), "{news}");
+    assert_eq!(updates[0]["part"], "page", "the page changed, not the theme: {news}");
+    assert_eq!(updates[0]["previous"], old_fp.as_str());
+    assert_eq!(news["copiesWithNewerDefault"], 1, "the own copy of Garden 1's page is counted: {news}");
+
+    // What moved: the synced Garden 1 now draws the pin grid, the settings
+    // cog and the activity drawer; 0.45.5's page had none of them.
+    let widget = |v: &J, kind: &str| {
+        v["page"]["widgets"]
+            .as_array()
+            .expect("widgets")
+            .iter()
+            .find(|w| w["kind"] == kind)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind} widget: {v}"))
+    };
+    let now = resolve_now(&f, &g1);
+    let then = resolve_as(&f, &g1, &view(copy_of(&old_fp), synced()));
+    for (kind, prop) in [("agents", "pins"), ("agents", "settings"), ("conversation", "activity-drawer")] {
+        assert_eq!(widget(&now, kind)["props"][prop], true, "synced Garden 1: {kind}.{prop} on");
+        assert_eq!(widget(&then, kind)["props"][prop], false, "0.45.5's Garden 1: {kind}.{prop} off");
+    }
+    // The own copy keeps its look, and Garden 2's own widgets stay off.
+    assert_eq!(resolve_now(&f, &mine), mine_before, "an own copy doesn't move");
+    assert_eq!(widget(&mine_before, "agents")["props"]["pins"], false);
+    assert_eq!(widget(&resolve_now(&f, &g2), "agents")["props"]["pins"], false, "Garden 2's own Agents widget: no pins");
 }
 
 // ── GS52: headless, the real binary under a temp HOME ──────────────────

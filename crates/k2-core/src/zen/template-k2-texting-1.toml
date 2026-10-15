@@ -40,6 +40,12 @@ order = "home"
 server-tag = true
 preview = true
 status = ["working", "idle", "needs-you"]
+# 0.45.6 (Rosson 2026-10-15, from K2 Companion): pinned agents as a
+# three-across grid of pictures at the top of the list.
+pins = true
+# The cog in the header: this Garden's own settings on this computer
+# (Recent agents first, off until you turn it on).
+settings = true
 
 [[widget]]
 id = "conversation"
@@ -51,6 +57,9 @@ caps = ["agents:read", "presence:read", "thread:read", "thread:post"]
 compose = true
 attachments = true
 load-older = true
+# 0.45.6 (Rosson 2026-10-15, from K2 Companion): the live activity
+# drawer above the message box while the agent works on your message.
+activity-drawer = true
 
 # The thin left rail (Rosson 2026-10-04): My Home (current), Agents,
 # Projects, Tickets. Drawn at the left edge of column 0, outside the Agents

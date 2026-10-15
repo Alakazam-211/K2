@@ -161,6 +161,11 @@ pub fn catalog_template(id: &str) -> Option<&'static str> {
     garden_catalog().iter().find(|e| e.template_id == id).map(|e| e.toml)
 }
 
+/// The texting start's card in New Garden (Rosson 2026-10-15).
+pub const GARDEN_ONE_LABEL: &str = "Garden 1";
+pub const GARDEN_ONE_DESCRIPTION: &str =
+    "K2's default: your agents beside a conversation, pinned agents on top, live activity above the box.";
+
 /// Where a template shows in New Garden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -195,8 +200,11 @@ pub fn template_list() -> Vec<TemplateInfo> {
         TemplateInfo {
             id: super::schema::TEMPLATE_ID.into(),
             short: "texting".into(),
-            label: "Start with the default".into(),
-            description: "Garden 1’s layout: your agents beside a conversation.".into(),
+            // Rosson 2026-10-15: Garden 1 is offered by name next to the
+            // Diary. It stays a start (k2.texting@1, not a catalog copy), so
+            // a Garden made from it keeps getting Garden 1's improvements.
+            label: GARDEN_ONE_LABEL.into(),
+            description: GARDEN_ONE_DESCRIPTION.into(),
             section: TemplateSection::Start,
             new_users: true,
         },
@@ -246,6 +254,7 @@ kind = "columns"
         }
         let list = template_list();
         assert_eq!(list[0].short, "texting");
+        assert_eq!(list[0].label, "Garden 1", "Garden 1 is offered by name (Rosson 2026-10-15)");
         assert_eq!(list[1].short, "blank");
         assert_eq!(list.len(), 2 + current_entries().len());
     }

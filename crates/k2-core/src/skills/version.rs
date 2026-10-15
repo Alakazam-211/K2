@@ -125,7 +125,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// agents' `k2 store --widget`, validate --widget signs, project grants are
 /// a convenience, the grant admin's bounds, `bin/board`, Lock keeps data
 /// writable, and the board-lite example.
-pub const SKILL_VERSION_ZEN: u32 = 18;
+/// v19 = Garden 1 from K2 Companion (0.45.6): the Agents widget's `pins`
+/// and `settings` props and the Conversation's `activity-drawer`.
+pub const SKILL_VERSION_ZEN: u32 = 19;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

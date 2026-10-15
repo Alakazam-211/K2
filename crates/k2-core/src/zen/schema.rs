@@ -486,6 +486,20 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         doc: "which live statuses to show (`monitoring` shows with `working`, `unverifiable` with `idle`)",
     },
     WidgetProp {
+        kind: "agents",
+        name: "pins",
+        ty: PropType::Bool,
+        default: Some("false"),
+        doc: "pinned agents as a grid of pictures at the top, three across (more rows as you pin more); the list below leaves them out. Garden 1 turns it on",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "settings",
+        ty: PropType::Bool,
+        default: Some("false"),
+        doc: "a settings button in the widget's header: the Garden's own settings on this computer (Recent agents first). Garden 1 turns it on",
+    },
+    WidgetProp {
         kind: "conversation",
         name: "agents",
         ty: PropType::Text,
@@ -526,6 +540,13 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         ty: PropType::Bool,
         default: Some("true"),
         doc: "load older messages on scroll",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "activity-drawer",
+        ty: PropType::Bool,
+        default: Some("false"),
+        doc: "while the agent works on your message, a drawer above the box shows its step, tool counts and a clock (click it for the detail); off, three dots under the last message. Garden 1 turns it on",
     },
     WidgetProp {
         kind: "nav-rail",

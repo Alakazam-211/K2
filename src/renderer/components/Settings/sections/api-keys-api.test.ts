@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   capsSummary,
+  ceilingFormFromLimits,
+  ceilingFromForm,
+  ceilingSummary,
+  EMPTY_CEILING_FORM,
+  parseCeilingOptions,
   HIRE_FORM_DEFAULTS,
   hireLimitsFromForm,
   hireSummary,
@@ -94,7 +99,7 @@ describe('hire scope helpers (0.45.6)', () => {
     expect(hireSummary(null)).toBe('')
   })
 
-  it('hireSummary counts app-login Apps', () => {
+  it('hireSummary leaves the App access limit to its own line', () => {
     expect(
       hireSummary({
         maxMembersPerDay: 1,
@@ -108,6 +113,51 @@ describe('hire scope helpers (0.45.6)', () => {
         folder: '',
         apps: [{ app: 'svc', rooms: ['self'], roles: [] }],
       }),
-    ).toBe('1/day · 2 live · 3 per team · db off · app logins on 1 App')
+    ).toBe('1/day · 2 live · 3 per team · db off')
+  })
+})
+
+describe('App access limit helpers (0.45.6)', () => {
+  const opts = parseCeilingOptions({
+    apps: [
+      { id: 'svc-1', name: 'jobs', roles: [{ id: 'r-m', name: 'Member', appId: 'svc-1', rooms: ['a'] }], roomIds: ['a'] },
+      { name: 'no id is dropped' },
+    ],
+    rooms: [{ id: 'self', handle: 'self' }, { id: 'a', handle: 'job-a', name: 'Job A' }, 7],
+  })
+
+  it('parses options and drops rows without ids', () => {
+    expect(opts.apps.map((a) => a.id)).toEqual(['svc-1'])
+    expect(opts.rooms.map((r) => r.id)).toEqual(['self', 'a'])
+    expect(parseCeilingOptions('garbage')).toEqual({ apps: [], rooms: [] })
+  })
+
+  it('summarizes each App in one line, and the empty limit as No App access', () => {
+    expect(ceilingSummary([], opts)).toBe('No App access')
+    expect(ceilingSummary(undefined, opts)).toBe('No App access')
+    expect(ceilingSummary([{ app: 'svc-1', rooms: ['self'], roles: [] }], opts)).toBe(
+      'jobs · its own room · no role (Thread only)',
+    )
+    expect(ceilingSummary([{ app: 'svc-1', rooms: ['self', 'a', 'b'], roles: ['r-m'] }], opts)).toBe(
+      'jobs · 3 rooms · up to Member',
+    )
+    expect(ceilingSummary([{ app: 'gone', rooms: ['a'], roles: ['x'] }], opts)).toBe('gone · 1 room · up to x')
+  })
+
+  it('turns the form into the stored shape and refuses an App with no rooms', () => {
+    expect(ceilingFromForm(EMPTY_CEILING_FORM, opts)).toEqual([])
+    expect(ceilingFromForm({ app: 'svc-1', rooms: ['self', 'a'], role: 'r-m' }, opts)).toEqual([
+      { app: 'svc-1', rooms: ['self', 'a'], roles: ['r-m'] },
+    ])
+    expect(ceilingFromForm({ app: 'svc-1', rooms: ['a'], role: '' }, opts)).toEqual([
+      { app: 'svc-1', rooms: ['a'], roles: [] },
+    ])
+    expect(() => ceilingFromForm({ app: 'svc-1', rooms: [], role: '' }, opts)).toThrow(/Pick at least one room on jobs/)
+    expect(ceilingFormFromLimits([{ app: 'svc-1', rooms: ['a'], roles: ['r-m'] }])).toEqual({
+      app: 'svc-1',
+      rooms: ['a'],
+      role: 'r-m',
+    })
+    expect(ceilingFormFromLimits(undefined)).toEqual(EMPTY_CEILING_FORM)
   })
 })

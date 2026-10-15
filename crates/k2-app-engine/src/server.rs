@@ -18,8 +18,8 @@ use std::time::Duration;
 use k2_root_proto::apps::{AppId, APP_HOME, APP_USER, CONTAINERS_CONF, SUBGID_FILE, SUBUID_FILE};
 use k2_root_proto::engine::{
     self as wire, app_slice, check_start, codes, deployment_ok, gateway_port, hex_decode, image_ok, pass_hex_ok, proxy_port, seed_hash_ok,
-    slot_base, unit_stem, Answer, Request, StartSpec, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES, PASS_FILE_NAME, PASS_ROOT,
-    PASS_TARGET, SECRETS_TARGET_DIR,
+    slot_base, unit_stem, Answer, Request, StartSpec, EXEC_TIMEOUT_BOUNDS, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES,
+    PASS_FILE_NAME, PASS_ROOT, PASS_TARGET, SECRETS_TARGET_DIR,
 };
 use serde_json::{json, Value};
 
@@ -43,6 +43,8 @@ pub struct Engine {
     pub pass_root: PathBuf,
     /// Serializes slot changes and unit-file writes + `daemon-reload`.
     lock: Mutex<()>,
+    /// `/etc/subuid` and `/etc/subgid` (tests point these elsewhere).
+    subid_files: (PathBuf, PathBuf),
 }
 
 /// One instance's state file (`<state>/run/<app>/<deployment>.json`).
@@ -64,7 +66,13 @@ pub struct RunState {
 
 impl Engine {
     pub fn new(home: PathBuf, runtime_dir: String) -> Self {
-        Self { home, runtime_dir, pass_root: PathBuf::from(PASS_ROOT), lock: Mutex::new(()) }
+        Self {
+            home,
+            runtime_dir,
+            pass_root: PathBuf::from(PASS_ROOT),
+            lock: Mutex::new(()),
+            subid_files: (PathBuf::from(SUBUID_FILE), PathBuf::from(SUBGID_FILE)),
+        }
     }
 
     /// Tests: keep the pass folders somewhere writable.
@@ -101,13 +109,19 @@ impl Engine {
         Ok(dir)
     }
 
-    fn seeds(&self) -> PathBuf {
+    /// Read the subordinate id files from elsewhere (tests).
+    pub fn with_subid_files(mut self, subuid: PathBuf, subgid: PathBuf) -> Self {
+        self.subid_files = (subuid, subgid);
+        self
+    }
+
+    pub(crate) fn seeds(&self) -> PathBuf {
         self.home.join("seeds")
     }
-    fn apps(&self) -> PathBuf {
+    pub(crate) fn apps(&self) -> PathBuf {
         self.home.join("apps")
     }
-    fn state(&self) -> PathBuf {
+    pub(crate) fn state(&self) -> PathBuf {
         self.home.join("engine")
     }
     fn run_dir(&self, app: &AppId) -> PathBuf {
@@ -157,7 +171,14 @@ impl Engine {
         }
     }
 
-    /// Make the engine's own folders and write K2's seccomp profile.
+    /// What Podman gets as `--runtime`: the OCI shim for the configured
+    /// runtime (`oci.rs`), never the runtime itself.
+    pub fn runtime_arg(&self) -> String {
+        crate::oci::shim_path(&self.state(), self.runtime()).to_string_lossy().to_string()
+    }
+
+    /// Make the engine's own folders, the OCI shim links and K2's seccomp
+    /// profile.
     pub fn init(&self) -> Result<(), String> {
         use std::os::unix::fs::DirBuilderExt;
         for (d, mode) in [
@@ -182,6 +203,7 @@ impl Engine {
                 }
             }
         }
+        crate::oci::install_links(&self.state(), Path::new(k2_root_proto::apps::ENGINE_PATH))?;
         let default = std::fs::read_to_string(crate::seccomp::DISTRO_DEFAULT)
             .map_err(|e| format!("{}: {e} (install containers-common; the engine never runs Apps without a seccomp profile)", crate::seccomp::DISTRO_DEFAULT))?;
         let profile = crate::seccomp::transform(&default)?;
@@ -222,7 +244,12 @@ impl Engine {
             Request::Stop { app, deployment } => self.stop(&app, &deployment),
             Request::Liveness { app, deployment } => self.liveness(&app, &deployment),
             Request::Stats { app, deployment } => self.stats(&app, &deployment),
-            Request::Exec { app, deployment, argv } => self.exec(&app, &deployment, &argv),
+            Request::Exec { app, deployment, argv, timeout_secs } => self.exec(&app, &deployment, &argv, timeout_secs),
+            // Answered in `serve_conn` (it streams); never reaches here.
+            Request::ExecTty { .. } => Err(bad("exec-tty streams; it has no one-line answer")),
+            Request::ProcessStage(spec) => crate::process::stage(self, &spec),
+            Request::ProcessActivate { app, deployment } => crate::process::activate(self, &app, &deployment),
+            Request::ProcessState { app } => crate::process::state(self, &app),
             Request::Adopt => self.adopt(),
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
             Request::PassWrite { app, pass_hex } => {
@@ -290,9 +317,22 @@ impl Engine {
         self.state().join("slots.json")
     }
 
+    /// The App's slot, assigned now if it has none (the process
+    /// exception needs only its gateway port from it).
+    pub(crate) fn assign_slot(&self, app: &AppId) -> R<u64> {
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = crate::slots::load(&self.slots_path()).map_err(|e| (codes::IO, e))?;
+        let cap = self.capacity();
+        let n = s.assign(app.as_str(), cap).ok_or_else(|| {
+            (codes::NO_SLOT, format!("no free id slot for another App ({cap} slots from k2app's subordinate ids are in use)"))
+        })?;
+        crate::slots::save(&self.slots_path(), &s).map_err(|e| (codes::IO, e))?;
+        Ok(n)
+    }
+
     fn capacity(&self) -> u64 {
-        let su = std::fs::read_to_string(SUBUID_FILE).unwrap_or_default();
-        let sg = std::fs::read_to_string(SUBGID_FILE).unwrap_or_default();
+        let su = std::fs::read_to_string(&self.subid_files.0).unwrap_or_default();
+        let sg = std::fs::read_to_string(&self.subid_files.1).unwrap_or_default();
         crate::slots::capacity(&su, &sg, APP_USER)
     }
 
@@ -352,7 +392,7 @@ impl Engine {
         let warm = format!("k2warm-{}", app.as_str());
         let _ = self.run(PODMAN, &["rm", "-f", "-i", &warm], None, 60);
         let map = format!("0:{base}:{}", wire::SLOT_SIZE);
-        let rt = format!("--runtime={}", self.runtime());
+        let rt = format!("--runtime={}", self.runtime_arg());
         let t0 = std::time::Instant::now();
         self.podman(&[&rt, "create", "--pull=never", "--name", &warm, "--uidmap", &map, "--gidmap", &map, image, "true"], None, 900)?;
         let warm_ms = t0.elapsed().as_millis() as u64;
@@ -452,11 +492,12 @@ impl Engine {
         let cache_s = self.apps().join(app.as_str()).join("cache").to_string_lossy().to_string();
         let env_s = env_file.to_string_lossy().to_string();
         let sec_s = self.seccomp_path().to_string_lossy().to_string();
+        let runtime = self.runtime_arg();
         let unit_text = quadlet::render(&quadlet::Render {
             app: &app,
             deployment: &s.deployment,
             image: &s.image,
-            runtime: self.runtime(),
+            runtime: &runtime,
             base: slot_base(slot),
             seed_dir: &seed_s,
             data_dir: &data_s,
@@ -471,6 +512,7 @@ impl Engine {
             drain_secs: s.drain_secs,
             secrets: &mounts,
             pass_dir: pass_dir.as_deref(),
+            io: &s.io,
         });
         let qfile = self.quadlets().join(format!("{stem}.container"));
         let state = RunState { app: app.as_str().into(), deployment: s.deployment.clone(), port: s.port, gw_port: gw, px_port: px, slot, unit: unit.clone(), secrets: made.clone() };
@@ -569,19 +611,49 @@ impl Engine {
         Ok(json!({ "memCurrent": read("memory.current"), "pids": read("pids.current"), "memMax": read("memory.max"), "cgroup": cg }))
     }
 
-    fn exec(&self, app: &str, dep: &str, argv: &[String]) -> R<Value> {
+    /// S28 one-shot exec: `podman exec` into the deployment's container
+    /// (the App's own user, capabilities, seccomp; the OCI shim adds its
+    /// MAC profile and no-new-privileges to the exec process). No stdin,
+    /// no tty, killed at the timeout. Output is raw here; the daemon frames
+    /// and strips it.
+    fn exec(&self, app: &str, dep: &str, argv: &[String], timeout_secs: u64) -> R<Value> {
         let (a, _) = Self::ids(app, dep)?;
-        if argv.is_empty() || argv.len() > 64 || !argv.iter().all(|x| !x.is_empty() && wire::value_ok(x, 4096)) {
+        if !wire::exec_argv_ok(argv) {
+            return Err(bad("argv"));
+        }
+        if !(EXEC_TIMEOUT_BOUNDS.0..=EXEC_TIMEOUT_BOUNDS.1).contains(&timeout_secs) {
+            return Err(bad("timeout"));
+        }
+        let ctr = unit_stem(&a, dep);
+        let mut args: Vec<&str> = vec!["exec", "--interactive=false", &ctr];
+        args.extend(argv.iter().map(String::as_str));
+        let t0 = std::time::Instant::now();
+        let o = self.run(PODMAN, &args, None, timeout_secs)?;
+        let mut out = o.stdout.clone();
+        out.extend_from_slice(&o.stderr);
+        let bytes = out.len();
+        out.truncate(MAX_OUTPUT);
+        Ok(json!({
+            "exitCode": if o.timed_out { None } else { Some(o.status) },
+            "timedOut": o.timed_out,
+            "bytes": bytes,
+            "ms": t0.elapsed().as_millis() as u64,
+            "output": String::from_utf8_lossy(&out),
+        }))
+    }
+
+    /// The `podman exec -it` command for `k2 app shell` (S28).
+    pub fn exec_tty_command(&self, app: &str, dep: &str, argv: &[String]) -> R<Command> {
+        let (a, _) = Self::ids(app, dep)?;
+        if !wire::exec_argv_ok(argv) {
             return Err(bad("argv"));
         }
         let ctr = unit_stem(&a, dep);
-        let mut args: Vec<&str> = vec!["exec", &ctr];
-        args.extend(argv.iter().map(String::as_str));
-        let o = self.run(PODMAN, &args, None, 120)?;
-        let mut out = o.stdout.clone();
-        out.extend_from_slice(&o.stderr);
-        out.truncate(MAX_OUTPUT);
-        Ok(json!({ "exitCode": if o.timed_out { None } else { Some(o.status) }, "output": String::from_utf8_lossy(&out) }))
+        let mut c = self.cmd(PODMAN);
+        // No detach keys: every byte goes to the command.
+        c.args(["exec", "--interactive", "--tty", "--detach-keys=", &ctr]);
+        c.args(argv);
+        Ok(c)
     }
 
     fn run_states(&self) -> Vec<RunState> {
@@ -616,6 +688,9 @@ impl Engine {
 
     fn remove_app(&self, app: &str, data: bool) -> R<Value> {
         let a = AppId::parse(app).ok_or_else(|| bad("app id"))?;
+        // The process exception's code and stages (its state under
+        // /var/lib/k2appx is the root helper's to purge).
+        crate::process::remove(self, &a);
         let mut stopped = Vec::new();
         for s in self.run_states().into_iter().filter(|s| s.app == a.as_str()) {
             self.stop(&s.app, &s.deployment)?;
@@ -672,9 +747,13 @@ fn verb_name(r: &Request) -> &'static str {
         Request::Liveness { .. } => "liveness",
         Request::Stats { .. } => "stats",
         Request::Exec { .. } => "exec",
+        Request::ExecTty { .. } => "exec-tty",
         Request::Adopt => "adopt",
         Request::RemoveApp { .. } => "remove-app",
         Request::PassWrite { .. } => "pass-write",
+        Request::ProcessStage(_) => "process-stage",
+        Request::ProcessActivate { .. } => "process-activate",
+        Request::ProcessState { .. } => "process-state",
     }
 }
 
@@ -732,6 +811,29 @@ pub fn serve_conn(engine: &Engine, conn: UnixStream, admit: &dyn Fn(i32) -> Resu
         }
     };
     let verb = verb_name(&req);
+    // A terminal: answer, then stream frames until the command exits.
+    if let Request::ExecTty { app, deployment, argv, cols, rows } = &req {
+        match engine.exec_tty_command(app, deployment, argv) {
+            Err((code, msg)) => {
+                audit(verb, &who, false, Some(code));
+                answer(&mut out, &Answer::err(code, msg));
+            }
+            Ok(cmd) => {
+                let mut line = serde_json::to_vec(&Answer::ok(json!({ "streaming": true }))).unwrap_or_default();
+                line.push(b'\n');
+                if out.write_all(&line).and_then(|_| out.flush()).is_err() {
+                    return;
+                }
+                // The daemon keeps the session (idle limit 15 min); allow
+                // a little more here before the input side gives up.
+                let conn = r.into_inner();
+                let _ = conn.set_read_timeout(Some(Duration::from_secs(16 * 60)));
+                let res = crate::tty::bridge(cmd, *cols, *rows, conn);
+                audit(verb, &who, res.is_ok(), res.as_ref().err().map(|_| codes::IO));
+            }
+        }
+        return;
+    }
     let res = engine.handle(req, &mut r);
     match res {
         Ok(v) => {

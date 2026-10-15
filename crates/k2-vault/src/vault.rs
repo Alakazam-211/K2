@@ -1487,7 +1487,10 @@ impl LocalVault {
         let rollback = *self.rollback.lock();
         let need = use_.needs();
         let candidates = self.effective(&conn, &keys, &m, who)?;
-        let mut chosen = None;
+        // A workspace's own secret gets an implicit, unnamed candidate
+        // first; an eligible explicit grant that names an env or file must
+        // still win, or its name is never used.
+        let mut chosen: Option<(Delivery, Option<String>, Option<String>)> = None;
         for (d, env, file, narrowed, explicit) in candidates {
             if explicit && rollback {
                 continue; // VS8: explicit grants stop while rolled back.
@@ -1504,8 +1507,13 @@ impl LocalVault {
                     continue;
                 }
             }
-            chosen = Some((d, env, file));
-            break;
+            let named = explicit && (env.is_some() || file.is_some());
+            if chosen.is_none() || named {
+                chosen = Some((d, env, file));
+            }
+            if named {
+                break;
+            }
         }
         let (d, env, file) = match chosen {
             Some(c) => c,
@@ -1581,7 +1589,7 @@ impl LocalVault {
             if m.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < t) {
                 continue;
             }
-            let mut best: Option<(Delivery, Option<String>, Option<String>)> = None;
+            let mut best: Option<(Delivery, Option<String>, Option<String>, bool)> = None;
             for (d, env, file, _, explicit) in self.effective(&conn, &keys, m, who)? {
                 if explicit && rollback {
                     continue;
@@ -1589,11 +1597,18 @@ impl LocalVault {
                 if !matches!(d, Delivery::Env | Delivery::File) {
                     continue;
                 }
-                if best.as_ref().is_none_or(|b| d.level() > b.0.level()) {
-                    best = Some((d, env, file));
+                // Highest delivery wins; on a tie, a grant that names the
+                // env or file beats the implicit unnamed one.
+                let named = explicit && (env.is_some() || file.is_some());
+                let better = match &best {
+                    None => true,
+                    Some(b) => d.level() > b.0.level() || (d.level() == b.0.level() && named && !b.3),
+                };
+                if better {
+                    best = Some((d, env, file, named));
                 }
             }
-            if let Some((d, env, file)) = best {
+            if let Some((d, env, file, _)) = best {
                 let env_name = if d == Delivery::Env {
                     let n = env.unwrap_or_else(|| m.name.clone());
                     if crate::delivery::validate_env_name(&n).is_err() {

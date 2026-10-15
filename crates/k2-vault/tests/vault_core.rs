@@ -434,6 +434,38 @@ fn env_and_file_names_are_checked_on_grants() {
 }
 
 #[test]
+fn explicit_grant_env_name_beats_the_implicit_own_workspace_candidate() {
+    let t = TestDir::new("shadow");
+    let ks = Arc::new(FakeKeyStore::new());
+    let v = open(&t, &ks);
+    // A workspace's own password (default delivery env) with a name that
+    // isn't a valid env name, then an explicit env grant to that same
+    // workspace naming the variable.
+    let r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "mini-k2n1-admin-pw", Kind::Password);
+    v.put(r, SecretBytes::from_slice(b"k2test-admin-pw-123456"), &Actor::Owner).expect("put");
+    let sel = Selector::user(Scope::workspace("ws1"), "mini-k2n1-admin-pw");
+    v.grant(
+        GrantRequest {
+            selector: sel.clone(),
+            consumer: Consumer::workspace("ws1"),
+            delivery: Delivery::Env,
+            env_name: Some("MINI_K2N1_PW".into()),
+            file_name: None,
+            hosts_narrowed: None,
+            expires_at: None,
+            version: None,
+        },
+        &Actor::Owner,
+    )
+    .expect("grant");
+    let r = v.resolve(&sel, Use::Env, &session("ws1")).expect("resolve");
+    assert_eq!(r.env_name.as_deref(), Some("MINI_K2N1_PW"));
+    let items = v.spawn_items(&session("ws1")).expect("items");
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].env_name.as_deref(), Some("MINI_K2N1_PW"));
+}
+
+#[test]
 fn reveal_needs_a_confirm_and_never_shows_system_values() {
     let t = TestDir::new("reveal");
     let ks = Arc::new(FakeKeyStore::new());

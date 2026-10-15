@@ -95,7 +95,7 @@
       "doc": "A catalog verb that isn't exposed to this caller (zen.exit, controls.bind, homes.list, …)."
     },
     {"code": "sending_off", "doc": "Posting is paused: the runaway guard tripped (too many posts). The person resumes it on the widget."},
-    {"code": "server_not_saved", "doc": "The source's server isn't one of your saved servers (Settings → K2 Server → Connected Servers)."},
+    {"code": "server_not_saved", "doc": "The source's server isn't one of your saved servers (Settings → Network → Connected Servers)."},
     {"code": "unreachable", "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
     {"code": "removed", "doc": "The source was removed on its server (its name is held for 7 days)."},
     {"code": "no_history", "doc": "The source keeps states only, so it has no history."},

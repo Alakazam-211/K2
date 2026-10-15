@@ -98,7 +98,11 @@ pub struct PrincipalFacts {
     pub full_name: Option<String>,
 }
 
-fn principal_where(conn: &Connection, sql_where: &str, v: &str) -> Result<Option<PrincipalFacts>, String> {
+fn principal_where(
+    conn: &Connection,
+    sql_where: &str,
+    v: &str,
+) -> Result<Option<PrincipalFacts>, String> {
     conn.query_row(
         &format!("SELECT id, username, email, full_name FROM principals WHERE {sql_where}"),
         params![v],
@@ -106,8 +110,12 @@ fn principal_where(conn: &Connection, sql_where: &str, v: &str) -> Result<Option
             Ok(PrincipalFacts {
                 id: r.get(0)?,
                 username: r.get(1)?,
-                email: r.get::<_, Option<String>>(2)?.filter(|s| !s.trim().is_empty()),
-                full_name: r.get::<_, Option<String>>(3)?.filter(|s| !s.trim().is_empty()),
+                email: r
+                    .get::<_, Option<String>>(2)?
+                    .filter(|s| !s.trim().is_empty()),
+                full_name: r
+                    .get::<_, Option<String>>(3)?
+                    .filter(|s| !s.trim().is_empty()),
             })
         },
     )
@@ -120,7 +128,10 @@ pub fn principal_by_id(conn: &Connection, id: &str) -> Result<Option<PrincipalFa
 }
 
 /// A principal id, else a username (case-insensitive like the rest of skin).
-pub fn principal_by_token(conn: &Connection, token: &str) -> Result<Option<PrincipalFacts>, String> {
+pub fn principal_by_token(
+    conn: &Connection,
+    token: &str,
+) -> Result<Option<PrincipalFacts>, String> {
     let t = token.trim();
     if let Some(p) = principal_by_id(conn, t)? {
         return Ok(Some(p));
@@ -139,7 +150,9 @@ pub fn parse_input_scope(
     let Some(raw) = raw else {
         return match subject_kind {
             "principal" => Ok(ChatScope::Member),
-            _ => Err("chat scope is required for a workspace: coworker or assistant:<person>".into()),
+            _ => {
+                Err("chat scope is required for a workspace: coworker or assistant:<person>".into())
+            }
         };
     };
     let (kw, rest) = match raw.split_once(':') {
@@ -171,14 +184,18 @@ pub fn external_id(subject_kind: &str, subject_id: &str) -> Result<ExternalId, S
     match subject_kind {
         "principal" => Ok(ExternalId::K2Principal(subject_id.to_string())),
         "workspace" => Ok(ExternalId::K2Workspace(subject_id.to_string())),
-        other => Err(format!("chat subjects are principals or workspaces, not '{other}'")),
+        other => Err(format!(
+            "chat subjects are principals or workspaces, not '{other}'"
+        )),
     }
 }
 
 /// §6.3.4: the name must fit Sew's handle grammar.
 pub fn check_username(name: &str) -> Result<(), String> {
     if name.len() > 64 {
-        return Err(format!("username '{name}' is longer than 64 characters; chat cannot use it"));
+        return Err(format!(
+            "username '{name}' is longer than 64 characters; chat cannot use it"
+        ));
     }
     if !sew_wire::is_valid_handle(name) {
         return Err(format!(
@@ -252,9 +269,13 @@ fn chat_grants_of(conn: &Connection, sql_where: &str, v: &str) -> Result<Vec<Ski
 
 /// The principal's chat grant, if any.
 pub fn person_grant(conn: &Connection, principal_id: &str) -> Result<Option<SkinGrant>, String> {
-    Ok(chat_grants_of(conn, "subject_kind = 'principal' AND subject_id = ?1", principal_id)?
-        .into_iter()
-        .next())
+    Ok(chat_grants_of(
+        conn,
+        "subject_kind = 'principal' AND subject_id = ?1",
+        principal_id,
+    )?
+    .into_iter()
+    .next())
 }
 
 /// Workspace chat grants pinned to this principal (`assistant:<id>`).
@@ -290,7 +311,9 @@ fn check_assistant_person(conn: &Connection, scope: &ChatScope) -> Result<(), St
         Some(g) if g.scope.as_deref() == Some("guest") => Err(format!(
             "assistant person '{name}' is a chat guest; guests cannot have assistants"
         )),
-        _ => Err(format!("assistant person '{name}' needs a member chat grant first")),
+        _ => Err(format!(
+            "assistant person '{name}' needs a member chat grant first"
+        )),
     }
 }
 
@@ -468,9 +491,9 @@ pub fn update_op(
         subject_key: ext.to_string(),
         payload: serde_json::to_value(&req).map_err(|e| format!("chat payload: {e}"))?,
         grant_id: grant.map(|g| g.id.clone()),
-        grant_rev: grant.map(grant_rev).or_else(|| {
-            matches!(ext, ExternalId::K2Owner).then(|| OWNER_GRANT_REV.to_string())
-        }),
+        grant_rev: grant
+            .map(grant_rev)
+            .or_else(|| matches!(ext, ExternalId::K2Owner).then(|| OWNER_GRANT_REV.to_string())),
         cause,
         after_subject: None,
     })
@@ -500,7 +523,11 @@ impl ToolProvisioner for ChatProvisioner {
         if !outbox::target_enabled(conn, CHAT_KIND)? {
             return Err(CHAT_NOT_ENABLED.to_string());
         }
-        if w.role.as_deref().map(str::trim).is_some_and(|r| !r.is_empty()) {
+        if w.role
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|r| !r.is_empty())
+        {
             return Err("roleId is only set for kind=app".to_string());
         }
         let subject_kind = w.subject_kind.trim().to_ascii_lowercase();
@@ -615,13 +642,23 @@ impl ToolProvisioner for ChatProvisioner {
                     .unwrap_or(&principal.username);
                 let patch = ProfilePatch {
                     display_name: Some(truncate_chars(display, DISPLAY_NAME_MAX)),
-                    email: match principal.email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    email: match principal
+                        .email
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
                         Some(e) => Patch::Set(e.to_string()),
                         None => Patch::Clear,
                     },
                     ..Default::default()
                 };
-                Ok(vec![update_op(&ext, patch, Some(&g), Cause::PrincipalUpdate)?])
+                Ok(vec![update_op(
+                    &ext,
+                    patch,
+                    Some(&g),
+                    Cause::PrincipalUpdate,
+                )?])
             }
             HookEvent::TargetEnabled => owner_ops(ctx, Cause::TargetEnable),
             _ => Ok(Vec::new()),

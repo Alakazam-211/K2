@@ -209,8 +209,8 @@ pub fn enqueue(
         }
         let id = uuid::Uuid::new_v4().to_string();
         let idem = idem_key_for(&id);
-        let payload = serde_json::to_string(&o.payload)
-            .map_err(|e| format!("tool_outbox payload: {e}"))?;
+        let payload =
+            serde_json::to_string(&o.payload).map_err(|e| format!("tool_outbox payload: {e}"))?;
         conn.execute(
             "INSERT INTO tool_outbox
              (id, tool, op, subject_key, payload, idem_key, grant_id, grant_rev, cause, actor,
@@ -260,7 +260,12 @@ fn delivered_ops_sql() -> String {
 /// row with a lower `seq`. Ops this worker does not deliver (S28's
 /// `sew_session_revoke`) are invisible here: never sent, never blocked,
 /// never in the way of the provisioning order.
-pub fn due_heads(conn: &Connection, tool: &str, now: i64, limit: usize) -> Result<Vec<OutboxRow>, String> {
+pub fn due_heads(
+    conn: &Connection,
+    tool: &str,
+    now: i64,
+    limit: usize,
+) -> Result<Vec<OutboxRow>, String> {
     let ops = delivered_ops_sql();
     let sql = format!(
         "SELECT {ROW_COLS} FROM tool_outbox o
@@ -278,9 +283,11 @@ pub fn due_heads(conn: &Connection, tool: &str, now: i64, limit: usize) -> Resul
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Option<OutboxRow>, String> {
-    Ok(collect(conn, &format!("{ROW_SELECT} WHERE id = ?1"), &[&id])?
-        .into_iter()
-        .next())
+    Ok(
+        collect(conn, &format!("{ROW_SELECT} WHERE id = ?1"), &[&id])?
+            .into_iter()
+            .next(),
+    )
 }
 
 fn require(conn: &Connection, id: &str) -> Result<OutboxRow, String> {
@@ -436,7 +443,11 @@ pub fn skip_open_rows(conn: &Connection, tool: &str, now: i64, why: &str) -> Res
 }
 
 /// Newest first, `limit` ≤ 500. Payload only on `blocked` rows.
-pub fn list(conn: &Connection, limit: usize, subject: Option<&str>) -> Result<Vec<OutboxRow>, String> {
+pub fn list(
+    conn: &Connection,
+    limit: usize,
+    subject: Option<&str>,
+) -> Result<Vec<OutboxRow>, String> {
     let limit = limit.clamp(1, 500) as i64;
     let mut rows = match subject {
         Some(s) => collect(
@@ -530,7 +541,10 @@ pub fn busy_subjects(conn: &Connection, tool: &str) -> Result<HashSet<String>, S
 
 /// HC2: subjects whose NEWEST row is `held`, with the grant rev it was
 /// held under. Reconcile skips them while the rev is unchanged.
-pub fn held_subjects(conn: &Connection, tool: &str) -> Result<HashMap<String, Option<String>>, String> {
+pub fn held_subjects(
+    conn: &Connection,
+    tool: &str,
+) -> Result<HashMap<String, Option<String>>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT o.subject_key, o.grant_rev FROM tool_outbox o
@@ -642,7 +656,11 @@ pub fn owner_state(conn: &Connection, tool: &str) -> Result<OwnerState, String> 
             |r| r.get(0),
         )
         .map_err(|e| format!("tool_outbox owner: {e}"))?;
-    Ok(if set > 0 { OwnerState::Set } else { OwnerState::None })
+    Ok(if set > 0 {
+        OwnerState::Set
+    } else {
+        OwnerState::None
+    })
 }
 
 // ── targets ──────────────────────────────────────────────────────────
@@ -733,7 +751,11 @@ pub fn upsert_target(
 ) -> Result<(ToolTarget, bool), String> {
     let old = get_target(conn, kind)?;
     let was_on = old.as_ref().is_some_and(|t| t.enabled);
-    let clean = |v: Option<&str>| v.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let clean = |v: Option<&str>| {
+        v.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     let socket = clean(socket)
         .or_else(|| old.as_ref().map(|t| t.socket.clone()))
         .unwrap_or_else(|| super::DEFAULT_MGMT_SOCKET.to_string());
@@ -779,7 +801,12 @@ pub fn set_target_health(
     Ok(())
 }
 
-pub fn set_target_install_id(conn: &Connection, kind: &str, install_id: &str, now: i64) -> Result<(), String> {
+pub fn set_target_install_id(
+    conn: &Connection,
+    kind: &str,
+    install_id: &str,
+    now: i64,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE tool_targets SET install_id = ?1, updated_at = ?2 WHERE kind = ?3",
         params![install_id, now, kind],

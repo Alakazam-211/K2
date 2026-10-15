@@ -83,7 +83,12 @@ impl MgmtResponse {
             }
         }
         self.error()
-            .and_then(|e| e.error.details.get("retry_after_ms").and_then(|v| v.as_u64()))
+            .and_then(|e| {
+                e.error
+                    .details
+                    .get("retry_after_ms")
+                    .and_then(|v| v.as_u64())
+            })
             .map(Duration::from_millis)
     }
 }
@@ -154,10 +159,15 @@ impl MgmtClient {
         }
         head.push_str("\r\n");
         let fut = async {
-            let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&self.socket))
-                .await
-                .map_err(|_| TransportError(format!("connect {} timed out", self.socket.display())))?
-                .map_err(|e| TransportError(format!("connect {}: {e}", self.socket.display())))?;
+            let mut stream =
+                tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&self.socket))
+                    .await
+                    .map_err(|_| {
+                        TransportError(format!("connect {} timed out", self.socket.display()))
+                    })?
+                    .map_err(|e| {
+                        TransportError(format!("connect {}: {e}", self.socket.display()))
+                    })?;
             let mut req = head.into_bytes();
             req.extend_from_slice(body);
             stream
@@ -191,9 +201,8 @@ impl MgmtClient {
 
 /// Read and trim the token file. Never logs the token.
 pub fn read_token(path: &Path) -> Result<String, TransportError> {
-    let raw = std::fs::read_to_string(path).map_err(|_| {
-        TransportError(format!("mgmt token file unreadable: {}", path.display()))
-    })?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|_| TransportError(format!("mgmt token file unreadable: {}", path.display())))?;
     let t = raw.trim().to_string();
     if t.is_empty() {
         return Err(TransportError(format!(
@@ -324,12 +333,17 @@ mod tests {
     fn truncated_responses_are_transport_errors_not_successes() {
         assert!(parse_response(b"").is_err());
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{}").is_err());
-        assert!(parse_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab").is_err());
+        assert!(
+            parse_response(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab")
+                .is_err()
+        );
     }
 
     #[test]
     fn retry_after_from_header_or_details() {
-        let r = parse_response(b"HTTP/1.1 429 Too Many\r\nRetry-After: 7\r\nContent-Length: 0\r\n\r\n").unwrap();
+        let r =
+            parse_response(b"HTTP/1.1 429 Too Many\r\nRetry-After: 7\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
         assert_eq!(r.retry_after(), Some(Duration::from_secs(7)));
         let body = br#"{"ok":false,"error":{"code":"rate_limited","hint":"slow","details":{"retry_after_ms":1500}}}"#;
         let raw = [

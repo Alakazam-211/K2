@@ -63,6 +63,19 @@ pub struct Manifest {
     /// Declared non-secret variables. Secrets come from the vault.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Outbound hosts the App asks for (S15). A request only: a deploy
+    /// files the new ones as a held widening and the owner approves them
+    /// (§5.6). A guarded App reaches nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<EgressRequest>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EgressRequest {
+    /// `host[:port]` (443 by default) or `*.<suffix>[:port]`.
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -207,6 +220,15 @@ mod tests {
         let e = parse(&bad).unwrap_err();
         assert!(e.message.contains("capz"), "{e:?}");
         assert!(e.line >= 2, "{e:?}");
+    }
+
+    #[test]
+    fn egress_hosts_are_an_optional_request() {
+        assert_eq!(parse(OK).unwrap().egress, None);
+        let m = parse(&OK.replace("\"caps\"", "\"egress\": {\"hosts\": [\"api.stripe.com\", \"*.s3.amazonaws.com:443\"]}, \"caps\"")).unwrap();
+        assert_eq!(m.egress.unwrap().hosts, vec!["api.stripe.com", "*.s3.amazonaws.com:443"]);
+        let e = parse(&OK.replace("\"caps\"", "\"egress\": {\"mode\": \"broad\"}, \"caps\"")).unwrap_err();
+        assert!(e.message.contains("mode"), "a Seed can't pick broad: {e:?}");
     }
 
     #[test]

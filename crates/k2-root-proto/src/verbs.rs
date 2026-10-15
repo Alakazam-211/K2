@@ -195,6 +195,10 @@ pub enum Verb {
     // apps (protocol 6, App runtime box prep; see `crate::apps`)
     AppsStatus,
     AppsEnsureUser,
+    /// `apps ensure-process-user`: the `process` exception's own system
+    /// user `k2appx` (never `k2app`, which owns every container's user
+    /// namespace).
+    AppsEnsureProcessUser,
     AppsSubid,
     AppsLinger(bool),
     AppsDelegate(bool),
@@ -220,8 +224,23 @@ pub enum Verb {
     AppsPackagesInstallYouki,
     AppsRuntime(OciRuntime),
     AppsProcessUnit(bool),
+    /// `apps apparmor on|off`: load (or unload) the canned `k2-app`
+    /// AppArmor profile, the engine's marker and the process template's
+    /// `AppArmorProfile=` drop-in. A no-op where SELinux enforces or no
+    /// MAC is on (the status says which).
+    AppsApparmor(bool),
     AppsProcessStart(AppId),
     AppsProcessStop(AppId),
+    /// `apps process purge <id>` (daemon): a stopped process App's state
+    /// (`/var/lib/k2appx/<id>`) and its runtime caps drop-in.
+    AppsProcessPurge(AppId),
+    /// `apps process caps <id> <mem MiB> <rbps.wbps.riops.wiops>
+    /// [<device>…]` (daemon): the per-instance runtime drop-in with the
+    /// App's memory and disk ceilings and its device grants (enum tokens,
+    /// at most [`crate::apps::MAX_DEVICES`]). `-` = no ceiling for a knob.
+    /// `process start` refuses until it exists. The one verb allowed more
+    /// than 8 tokens (6 + the devices).
+    AppsProcessCaps { id: AppId, mem_mib: u64, io: IoMax, devices: Vec<String> },
     /// `Some(MemoryMin MiB)` = write; `None` = `off`.
     AppsCoresSlice(Option<u64>),
     /// `Some((MemoryMax MiB, TasksMax))` = write; `None` = `off`.
@@ -229,7 +248,7 @@ pub enum Verb {
     AppsUnprep,
 }
 
-use crate::apps::{bounded, AppId, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
+use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
 
 const REFUSED: &str = "refused arguments";
 
@@ -345,7 +364,9 @@ impl Verb {
         if args.is_empty() {
             return Err("empty argv");
         }
-        if args.len() > 8 || !args.iter().all(|a| token_ok(a)) {
+        // 8 tokens, except `apps process caps` (6 + its device grants).
+        let max = if args.starts_with(&["apps", "process", "caps"]) { 6 + crate::apps::MAX_DEVICES } else { 8 };
+        if args.len() > max || !args.iter().all(|a| token_ok(a)) {
             return Err(REFUSED);
         }
         let v = match args {
@@ -419,6 +440,7 @@ impl Verb {
 
             ["apps", "status"] => Verb::AppsStatus,
             ["apps", "ensure-user"] => Verb::AppsEnsureUser,
+            ["apps", "ensure-process-user"] => Verb::AppsEnsureProcessUser,
             ["apps", "subid"] => Verb::AppsSubid,
             ["apps", "linger", t] => Verb::AppsLinger(on_off(t).ok_or(REFUSED)?),
             ["apps", "delegate", t] => Verb::AppsDelegate(on_off(t).ok_or(REFUSED)?),
@@ -453,10 +475,30 @@ impl Verb {
             ["apps", "packages", "install-youki"] => Verb::AppsPackagesInstallYouki,
             ["apps", "runtime", r] => Verb::AppsRuntime(OciRuntime::parse(r).ok_or(REFUSED)?),
             ["apps", "process-unit", t] => Verb::AppsProcessUnit(on_off(t).ok_or(REFUSED)?),
+            ["apps", "apparmor", t] => Verb::AppsApparmor(on_off(t).ok_or(REFUSED)?),
             ["apps", "process", "start", id] => {
                 Verb::AppsProcessStart(AppId::parse(id).ok_or(REFUSED)?)
             }
             ["apps", "process", "stop", id] => Verb::AppsProcessStop(AppId::parse(id).ok_or(REFUSED)?),
+            ["apps", "process", "purge", id] => Verb::AppsProcessPurge(AppId::parse(id).ok_or(REFUSED)?),
+            ["apps", "process", "caps", id, mem, io, devs @ ..] => {
+                if devs.len() > crate::apps::MAX_DEVICES {
+                    return Err(REFUSED);
+                }
+                let mut devices: Vec<String> = Vec::with_capacity(devs.len());
+                for d in devs.iter() {
+                    if crate::apps::device(d).is_none() || devices.iter().any(|x| x == d) {
+                        return Err(REFUSED);
+                    }
+                    devices.push(d.to_string());
+                }
+                Verb::AppsProcessCaps {
+                    id: AppId::parse(id).ok_or(REFUSED)?,
+                    mem_mib: bounded(mem, crate::apps::PROCESS_MEM_MIB).ok_or(REFUSED)?,
+                    io: IoMax::from_token(io).ok_or(REFUSED)?,
+                    devices,
+                }
+            }
             ["apps", "cores-slice", "off"] => Verb::AppsCoresSlice(None),
             ["apps", "cores-slice", n] => {
                 Verb::AppsCoresSlice(Some(bounded(n, CORES_MIN_MIB).ok_or(REFUSED)?))
@@ -573,6 +615,7 @@ impl Verb {
             Verb::DaemonHandoffDropinRemove => s(&["daemon", "handoff-dropin", "remove"]),
             Verb::AppsStatus => s(&["apps", "status"]),
             Verb::AppsEnsureUser => s(&["apps", "ensure-user"]),
+            Verb::AppsEnsureProcessUser => s(&["apps", "ensure-process-user"]),
             Verb::AppsSubid => s(&["apps", "subid"]),
             Verb::AppsLinger(on) => s(&["apps", "linger", on_off_name(*on)]),
             Verb::AppsDelegate(on) => s(&["apps", "delegate", on_off_name(*on)]),
@@ -592,8 +635,17 @@ impl Verb {
             Verb::AppsPackagesInstallYouki => s(&["apps", "packages", "install-youki"]),
             Verb::AppsRuntime(r) => s(&["apps", "runtime", r.as_str()]),
             Verb::AppsProcessUnit(on) => s(&["apps", "process-unit", on_off_name(*on)]),
+            Verb::AppsApparmor(on) => s(&["apps", "apparmor", on_off_name(*on)]),
             Verb::AppsProcessStart(id) => s(&["apps", "process", "start", id.as_str()]),
             Verb::AppsProcessStop(id) => s(&["apps", "process", "stop", id.as_str()]),
+            Verb::AppsProcessPurge(id) => s(&["apps", "process", "purge", id.as_str()]),
+            Verb::AppsProcessCaps { id, mem_mib, io, devices } => {
+                let mem = mem_mib.to_string();
+                let t = io.token();
+                let mut v = vec!["apps", "process", "caps", id.as_str(), mem.as_str(), t.as_str()];
+                v.extend(devices.iter().map(String::as_str));
+                s(&v)
+            }
             Verb::AppsCoresSlice(None) => s(&["apps", "cores-slice", "off"]),
             Verb::AppsCoresSlice(Some(n)) => s(&["apps", "cores-slice", &n.to_string()]),
             Verb::AppsBudget(None) => s(&["apps", "budget", "off"]),
@@ -655,6 +707,7 @@ impl Verb {
             // k2app.
             Verb::AppsStatus
             | Verb::AppsEnsureUser
+            | Verb::AppsEnsureProcessUser
             | Verb::AppsSubid
             | Verb::AppsLinger(true)
             | Verb::AppsDelegate(true)
@@ -663,7 +716,8 @@ impl Verb {
             | Verb::AppsPackagesInstall
             | Verb::AppsPackagesInstallYouki
             | Verb::AppsRuntime(OciRuntime::Crun)
-            | Verb::AppsProcessUnit(true) => Open,
+            | Verb::AppsProcessUnit(true)
+            | Verb::AppsApparmor(true) => Open,
             Verb::AppsLinger(false)
             | Verb::AppsDelegate(false)
             | Verb::AppsIoCost(false)
@@ -678,8 +732,14 @@ impl Verb {
             | Verb::AppsLogs { .. }
             | Verb::AppsRuntime(OciRuntime::Youki)
             | Verb::AppsProcessUnit(false)
+            // Unloading the MAC profile loosens every App.
+            | Verb::AppsApparmor(false)
             | Verb::AppsProcessStart(_)
             | Verb::AppsProcessStop(_)
+            // Limits and device grants: the daemon decides (owner-approved).
+            | Verb::AppsProcessCaps { .. }
+            // Deletes an App's data.
+            | Verb::AppsProcessPurge(_)
             | Verb::AppsCoresSlice(_)
             | Verb::AppsBudget(_)
             | Verb::AppsUnprep => Daemon,
@@ -822,6 +882,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::DaemonHandoffDropinRemove,
         Verb::AppsStatus,
         Verb::AppsEnsureUser,
+        Verb::AppsEnsureProcessUser,
         Verb::AppsSubid,
         Verb::AppsNftApply {
             gw: crate::apps::GATEWAY_PORTS,
@@ -846,6 +907,19 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsRuntime(OciRuntime::Youki),
         Verb::AppsProcessStart(AppId::parse("jobs").expect("id")),
         Verb::AppsProcessStop(AppId::parse("jobs").expect("id")),
+        Verb::AppsProcessPurge(AppId::parse("jobs").expect("id")),
+        Verb::AppsProcessCaps {
+            id: AppId::parse("jobs").expect("id"),
+            mem_mib: 512,
+            io: crate::apps::IoMax::k2_default(),
+            devices: vec![],
+        },
+        Verb::AppsProcessCaps {
+            id: AppId::parse("gpu-job").expect("id"),
+            mem_mib: 8192,
+            io: crate::apps::IoMax::unlimited(),
+            devices: vec!["dri-render128".into(), "nvidia0".into(), "nvidiactl".into()],
+        },
         Verb::AppsCoresSlice(Some(768)),
         Verb::AppsCoresSlice(None),
         Verb::AppsBudget(Some((4096, 4096))),
@@ -858,6 +932,7 @@ pub fn catalog() -> Vec<Verb> {
         v.push(Verb::AppsIoCost(on));
         v.push(Verb::AppsReservePorts(on));
         v.push(Verb::AppsProcessUnit(on));
+        v.push(Verb::AppsApparmor(on));
     }
     for t in [
         MkdirTarget::Config,
@@ -1099,6 +1174,7 @@ mod tests {
         let open: &[&[&str]] = &[
             &["apps", "status"],
             &["apps", "ensure-user"],
+            &["apps", "ensure-process-user"],
             &["apps", "subid"],
             &["apps", "linger", "on"],
             &["apps", "delegate", "on"],
@@ -1109,6 +1185,7 @@ mod tests {
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
             &["apps", "process-unit", "on"],
+            &["apps", "apparmor", "on"],
         ];
         let daemon: &[&[&str]] = &[
             &["apps", "linger", "off"],
@@ -1118,8 +1195,12 @@ mod tests {
             &["apps", "nft", "remove"],
             &["apps", "runtime", "youki"],
             &["apps", "process-unit", "off"],
+            &["apps", "apparmor", "off"],
             &["apps", "process", "start", "jobs"],
             &["apps", "process", "stop", "jobs"],
+            &["apps", "process", "purge", "jobs"],
+            &["apps", "process", "caps", "jobs", "512", "-.41943040.-.2000"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.-", "dri-render128", "dri-card0", "nvidia0", "nvidiactl", "nvidia-uvm", "nvidia-uvm-tools", "nvidia-modeset", "nvidia1"],
             &["apps", "cores-slice", "768"],
             &["apps", "cores-slice", "off"],
             &["apps", "budget", "4096", "4096"],
@@ -1210,7 +1291,34 @@ mod tests {
             &["apps", "process", "start", "jobs", "--now"],
             &["apps", "process", "restart", "jobs"],
             &["apps", "process", "kill", "jobs"],
+            // caps: bounded numbers, `-`, and device tokens only.
+            &["apps", "process", "caps", "jobs"],
+            &["apps", "process", "caps", "jobs", "512"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-"],
+            &["apps", "process", "caps", "jobs", "512", "-", "-", "-", "-"],
+            &["apps", "process", "caps", "jobs", "512M", "-.-.-.-"],
+            &["apps", "process", "caps", "jobs", "63", "-.-.-.-"],
+            &["apps", "process", "caps", "jobs", "512", "-.40M.-.-"],
+            &["apps", "process", "caps", "jobs", "512", "-.1.-.-"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.infinity"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.-", "/dev/sda"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.-", "kvm"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.-", "dri-render128", "dri-render128"],
+            &["apps", "process", "caps", "jobs", "512", "-.-.-.-", "nvidia0", "nvidia1", "nvidia2", "nvidia3", "nvidia4", "nvidia5", "nvidia6", "nvidia7", "nvidia8"],
+            &["apps", "process", "caps", "../x", "512", "-.-.-.-"],
+            // The longer argv is for caps only.
+            &["apps", "process", "start", "jobs", "a", "b", "c", "d", "e", "f"],
+            &["apps", "process", "purge", "../x"],
+            &["apps", "process", "purge", "jobs", "--all"],
+            &["apps", "ensure-process-user", "k2app"],
+            &["apps", "ensure-process-user", "root"],
             &["apps", "process-unit", "on", "/etc/systemd/system/x.service"],
+            // apparmor: on|off and nothing else (never a profile or a path).
+            &["apps", "apparmor"],
+            &["apps", "apparmor", "on", "k2-app"],
+            &["apps", "apparmor", "/etc/apparmor.d/k2-app"],
+            &["apps", "apparmor", "complain"],
+            &["apps", "apparmor", "unconfined"],
             // numbers: bounded decimal, no units.
             &["apps", "cores-slice", "0"],
             &["apps", "cores-slice", "127"],

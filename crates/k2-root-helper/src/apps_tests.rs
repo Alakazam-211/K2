@@ -135,6 +135,124 @@ fn reloads(t: &T) -> usize {
 
 // ── user ────────────────────────────────────────────────────────────────
 
+const PROC_UID: u32 = 995;
+const PROC_PW_LINE: &str = "k2appx:x:995:995:K2 process Apps:/var/lib/k2appx:/usr/sbin/nologin\n";
+
+/// The box after `apps ensure-process-user` (k2app first).
+fn with_process_user(t: &T) {
+    with_app_user(t);
+    write(t, PASSWD_FILE, &(read(t, PASSWD_FILE) + PROC_PW_LINE));
+    write(t, GROUP_FILE, &(read(t, GROUP_FILE) + "k2appx:x:995:\n"));
+    write(t, SHADOW_FILE, &(read(t, SHADOW_FILE) + "k2appx:!:19000::::::\n"));
+}
+
+/// `nft list table inet k2app` answers with both users' jumps.
+fn nft_lists_both(t: &T) {
+    rule(
+        t,
+        NFT,
+        "list",
+        0,
+        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v2\n\t\tmeta skuid 995 jump k2app_v2\n\t}\n\tchain k2app_v2 {\n\t}\n}\n",
+    );
+}
+
+#[test]
+fn ensure_process_user_is_its_own_system_user_never_k2app() {
+    let t = box_root();
+    // k2app first.
+    base_users(&t);
+    let o = t.call(&["apps", "ensure-process-user"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("box_not_prepared"), "{}", o.stderr);
+
+    let t = box_root();
+    with_app_user(&t);
+    let root = t.root.clone();
+    t.exec.0.borrow_mut().effects.push((
+        USERADD.into(),
+        Rc::new(move |_args: &[String]| {
+            let add = |abs: &str, line: &str| {
+                let p = crate::ctx::under(&root, abs);
+                let mut s = std::fs::read_to_string(&p).unwrap_or_default();
+                s.push_str(line);
+                std::fs::write(&p, s).unwrap();
+            };
+            add(PASSWD_FILE, PROC_PW_LINE);
+            add(GROUP_FILE, "k2appx:x:995:\n");
+            add(SHADOW_FILE, "k2appx:!:19000::::::\n");
+        }),
+    ));
+    let v = json(&t.call(&["apps", "ensure-process-user"]));
+    assert_eq!(v["created"], true, "{v}");
+    assert_eq!(v["uid"], PROC_UID);
+    assert_eq!(
+        calls_of(&t, USERADD),
+        vec!["--system --user-group --home-dir /var/lib/k2appx --no-create-home --shell /usr/sbin/nologin --comment K2 process Apps k2appx"]
+    );
+    ok(&t.call(&["apps", "ensure-process-user"]));
+    assert_eq!(calls_of(&t, USERADD).len(), 1, "once");
+    assert!(!t.p(PROCESS_HOME).exists(), "systemd makes the per-App state dirs");
+
+    // Bad shapes are refused, never adopted.
+    for (line, grp) in [
+        ("k2appx:x:996:996::/var/lib/k2appx:/usr/sbin/nologin\n", ""),
+        ("k2appx:x:995:996::/var/lib/k2appx:/usr/sbin/nologin\n", ""),
+        ("k2appx:x:995:995::/var/lib/k2app:/usr/sbin/nologin\n", ""),
+        ("k2appx:x:995:995::/var/lib/k2appx:/bin/sh\n", ""),
+        ("k2appx:x:1995:1995::/var/lib/k2appx:/usr/sbin/nologin\n", ""),
+        ("k2appx:x:995:995::/var/lib/k2appx:/usr/sbin/nologin\n", "k2app:x:996:k2appx\n"),
+        ("k2appx:x:995:995::/var/lib/k2appx:/usr/sbin/nologin\n", "video:x:44:\ndisk:x:6:k2appx\n"),
+    ] {
+        let t = box_root();
+        with_app_user(&t);
+        write(&t, PASSWD_FILE, &(read(&t, PASSWD_FILE) + line));
+        write(&t, GROUP_FILE, &(read(&t, GROUP_FILE) + grp));
+        write(&t, SHADOW_FILE, &(read(&t, SHADOW_FILE) + "k2appx:!:1::::::\n"));
+        let o = t.call(&["apps", "ensure-process-user"]);
+        assert_eq!(o.code, exit::STATE, "{line:?} {grp:?}: {}", o.stderr);
+        assert!(o.stderr.starts_with("refused:"), "{}", o.stderr);
+    }
+}
+
+#[test]
+fn nft_covers_process_apps_once_their_user_exists() {
+    let t = box_root();
+    with_process_user(&t);
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"]));
+    let fed: Vec<_> = t
+        .calls()
+        .into_iter()
+        .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
+        .collect();
+    let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+    assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
+    assert!(want.contains("meta skuid 995 jump k2app_v2"));
+}
+
+#[test]
+fn process_purge_removes_a_stopped_apps_state_only() {
+    let t = box_root();
+    with_process_user(&t);
+    write(&t, "/var/lib/k2appx/jobs/data/db.sqlite", "x");
+    write(&t, "/var/lib/k2appx/other/data/keep", "y");
+    std::fs::create_dir_all(t.p("/etc/secret")).unwrap();
+    symlink(t.p("/etc/secret"), t.p("/var/lib/k2appx/jobs/link")).unwrap();
+    ok(&t.call(&["apps", "process", "caps", "jobs", "512", "-.-.-.-"]));
+    rule(&t, SYSTEMCTL, "list-units", 0, "k2app-process@jobs.service loaded active running K2 App jobs (process)\n");
+    let o = t.call(&["apps", "process", "purge", "jobs"]);
+    assert_eq!(o.code, exit::STATE, "never while it runs: {}", o.stderr);
+    t.exec.0.borrow_mut().rules.clear();
+    let v = json(&t.call(&["apps", "process", "purge", "jobs"]));
+    assert_eq!(v["purged"], true, "{v}");
+    assert_eq!(v["capsRemoved"], true);
+    assert!(!t.p("/var/lib/k2appx/jobs").exists());
+    assert!(t.p("/etc/secret").exists(), "a link inside is removed, never followed");
+    assert!(t.p("/var/lib/k2appx/other/data/keep").exists());
+    t.as_agent();
+    assert_eq!(t.call(&["apps", "process", "purge", "other"]).code, exit::NOT_DAEMON);
+}
+
 #[test]
 fn ensure_user_creates_a_locked_system_user_once() {
     let t = box_root();
@@ -587,7 +705,7 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
         .filter(|(p, a, _)| p == NFT && a == &vec!["-f".to_string(), "-".to_string()])
         .collect();
     assert_eq!(fed.len(), 1);
-    let want = nft_ruleset(APP_UID, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+    let want = nft_ruleset(APP_UID, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
     assert!(want.contains("meta skuid 996 jump k2app_v2"));
 
@@ -748,6 +866,20 @@ fn process_unit_is_canned_and_only_the_daemon_starts_apps() {
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.starts_with("engine_missing"), "{}", o.stderr);
     bin(&t, ENGINE_PATH);
+    // Its own user and an nft table that already covers it.
+    let o = t.call(&["apps", "process", "start", "jobs"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("k2appx"), "{}", o.stderr);
+    with_process_user_lines(&t);
+    let o = t.call(&["apps", "process", "start", "jobs"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("nftables"), "{}", o.stderr);
+    nft_lists_both(&t);
+    // Never uncapped: the caps drop-in comes first.
+    let o = t.call(&["apps", "process", "start", "jobs"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("caps_missing"), "{}", o.stderr);
+    ok(&t.call(&["apps", "process", "caps", "jobs", "512", "-.41943040.-.2000"]));
     ok(&t.call(&["apps", "process", "start", "jobs"]));
     ok(&t.call(&["apps", "process", "stop", "jobs"]));
     let sc = calls_of(&t, SYSTEMCTL);
@@ -776,6 +908,66 @@ fn process_unit_is_canned_and_only_the_daemon_starts_apps() {
 }
 
 #[test]
+fn process_caps_render_a_runtime_dropin_from_tokens_only() {
+    let t = box_root();
+    with_app_user(&t);
+    let caps = "/run/systemd/system/k2app-process@jobs.service.d/k2-caps.conf";
+    let v = json(&t.call(&["apps", "process", "caps", "jobs", "512", "-.41943040.-.2000"]));
+    assert_eq!(v["changed"], true, "{v}");
+    assert_eq!(
+        read(&t, caps),
+        process_caps_dropin(512, &IoMax::k2_default(), &[])
+    );
+    assert_eq!(reloads(&t), 1);
+    ok(&t.call(&["apps", "process", "caps", "jobs", "512", "-.41943040.-.2000"]));
+    assert_eq!(reloads(&t), 1, "same caps: no reload");
+
+    // A device grant needs the node on this box.
+    let o = t.call(&["apps", "process", "caps", "jobs", "1024", "-.-.-.-", "dri-render128"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("device_missing"), "{}", o.stderr);
+    write(&t, "/dev/dri/renderD128", "");
+    ok(&t.call(&["apps", "process", "caps", "jobs", "1024", "-.-.-.-", "dri-render128"]));
+    let body = read(&t, caps);
+    assert!(body.contains("\nMemoryMax=1024M\n"), "{body}");
+    assert!(body.contains("\nDeviceAllow=/dev/dri/renderD128 rw\n"), "{body}");
+    assert!(body.contains("\nSupplementaryGroups=render\n"), "{body}");
+    assert!(!body.contains("IOWrite"), "{body}");
+
+    // A planted link where the drop-in dir goes is refused, not followed.
+    let t2 = box_root();
+    with_app_user(&t2);
+    std::fs::create_dir_all(t2.p("/run/systemd/system")).unwrap();
+    symlink(t2.p("/etc"), t2.p("/run/systemd/system/k2app-process@jobs.service.d")).unwrap();
+    let o = t2.call(&["apps", "process", "caps", "jobs", "512", "-.-.-.-"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(!t2.p("/etc/k2-caps.conf").exists());
+
+    // Agents can't set an App's limits.
+    t.as_agent();
+    assert_eq!(
+        t.call(&["apps", "process", "caps", "jobs", "512", "-.-.-.-"]).code,
+        exit::NOT_DAEMON
+    );
+}
+
+#[test]
+fn process_start_needs_the_mac_dropin_on_an_apparmor_box() {
+    let t = box_root();
+    apparmor_box(&t);
+    with_process_user_lines(&t);
+    nft_lists_both(&t);
+    bin(&t, ENGINE_PATH);
+    ok(&t.call(&["apps", "process-unit", "on"]));
+    ok(&t.call(&["apps", "process", "caps", "jobs", "512", "-.-.-.-"]));
+    let o = t.call(&["apps", "process", "start", "jobs"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("mac_missing"), "{}", o.stderr);
+    ok(&t.call(&["apps", "apparmor", "on"]));
+    ok(&t.call(&["apps", "process", "start", "jobs"]));
+}
+
+#[test]
 fn process_unit_off_refuses_while_an_app_runs() {
     let t = box_root();
     with_app_user(&t);
@@ -790,6 +982,171 @@ fn process_unit_off_refuses_while_an_app_runs() {
     let o = t.call(&["apps", "process-unit", "off"]);
     assert_eq!(o.code, exit::STATE, "{}", o.stderr);
     assert!(t.p("/etc/systemd/system/k2app-process@.service").exists());
+}
+
+// ── MAC: the k2-app AppArmor profile ────────────────────────────────────
+
+const PARSER: &str = "/usr/sbin/apparmor_parser";
+const AA_DROPIN: &str = "/etc/systemd/system/k2app-process@.service.d/k2-apparmor.conf";
+
+/// k2appx on a box that already has k2app.
+fn with_process_user_lines(t: &T) {
+    write(t, PASSWD_FILE, &(read(t, PASSWD_FILE) + PROC_PW_LINE));
+    write(t, GROUP_FILE, &(read(t, GROUP_FILE) + "k2appx:x:995:\n"));
+    write(t, SHADOW_FILE, &(read(t, SHADOW_FILE) + "k2appx:!:19000::::::\n"));
+}
+
+fn apparmor_box(t: &T) {
+    with_app_user(t);
+    write(t, APPARMOR_ENABLED, "Y\n");
+    std::fs::create_dir_all(t.p(APPARMOR_DIR)).unwrap();
+    bin(t, PARSER);
+}
+
+fn ok_json(o: &crate::Outcome) -> serde_json::Value {
+    ok(o);
+    json(o)
+}
+
+#[test]
+fn apparmor_on_loads_the_profile_before_anything_points_at_it() {
+    let t = box_root();
+    apparmor_box(&t);
+    let v = ok_json(&t.call(&["apps", "apparmor", "on"]));
+    assert_eq!(v["changed"], true);
+    assert_eq!(read(&t, APPARMOR_FILE), apparmor_profile());
+    assert_eq!(read(&t, MAC_MARKER), mac_marker());
+    assert_eq!(read(&t, AA_DROPIN), process_apparmor_dropin());
+    assert_eq!(
+        calls_of(&t, PARSER),
+        vec![format!("--replace --write-cache {APPARMOR_FILE}")]
+    );
+    // The parser ran before the drop-in's daemon-reload.
+    let order: Vec<String> = t
+        .calls()
+        .into_iter()
+        .map(|(p, a, _)| format!("{p} {}", a.join(" ")))
+        .collect();
+    let parse_at = order.iter().position(|c| c.starts_with(PARSER)).unwrap();
+    let reload_at = order
+        .iter()
+        .position(|c| c.ends_with("daemon-reload"))
+        .unwrap();
+    assert!(parse_at < reload_at, "{order:?}");
+    assert_eq!(reloads(&t), 1);
+
+    // The kernel now lists it: a second run changes nothing.
+    write(
+        &t,
+        APPARMOR_PROFILES,
+        "docker-default (enforce)\nk2-app (enforce)\n",
+    );
+    let v = ok_json(&t.call(&["apps", "apparmor", "on"]));
+    assert_eq!(v["changed"], false, "{v}");
+    assert_eq!(v["applied"], true, "{v}");
+    assert_eq!(v["lsm"], "apparmor");
+    assert_eq!(calls_of(&t, PARSER).len(), 1);
+    assert_eq!(reloads(&t), 1);
+
+    // Loaded in complain mode (someone ran aa-complain): enforce again.
+    write(&t, APPARMOR_PROFILES, "k2-app (complain)\n");
+    let v = ok_json(&t.call(&["apps", "apparmor", "on"]));
+    assert_eq!(v["changed"], true);
+    assert_eq!(calls_of(&t, PARSER).len(), 2);
+
+    // A doctored profile is put back and reloaded.
+    write(&t, APPARMOR_PROFILES, "k2-app (enforce)\n");
+    write(
+        &t,
+        APPARMOR_FILE,
+        "profile k2-app flags=(complain) { file, capability, }\n",
+    );
+    let v = ok_json(&t.call(&["apps", "apparmor", "on"]));
+    assert_eq!(v["changed"], true);
+    assert_eq!(read(&t, APPARMOR_FILE), apparmor_profile());
+    assert_eq!(calls_of(&t, PARSER).len(), 3);
+
+    let st = ok_json(&t.call(&["apps", "status"]));
+    assert_eq!(st["mac"]["applied"], true, "{}", st["mac"]);
+    assert_eq!(st["mac"]["loaded"], "enforce");
+}
+
+#[test]
+fn apparmor_on_is_a_no_op_under_selinux_or_without_mac() {
+    for (enabled, enforce, why) in [
+        (Some("Y\n"), Some("1\n"), "SELinux"),
+        (None, None, "no MAC"),
+        (Some("N\n"), Some("0\n"), "no MAC"),
+    ] {
+        let t = box_root();
+        with_app_user(&t);
+        bin(&t, PARSER);
+        if let Some(e) = enabled {
+            write(&t, APPARMOR_ENABLED, e);
+        }
+        if let Some(e) = enforce {
+            write(&t, SELINUX_ENFORCE, e);
+        }
+        let v = ok_json(&t.call(&["apps", "apparmor", "on"]));
+        assert_eq!(v["changed"], false);
+        assert!(v["skipped"].as_str().unwrap().contains(why), "{v}");
+        assert!(!t.p(APPARMOR_FILE).exists());
+        assert!(!t.p(MAC_MARKER).exists());
+        assert!(!t.p(AA_DROPIN).exists());
+        assert!(calls_of(&t, PARSER).is_empty());
+        let st = ok_json(&t.call(&["apps", "status"]));
+        assert_eq!(st["mac"]["applied"], why == "SELinux", "{}", st["mac"]);
+    }
+}
+
+#[test]
+fn apparmor_on_fails_closed_when_the_profile_does_not_load() {
+    let t = box_root();
+    apparmor_box(&t);
+    rule(&t, PARSER, "--replace", 1, "");
+    let o = t.call(&["apps", "apparmor", "on"]);
+    assert_eq!(o.code, exit::IO, "{}", o.stderr);
+    // Nothing points at a profile the kernel doesn't have.
+    assert!(!t.p(MAC_MARKER).exists());
+    assert!(!t.p(AA_DROPIN).exists());
+
+    // AppArmor on but no parser: refused before writing anything.
+    let t = box_root();
+    with_app_user(&t);
+    write(&t, APPARMOR_ENABLED, "Y\n");
+    std::fs::create_dir_all(t.p(APPARMOR_DIR)).unwrap();
+    let o = t.call(&["apps", "apparmor", "on"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.starts_with("apparmor_missing"), "{}", o.stderr);
+    assert!(!t.p(APPARMOR_FILE).exists());
+}
+
+#[test]
+fn apparmor_off_is_the_daemons_and_removes_pointers_first() {
+    let t = box_root();
+    apparmor_box(&t);
+    ok(&t.call(&["apps", "apparmor", "on"]));
+    write(&t, APPARMOR_PROFILES, "k2-app (enforce)\n");
+    t.as_agent();
+    assert_eq!(t.call(&["apps", "apparmor", "off"]).code, exit::NOT_DAEMON);
+    // Turning it on (tightening) is open.
+    ok(&t.call(&["apps", "apparmor", "on"]));
+    t.as_daemon();
+    let v = ok_json(&t.call(&["apps", "apparmor", "off"]));
+    assert_eq!(v["changed"], true);
+    assert!(!t.p(AA_DROPIN).exists());
+    assert!(!t.p(MAC_MARKER).exists());
+    assert!(!t.p(APPARMOR_FILE).exists());
+    assert!(calls_of(&t, PARSER).contains(&format!("--remove {APPARMOR_FILE}")));
+
+    // A planted link where the marker lives is removed, never followed.
+    let t = box_root();
+    apparmor_box(&t);
+    std::fs::create_dir_all(t.p(APP_ETC)).unwrap();
+    symlink(t.p("/etc/passwd"), t.p(MAC_MARKER)).unwrap();
+    ok(&t.call(&["apps", "apparmor", "off"]));
+    assert!(t.p("/etc/passwd").exists());
+    assert!(std::fs::symlink_metadata(t.p(MAC_MARKER)).is_err());
 }
 
 // ── cores slice and budget ──────────────────────────────────────────────

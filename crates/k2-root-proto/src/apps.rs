@@ -15,6 +15,16 @@
 
 /// The App user.
 pub const APP_USER: &str = "k2app";
+/// The `process` exception's user: a second system user, never `k2app`.
+/// `k2app` owns every guarded container's user namespace (and runs the
+/// engine), so a process running as `k2app` could ptrace or read the
+/// memory of every guarded App (the owner of a user namespace holds all
+/// capabilities in it). Process Apps share this user among themselves;
+/// they never share it with the engine or the containers.
+pub const PROCESS_USER: &str = "k2appx";
+/// Its state root (`StateDirectory=k2appx/<id>`, made by systemd). Never
+/// created by useradd: nothing else lives there.
+pub const PROCESS_HOME: &str = "/var/lib/k2appx";
 /// Its home (0750, owned by `k2app`). App state lives under `apps/<id>`.
 pub const APP_HOME: &str = "/var/lib/k2app";
 pub const APP_SHELL: &str = "/usr/sbin/nologin";
@@ -455,10 +465,20 @@ pub fn cores_dropin(core: Core) -> &'static str {
 }
 
 /// The process exception (§4.3, AR45): a **system** unit with
-/// `User=k2app`, where systemd's sandboxing is real on every supported
-/// systemd (249+). One instance per App, started and stopped only by the
-/// daemon (`apps process start|stop <id>`). The engine reads the App's
-/// spec; the unit carries no command of its own.
+/// `User=k2appx` (see [`PROCESS_USER`]: never `k2app`), where systemd's
+/// sandboxing is real on every supported systemd (249+). One instance per App, started and stopped only by the
+/// daemon (`apps process start|stop <id>`), always with its caps drop-in
+/// (`apps process caps`). The engine stages the App's code and spec under
+/// `/var/lib/k2app/apps/<id>/process/` (read-only inside the unit); the
+/// unit carries no command of its own.
+///
+/// The App's code and spec are read-only; its writable state is its own
+/// `/var/lib/k2appx/<id>` (`data/`, `cache/`, `home/`). A read-only tmpfs
+/// over `k2app`'s home hides the engine's state, the Seeds, Podman's
+/// storage and every other App; no home directories, no engine socket,
+/// loopback only
+/// (`IPAddressAllow=localhost`; the `inet k2app` table narrows that to
+/// its gateway port, the proxy and Postgres), no devices unless granted.
 pub fn process_unit() -> &'static str {
     "# K2 App runtime: the `process` exception (prd-k2-app-runtime-v1 §4.3).\n\
      # Written by k2-root-helper `apps process-unit on`. One instance per App\n\
@@ -469,13 +489,18 @@ pub fn process_unit() -> &'static str {
      \n\
      [Service]\n\
      Type=simple\n\
-     User=k2app\n\
-     Group=k2app\n\
+     User=k2appx\n\
+     Group=k2appx\n\
      Slice=k2apps.slice\n\
      ExecStart=/usr/local/libexec/k2-app-engine process-run %i\n\
-     StateDirectory=k2app/apps/%i\n\
+     StateDirectory=k2appx/%i\n\
      StateDirectoryMode=0700\n\
-     WorkingDirectory=/var/lib/k2app/apps/%i\n\
+     WorkingDirectory=/var/lib/k2app/apps/%i/process/code\n\
+     TemporaryFileSystem=/var/lib/k2app:ro\n\
+     BindReadOnlyPaths=/var/lib/k2app/apps/%i/process\n\
+     InaccessiblePaths=-/run/k2app\n\
+     IPAddressAllow=localhost\n\
+     IPAddressDeny=any\n\
      Restart=no\n\
      KillMode=control-group\n\
      TimeoutStopSec=60\n\
@@ -534,6 +559,399 @@ pub fn containers_conf(rt: OciRuntime) -> String {
     )
 }
 
+// ── per-App disk ceilings: cgroup v2 io.max (§6.2, stage W §5.1) ───────
+//
+// `IOWeight=` alone is inert on the schedulers the fleet runs (W: an App
+// filling its data folder pushed Postgres p99 from ~40 ms to 10 s); a
+// per-App `io.max` ceiling held Postgres at 8.8 ms. systemd writes it from
+// `IO{Read,Write}{Bandwidth,IOPS}Max=<path> <n>`, resolving the path to
+// the disk under the Apps' data (`k2app`'s home). Containers get the lines
+// on their Quadlet unit (the user manager owns the delegated `io`
+// controller); the `process` exception on its caps drop-in.
+
+/// The path systemd resolves to the Apps' data disk.
+pub const IO_PATH: &str = APP_HOME;
+/// K2's default ceiling (W's drill: 40 MB/s and 2,000 write IOPS kept
+/// Postgres at its baseline). Reads have no default ceiling.
+pub const DEFAULT_IO_WBPS: u64 = 40 * 1024 * 1024;
+pub const DEFAULT_IO_WIOPS: u64 = 2_000;
+/// Bounds: a ceiling below these starves an App; above, it means nothing.
+pub const IO_BPS_BOUNDS: (u64, u64) = (1024 * 1024, 64 * 1024 * 1024 * 1024);
+pub const IO_IOPS_BOUNDS: (u64, u64) = (16, 10_000_000);
+
+/// One App's ceilings; `None` = no ceiling for that knob.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IoMax {
+    pub rbps: Option<u64>,
+    pub wbps: Option<u64>,
+    pub riops: Option<u64>,
+    pub wiops: Option<u64>,
+}
+
+impl IoMax {
+    /// What an App gets until someone changes it.
+    pub fn k2_default() -> Self {
+        Self { rbps: None, wbps: Some(DEFAULT_IO_WBPS), riops: None, wiops: Some(DEFAULT_IO_WIOPS) }
+    }
+
+    /// No ceiling at all (owner only).
+    pub fn unlimited() -> Self {
+        Self::default()
+    }
+
+    fn knobs(&self) -> [(&'static str, Option<u64>, bool); 4] {
+        [("rbps", self.rbps, false), ("wbps", self.wbps, false), ("riops", self.riops, true), ("wiops", self.wiops, true)]
+    }
+
+    /// Every set value inside its bounds.
+    pub fn check(&self) -> Result<(), String> {
+        for (name, v, iops) in self.knobs() {
+            if let Some(n) = v {
+                let (lo, hi) = if iops { IO_IOPS_BOUNDS } else { IO_BPS_BOUNDS };
+                if !(lo..=hi).contains(&n) {
+                    return Err(format!("{name} {n} is outside {lo}..={hi}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The stored column: NULL = K2's default. A value that doesn't parse
+    /// or check also reads as the default (never as "no ceiling").
+    pub fn from_column(col: Option<&str>) -> Self {
+        col.and_then(|c| serde_json::from_str::<IoMax>(c).ok())
+            .filter(|m| m.check().is_ok())
+            .unwrap_or_else(Self::k2_default)
+    }
+
+    pub fn to_column(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// The knobs `new` allows more on than `self` does (a higher number,
+    /// or no ceiling where there was one): what only the owner may do.
+    pub fn loosened_by(&self, new: &IoMax) -> Vec<&'static str> {
+        self.knobs()
+            .iter()
+            .zip(new.knobs().iter())
+            .filter(|((_, old, _), (_, new, _))| match (old, new) {
+                (Some(_), None) => true,
+                (Some(o), Some(n)) => n > o,
+                (None, _) => false,
+            })
+            .map(|((name, _, _), _)| *name)
+            .collect()
+    }
+
+    /// The systemd lines (`[Service]` section).
+    pub fn unit_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (key, v) in [
+            ("IOReadBandwidthMax", self.rbps),
+            ("IOWriteBandwidthMax", self.wbps),
+            ("IOReadIOPSMax", self.riops),
+            ("IOWriteIOPSMax", self.wiops),
+        ] {
+            if let Some(n) = v {
+                out.push(format!("{key}={IO_PATH} {n}"));
+            }
+        }
+        out
+    }
+
+    /// The helper's one argv token: `rbps.wbps.riops.wiops`, `-` = no
+    /// ceiling (`-.41943040.-.2000` is K2's default).
+    pub fn token(&self) -> String {
+        let t = |v: Option<u64>| v.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+        format!("{}.{}.{}.{}", t(self.rbps), t(self.wbps), t(self.riops), t(self.wiops))
+    }
+
+    pub fn from_token(s: &str) -> Option<Self> {
+        let p: Vec<&str> = s.split('.').collect();
+        let [a, b, c, d] = p.as_slice() else { return None };
+        Self::from_tokens([a, b, c, d])
+    }
+
+    fn from_tokens(t: [&str; 4]) -> Option<Self> {
+        let one = |s: &str, b: (u64, u64)| -> Option<Option<u64>> {
+            if s == "-" {
+                Some(None)
+            } else {
+                bounded(s, b).map(Some)
+            }
+        };
+        Some(Self {
+            rbps: one(t[0], IO_BPS_BOUNDS)?,
+            wbps: one(t[1], IO_BPS_BOUNDS)?,
+            riops: one(t[2], IO_IOPS_BOUNDS)?,
+            wiops: one(t[3], IO_IOPS_BOUNDS)?,
+        })
+    }
+}
+
+/// A user-typed rate: `none`, a plain number, or `<n>K|M|G` (powers of
+/// 1024, an optional trailing `B` or `/s`). IOPS take plain numbers only.
+pub fn parse_rate(s: &str, iops: bool) -> Result<Option<u64>, String> {
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("unlimited") {
+        return Ok(None);
+    }
+    let t = t.strip_suffix("/s").unwrap_or(t);
+    let (num, mul) = if iops {
+        (t, 1u64)
+    } else {
+        let u = t.trim_end_matches(['B', 'b']);
+        match u.chars().last() {
+            Some('K' | 'k') => (&u[..u.len() - 1], 1024),
+            Some('M' | 'm') => (&u[..u.len() - 1], 1024 * 1024),
+            Some('G' | 'g') => (&u[..u.len() - 1], 1024 * 1024 * 1024),
+            _ => (u, 1),
+        }
+    };
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) || num.len() > 12 {
+        return Err(format!("'{s}' is not a rate (try 40M, 2000 or none)"));
+    }
+    let n: u64 = num.parse().map_err(|_| format!("'{s}' is not a rate"))?;
+    let v = n.checked_mul(mul).ok_or_else(|| format!("'{s}' is too large"))?;
+    let (lo, hi) = if iops { IO_IOPS_BOUNDS } else { IO_BPS_BOUNDS };
+    if !(lo..=hi).contains(&v) {
+        return Err(format!("'{s}' is outside {lo}..={hi}{}", if iops { " IOPS" } else { " bytes/s" }));
+    }
+    Ok(Some(v))
+}
+
+// ── the `process` exception: devices and caps ─────────────────────────
+
+/// One device the process exception may be granted (§4.3: "only the ones
+/// named in App config, each a widening"). Tokens are enum-like names,
+/// never paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceGrant {
+    pub token: String,
+    pub path: String,
+    /// The group that owns the node on Debian/Ubuntu/Fedora/Arch
+    /// (`render` for render nodes, `video` for DRM cards); NVIDIA's nodes
+    /// are 0666.
+    pub group: Option<&'static str>,
+}
+
+pub const MAX_DEVICES: usize = 8;
+
+/// `dri-render128`..`dri-render191`, `dri-card0`..`dri-card15`,
+/// `nvidia0`..`nvidia15`, `nvidiactl`, `nvidia-uvm`, `nvidia-uvm-tools`,
+/// `nvidia-modeset`.
+pub fn device(token: &str) -> Option<DeviceGrant> {
+    let num = |s: &str, lo: u32, hi: u32| -> Option<u32> {
+        if s.is_empty() || s.len() > 3 || !s.bytes().all(|b| b.is_ascii_digit()) || (s.len() > 1 && s.starts_with('0')) {
+            return None;
+        }
+        s.parse().ok().filter(|n| (lo..=hi).contains(n))
+    };
+    let g = |path: String, group: Option<&'static str>| Some(DeviceGrant { token: token.to_string(), path, group });
+    if let Some(n) = token.strip_prefix("dri-render") {
+        return g(format!("/dev/dri/renderD{}", num(n, 128, 191)?), Some("render"));
+    }
+    if let Some(n) = token.strip_prefix("dri-card") {
+        return g(format!("/dev/dri/card{}", num(n, 0, 15)?), Some("video"));
+    }
+    match token {
+        "nvidiactl" | "nvidia-uvm" | "nvidia-uvm-tools" | "nvidia-modeset" => g(format!("/dev/{token}"), None),
+        _ => {
+            let n = token.strip_prefix("nvidia")?;
+            g(format!("/dev/nvidia{}", num(n, 0, 15)?), None)
+        }
+    }
+}
+
+/// Bounds for the process exception's memory cap (MiB).
+pub const PROCESS_MEM_MIB: (u64, u64) = (64, 65_536);
+
+/// The per-instance caps drop-in, a runtime file
+/// (`/run/systemd/system/k2app-process@<id>.service.d/k2-caps.conf`):
+/// written by `apps process caps` before every start, gone at reboot. A
+/// start refuses without it, so a process App never runs uncapped.
+pub const RUNTIME_SYSTEMD_DIR: &str = "/run/systemd/system";
+pub const PROCESS_CAPS_DROPIN: &str = "k2-caps.conf";
+
+pub fn process_caps_dropin(mem_mib: u64, io: &IoMax, devices: &[DeviceGrant]) -> String {
+    let mut s = String::from(
+        "# K2 App runtime: this App's caps (k2-root-helper `apps process caps`).\n\
+         [Service]\n",
+    );
+    s.push_str(&format!("MemoryMax={mem_mib}M\n"));
+    for l in io.unit_lines() {
+        s.push_str(&l);
+        s.push('\n');
+    }
+    if !devices.is_empty() {
+        // The cgroup device filter admits exactly these nodes (plus the
+        // pseudo-devices `closed` keeps: null, zero, full, random, …).
+        s.push_str("PrivateDevices=no\nDevicePolicy=closed\n");
+        for d in devices {
+            s.push_str(&format!("DeviceAllow={} rw\n", d.path));
+        }
+        let mut groups: Vec<&str> = devices.iter().filter_map(|d| d.group).collect();
+        groups.sort();
+        groups.dedup();
+        if !groups.is_empty() {
+            s.push_str(&format!("SupplementaryGroups={}\n", groups.join(" ")));
+        }
+    }
+    s
+}
+
+// ── MAC: the `k2-app` AppArmor profile (§4.2 item 4, `apps apparmor`) ──
+//
+// Where SELinux is enforcing, rootless Podman already labels every
+// container `container_t` and box prep leaves it alone. Where AppArmor is
+// on, box prep loads the canned `k2-app` profile and:
+// - guarded containers enter it through k2-app-engine's OCI shim (rootless
+//   Podman refuses `--security-opt apparmor=`, so the shim writes
+//   `process.apparmorProfile` into the OCI config and into every `exec`
+//   process, and crun/youki apply it), when the marker below is present;
+// - the `process` exception enters it through a drop-in on its template
+//   (`AppArmorProfile=k2-app`, applied by PID 1; fails closed when the
+//   profile is missing).
+
+/// The profile name (also its file name under [`APPARMOR_DIR`]).
+pub const APPARMOR_PROFILE: &str = "k2-app";
+pub const APPARMOR_DIR: &str = "/etc/apparmor.d";
+pub const APPARMOR_FILE: &str = "/etc/apparmor.d/k2-app";
+/// `apparmor_parser`: merged-/usr distros have both; older ones only /sbin.
+pub const APPARMOR_PARSER: &[&str] = &["/usr/sbin/apparmor_parser", "/sbin/apparmor_parser"];
+/// `Y` when the AppArmor LSM is on.
+pub const APPARMOR_ENABLED: &str = "/sys/module/apparmor/parameters/enabled";
+/// Loaded profiles, one `name (mode)` per line (root reads it).
+pub const APPARMOR_PROFILES: &str = "/sys/kernel/security/apparmor/profiles";
+/// `1` when SELinux is enforcing.
+pub const SELINUX_ENFORCE: &str = "/sys/fs/selinux/enforce";
+/// Root-owned marker the engine's OCI shim reads (`k2-app\n`): present =
+/// put every App process under the profile. Next to `containers.conf`.
+pub const MAC_MARKER_FILE: &str = "apparmor";
+pub const MAC_MARKER: &str = "/etc/k2app/apparmor";
+/// Drop-ins on the `process` template (`k2app-process@.service.d/`).
+pub const PROCESS_DROPIN_DIR: &str = "k2app-process@.service.d";
+pub const PROCESS_APPARMOR_DROPIN: &str = "k2-apparmor.conf";
+
+/// The box's MAC layer, from the two kernel files above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lsm {
+    AppArmor,
+    SeLinux,
+    None,
+}
+
+impl Lsm {
+    /// SELinux enforcing wins (the PRD: `container_t` where SELinux is on,
+    /// otherwise AppArmor).
+    pub fn detect(apparmor_enabled: Option<&str>, selinux_enforce: Option<&str>) -> Self {
+        if selinux_enforce.map(str::trim) == Some("1") {
+            Self::SeLinux
+        } else if apparmor_enabled.map(str::trim) == Some("Y") {
+            Self::AppArmor
+        } else {
+            Self::None
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AppArmor => "apparmor",
+            Self::SeLinux => "selinux",
+            Self::None => "none",
+        }
+    }
+}
+
+/// The mode `k2-app` is loaded in (`enforce`, `complain`, …), from the
+/// kernel's profile list; `None` when it isn't loaded.
+pub fn profile_mode(profiles: &str, name: &str) -> Option<String> {
+    profiles.lines().find_map(|l| {
+        let (n, rest) = l.trim().rsplit_once(' ')?;
+        (n == name).then(|| rest.trim_matches(|c| c == '(' || c == ')').to_string())
+    })
+}
+
+/// The marker's canned bytes.
+pub fn mac_marker() -> &'static str {
+    "k2-app\n"
+}
+
+/// `k2app-process@.service.d/k2-apparmor.conf`.
+pub fn process_apparmor_dropin() -> &'static str {
+    "# K2 App runtime: the process exception runs under the k2-app AppArmor\n\
+     # profile. Written by k2-root-helper `apps apparmor on`.\n\
+     [Service]\n\
+     AppArmorProfile=k2-app\n"
+}
+
+/// `/etc/apparmor.d/k2-app`: the container-shaped profile every App runs
+/// under (Docker's and Podman's default profiles are the model). The wall
+/// itself (the container's mounts, or the process unit's sandbox) decides
+/// what files exist; this profile takes away the kernel's sharp edges:
+/// writes to /proc and /sys, mounts, raw and packet sockets, every
+/// capability (none is listed, so none is allowed), ptrace and signals
+/// across the profile, and — for the `process` exception, which sees the
+/// host's tree — the engine's state, other users' homes and the engine
+/// socket.
+pub fn apparmor_profile() -> &'static str {
+    "# K2 App runtime: the MAC layer for Apps (prd-k2-app-runtime-v1 §4.2 item 4).\n\
+     # Written by k2-root-helper `apps apparmor on`; edits are overwritten.\n\
+     abi <abi/3.0>,\n\
+     include <tunables/global>\n\
+     \n\
+     profile k2-app flags=(attach_disconnected,mediate_deleted) {\n\
+     \x20 include <abstractions/base>\n\
+     \n\
+     \x20 # Sockets: TCP, UDP, Unix and netlink (getaddrinfo asks the kernel\n\
+     \x20 # which address families exist). No raw IP, no packet sockets.\n\
+     \x20 network,\n\
+     \x20 deny network inet raw,\n\
+     \x20 deny network inet6 raw,\n\
+     \x20 deny network packet,\n\
+     \x20 unix,\n\
+     \n\
+     \x20 file,\n\
+     \x20 umount,\n\
+     \x20 deny mount,\n\
+     \x20 deny pivot_root,\n\
+     \n\
+     \x20 # /proc and /sys: read what a program needs, write almost nothing.\n\
+     \x20 deny @{PROC}/* w,\n\
+     \x20 deny @{PROC}/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,\n\
+     \x20 deny @{PROC}/sys/[^k]** w,\n\
+     \x20 deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,\n\
+     \x20 deny @{PROC}/sysrq-trigger rwklx,\n\
+     \x20 deny @{PROC}/kcore rwklx,\n\
+     \x20 deny @{PROC}/kmem rwklx,\n\
+     \x20 deny @{PROC}/mem rwklx,\n\
+     \x20 deny /sys/[^f]*/** wklx,\n\
+     \x20 deny /sys/f[^s]*/** wklx,\n\
+     \x20 deny /sys/fs/[^c]*/** wklx,\n\
+     \x20 deny /sys/fs/c[^g]*/** wklx,\n\
+     \x20 deny /sys/fs/cg[^r]*/** wklx,\n\
+     \x20 deny /sys/firmware/** rwklx,\n\
+     \x20 deny /sys/devices/virtual/powercap/** rwklx,\n\
+     \x20 deny /sys/kernel/security/** rwklx,\n\
+     \x20 deny /sys/kernel/debug/** rwklx,\n\
+     \n\
+     \x20 # The host tree the process exception could otherwise name (these\n\
+     \x20 # paths don't exist inside a container).\n\
+     \x20 deny /var/lib/k2app/engine/** rwklx,\n\
+     \x20 deny /var/lib/k2app/.local/** rwklx,\n\
+     \x20 deny /var/lib/k2app/.config/** rwklx,\n\
+     \x20 deny /run/k2app/** rwklx,\n\
+     \x20 deny /home/** rwklx,\n\
+     \x20 deny /root/** rwklx,\n\
+     \n\
+     \x20 # Signals and ptrace stay inside the profile; the engine, conmon and\n\
+     \x20 # systemd (unconfined) may signal the App.\n\
+     \x20 signal (send,receive) peer=k2-app,\n\
+     \x20 signal (receive) peer=unconfined,\n\
+     \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
+     }\n"
+}
+
 /// One per-App accept: sockets in `cgroup` (a path under
 /// `/sys/fs/cgroup`, `level` components deep) may reach `gw_port` on
 /// loopback. nft resolves the path to the cgroup's inode when the rule
@@ -569,8 +987,8 @@ fn app_rule_line(r: &AppRule) -> String {
 }
 
 /// The `inet k2app` table (§10.4, W §5.6): for sockets owned by `k2app`
-/// (container Apps reach the host through pasta, which runs as `k2app`;
-/// process Apps run as `k2app`), allow replies, each App's own gateway
+/// (container Apps reach the host through pasta, which runs as `k2app`)
+/// or by `k2appx` (process Apps), allow replies, each App's own gateway
 /// port (per-App cgroup rules, [`NFT_APPS_CHAIN`]), the egress proxy and
 /// the box's Postgres on loopback, and drop everything else: other
 /// loopback ports (other Apps' gateway ports included), any address of
@@ -579,9 +997,12 @@ fn app_rule_line(r: &AppRule) -> String {
 /// the proxy on loopback). The leading `table` + `delete table` make
 /// `nft -f` replace it atomically. `gw` is the range per-App ports must
 /// sit in; nothing accepts it as a whole.
-pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
+pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
     let _ = gw;
     let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r))).collect();
+    let proc_line = process_uid
+        .map(|pu| format!("\t\tmeta skuid {pu} jump {NFT_CHAIN}\n"))
+        .unwrap_or_default();
     format!(
         "table inet {t}\n\
          delete table inet {t}\n\
@@ -589,6 +1010,7 @@ pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: 
          \tchain output {{\n\
          \t\ttype filter hook output priority filter; policy accept;\n\
          \t\tmeta skuid {uid} jump {c}\n\
+         {proc_line}\
          \t}}\n\
          \tchain {a} {{\n\
          {app_lines}\
@@ -753,8 +1175,14 @@ mod tests {
         }
         let p = process_unit();
         for line in [
-            "\nUser=k2app\n",
+            "\nUser=k2appx\n",
             "\nSlice=k2apps.slice\n",
+            "\nStateDirectory=k2appx/%i\n",
+            "\nTemporaryFileSystem=/var/lib/k2app:ro\n",
+            "\nBindReadOnlyPaths=/var/lib/k2app/apps/%i/process\n",
+            "\nInaccessiblePaths=-/run/k2app\n",
+            "\nIPAddressDeny=any\n",
+            "\nPrivateDevices=yes\n",
             "\nProtectHome=yes\n",
             "\nCapabilityBoundingSet=\n",
             "\nRestrictNamespaces=yes\n",
@@ -764,9 +1192,136 @@ mod tests {
             assert!(p.contains(line), "{line:?}");
         }
         assert!(!p.contains("[Install]"), "never enabled at boot by itself");
+        assert!(!p.contains("User=k2app\n"), "never the engine's user: it owns every container's user namespace");
+        assert!(!p.contains("StateDirectory=k2app/"), "systemd would chown k2app's tree recursively");
+        assert!(!p.contains("MemoryMax"), "the caps drop-in sets it, per App");
         assert!(sysctl_conf().contains("= 38600-38999\n"));
         assert!(containers_conf(OciRuntime::Youki).contains("runtime = \"youki\"\n"));
         assert!(GATEWAY_PORTS.lo >= RESERVED_PORTS.0 && PROXY_PORTS.hi <= RESERVED_PORTS.1);
+    }
+
+    #[test]
+    fn io_ceilings() {
+        let d = IoMax::k2_default();
+        assert_eq!(d.wbps, Some(40 * 1024 * 1024));
+        assert_eq!(d.wiops, Some(2000));
+        assert_eq!((d.rbps, d.riops), (None, None));
+        assert_eq!(IoMax::from_column(None), d, "NULL = the default ceiling");
+        for bad in ["", "{", "{\"wbps\":1}", "{\"wbps\":null,\"x\":1}", "[]"] {
+            assert_eq!(IoMax::from_column(Some(bad)), d, "{bad:?} must read as the default, never as no ceiling");
+        }
+        let u = IoMax::unlimited();
+        assert_eq!(IoMax::from_column(Some(&u.to_column())), u);
+        let mine = IoMax { rbps: Some(200 << 20), wbps: Some(10 << 20), riops: None, wiops: Some(500) };
+        assert_eq!(IoMax::from_column(Some(&mine.to_column())), mine);
+
+        // Loosening: a higher number, or a ceiling taken away.
+        assert!(d.loosened_by(&d).is_empty());
+        assert!(d.loosened_by(&mine).is_empty(), "mine is tighter on every knob d sets");
+        assert_eq!(d.loosened_by(&u), vec!["wbps", "wiops"]);
+        assert_eq!(mine.loosened_by(&d), vec!["rbps", "wbps", "wiops"]);
+        let more = IoMax { wbps: Some(80 << 20), ..d };
+        assert_eq!(d.loosened_by(&more), vec!["wbps"]);
+
+        assert_eq!(
+            d.unit_lines(),
+            vec!["IOWriteBandwidthMax=/var/lib/k2app 41943040", "IOWriteIOPSMax=/var/lib/k2app 2000"]
+        );
+        assert!(u.unit_lines().is_empty());
+        assert_eq!(d.token(), "-.41943040.-.2000");
+        assert_eq!(IoMax::from_token("-.41943040.-.2000"), Some(d));
+        assert_eq!(IoMax::from_token(&u.token()), Some(u));
+        assert_eq!(IoMax::from_token(&mine.token()), Some(mine));
+        for bad in ["x.-.-.-", "-.0.-.-", "-.1.-.-", "-.-.-.15", "-.-.-.02000", ".-.-.-", "-.-.-", "-.-.-.-.-", "", "-.-.-.-."] {
+            assert_eq!(IoMax::from_token(bad), None, "{bad:?}");
+        }
+
+        assert_eq!(parse_rate("40M", false), Ok(Some(40 << 20)));
+        assert_eq!(parse_rate("40MB/s", false), Ok(Some(40 << 20)));
+        assert_eq!(parse_rate("1G", false), Ok(Some(1 << 30)));
+        assert_eq!(parse_rate("none", false), Ok(None));
+        assert_eq!(parse_rate("2000", true), Ok(Some(2000)));
+        for bad in ["", "40X", "-1", "1.5M", "0", "512K", "999999999999999G", "65G", "M"] {
+            assert!(parse_rate(bad, false).is_err(), "{bad:?}");
+        }
+        assert!(parse_rate("2k", true).is_err(), "IOPS are plain numbers");
+        assert!(parse_rate("5", true).is_err(), "below the IOPS floor");
+    }
+
+    #[test]
+    fn devices_are_tokens_never_paths() {
+        let r = device("dri-render128").unwrap();
+        assert_eq!((r.path.as_str(), r.group), ("/dev/dri/renderD128", Some("render")));
+        assert_eq!(device("dri-card0").unwrap().path, "/dev/dri/card0");
+        assert_eq!(device("dri-card0").unwrap().group, Some("video"));
+        assert_eq!(device("nvidia3").unwrap().path, "/dev/nvidia3");
+        assert_eq!(device("nvidia-uvm").unwrap().group, None);
+        for bad in [
+            "", "dri-render", "dri-render127", "dri-render192", "dri-render0128", "dri-card16", "dri-card-1", "nvidia",
+            "nvidia16", "nvidia01", "/dev/dri/renderD128", "../sda", "sda", "kvm", "fuse", "dri-render128/x", "nvidia-caps",
+        ] {
+            assert!(device(bad).is_none(), "{bad:?}");
+        }
+        let io = IoMax::k2_default();
+        let d = process_caps_dropin(512, &io, &[]);
+        assert!(d.contains("\nMemoryMax=512M\n") && d.contains("\nIOWriteIOPSMax=/var/lib/k2app 2000\n"), "{d}");
+        assert!(!d.contains("PrivateDevices=no") && !d.contains("DeviceAllow"), "no devices, PrivateDevices stays on");
+        let d = process_caps_dropin(1024, &IoMax::unlimited(), &[device("dri-render128").unwrap(), device("dri-card1").unwrap(), device("nvidia0").unwrap()]);
+        for want in [
+            "\nPrivateDevices=no\nDevicePolicy=closed\n",
+            "\nDeviceAllow=/dev/dri/renderD128 rw\n",
+            "\nDeviceAllow=/dev/dri/card1 rw\n",
+            "\nDeviceAllow=/dev/nvidia0 rw\n",
+            "\nSupplementaryGroups=render video\n",
+        ] {
+            assert!(d.contains(want), "missing {want:?} in {d}");
+        }
+        assert!(!d.contains("IOWrite"));
+    }
+
+    #[test]
+    fn mac_detection_and_profile_shape() {
+        assert_eq!(Lsm::detect(Some("Y\n"), None), Lsm::AppArmor);
+        assert_eq!(Lsm::detect(Some("Y"), Some("1\n")), Lsm::SeLinux, "SELinux enforcing wins");
+        assert_eq!(Lsm::detect(Some("Y"), Some("0")), Lsm::AppArmor, "permissive SELinux is not a wall");
+        assert_eq!(Lsm::detect(Some("N"), Some("0")), Lsm::None);
+        assert_eq!(Lsm::detect(None, None), Lsm::None);
+        let list = "docker-default (enforce)\nk2-app (enforce)\n/usr/bin/man (complain)\nk2-app-other (enforce)\n";
+        assert_eq!(profile_mode(list, "k2-app").as_deref(), Some("enforce"));
+        assert_eq!(profile_mode("k2-app (complain)\n", "k2-app").as_deref(), Some("complain"));
+        assert_eq!(profile_mode("k2-app-other (enforce)\n", "k2-app"), None);
+        assert_eq!(profile_mode("", "k2-app"), None);
+
+        let p = apparmor_profile();
+        assert!(p.contains("\nprofile k2-app flags=(attach_disconnected,mediate_deleted) {\n"), "{p}");
+        assert!(p.starts_with("# K2 App runtime"));
+        assert!(p.trim_end().ends_with('}'));
+        assert_eq!(p.matches('{').count(), p.matches('}').count(), "braces");
+        for want in [
+            "  deny mount,\n",
+            "  deny pivot_root,\n",
+            "  deny network packet,\n",
+            "  deny network inet raw,\n",
+            "  deny @{PROC}/sysrq-trigger rwklx,\n",
+            "  deny /sys/kernel/security/** rwklx,\n",
+            "  deny /var/lib/k2app/engine/** rwklx,\n",
+            "  deny /run/k2app/** rwklx,\n",
+            "  ptrace (trace,read,tracedby,readby) peer=k2-app,\n",
+        ] {
+            assert!(p.contains(want), "missing {want:?}");
+        }
+        // No capability is granted (AppArmor denies what isn't listed).
+        assert!(!p.lines().any(|l| l.trim_start().starts_with("capability")), "{p}");
+        for l in p.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            assert!(
+                l.ends_with(',') || l.ends_with('{') || l == "}" || l.starts_with("include "),
+                "every rule ends with a comma: {l:?}"
+            );
+        }
+        assert_eq!(process_apparmor_dropin().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>(), ["[Service]", "AppArmorProfile=k2-app"]);
+        assert_eq!(mac_marker(), "k2-app\n");
+        assert_eq!(MAC_MARKER, format!("{APP_ETC}/{MAC_MARKER_FILE}"));
+        assert_eq!(APPARMOR_FILE, format!("{APPARMOR_DIR}/{APPARMOR_PROFILE}"));
     }
 
     #[test]
@@ -776,7 +1331,8 @@ mod tests {
         assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice");
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601 };
-        let r = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
+        let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
+        assert!(r.contains("meta skuid 998 jump k2app_v2"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
         assert!(r.contains("meta skuid 997 jump k2app_v2"));
         // No App reaches the whole gateway range: only its own port, by cgroup.
@@ -793,7 +1349,8 @@ mod tests {
         let px = r.find("tcp dport 38900").unwrap();
         assert!(est < jump && jump < px);
         assert!(r.trim_end().ends_with("counter drop\n\t}\n}"));
-        let empty = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        let empty = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
+        assert_eq!(empty.matches("meta skuid").count(), 1);
         assert!(empty.contains("\tchain k2app_apps {\n\t}\n"));
         let sc = nft_apps_script(&[rule]);
         assert!(sc.starts_with("flush chain inet k2app k2app_apps\nadd rule inet k2app k2app_apps socket cgroupv2 level 5 "));

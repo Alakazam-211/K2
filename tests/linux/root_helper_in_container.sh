@@ -19,6 +19,7 @@ NEXT=/it/bin/k2-root-helper-next
 TS=/it/bin/testsign
 CUR_V="$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]*' "$CUR" | sed 's/.*v=//')"
 NEXT_V="$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]*' "$NEXT" | sed 's/.*v=//')"
+NEXT_P="$(grep -a -o "K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]*" "$NEXT" | sed "s/.*proto=//")"
 pass=0
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "  ok $*"; pass=$((pass + 1)); }
@@ -164,8 +165,8 @@ visudo -c >/dev/null || fail "visudo -c after retirement"
 ok "installed; pg + mail legacy, k2-mail-sidecar and its PATH shims retired (backed up 0700); the direct-wipe hole is closed"
 runuser -u k2 -- sudo -n -l "$H" >/dev/null || fail "sudo -n -l as k2"
 V="$(runuser -u k2 -- sudo -n "$H" helper version)"
-echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -q '"protocol":4' || fail "helper version: $V"
-ok "k2 may sudo -n it; helper version = $CUR_V protocol 4"
+echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -q '"protocol":6' || fail "helper version: $V"
+ok "k2 may sudo -n it; helper version = $CUR_V protocol 6"
 
 echo "== caller is the daemon (§6) =="
 req daemon keep kek init
@@ -373,7 +374,7 @@ expect_rc 2 "psql -c refused"
 ok "pg systemctl + psql (daemon-only, runuser, argv array)"
 
 echo "== self-update / rollback (§9.2, §9.3) =="
-"$TS" payload "$NEXT" "$NEXT_V" 4 x86_64 >/tmp/next.payload
+"$TS" payload "$NEXT" "$NEXT_V" "$NEXT_P" x86_64 >/tmp/next.payload
 cp /tmp/next.payload /tmp/bad.payload
 python3 - <<'PY'
 p = bytearray(open("/tmp/bad.payload", "rb").read())
@@ -384,10 +385,10 @@ SHA_BEFORE="$(sha256sum "$H" | cut -d' ' -f1)"
 req agent @/tmp/bad.payload helper self-update
 expect_rc 4 "tampered build"
 [ "$(sha256sum "$H" | cut -d' ' -f1)" = "$SHA_BEFORE" ] || fail "tampered build changed the helper"
-"$TS" payload "$NEXT" "0.45.98" 4 x86_64 >/tmp/lie.payload
+"$TS" payload "$NEXT" "0.45.98" "$NEXT_P" x86_64 >/tmp/lie.payload
 req agent @/tmp/lie.payload helper self-update
 expect_rc 4 "comment/marker mismatch"
-"$TS" sig "$NEXT" "$NEXT_V" 4 x86_64 | sed 's/k2-root-helper-linux-x86_64/k2-daemon-linux-x86_64/' >/tmp/daemon.sig
+"$TS" sig "$NEXT" "$NEXT_V" "$NEXT_P" x86_64 | sed 's/k2-root-helper-linux-x86_64/k2-daemon-linux-x86_64/' >/tmp/daemon.sig
 "$TS" payload-raw "$NEXT" /tmp/daemon.sig >/tmp/daemon.payload
 req agent @/tmp/daemon.payload helper self-update
 expect_rc 4 "a comment naming the daemon asset"
@@ -425,10 +426,10 @@ ok "legacy-retire (daemon-only, visudo ok); audit lines in the journal, no secre
 
 echo "== real minisign -t round trip through the same check (S0 #5) =="
 minisign -G -W -p /tmp/t.pub -s /tmp/t.key >/dev/null
-minisign -S -s /tmp/t.key -m "$NEXT" -x /tmp/real.sig -t "file:k2-root-helper-linux-x86_64 version:$NEXT_V protocol:4" >/dev/null
-"$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 | grep -q "ok version=$NEXT_V protocol=4" \
+minisign -S -s /tmp/t.key -m "$NEXT" -x /tmp/real.sig -t "file:k2-root-helper-linux-x86_64 version:$NEXT_V protocol:$NEXT_P" >/dev/null
+"$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 | grep -q "ok version=$NEXT_V protocol=$NEXT_P" \
 	|| fail "real minisign signature not accepted"
-sed -i 's/protocol:4/protocol:5/' /tmp/real.sig
+sed -i "s/protocol:$NEXT_P/protocol:$((NEXT_P + 1))/" /tmp/real.sig
 if "$TS" verify "$(sed -n 2p /tmp/t.pub)" "$NEXT" /tmp/real.sig x86_64 >/dev/null 2>&1; then fail "tampered real comment accepted"; fi
 ok "a real 'minisign -S -t' signature verifies; a tampered comment does not"
 

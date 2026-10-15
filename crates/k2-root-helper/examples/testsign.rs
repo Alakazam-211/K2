@@ -4,6 +4,8 @@
 //!   k2-root-helper-testsign sig <elf> <version> <protocol> <arch>   → minisign text
 //!   k2-root-helper-testsign payload <elf> <version> <protocol> <arch> → self-update stdin
 //!   k2-root-helper-testsign payload-raw <elf> <sigfile>              → self-update stdin
+//!   k2-root-helper-testsign engine-sig <elf> <version> <protocol> <arch>     → k2-app-engine .sig
+//!   k2-root-helper-testsign engine-payload <elf> <version> <protocol> <arch> → install-engine stdin
 //!   k2-root-helper-testsign verify <pubkey-b64> <elf> <sigfile> <arch>
 //!       (verify any minisign signature — e.g. one made by the real
 //!        `minisign -S -t` CLI — through the same check the helper runs)
@@ -27,6 +29,20 @@ fn main() {
             let sig = sign_with_test_key(
                 &elf,
                 &trusted_comment(&a[4], &a[2], a[3].parse().expect("protocol")),
+            );
+            encode_payload(&sig, &elf)
+        }
+        // k2-app-engine (apps install-engine stdin / the daemon's .sig).
+        Some("engine-sig") => sign_with_test_key(
+            &r(1),
+            &k2_root_proto::engine::trusted_comment(&a[4], &a[2], a[3].parse().expect("protocol")),
+        )
+        .into_bytes(),
+        Some("engine-payload") => {
+            let elf = r(1);
+            let sig = sign_with_test_key(
+                &elf,
+                &k2_root_proto::engine::trusted_comment(&a[4], &a[2], a[3].parse().expect("protocol")),
             );
             encode_payload(&sig, &elf)
         }

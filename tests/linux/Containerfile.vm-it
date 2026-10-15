@@ -1,0 +1,10 @@
+# A throwaway container that boots ONE throwaway Debian 13 VM with qemu/KVM
+# for tests/linux/apps_guarded_e2e.sh (tests/linux/run_apps_guarded_vm.sh).
+# The VM is where root, users, systemd, nftables and rootless Podman are
+# real; nothing of it touches the build box itself.
+FROM docker.io/library/debian:trixie
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      qemu-system-x86 qemu-utils cloud-image-utils openssh-client ca-certificates curl procps \
+ && rm -rf /var/lib/apt/lists/*

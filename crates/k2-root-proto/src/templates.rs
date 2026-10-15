@@ -62,6 +62,30 @@ pub fn hardening_dropin() -> &'static str {
      Restart=on-failure\n"
 }
 
+/// The daemon unit's hand-off drop-in (runtime stage H, vs-live AR3/K37):
+///
+/// - `KillMode=process`: a stop, restart or crash of the daemon kills the
+///   daemon only. frpc, published services and skin gateway helpers live
+///   in the same cgroup and survive to be re-adopted (stage H keeps the
+///   tunnel up; `mixed` would still SIGKILL them once the main process
+///   exits — checked on systemd 255).
+/// - `NotifyAccess=main`: the hand-off's `MAINPID=<successor>` comes from
+///   the main process itself. Never `all`: then any process in the unit
+///   (an agent) could name itself the main pid and pass this helper's
+///   daemon-caller check.
+/// - `ExecReload=`: `systemctl reload` = a no-downtime hand-off (SIGUSR2).
+///
+/// Shared with the provisioning templates and the user-unit writer, so a
+/// new box, a migrated box and a user-scope daemon all carry the same lines.
+pub fn handoff_dropin() -> &'static str {
+    "# K2 runtime stage H (front-door hand-off). Written by k2-root-helper\n\
+     # `daemon handoff-dropin install`; remove with `... remove`.\n\
+     [Service]\n\
+     KillMode=process\n\
+     NotifyAccess=main\n\
+     ExecReload=/bin/kill -USR2 $MAINPID\n"
+}
+
 /// The recovery admin password the daemon may send to `mail render-unit`:
 /// exactly 64 lowercase hex characters.
 pub fn recovery_pw_ok(pw: &str) -> bool {

@@ -653,6 +653,28 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/compute/nodes/policy/set",
         "/cli/compute/nodes/update",
         "/cli/compute/nodes/rollback",
+        // App runtime stage 1 (prd-k2-app-runtime-v1 §5.11.1): the handler
+        // scopes a passport to its own workspace's Apps and folders and
+        // needs "Allow this agent to manage Apps" for every change.
+        // `/cli/app/box` is the read-only doctor; `/cli/app/box/prepare`
+        // is NOT here (the owner's).
+        "/cli/app/box",
+        "/cli/app/build",
+        "/cli/app/config",
+        "/cli/app/deploy",
+        "/cli/app/deployment",
+        "/cli/app/errors",
+        "/cli/app/history",
+        "/cli/app/inspect",
+        "/cli/app/install",
+        "/cli/app/list",
+        "/cli/app/logs",
+        "/cli/app/restart",
+        "/cli/app/rollback",
+        "/cli/app/start",
+        "/cli/app/stop",
+        "/cli/app/uninstall",
+        "/cli/app/validate",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

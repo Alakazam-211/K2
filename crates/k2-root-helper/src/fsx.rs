@@ -222,6 +222,24 @@ impl Dir {
         res
     }
 
+    /// Write into an existing file in place (a sysfs/procfs knob: no temp,
+    /// no rename, no create). Never through a link.
+    pub fn write_existing(&self, name: &OsStr, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write;
+        let c = cstr(name)?;
+        // SAFETY: valid dirfd and name; no O_CREAT, so no mode argument.
+        let fd = check(unsafe {
+            libc::openat(
+                self.raw(),
+                c.as_ptr(),
+                libc::O_WRONLY | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })?;
+        // SAFETY: fresh fd.
+        let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+        f.write_all(bytes)
+    }
+
     pub fn rename(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         let (a, b) = (cstr(from)?, cstr(to)?);
         // SAFETY: valid dirfd and names; renameat never follows the final

@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# k2 app (App runtime stage 1, prd-k2-app-runtime-v1 S6–S9) — CLI smoke: a
+# sandbox daemon (temp HOME, K2_APPS=1, air-gapped) + this checkout's
+# cli/k2 on loopback. Fixture Apps are python3 HTTP servers.
+#
+# Covers: validate (ok and failing, exit 1); build prints a Seed; install;
+# deploy (exit 0, live), a failing health gate (exit 1, the old version
+# keeps serving); rollback (instant, warm); deployment (who/commit/state);
+# list/inspect/history (audit chain verifies); logs and errors are framed;
+# config --memory 8G / none; stop/start; uninstall; a refusal exits 3.
+#
+# Build first:  cargo build -p k2-daemon
+# Never touches the real ~/.k2, the production daemon or the keychain.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+K2="$PROJECT_ROOT/cli/k2"
+TARGET="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+DAEMON="$TARGET/debug/k2-daemon"
+[ -x "$DAEMON" ] || { echo "FAIL: $DAEMON not built (cargo build -p k2-daemon)" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 1; }
+
+# Session variables reach the production daemon: drop them all.
+for v in $(env | grep -E '^K2(SO)?_' | cut -d= -f1); do unset "$v"; done
+
+pass=0
+fail=0
+ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
+bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
+expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
+expect_has() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+
+SANDBOX="$(mktemp -d /tmp/k2ar-XXXXXX)"
+DAEMON_PID=""
+cleanup() {
+    [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null || true
+    sleep 0.5
+    [ -n "$DAEMON_PID" ] && kill -9 "$DAEMON_PID" 2>/dev/null || true
+    # Fixture Apps outlive a daemon stop by design (they are re-adopted);
+    # kill each one's process group from its run file.
+    for rf in "$SANDBOX"/home/.k2/apps/*/run/*.json; do
+        [ -f "$rf" ] || continue
+        pid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$rf" 2>/dev/null || true)"
+        [ -n "$pid" ] && kill -9 -- "-$pid" 2>/dev/null || true
+    done
+    if [ "$fail" -ne 0 ]; then
+        echo "--- daemon log tail ---" >&2; tail -30 "$SANDBOX/daemon.log" >&2 || true
+    fi
+    # Seeds are read-only trees: make them removable first.
+    chmod -R u+w "$SANDBOX" 2>/dev/null || true
+    rm -rf "$SANDBOX"
+}
+trap cleanup EXIT
+
+DHOME="$SANDBOX/home"
+mkdir -p "$DHOME" "$SANDBOX/tmp"
+echo "== sandbox daemon =="
+# Its own TMPDIR too: the daemon keeps runtime files (frpc.toml) there,
+# and its shutdown reaps strays matching that path.
+HOME="$DHOME" TMPDIR="$SANDBOX/tmp" K2_APPS=1 K2_AIRGAP=1 K2_APPS_WATCH_SECS=120 K2_APPS_DEPLOY_TIMEOUT_SECS=10 K2_APPS_DRAIN_SECS=2 K2_APPS_STOP_GRACE_SECS=2 \
+    "$DAEMON" > "$SANDBOX/daemon.log" 2>&1 &
+DAEMON_PID=$!
+for _ in $(seq 1 150); do
+    [ -s "$DHOME/.k2/heartbeat.port" ] && [ -s "$DHOME/.k2/heartbeat.token" ] && break
+    sleep 0.2
+done
+[ -s "$DHOME/.k2/heartbeat.port" ] || { bad "daemon wrote its port"; exit 1; }
+PORT="$(cat "$DHOME/.k2/heartbeat.port")"
+OWNER_TOKEN="$(cat "$DHOME/.k2/heartbeat.token")"
+for _ in $(seq 1 100); do
+    curl -sf "http://127.0.0.1:$PORT/boot-status" | grep -q '"ready"' && break
+    sleep 0.2
+done
+ok "daemon up on $PORT"
+k2() { HOME="$DHOME" "$K2" "$@"; }
+
+echo "== workspace =="
+WS="$SANDBOX/ws"
+mkdir -p "$WS"
+# Workspaces are git checkouts (add-from-path registers only those).
+git -C "$WS" -c init.defaultBranch=main init -q
+git -C "$WS" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m one
+reg="$(curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1]}))' "$WS")" \
+    "http://127.0.0.1:$PORT/cli/projects/add-from-path?token=$OWNER_TOKEN")"
+expect_has "workspace registered" "$reg" "\"path\":\"$WS\""
+cd "$WS"
+export K2_PROJECT_PATH="$WS"
+
+mkapp() { # dir version tag
+    mkdir -p "$1"
+    cat > "$1/manifest.json" <<EOF
+{"schema":1,"kind":"app","id":"smoke","name":"Smoke","version":"$2",
+ "host":{"mode":"cmd","start":["python3","server.py"],"health":{"path":"/healthz"},"drainSecs":2}}
+EOF
+    printf '%s' "$3" > "$1/tag.txt"
+    cat > "$1/server.py" <<'EOF'
+import http.server, os, sys
+TAG = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tag.txt")).read().strip()
+print("smoke %s up; error: none" % TAG, flush=True)
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        code = 500 if (TAG.startswith("sick") and self.path == "/healthz") else 200
+        b = (TAG + "\n").encode()
+        self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+EOF
+}
+mkapp "$WS/v1" 1.0.0 v1
+mkapp "$WS/v2" 2.0.0 v2
+mkapp "$WS/sick" 3.0.0 sick
+
+echo "== validate / build =="
+out="$(k2 app validate "$WS/v1")"
+expect_has "validate ok (manifest, contract and the stage 0 code pass)" "$out" "ok — checks: manifest, contract, code"
+mkdir -p "$WS/broken"
+echo '{"schema":1,"kind":"app","id":"smoke"' > "$WS/broken/manifest.json"
+set +e
+k2 app validate "$WS/broken" > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "validate errors exit 1" "$rc" "1"
+expect_has "validate names the problem" "$(cat "$SANDBOX/out")" "manifest_invalid"
+out="$(k2 app build "$WS/v1")"
+expect_has "build prints a Seed" "$out" "Seed "
+SEED1="$(printf '%s\n' "$out" | sed -n 's/^Seed \([0-9a-f]\{64\}\)$/\1/p')"
+[ -n "$SEED1" ] || bad "Seed hash parsed"
+out="$(k2 app validate "${SEED1:0:16}")"
+expect_has "one k2 app validate also takes a stored Seed" "$out" "ok — checks: manifest, contract, code"
+
+echo "== install / deploy / rollback =="
+out="$(k2 app install smoke --memory none)"
+expect_has "installed" "$out" "App smoke installed"
+FRONT="$(k2 app list --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["apps"][0]["frontPort"])')"
+out="$(k2 app deploy smoke "$SEED1")"
+expect_has "deploy is live" "$out" "live on port"
+expect_eq "front serves v1" "$(curl -s "http://127.0.0.1:$FRONT/")" "v1"
+k2 app deploy smoke "$WS/v2" >/dev/null
+expect_eq "front serves v2" "$(curl -s "http://127.0.0.1:$FRONT/")" "v2"
+set +e
+k2 app deploy smoke "$WS/sick" > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "a failed health gate exits 1" "$rc" "1"
+expect_has "failed with the reason" "$(cat "$SANDBOX/out")" "health_failed"
+expect_eq "the old version keeps serving" "$(curl -s "http://127.0.0.1:$FRONT/")" "v2"
+out="$(k2 app rollback smoke)"
+expect_has "rollback is instant" "$out" "instant"
+expect_eq "front serves v1 again" "$(curl -s "http://127.0.0.1:$FRONT/")" "v1"
+
+echo "== see it =="
+out="$(k2 app deployment smoke)"
+expect_has "deployment shows who" "$out" "who     owner"
+expect_has "deployment shows the state" "$out" "state   live"
+out="$(k2 app list)"
+expect_has "list shows the App" "$out" "smoke"
+expect_has "list shows the label" "$out" "Preview, unwalled (process)"
+out="$(k2 app inspect smoke)"
+expect_has "inspect: audit verifies" "$out" "chain verifies"
+out="$(k2 app history smoke)"
+expect_has "history has the rollback" "$out" "rollback"
+expect_has "history: audit verifies" "$out" "audit chain: verifies"
+out="$(k2 app logs smoke)"
+expect_has "logs are framed" "$out" "<untrusted-app-output app=\"smoke\" kind=\"logs\">"
+expect_has "logs carry the App's output" "$out" "smoke v1 up"
+out="$(k2 app errors smoke)"
+expect_has "errors list the failed deploy" "$out" "health_failed"
+
+echo "== config / stop / start / uninstall =="
+expect_has "memory set" "$(k2 app config smoke --memory 8G)" "memory limit 8192 MiB"
+expect_has "memory cleared" "$(k2 app config smoke --memory none)" "memory limit none"
+expect_has "stop" "$(k2 app stop smoke)" "smoke: stopped"
+expect_eq "front answers 503 when stopped" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$FRONT/")" "503"
+expect_has "start" "$(k2 app start smoke)" "live on port"
+set +e
+k2 app deploy nosuch "$SEED1" > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "a refusal exits 3" "$rc" "3"
+expect_has "refusal names the code" "$(cat "$SANDBOX/out")" "app_not_found"
+expect_has "uninstall" "$(k2 app uninstall smoke)" "App smoke uninstalled"
+expect_has "list is empty" "$(k2 app list)" "No Apps on this box"
+
+echo "== box doctor / prepare (S10) =="
+# A sandbox daemon never has a protocol-6 root helper (a Mac has none;
+# a Linux build box's helper predates protocol 6), so the box is not
+# ready and prepare refuses before any root verb. Prepare is only tried
+# when the doctor confirms that: this smoke never preps a real box.
+set +e
+out="$(k2 app doctor --json)"; rc=$?
+set -e
+expect_eq "doctor: a box without a protocol-6 helper is not ready (exit 1)" "$rc" "1"
+expect_has "doctor lists the helper check" "$out" '"id":"helper"'
+expect_has "doctor lists the platform check" "$out" '"id":"platform"'
+expect_has "doctor names the apps protocol" "$out" '"appsMinProtocol":6'
+human="$(k2 app doctor 2>&1 || true)"
+expect_has "doctor prints a verdict" "$human" "App box: NOT READY"
+proto="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["helperProtocol"])')"
+if [ "$proto" -lt 6 ]; then
+    set +e
+    k2 app box prepare > "$SANDBOX/out" 2>&1; rc=$?
+    set -e
+    expect_eq "prepare without a protocol-6 helper exits 3" "$rc" "3"
+    case "$(cat "$SANDBOX/out")" in
+        *linux_only*|*helper_needed*) ok "prepare names why (linux_only / helper_needed)" ;;
+        *) bad "prepare names why: $(cat "$SANDBOX/out")" ;;
+    esac
+else
+    bad "the sandbox daemon saw a protocol-$proto helper: refusing to prepare a real box from a smoke"
+fi
+set +e
+k2 app box prepare --runtime runc > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "prepare refuses an unknown runtime (exit 2)" "$rc" "2"
+
+echo "== guarded engine (S11/S12) =="
+# Same rule: a sandbox never has a protocol-6 helper, so the engine install
+# refuses before any download or root call, and a guarded deploy without an
+# engine fails its pipeline (never falls back to the process engine).
+if [ "$proto" -lt 6 ]; then
+    set +e
+    k2 app engine install > "$SANDBOX/out" 2>&1; rc=$?
+    set -e
+    expect_eq "engine install without a protocol-6 helper exits 3" "$rc" "3"
+    case "$(cat "$SANDBOX/out")" in
+        *linux_only*|*helper_needed*) ok "engine install names why (linux_only / helper_needed)" ;;
+        *) bad "engine install names why: $(cat "$SANDBOX/out")" ;;
+    esac
+fi
+expect_has "a second App for the engine checks" "$(k2 app install walled --memory none)" "App walled installed"
+set +e
+k2 app deploy walled "$WS/v1" --engine vm > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "deploy refuses an unknown engine (exit 2)" "$rc" "2"
+set +e
+k2 app deploy walled "$WS/v1" --engine guarded --json > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+case "$(cat "$SANDBOX/out")" in
+    *engine_unavailable*) ok "a guarded deploy without an engine is refused, not run unwalled (rc $rc)" ;;
+    *) bad "guarded deploy without an engine: rc $rc $(cat "$SANDBOX/out")" ;;
+esac
+[ "$rc" != 0 ] && ok "and it does not exit 0" || bad "guarded deploy without an engine exited 0"
+if [ "$(uname -s)" = Linux ]; then
+    expect_has "the guarded choice is recorded on the App" "$(k2 app list)" "Guarded (container)"
+fi
+expect_has "uninstall the engine-check App" "$(k2 app uninstall walled)" "App walled uninstalled"
+
+echo
+echo "app_runtime_cli_smoke: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

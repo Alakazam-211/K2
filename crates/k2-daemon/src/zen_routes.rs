@@ -86,6 +86,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/gardens",
     "/cli/zen/get",
     "/cli/zen/history",
+    "/cli/zen/inspect",
     "/cli/zen/lib/file",
     "/cli/zen/news",
     "/cli/zen/status",
@@ -1123,7 +1124,17 @@ pub fn handle(
         "/cli/zen/validate" => {
             let f = files();
             match param(params, "widget") {
-                Some(w) => set_up(&f).and_then(|_| f.validate_widget(w)),
+                Some(w) => set_up(&f).and_then(|_| f.validate_widget(w)).and_then(|mut v| {
+                    // `--types[=all]`: the optional tsc-rs stage, warnings only.
+                    if let Some(t) = param(params, "types") {
+                        let types = f.widget_types(w, t == "all")?;
+                        if let (Some(ws), Some(tw)) = (v["warnings"].as_array_mut(), types["warnings"].as_array()) {
+                            ws.extend(tw.iter().cloned());
+                        }
+                        v["types"] = types;
+                    }
+                    Ok(v)
+                }),
                 None => set_up(&f)
                     .and_then(|_| refuse_home(params))
                     .and_then(|_| target(&f, param(params, "file"), param(params, "garden"), param(params, "theme"), false))
@@ -1140,6 +1151,16 @@ pub fn handle(
                     .and_then(|t| f.history(t.as_ref())),
             }
         }
+        // A received Garden bundle (zip) or folder, statically: never run,
+        // never installed, every quoted string escaped and capped. Zen
+        // needn't be set up: an agent reviews before anything is added.
+        "/cli/zen/inspect" => match param(params, "path") {
+            None => Err(ZenError::BadRequest("inspect needs path=<bundle or folder>".into())),
+            Some(p) if !std::path::Path::new(p).is_absolute() => {
+                Err(ZenError::BadRequest("inspect needs an absolute path".into()))
+            }
+            Some(p) => k2_core::jscheck::inspect::inspect(std::path::Path::new(p)).map_err(ZenError::BadRequest),
+        },
         "/cli/zen/templates" => {
             Ok(json!({ "ok": true, "templates": k2_core::zen::garden_catalog::template_list() }))
         }

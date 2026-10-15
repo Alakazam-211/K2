@@ -22,6 +22,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Verify-only, pure Rust, no transitive deps beyond its own ed25519/blake2b.
 minisign-verify = "0.2"
+# daemon.toml (the caller check shared by the helper and k2-app-engine).
+toml = "0.8"
+libc = "0.2"
 ring = { version = "0.17", optional = true }
 blake2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }

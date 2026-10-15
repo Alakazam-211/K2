@@ -124,6 +124,11 @@ pub mod wiki_public_chat;
 // label + plist shape.
 pub mod daemon_lifecycle;
 pub mod db;
+// Runtime stage H: the "handed off, drain only" flag the spawn choke
+// points check.
+pub mod handoff_state;
+/// App runtime stage 1: Seeds, deployments, deploy audit (prd-k2-app-runtime-v1).
+pub mod deploy;
 pub mod migration_home;
 pub mod paths;
 pub mod private_home;
@@ -133,6 +138,9 @@ pub mod workspace_dir;
 pub use workspace_dir::workspace_dot_dir;
 pub mod db_ops;
 pub mod inject_flow;
+// The VALIDATE stage: oxc parse + lints for Garden widgets and Apps
+// (decision-k2-runtime-v1 stage 0).
+pub mod jscheck;
 // Phase 2.5c: retired-but-preserved surface; modules here are
 // `#[deprecated]` and exist only for the deprecation window.
 pub mod deprecated;

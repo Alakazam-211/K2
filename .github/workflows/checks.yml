@@ -98,7 +98,7 @@ jobs:
       - name: cargo check (deny warnings, all targets)
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check -p k2-core -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper --all-targets
+        run: cargo check -p k2-core -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper -p k2-app-engine --all-targets
 
       # K2 root helper (prd-k2-root-helper-v1 RH16): a REQUIRED test step —
       # a bug here is a root bug. Pure unit tests over temp roots + the
@@ -140,6 +140,21 @@ jobs:
           cargo test -p k2-core --lib -- compute::
           cargo test -p k2-daemon --lib -- compute_ route_policy
           cargo test -p k2-daemon --test compute_integration
+
+      # App runtime stage 1 (prd-k2-app-runtime-v1 §12.1, AR27): the Seed
+      # store, validate, the deploy audit chain, the deploy pipeline and
+      # the headless daemon contract (fixture Apps are python3 servers on
+      # loopback; never a real agent CLI, never the real ~/.k2).
+      - name: cargo test App runtime
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo test -p k2-core --lib -- deploy::
+          cargo test -p k2-daemon --lib -- apps::
+          cargo test -p k2-daemon --test apps_runtime_integration
+          # The guarded engine's k2app-side binary (S11/S12): wire, caller
+          # check over socket pairs, Quadlet rendering, seccomp, Seeds.
+          cargo test -p k2-app-engine
 
       # Custom/enterprise air-gap compile (`--features airgap`). Compiles
       # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot

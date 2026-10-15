@@ -19,9 +19,19 @@
 //! - [`sig`]: the trusted-comment format and the one signed-build check
 //!   both sides run (the helper before installing, the daemon before
 //!   spending a root call).
+//! - [`apps`]: the App runtime's box prep (protocol 6): the `k2app` user,
+//!   its subordinate ids, slice names, port ranges, and the canned unit,
+//!   drop-in, sysctl and nftables bytes the helper renders.
+//! - [`caller`]: `daemon.toml` and the "is this the daemon's main
+//!   process" match, shared by the helper and `k2-app-engine` (AR25).
+//! - [`engine`]: `k2-app-engine`'s socket wire, paths, validators and its
+//!   signed builds (root-helper key, like `k2-node`; S11).
 //! - [`node_build`]: the same key and check for signed `k2-node` builds
 //!   (prd-k2-node-admin-v1 §8.1: node updates are root-class code).
 
+pub mod apps;
+pub mod caller;
+pub mod engine;
 pub mod keys;
 pub mod node_build;
 pub mod paths;

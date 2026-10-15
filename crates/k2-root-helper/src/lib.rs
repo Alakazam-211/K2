@@ -16,9 +16,11 @@
 //! A bug in any namespace is a root bug: changes here need two
 //! independent reviewers, one of them a security pass (Q10).
 
+pub mod apps;
 pub mod caller;
 pub mod core;
 pub mod ctx;
+pub mod daemon_unit;
 pub mod fsx;
 pub mod keep;
 pub mod mail;
@@ -41,14 +43,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=4 arch=x86_64;"
+    " proto=6 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=4 arch=aarch64;"
+    " proto=6 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -181,6 +183,7 @@ fn dispatch(
         Verb::PgDaemonReload => pg::daemon_reload(ctx).map(|_| None)?,
         Verb::PgInstallRamFence => Some(pg::install_ram_fence(ctx)?),
         Verb::PgPsql { db, flags } => pg::psql(ctx, db, *flags, stdin).map(|_| None)?,
+        Verb::PgHbaApp { add, id } => Some(pg::hba_app(ctx, *add, id)?),
 
         Verb::KeepStatus => Some(keep::status(ctx, who.user.as_deref())?),
         Verb::KeepKekInit => keep::kek_init(ctx, &user()?).map(|_| None)?,
@@ -190,6 +193,32 @@ fn dispatch(
         Verb::KeepKekAbort => keep::kek_abort(ctx, &user()?).map(|_| None)?,
         Verb::KeepGenGet => Some(keep::gen_get(ctx, who.user.as_deref())?),
         Verb::KeepGenBump => Some(keep::gen_bump(ctx, &user()?)?),
+
+        Verb::DaemonHandoffDropinInstall => Some(daemon_unit::handoff_dropin_set(ctx, who, true)?),
+        Verb::DaemonHandoffDropinRemove => Some(daemon_unit::handoff_dropin_set(ctx, who, false)?),
+
+        Verb::AppsStatus => Some(apps::status(ctx)?),
+        Verb::AppsEnsureUser => Some(apps::ensure_user(ctx)?),
+        Verb::AppsSubid => Some(apps::subid(ctx)?),
+        Verb::AppsLinger(on) => Some(apps::linger(ctx, *on)?),
+        Verb::AppsDelegate(on) => Some(apps::delegate(ctx, *on)?),
+        Verb::AppsIoCost(on) => Some(apps::io_cost(ctx, *on)?),
+        Verb::AppsReservePorts(on) => Some(apps::reserve_ports(ctx, *on)?),
+        Verb::AppsNftApply { gw, px, db } => Some(apps::nft_apply(ctx, *gw, *px, *db)?),
+        Verb::AppsNftRemove => Some(apps::nft_remove(ctx)?),
+        Verb::AppsNftApp { id, gw } => Some(apps::nft_app(ctx, id, *gw)?),
+        Verb::AppsNftAppRemove(id) => Some(apps::nft_app_remove(ctx, id)?),
+        Verb::AppsInstallEngine => Some(apps::install_engine(ctx, stdin)?),
+        Verb::AppsLogs { id, deployment, lines } => Some(apps::logs(ctx, id, deployment, *lines)?),
+        Verb::AppsPackagesInstall => Some(apps::packages_install(ctx)?),
+        Verb::AppsPackagesInstallYouki => Some(apps::packages_install_youki(ctx)?),
+        Verb::AppsRuntime(rt) => Some(apps::runtime(ctx, *rt)?),
+        Verb::AppsProcessUnit(on) => Some(apps::process_unit_set(ctx, *on)?),
+        Verb::AppsProcessStart(id) => Some(apps::process_start(ctx, id)?),
+        Verb::AppsProcessStop(id) => Some(apps::process_stop(ctx, id)?),
+        Verb::AppsCoresSlice(n) => Some(apps::cores_slice(ctx, who, *n)?),
+        Verb::AppsBudget(b) => Some(apps::budget(ctx, *b)?),
+        Verb::AppsUnprep => Some(apps::unprep(ctx, who)?),
     })
 }
 

@@ -4,7 +4,13 @@
 //! - 1 = the original `k2-mail-helper` verbs;
 //! - 2 = `version`/`usage`/`snapshot-data`/`restore-data`/`stop` (0.45.0);
 //! - 3 = self-update + backup + `harden-store` + the `pg` namespace;
-//! - 4 = `keep`.
+//! - 4 = `keep`;
+//! - 5 = `daemon handoff-dropin install|remove` (runtime stage H, 0.46.0).
+//! - 6 = the App runtime's `apps` namespace (box prep, runtime slice 2;
+//!   the engine install and per-App nft rules, slice 3) + `pg hba-app`
+//!   (0.46.1, vs-live 2 AR38). All of it ships together in 0.46.1, behind
+//!   the preview; anything added after a 6 build ships needs 7. Sew's
+//!   `engine sew` takes 7 or later.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -13,7 +19,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 6;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -30,6 +36,12 @@ pub const BACKUP_MIN_PROTOCOL: u32 = 3;
 pub const PG_MIN_PROTOCOL: u32 = 3;
 /// The vault keeper (`keep …`).
 pub const KEEP_MIN_PROTOCOL: u32 = 4;
+/// The daemon unit's hand-off drop-in (`daemon handoff-dropin …`).
+pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
+/// The App runtime's `apps` namespace (box prep) and `pg hba-app` (0.46.1,
+/// AR38). Helpers on the fleet answer ≤ 5, so the daemon treats them as
+/// "no App verbs" until they self-update.
+pub const APPS_MIN_PROTOCOL: u32 = 6;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -173,6 +185,37 @@ pub fn elf_matches(bytes: &[u8], arch: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace.
+    /// This build answers 6 because the `apps` verbs exist: every one of
+    /// them is in the catalog. Sew's `engine sew` takes 7 or later, so
+    /// nothing here may answer 7 yet.
+    #[test]
+    fn protocol_numbers_follow_ar38() {
+        assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
+        assert_eq!(APPS_MIN_PROTOCOL, 6);
+        assert_eq!(PROTOCOL, APPS_MIN_PROTOCOL, "protocol 6 = the apps namespace; 7 is Sew's");
+        let apps: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| v.namespace() == "apps")
+            .collect();
+        for needed in [
+            &["apps", "status"][..],
+            &["apps", "ensure-user"],
+            &["apps", "subid"],
+            &["apps", "linger", "on"],
+            &["apps", "delegate", "on"],
+            &["apps", "io-cost", "on"],
+            &["apps", "reserve-ports", "on"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"],
+            &["apps", "process-unit", "on"],
+            &["apps", "packages", "install"],
+            &["apps", "unprep"],
+        ] {
+            let v = crate::verbs::Verb::parse(needed).expect("apps verb parses");
+            assert!(apps.contains(&v), "{needed:?} missing from the catalog");
+        }
+    }
 
     #[test]
     fn semver_is_plain_xyz_and_orders_numerically() {

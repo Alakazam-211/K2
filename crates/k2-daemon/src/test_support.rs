@@ -73,6 +73,10 @@ fn no_new_raw_env_mutation_in_k2_daemon() {
     const BASELINE: &[(&str, usize, usize)] = &[
         // Production: the VMM worker pins LD_LIBRARY_PATH while single-threaded.
         ("bin/k2-vmm-worker.rs", 1, 0),
+        // Production (runtime stage H): capture_process_context drops
+        // NOTIFY_SOCKET and K2_HANDOFF_FD at process start, single-threaded,
+        // so no child inherits the unit's notify socket or the hand-off fd.
+        ("handoff/mod.rs", 2, 0),
     ];
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let violations = k2_core::test_env::env_mutation_violations(&src, BASELINE);

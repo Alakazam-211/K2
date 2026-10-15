@@ -3122,6 +3122,82 @@ async fn handle_one_request(
             }
             return DispatchOutcome::Done;
         }
+        // Runtime stage H — POST /cli/daemon/handoff: a no-downtime restart.
+        // A fresh copy of the binary at the boot path takes the listening
+        // sockets over; this daemon drains its live App splices and exits
+        // (handoff/mod.rs). Same gate as /cli/daemon/restart. 409 with the
+        // reason when this daemon can't hand off (launchd, no drop-in); the
+        // caller can fall back to /cli/daemon/restart.
+        "/cli/daemon/handoff" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // SEAM (as #651): the harness has no shutdown_tx and must never
+            // hand off the test process.
+            let Some(tx) = state.shutdown_tx.clone() else {
+                let body = serde_json::json!({"ok": true, "handoff": "would-start", "note": "test-seam: no shutdown_tx"});
+                super::http::send_response(&mut *stream, "200 OK", "application/json", &body.to_string()).await;
+                return DispatchOutcome::Done;
+            };
+            let exe = crate::handoff::boot_exe();
+            let res = match exe {
+                Some(exe) => crate::handoff::start(exe, Some(tx)),
+                None => Err("the daemon's executable path is unknown".to_string()),
+            };
+            match res {
+                Ok(()) => {
+                    let body = serde_json::json!({"ok": true, "handoff": "started"});
+                    super::http::send_response(&mut *stream, "202 Accepted", "application/json", &body.to_string()).await;
+                }
+                Err(e) => {
+                    let body = serde_json::json!({"ok": false, "error": "handoff_unavailable", "message": e});
+                    super::http::send_response(&mut *stream, "409 Conflict", "application/json", &body.to_string()).await;
+                }
+            }
+            let _ = stream.flush().await;
+            return DispatchOutcome::Done;
+        }
+        // POST /cli/daemon/handoff/setup — install (or re-assert) the unit's
+        // hand-off drop-in now (boot does it too). System units go through
+        // the root helper (protocol 5); user units are written directly.
+        "/cli/daemon/handoff/setup" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(crate::handoff_setup::install)
+                .await
+                .unwrap_or_else(|e| Err(format!("worker join: {e}")));
+            let (status, body) = match r {
+                Ok(changed) => (
+                    "200 OK",
+                    serde_json::json!({"ok": true, "changed": changed, "dropin": crate::handoff_setup::dropin_state()}),
+                ),
+                Err(e) => ("409 Conflict", serde_json::json!({"ok": false, "error": "dropin_unavailable", "message": e})),
+            };
+            super::http::send_response(&mut *stream, status, "application/json", &body.to_string()).await;
+        }
+        // GET /cli/daemon/handoff/status — can this daemon hand off, and is
+        // the unit drop-in in place.
+        "/cli/daemon/handoff/status" => {
+            // A refusal drains the request itself; on success drain it here
+            // (keep-alive: an unconsumed request is answered again forever).
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query).await;
+            let body = tokio::task::spawn_blocking(crate::handoff_setup::status_json)
+                .await
+                .unwrap_or_else(|e| serde_json::json!({"error": format!("worker join: {e}")}));
+            super::http::send_response(&mut *stream, "200 OK", "application/json", &body.to_string()).await;
+        }
         // #58 Phase-1 close — POST /cli/daemon/hook-revoke-all. The global
         // scoped-hook-token KILL SWITCH: bump the daemon-wide hook epoch so
         // every already-minted scoped token (stamped with the old epoch) goes
@@ -5913,6 +5989,39 @@ async fn handle_one_request(
             .unwrap_or_else(|e| {
                 crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
             });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
+        // K2_APPS / appsPreview is on. Passport rules live in the handler.
+        p if crate::apps::routes::is_route(p) => {
+            if !k2_core::deploy::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::apps::routes::dark();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if crate::apps::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::apps::routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::apps::routes::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // K2 compute nodes (prd-k2-compute-nodes-v1). Dark (404) until

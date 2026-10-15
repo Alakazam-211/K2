@@ -172,6 +172,33 @@ pub const ROUTES: &[Route] = &[
     get("/cli/api-keys/hire-ceiling-options", Owner),
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
+    // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Passport rules
+    // (own workspace + "Allow this agent to manage Apps") in the handler.
+    // Box prep (S10): the doctor is Admin (agents read it through their
+    // passport); prepare runs root-helper verbs and is the owner's.
+    get("/cli/app/box", Admin),
+    post("/cli/app/box/prepare", Owner),
+    post("/cli/app/build", Member),
+    // Stage 1 holds only the per-App memory limit (the rest is S13).
+    post("/cli/app/config", Member),
+    post("/cli/app/deploy", Member),
+    // Litmus L3: who, commit, live/failed/stalled of one deployment.
+    get("/cli/app/deployment", Member),
+    // The guarded engine's install/update through the root helper (S11).
+    post("/cli/app/engine/install", Owner),
+    get("/cli/app/errors", Member),
+    get("/cli/app/history", Member),
+    get("/cli/app/inspect", Member),
+    post("/cli/app/install", Member),
+    get("/cli/app/list", Member),
+    get("/cli/app/logs", Member),
+    post("/cli/app/restart", Member),
+    post("/cli/app/rollback", Member),
+    post("/cli/app/start", Member),
+    post("/cli/app/stop", Member),
+    // purge (deletes the App's data) is owner-only in the handler.
+    post("/cli/app/uninstall", Member),
+    post("/cli/app/validate", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),
     post("/cli/auth/logout", Member),
@@ -293,6 +320,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/context/set-enabled", Member),
     get("/cli/context/show", Member),
     post("/cli/daemon/app-update/progress", Admin),
+    post("/cli/daemon/handoff", Admin),
+    post("/cli/daemon/handoff/setup", Admin),
+    get("/cli/daemon/handoff/status", Admin),
     post("/cli/daemon/hook-revoke-all", NoLogin),
     post("/cli/daemon/restart", Admin),
     post("/cli/daemon/update/apply", Admin),
@@ -735,6 +765,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/publish/stop", Member),
     post("/cli/publish/subdomain/claim", Member),
     post("/cli/publish/subdomain/unclaim", Member),
+    // decision-k2-runtime-v1 stage 0: `k2 app validate` (parse + leak lints).
+    get("/cli/publish/validate", Member),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
     post("/cli/relations/create", Member),
@@ -1091,6 +1123,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/gardens", Member),
     get("/cli/zen/get", Member),
     get("/cli/zen/history", Member),
+    // Static review of a received Garden bundle or folder (Rosson
+    // 2026-10-11: importing a Garden is an agent workflow). Reads only.
+    get("/cli/zen/inspect", Member),
     post("/cli/zen/lib/fetch", Member),
     get("/cli/zen/lib/file", Member),
     get("/cli/zen/news", Member),
@@ -1753,6 +1788,7 @@ mod tests {
         ("/cli/publish/leftovers", "lists published-service leftovers"),
         ("/cli/publish/list", "lists published services"),
         ("/cli/publish/logs", "reads service logs"),
+        ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
     ];
 
     fn path_words(path: &str) -> Vec<String> {

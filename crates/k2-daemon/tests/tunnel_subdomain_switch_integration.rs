@@ -284,7 +284,9 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
         //       ensures its listener. It must be REPLACED, not reused. ───
         seed("k2n1-m4", "tok-new");
         let p2 = ensure(d.port).await;
-        assert_ne!(p2, p1, "a new name must get a new listener");
+        // Runtime stage H (AR3): the listener is replaced (new cert, new
+        // renewer) but its PORT is sticky, so frpc's localPort stays valid.
+        assert_eq!(p2, p1, "a new name gets a new listener on the same sticky port");
         assert_eq!(
             k2_daemon::tunnel_tls_listener::live_listener(),
             Some((p2, "k2n1-m4".to_string()))
@@ -301,7 +303,6 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             .await
             .expect_err("the old name must not validate on the new listener");
         assert!(old.contains("handshake"), "clean TLS failure, got: {old}");
-        wait_port_closed(p1).await;
         assert_eq!(
             k2_core::tunnel::tls::read_https_port(),
             Some(p2),

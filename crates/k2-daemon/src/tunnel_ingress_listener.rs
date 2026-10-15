@@ -117,13 +117,21 @@ pub async fn spawn(state: crate::DaemonState) -> Result<u16, String> {
         .local_addr()
         .map_err(|e| format!("read tunnel-ingress listener addr: {e}"))?
         .port();
-    tokio::spawn(accept_loop(listener, state));
+    tokio::spawn(accept_loop(std::sync::Arc::new(listener), state));
     Ok(port)
 }
 
-async fn accept_loop(listener: TcpListener, state: crate::DaemonState) {
+async fn accept_loop(listener: std::sync::Arc<TcpListener>, state: crate::DaemonState) {
     loop {
-        match listener.accept().await {
+        let accepted = tokio::select! {
+            r = listener.accept() => r,
+            // Runtime stage H: the successor owns the socket now.
+            _ = crate::handoff::quiesced() => {
+                log_debug!("[daemon/tunnel-ingress] accept loop stopped for the hand-off");
+                return;
+            }
+        };
+        match accepted {
             Ok((stream, _peer)) => {
                 let st = state.clone();
                 tokio::spawn(async move {
@@ -156,6 +164,9 @@ async fn accept_loop(listener: TcpListener, state: crate::DaemonState) {
 /// when no state was installed (a bug: the daemon installs it at boot) or
 /// the bind fails; callers must NOT fall back to the main listener.
 pub async fn ensure_port() -> Result<u16, String> {
+    // A daemon that handed off never binds again (the successor owns the
+    // sticky port; a bind here would land on a stray one).
+    k2_core::handoff_state::guard()?;
     if let Some(p) = recorded_port() {
         if port_live(p).await {
             return Ok(p);
@@ -186,9 +197,26 @@ pub async fn ensure_port() -> Result<u16, String> {
 /// [`spawn`] + record the port, clearing the record when the accept loop
 /// ends (so [`ensure_port`] re-binds on the next call).
 async fn spawn_recorded(state: crate::DaemonState) -> Result<u16, String> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .map_err(|e| format!("bind tunnel-ingress listener: {e}"))?;
+    // Runtime stage H: the handed-over socket, else the sticky port (frpc's
+    // cleartext `localPort` with E2E off must survive a daemon restart).
+    let std_listener = match crate::handoff::take_inherited(crate::handoff::Role::TunnelIngress) {
+        Some(l) => l,
+        None => {
+            k2_core::tunnel::tls::claim_sticky_loopback(
+                &k2_core::tunnel::tls::ingress_sticky_port_path(),
+            )
+            .map_err(|e| format!("bind tunnel-ingress listener: {e}"))?
+            .0
+        }
+    };
+    std_listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("tunnel-ingress set_nonblocking: {e}"))?;
+    let listener = std::sync::Arc::new(
+        TcpListener::from_std(std_listener)
+            .map_err(|e| format!("adopt tunnel-ingress listener: {e}"))?,
+    );
+    crate::handoff::register(crate::handoff::Role::TunnelIngress, &listener);
     let port = listener
         .local_addr()
         .map_err(|e| format!("read tunnel-ingress listener addr: {e}"))?

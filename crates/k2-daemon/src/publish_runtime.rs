@@ -194,31 +194,40 @@ fn open_log(project_id: &str, name: &str) -> Result<std::fs::File, String> {
         .map_err(|e| format!("open {}: {e}", path.display()))
 }
 
-fn pump_stdio(mut stdout: impl Read + Send + 'static, mut stderr: impl Read + Send + 'static, path: PathBuf) {
-    let path_err = path.clone();
-    thread::Builder::new()
-        .name("publish-log-out".into())
-        .spawn(move || copy_rotating(&mut stdout, &path))
-        .ok();
-    thread::Builder::new()
-        .name("publish-log-err".into())
-        .spawn(move || copy_rotating(&mut stderr, &path_err))
-        .ok();
-}
-
-fn copy_rotating(src: &mut impl Read, path: &Path) {
-    let mut buf = [0u8; 4096];
-    loop {
-        let n = match src.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => break,
-        };
-        rotate_if_needed(path);
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = f.write_all(&buf[..n]);
+/// Rotate a log a LIVE service writes into directly (runtime stage H):
+/// copy it to `<name>.log.1`, then truncate it in place. The service keeps
+/// its `O_APPEND` descriptor, so its next write lands at the new end — a
+/// rename (as [`rotate_if_needed`] does before a spawn) would leave it
+/// writing into the backup forever. Lines written between the copy and
+/// the truncate are lost; that is the price of not owning a pipe.
+fn rotate_in_place_if_needed(path: &Path) {
+    let Ok(meta) = fs::metadata(path) else { return };
+    if meta.len() <= LOG_CAP {
+        return;
+    }
+    let bak = path.with_extension("log.1");
+    if fs::copy(path, &bak).is_ok() {
+        if let Ok(f) = OpenOptions::new().write(true).open(path) {
+            let _ = f.set_len(0);
         }
     }
+}
+
+/// The service's stdout and stderr: the log file itself, opened
+/// `O_APPEND`. Before stage H these were pipes pumped by daemon threads,
+/// so a daemon exit (restart, hand-off) closed them and the service's next
+/// write hit `EPIPE`/`SIGPIPE` — published services and skin gateway
+/// helpers died with the daemon even when nothing killed them.
+fn log_stdio(path: &Path) -> Result<(Stdio, Stdio), String> {
+    let f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let f2 = f
+        .try_clone()
+        .map_err(|e| format!("clone log handle: {e}"))?;
+    Ok((Stdio::from(f), Stdio::from(f2)))
 }
 
 pub fn read_log_tail(project_id: &str, name: &str, lines: usize) -> String {
@@ -340,11 +349,12 @@ fn spawn_prepared(
     project_id: &str,
     name: &str,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
+    // A daemon that handed off starts no service: the successor owns them.
+    k2_core::handoff_state::guard()?;
     let _ = open_log(project_id, name)?;
     let log_p = log_path(project_id, name);
-    c.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let (out, err) = log_stdio(&log_p)?;
+    c.stdin(Stdio::null()).stdout(out).stderr(err);
     enrich_path(&mut c);
 
     #[cfg(unix)]
@@ -358,20 +368,14 @@ fn spawn_prepared(
                 Ok(())
             });
         }
-        let mut child = c.spawn().map_err(|e| format!("spawn: {e}"))?;
+        let child = c.spawn().map_err(|e| format!("spawn: {e}"))?;
         let pid = child.id() as i32;
-        if let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) {
-            pump_stdio(out, err, log_p);
-        }
         Ok((child, pid, None))
     }
     #[cfg(windows)]
     {
-        let (mut child, job) = win_job::spawn_in_job(&mut c)?;
+        let (child, job) = win_job::spawn_in_job(&mut c)?;
         let pid = child.id() as i32;
-        if let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) {
-            pump_stdio(out, err, log_p);
-        }
         Ok((child, pid, Some(job)))
     }
     #[cfg(not(any(unix, windows)))]
@@ -599,7 +603,12 @@ fn compute_status(row: &ps::PublishedService, live: Option<&LiveChild>) -> (&'st
 
 pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     let live = live_get(&row.project_id, &row.name);
-    let (status, pid) = compute_status(row, live.as_deref());
+    let (status, pid) = if row.cmd == ps::CMD_APP_SENTINEL {
+        // An App runtime row (AR5): the App supervisor owns it.
+        (crate::apps::supervisor::service_status(&row.id).unwrap_or(STATUS_STOPPED), None)
+    } else {
+        compute_status(row, live.as_deref())
+    };
     let url = if status == STATUS_STOPPED && row.error.is_some() && row.desired == DESIRED_STOPPED {
         // Hostname-fail path: do not advertise a public URL.
         if row.error.as_deref().is_some_and(|e| {
@@ -641,7 +650,7 @@ fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
     ps::get_by_project_name(&conn, project_id, name).ok().flatten()
 }
 
-fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
+pub(crate) fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String), PublishError> {
     k2_core::airgap::refuse().map_err(PublishError::fail)?;
     let cfg = tunnel_config::load().map_err(PublishError::fail)?;
     // 0.45.7: a vault that can't be read right now is not "no token".
@@ -677,7 +686,7 @@ fn gate_hint(kind: &str) -> String {
     )
 }
 
-fn attach_hostname(
+pub(crate) fn attach_hostname(
     project_id: &str,
     name: &str,
     port: u16,
@@ -782,7 +791,13 @@ fn adopt_reattach(project_id: &str, name: &str, port: u16, pid: i32) -> Arc<Live
 }
 
 fn wait_child(entry: Arc<LiveChild>) {
+    let log = log_path(&entry.project_id, &entry.name);
+    let mut ticks = 0u32;
     loop {
+        ticks = ticks.wrapping_add(1);
+        if ticks % 25 == 0 {
+            rotate_in_place_if_needed(&log);
+        }
         let status = {
             let mut g = entry.child.lock().unwrap_or_else(|e| e.into_inner());
             match g.as_mut() {
@@ -813,7 +828,13 @@ fn entry_exit_fallback() -> i64 {
 }
 
 fn poll_foreign(entry: Arc<LiveChild>) {
+    let log = log_path(&entry.project_id, &entry.name);
+    let mut ticks = 0u32;
     loop {
+        ticks = ticks.wrapping_add(1);
+        if ticks % 10 == 0 {
+            rotate_in_place_if_needed(&log);
+        }
         if entry.stop_requested.load(Ordering::SeqCst) {
             return;
         }
@@ -889,11 +910,15 @@ pub struct RunSpec {
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_existing_name(&spec.name).map_err(PublishError::bad)?;
+    let existing = load_row(&spec.project_id, &name);
+    // App runtime rows are driven by `k2 app`, never by `k2 publish run`.
+    if let Some(row) = &existing {
+        refuse_app_row(row)?;
+    }
     // Reserved nested labels (`meet`, `chat`): only a re-run of a row this
     // workspace already had before the reservation goes through. A new
     // row under a reserved name is refused before anything changes.
-    if k2_core::skin::is_reserved_nested_label(&name) && load_row(&spec.project_id, &name).is_none()
-    {
+    if k2_core::skin::is_reserved_nested_label(&name) && existing.is_none() {
         return Err(PublishError::bad(k2_core::skin::reserved_nested_label_error(&name)));
     }
     if spec.skin && spec.cwd_explicit {
@@ -1010,9 +1035,23 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     }
 }
 
+/// App runtime rows are driven by `k2 app`, never by the publish verbs.
+fn refuse_app_row(row: &ps::PublishedService) -> Result<(), PublishError> {
+    if row.cmd == ps::CMD_APP_SENTINEL {
+        return Err(PublishError::bad(format!(
+            "{}: '{}' is an App; use k2 app start|stop|deploy|uninstall {}",
+            k2_core::deploy::codes::IS_AN_APP,
+            row.name,
+            row.name
+        )));
+    }
+    Ok(())
+}
+
 pub fn start(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
+    refuse_app_row(&row)?;
     if is_running_now(project_id, &name, &row) {
         return Ok(to_json(&row));
     }
@@ -1131,6 +1170,7 @@ fn rollback_hostname_fail(project_id: &str, name: &str, entry: &LiveChild, error
 pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
     let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
+    refuse_app_row(&row)?;
     if let Some(entry) = live_remove(project_id, &name) {
         kill_tree(&entry);
     } else if let Some(pid) = row.pid.and_then(|p| i32::try_from(p).ok()) {
@@ -1180,6 +1220,9 @@ fn kill_pid_tree(pid: i32) {
 pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), PublishError> {
     let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name);
+    if let Some(r) = &row {
+        refuse_app_row(r)?;
+    }
     let _ = stop(project_id, &name);
     // Only ever release THIS workspace's label: a label another workspace
     // holds keeps its attribution and its control-plane hostname.
@@ -1484,6 +1527,8 @@ pub fn boot_desired_running() {
         let conn = db.lock();
         ps::list_desired_running(&conn).unwrap_or_default()
     };
+    // App runtime rows (AR5) belong to the App supervisor.
+    let rows: Vec<_> = rows.into_iter().filter(|r| r.cmd != ps::CMD_APP_SENTINEL).collect();
     for (i, row) in rows.into_iter().enumerate() {
         if i > 0 {
             thread::sleep(stagger());
@@ -1887,7 +1932,12 @@ mod win_job {
 /// `k2-daemon --skin-gateway` orphans listening forever (two from the
 /// 2026-09-12 run were killed by hand). Production never calls this —
 /// helpers are meant to outlive a daemon restart (`boot_desired_running`
-/// reattaches by pid + port).
+/// reattaches by pid + port). That holds on macOS (launchd kills only the
+/// daemon) and, since runtime stage H, on Linux where the unit carries the
+/// root helper's `k2-handoff.conf` drop-in (`KillMode=process`; before it,
+/// `KillMode=control-group` killed every helper with the daemon — AR3) and
+/// the helpers log straight into their file (a pumped pipe died with the
+/// daemon and took the helper with it on its next write).
 #[allow(dead_code)] // lib-only caller (integration harness teardown); the bin target never calls it
 pub fn kill_all_live_children() {
     let entries: Vec<Arc<LiveChild>> = {

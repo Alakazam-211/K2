@@ -396,6 +396,7 @@ impl GardenDefaults {
         self.damaged
             .iter()
             .map(|(fp, msg)| Diagnostic {
+                suggestion: None,
                 file: format!("{DEFAULTS_DIR}/{fp}.json"),
                 line: 1,
                 col: 1,

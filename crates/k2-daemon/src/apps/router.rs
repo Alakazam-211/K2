@@ -1,0 +1,357 @@
+//! The daemon-local App route override and drain (§7.2 step 7, AR4).
+//!
+//! Router targets for `*.<sub>.k2.dev` come from the control plane
+//! (`SubdomainMap`), and a target change is a control-plane write. A deploy
+//! never makes one. Instead:
+//! - The control-plane target of an App label is the App's **front port**:
+//!   a stable loopback listener the daemon owns (`apps.front_port`).
+//! - This module holds the **override**: App label → the live instance's
+//!   backend port, in an `ArcSwap` read once per connection. The tunnel TLS
+//!   listener (`serve_one`) consults it before dialing the control-plane
+//!   target, and the front listener uses it for every connection, so local
+//!   (`--no-tunnel`) access sees the same switch.
+//! - A switch only changes where **new** connections go. Spliced
+//!   connections to the old backend keep running until they close or the
+//!   drain deadline passes; then they are cut.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use arc_swap::ArcSwap;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::watch;
+
+/// One instance's backend: its port, the connections spliced to it, and
+/// the signal that cuts them at the end of a drain.
+#[derive(Debug)]
+pub struct Backend {
+    pub app_id: String,
+    pub port: u16,
+    active: AtomicUsize,
+    total: AtomicUsize,
+    draining: AtomicBool,
+    cut_tx: watch::Sender<bool>,
+}
+
+impl Backend {
+    fn new(app_id: &str, port: u16) -> Arc<Self> {
+        let (cut_tx, _) = watch::channel(false);
+        Arc::new(Self {
+            app_id: app_id.to_string(),
+            port,
+            active: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+            draining: AtomicBool::new(false),
+            cut_tx,
+        })
+    }
+
+    /// Connections spliced to this backend right now.
+    pub fn active(&self) -> usize {
+        self.active.load(Ordering::SeqCst)
+    }
+
+    /// Connections ever spliced to this backend.
+    pub fn total(&self) -> usize {
+        self.total.load(Ordering::SeqCst)
+    }
+
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
+    }
+}
+
+type Table = HashMap<String, Arc<Backend>>;
+
+fn table() -> &'static ArcSwap<Table> {
+    static T: OnceLock<ArcSwap<Table>> = OnceLock::new();
+    T.get_or_init(|| ArcSwap::from_pointee(HashMap::new()))
+}
+
+fn write_lock() -> &'static Mutex<()> {
+    static L: Mutex<()> = Mutex::new(());
+    &L
+}
+
+/// The live backend for an App label (one atomic load).
+pub fn live(app_id: &str) -> Option<Arc<Backend>> {
+    table().load().get(app_id).cloned()
+}
+
+/// Point `app_id` at `port`. Returns the backend that was live before
+/// (the caller drains it). Never a control-plane call.
+pub fn switch(app_id: &str, port: u16) -> (Arc<Backend>, Option<Arc<Backend>>) {
+    let _g = write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let cur = table().load_full();
+    let prev = cur.get(app_id).cloned();
+    if let Some(p) = &prev {
+        if p.port == port {
+            return (p.clone(), None);
+        }
+    }
+    let be = Backend::new(app_id, port);
+    let mut next: Table = (*cur).clone();
+    next.insert(app_id.to_string(), be.clone());
+    table().store(Arc::new(next));
+    (be, prev)
+}
+
+/// Remove an App's route (stop / uninstall). Returns the old backend.
+pub fn clear(app_id: &str) -> Option<Arc<Backend>> {
+    let _g = write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let cur = table().load_full();
+    let prev = cur.get(app_id).cloned()?;
+    let mut next: Table = (*cur).clone();
+    next.remove(app_id);
+    table().store(Arc::new(next));
+    Some(prev)
+}
+
+/// Let `be`'s spliced connections finish, cutting what is left after
+/// `deadline`. Returns how many were cut. Blocking (call from a thread).
+pub fn drain_blocking(be: &Arc<Backend>, deadline: Duration) -> usize {
+    be.draining.store(true, Ordering::SeqCst);
+    let end = std::time::Instant::now() + deadline;
+    while be.active() > 0 && std::time::Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let left = be.active();
+    if left > 0 {
+        let _ = be.cut_tx.send(true);
+        // Give the splices a moment to see the cut.
+        let grace = std::time::Instant::now() + Duration::from_secs(2);
+        while be.active() > 0 && std::time::Instant::now() < grace {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    left
+}
+
+struct Guard(Arc<Backend>);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Splice `client` to `be`, counted for drain and cut at its deadline.
+/// `Err` only when the backend can't be dialed (the caller answers 502).
+pub async fn splice<S>(client: &mut S, be: Arc<Backend>) -> Result<(), String>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut upstream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(("127.0.0.1", be.port)))
+        .await
+        .map_err(|_| format!("App {} backend :{} did not accept within 5s", be.app_id, be.port))?
+        .map_err(|e| format!("App {} backend :{}: {e}", be.app_id, be.port))?;
+    be.active.fetch_add(1, Ordering::SeqCst);
+    be.total.fetch_add(1, Ordering::SeqCst);
+    let _guard = Guard(be.clone());
+    let mut cut = be.cut_tx.subscribe();
+    if *cut.borrow() {
+        return Ok(());
+    }
+    tokio::select! {
+        _ = tokio::io::copy_bidirectional(client, &mut upstream) => {}
+        _ = cut.changed() => {}
+    }
+    let _ = upstream.shutdown().await;
+    Ok(())
+}
+
+const UNAVAILABLE_BODY: &str = "This App is not running now.\r\n";
+const BAD_GATEWAY_BODY: &str = "This App did not answer K2.\r\n";
+
+/// K2's own answer on an App's front port (no backend, or it didn't
+/// answer). It carries the daemon's framing headers like every other
+/// response K2 writes (prd-app-frame-ancestors-v1 FA6, routes/frame_walk).
+fn own_answer(status: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
+        body.len(),
+        k2_core::frame_policy::CONNECT_HEADER_LINES,
+    )
+}
+
+/// Serve one connection for `app_id`: splice to its live backend, 503
+/// when it has none, 502 when the backend doesn't answer.
+pub async fn serve_app_conn<S>(client: &mut S, app_id: &str)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    match live(app_id) {
+        None => {
+            consume_request_head(client).await;
+            let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
+        }
+        Some(be) => {
+            if splice(client, be).await.is_err() {
+                consume_request_head(client).await;
+                let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
+            }
+        }
+    }
+    let _ = client.shutdown().await;
+}
+
+/// Read the request head before answering an error ourselves: closing a
+/// socket with unread bytes makes the kernel send a reset, and the client
+/// would see "connection reset" instead of our 503/502.
+async fn consume_request_head<S>(client: &mut S)
+where
+    S: AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let mut got = Vec::new();
+    let mut b = [0u8; 2048];
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        while got.len() < 16 * 1024 && !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            match client.read(&mut b).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => got.extend_from_slice(&b[..n]),
+            }
+        }
+    })
+    .await;
+}
+
+// ── front listeners ──────────────────────────────────────────────────
+
+struct Front {
+    port: u16,
+    task: tokio::task::JoinHandle<()>,
+}
+
+fn fronts() -> &'static Mutex<HashMap<String, Front>> {
+    static F: OnceLock<Mutex<HashMap<String, Front>>> = OnceLock::new();
+    F.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Make sure `app_id`'s front listener runs on `want` (0 = any free
+/// port). Returns the port it listens on (a different one when `want` was
+/// taken; the caller records it). Needs a tokio runtime handle.
+pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16) -> Result<u16, String> {
+    let mut f = fronts().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(cur) = f.get(app_id) {
+        if !cur.task.is_finished() && (want == 0 || cur.port == want) {
+            return Ok(cur.port);
+        }
+        cur.task.abort();
+        f.remove(app_id);
+    }
+    let std_l = std::net::TcpListener::bind(("127.0.0.1", want))
+        .or_else(|e| if want != 0 { std::net::TcpListener::bind(("127.0.0.1", 0)) } else { Err(e) })
+        .map_err(|e| format!("bind the App's front port: {e}"))?;
+    let port = std_l.local_addr().map_err(|e| e.to_string())?.port();
+    std_l.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let app = app_id.to_string();
+    let _rt = handle.enter();
+    let l = tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?;
+    let task = handle.spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else { continue };
+            let app = app.clone();
+            tokio::spawn(async move { serve_app_conn(&mut s, &app).await });
+        }
+    });
+    f.insert(app_id.to_string(), Front { port, task });
+    Ok(port)
+}
+
+/// Stop `app_id`'s front listener (uninstall).
+pub fn close_front(app_id: &str) {
+    if let Some(f) = fronts().lock().unwrap_or_else(|e| e.into_inner()).remove(app_id) {
+        f.task.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    async fn tagged_server(tag: &'static str, hold_ms: u64) -> u16 {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = l.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut b = [0u8; 512];
+                    let _ = s.read(&mut b).await;
+                    tokio::time::sleep(Duration::from_millis(hold_ms)).await;
+                    let body = format!("{tag}\n");
+                    let _ = s
+                        .write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+                        .await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn get_via_front(front: u16) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", front)).await.unwrap();
+        s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        // A cut connection may end in a reset: keep what arrived.
+        let mut out = Vec::new();
+        let mut b = [0u8; 4096];
+        loop {
+            match s.read(&mut b).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&b[..n]),
+            }
+        }
+        String::from_utf8_lossy(&out).to_string()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn switch_moves_new_connections_and_old_ones_drain() {
+        let app = "router-test-app";
+        let a = tagged_server("A", 0).await;
+        let a_slow = tagged_server("A-slow", 800).await;
+        let b = tagged_server("B", 0).await;
+        let front = ensure_front(&tokio::runtime::Handle::current(), app, 0).unwrap();
+        assert!(get_via_front(front).await.contains("503"), "no live backend yet");
+
+        let (_, prev) = switch(app, a);
+        assert!(prev.is_none());
+        assert!(get_via_front(front).await.ends_with("A\n"));
+
+        // An in-flight request on the old backend survives the switch.
+        let (old_slow, _) = switch(app, a_slow);
+        let inflight = tokio::spawn(get_via_front(front));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(old_slow.active(), 1);
+        let (_, prev) = switch(app, b);
+        let prev = prev.expect("previous backend");
+        assert_eq!(prev.port, a_slow);
+        assert!(get_via_front(front).await.ends_with("B\n"), "new connections go to the new backend");
+        let p2 = prev.clone();
+        let cut = tokio::task::spawn_blocking(move || drain_blocking(&p2, Duration::from_secs(5))).await.unwrap();
+        assert_eq!(cut, 0, "it finished inside the drain");
+        assert!(inflight.await.unwrap().ends_with("A-slow\n"), "the old request completed");
+
+        // Past the deadline, what is left is cut.
+        let slow2 = tagged_server("never", 10_000).await;
+        let (old, _) = switch(app, slow2);
+        let stuck = tokio::spawn(get_via_front(front));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        switch(app, b);
+        let o2 = old.clone();
+        let cut = tokio::task::spawn_blocking(move || drain_blocking(&o2, Duration::from_millis(300))).await.unwrap();
+        assert_eq!(cut, 1);
+        let out = tokio::time::timeout(Duration::from_secs(5), stuck).await.expect("cut, not hung").unwrap();
+        assert!(!out.contains("never"));
+        assert_eq!(old.active(), 0);
+
+        assert!(clear(app).is_some());
+        assert!(get_via_front(front).await.contains("503"));
+        close_front(app);
+    }
+}

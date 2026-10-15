@@ -1,0 +1,20 @@
+# Throwaway systemd box for the App runtime box-prep tests
+# (tests/linux/apps_box_in_container.sh, apps_box_daemon_e2e.sh).
+# Debian 13: the distro whose own Podman (5.4.2) and passt meet the App
+# floor. The containers run with --network=none (so their netns belongs to
+# their user namespace), so the distro packages box prep installs are
+# baked in here and the apt sources are emptied: `apps packages install`
+# then runs its exact apt argv offline (update is a no-op, install finds
+# everything present) and the version gate still runs. youki goes in when
+# the distro has it. nftables, iproute2 and curl are for the network checks.
+FROM docker.io/library/debian:trixie
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus libpam-systemd sudo passwd \
+      curl ca-certificates util-linux procps python3 nftables iproute2 \
+      podman crun passt uidmap dbus-user-session skopeo catatonit \
+ && (apt-get install -y --no-install-recommends youki || echo "no youki package") \
+ && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/* /etc/apt/sources.list
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

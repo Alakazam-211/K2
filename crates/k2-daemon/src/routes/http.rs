@@ -798,7 +798,7 @@ pub(crate) fn actor_label(query: &str, owner_token: &str, bearer: Option<&str>) 
         .filter(|t| !t.is_empty())
         .or_else(|| bearer.map(str::trim).filter(|t| !t.is_empty()))?;
     if k2_core::skin::is_skin_token(tok) {
-        let pass = k2_core::skin::resolve_skin_token(tok)?;
+        let pass = crate::apps::gateway::resolve_pass(tok)?;
         return Some(app_actor_label(&pass));
     }
     if ct_eq_token(tok, owner_token) {

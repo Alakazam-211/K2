@@ -142,6 +142,8 @@ fn route_label(ingress: Ingress) -> &'static str {
         Ingress::Tunnel => "relay",
         Ingress::Lan => "lan",
         Ingress::Loopback => "loopback",
+        // An App's gateway link never serves the node socket (its gate).
+        Ingress::App => "app-link",
     }
 }
 

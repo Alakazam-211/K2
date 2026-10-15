@@ -205,6 +205,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/key/mint", Member),
     post("/cli/app/key/revoke", Admin),
     get("/cli/app/keys", Member),
+    // S14: the App's gateway link (status; rotate the App pass now).
+    get("/cli/app/link", Member),
+    post("/cli/app/link/rotate", Member),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
     post("/cli/app/restart", Member),

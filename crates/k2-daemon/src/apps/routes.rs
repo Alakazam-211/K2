@@ -41,6 +41,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/history",
     "/cli/app/inspect",
     "/cli/app/install",
+    "/cli/app/link",
+    "/cli/app/link/rotate",
     "/cli/app/list",
     "/cli/app/logs",
     "/cli/app/restart",
@@ -59,6 +61,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/deploy",
     "/cli/app/engine/install",
     "/cli/app/install",
+    "/cli/app/link/rotate",
     "/cli/app/restart",
     "/cli/app/rollback",
     "/cli/app/start",
@@ -352,6 +355,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/logs" => logs(&who, params),
         "/cli/app/errors" => errors(&who, params),
         "/cli/app/uninstall" => uninstall(&who, body),
+        "/cli/app/link" => link(&who, params),
+        "/cli/app/link/rotate" => link_rotate(&who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     respond(r)
@@ -1026,7 +1031,29 @@ fn app_summary(app: &AppRow) -> J {
         "label": label(app),
         "url": url_for(app),
         "livePort": super::supervisor::live_port(&app.app_id),
+        "link": super::gateway::status_json(&app.app_id),
     })
+}
+
+/// GET `/cli/app/link?app=` (S14): the App's gateway link — its port, the
+/// in-wall URL, the pass's caps, rooms, expiry and rotation, counters.
+/// Never the pass itself.
+fn link(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = app_for(who, params.get("app").map(String::as_str))?;
+    Ok(json!({ "ok": true, "app": app.app_id, "link": super::gateway::status_json(&app.app_id) }))
+}
+
+/// POST `/cli/app/link/rotate {app}` (S14): hand the App a new pass now
+/// (the old one keeps working until its own expiry). It only refreshes,
+/// so the manage-Apps switch is enough for an agent's own App.
+fn link_rotate(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let expires = super::gateway::rotate(&app.app_id).map_err(|e| no("link_unavailable", 409, e))?;
+    audit_human(&app.app_id, "link_rotate", who, json!({ "expiresAt": expires }));
+    Ok(json!({ "ok": true, "app": app.app_id, "passExpiresAt": expires, "link": super::gateway::status_json(&app.app_id) }))
 }
 
 /// Published labels an App id could collide with (§8.4, AR7): reserved

@@ -667,6 +667,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/history",
         "/cli/app/inspect",
         "/cli/app/install",
+        "/cli/app/link",
+        "/cli/app/link/rotate",
         "/cli/app/list",
         "/cli/app/logs",
         "/cli/app/restart",

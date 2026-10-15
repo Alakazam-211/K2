@@ -1365,6 +1365,9 @@ async fn async_main() {
 
     // App runtime stage 1 (prd-k2-app-runtime-v1), after the DB is open:
     // in preview, re-adopt running Apps and open their front ports.
+    // S14: App gateway links dispatch with this state (installed before
+    // the supervisor re-adopts guarded Apps and re-opens their links).
+    crate::apps::gateway::install(state.clone());
     if k2_core::deploy::enabled() {
         crate::apps::supervisor::ensure_started();
     }

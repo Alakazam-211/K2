@@ -14,6 +14,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 **After updating**
 - The inherited environment now ends in 0.46.1, not 0.46.0. Run `k2 app warnings` to see what each of your Apps still needs.
 - From 0.46.1, an agent starting a new `--cmd` service needs both App switches on its workspace; until then `k2 publish run` just tells it so.
+- **Walled Apps reach K2 through their own door (App runtime preview, Linux).** An App deployed with `k2 app deploy … --engine guarded` now gets a gateway link: it calls `http://127.0.0.1:8730` from inside its container, with an App pass K2 keeps in the file `K2_PASS_FILE` names. The pass works only on that App's own link, never on K2's main port, the tunnel or another App's link. It carries the permissions in the App's manifest, for its own workspace only, lives an hour and is replaced before then without dropping a request. Only the routes Apps already use through the App page helper are open on the link. Stopping or uninstalling the App ends every pass. `k2 app link <app>` shows the link (port, permissions, expiry, refused calls) and `k2 app link <app> --rotate` hands the App a new pass now; an agent can do both for its own workspace's Apps with "Allow this agent to manage Apps". `link` and `engine` are now reserved App names.
 
 ## 0.45.7 — Grok Bots at home
 

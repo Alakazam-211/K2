@@ -6,6 +6,10 @@
 //! - results back: `--artifact` globs, the result envelope on
 //!   `get --json` / `run --json`, `fetch`, JUnit failures first in
 //!   `logs --failures`, test counts in the wake message;
+//! - never stuck: queue timeouts, `--any` late binding (moves off a busy
+//!   node), lost nodes, infra-only retries on another node (the CLI
+//!   follows the new attempt), a returning lost node is told to stop,
+//!   a node with infra failures in a row is set aside;
 
 #![cfg(unix)]
 
@@ -211,6 +215,49 @@ impl Drop for RunningNode {
     }
 }
 
+impl RunningNode {
+    /// The machine drops off the network: no session, no redial. Its jobs
+    /// keep running locally (like a node whose Wi-Fi died).
+    fn cut(&mut self, node_id: &str) {
+        self.runner.abort();
+        k2_daemon::compute_ws::drop_connection(node_id);
+    }
+
+    /// Back on the network.
+    fn revive(&mut self) {
+        self.runner = tokio::spawn(k2_node::session::run_forever(self.node.clone()));
+    }
+}
+
+fn tuning_for_tests() -> k2_core::compute::retry::Tuning {
+    k2_core::compute::retry::Tuning {
+        replace_after_secs: 1,
+        node_lost_secs: 2,
+        retry_base_secs: 0,
+        retry_cap_secs: 0,
+        quarantine_after: 2,
+        quarantine_secs: 300,
+        tick_millis: 250,
+        ..Default::default()
+    }
+}
+
+/// Submit as the owner for `ws`; returns the job id.
+async fn submit(port: u16, ws: &Ws, n: &mut u32, mut body: Value) -> String {
+    *n += 1;
+    body["workspace"] = json!(ws.id);
+    body["clientJobId"] = json!(format!("client-{}-{:08}", &ws.id[..8], n));
+    let r = post(port, "/cli/compute/run", OWNER, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    j(&r)["job"]["id"].as_str().unwrap().to_string()
+}
+
+async fn cancel(port: u16, id: &str) {
+    let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    wait_state(port, id, 20, |v| v["state"] == "cancelled").await;
+}
+
 fn node_layout(env: &Env, tag: &str, parallel: u32) -> Layout {
     let dir = env.home.join(format!("node-{tag}"));
     let layout = Layout::new(dir.join("home"), dir.join("config"));
@@ -319,6 +366,7 @@ fn results_script() -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn results_come_back_as_artifacts_tests_and_one_result_object() {
     let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(Default::default());
     let d = test_harness::start(OWNER).await;
     let port = d.port;
     std::fs::create_dir_all(env.home.join("cli-tmp")).unwrap();
@@ -422,5 +470,127 @@ async fn results_come_back_as_artifacts_tests_and_one_result_object() {
     let r = get(port, "/cli/compute/jobs/artifact", &agent, &format!("job={id2}&name=..%2F..%2Fstate%2Fnode-key.pem")).await;
     assert_eq!(r.status, 404, "{}", r.body);
     assert_eq!(code(&r), "artifact_not_found");
+    drop(env);
+}
+
+// ── never stuck (G3, G4) ─────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
+    let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(tuning_for_tests());
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    std::fs::create_dir_all(env.home.join("cli-tmp")).unwrap();
+    let ws = seed_ws(&env, "ns", &[]);
+    let (mut na, na_id) = online_node(&env, port, "na", 1).await;
+    let (mut nb, nb_id) = online_node(&env, port, "nb", 1).await;
+    let mut n = 0u32;
+
+    // 1. A queue timeout fails loudly with the reason it waited.
+    let long_a = submit(port, &ws, &mut n, json!({"node": "na", "argv": ["sleep", "30"], "noSource": true, "retries": 0})).await;
+    wait_state(port, &long_a, 20, |v| v["state"] == "running").await;
+    let qt = submit(port, &ws, &mut n, json!({"node": "na", "argv": ["true"], "noSource": true, "queueTimeoutSecs": 2})).await;
+    let v = wait_state(port, &qt, 20, |v| v["state"] == "failed").await;
+    assert_eq!(v["reason"], "queue_timeout", "{v}");
+    let detail = v["detail"].as_str().unwrap();
+    assert!(detail.starts_with("not started within 2s (last wait on na: parallel_full"), "{detail}");
+    assert_eq!(v["result"]["ok"], false);
+    cancel(port, &long_a).await;
+
+    // 2. A real failure is a result: never retried, whatever --retries says.
+    let f = submit(port, &ws, &mut n, json!({"any": true, "argv": ["sh", "-c", "exit 7"], "noSource": true, "retries": 3})).await;
+    let v = wait_state(port, &f, 20, |v| v["state"] == "done").await;
+    assert_eq!((v["exitCode"].as_i64(), v["attempt"].as_i64()), (Some(7), Some(1)), "{v}");
+
+    // 3. Late binding: an --any job queued behind a busy node moves to the
+    //    first node that can start it.
+    let la = submit(port, &ws, &mut n, json!({"node": "na", "argv": ["sleep", "30"], "noSource": true, "retries": 0})).await;
+    let lb = submit(port, &ws, &mut n, json!({"node": "nb", "argv": ["sleep", "30"], "noSource": true, "retries": 0})).await;
+    wait_state(port, &la, 20, |v| v["state"] == "running").await;
+    wait_state(port, &lb, 20, |v| v["state"] == "running").await;
+    let x = submit(port, &ws, &mut n, json!({"any": true, "argv": ["sh", "-c", "echo moved"], "noSource": true})).await;
+    let first = job(port, &x).await;
+    assert_eq!(first["state"], "queued", "{first}");
+    let (stay, free) = if first["nodeId"] == na_id { (&la, &lb) } else { (&lb, &la) };
+    cancel(port, free).await;
+    let v = wait_state(port, &x, 20, |v| v["state"] == "done").await;
+    assert_ne!(v["nodeId"], first["nodeId"], "it ran on the node that freed up: {v}");
+    assert_eq!(v["exitCode"], 0);
+    cancel(port, stay).await;
+
+    // 4. The node running an attached --any job drops off the network:
+    //    after node_lost_secs the attempt is `interrupted/node_lost`, a
+    //    new attempt runs on the other node, and the CLI follows it.
+    let cli_env_home = env.home.clone();
+    let ws_path = ws.path.clone();
+    let k2_dir = env.home.join(".k2");
+    std::fs::create_dir_all(&k2_dir).unwrap();
+    std::fs::write(k2_dir.join("heartbeat.port"), port.to_string()).unwrap();
+    std::fs::write(k2_dir.join("heartbeat.token"), OWNER).unwrap();
+    let cli = tokio::task::spawn_blocking(move || {
+        let out = Command::new("bash")
+            .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2"))
+            .args(["compute", "run", "--any", "--no-source", "--retries", "1", "--", "sh", "-c", "echo start; sleep 8; echo end"])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", &cli_env_home)
+            .env("TMPDIR", cli_env_home.join("cli-tmp"))
+            .env("K2_PROJECT_PATH", &ws_path)
+            .current_dir(&ws_path)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    });
+    let mut lost_id = String::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while lost_id.is_empty() {
+        assert!(Instant::now() < deadline, "the CLI's job never ran");
+        let r = get(port, "/cli/compute/jobs", OWNER, &format!("workspace={}", ws.id)).await;
+        for jb in j(&r)["jobs"].as_array().unwrap() {
+            if jb["argv"][2].as_str().is_some_and(|a| a.contains("sleep 8")) && jb["state"] == "running" {
+                lost_id = jb["id"].as_str().unwrap().to_string();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let lost_on = job(port, &lost_id).await["nodeId"].as_str().unwrap().to_string();
+    let (gone, other_id) = if lost_on == na_id { (&mut na, nb_id.clone()) } else { (&mut nb, na_id.clone()) };
+    gone.cut(&lost_on);
+    let v = wait_state(port, &lost_id, 30, |v| v["attempt"] == 2 && v["state"] == "running").await;
+    assert_eq!(v["nodeId"], other_id, "the retry prefers another node: {v}");
+    assert_eq!(v["ctl"]["failedAttempts"][0]["reason"], "node_lost", "{v}");
+    // The lost node comes back still running attempt 1: it is told to stop.
+    gone.revive();
+    let gnode = gone.node.clone();
+    wait_for("the stale attempt stops on the returning node", 6, move || {
+        let g = gnode.clone();
+        Box::pin(async move { g.running_ids().is_empty() })
+    })
+    .await;
+    let (rc, out, err) = cli.await.unwrap();
+    assert_eq!(rc, 0, "the second attempt's exit: {err}");
+    assert!(err.contains("retrying as attempt 2"), "{err}");
+    assert!(out.ends_with("start\nend\n"), "the new attempt's output: {out:?}");
+    let v = job(port, &lost_id).await;
+    assert_eq!((v["state"].as_str(), v["exitCode"].as_i64(), v["attempt"].as_i64()), (Some("done"), Some(0), Some(2)), "{v}");
+
+    // 5. Infra failures in a row set a node aside; --any skips it.
+    for _ in 0..2 {
+        let bad = submit(port, &ws, &mut n, json!({"node": "na", "argv": ["/nonexistent/k2-test-binary"], "noSource": true, "retries": 0})).await;
+        let v = wait_state(port, &bad, 20, |v| v["state"] == "failed").await;
+        assert_eq!(v["reason"], "spawn_failed", "{v}");
+    }
+    let row = node_row(port, "na").await;
+    assert!(row["setAsideUntil"].is_i64(), "{row}");
+    for _ in 0..2 {
+        let a = submit(port, &ws, &mut n, json!({"any": true, "argv": ["true"], "noSource": true})).await;
+        let v = wait_state(port, &a, 20, |v| v["state"] == "done").await;
+        assert_eq!(v["nodeId"], nb_id, "a set-aside node takes no --any work: {v}");
+    }
+    k2_daemon::compute_place::clear_set_aside(&na_id);
+    k2_core::compute::retry::set_tuning_for_tests(Default::default());
+    drop(na);
+    drop(nb);
     drop(env);
 }

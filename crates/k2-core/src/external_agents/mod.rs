@@ -20,7 +20,7 @@
 //!   ([`settings`]) says so; the daemon checks it before every call.
 
 pub mod grokbot;
-pub mod live_tail;
+pub mod collect;
 pub mod rate_limit;
 pub mod settings;
 
@@ -54,8 +54,8 @@ pub struct ExternalAgent {
     pub unread_count: u32,
     /// The agent's live conversation runs outside this computer (another
     /// box, or the product's cloud): the local chat store is behind, so
-    /// K2 shows its history as old and adds the live tail
-    /// ([`live_tail`]) after it. Sends still go through: the product's
+    /// K2 collects the roster's latest entries into the bot's Thread
+    /// ([`collect`]) instead. Sends still go through: the product's
     /// gateway delivers them to the live conversation wherever it runs.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stale: bool,
@@ -78,7 +78,7 @@ pub struct ExternalAgent {
     /// tail of a stale agent). `None` for the disk roster. Never sent to
     /// clients as is.
     #[serde(skip)]
-    pub live: Option<live_tail::LiveSummary>,
+    pub live: Option<collect::LiveSummary>,
 }
 
 /// Box-wide status. Grok Bot runs one turn at a time for the whole box, so
@@ -247,7 +247,7 @@ pub struct SendReceipt {
     /// The client nonce K2 stamped on the send (`k2-<uuid>`).
     pub client_nonce: String,
     /// The agent was stale when the send went out: the caller records the
-    /// send in the agent's live tail (its local chat store won't show it).
+    /// send in the agent's Thread (see `collect`).
     #[serde(skip)]
     pub agent_stale: bool,
 }

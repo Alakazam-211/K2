@@ -199,6 +199,56 @@ pub struct OverlayDoc {
     /// on docs written before this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<PostAuthor>,
+    /// Set on a line K2 collected from an outside agent product (a local
+    /// Grok Bot): where it came from and how to draw it. None on every
+    /// other doc and on docs from before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<CollectedMeta>,
+}
+
+/// [`CollectedMeta::origin`]: the product's own local chat store (imported).
+pub const ORIGIN_STORE: &str = "store";
+/// [`CollectedMeta::origin`]: the product's live roster summary (its
+/// latest line at one of the daemon's checks).
+pub const ORIGIN_ROSTER: &str = "roster";
+/// [`CollectedMeta::origin`]: a message K2 sent to the product's agent.
+pub const ORIGIN_K2: &str = "k2";
+/// [`CollectedMeta::origin`]: a note K2 added (a gap marker).
+pub const ORIGIN_SYSTEM: &str = "system";
+
+/// A Thread line K2 collected from an outside agent product (0.46.0: local
+/// Grok Bots, address `gb:<name>`). These conversations belong to no
+/// workspace: they never wake an agent, never reach a PTY and never
+/// federate. Holds chat text only, never a token or a secret value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectedMeta {
+    /// The product (`grokbot`).
+    pub source: String,
+    /// [`ORIGIN_STORE`] | [`ORIGIN_ROSTER`] | [`ORIGIN_K2`] | [`ORIGIN_SYSTEM`].
+    pub origin: String,
+    /// The product's id for the line (dedupe key); `k2-<nonce>` for a K2
+    /// send; `gap:<id of the next line>` for a gap marker.
+    pub entry_id: String,
+    /// `human` | `agent` | `peer` | `system`.
+    pub author: String,
+    /// When the line was written (ms since epoch), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<i64>,
+    /// Sent from K2.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub via_k2: bool,
+    /// The text is the product's one-line preview (may be cut short).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preview_only: bool,
+    /// The line has no text of its own: `body` is a label for readers
+    /// (`k2 thread gb:<name>`), and the chat view draws `detail` instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_is_label: bool,
+    /// Product-specific drawing detail (peer chips, a read-only card, what
+    /// to open in the product). Never a secret value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 impl OverlayDoc {
@@ -216,6 +266,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             author: None,
+            external: None,
         }
     }
 
@@ -252,6 +303,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             author: None,
+            external: None,
         }
     }
 
@@ -288,6 +340,7 @@ impl OverlayDoc {
             }),
             widget: None,
             author: None,
+            external: None,
         }
     }
 
@@ -312,6 +365,7 @@ impl OverlayDoc {
             secret: None,
             widget: None,
             author: None,
+            external: None,
         }
     }
 

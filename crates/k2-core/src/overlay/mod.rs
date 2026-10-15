@@ -14,11 +14,30 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
-pub use store::OverlayPage;
+pub use store::{ExtTxn, OverlayPage};
 
 static WRITE: Mutex<()> = Mutex::new(());
+
+/// Write a **collected** conversation (lines K2 gathers from an outside
+/// agent product, e.g. a local Grok Bot at `gb:<name>`) in one redb
+/// transaction under the overlay write lock: dedupe index, in-place
+/// updates, appends and the collector's cursor commit together or not at
+/// all. These conversations have no workspace: nothing here wakes an
+/// agent, injects into a PTY, pushes a notification or federates.
+pub fn collected_write<R>(
+    conversation_id: &str,
+    f: impl FnOnce(&mut ExtTxn<'_>) -> Result<R, String>,
+) -> Result<R, String> {
+    let _guard = WRITE.lock();
+    store::ext_write(conversation_id, f)
+}
+
+/// A collected conversation's cursor JSON (see [`collected_write`]).
+pub fn collected_state(conversation_id: &str) -> Result<Option<Vec<u8>>, String> {
+    store::ext_state(conversation_id)
+}
 
 /// A conversation's Thread + Chatter moved to a new key (Codex/Hermes
 /// adoption: the pane key → the provider's conversation id).

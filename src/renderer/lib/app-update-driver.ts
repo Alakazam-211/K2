@@ -107,10 +107,10 @@ export async function runTriggeredAppUpdate(jobId: string): Promise<void> {
       await relayError('No update available for this app.')
       return
     }
-    // Arch pacman has no in-app installer. The offer stays in Settings
+    // Linux packages (Arch, deb, rpm) have no in-app installer. The offer stays in Settings
     // as a pkg URL. Do not download, install, or relaunch.
     if (useUpdateStore.getState().archDownloadUrl) {
-      await relayError('Arch package updates are not installed by the in-app updater.')
+      await relayError('Linux package updates (deb, rpm, Arch) are not installed by the in-app updater.')
       return
     }
     await store.startDownload()

@@ -391,6 +391,18 @@ struct FetchBody {
     include_headers: bool,
 }
 
+/// The runtime App behind a published service when its egress list is
+/// enforced (a walled engine: container or VM). A `--cmd` service, or a
+/// preview App on the unwalled process engine, has no enforced list (its
+/// raw traffic isn't walled either); the secret's host binding still
+/// holds.
+fn walled_app_of(service_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let app = k2_core::deploy::store::get_app_by_service(&conn, service_id).ok().flatten()?;
+    matches!(app.isolation.as_str(), "container" | "vm").then_some(app.app_id)
+}
+
 fn fetch(c: &Ctx, v: &J) -> R {
     use base64::Engine as _;
     use k2_vault::hosts::{Origin, OriginPattern};
@@ -398,6 +410,13 @@ fn fetch(c: &Ctx, v: &J) -> R {
     let b: FetchBody = serde_json::from_value(v.clone()).map_err(|e| err(400, "bad_json", format!("fetch body: {e}")))?;
     let url = b.url.clone().ok_or_else(|| err(400, "url_required", "give the URL to call"))?;
     let (_, origin): (url::Url, Origin) = Origin::parse_url(&url).map_err(|e| err(400, &e.code, e.hint))?;
+    // One host policy for both ways out (S15): a walled App's key-proxy
+    // call passes its egress allowlist first, with the same own-name,
+    // local-name and first-seen rules and counters as its egress proxy.
+    // The secret's own host binding still applies after it.
+    if let Some(app_id) = walled_app_of(&c.app) {
+        crate::apps::egress_proxy::check_for_key_proxy(&app_id, &origin.host_str(), origin.port).map_err(|r| err(r.status, r.code, r.hint))?;
+    }
     let mut names = b.secrets.clone();
     if let Some(n) = b.secret.as_deref().filter(|n| !n.is_empty()) {
         names.push(n.to_string());

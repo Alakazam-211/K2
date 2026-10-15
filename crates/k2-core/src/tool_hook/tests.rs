@@ -957,6 +957,9 @@ fn member(ext: ExternalId, kind: MemberKind, username: &str, display: &str) -> M
         deactivated: false,
         created_at: "2026-10-15T00:00:00Z".into(),
         deactivated_at: None,
+        email: None,
+        title: None,
+        pronouns: None,
     }
 }
 
@@ -1349,4 +1352,169 @@ fn outbox_statuses_and_prune_keep_open_and_held_rows() {
         left[0].state, STATE_BLOCKED,
         "blocked rows are never pruned"
     );
+}
+
+// ── A8: provision is declarative; K2 round-trips what it does not own ──
+
+fn with_profile(
+    mut m: MgmtPrincipal,
+    email: Option<Option<&str>>,
+    title: Option<Option<&str>>,
+    pronouns: Option<Option<&str>>,
+) -> MgmtPrincipal {
+    let own = |v: Option<Option<&str>>| v.map(|x| x.map(str::to_string));
+    m.email = own(email);
+    m.title = own(title);
+    m.pronouns = own(pronouns);
+    m
+}
+
+#[test]
+fn a8_fill_round_trips_only_fields_k2_does_not_own() {
+    let a = uuid();
+    // A principal: title/pronouns come back; the email stays K2's (here: none).
+    let mut d = desired_person(&a, "ann", true, "r");
+    let m = with_profile(
+        member(
+            ExternalId::K2Principal(a.clone()),
+            MemberKind::Person,
+            "ann",
+            "ann",
+        ),
+        Some(Some("sew@x.io")),
+        Some(Some("CTO")),
+        Some(Some("she/her")),
+    );
+    assert!(chat::fill_provision_from_member(&mut d.request, &m));
+    assert_eq!(d.request.profile.title.as_deref(), Some("CTO"));
+    assert_eq!(d.request.profile.pronouns.as_deref(), Some("she/her"));
+    assert_eq!(d.request.profile.email, None, "a principal's email is K2's");
+    // An agent / the owner: the email is Sew's too.
+    let w = uuid();
+    let mut ag = desired_agent(&w, "bot", AgentKind::Assistant, Some(ExternalId::K2Owner));
+    let mw = with_profile(
+        member(
+            ExternalId::K2Workspace(w.clone()),
+            MemberKind::Agent,
+            "bot",
+            "bot",
+        ),
+        Some(Some("bot@x.io")),
+        Some(None),
+        None,
+    );
+    assert!(chat::fill_provision_from_member(&mut ag.request, &mw));
+    assert_eq!(ag.request.profile.email.as_deref(), Some("bot@x.io"));
+    assert_eq!(ag.request.profile.title, None, "Sew says none");
+    assert_eq!(
+        ag.request.profile.pronouns, None,
+        "unknown (pre-SW14) stays absent"
+    );
+    // Nothing known → nothing changes.
+    let mut d2 = desired_person(&a, "ann", false, "r");
+    let bare = member(ExternalId::K2Principal(a), MemberKind::Person, "ann", "ann");
+    assert!(!chat::fill_provision_from_member(&mut d2.request, &bare));
+}
+
+#[test]
+fn a8_reconcile_drift_uses_update_and_email_only_when_known() {
+    let a = uuid();
+    let pa = ExternalId::K2Principal(a.clone());
+    let mut want = desired_person(&a, "ann", false, "r");
+    want.request.profile.email = Some("ann@k2.io".into());
+    // Sew's list carries a different email and a Sew-local title.
+    let m = with_profile(
+        member(pa.clone(), MemberKind::Person, "ann", "ann"),
+        Some(Some("old@k2.io")),
+        Some(Some("CTO")),
+        None,
+    );
+    let (planned, s) = reconcile::plan(&[want.clone()], &[m], &HashSet::new(), &HashMap::new());
+    assert_eq!(
+        ops_for(&planned, &pa),
+        [Op::Update],
+        "profile drift → update, never provision"
+    );
+    assert_eq!(s.updated, 1);
+    assert_eq!(
+        planned[0].payload["profile"],
+        serde_json::json!({"email": "ann@k2.io"}),
+        "only the drifted field; the title is Sew's and never sent"
+    );
+    // K2 has no email, Sew has one → explicit clear.
+    let mut no_mail = want.clone();
+    no_mail.request.profile.email = None;
+    let m2 = with_profile(
+        member(pa.clone(), MemberKind::Person, "ann", "ann"),
+        Some(Some("old@k2.io")),
+        None,
+        None,
+    );
+    let (planned, _) = reconcile::plan(&[no_mail], &[m2], &HashSet::new(), &HashMap::new());
+    assert_eq!(
+        planned[0].payload["profile"],
+        serde_json::json!({"email": null})
+    );
+    // Email unknown (pre-SW14 list) → no drift, nothing planned.
+    let m3 = member(pa.clone(), MemberKind::Person, "ann", "ann");
+    let (planned, _) = reconcile::plan(&[want], &[m3], &HashSet::new(), &HashMap::new());
+    assert!(planned.is_empty(), "{planned:?}");
+}
+
+#[test]
+fn a8_reconcile_reprovision_round_trips_sew_fields() {
+    let a = uuid();
+    let pa = ExternalId::K2Principal(a.clone());
+    // Guest flip needed (Sew: member, K2: guest).
+    let want = desired_person(&a, "ann", true, "r");
+    let m = with_profile(
+        member(pa.clone(), MemberKind::Person, "ann", "ann"),
+        Some(None),
+        Some(Some("CTO")),
+        Some(Some("she/her")),
+    );
+    let (planned, _) = reconcile::plan(
+        &[want.clone()],
+        &[m.clone()],
+        &HashSet::new(),
+        &HashMap::new(),
+    );
+    assert_eq!(ops_for(&planned, &pa), [Op::Provision]);
+    let p = &planned[0].payload;
+    assert_eq!(
+        (
+            p["guest"].as_bool(),
+            p["profile"]["title"].as_str(),
+            p["profile"]["pronouns"].as_str()
+        ),
+        (Some(true), Some("CTO"), Some("she/her"))
+    );
+    // A deactivated member is re-provisioned with its fields too.
+    let mut gone = m;
+    gone.deactivated = true;
+    let (planned, _) = reconcile::plan(&[want], &[gone], &HashSet::new(), &HashMap::new());
+    assert_eq!(planned[0].payload["profile"]["title"], "CTO");
+}
+
+#[test]
+fn a8_filled_mark_is_set_once_and_keeps_the_key() {
+    let _e = setup();
+    enable_chat();
+    let owner = rows_for("k2:owner").remove(0);
+    assert_eq!(owner.filled_at, None);
+    let mut body = payload(&owner);
+    body["profile"]["title"] = serde_json::json!("Boss");
+    record_filled(&owner.id, Some(&body)).unwrap();
+    let after = row(&owner.id);
+    assert!(after.filled_at.is_some());
+    assert_eq!(payload(&after)["profile"]["title"], "Boss");
+    assert_eq!(
+        after.idem_key, owner.idem_key,
+        "the key never changes on a fill"
+    );
+    // A second fill is a no-op: the persisted body is what every retry sends.
+    let mut other = body.clone();
+    other["profile"]["title"] = serde_json::json!("Changed");
+    record_filled(&owner.id, Some(&other)).unwrap();
+    assert_eq!(payload(&row(&owner.id))["profile"]["title"], "Boss");
 }

@@ -8,12 +8,18 @@
 //! `boot_status::set_ready()`, so its first pass is the boot pass and rows
 //! queued before a restart deliver on the next boot.
 //!
-//! Outcome rules (§9.3 with S27-A6/A7/A11, HC2):
+//! Before the FIRST send of a `provision` (A8: provision is declarative —
+//! an absent field clears it), the worker looks the member up
+//! (`GET /mgmt/v1/principals?external_id=…`) and copies back the profile
+//! fields K2 does not own (`title`, `pronouns`; `email` for agents and the
+//! owner). The filled body is persisted with `filled_at` BEFORE the send,
+//! so every retry sends the same bytes under the same key.
+//!
+//! Outcome rules (§9.3 with S27-A6/A7/A11):
 //!
 //! | Response | Row |
 //! |---|---|
 //! | 2xx | `done` (target healthy) |
-//! | 2xx listing the subject in `skipped` (HC2) | `held` — not re-added until the grant changes |
 //! | 404 on deprovision | `done` (already gone) |
 //! | 404 on update | `done` + reconcile |
 //! | 409 `username_taken`, first time | rewrite to `<base>-<hhhh>`, key `<old>_u`, now |
@@ -104,12 +110,6 @@ pub enum Outcome {
         body: String,
         reconcile: bool,
     },
-    /// HC2: delivered, but the tool skipped this subject (e.g. banned).
-    Held {
-        status: u16,
-        body: String,
-        why: String,
-    },
     UsernameRetry {
         status: u16,
     },
@@ -128,27 +128,10 @@ pub enum Outcome {
     },
 }
 
-/// HC2: does a 2xx body list this subject as `skipped`?
-fn skipped_reason(body: &[u8], row: &OutboxRow) -> Option<String> {
-    let v: Value = serde_json::from_slice(body).ok()?;
-    match v.get("skipped")? {
-        Value::Bool(true) => Some("skipped by Sew".to_string()),
-        Value::Array(items) => {
-            let member = v
-                .get("member_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let hit = items
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|s| s == row.subject_key || member.as_deref() == Some(s));
-            hit.then(|| {
-                "skipped by Sew (e.g. banned); not re-added until the grant changes".to_string()
-            })
-        }
-        _ => None,
-    }
-}
+// HC2 note: `principals/provision` has no `skipped` field (Sew,
+// 2026-10-15). `skipped` lives on the batch Space/channel member-add
+// responses (`sew_wire::AddMembersOutcome`), which K5/K31's Space-add op
+// reads; S27's ops never record `held`.
 
 /// Pure outcome rules. `now` and `first_attempt_at` are Unix seconds.
 pub fn classify(
@@ -174,9 +157,6 @@ pub fn classify(
     let status = resp.status;
     if resp.is_success() {
         let body = resp.body_text();
-        if let Some(why) = skipped_reason(&resp.body, row) {
-            return Outcome::Held { status, body, why };
-        }
         return Outcome::Done {
             status,
             body,
@@ -287,6 +267,56 @@ fn path_for(op: Op) -> &'static str {
     }
 }
 
+/// A8 (b): the filled body for a provision row, `Ok(None)` when nothing
+/// changes (a new member, or Sew's list carries none of the fields), or the
+/// retry outcome when the lookup itself failed.
+async fn fill_provision(
+    cfg: &WorkerConfig,
+    client: &MgmtClient,
+    row: &OutboxRow,
+) -> Result<Option<Value>, Outcome> {
+    let lookup_failed = |error: String, status: Option<u16>, target: bool| Outcome::Retry {
+        status,
+        error: format!("member lookup: {error}"),
+        delay: backoff(cfg, row.attempts + 1),
+        target_error: target.then(|| format!("member lookup: {error}")),
+        stop_target: target,
+    };
+    let mut req: sew_wire::ProvisionRequest = match serde_json::from_str(&row.payload_raw) {
+        Ok(r) => r,
+        // Not a provision body this worker built: send it unchanged and
+        // let Sew's answer decide (a 400 blocks it loudly).
+        Err(_) => return Ok(None),
+    };
+    let path = sew_wire::principal_lookup_path(&req.external_id);
+    let resp = client
+        .get(&path)
+        .await
+        .map_err(|e| lookup_failed(e.0, None, true))?;
+    if resp.status == 401 {
+        return Err(lookup_failed("mgmt token rejected".into(), Some(401), true));
+    }
+    if !resp.is_success() {
+        return Err(lookup_failed(
+            resp.error_line(),
+            Some(resp.status),
+            resp.status >= 500,
+        ));
+    }
+    let page: sew_wire::MgmtPrincipalPage = serde_json::from_slice(&resp.body)
+        .map_err(|e| lookup_failed(format!("unexpected body ({e})"), Some(resp.status), false))?;
+    let Some(m) = page.items.iter().find(|m| m.external_id == req.external_id) else {
+        return Ok(None);
+    };
+    if hook::chat::fill_provision_from_member(&mut req, m) {
+        Ok(Some(serde_json::to_value(&req).map_err(|e| {
+            lookup_failed(format!("encode ({e})"), None, false)
+        })?))
+    } else {
+        Ok(None)
+    }
+}
+
 /// The username-conflict rewrite: `<base>-<hhhh>` in `profile.username`.
 fn suffixed_payload(row: &OutboxRow) -> Option<Value> {
     let mut v: Value = serde_json::from_str(&row.payload_raw).ok()?;
@@ -309,8 +339,9 @@ async fn blocking<T: Send + 'static>(
 pub struct PassReport {
     pub attempted: usize,
     pub done: usize,
-    pub held: usize,
     pub retried: usize,
+    /// A8: provision bodies filled from the member list before a first send.
+    pub filled: usize,
     pub blocked: usize,
 }
 
@@ -331,6 +362,31 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                 continue;
             };
             report.attempted += 1;
+            let mut row = row;
+            if op == Op::Provision && row.filled_at.is_none() {
+                match fill_provision(cfg, &client, &row).await {
+                    Ok(Some(filled)) => {
+                        report.filled += 1;
+                        let (id, body) = (row.id.clone(), filled.clone());
+                        blocking(move || hook::record_filled(&id, Some(&body))).await?;
+                        row.payload_raw = filled.to_string();
+                    }
+                    Ok(None) => {
+                        let id = row.id.clone();
+                        blocking(move || hook::record_filled(&id, None)).await?;
+                    }
+                    Err(outcome) => {
+                        // The lookup failed: nothing was sent. Same retry
+                        // rules as a failed send (transport/5xx/401 stop
+                        // this target's pass).
+                        let (stop, _) = apply(&kind, &row, outcome, &mut report).await?;
+                        if stop {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
             let res = client
                 .post(
                     path_for(op),
@@ -369,7 +425,6 @@ async fn apply(
         row.attempts + 1,
         match &outcome {
             Outcome::Done { status, .. } => format!("done {status}"),
-            Outcome::Held { status, .. } => format!("held {status}"),
             Outcome::UsernameRetry { status } => format!("username retry {status}"),
             Outcome::Retry { status, error, .. } => format!("retry {status:?} {error}"),
             Outcome::Blocked { status, error } => format!("blocked {status:?} {error}"),
@@ -388,15 +443,6 @@ async fn apply(
             })
             .await?;
             Ok((false, reconcile))
-        }
-        Outcome::Held { status, body, why } => {
-            report.held += 1;
-            blocking(move || {
-                hook::record_held(&id, status, &body, &why)?;
-                hook::set_health(&kind, true, None)
-            })
-            .await?;
-            Ok((false, false))
         }
         Outcome::UsernameRetry { status } => {
             let Some(payload) = suffixed_payload(row) else {
@@ -635,6 +681,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             done_at: None,
+            filled_at: None,
         }
     }
 
@@ -682,15 +729,11 @@ mod tests {
                 ..
             }
         ));
-        // HC2: 2xx with our subject skipped → held
-        let held = resp(200, r#"{"member_id":"7","skipped":["7"]}"#, "");
+        // HC2 lives on member-add responses, not provision: a stray
+        // `skipped` on a provision body changes nothing.
+        let stray = resp(200, r#"{"member_id":"7","skipped":["7"]}"#, "");
         assert!(matches!(
-            classify(&c, &r, Ok(&held), 0),
-            Outcome::Held { .. }
-        ));
-        let not_us = resp(200, r#"{"member_id":"7","skipped":["9"]}"#, "");
-        assert!(matches!(
-            classify(&c, &r, Ok(&not_us), 0),
+            classify(&c, &r, Ok(&stray), 0),
             Outcome::Done { .. }
         ));
         // 404 deprovision → done; 404 update → done + reconcile; 404 provision → blocked

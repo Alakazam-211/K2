@@ -2,7 +2,8 @@
 //!
 //! - Delivery (K3): success, retryable (transport, 5xx, 401, 429),
 //!   permanent (4xx → blocked, one subject only), lost response replayed
-//!   under the same `Idempotency-Key`, restart resumes the outbox, HC2.
+//!   under the same `Idempotency-Key`, restart resumes the outbox, A8
+//!   profile round-trip (fill once before the first send).
 //! - Reconcile (K4): drift repair, install-id change, rev 147.
 //! - Routes: owner-only, POST-only (405), hook state on `GET grants`.
 //!
@@ -583,43 +584,221 @@ async fn assistant_person_inactive_blocks_at_once() {
     drop_ws(&wid);
 }
 
+// ── A8: provision is declarative; K2 round-trips what it does not own ──
+
+/// `GET /mgmt/v1/principals` calls (lookups during delivery passes; the
+/// fake records the path without its query).
+fn principal_gets(env: &Env) -> usize {
+    env.sew
+        .calls()
+        .iter()
+        .filter(|c| c.method == "GET" && c.path == "/mgmt/v1/principals" && c.status == 200)
+        .count()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hc2_skipped_member_is_held_and_not_re_added_until_the_grant_changes() {
+async fn a8_guest_flip_and_repin_keep_sew_owned_profile_fields() {
     let env = setup().await;
     enable(&env);
-    drain(&env).await;
     let ann = skin::add_principal("ann").unwrap();
-    env.sew.ban(&pext(&ann.id));
+    skin::set_principal_email_as("ann", Some("ann@k2.io"), "owner-token").unwrap();
     let g = chat("principal", "ann", None, "owner-token");
+    let (wid, handle) = add_ws("pin");
+    chat("workspace", &handle, Some("assistant:ann"), "owner-token");
     drain(&env).await;
-    let r = rows()
-        .into_iter()
-        .find(|r| r.subject_key == pext(&ann.id))
-        .unwrap();
-    assert_eq!(r.state, "held", "{r:?}");
-    let provisions = || {
-        env.sew
-            .posts()
-            .iter()
-            .filter(|c| c.body["external_id"] == pext(&ann.id))
-            .count()
-    };
-    assert_eq!(provisions(), 1);
-    for _ in 0..3 {
-        worker::reconcile_once().await.unwrap();
-        drain(&env).await;
-    }
-    assert_eq!(
-        provisions(),
-        1,
-        "reconcile does not keep re-adding a skipped member"
+    // People edit their Sew-local profile; an admin gives the agent a Sew email.
+    let ws_ext = format!("k2:workspace:{wid}");
+    env.sew.set_sew_profile(
+        &pext(&ann.id),
+        Some("ann@k2.io"),
+        Some("CTO"),
+        Some("she/her"),
     );
-    let grants = skin::list_grants().unwrap();
-    assert_eq!(hook::hook_states(&grants).unwrap()[&g.id].0, "held");
-    // The grant changes → the hook tries again.
+    env.sew
+        .set_sew_profile(&ws_ext, Some("bot@sew.io"), Some("Scheduler"), None);
+    // Re-pin the assistant to the owner, then flip... the person can't go
+    // guest while pinned, so re-pin first.
+    let wg = skin::list_grants()
+        .unwrap()
+        .into_iter()
+        .find(|x| x.subject_id == wid)
+        .unwrap();
+    skin::update_grant_scope(&wg.id, "assistant:owner", "owner-token").unwrap();
     skin::update_grant_scope(&g.id, "guest", "owner-token").unwrap();
     drain(&env).await;
-    assert_eq!(provisions(), 2);
+    let a = env.sew.member(&pext(&ann.id)).unwrap();
+    assert!(a.guest, "guest flip applied");
+    assert_eq!(
+        (
+            a.title.as_deref(),
+            a.pronouns.as_deref(),
+            a.email.as_deref()
+        ),
+        (Some("CTO"), Some("she/her"), Some("ann@k2.io")),
+        "a re-provision must not clear the Sew-local profile: {}",
+        env.sew.log()
+    );
+    let w = env.sew.member(&ws_ext).unwrap();
+    assert_eq!(w.assistant_of.as_deref(), Some("k2:owner"));
+    assert_eq!(
+        (w.email.as_deref(), w.title.as_deref()),
+        (Some("bot@sew.io"), Some("Scheduler")),
+        "an agent's email is Sew's: round-tripped"
+    );
+    // The bodies Sew received carried the fields (declarative provision).
+    let flip = env
+        .sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.body["external_id"] == pext(&ann.id))
+        .last()
+        .unwrap();
+    assert_eq!(flip.body["profile"]["title"], "CTO");
+    assert_eq!(flip.body["guest"], true);
+    env.sew.assert_clean();
+    drop_ws(&wid);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a8_fill_happens_once_before_the_first_send_and_retries_reuse_it() {
+    let env = setup().await;
+    enable(&env);
+    let ann = skin::add_principal("ann").unwrap();
+    let g = chat("principal", "ann", None, "owner-token");
+    drain(&env).await;
+    env.sew
+        .set_sew_profile(&pext(&ann.id), None, Some("CTO"), None);
+    skin::update_grant_scope(&g.id, "guest", "owner-token").unwrap();
+    let gets_before = principal_gets(&env);
+    env.sew.fail_next(2, 503, "unavailable", "");
+    drain(&env).await;
+    let gets = principal_gets(&env) - gets_before;
+    assert_eq!(
+        gets,
+        1,
+        "one lookup, then the persisted body: {}",
+        env.sew.log()
+    );
+    let sends: Vec<_> = env
+        .sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.body["external_id"] == pext(&ann.id) && c.body["guest"] == true)
+        .collect();
+    assert_eq!(sends.len(), 3, "503, 503, 200: {}", env.sew.log());
+    assert!(
+        sends.iter().all(|c| c.key == sends[0].key),
+        "same key on every retry"
+    );
+    assert!(
+        sends.iter().all(|c| c.body == sends[0].body),
+        "same bytes on every retry"
+    );
+    assert_eq!(sends[0].body["profile"]["title"], "CTO");
+    let row = rows()
+        .into_iter()
+        .filter(|r| r.subject_key == pext(&ann.id))
+        .last()
+        .unwrap();
+    assert!(row.filled_at.is_some());
+    assert_eq!(
+        env.sew.member(&pext(&ann.id)).unwrap().title.as_deref(),
+        Some("CTO")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a8_pre_sw14_list_still_provisions_and_lookup_failure_retries() {
+    let env = setup().await;
+    enable(&env);
+    let ann = skin::add_principal("ann").unwrap();
+    let g = chat("principal", "ann", None, "owner-token");
+    drain(&env).await;
+    // An older Sew: the list has no profile fields → unknown; the flip
+    // still goes through (Sew clears the title: nothing K2 can see).
+    env.sew.set_list_profile_fields(false);
+    env.sew
+        .set_sew_profile(&pext(&ann.id), None, Some("CTO"), None);
+    skin::update_grant_scope(&g.id, "guest", "owner-token").unwrap();
+    drain(&env).await;
+    let m = env.sew.member(&pext(&ann.id)).unwrap();
+    assert!(m.guest);
+    assert_eq!(
+        m.title, None,
+        "pre-SW14: unknown fields cannot be round-tripped"
+    );
+    // A lookup that cannot reach Sew sends nothing and stays pending.
+    let mut env = env;
+    skin::update_grant_scope(&g.id, "member", "owner-token").unwrap();
+    env.sew.down();
+    hook::force_due_for_tests().unwrap();
+    worker::pass_once(&cfg()).await.unwrap();
+    let r = rows()
+        .into_iter()
+        .filter(|r| r.subject_key == pext(&ann.id))
+        .last()
+        .unwrap();
+    assert_eq!((r.state.as_str(), r.filled_at), ("pending", None), "{r:?}");
+    assert!(
+        r.last_error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("member lookup:"),
+        "{r:?}"
+    );
+    env.sew.up();
+    drain(&env).await;
+    assert!(!env.sew.member(&pext(&ann.id)).unwrap().guest);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a8_profile_drift_is_repaired_with_update_and_keeps_title() {
+    let env = setup().await;
+    enable(&env);
+    let ann = skin::add_principal("ann").unwrap();
+    skin::set_principal_email_as("ann", Some("ann@k2.io"), "owner-token").unwrap();
+    chat("principal", "ann", None, "owner-token");
+    drain(&env).await;
+    // Drift in Sew: wrong email and name; a Sew-local title K2 must keep.
+    env.sew
+        .set_sew_profile(&pext(&ann.id), Some("wrong@x.io"), Some("CTO"), None);
+    env.sew.set_display_name(&pext(&ann.id), "Wrong");
+    let provisions_before = env
+        .sew
+        .applied("/mgmt/v1/principals/provision", &pext(&ann.id));
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    let m = env.sew.member(&pext(&ann.id)).unwrap();
+    assert_eq!(
+        (
+            m.email.as_deref(),
+            m.display_name.as_str(),
+            m.title.as_deref()
+        ),
+        (Some("ann@k2.io"), "ann", Some("CTO"))
+    );
+    assert_eq!(
+        env.sew
+            .applied("/mgmt/v1/principals/provision", &pext(&ann.id)),
+        provisions_before,
+        "profile-only drift never re-provisions"
+    );
+    assert_eq!(
+        env.sew
+            .applied("/mgmt/v1/principals/update", &pext(&ann.id)),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hc2_provision_has_no_skipped_so_s27_never_holds_a_member() {
+    let env = setup().await;
+    enable(&env);
+    let ann = skin::add_principal("ann").unwrap();
+    chat("principal", "ann", None, "owner-token");
+    drain(&env).await;
+    assert!(rows().iter().all(|r| r.state != "held"), "{:?}", rows());
+    assert!(env.sew.member(&pext(&ann.id)).is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

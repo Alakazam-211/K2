@@ -20,8 +20,12 @@
 //!   owner `k2:owner` when the target is enabled). Connect users — owners
 //!   and admins included — are never provisioned by role. App Space
 //!   membership (K31) will come only from that App's `kind=app` grants.
-//! - **HC2:** a subject Sew answers as `skipped` (banned) is recorded as
-//!   `held` and is not re-added by reconcile until its grant changes.
+//! - **HC2:** `skipped` lives on the batch Space/channel member-add
+//!   responses (not on provision). The seam is here for K5/K31: a member
+//!   recorded `held` is not re-added by reconcile until its grant changes.
+//! - **A8:** provision is declarative (absent clears). Profile drift is
+//!   repaired with `update`; a re-provision of an existing member first
+//!   copies back the fields K2 does not own from Sew's member list.
 //! - **KM13:** the `actor` stored on a row and sent as `Sew-Actor` is
 //!   attribution only ("reported by K2"), never proof a person acted.
 //! - Workspace names/handles, the owner name and project deletes live in
@@ -664,7 +668,14 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
     })
 }
 
-/// HC2: the tool listed the subject as `skipped`.
+/// A8: store the filled provision body (or just the mark, when nothing
+/// changed) before the first send.
+pub fn record_filled(id: &str, payload: Option<&serde_json::Value>) -> Result<(), String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| outbox::mark_filled(conn, id, payload, now))
+}
+
+/// HC2: a member-add listed the subject as `skipped` (K5/K31 seam).
 pub fn record_held(id: &str, status: u16, result: &str, why: &str) -> Result<(), String> {
     let now = outbox::now_secs();
     crate::log_debug!("[grant-hook] row {id} held: {why}");

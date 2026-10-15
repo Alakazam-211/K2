@@ -9,9 +9,11 @@
 //! `superseded`.
 //! - `blocked`: a bug or bad data; halts that subject until an owner runs
 //!   retry or skip.
-//! - `held` (HC2): the tool answered 2xx but listed the subject as
-//!   `skipped` (e.g. banned). Final; reconcile leaves the subject alone
-//!   until its grant changes (a new [`super::grant_rev`]).
+//! - `held` (HC2): a batch Space/channel member-add answered 2xx with the
+//!   subject in `skipped` (e.g. banned). Final; reconcile leaves the
+//!   subject alone until its grant changes (a new [`super::grant_rev`]).
+//!   Written by K5/K31's Space-add op; S27's ops (provision has no
+//!   `skipped`) never write it.
 //! - `skipped`: an owner skip, or the target was dropped.
 //! - `superseded`: an unattempted `update` replaced by a newer row.
 //!
@@ -66,7 +68,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             result           TEXT,
             created_at       INTEGER NOT NULL,
             updated_at       INTEGER NOT NULL,
-            done_at          INTEGER
+            done_at          INTEGER,
+            filled_at        INTEGER
          );
          CREATE INDEX IF NOT EXISTS tool_outbox_due
             ON tool_outbox(tool, state, next_attempt_at);
@@ -85,7 +88,10 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             updated_at        INTEGER NOT NULL
          );",
     )
-    .map_err(|e| format!("skin.db tool_outbox schema: {e}"))
+    .map_err(|e| format!("skin.db tool_outbox schema: {e}"))?;
+    // A8: files made before `filled_at` existed. Ignore duplicate ALTER.
+    let _ = conn.execute("ALTER TABLE tool_outbox ADD COLUMN filled_at INTEGER", []);
+    Ok(())
 }
 
 /// `k2ob_` + the row uuid without hyphens (37 chars, inside
@@ -126,14 +132,19 @@ pub struct OutboxRow {
     pub created_at: i64,
     pub updated_at: i64,
     pub done_at: Option<i64>,
+    /// A8: when the worker copied the Sew-owned profile fields into a
+    /// provision body (once, before its first send). `None` = not yet.
+    pub filled_at: Option<i64>,
 }
 
 const ROW_COLS: &str = "id, seq, tool, op, subject_key, payload, idem_key, grant_id,
         grant_rev, cause, actor, after_subject, state, attempts, first_attempt_at,
-        next_attempt_at, last_status, last_error, result, created_at, updated_at, done_at";
+        next_attempt_at, last_status, last_error, result, created_at, updated_at, done_at,
+        filled_at";
 const ROW_SELECT: &str = "SELECT id, seq, tool, op, subject_key, payload, idem_key, grant_id,
         grant_rev, cause, actor, after_subject, state, attempts, first_attempt_at,
-        next_attempt_at, last_status, last_error, result, created_at, updated_at, done_at
+        next_attempt_at, last_status, last_error, result, created_at, updated_at, done_at,
+        filled_at
      FROM tool_outbox";
 
 fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxRow> {
@@ -162,6 +173,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OutboxRow> {
         created_at: r.get(19)?,
         updated_at: r.get(20)?,
         done_at: r.get(21)?,
+        filled_at: r.get(22)?,
     })
 }
 
@@ -313,7 +325,34 @@ pub fn mark_done(
     Ok(())
 }
 
-/// HC2: 2xx with the subject listed as `skipped`. Final.
+/// A8: persist the filled provision body BEFORE its first send, so every
+/// retry sends the same bytes under the same key. A no-op once filled.
+pub fn mark_filled(
+    conn: &Connection,
+    id: &str,
+    payload: Option<&serde_json::Value>,
+    now: i64,
+) -> Result<(), String> {
+    match payload {
+        Some(p) => {
+            let body = serde_json::to_string(p).map_err(|e| format!("tool_outbox payload: {e}"))?;
+            conn.execute(
+                "UPDATE tool_outbox SET payload = ?1, filled_at = ?2, updated_at = ?2
+                 WHERE id = ?3 AND filled_at IS NULL",
+                params![body, now, id],
+            )
+        }
+        None => conn.execute(
+            "UPDATE tool_outbox SET filled_at = ?1 WHERE id = ?2 AND filled_at IS NULL",
+            params![now, id],
+        ),
+    }
+    .map_err(|e| format!("tool_outbox fill: {e}"))?;
+    Ok(())
+}
+
+/// HC2: a member-add answered 2xx with the subject in `skipped`. Final.
+/// (K5/K31's Space adds; `provision` has no `skipped` field.)
 pub fn mark_held(
     conn: &Connection,
     id: &str,

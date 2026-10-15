@@ -16,6 +16,7 @@
 //! - [`admin`]: node admin — the signed command, classes, levels, the
 //!   verb catalog and refusal codes (prd-k2-node-admin-v1 §7). SSOT.
 //! - [`health`]: node health facts (§10.1).
+//! - [`results`]: artifact globs, collected artifacts, JUnit test summaries.
 
 pub mod admin;
 pub mod canonical;
@@ -26,6 +27,7 @@ pub mod health;
 pub mod needs;
 pub mod pairing;
 pub mod refusal;
+pub mod results;
 pub mod ticket;
 
 pub use frames::PROTOCOL;

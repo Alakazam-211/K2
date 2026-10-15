@@ -140,6 +140,7 @@ jobs:
           cargo test -p k2-core --lib -- compute::
           cargo test -p k2-daemon --lib -- compute_ route_policy
           cargo test -p k2-daemon --test compute_integration
+          cargo test -p k2-daemon --test compute_results_integration
 
       # Custom/enterprise air-gap compile (`--features airgap`). Compiles
       # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot

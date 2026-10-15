@@ -670,6 +670,15 @@ pub fn set_job_log(conn: &Connection, id: &str, seq: u64, bytes: u64) {
     );
 }
 
+/// Store the node-reported outputs (artifacts + test summary) for the
+/// attempt `generation` only (a stale attempt's outputs never land).
+pub fn set_job_outputs(conn: &Connection, id: &str, generation: i64, outputs_json: &str) {
+    let _ = conn.execute(
+        "UPDATE compute_jobs SET summary_json = ?3 WHERE id = ?1 AND generation = ?2",
+        params![id, generation, outputs_json],
+    );
+}
+
 pub fn set_job_receipt(conn: &Connection, id: &str, receipt_json: &str, ok: bool) {
     let _ = conn.execute(
         "UPDATE compute_jobs SET receipt_json = ?2, receipt_ok = ?3 WHERE id = ?1",
@@ -838,6 +847,7 @@ mod tests {
             exclusive: false,
             created_at: 10,
             needs: Vec::new(),
+            artifacts: Vec::new(),
         }
     }
 

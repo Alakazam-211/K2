@@ -20,6 +20,7 @@ pub mod enroll;
 pub mod local;
 pub mod logs;
 pub mod message;
+pub mod result;
 pub mod scheduler;
 pub mod store;
 pub mod sync;

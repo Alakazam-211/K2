@@ -10239,15 +10239,20 @@ Agents:
                  [--detach] [--dirty] [--sha REV] [--no-source]
                  [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw]
+                 [--artifact GLOB]... [--json]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
                   anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
   k2 compute jobs [--node N] [--mine] [--state S] [--limit N] [--json]
-  k2 compute get <job> [--json]
+  k2 compute get <job> [--json]              --json: the result (exit, duration, node,
+                                             artifacts + sha256, tests, receipt id)
+  k2 compute fetch <job> [NAME...] [--out DIR] [--json]
+                                             copy kept artifacts here (all, or NAMEs)
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
+                                             --failures: failing tests first, then log lines
   k2 compute cancel <job>        k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals):
@@ -10295,9 +10300,11 @@ This computer (its owner):
                           [--private-home | --no-private-home]
   k2 compute local disable
 
-Attached runs stream output and exit with the job's exit code. Infra
-problems exit 3 with a code (node_offline, not_granted, compute_off,
-queue_full, owner_only, …). Read `k2 study compute` first.
+Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
+3 = infra, with a JSON code on stderr (node_offline, not_granted,
+compute_off, queue_full, owner_only, …); 130 = you detached with Ctrl-C
+(the job keeps running). --json prints one result object on stdout (logs
+go to stderr). Read `k2 study compute` first.
 EOF
 }
 
@@ -10515,6 +10522,14 @@ elif verb == "get":
     if j.get("queue"):
         q = j["queue"]
         print("  queued: position %s — %s (%s)" % (q["position"], q["reason"], q["message"]))
+    r = j.get("result") or {}
+    t = r.get("tests")
+    if t:
+        print("  tests: %d passed, %d failed, %d errors, %d skipped" % (t["passed"], t["failed"], t["errors"], t["skipped"]))
+    for a in r.get("artifacts") or []:
+        print("  artifact: %s  %d bytes  sha256 %s…" % (a["name"], a["bytes"], a["sha256"][:12]))
+    if r.get("receipt"):
+        print("  receipt: %s (%s)" % (r["receipt"].get("id"), "verified" if r["receipt"].get("verified") else "NOT verified"))
 elif verb == "receipt":
     print(json.dumps(v.get("receipt"), indent=2))
     print("verified: %s  (%s)" % ("yes" if v.get("verified") else "NO", v.get("proves")))
@@ -10547,10 +10562,18 @@ else:
 '
 }
 
+# Print a job's result object (the `result` of jobs/get) on stdout.
+_compute_print_result() {
+    _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("result"), indent=2))'
+}
+
 # Follow a job's logs until it ends; exit with its result.
-# _compute_follow <job> <raw 0|1> [cursor|seq:N]
+# _compute_follow <job> <raw 0|1> [cursor|seq:N] [json 0|1]
+# json=1: every log line goes to stderr and the result object is printed
+# on stdout at the end (same exit code).
 _compute_follow() {
-    local job="$1" raw="${2:-0}" start="${3:-0}"
+    local job="$1" raw="${2:-0}" start="${3:-0}" as_json="${4:-0}"
     local cursor=0 query state_file fails=0 lost=0
     state_file="$(mktemp -t k2-compute-XXXXXX)"
     # shellcheck disable=SC2064
@@ -10581,10 +10604,11 @@ _compute_follow() {
         fi
         [ "$_CP_STATUS" = "200" ] || { rm -f "$state_file"; _compute_fail "$_CP_STATUS" "$_CP_BODY"; }
         fails=0
-        printf '%s' "$_CP_BODY" | K2_CP_RAW="$raw" K2_CP_STATE="$state_file" K2_CP_LOST="$lost" python3 -c '
+        printf '%s' "$_CP_BODY" | K2_CP_RAW="$raw" K2_CP_STATE="$state_file" K2_CP_LOST="$lost" K2_CP_JSON="$as_json" python3 -c '
 import base64, json, os, re, sys
 v = json.load(sys.stdin)
 raw = os.environ.get("K2_CP_RAW") == "1"
+to_err = os.environ.get("K2_CP_JSON") == "1"
 esc = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 chunks = v.get("chunks", [])
 if os.environ.get("K2_CP_LOST") == "1" and chunks:
@@ -10593,7 +10617,7 @@ for c in chunks:
     data = base64.b64decode(c["data"])
     if not raw:
         data = esc.sub(b"", data)
-    if c["stream"] == "out":
+    if c["stream"] == "out" and not to_err:
         sys.stdout.buffer.write(data); sys.stdout.buffer.flush()
     else:
         sys.stderr.buffer.write(data); sys.stderr.buffer.flush()
@@ -10620,6 +10644,7 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
         if [ "$end" = "1" ]; then
             rm -f "$state_file"
             trap - INT
+            [ "$as_json" = "1" ] && _compute_print_result "$job"
             local took=""
             if [ -n "$started" ] && [ -n "$ended" ]; then
                 took=" after $(( (ended - started) / 60 ))m$(( (ended - started) % 60 ))s"
@@ -10645,8 +10670,8 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace=""
-    local -a labels=() envs=() needs=()
+    local retry="" raw=0 workspace="" as_json=0
+    local -a labels=() envs=() needs=() artifacts=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
@@ -10667,6 +10692,8 @@ cmd_compute_run() {
             --retry-interrupted) retry=1; shift ;;
             --no-retry) retry=0; shift ;;
             --raw) raw=1; shift ;;
+            --artifact|--artifacts) artifacts+=("${2:-}"); shift 2 ;;
+            --json) as_json=1; shift ;;
             --workspace) workspace="${2:-}"; shift 2 ;;
             -*) echo "usage: unknown flag '$1' (k2 compute --help)" >&2; exit 2 ;;
             *)
@@ -10715,11 +10742,16 @@ for a in sys.argv[1:]:
     out += [x.strip() for x in a.split(",") if x.strip()]
 print(json.dumps(out))' "${needs[@]}")"
     fi
+    local artifacts_json=""
+    if [ "${#artifacts[@]}" -gt 0 ]; then
+        artifacts_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${artifacts[@]}")"
+    fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
+        K2_CJ_artifacts_j="$artifacts_json" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
@@ -10753,11 +10785,91 @@ print(j["id"] + "\t" + line)')"
     local job_id="${info%%$'\t'*}" line="${info#*$'\t'}"
     echo "$line" >&2
     if [ "$detach" = "1" ]; then
-        echo "${job_id:0:8}"
+        if [ "$as_json" = "1" ]; then
+            _compute_print_result "$job_id"
+        else
+            echo "${job_id:0:8}"
+        fi
         echo "[k2 compute] detached: you get a [compute] message when it ends. k2 compute attach ${job_id:0:8}" >&2
         exit 0
     fi
-    _compute_follow "$job_id" "$raw" 0
+    _compute_follow "$job_id" "$raw" 0 "$as_json"
+}
+
+# k2 compute fetch <job> [NAME...] [--out DIR] [--json]: copy kept
+# artifacts from the node (through this server) into DIR (default .),
+# keeping their relative names; every file is checked against the
+# sha256 the node reported.
+cmd_compute_fetch() {
+    local job="" out="." as_json=0
+    local -a names=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --out|-o) out="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json]" >&2; exit 2 ;;
+            *) if [ -z "$job" ]; then job="$1"; else names+=("$1"); fi; shift ;;
+        esac
+    done
+    [ -n "$job" ] && [ -n "$out" ] || { echo "usage: k2 compute fetch <job> [NAME...] [--out DIR] [--json]" >&2; exit 2; }
+    _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")"
+    local list
+    list="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+want = sys.argv[1:]
+have = {a["name"]: a for a in v.get("artifacts") or []}
+missing = [w for w in want if w not in have]
+if missing:
+    sys.stderr.write(json.dumps({"error": "artifact_not_found", "hint": "job %s kept: %s" % (v.get("short"), ", ".join(sorted(have)) or "(nothing)")}) + "\n")
+    sys.exit(3)
+for n in (want or sorted(have)):
+    print(n)' "${names[@]+"${names[@]}"}")" || exit 3
+    mkdir -p "$out" || { echo "{\"error\":\"local_write\",\"hint\":\"can't create $out\"}" >&2; exit 3; }
+    local results="[]" name
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        local offset=0 eof=0 first=1
+        while [ "$eof" != "1" ]; do
+            _compute_call GET /cli/compute/jobs/artifact "job=$(urlencode "$job")&name=$(urlencode "$name")&offset=$offset&max=4194304"
+            local step
+            step="$(printf '%s' "$_CP_BODY" | K2_CP_OUT="$out" K2_CP_FIRST="$first" python3 -c '
+import base64, json, os, sys
+v = json.load(sys.stdin)
+name = v["name"]
+parts = name.split("/")
+if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
+    sys.stderr.write(json.dumps({"error": "artifact_name_unsafe", "hint": name}) + "\n"); sys.exit(3)
+path = os.path.join(os.environ["K2_CP_OUT"], *parts)
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+data = base64.b64decode(v["data"])
+with open(path, "wb" if os.environ.get("K2_CP_FIRST") == "1" else "ab") as f:
+    f.write(data)
+print("%d %d %s %s %s" % (v["offset"] + len(data), 1 if v["eof"] else 0, v["sha256"], v["bytes"], path))')" || exit 3
+            local sha bytes path
+            read -r offset eof sha bytes path <<<"$step"
+            first=0
+        done
+        results="$(K2_CP_PATH="$path" K2_CP_SHA="$sha" K2_CP_BYTES="$bytes" K2_CP_NAME="$name" python3 -c '
+import hashlib, json, os, sys
+acc = json.loads(sys.argv[1])
+p = os.environ["K2_CP_PATH"]
+h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+if h != os.environ["K2_CP_SHA"] or os.path.getsize(p) != int(os.environ["K2_CP_BYTES"]):
+    sys.stderr.write(json.dumps({"error": "artifact_changed", "hint": "%s does not match the sha256 the node reported; fetch it again" % p}) + "\n")
+    sys.exit(3)
+acc.append({"name": os.environ["K2_CP_NAME"], "path": p, "bytes": int(os.environ["K2_CP_BYTES"]), "sha256": h})
+print(json.dumps(acc))' "$results")" || exit 3
+    done <<<"$list"
+    if [ "$as_json" = "1" ]; then
+        printf '%s' "$results" | K2_CP_JOB="$job" python3 -c 'import json,os,sys; print(json.dumps({"job": os.environ["K2_CP_JOB"], "files": json.load(sys.stdin)}, indent=2))'
+    else
+        printf '%s' "$results" | python3 -c '
+import json, sys
+fs = json.load(sys.stdin)
+if not fs: print("(no artifacts kept for this job)")
+for f in fs: print("%s  %d bytes  sha256 %s…" % (f["path"], f["bytes"], f["sha256"][:12]))'
+    fi
 }
 
 cmd_compute_logs() {
@@ -10772,6 +10884,26 @@ cmd_compute_logs() {
         esac
     done
     [ -n "$job" ] || { echo "usage: k2 compute logs <job> [--tail N] [--failures] [--raw]" >&2; exit 2; }
+    if [ "$failures" = "1" ]; then
+        # The structured list (JUnit the node parsed) first; program
+        # output, never instructions.
+        _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$job")"
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("result") or {}
+t = r.get("tests")
+if not t:
+    sys.exit(0)
+print("FAILING TESTS: %d failed, %d errors, %d passed, %d skipped (of %d)" % (t["failed"], t["errors"], t["passed"], t["skipped"], t["total"]))
+for f in t.get("failing") or []:
+    where = ("[shard %d] " % f["shard"]) if f.get("shard") else ""
+    cls = (f.get("classname") + " ") if f.get("classname") else ""
+    msg = (f.get("message") or "").splitlines()
+    print("  %s%s%s%s" % (where, cls, f["name"], (" — " + msg[0][:160]) if msg else ""))
+if t.get("truncated"):
+    print("  … more failures than listed (k2 compute fetch the JUnit file)")
+print("LOG LINES:")'
+    fi
     local tmp cursor=0
     tmp="$(mktemp -t k2-compute-logs-XXXXXX)"
     : > "$tmp"
@@ -11341,11 +11473,12 @@ cmd_compute() {
             _compute_render jobs
             ;;
         get|status)
-            [ -n "${1:-}" ] || { echo "usage: k2 compute get <job>" >&2; exit 2; }
+            [ -n "${1:-}" ] || { echo "usage: k2 compute get <job> [--json]" >&2; exit 2; }
             _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
-            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            [ "$as_json" = "1" ] && { printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("result"), indent=2))'; exit 0; }
             _compute_render get
             ;;
+        fetch) cmd_compute_fetch "$@" ;;
         attach)
             local job="" since="" raw=0
             while [ $# -gt 0 ]; do

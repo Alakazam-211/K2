@@ -39,6 +39,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/deployment",
     "/cli/app/engine/install",
     "/cli/app/errors",
+    "/cli/app/exception",
+    "/cli/app/exec",
     "/cli/app/history",
     "/cli/app/inspect",
     "/cli/app/install",
@@ -48,6 +50,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/logs",
     "/cli/app/restart",
     "/cli/app/rollback",
+    "/cli/app/shell",
     "/cli/app/start",
     "/cli/app/stop",
     "/cli/app/uninstall",
@@ -61,6 +64,8 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/app/config",
     "/cli/app/deploy",
     "/cli/app/engine/install",
+    "/cli/app/exception",
+    "/cli/app/exec",
     "/cli/app/install",
     "/cli/app/link/rotate",
     "/cli/app/restart",
@@ -81,6 +86,7 @@ pub fn is_post_route(p: &str) -> bool {
 
 // ── refusals ─────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub(crate) struct Refusal {
     pub code: &'static str,
     pub status: u16,
@@ -361,6 +367,12 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/link/rotate" => link_rotate(&who, body),
         // Egress (S15) and held widenings.
         p if super::egress_routes::ROUTES.contains(&p) => super::egress_routes::handle(p, &who, body, params),
+        // S28 and the process exception.
+        "/cli/app/exec" => super::exec::exec_route(&who, body),
+        "/cli/app/exception" => super::exception::route(&who, body),
+        // A WebSocket: the TCP dispatcher serves it; anything else (the
+        // cell socket) is told so.
+        "/cli/app/shell" => return super::exec::shell_on_cell(),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     respond(r)
@@ -617,6 +629,13 @@ fn wait_secs(v: &J) -> u64 {
 /// Absent: the App's current engine. A change is recorded and audited.
 fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
     let Some(e) = s(v, "engine") else { return Ok(app) };
+    if app.is_process_exception() {
+        return Err(no(
+            codes::ENGINE_UNAVAILABLE,
+            409,
+            format!("{} runs as the process exception; turn that off first (k2 app exception {} off), then pick an engine", app.app_id, app.app_id),
+        ));
+    }
     let iso = match e {
         "guarded" | "container" => "container",
         "process" => "process",
@@ -1010,7 +1029,10 @@ const LOG_CAP: usize = 256 * 1024;
 
 /// What a stage-1 App's wall is (the §4.5 label function arrives with the
 /// walls in S13; preview Apps are always this).
-fn label(app: &AppRow) -> &'static str {
+pub(crate) fn label(app: &AppRow) -> &'static str {
+    if app.is_process_exception() {
+        return "Open (process)";
+    }
     match app.isolation.as_str() {
         "process" => "Preview, unwalled (process)",
         "container" => "Guarded (container)",
@@ -1040,7 +1062,11 @@ fn app_summary(app: &AppRow) -> J {
         "frontPort": app.front_port,
         "memoryLimitBytes": app.memory_limit_bytes,
         "isolation": app.isolation,
+        "path": app.path,
         "label": label(app),
+        "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),
+        "devices": app.devices(),
+        "exception": app.exception_json.as_deref().and_then(|e| serde_json::from_str::<J>(e).ok()),
         "url": url_for(app),
         "livePort": super::supervisor::live_port(&app.app_id),
         "link": super::gateway::status_json(&app.app_id),
@@ -1332,6 +1358,13 @@ fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         // gateway rule). Best effort: a process-only App has none.
         if let Err(e) = super::guarded::remove_app(&app.app_id, purge) {
             k2_core::log_debug!("[apps] uninstall {}: engine: {}", app.app_id, e.message);
+        }
+        // The process exception's own state belongs to k2appx: the root
+        // helper deletes it.
+        if purge && app.is_process_exception() {
+            if let Err(e) = super::process_exception::purge(&app.app_id) {
+                k2_core::log_debug!("[apps] uninstall {}: process state: {}", app.app_id, e.message);
+            }
         }
     }
     let svc = {

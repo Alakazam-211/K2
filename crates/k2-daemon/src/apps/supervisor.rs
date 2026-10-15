@@ -89,10 +89,27 @@ pub fn engine_for(iso: Isolation) -> Option<&'static dyn RuntimeEngine> {
     }
 }
 
+/// The engine for an App: its isolation, and for `process` its path —
+/// the open path's `process` exception (owner-approved, a sandboxed
+/// system unit as `k2appx`) is not stage 1's preview process engine.
+pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
+    if app.is_process_exception() {
+        return cfg!(target_os = "linux").then(|| super::process_exception::engine() as &'static dyn RuntimeEngine);
+    }
+    if app.path != "guarded" {
+        // The relaxed container (open path) arrives in 0.46.1: refuse,
+        // never run it behind a different wall (AR24).
+        return None;
+    }
+    engine_for(Isolation::parse(&app.isolation).unwrap_or(Isolation::Process))
+}
+
 /// The engine that runs an instance (by its handle).
 pub fn engine_of(h: &RunHandle) -> &'static dyn RuntimeEngine {
     if super::guarded::owns(h) {
         super::guarded::engine()
+    } else if super::process_exception::owns(h) {
+        super::process_exception::engine()
     } else {
         engine()
     }
@@ -200,6 +217,10 @@ fn boot() {
         match g.adopt() {
             Ok(mut v) => adopted.append(&mut v),
             Err(e) => k2_core::log_debug!("[apps] guarded engine adopt: {}", e.message),
+        }
+        match super::process_exception::engine().adopt() {
+            Ok(mut v) => adopted.append(&mut v),
+            Err(e) => k2_core::log_debug!("[apps] process exception adopt: {}", e.message),
         }
     }
     let mut claimed = std::collections::BTreeSet::new();
@@ -373,6 +394,8 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
         env: m.env.clone().into_iter().collect(),
         memory_limit_bytes: app.memory_limit_bytes,
         drain_secs: m.host.drain_secs.unwrap_or(timings().drain_secs),
+        io_max_json: app.io_max_json.clone(),
+        devices: app.devices(),
         data_dir: dir.join("data"),
         cache_dir: dir.join("cache"),
         home_dir: dir.join("home"),
@@ -421,12 +444,16 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Err((code, msg)) => return pipeline_fail(app_id, dep, code, &msg),
     };
     let wanted = Isolation::parse(&app.isolation).unwrap_or(Isolation::Process);
-    let Some(eng) = engine_for(wanted) else {
+    let Some(eng) = engine_for_app(&app) else {
         return pipeline_fail(
             app_id,
             dep,
             codes::ENGINE_UNAVAILABLE,
-            &format!("no engine on this box gives isolation={} (the guarded engine runs on Linux boxes)", wanted.as_str()),
+            &format!(
+                "no engine on this box gives path={} isolation={} (the guarded engine and the process exception run on Linux boxes)",
+                app.path,
+                wanted.as_str()
+            ),
         );
     };
     if let Err(e) = k2_core::deploy::engine::require_isolation(eng, wanted) {

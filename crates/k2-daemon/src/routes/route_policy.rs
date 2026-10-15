@@ -206,6 +206,12 @@ pub const ROUTES: &[Route] = &[
     // The guarded engine's install/update through the root helper (S11).
     post("/cli/app/engine/install", Owner),
     get("/cli/app/errors", Member),
+    // The process exception (§4.3): on = the owner in person with an owner
+    // confirm (handler); off (back to the guarded container) = manage.
+    post("/cli/app/exception", Member),
+    // S28: own workspace + "Allow this agent to manage Apps" for passports
+    // (handler); never App credentials or delegation; audited.
+    post("/cli/app/exec", Member),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Member),
@@ -222,6 +228,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/logs", Member),
     post("/cli/app/restart", Member),
     post("/cli/app/rollback", Member),
+    // S28 `k2 app shell` (WebSocket; same rules as exec).
+    get("/cli/app/shell", Member),
     post("/cli/app/start", Member),
     post("/cli/app/stop", Member),
     // purge (deletes the App's data) is owner-only in the handler.

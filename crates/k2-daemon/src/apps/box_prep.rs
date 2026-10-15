@@ -97,6 +97,38 @@ fn c(
 
 const PREPARE: &str = "k2 app box prepare (owner)";
 
+/// The MAC row (§4.2 item 4) from `apps status`'s `mac`. AppArmor on but
+/// the `k2-app` profile not applied is a gate failure: Apps would start
+/// without their MAC layer. No MAC at all is a warning (the floor is still
+/// user namespaces, seccomp, no capabilities and a read-only root).
+fn mac_check(m: &J) -> Check {
+    match m["lsm"].as_str() {
+        Some("selinux") => c("mac", "ok", "SELinux enforcing: Apps run as container_t (Podman's labels)", None),
+        Some("apparmor") if m["applied"].as_bool() == Some(true) => {
+            c("mac", "ok", "AppArmor: Apps run under the k2-app profile (enforce)", None)
+        }
+        Some("apparmor") => c(
+            "mac",
+            "fail",
+            format!(
+                "AppArmor is on but the k2-app profile isn't applied (loaded: {}, profile {}, engine marker {}, process drop-in {})",
+                m["loaded"].as_str().unwrap_or("no"),
+                m["profile"].as_str().unwrap_or("?"),
+                m["marker"].as_str().unwrap_or("?"),
+                m["processDropin"].as_str().unwrap_or("?"),
+            ),
+            Some(PREPARE),
+        ),
+        Some(_) => c(
+            "mac",
+            "warn",
+            "no MAC layer on this box (AppArmor and SELinux are off): Apps keep user namespaces, seccomp, no capabilities and a read-only root",
+            None,
+        ),
+        None => c("mac", "unknown", "the root helper didn't report the MAC layer (update it)", None),
+    }
+}
+
 /// The doctor: one row per readiness item, `ok` | `warn` | `fail` |
 /// `unknown`. `ready` = no `fail` and no `unknown` among the gate rows.
 pub fn doctor(f: &Facts) -> J {
@@ -411,6 +443,7 @@ pub fn doctor(f: &Facts) -> J {
             ),
             None => c("processUnit", "unknown", "", None),
         });
+        out.push(mac_check(&hs("/mac")));
         out.push(if hs("/coresSlice/present").as_bool() == Some(true) {
             c(
                 "coresSlice",
@@ -512,6 +545,7 @@ pub fn doctor(f: &Facts) -> J {
         "reservedPorts",
         "nft",
         "processUnit",
+        "mac",
     ];
     let ready = out
         .iter()
@@ -703,6 +737,8 @@ pub fn plan(o: &PrepareOpts) -> Vec<Vec<String>> {
             &DB_PORTS.token(),
         ]),
         sv(&["apps", "process-unit", "on"]),
+        // After the process template: its AppArmor drop-in sits next to it.
+        sv(&["apps", "apparmor", "on"]),
         sv(&["apps", "runtime", o.runtime.as_str()]),
     ]);
     if let Some(n) = o.cores_mem_min_mib {
@@ -888,6 +924,13 @@ pub fn reapply_plan(status: Option<&J>) -> Vec<Vec<String>> {
     {
         p.push(sv(&["apps", "io-cost", "on"]));
     }
+    // AppArmor box whose k2-app profile isn't loaded in enforce mode (or a
+    // pointer to it went missing): load it again before any App starts.
+    if s.pointer("/mac/lsm").and_then(J::as_str) == Some("apparmor")
+        && s.pointer("/mac/applied").and_then(J::as_bool) != Some(true)
+    {
+        p.push(sv(&["apps", "apparmor", "on"]));
+    }
     p
 }
 
@@ -906,6 +949,7 @@ mod tests {
             "reservedPorts": {"covered": true, "file": true, "range": "38600-38999"},
             "nft": {"table": true, "current": true},
             "processUnit": "ok",
+            "mac": {"lsm": "apparmor", "applied": true, "loaded": "enforce", "profile": "ok", "marker": "ok", "processDropin": "ok"},
             "coresSlice": {"present": false},
             "engine": {"podman": "5.4.2", "podmanOk": true, "pasta": true, "crun": "1.21", "youki": null,
                        "conmon": "2.1.12", "runtime": "crun"},
@@ -967,6 +1011,7 @@ mod tests {
             "ioCost",
             "reservedPorts",
             "processUnit",
+            "mac",
             "ptraceScope",
             "ownerConfirm",
         ] {
@@ -1015,6 +1060,19 @@ mod tests {
             ("processUnit", |f| {
                 f.helper_status.as_mut().unwrap()["processUnit"] = json!("missing")
             }),
+            // AppArmor on, k2-app not applied: Apps would start without MAC.
+            ("mac", |f| {
+                f.helper_status.as_mut().unwrap()["mac"] =
+                    json!({"lsm": "apparmor", "applied": false, "loaded": null, "profile": "missing", "marker": "missing", "processDropin": "missing"})
+            }),
+            ("mac", |f| {
+                f.helper_status.as_mut().unwrap()["mac"]["loaded"] = json!("complain");
+                f.helper_status.as_mut().unwrap()["mac"]["applied"] = json!(false);
+            }),
+            // An older helper that doesn't report it: unknown, not ready.
+            ("mac", |f| {
+                f.helper_status.as_mut().unwrap().as_object_mut().unwrap().remove("mac");
+            }),
             ("ociRuntime", |f| {
                 f.helper_status.as_mut().unwrap()["engine"]["runtime"] = json!("youki");
             }),
@@ -1060,6 +1118,15 @@ mod tests {
         let d = doctor(&f);
         assert_eq!(d["runtime"], "youki");
         assert_eq!(status_of(&d, "ociRuntime"), "ok");
+        // SELinux boxes: Podman's labels are the MAC layer. No MAC at all:
+        // a warning (the rest of the floor still holds), never a block.
+        let mut f = good();
+        f.helper_status.as_mut().unwrap()["mac"] = json!({"lsm": "selinux", "applied": true});
+        assert_eq!(status_of(&doctor(&f), "mac"), "ok");
+        f.helper_status.as_mut().unwrap()["mac"] = json!({"lsm": "none", "applied": false});
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "mac"), "warn");
+        assert_eq!(d["ready"], true);
     }
 
     #[test]
@@ -1105,6 +1172,7 @@ mod tests {
                 "apps io-cost on",
                 "apps nft apply 38600-38899 38900-38999 5432",
                 "apps process-unit on",
+                "apps apparmor on",
                 "apps runtime crun",
             ]
         );
@@ -1244,6 +1312,14 @@ mod tests {
         s["ioCost"]["available"] = json!(false);
         let p: Vec<String> = reapply_plan(Some(&s)).iter().map(|a| a.join(" ")).collect();
         assert_eq!(p, vec!["apps nft apply 38600-38899 38900-38999 5432"]);
+        // The k2-app profile not loaded after a boot: load it again; never
+        // on a box whose LSM isn't AppArmor.
+        let mut s = good_status();
+        s["mac"]["applied"] = json!(false);
+        let p: Vec<String> = reapply_plan(Some(&s)).iter().map(|a| a.join(" ")).collect();
+        assert_eq!(p, vec!["apps apparmor on"]);
+        s["mac"] = json!({"lsm": "none", "applied": false});
+        assert!(reapply_plan(Some(&s)).is_empty());
         // Every re-apply verb is open (a tightening) on the helper's table.
         for argv in reapply_plan(Some(&{
             let mut s = good_status();

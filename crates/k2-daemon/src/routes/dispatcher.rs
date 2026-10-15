@@ -6075,6 +6075,14 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
+            // S28 `k2 app shell`: a WebSocket. The handler checks the caller
+            // and the App before the upgrade.
+            if p == crate::apps::exec::SHELL_PATH {
+                let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+                let params = super::http::parse_params(&path, &query);
+                crate::apps::exec::serve_shell(&mut *stream, who, params).await;
+                return DispatchOutcome::Done;
+            }
             if crate::apps::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }

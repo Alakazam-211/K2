@@ -685,7 +685,7 @@ pub fn list_api_keys() -> Result<Vec<ApiKeyMeta>, String> {
                     allowed_workspaces, provider, base_url, \
                     cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, \
                     cap_hire, hire_limits, legacy_new_workspace \
-             FROM api_keys ORDER BY created_at DESC, id DESC",
+             FROM api_keys WHERE app_service_id IS NULL ORDER BY created_at DESC, id DESC",
         )
         .map_err(|e| format!("DB prepare failed: {e}"))?;
     let rows = stmt
@@ -750,7 +750,8 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
                 cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref, \
                 cap_hire \
          FROM api_keys \
-         WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
+         WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL \
+           AND app_service_id IS NULL",
         rusqlite::params![key_hash],
         |row| {
             let id: String = row.get(0)?;
@@ -808,7 +809,8 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
                 cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, anthropic_secret_ref, \
                 cap_hire \
          FROM api_keys \
-         WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL",
+         WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL \
+           AND app_service_id IS NULL",
         rusqlite::params![id],
         |row| {
             let id: String = row.get(0)?;
@@ -919,9 +921,135 @@ pub fn key_label(id: &str) -> Option<String> {
     .flatten()
 }
 
+// ── 0168: App-scoped keys (vs-live 2 §6, S45) ────────────────────────────
+
+/// One App-scoped key row (never the raw key or its hash).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppKeyRow {
+    pub id: String,
+    pub label: Option<String>,
+    /// The published service id (`K2_APP_ID`) the key is bound to.
+    pub service_id: String,
+    /// Raw `app_key` JSON (`{scopes, rooms, roles}`); `None` = nothing.
+    pub grant_json: Option<String>,
+    pub created_at: i64,
+    pub revoked_at: Option<i64>,
+    pub disabled_at: Option<i64>,
+}
+
+const APP_KEY_COLS: &str = "id, label, app_service_id, app_key, created_at, revoked_at, disabled_at";
+
+fn app_key_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppKeyRow> {
+    Ok(AppKeyRow {
+        id: r.get(0)?,
+        label: r.get(1)?,
+        service_id: r.get(2)?,
+        grant_json: r.get(3)?,
+        created_at: r.get(4)?,
+        revoked_at: r.get(5)?,
+        disabled_at: r.get(6)?,
+    })
+}
+
+/// Mint an App-scoped key bound to `service_id`. Every ordinary door is
+/// off (`cap_* = 0`, no workspace grant), so the key can never act as an
+/// ordinary `/v1` principal; [`resolve_api_key`] skips it outright. The
+/// caller (the daemon's mint route) checked the owner confirm and
+/// validated `grant_json`. Returns `(id, raw_key)`; the raw key is never
+/// stored or logged.
+pub fn create_app_key(label: &str, service_id: &str, grant_json: &str) -> Result<(String, String), String> {
+    let service_id = service_id.trim();
+    if service_id.is_empty() || service_id == "host" {
+        return Err("an App key is bound to one published App".to_string());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let raw = generate_raw_key();
+    let label_stored = Some(label.trim()).filter(|l| !l.is_empty());
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
+         allowed_workspaces, cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, cap_hire, \
+         app_service_id, app_key) \
+         VALUES (?1, ?2, ?3, NULL, 'app', ?4, NULL, NULL, 0, 0, 0, 0, 0, ?5, ?6)",
+        rusqlite::params![id, sha256_hex(&raw), label_stored, now_secs(), service_id, grant_json],
+    )
+    .map_err(|e| format!("DB insert failed: {e}"))?;
+    Ok((id, raw))
+}
+
+/// Resolve a presented key to a live App-scoped key (`None` for an ordinary
+/// key, a revoked/disabled one, or garbage). Never logs the key.
+pub fn resolve_app_key(presented_raw: &str) -> Option<AppKeyRow> {
+    let presented = presented_raw.trim();
+    if presented.is_empty() || !presented.starts_with(API_KEY_PREFIX) {
+        return None;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!(
+            "SELECT {APP_KEY_COLS} FROM api_keys WHERE key_hash = ?1 AND app_service_id IS NOT NULL \
+             AND revoked_at IS NULL AND disabled_at IS NULL"
+        ),
+        rusqlite::params![sha256_hex(presented)],
+        app_key_row,
+    )
+    .ok()
+}
+
+/// App-scoped keys, newest first; `service_id` narrows to one App.
+pub fn list_app_keys(service_id: Option<&str>) -> Result<Vec<AppKeyRow>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let sql = format!(
+        "SELECT {APP_KEY_COLS} FROM api_keys WHERE app_service_id IS NOT NULL \
+         AND (?1 IS NULL OR app_service_id = ?1) ORDER BY created_at DESC, id DESC"
+    );
+    let mut st = conn.prepare(&sql).map_err(|e| format!("DB prepare failed: {e}"))?;
+    let rows = st
+        .query_map(rusqlite::params![service_id], app_key_row)
+        .map_err(|e| format!("DB query failed: {e}"))?;
+    rows.map(|r| r.map_err(|e| format!("DB row failed: {e}"))).collect()
+}
+
+/// One App-scoped key by id (any state).
+pub fn get_app_key(id: &str) -> Option<AppKeyRow> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!("SELECT {APP_KEY_COLS} FROM api_keys WHERE id = ?1 AND app_service_id IS NOT NULL"),
+        rusqlite::params![id.trim()],
+        app_key_row,
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0168: an App-scoped key resolves only as an App key, never as an
+    /// ordinary /v1 principal, and stops at revoke.
+    #[test]
+    fn app_key_never_resolves_as_an_ordinary_principal() {
+        let svc = uuid::Uuid::new_v4().to_string();
+        let (id, raw) = create_app_key("jobs bff", &svc, r#"{"scopes":["users"],"rooms":[],"roles":[]}"#)
+            .expect("mint");
+        assert!(resolve_api_key(&raw).is_none(), "an App key is not a /v1 principal");
+        assert!(resolve_api_key_by_id(&id).is_none(), "nor by id");
+        assert!(list_api_keys().expect("list").iter().all(|k| k.id != id), "nor in the ordinary key list");
+        let k = resolve_app_key(&raw).expect("resolves as an App key");
+        assert_eq!((k.id.as_str(), k.service_id.as_str()), (id.as_str(), svc.as_str()));
+        assert_eq!(list_app_keys(Some(&svc)).expect("list").len(), 1);
+        assert!(list_app_keys(Some("other")).expect("list").is_empty());
+        let (_, ordinary) = create_api_key("plain", None, None, None, None, None).expect("plain");
+        assert!(resolve_app_key(&ordinary).is_none(), "an ordinary key is not an App key");
+        assert!(create_app_key("x", "host", "{}").is_err(), "never bound to the box login");
+        assert!(revoke_api_key(&id).expect("revoke"));
+        assert!(resolve_app_key(&raw).is_none(), "revoked keys stop at once");
+    }
 
     /// Drain-time principal reload: resolve by durable id (not raw secret).
     #[test]

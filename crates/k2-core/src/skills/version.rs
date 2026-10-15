@@ -127,7 +127,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// writable, and the board-lite example.
 /// v19 = Garden 1 from K2 Companion (0.45.6): the Agents widget's `pins`
 /// and `settings` props and the Conversation's `activity-drawer`.
-pub const SKILL_VERSION_ZEN: u32 = 19;
+/// v20 = the Kanban Garden (0.45.7): New Garden lists it, `k2:kanban` in the
+/// examples, and its board's keys (`board/<garden id>/col|card/<id>`) for
+/// agents writing with `k2 store --widget k2:kanban`.
+pub const SKILL_VERSION_ZEN: u32 = 20;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

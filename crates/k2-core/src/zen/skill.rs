@@ -53,7 +53,7 @@ for the human to ask you to build it. Garden 2 and every new Garden start\n\
 **empty**, with \"Ask your agents to add things to this Garden\", an Ask my\n\
 agent button and **Start with the default** (which turns that Garden into the\n\
 texting page). + New Garden opens one window: a name and the ready-made Gardens as\n\
-cards (the Diary, start with the default, or start empty and ask you).\n\n\
+cards (the Diary, the Kanban, start with the default, or start empty and ask you).\n\n\
 When the human asks you to add something to a Garden, you edit that Garden's\n\
 file. A message that starts **\"In my Zen Garden ... (id g-...)\"** means: edit\n\
 `~/.k2/zen/gardens/<id>.toml`, then run `k2 zen validate --garden <id>`.\n\n\
@@ -440,7 +440,14 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
 - Big changes: `k2 store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or\n\
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
-  the agent's `bin/board-lite` beside it).\n\n",
+  the agent's `bin/board-lite` beside it).\n\
+- **The Kanban Garden** (`k2:kanban@1`, New Garden → Kanban) keeps its board in\n\
+  `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
+  button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
+  `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
+  `order` first). With a grant, `k2 store list --widget k2:kanban --prefix <p>`, then:\n\
+  `k2 store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{\"title\":\"…\",\"col\":\"todo\",\"order\":4096}'`\n\
+  Change a card with `--if-rev <rev>`; never write `<p>meta`.\n\n",
     )
 }
 
@@ -722,7 +729,8 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 - `k2:diary` (the Diary): a full widget with draggable page turns, handwriting and reduced motion.\n\
 - `hello`: a clock and a greeting; the smallest widget.\n\
 - `arcade`: agents as characters; click one to talk.\n\
-- `board-lite`: sticky notes kept in the widget's data, live for you and your agents.\n\n",
+- `board-lite`: sticky notes kept in the widget's data, live for you and your agents.\n\
+- `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.\n\n",
         m.cdn_hosts.join(", "),
         kb(m.max_bytes_per_widget),
     ));
@@ -916,6 +924,25 @@ mod tests {
             "never edit a widget the person made unless they ask",
             "`k2 zen guide example board-lite`",
             "- `board-lite`: sticky notes",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v20: the Kanban Garden (0.45.7, Rosson 2026-10-15): where its board
+    /// lives and the shape an agent writes.
+    #[test]
+    fn skill_documents_the_kanban_garden() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 20, "the Kanban needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in [
+            "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
+            "**The Kanban Garden** (`k2:kanban@1`, New Garden → Kanban)",
+            "`data:k2:kanban`, one board per Garden under `board/<garden id>/`",
+            "`<p>card/<id>` =\n`{title, note, col, order}`",
+            "k2 store put --widget k2:kanban <p>card/<new-id>",
+            "never write `<p>meta`",
+            "- `k2:kanban` (the Kanban): columns and cards",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }

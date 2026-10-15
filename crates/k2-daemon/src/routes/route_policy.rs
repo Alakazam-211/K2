@@ -409,6 +409,15 @@ pub const ROUTES: &[Route] = &[
     get("/cli/glossary", Member),
     get("/cli/glossary/get", Member),
     get("/cli/glossary/list", Member),
+    // Local Grok Bots (0.45.7). Reads are any login; detect (the Settings
+    // preview), send (a billed turn that speaks as the account holder) and
+    // the setting are Admin. The handler refuses passports and App passes.
+    get("/cli/grokbots/detect", Admin),
+    get("/cli/grokbots/list", Member),
+    post("/cli/grokbots/send", Admin),
+    split("/cli/grokbots/settings", Member, Admin),
+    get("/cli/grokbots/status", Member),
+    get("/cli/grokbots/thread", Member),
     get("/cli/heartbeat-log", Member),
     post("/cli/heartbeat/active-projects", Member),
     get("/cli/heartbeat/active-session", Member),

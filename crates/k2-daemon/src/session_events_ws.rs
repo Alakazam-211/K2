@@ -388,6 +388,7 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         SessionEvent::SourcesChanged { .. } => None,
         // Garden data — a widget keyspace changed: app-level, space + rev only.
         SessionEvent::GardenDataChanged { .. } => None,
+        SessionEvent::GrokbotsChanged { .. } => None,
         // A11 — hook install problems: daemon-global, every client may toast.
         SessionEvent::HooksInstallFailed { .. } => None,
         // S4 (RL2) — activity rows: app-level like the compat events below;
@@ -794,6 +795,7 @@ mod tests {
             SessionEvent::ZenChanged {},
             SessionEvent::SourcesChanged { rev: 1 },
             SessionEvent::GardenDataChanged { space: "data:board".into(), rev: 1 },
+            SessionEvent::GrokbotsChanged { rev: 1, roster: true, agents: vec!["a".into()] },
             SessionEvent::HooksInstallFailed { failures: vec![] },
             SessionEvent::ActivityChanged {
                 seq: 1,

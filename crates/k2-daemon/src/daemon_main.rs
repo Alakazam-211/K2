@@ -1251,6 +1251,8 @@ async fn async_main() {
     // Garden data (contract-garden-data-v1): idle close, audit counts and
     // the hourly tombstone reaper / orphan pass. The store opens lazily.
     crate::garden_data::start();
+    // Local Grok Bots (0.45.7): idle unless Show is on.
+    crate::grokbots_watch::start();
 
     // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored
     // next_fire_at + wait_reason at boot, then runs the overdue

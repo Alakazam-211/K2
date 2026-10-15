@@ -598,6 +598,13 @@ pub enum SessionEvent {
     /// spaces (contract-garden-data-v1 §6).
     GardenDataChanged { space: String, rev: i64 },
 
+    /// Local Grok Bots (0.45.7): the roster or status changed, or some
+    /// agents' chats grew. Wire: `{ "kind": "grokbots_changed", "rev": 9,
+    /// "roster": true, "agents": ["<uuid>", …] }`. App-level refetch signal:
+    /// ids only, never names, text or the gateway token. Only emitted while
+    /// Settings → K2 Server → Local Grok Bots → Show is on.
+    GrokbotsChanged { rev: i64, roster: bool, agents: Vec<String> },
+
     /// S1 (presence/multiplayer arc) — the connected-users roster
     /// changed (a `/cli/sessions/events` socket registered or
     /// deregistered). `grantedEdit` is retired and always false.
@@ -811,6 +818,7 @@ impl SessionEvent {
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::SourcesChanged { .. } => "sources_changed",
             SessionEvent::GardenDataChanged { .. } => "garden_data_changed",
+            SessionEvent::GrokbotsChanged { .. } => "grokbots_changed",
             SessionEvent::HooksInstallFailed { .. } => "hooks_install_failed",
             SessionEvent::ActivityChanged { .. } => "activity_changed",
             SessionEvent::PresenceChanged { .. } => "presence_changed",

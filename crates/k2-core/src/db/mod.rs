@@ -1336,6 +1336,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
+        // 0168 — the 0.46.0 wall knobs on `apps` (runtime lane D: per-App
+        // io.max, the process exception's devices and approval). New
+        // columns only. 0166/0167 are reserved for Sew; the integrator
+        // renumbers on slips (the 0.46.1 app_walls migration folds it in).
+        (
+            "0168_app_walls_lite",
+            include_str!("../../drizzle_sql/0168_app_walls_lite.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -1996,7 +2004,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0165_app_runtime_core",
+            last_name, "0168_app_walls_lite",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2030,6 +2038,7 @@ mod tests {
                 "0163_sources",
                 "0164_garden_data",
                 "0165_app_runtime_core",
+                "0168_app_walls_lite",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2155,6 +2164,8 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
+            // 0168 (its columns on `apps`) went with the table.
+            conn.execute("DELETE FROM _migrations WHERE name = '0168_app_walls_lite'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

@@ -80,7 +80,7 @@ R="$1"
 RT="$R/rt/$(date +%s)"
 mkdir -p "$RT/tmp" "$RT/xdg" && chmod 700 "$RT/xdg"
 run() {
-	env -i HOME="$RT/home" USER=root PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin" LANG=C.UTF-8 \
+	env -i HOME="$RT/home" USER=root RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin" LANG=C.UTF-8 \
 		TMPDIR="$RT/tmp" XDG_RUNTIME_DIR="$RT/xdg" CARGO_TARGET_DIR="$R/target" "$@"
 }
 mkdir -p "$RT/home"
@@ -92,7 +92,7 @@ for args in "-p k2-root-proto --features test-signer" "-p k2-root-helper" "-p k2
 	run cargo test -j 8 $args -- --test-threads=8 >"$RT/out.txt" 2>&1
 	r=$?
 	grep -E "^test result|FAILED|panicked at" "$RT/out.txt" | sort | uniq -c | sort -rn | head -n 30
-	[ "$r" = 0 ] || { rc=1; grep -E "^    [a-z_:]+$" "$RT/out.txt" | head -n 40; }
+	[ "$r" = 0 ] || { rc=1; grep -E "^    [a-z_:0-9]+$" "$RT/out.txt" | head -n 40; tail -n 15 "$RT/out.txt"; }
 done
 echo "--- bash tests/cli/app_runtime_cli_smoke.sh"
 run bash tests/cli/app_runtime_cli_smoke.sh 2>&1 | tail -n 4 || rc=1

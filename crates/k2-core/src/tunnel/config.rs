@@ -476,6 +476,23 @@ pub fn clear_vault_token() -> Result<(), String> {
     })
 }
 
+/// What the vault holds right now, for a rollback snapshot: `Ok(None)`
+/// when no vault holder is installed, `Ok(Some(None))` when it holds no
+/// token. An unreadable vault is an `Err` (never "no token").
+pub(crate) fn vault_token() -> Result<Option<Option<String>>, String> {
+    with_vault(|v| v.map(|v| v.get()).transpose())
+}
+
+/// Put a [`vault_token`] snapshot back: the old token, or no token when
+/// there was none. A no-op without a vault holder.
+pub(crate) fn restore_vault_token(token: Option<&str>) -> Result<(), String> {
+    with_vault(|v| match (v, token) {
+        (None, _) => Ok(()),
+        (Some(v), Some(t)) => v.set(t),
+        (Some(v), None) => v.clear(),
+    })
+}
+
 /// The token as it sits in `tunnel.json` itself (adoption reads it once).
 pub fn file_token() -> Result<String, String> {
     Ok(load_file()?.token)

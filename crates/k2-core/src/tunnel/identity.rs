@@ -398,6 +398,11 @@ struct DiskSnapshot {
     /// name's certificate was installed puts the old one back, so the
     /// rollback needs no broker round trip.
     cert: Option<Vec<u8>>,
+    /// The vault-held token (desktops keep it there and `tunnel.json`'s
+    /// token empty): `None` without a vault holder, `Some(None)` when the
+    /// vault held no token. A failed switch puts the old token back, or
+    /// clears the new one, so the old name never pairs with the new token.
+    vault_token: Option<Option<String>>,
 }
 
 fn read_opt(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
@@ -439,9 +444,21 @@ impl DiskSnapshot {
             tunnel_json: read_opt(&config::config_path())?,
             tombstone: read_opt(&super::unpair::tombstone_path())?,
             cert: read_opt(&super::tls::cert_path())?,
+            // An unreadable vault refuses the switch: without the old token
+            // a rollback could not put it back.
+            vault_token: config::vault_token().map_err(|e| {
+                format!(
+                    "the tunnel token could not be read from the K2 vault ({e}); nothing was \
+                     changed — try again once the vault is readable"
+                )
+            })?,
         })
     }
     fn restore(&self) -> Result<(), String> {
+        if let Some(token) = &self.vault_token {
+            config::restore_vault_token(token.as_deref())
+                .map_err(|e| format!("restore the tunnel token in the K2 vault: {e}"))?;
+        }
         // tunnel.json + the tombstone carry the bearer (0600); the cert is
         // public (0644, like `cert_broker::install_cert`).
         restore_opt(&config::config_path(), &self.tunnel_json, 0o600)?;
@@ -454,10 +471,10 @@ impl DiskSnapshot {
 /// binding, move every subdomain-bound component (see [`reconcile`]), and
 /// bring the tunnel up on the new name when asked (or when it was up).
 ///
-/// When a step fails, the previous `tunnel.json` and tombstone are put
-/// back and the daemon is moved back to the old identity (the old tunnel
-/// is restarted when it was running), so a failed switch leaves the old
-/// name working. The report says which step failed and `rolledBack`.
+/// When a step fails, the previous `tunnel.json`, tombstone, certificate
+/// and vault-held token are put back and the daemon is moved back to the
+/// old identity (the old tunnel is restarted when it was running), so a
+/// failed switch leaves the old name working. The report says which step failed and `rolledBack`.
 ///
 /// Input errors (bad label, missing token) are `Err` and change nothing.
 pub fn switch_subdomain(
@@ -486,7 +503,7 @@ pub fn switch_subdomain(
         None if before.token_unreadable() => {
             return Err(format!(
                 "the tunnel token could not be read from the K2 vault ({}); nothing was \
-                 changed — try again once the vault is readable, or pass --token",
+                 changed — try again once the vault is readable",
                 before.token_read_error.as_deref().unwrap_or_default()
             ))
         }
@@ -1035,6 +1052,143 @@ mod tests {
             assert!(st.running, "{st:?}");
             assert!(frpc_toml().contains("tok-afs"), "frpc renders the kept token");
             let _ = connector::stop("test teardown");
+            reset_routing();
+        });
+    }
+
+    /// Ingress stub that also records the token the switch had stored when
+    /// the listener step ran (the vault-resolved token), then refuses
+    /// `broken` like [`install_ingress_stub`].
+    fn recording_ingress_stub(
+        seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> super::super::ingress::TestIngressHook {
+        super::super::ingress::TestIngressHook::install(Box::new(move || {
+            let c = config::load()?;
+            seen.lock().expect("seen").push((c.subdomain.clone(), c.token.clone()));
+            if c.subdomain == "broken" {
+                Err("ingress refused for broken".to_string())
+            } else {
+                Ok(46123)
+            }
+        }))
+    }
+
+    /// `start` asks for the tunnel, which drives the listener step (and so
+    /// the `broken` refusal) while the tunnel is off.
+    fn switch_to(sub: &str, token: &str, start: bool) -> IdentityChangeReport {
+        switch_subdomain(
+            SwitchRequest {
+                subdomain: sub.to_string(),
+                token: Some(token.to_string()),
+                start: Some(start),
+                ..Default::default()
+            },
+            57839,
+            &true_bin(),
+        )
+        .expect("a switch with a token is a report, not an Err")
+    }
+
+    #[test]
+    fn failed_switch_puts_the_old_vault_token_back() {
+        with_temp_home(|| {
+            let _env = env();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            seed("afs", "tok-afs");
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"), "setup: token in the vault");
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let _hook = recording_ingress_stub(seen.clone());
+
+            let report = switch_to("broken", "tok-broken", true);
+            assert!(!report.ok && report.rolled_back, "{report:?}");
+            let seen = seen.lock().expect("seen").clone();
+            assert_eq!(
+                seen.first(),
+                Some(&("broken".to_string(), "tok-broken".to_string())),
+                "the new token was stored before the failing step: {seen:?}"
+            );
+            for (sub, tok) in &seen[1..] {
+                assert_eq!((sub.as_str(), tok.as_str()), ("afs", "tok-afs"), "rollback: {seen:?}");
+            }
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"), "the old token is back");
+            let cfg = config::load().expect("cfg");
+            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("afs", "tok-afs"));
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn failed_switch_from_no_token_leaves_no_token() {
+        with_temp_home(|| {
+            let _env = env();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            // Unpaired: no name, no token (E2E off like every test here).
+            seed("", "");
+            assert_eq!(vault.stored(), None, "setup: no token in the vault");
+            let before = std::fs::read(config::config_path()).expect("cfg bytes");
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let _hook = recording_ingress_stub(seen.clone());
+
+            let report = switch_to("broken", "tok-broken", true);
+            assert!(!report.ok && report.rolled_back, "{report:?}");
+            assert_eq!(
+                seen.lock().expect("seen").first(),
+                Some(&("broken".to_string(), "tok-broken".to_string())),
+                "the new token was stored before the failing step"
+            );
+            assert_eq!(vault.stored(), None, "the new token must not survive the rollback");
+            assert_eq!(std::fs::read(config::config_path()).expect("cfg bytes"), before);
+            let cfg = config::load().expect("cfg");
+            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("", ""));
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn successful_switch_keeps_the_new_vault_token() {
+        with_temp_home(|| {
+            let _env = env();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            seed("afs", "tok-afs");
+
+            let report = switch_to("k2n1-m4", "tok-new", false);
+            assert!(report.ok && !report.rolled_back, "{report:?}");
+            assert_eq!(vault.stored().as_deref(), Some("tok-new"));
+            let cfg = config::load().expect("cfg");
+            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("k2n1-m4", "tok-new"));
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn switch_with_a_token_refuses_while_the_vault_is_unreadable() {
+        // Without the old token a rollback could not put it back.
+        with_temp_home(|| {
+            let _env = env();
+            let vault = config::MemTokenVault::holding(None);
+            let _v = config::TestTokenVault::install(vault.clone());
+            seed("afs", "tok-afs");
+            let before = std::fs::read(config::config_path()).expect("cfg bytes");
+            vault.set_fail_reads(true);
+            let err = switch_subdomain(
+                SwitchRequest {
+                    subdomain: "k2n1-m4".into(),
+                    token: Some("tok-new".into()),
+                    ..Default::default()
+                },
+                57839,
+                &true_bin(),
+            )
+            .expect_err("an unreadable vault refuses the switch");
+            assert!(
+                err.contains("could not be read from the K2 vault") && err.contains("nothing was"),
+                "{err}"
+            );
+            assert_eq!(vault.stored().as_deref(), Some("tok-afs"), "the vault token is untouched");
+            assert_eq!(std::fs::read(config::config_path()).expect("cfg bytes"), before);
             reset_routing();
         });
     }

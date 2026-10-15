@@ -8,6 +8,13 @@
 //! gateway is down it falls back to a stat of `store.db` + WAL (size and
 //! mtime; no file is opened).
 //!
+//! For a **stale** agent (live conversation outside this computer) it also
+//! records each new latest entry the roster reports into the agent's live
+//! tail (`k2_core::external_agents::live_tail`). That is only what the
+//! roster summary exposes — the latest entry at each poll — so a burst of
+//! several lines between two polls shows only the last one (marked as a
+//! possible gap when the snapshot counter jumped).
+//!
 //! It does nothing — reads nothing under `~/sand-data` — while
 //! Settings → K2 Server → Local Grok Bots → Show is off.
 
@@ -16,7 +23,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use k2_core::external_agents::grokbot::GrokBot;
-use k2_core::external_agents::{settings, ExtError, ExternalAgentProvider};
+use k2_core::external_agents::{live_tail, settings, ExtError, ExternalAgentProvider};
 use k2_core::log_debug;
 
 use crate::session_events::{emit, SessionEvent};
@@ -55,6 +62,16 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
         Err(_) => return Change::default(),
     };
     let status = p.status();
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut tail_moved = Vec::new();
+    for a in list.iter().filter(|a| a.stale) {
+        let Some(live) = &a.live else { continue };
+        if live_tail::observe(&a.id, live, now, |id| {
+            p.store_has_entry(&a.id, id) == Some(true)
+        }) {
+            tail_moved.push(a.id.clone());
+        }
+    }
     let mut revs = HashMap::new();
     let mut roster_parts = vec![format!(
         "busy={}:{:?}:{}",
@@ -84,13 +101,16 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
     let roster_key = roster_parts.join("\n");
     let mut change = Change::default();
     if seen.primed {
-        change.roster = roster_key != seen.roster_key;
+        // A new live-tail line also changes the row's preview.
+        change.roster = roster_key != seen.roster_key || !tail_moved.is_empty();
         let mut agents: Vec<String> = revs
             .iter()
             .filter(|(id, rev)| seen.revs.get(*id).is_some_and(|old| old != *rev))
             .map(|(id, _)| id.clone())
+            .chain(tail_moved)
             .collect();
         agents.sort();
+        agents.dedup();
         change.agents = agents;
     }
     *seen = Seen {
@@ -143,6 +163,15 @@ pub fn nudge_roster() {
         agents: Vec::new(),
     });
     wake_now();
+}
+
+/// `agent`'s chat changed outside a poll (a send recorded in its live
+/// tail): tell clients now (roster too: the row preview moved).
+pub fn announce_agent(agent: &str) {
+    announce(&Change {
+        roster: true,
+        agents: vec![agent.to_string()],
+    });
 }
 
 /// A send went out to `agent`: poll at once so the echo shows quickly.
@@ -233,6 +262,46 @@ mod tests {
             s.agents[0]["localActivityAt"] = json!(1_788_000_000_000_i64);
         });
         assert!(tick(&p, &mut seen).roster);
+    }
+
+    #[test]
+    fn tick_records_a_stale_agents_new_latest_lines_in_its_live_tail() {
+        use k2_core::external_agents::live_tail;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut item = fixture::list_item(A, "Grok");
+        item["lastActivityAt"] = json!(now - 5_000);
+        item["localActivityAt"] = json!(now - 40 * 86_400_000_i64);
+        item["lastMessageId"] = json!("r1");
+        item["lastEntry"] = json!({"kind": "send-message", "text": "first reply"});
+        item["snapshotSeq"] = json!(3);
+        let gw = FakeGateway::start(json!([item]));
+        let home = crate::test_support::TempHome::new();
+        let sand = FakeSandData::create(home.path(), gw.port);
+        sand.add_agent(A, "Grok", "x");
+        let p = GrokBot::for_current_user();
+        let mut seen = Seen::default();
+        assert!(tick(&p, &mut seen).is_empty(), "first poll only primes");
+        let t = live_tail::tail(A).expect("followed from the first poll");
+        assert_eq!(t.entries.len(), 1);
+        assert_eq!(t.entries[0].text, "first reply");
+
+        // A new latest line → the tail grows and clients hear about it.
+        gw.set(|s| {
+            s.agents[0]["lastMessageId"] = json!("r2");
+            s.agents[0]["lastEntry"] = json!({"kind": "send-message", "text": "second reply"});
+            s.agents[0]["snapshotSeq"] = json!(4);
+        });
+        let c = tick(&p, &mut seen);
+        assert_eq!(c.agents, vec![A.to_string()]);
+        assert!(c.roster, "the row preview moved");
+        let t = live_tail::tail(A).expect("tail");
+        let texts: Vec<&str> = t.entries.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["first reply", "second reply"]);
+        assert!(!t.entries[1].gap_before);
+
+        // Nothing new → nothing announced, nothing added.
+        assert!(tick(&p, &mut seen).is_empty());
+        assert_eq!(live_tail::tail(A).expect("tail").entries.len(), 2);
     }
 
     #[test]

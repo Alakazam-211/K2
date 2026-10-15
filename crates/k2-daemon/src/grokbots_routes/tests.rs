@@ -403,41 +403,107 @@ fn from_names_are_cleaned_and_capped() {
     assert_eq!(from_envelope("Pat", "  hi\nthere "), "[from Pat] hi\nthere");
 }
 
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// A stale roster item: live activity just now, this computer's copy
+/// 47 days old, latest entry `id` (an agent reply) at counter `seq`.
+fn stale_item(id: &str, name: &str, entry: &str, kind: &str, text: &str, seq: i64) -> Value {
+    let mut item = fixture::list_item(id, name);
+    item["lastActivityAt"] = json!(now_ms() - 5_000);
+    item["localActivityAt"] = json!(now_ms() - 47 * 86_400_000);
+    item["newestEntryId"] = json!(entry);
+    item["lastMessageId"] = json!(entry);
+    item["lastEntry"] = json!({"kind": kind, "text": text});
+    item["lastMessagePreview"] = json!(text);
+    item["snapshotSeq"] = json!(seq);
+    item
+}
+
+fn tail_ids(t: &Value) -> Vec<String> {
+    t["liveTail"]["entries"]
+        .as_array()
+        .expect("liveTail.entries")
+        .iter()
+        .map(|e| e["id"].as_str().expect("id").to_string())
+        .collect()
+}
+
 #[test]
-fn a_stale_bot_refuses_sends_with_409_and_lists_its_current_preview() {
-    // Own agent id: the send limiter is process-wide.
+fn a_stale_bot_takes_sends_and_its_thread_adds_the_live_tail_after_the_old_history() {
+    // Own agent ids: the send limiter is process-wide.
     const S: &str = "c0ffee00-0000-4000-8000-0000000000e5";
+    const N: &str = "c0ffee00-0000-4000-8000-0000000000e6";
     let e = env();
     e.sand.add_agent(S, "Grok", "x");
     e.sand.add_sample_chat(S);
-    let mut item = fixture::list_item(S, "Grok");
-    item["lastActivityAt"] = json!(1_792_070_040_000_i64);
-    item["localActivityAt"] = json!(1_788_052_860_000_i64);
-    item["newestEntryId"] = json!("t115s656");
-    item["lastMessagePreview"] = json!("Shipped the October report");
-    e.gw.set(|s| s.agents = json!([item.clone()]));
+    e.sand.add_agent(N, "Zed", "x");
+    e.sand.add_sample_chat(N);
+    let stale = stale_item(S, "Grok", "r1", "send-message", "Shipped the October report.", 5);
+    let mut current = fixture::list_item(N, "Zed");
+    current["newestEntryId"] = json!("s1");
+    e.gw.set(|s| s.agents = json!([stale.clone(), current.clone()]));
     turn_on(true, true);
 
     let b = body(&get("/cli/grokbots/list", Who::Owner, &[]));
     let a = &b["agents"][0];
-    assert_eq!(a["stale"], json!(true), "{b}");
-    assert_eq!(a["lastMessagePreview"], json!("Shipped the October report"));
-    assert_eq!(a["lastActivityAt"], json!(1_792_070_040_000_i64));
-    assert_eq!(a["localActivityAt"], json!(1_788_052_860_000_i64));
+    assert_eq!((a["name"].clone(), a["stale"].clone()), (json!("Grok"), json!(true)), "{b}");
+    assert_eq!(a["lastMessagePreview"], json!("Shipped the October report."));
 
-    // Twice: a refused send takes no rate-limit slot (no 429 the second time).
-    for _ in 0..2 {
-        let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": S, "text": "hi"}));
-        assert_eq!(r.status, "409 Conflict", "{}", r.body);
-        let rb = body(&r);
-        assert_eq!(rb["error"], json!("grokbots_stale"));
-        assert_eq!(
-            rb["message"],
-            json!("This bot's live conversation runs outside this computer; message it in Grok Bot.")
-        );
-    }
+    // The thread: the old local history, then the live tail.
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
+    assert_eq!(t["stale"], json!(true), "{t}");
+    assert_eq!(t["messages"][2]["text"], json!("Build is green."), "old history kept: {t}");
+    assert!(t["liveTail"]["sinceMs"].as_i64().expect("sinceMs") > 0);
+    assert_eq!(tail_ids(&t), vec!["r1"]);
+    let r1 = &t["liveTail"]["entries"][0];
+    assert_eq!(
+        (r1["author"].clone(), r1["text"].clone()),
+        (json!("agent"), json!("Shipped the October report."))
+    );
+    assert!(r1.get("viaK2").is_none() && r1.get("gapBefore").is_none(), "{r1}");
+
+    // Sends go through to the live conversation (no 409 any more).
+    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": S, "text": "hi"}));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let nonce = body(&r)["clientNonce"].as_str().expect("nonce").to_string();
+    assert_eq!(sent_prompts(&e), vec![json!("[from the owner] hi")]);
+    // ...and show at once in the tail, as sent from K2.
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
+    assert_eq!(tail_ids(&t), vec!["r1".to_string(), format!("k2-{nonce}")]);
+    let own = &t["liveTail"]["entries"][1];
+    assert_eq!(
+        (own["author"].clone(), own["text"].clone(), own["viaK2"].clone()),
+        (json!("human"), json!("[from the owner] hi"), json!(true))
+    );
+    // The row preview is the tail's newest line.
+    let b = body(&get("/cli/grokbots/list", Who::Owner, &[]));
+    assert_eq!(b["agents"][0]["lastMessagePreview"], json!("[from the owner] hi"));
+
+    // Grok Bot reports our line (linked, not shown twice), then a reply
+    // after a counter jump (a line may be missing → gap marker).
+    e.gw.set(|s| s.agents[0] = stale_item(S, "Grok", "u1", "message", "[from the owner] hi", 6));
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
+    assert_eq!(tail_ids(&t).len(), 2, "{t}");
+    assert_eq!(t["liveTail"]["entries"][1]["gatewayId"], json!("u1"));
+    // The reply's activity time is after our send (lines are kept in time
+    // order).
+    let mut reply = stale_item(S, "Grok", "r2", "send-message", "Done: report sent.", 9);
+    reply["lastActivityAt"] = json!(now_ms() + 1_000);
+    e.gw.set(|s| s.agents[0] = reply);
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", S)]));
+    assert_eq!(tail_ids(&t), vec!["r1".to_string(), format!("k2-{nonce}"), "r2".to_string()]);
+    assert_eq!(t["liveTail"]["entries"][2]["gapBefore"], json!(true), "{t}");
+    assert_eq!(t["liveTail"]["entries"][2]["text"], json!("Done: report sent."));
+
+    // A current bot is unchanged: no stale flag, no tail.
+    let t = body(&get("/cli/grokbots/thread", Who::Owner, &[("agent", N)]));
+    assert!(t.get("stale").is_none() && t.get("liveTail").is_none(), "{t}");
+    let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": N, "text": "yo"}));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
     assert!(
-        e.gw.seen().iter().all(|r| r.path != "/api/sendPrompt"),
-        "nothing reached Grok Bot"
+        k2_core::external_agents::live_tail::tail(N).is_none(),
+        "a current bot's sends are not recorded in a tail"
     );
 }

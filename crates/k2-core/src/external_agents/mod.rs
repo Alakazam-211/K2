@@ -20,10 +20,11 @@
 //!   ([`settings`]) says so; the daemon checks it before every call.
 
 pub mod grokbot;
+pub mod live_tail;
 pub mod rate_limit;
 pub mod settings;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One agent of an external product, as K2 shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -53,7 +54,9 @@ pub struct ExternalAgent {
     pub unread_count: u32,
     /// The agent's live conversation runs outside this computer (another
     /// box, or the product's cloud): the local chat store is behind, so
-    /// K2 shows its history as old and refuses sends to it.
+    /// K2 shows its history as old and adds the live tail
+    /// ([`live_tail`]) after it. Sends still go through: the product's
+    /// gateway delivers them to the live conversation wherever it runs.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stale: bool,
     /// The product's own one-line preview of the latest message (plain
@@ -71,6 +74,11 @@ pub struct ExternalAgent {
     /// equality only). Never sent to clients.
     #[serde(skip)]
     pub rev: String,
+    /// The roster's summary of the agent's latest entry (feeds the live
+    /// tail of a stale agent). `None` for the disk roster. Never sent to
+    /// clients as is.
+    #[serde(skip)]
+    pub live: Option<live_tail::LiveSummary>,
 }
 
 /// Box-wide status. Grok Bot runs one turn at a time for the whole box, so
@@ -88,7 +96,7 @@ pub struct ProviderStatus {
 }
 
 /// Who wrote a chat line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Author {
     /// The human (a user turn).
@@ -238,6 +246,10 @@ impl ThreadPage {
 pub struct SendReceipt {
     /// The client nonce K2 stamped on the send (`k2-<uuid>`).
     pub client_nonce: String,
+    /// The agent was stale when the send went out: the caller records the
+    /// send in the agent's live tail (its local chat store won't show it).
+    #[serde(skip)]
+    pub agent_stale: bool,
 }
 
 /// What detection found, for the Settings preview. Contains no secret.
@@ -265,9 +277,6 @@ pub enum ExtError {
     Protocol(String),
     /// Bad input from the caller.
     BadInput(String),
-    /// The agent's live conversation runs outside this computer, so a send
-    /// here could run against old context.
-    Stale,
 }
 
 impl ExtError {
@@ -278,7 +287,6 @@ impl ExtError {
             ExtError::Unreachable(_) => "unreachable",
             ExtError::Protocol(_) => "protocol",
             ExtError::BadInput(_) => "bad_input",
-            ExtError::Stale => "stale",
         }
     }
 }
@@ -291,10 +299,6 @@ impl std::fmt::Display for ExtError {
             ExtError::Unreachable(m) => write!(f, "not reachable: {m}"),
             ExtError::Protocol(m) => write!(f, "unexpected answer: {m}"),
             ExtError::BadInput(m) => write!(f, "{m}"),
-            ExtError::Stale => write!(
-                f,
-                "This bot's live conversation runs outside this computer; message it in Grok Bot."
-            ),
         }
     }
 }

@@ -33,9 +33,11 @@ export interface GrokBotAgent {
   needsYou: boolean
   unreadCount: number
   /** The bot's live conversation runs outside this computer (another box
-   *  or Grok's cloud): the chat K2 reads here is old, and sends are refused. */
+   *  or Grok's cloud): the chat K2 reads here is old. Sends still reach the
+   *  live conversation; its new lines show in the thread's live tail. */
   stale: boolean
-  /** Grok Bot's own preview of the latest message (current even when stale). */
+  /** The latest message's preview (current even when stale: the daemon
+   *  uses the live tail's newest line when that is newer). */
   lastMessagePreview: string | null
   /** Latest activity anywhere (ms). */
   lastActivityAt: number | null
@@ -43,8 +45,24 @@ export interface GrokBotAgent {
   localActivityAt: number | null
 }
 
-/** What a stale bot's compose box and a refused send say. */
-export const GROK_STALE_SEND_TEXT = "This bot's live conversation runs outside this computer; message it in Grok Bot."
+/** The note under a stale bot's compose box. */
+export const GROK_STALE_COMPOSE_NOTE =
+  "Replies come from Grok Bot's live conversation; older history on this computer may be out of date."
+
+/** Shown before a live line when the bot may have written more in between
+ *  (only the latest line at each check is visible to K2). */
+export const GROK_LIVE_GAP_TEXT = '… earlier messages not shown — open Grok Bot'
+
+/** The divider between a stale bot's old local history and its live tail. */
+export function grokLiveDividerText(sinceMs: number): string {
+  const when = new Date(sinceMs).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+  return `Live since ${when} — older history above may be out of date`
+}
 
 export interface GrokBotStatus {
   reachable: boolean
@@ -88,12 +106,36 @@ export interface GrokMessage {
   card: GrokCard | null
 }
 
+/** One line of a stale bot's live tail: what Grok Bot's roster summary
+ *  showed as the bot's latest line at one of the server's checks, or a
+ *  message sent from K2. */
+export interface GrokLiveEntry {
+  id: string
+  author: 'human' | 'agent' | 'peer'
+  text: string
+  atMs: number | null
+  viaK2: boolean
+  /** Lines may be missing just before this one. */
+  gapBefore: boolean
+  /** The text is Grok Bot's one-line preview (may be cut short). */
+  previewOnly: boolean
+}
+
+export interface GrokLiveTail {
+  /** When the server started following the bot's live conversation. */
+  sinceMs: number
+  entries: GrokLiveEntry[]
+}
+
 export interface GrokThreadPage {
   supported: boolean
   reason: string | null
   messages: GrokMessage[]
   nextSince: number
   hasMoreBefore: boolean
+  /** The bot's live conversation runs elsewhere (then `liveTail` is set). */
+  stale: boolean
+  liveTail: GrokLiveTail | null
 }
 
 export interface GrokSettings {
@@ -215,8 +257,36 @@ export function parseGrokMessage(raw: unknown): GrokMessage | null {
   }
 }
 
+export function parseGrokLiveEntry(raw: unknown): GrokLiveEntry | null {
+  const o = obj(raw)
+  const id = str(o.id)
+  if (!id || typeof o.text !== 'string') return null
+  return {
+    id,
+    author: o.author === 'human' || o.author === 'peer' ? o.author : 'agent',
+    text: o.text,
+    atMs: typeof o.atMs === 'number' && o.atMs > 0 ? o.atMs : null,
+    viaK2: o.viaK2 === true,
+    gapBefore: o.gapBefore === true,
+    previewOnly: o.previewOnly === true,
+  }
+}
+
+export function parseGrokLiveTail(raw: unknown): GrokLiveTail | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = obj(raw)
+  if (typeof o.sinceMs !== 'number') return null
+  return {
+    sinceMs: o.sinceMs,
+    entries: Array.isArray(o.entries)
+      ? o.entries.map(parseGrokLiveEntry).filter((e): e is GrokLiveEntry => e !== null)
+      : [],
+  }
+}
+
 export function parseGrokThread(raw: unknown): GrokThreadPage {
   const o = obj(raw)
+  const liveTail = parseGrokLiveTail(o.liveTail)
   return {
     supported: o.supported !== false,
     reason: str(o.reason),
@@ -225,6 +295,24 @@ export function parseGrokThread(raw: unknown): GrokThreadPage {
       : [],
     nextSince: typeof o.nextSince === 'number' ? o.nextSince : 0,
     hasMoreBefore: o.hasMoreBefore === true,
+    stale: o.stale === true && liveTail !== null,
+    liveTail,
+  }
+}
+
+/** A live-tail line in the chat's message shape (its `seq` is not a store
+ *  cursor and is never merged into the local history). */
+export function grokLiveEntryAsMessage(e: GrokLiveEntry): GrokMessage {
+  return {
+    seq: -1,
+    author: e.author,
+    text: e.text,
+    atMs: e.atMs,
+    toAgent: null,
+    fromAgent: null,
+    viaK2: e.viaK2,
+    openInApp: null,
+    card: null,
   }
 }
 

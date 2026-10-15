@@ -539,12 +539,72 @@ fn stale_rule_one_last_activity_ahead_of_local() {
     assert_eq!(v[0]["localActivityAt"], json!(t));
     assert!(v[1].get("stale").is_none(), "not stale is left out: {}", v[1]);
 
-    // A stale agent refuses sends before anything reaches the gateway.
-    let e = g.send(A, "hi").expect_err("stale");
-    assert!(matches!(e, ExtError::Stale), "{e:?}");
-    assert_eq!(e.code(), "stale");
-    assert!(gw.seen().iter().all(|r| r.path != "/api/sendPrompt"));
-    g.send(B, "hi").expect("a current agent still sends");
+    // A stale agent still gets the send: Grok Bot's gateway delivers it to
+    // the live conversation wherever it runs. The receipt says it was
+    // stale so the caller records it in the live tail.
+    let r = g.send(A, "hi").expect("a stale agent sends");
+    assert!(r.agent_stale);
+    let sent: Vec<_> = gw.seen().into_iter().filter(|r| r.path == "/api/sendPrompt").collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].body["agentId"], json!(A));
+    assert_eq!(sent[0].body["prompt"], json!("hi"));
+    assert_eq!(sent[0].body["clientNonce"], json!(r.client_nonce));
+    assert!(!g.send(B, "hi").expect("a current agent sends").agent_stale);
+}
+
+#[test]
+fn the_roster_summary_of_the_latest_entry_feeds_the_live_tail() {
+    let t = now() - 30 * DAY_MS;
+    let mut reply = fixture::list_item(A, "Grok");
+    reply["lastActivityAt"] = json!(t + 120_000);
+    reply["localActivityAt"] = json!(t);
+    reply["lastMessageId"] = json!("t200");
+    reply["newestEntryId"] = json!("t201");
+    reply["lastEntry"] = json!({"kind": "send-message", "text": "Line one\nline two\u{1b}"});
+    reply["lastMessagePreview"] = json!("Line one line two");
+    reply["snapshotEpoch"] = json!("ep9");
+    reply["snapshotSeq"] = json!(41);
+    // A tool call as the newest entry: its text is not a chat line, so the
+    // preview is used; the author id names the agent itself.
+    let mut tool = fixture::list_item(B, "Jarvis");
+    tool["lastEntry"] = json!({"kind": "tool-call", "text": "Shell: ls"});
+    tool["lastMessagePreview"] = json!("Done, deployed.");
+    tool["lastMessageId"] = json!(null);
+    tool["newestEntryId"] = json!("n7");
+    tool["lastMessageAuthorId"] = json!(B);
+    let gw = FakeGateway::start(json!([reply, tool]));
+    let (_home, _sand) = setup(&gw);
+    let list = GrokBot::for_current_user().list_agents().expect("list");
+    let a = list[0].live.clone().expect("live summary");
+    assert_eq!(a.entry_id.as_deref(), Some("t200"), "lastMessageId first");
+    assert_eq!(a.text.as_deref(), Some("Line one\nline two"), "line breaks kept, controls dropped");
+    assert!(!a.preview_only);
+    assert_eq!(a.author, Some(Author::Agent));
+    assert_eq!(a.at_ms, Some(t + 120_000));
+    assert_eq!((a.snapshot_epoch.as_deref(), a.snapshot_seq), (Some("ep9"), Some(41)));
+    let b = list[1].live.clone().expect("live summary");
+    assert_eq!(b.entry_id.as_deref(), Some("n7"), "newestEntryId when no lastMessageId");
+    assert_eq!(b.text.as_deref(), Some("Done, deployed."));
+    assert!(b.preview_only);
+    assert_eq!(b.author, Some(Author::Agent));
+    // Never on the wire.
+    let v = serde_json::to_value(&list).expect("json");
+    assert!(v[0].get("live").is_none(), "{}", v[0]);
+
+    // A human line (K2's envelope or a user message) reads as the human.
+    gw.set(|s| {
+        s.agents[0]["lastEntry"] = json!({"kind": "message", "text": "[from Pat] go"});
+        s.agents[1]["lastEntry"] = json!({"kind": "message", "text": "thanks"});
+        s.agents[1]["lastMessageAuthorId"] = json!(null);
+    });
+    let list = GrokBot::for_current_user().list_agents().expect("list");
+    assert_eq!(list[0].live.as_ref().and_then(|l| l.author), Some(Author::Human));
+    assert_eq!(list[1].live.as_ref().and_then(|l| l.author), Some(Author::Human));
+    // A hidden host prompt is never a line: the preview stands in.
+    gw.set(|s| s.agents[0]["lastEntry"] = json!({"kind": "message", "text": "[SAND_HIDDEN_PROMPT] x"}));
+    let list = GrokBot::for_current_user().list_agents().expect("list");
+    let a = list[0].live.clone().expect("live");
+    assert_eq!((a.text.as_deref(), a.preview_only), (Some("Line one line two"), true));
 }
 
 #[test]

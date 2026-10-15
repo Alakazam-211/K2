@@ -6,6 +6,12 @@
 // Interactive lines (a question with choices, a connect request, a
 // credential request, a shared template) show as read-only cards: they are
 // answered in Grok Bot itself. K2 never asks for or shows a secret.
+//
+// A stale bot (its live conversation runs outside this computer) shows the
+// old local history, then a "Live since …" divider and the live tail: the
+// new lines the server saw in Grok Bot's roster summary plus what was sent
+// from K2. The summary only shows the latest line at each check, so a gap
+// marker stands where lines may be missing.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
@@ -18,12 +24,16 @@ import {
   fetchGrokThread,
   grokAgentState,
   GROK_BOTS_SETTINGS_PATH,
-  GROK_STALE_SEND_TEXT,
+  GROK_LIVE_GAP_TEXT,
+  GROK_STALE_COMPOSE_NOTE,
   GROK_STATE_LABEL,
   grokK2Sender,
+  grokLiveDividerText,
+  grokLiveEntryAsMessage,
   mergeGrokMessages,
   sendToGrokBot,
   type GrokCard,
+  type GrokLiveTail,
   type GrokMessage,
 } from '@/lib/grokbots'
 import { grokAgentOn, scopeForGrokHost, useGrokBotsStore, useGrokBotsSync } from '@/stores/grokbots'
@@ -40,6 +50,42 @@ function OpenInGrokBot({ what }: { what: string }): React.JSX.Element {
   return (
     <div data-testid="grokbot-open-in-app" className={`text-[10px] ${muted}`}>
       {what} Open Grok Bot to see or answer it.
+    </div>
+  )
+}
+
+/** A stale bot's live tail under its old history: a divider, then each
+ *  live line as an ordinary bubble (a gap marker where lines may be
+ *  missing). */
+export function GrokLiveTailView({
+  tail,
+  agentName,
+  nowSec,
+}: {
+  tail: GrokLiveTail
+  agentName: string
+  nowSec: number
+}): React.JSX.Element {
+  return (
+    <div data-testid="grokbot-live-tail">
+      <div
+        data-testid="grokbot-live-divider"
+        className={`my-2 flex items-center gap-2 text-[10px] ${muted}`}
+      >
+        <div className="h-px flex-1 bg-[var(--color-border)]" />
+        <span className="shrink-0">{grokLiveDividerText(tail.sinceMs)}</span>
+        <div className="h-px flex-1 bg-[var(--color-border)]" />
+      </div>
+      {tail.entries.map((e) => (
+        <div key={e.id} data-testid="grokbot-live-entry" data-live-id={e.id}>
+          {e.gapBefore && (
+            <div data-testid="grokbot-live-gap" className={`py-1 text-center text-[10px] ${muted}`}>
+              {GROK_LIVE_GAP_TEXT}
+            </div>
+          )}
+          <MessageRow m={grokLiveEntryAsMessage(e)} agentName={agentName} nowSec={nowSec} previewOnly={e.previewOnly} />
+        </div>
+      ))}
     </div>
   )
 }
@@ -157,13 +203,24 @@ function authorLabel(m: GrokMessage, agentName: string, k2From: string | null): 
   return agentName
 }
 
-function MessageRow({ m, agentName, nowSec }: { m: GrokMessage; agentName: string; nowSec: number }): React.JSX.Element {
+function MessageRow({
+  m,
+  agentName,
+  nowSec,
+  previewOnly = false,
+}: {
+  m: GrokMessage
+  agentName: string
+  nowSec: number
+  previewOnly?: boolean
+}): React.JSX.Element {
   const sent = grokK2Sender(m)
   const time = m.atMs !== null ? formatRelativeTime(Math.floor(m.atMs / 1000), nowSec) : ''
   const notes: string[] = []
   if (m.toAgent) notes.push(`to ${m.toAgent.name}`)
   if (m.author === 'peer') notes.push(`from ${m.fromAgent?.name ?? 'another agent'}`)
   if (m.viaK2) notes.push('sent from K2')
+  if (previewOnly) notes.push('preview, open Grok Bot for the full message')
   const footer = (
     <>
       {m.card && <GrokCardView card={m.card} />}
@@ -195,6 +252,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   const realId = agent?.id ?? agentId
 
   const [messages, setMessages] = useState<GrokMessage[]>([])
+  const [liveTail, setLiveTail] = useState<GrokLiveTail | null>(null)
   const [supported, setSupported] = useState(true)
   const [reason, setReason] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -211,6 +269,8 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
         setSupported(page.supported)
         setReason(page.reason)
         setMessages((prev) => (reset ? page.messages : mergeGrokMessages(prev, page.messages)))
+        // The whole tail comes with every read (bounded by the server).
+        setLiveTail(page.liveTail)
         setLoadError(null)
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : String(e))
@@ -225,6 +285,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   // First page when the chat opens (or switches agent).
   useEffect(() => {
     setMessages([])
+    setLiveTail(null)
     setLoaded(false)
     setSendError(null)
     void load(PAGE, true)
@@ -246,7 +307,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   useEffect(() => {
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages.length])
+  }, [messages.length, liveTail?.entries.length])
 
   const send = async (): Promise<void> => {
     const text = draft.trim()
@@ -315,28 +376,17 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
             K2 can't read this chat yet{reason ? ` (${reason})` : ''}. Open it in Grok Bot.
           </Callout>
         )}
-        {loaded && supported && !loadError && messages.length === 0 && (
+        {loaded && supported && !loadError && messages.length === 0 && !liveTail?.entries.length && (
           <div className={`py-6 text-center text-xs ${muted}`}>No messages yet</div>
         )}
         {messages.map((m) => (
           <MessageRow key={m.seq} m={m} agentName={name} nowSec={nowSec} />
         ))}
+        {liveTail && <GrokLiveTailView tail={liveTail} agentName={name} nowSec={nowSec} />}
       </div>
 
       <div className="border-t border-[var(--color-border)] px-3 py-2">
-        {sendOn && stale ? (
-          <div className="flex items-end gap-2 opacity-60" data-testid="grokbot-compose-stale">
-            <textarea
-              disabled
-              rows={2}
-              placeholder={GROK_STALE_SEND_TEXT}
-              className="flex-1 cursor-not-allowed resize-none rounded-[var(--radius-box)] border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--color-text-muted)] outline-none"
-            />
-            <Button variant="accent" disabled>
-              Send
-            </Button>
-          </div>
-        ) : sendOn ? (
+        {sendOn ? (
           <div className="flex flex-col gap-1.5" data-testid="grokbot-compose">
             {state === 'working' && (
               <div className={`text-[11px] ${muted}`}>{name} is busy. Your message may wait until it finishes.</div>
@@ -368,6 +418,11 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
             <div className={`text-[10px] ${muted}`}>
               Each message runs a billed Grok turn and reaches the bot as [from your name].
             </div>
+            {stale && (
+              <div data-testid="grokbot-compose-stale-note" className={`text-[10px] ${muted}`}>
+                {GROK_STALE_COMPOSE_NOTE}
+              </div>
+            )}
             {sendError && <Callout tone="error">{sendError}</Callout>}
           </div>
         ) : (

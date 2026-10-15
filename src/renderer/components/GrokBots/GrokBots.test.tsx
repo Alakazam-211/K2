@@ -250,34 +250,86 @@ describe('chat view', () => {
     expect(typed.textContent).toContain('You')
   })
 
-  it('a stale bot shows the banner with its current preview above the old history, and a greyed-out compose box', async () => {
+  it('a stale bot shows the banner, the old history, then the live tail under a divider, and still sends', async () => {
     cli.list = listWith({
       sendEnabled: true,
       agents: [
         item(ID, 'Grok', {
           stale: true,
-          lastMessagePreview: 'Shipped the October report',
+          lastMessagePreview: 'Done: report sent.',
           lastActivityAt: Date.now() - 2 * 3600_000,
           localActivityAt: Date.UTC(2026, 7, 30, 12),
         }),
       ],
     })
+    cli.thread = {
+      ...THREAD,
+      stale: true,
+      liveTail: {
+        sinceMs: Date.now() - 3 * 3600_000,
+        entries: [
+          { id: 'r1', author: 'agent', text: 'Shipped the October report.', atMs: Date.now() - 3 * 3600_000 },
+          { id: 'k2-n1', author: 'human', text: '[from Rosson Test] send it to the board', atMs: Date.now() - 2.5 * 3600_000, viaK2: true },
+          { id: 'r2', author: 'agent', text: 'Done: report sent.', atMs: Date.now() - 2 * 3600_000, gapBefore: true },
+        ],
+      },
+    }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     const banner = await screen.findByTestId('grokbot-stale-banner')
     expect(banner.textContent).toContain("Grok's latest conversation runs outside this computer.")
     expect(banner.textContent).toContain('Showing history up to')
-    expect(banner.textContent).toContain('2026')
-    expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Shipped the October report')
-    // The old local history is still shown below.
+    expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Done: report sent.')
+    // Old local history first, then the divider, then the live lines.
     await screen.findByText('Build is green.')
-    const compose = screen.getByTestId('grokbot-compose-stale')
-    expect((compose.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(true)
-    expect((compose.querySelector('textarea') as HTMLTextAreaElement).placeholder).toBe(
-      "This bot's live conversation runs outside this computer; message it in Grok Bot.",
+    const divider = screen.getByTestId('grokbot-live-divider')
+    expect(divider.textContent).toMatch(/^Live since .+ — older history above may be out of date$/)
+    const all = screen.getAllByTestId('grokbot-message')
+    expect(all).toHaveLength(7)
+    const live = screen.getAllByTestId('grokbot-live-entry')
+    expect(live.map((e) => e.getAttribute('data-live-id'))).toEqual(['r1', 'k2-n1', 'r2'])
+    const history = screen.getByText('Build is green.')
+    expect(history.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(divider.compareDocumentPosition(live[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Normal bubbles: the agent's reply, and K2's own line with its sender.
+    expect(live[0].textContent).toContain('Shipped the October report.')
+    expect(live[1].textContent).toContain('Rosson Test')
+    expect(live[1].textContent).toContain('send it to the board')
+    expect(live[1].textContent).toContain('sent from K2')
+    expect(live[1].textContent).not.toContain('[from Rosson Test]')
+    // A gap marker only where lines may be missing.
+    const gaps = screen.getAllByTestId('grokbot-live-gap')
+    expect(gaps).toHaveLength(1)
+    expect(live[2].contains(gaps[0])).toBe(true)
+    expect(gaps[0].textContent).toBe('… earlier messages not shown — open Grok Bot')
+
+    // The compose box works, with a note about where replies come from.
+    expect(screen.queryByTestId('grokbot-compose-stale')).toBeNull()
+    expect(screen.getByTestId('grokbot-compose-stale-note').textContent).toBe(
+      "Replies come from Grok Bot's live conversation; older history on this computer may be out of date.",
     )
-    expect((compose.querySelector('button') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.queryByTestId('grokbot-compose')).toBeNull()
-    expect(cli.posts).toEqual([])
+    const input = screen.getByTestId('grokbot-compose-input') as HTMLTextAreaElement
+    expect(input.disabled).toBe(false)
+    fireEvent.change(input, { target: { value: 'thanks' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('grokbot-compose-send'))
+    })
+    expect(cli.posts).toEqual([{ route: 'grokbots/send', body: { agent: ID, text: 'thanks' } }])
+  })
+
+  it("a new live line from the server's change event shows up", async () => {
+    cli.list = listWith({ agents: [item(ID, 'Grok', { stale: true })] })
+    const entry = (id: string, text: string): Record<string, unknown> => ({ id, author: 'agent', text, atMs: Date.now() })
+    cli.thread = { ...THREAD, stale: true, liveTail: { sinceMs: Date.now(), entries: [entry('r1', 'first')] } }
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    await screen.findByText('first')
+    cli.thread = {
+      ...THREAD,
+      stale: true,
+      liveTail: { sinceMs: Date.now(), entries: [entry('r1', 'first'), entry('r2', 'second')] },
+    }
+    act(() => useGrokBotsStore.getState().noteChange('local'))
+    await screen.findByText('second')
+    expect(screen.getAllByTestId('grokbot-live-entry')).toHaveLength(2)
   })
 
   it('a current bot has no stale banner', async () => {
@@ -285,7 +337,8 @@ describe('chat view', () => {
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     await screen.findByTestId('grokbot-compose')
     expect(screen.queryByTestId('grokbot-stale-banner')).toBeNull()
-    expect(screen.queryByTestId('grokbot-compose-stale')).toBeNull()
+    expect(screen.queryByTestId('grokbot-compose-stale-note')).toBeNull()
+    expect(screen.queryByTestId('grokbot-live-divider')).toBeNull()
   })
 
   it('an unknown chat layout says "Open it in Grok Bot" instead of breaking', async () => {

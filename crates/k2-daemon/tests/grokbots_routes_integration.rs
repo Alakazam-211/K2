@@ -10,7 +10,10 @@
 //!   gateway sees the bearer, the body never carries the token;
 //! - a send reaches Grok Bot as `[from <login>]` / `[from <owner name>]`;
 //! - a send emits nothing on its own, but the setting change emits
-//!   `grokbots_changed` on the session-event bus.
+//!   `grokbots_changed` on the session-event bus;
+//! - a stale bot (live conversation elsewhere) takes sends; its thread is
+//!   the old local history plus a live tail holding Grok Bot's latest line
+//!   and the line K2 sent, and the send announces `grokbots_changed`.
 //!
 //! Never touches the real `~/.k2` or a real `~/sand-data`.
 
@@ -31,6 +34,8 @@ const OWNER: &str = "owner-token-grokbots";
 const A: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2346";
 /// A second agent: the send limiter is per agent.
 const B: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2347";
+/// A stale agent (its live conversation runs elsewhere).
+const C: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2348";
 
 struct Conn {
     reader: BufReader<TcpStream>,
@@ -122,16 +127,26 @@ fn login(username: &str, role: Option<connect_users::Role>) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grokbots_routes_gate_consent_and_round_trip() {
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut stale = fixture::list_item(C, "Grok");
+    stale["lastActivityAt"] = json!(now - 5_000);
+    stale["localActivityAt"] = json!(now - 47 * 86_400_000_i64);
+    stale["lastMessageId"] = json!("r1");
+    stale["lastEntry"] = json!({"kind": "send-message", "text": "The October report is out."});
+    stale["lastMessagePreview"] = json!("The October report is out.");
     let gw = FakeGateway::start(json!([
         fixture::list_item(A, "Cortana"),
-        fixture::list_item(B, "Friday")
+        fixture::list_item(B, "Friday"),
+        stale
     ]));
     let home = k2_core::test_env::TempHome::new();
     let _ = k2_core::db::init_for_tests();
     let sand = FakeSandData::create(home.path(), gw.port);
     sand.add_agent(A, "Cortana", "Chief of staff");
     sand.add_agent(B, "Friday", "Ops");
+    sand.add_agent(C, "Grok", "Assistant");
     sand.add_sample_chat(A);
+    sand.add_sample_chat(C);
     let mut events = k2_daemon::session_events::subscribe();
 
     let d = futures_block(test_harness::start(OWNER));
@@ -308,6 +323,71 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[1].body["prompt"], json!("[from Rosson Test] hello"));
     assert_eq!(sent[1].body["agentId"], json!(B));
+
+    // A stale bot: the send goes through and shows in its live tail.
+    while events.try_recv().is_ok() {}
+    let (s, b, raw) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/send", OWNER),
+        Some(json!({"agent": C, "text": "send it to the board"})),
+    );
+    assert_eq!(s, 200, "{b}");
+    assert!(!raw.contains(FAKE_TOKEN));
+    let nonce = b["clientNonce"].as_str().expect("clientNonce").to_string();
+    let sent: Vec<_> = gw
+        .seen()
+        .into_iter()
+        .filter(|r| r.path == "/api/sendPrompt")
+        .collect();
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2].body["agentId"], json!(C));
+    let mut saw = false;
+    for _ in 0..50 {
+        match events.try_recv() {
+            Ok(ev) => {
+                let v = serde_json::to_value(&ev).expect("event json");
+                if v["kind"] == "grokbots_changed" && v["agents"] == json!([C]) {
+                    saw = true;
+                    break;
+                }
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    assert!(saw, "a stale send announces the agent's chat changed");
+    let (s, t, raw) = call(
+        port,
+        "GET",
+        &format!("/cli/grokbots/thread?agent={C}&token={member}"),
+        None,
+    );
+    assert_eq!(s, 200, "{t}");
+    assert!(!raw.contains(FAKE_TOKEN));
+    assert_eq!(t["stale"], json!(true));
+    assert_eq!(t["messages"][2]["text"], json!("Build is green."), "old history: {t}");
+    let entries = t["liveTail"]["entries"].as_array().expect("liveTail.entries");
+    let got: Vec<(J, J, J)> = entries
+        .iter()
+        .map(|e| (e["id"].clone(), e["author"].clone(), e["text"].clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (json!("r1"), json!("agent"), json!("The October report is out.")),
+            (
+                json!(format!("k2-{nonce}")),
+                json!("human"),
+                json!("[from Rosson Test] send it to the board")
+            ),
+        ]
+    );
+    assert_eq!(entries[1]["viaK2"], json!(true));
+    let tail_file = home
+        .path()
+        .join(".k2/external-agents/grokbots-live-tail.json");
+    let on_disk = std::fs::read_to_string(&tail_file).expect("live tail persisted");
+    assert!(!on_disk.contains(FAKE_TOKEN), "no token in the tail file");
 
     drop(d);
     drop(home);

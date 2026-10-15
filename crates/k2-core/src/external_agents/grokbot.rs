@@ -28,6 +28,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
+use super::live_tail::LiveSummary;
 use super::{
     valid_agent_id, AgentRef, Author, Card, CardOption, CardState, Detection, ExtError,
     ExternalAgent, ExternalAgentProvider, ProviderStatus, SendReceipt, ThreadMessage, ThreadPage,
@@ -66,7 +67,7 @@ pub mod schema {
     /// `POST` + bearer: `{prompt, agentId, clientNonce}`. Runs a billed
     /// turn. UNTESTED by Grok Bot: the response body and what happens when
     /// the agent is busy. K2 treats any 2xx as accepted and shows the reply
-    /// when it lands in `store.db`.
+    /// when it lands in `store.db` (a stale agent: in the live tail).
     pub const SEND_PROMPT_PATH: &str = "/api/sendPrompt";
     /// Whether K2 lets the human send while the agent is running a turn.
     /// Unknown on Grok Bot's side (queued / refused / interrupted), so K2
@@ -98,6 +99,27 @@ pub mod schema {
     pub const AGENT_NEWEST_ENTRY: &str = "newestEntryId";
     /// One-line preview of the latest message, current even when stale.
     pub const AGENT_LAST_PREVIEW: &str = "lastMessagePreview";
+    /// The latest message's id: the live tail's entry id (falls back to
+    /// [`AGENT_NEWEST_ENTRY`]).
+    pub const AGENT_LAST_MESSAGE_ID: &str = "lastMessageId";
+    /// `{kind, text}` of the latest entry. `text` is the live tail's line
+    /// (as much as the gateway gives; unverified whether it is ever cut).
+    pub const AGENT_LAST_ENTRY: &str = "lastEntry";
+    pub const LAST_ENTRY_KIND: &str = "kind";
+    pub const LAST_ENTRY_TEXT: &str = "text";
+    /// Who wrote the latest message (null in every sample so far). Equal to
+    /// the agent's own id → the agent.
+    pub const AGENT_LAST_AUTHOR: &str = "lastMessageAuthorId";
+    /// `lastEntry.kind` values that are the agent writing (anything else
+    /// that is a chat kind reads as the human).
+    pub const AGENT_ENTRY_KINDS: &[&str] = &["send-message", "assistant", "agent"];
+    pub const HUMAN_ENTRY_KINDS: &[&str] = &["message", "user", "human"];
+    /// `lastEntry.kind` values that are not chat lines: their `text` is not
+    /// shown; the preview is used instead.
+    pub const NON_CHAT_ENTRY_KINDS: &[&str] = &["tool-call", "event", "spend-initiation", "feedback"];
+    /// Snapshot counter (gap detection within one epoch).
+    pub const AGENT_SNAPSHOT_EPOCH: &str = "snapshotEpoch";
+    pub const AGENT_SNAPSHOT_SEQ: &str = "snapshotSeq";
     /// `lastActivityAt` may lead `localActivityAt` by this much before the
     /// agent counts as stale (clock skew, a write in flight).
     pub const STALE_TOLERANCE_MS: i64 = 60_000;
@@ -323,6 +345,7 @@ impl GrokBot {
                 last_activity_at: None,
                 local_activity_at: None,
                 rev: String::new(),
+                live: None,
                 id,
             });
         }
@@ -382,6 +405,7 @@ impl GrokBot {
                     newest_entry_settled(last_activity_at, now_ms())
                         && self.store_has_entry(&id, e) == Some(false)
                 });
+            let live = live_summary(&id, o, last_activity_at);
             out.push(ExternalAgent {
                 kind: KIND,
                 name: str_of(o, schema::AGENT_NAME)
@@ -407,6 +431,7 @@ impl GrokBot {
                 last_activity_at,
                 local_activity_at,
                 rev,
+                live: Some(live),
                 id,
             });
         }
@@ -444,7 +469,7 @@ impl GrokBot {
     /// K2 can't tell (no store, unknown layout, unreadable). A hit is
     /// remembered (an entry never leaves), so a current agent costs one
     /// lookup per new entry, not one per poll.
-    fn store_has_entry(&self, agent_id: &str, entry_id: &str) -> Option<bool> {
+    pub fn store_has_entry(&self, agent_id: &str, entry_id: &str) -> Option<bool> {
         type Key = (PathBuf, String, String);
         static FOUND: std::sync::Mutex<Option<std::collections::HashSet<Key>>> =
             std::sync::Mutex::new(None);
@@ -677,11 +702,12 @@ impl ExternalAgentProvider for GrokBot {
         let Some(agent) = roster.iter().find(|a| a.id == agent_id) else {
             return Err(ExtError::UnknownAgent(agent_id.to_string()));
         };
-        if agent.stale {
-            // Its live conversation runs elsewhere: a send here might run
-            // against this computer's old context.
-            return Err(ExtError::Stale);
-        }
+        // A stale agent (live conversation elsewhere) still gets the send:
+        // the gateway delivers it to the live conversation wherever it runs
+        // (seen on a real box 2026-10-15: `lastActivityAt` moved 3 s after a
+        // K2 send while this computer's store did not). The caller records
+        // it in the live tail, since the local store won't show it.
+        let agent_stale = agent.stale;
         if agent.working && !schema::SEND_WHILE_BUSY_ALLOWED {
             return Err(ExtError::BadInput("the agent is busy".into()));
         }
@@ -721,6 +747,7 @@ impl ExternalAgentProvider for GrokBot {
         // Any 2xx is accepted (the body is untested on Grok Bot's side).
         Ok(SendReceipt {
             client_nonce: nonce,
+            agent_stale,
         })
     }
 }
@@ -733,6 +760,71 @@ pub fn k2_nonce() -> String {
         schema::K2_NONCE_MARK,
         &u[schema::K2_NONCE_MARK.len()..]
     )
+}
+
+// ── live summary (stale agents) ─────────────────────────────────────────
+
+/// What `listAgents` says about an agent's latest entry, for the live tail
+/// ([`super::live_tail`]). Only the LATEST entry is ever visible this way.
+fn live_summary(
+    agent_id: &str,
+    o: &Map<String, Value>,
+    last_activity_at: Option<i64>,
+) -> LiveSummary {
+    let last = o.get(schema::AGENT_LAST_ENTRY).and_then(Value::as_object);
+    let kind = last.and_then(|l| str_of(l, schema::LAST_ENTRY_KIND));
+    let chat_kind = !kind.is_some_and(|k| schema::NON_CHAT_ENTRY_KINDS.contains(&k));
+    let entry_text = last
+        .filter(|_| chat_kind)
+        .and_then(|l| str_of(l, schema::LAST_ENTRY_TEXT))
+        .and_then(clean_entry_text);
+    let (text, preview_only) = match entry_text {
+        Some(t) => (Some(t), false),
+        None => (
+            str_of(o, schema::AGENT_LAST_PREVIEW).and_then(clean_preview),
+            true,
+        ),
+    };
+    let author_id = str_of(o, schema::AGENT_LAST_AUTHOR);
+    let author = if author_id == Some(agent_id) {
+        Author::Agent
+    } else if text
+        .as_deref()
+        .is_some_and(|t| t.starts_with("[from "))
+    {
+        Author::Human
+    } else {
+        match kind {
+            Some(k) if schema::AGENT_ENTRY_KINDS.contains(&k) => Author::Agent,
+            Some(k) if schema::HUMAN_ENTRY_KINDS.contains(&k) => Author::Human,
+            _ => Author::Agent,
+        }
+    };
+    LiveSummary {
+        entry_id: str_of(o, schema::AGENT_LAST_MESSAGE_ID)
+            .or_else(|| str_of(o, schema::AGENT_NEWEST_ENTRY))
+            .map(str::to_string),
+        at_ms: last_activity_at,
+        author: Some(author),
+        text,
+        preview_only,
+        snapshot_epoch: o
+            .get(schema::AGENT_SNAPSHOT_EPOCH)
+            .filter(|v| !v.is_null())
+            .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())),
+        snapshot_seq: o.get(schema::AGENT_SNAPSHOT_SEQ).and_then(Value::as_i64),
+    }
+}
+
+/// `lastEntry.text` as a chat line: control characters other than line
+/// breaks and tabs dropped, trimmed. Hidden host prompts are dropped.
+fn clean_entry_text(raw: &str) -> Option<String> {
+    let t: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    let t = t.trim();
+    (!t.is_empty() && !t.starts_with(schema::HIDDEN_PREFIX)).then(|| t.to_string())
 }
 
 // ── transcript reading ──────────────────────────────────────────────────

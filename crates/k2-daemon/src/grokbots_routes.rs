@@ -27,10 +27,19 @@
 //! - `GET  /cli/grokbots/list`     → `{enabled, sendEnabled, status, agents}`
 //! - `GET  /cli/grokbots/status`   → `{enabled, sendEnabled, status}`
 //! - `GET  /cli/grokbots/thread?agent=<id>&since=<seq>&limit=<n>` → `ThreadPage`
+//!   (+ `stale: true, liveTail: {sinceMs, entries}` for a stale bot, below)
 //! - `POST /cli/grokbots/send`     `{agent, text}` → `{ok, clientNonce}`
-//!   (409 `grokbots_stale` when the bot's live conversation runs outside
-//!   this computer: its local chat is old, so a send could run against old
-//!   context; the person messages it in Grok Bot instead)
+//!
+//! A **stale** bot's live conversation runs outside this computer (another
+//! box, Grok's cloud): its local chat store is old and Grok Bot's gateway
+//! has no transcript endpoint. Sends still go through (the gateway delivers
+//! them to the live conversation), so `send` is allowed and records the
+//! line in the bot's live tail (`k2_core::external_agents::live_tail`). The
+//! poller records each new latest entry the roster reports. `thread`
+//! returns the old local history plus that tail after it; `list` shows the
+//! tail's newest line as the bot's preview. The tail is only what the
+//! roster summary exposed (the latest entry at each poll): a burst between
+//! two polls shows only its last line, marked as a possible gap.
 //!
 //! A send reaches Grok Bot as `[from <name>] <text>`, so the bot knows who
 //! wrote. The name comes from the credential, never the body (the same
@@ -47,6 +56,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as J};
 
 use k2_core::external_agents::grokbot::{self, GrokBot};
+use k2_core::external_agents::live_tail;
 use k2_core::external_agents::rate_limit::SendLimiter;
 use k2_core::external_agents::settings::{self, LocalGrokBotsSettings};
 use k2_core::external_agents::{ExtError, ExternalAgentProvider};
@@ -139,14 +149,10 @@ fn admin_only() -> CliResponse {
 }
 
 fn ext_err(e: ExtError) -> CliResponse {
-    if matches!(e, ExtError::Stale) {
-        return refuse("409 Conflict", "grokbots_stale", e.to_string());
-    }
     let status = match e {
         ExtError::NotInstalled | ExtError::UnknownAgent(_) => "404 Not Found",
         ExtError::BadInput(_) => "400 Bad Request",
         ExtError::Unreachable(_) | ExtError::Protocol(_) => "502 Bad Gateway",
-        ExtError::Stale => "409 Conflict",
     };
     refuse(status, e.code(), e.to_string())
 }
@@ -261,11 +267,16 @@ fn list() -> CliResponse {
         );
     }
     let p = provider();
-    let (installed, agents) = match p.list_agents() {
+    let (installed, mut agents) = match p.list_agents() {
         Ok(a) => (true, a),
         Err(ExtError::NotInstalled) => (false, Vec::new()),
         Err(e) => return ext_err(e),
     };
+    for a in agents.iter_mut().filter(|a| a.stale) {
+        if let Some(text) = live_preview(a) {
+            a.last_message_preview = Some(text);
+        }
+    }
     let status = if installed {
         p.status()
     } else {
@@ -321,17 +332,54 @@ fn thread(params: &HashMap<String, String>) -> CliResponse {
         },
         None => 100,
     };
-    match provider().read_thread(agent, since, limit) {
+    let p = provider();
+    match p.read_thread(agent, since, limit) {
         Ok(page) => {
             let mut v = serde_json::to_value(&page).unwrap_or(J::Null);
             if let Some(o) = v.as_object_mut() {
                 o.insert("ok".into(), J::Bool(true));
                 o.insert("agent".into(), J::String(agent.clone()));
+                if let Some(tail) = stale_live_tail(&p, agent) {
+                    o.insert("stale".into(), J::Bool(true));
+                    o.insert(
+                        "liveTail".into(),
+                        serde_json::to_value(&tail).unwrap_or(J::Null),
+                    );
+                }
             }
             resp("200 OK", v)
         }
         Err(e) => ext_err(e),
     }
+}
+
+/// For a stale bot: its live tail, freshly topped up from the roster (so a
+/// read never waits for the poller). `None` when the bot is not stale or
+/// the gateway can't be asked (then the page is the local history alone).
+fn stale_live_tail(p: &GrokBot, agent: &str) -> Option<live_tail::LiveTail> {
+    let roster = p.list_agents().ok()?;
+    let a = roster.into_iter().find(|a| a.id == *agent && a.stale)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    if let Some(live) = &a.live {
+        live_tail::observe(agent, live, now, |id| {
+            p.store_has_entry(agent, id) == Some(true)
+        });
+    }
+    Some(live_tail::tail(agent).unwrap_or(live_tail::LiveTail {
+        since_ms: now,
+        entries: Vec::new(),
+    }))
+}
+
+/// A stale bot's row preview: the tail's newest line when it is at least as
+/// new as the roster's own latest activity (a K2 send just made, a reply
+/// the poller saw). Otherwise the roster's preview stands.
+fn live_preview(a: &k2_core::external_agents::ExternalAgent) -> Option<String> {
+    let newest = live_tail::newest(&a.id)?;
+    if a.last_activity_at.is_some_and(|t| newest.at_ms < t) {
+        return None;
+    }
+    grokbot::clean_preview(&newest.text)
 }
 
 #[derive(Deserialize)]
@@ -384,11 +432,17 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
     match provider().send(&b.agent, &prompt) {
         Ok(r) => {
             log_debug!(
-                "[grokbots] send to {} by {} ({} bytes)",
+                "[grokbots] send to {} by {} ({} bytes{})",
                 b.agent,
                 who.label(),
-                b.text.len()
+                b.text.len(),
+                if r.agent_stale { ", stale" } else { "" }
             );
+            if r.agent_stale {
+                // Its local store won't show this line: the live tail does.
+                live_tail::record_own_send(&b.agent, &r.client_nonce, &prompt, now);
+                crate::grokbots_watch::announce_agent(&b.agent);
+            }
             crate::grokbots_watch::nudge_agent(&b.agent);
             resp(
                 "200 OK",
@@ -396,10 +450,6 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
             )
         }
         Err(e) => {
-            if matches!(e, ExtError::Stale) {
-                // Refused before it reached Grok Bot: no turn ran.
-                limiter().unrecord(&b.agent, now);
-            }
             log_debug!(
                 "[grokbots] send to {} by {} failed: {}",
                 b.agent,

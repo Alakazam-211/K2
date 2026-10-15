@@ -7,6 +7,8 @@ import {
   grokK2Sender,
   grokRowStatus,
   isGrokBotAddress,
+  grokLiveDividerText,
+  grokLiveEntryAsMessage,
   mergeGrokMessages,
   parseGrokList,
   parseGrokThread,
@@ -113,6 +115,35 @@ describe('parsing', () => {
       localActivityAt: 1_788_052_860_000,
     })
     expect(l.agents[1]).toMatchObject({ stale: false, lastMessagePreview: null, lastActivityAt: null, localActivityAt: null })
+  })
+
+  it("reads a stale bot's live tail; a page without one is unchanged", () => {
+    const p = parseGrokThread({
+      supported: true,
+      messages: [{ seq: 1, author: 'agent', text: 'old' }],
+      stale: true,
+      liveTail: {
+        sinceMs: 1_792_070_000_000,
+        entries: [
+          { id: 'r1', author: 'agent', text: 'Shipped.', atMs: 1_792_070_010_000 },
+          { id: 'k2-n', author: 'human', text: '[from Pat] go', atMs: 1_792_070_020_000, viaK2: true },
+          { id: 'r2', author: 'agent', text: 'Done.', atMs: 1_792_070_030_000, gapBefore: true, previewOnly: true },
+          { id: 'bad', author: 'agent' },
+          { author: 'agent', text: 'no id' },
+        ],
+      },
+    })
+    expect(p.stale).toBe(true)
+    expect(p.liveTail?.sinceMs).toBe(1_792_070_000_000)
+    expect(p.liveTail?.entries.map((e) => e.id)).toEqual(['r1', 'k2-n', 'r2'])
+    expect(p.liveTail?.entries[1]).toMatchObject({ author: 'human', viaK2: true, gapBefore: false })
+    expect(p.liveTail?.entries[2]).toMatchObject({ gapBefore: true, previewOnly: true })
+    // A K2 send in the tail reads its sender like any K2 line.
+    expect(grokK2Sender(grokLiveEntryAsMessage(p.liveTail!.entries[1]))).toEqual({ from: 'Pat', text: 'go' })
+    const plain = parseGrokThread({ supported: true, messages: [] })
+    expect(plain.stale).toBe(false)
+    expect(plain.liveTail).toBeNull()
+    expect(grokLiveDividerText(1_792_070_000_000)).toMatch(/^Live since .+ — older history above may be out of date$/)
   })
 
   it('merges pages by seq, a later read replaces the line', () => {

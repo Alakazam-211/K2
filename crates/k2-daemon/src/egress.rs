@@ -48,6 +48,12 @@ pub enum Purpose {
     /// `/api/oauth/profile`), asked during a token switch. Short: a slow
     /// answer means "can't tell", never a wait.
     LlmAccountCheck,
+    /// A guarded App's egress proxy (`prd-k2-app-runtime-v1` S15, AR16):
+    /// the App's CONNECT / plain-HTTP requests, after its own allowlist.
+    /// The proxy dials raw TCP to the vetted, pinned addresses
+    /// ([`Destination::socket_addrs`]); it never builds an HTTP client and
+    /// never handles keys (those go through the vault key proxy).
+    AppEgress,
 }
 
 impl Purpose {
@@ -57,12 +63,13 @@ impl Purpose {
             Purpose::VaultProxy => "vault-proxy",
             Purpose::Source => "source",
             Purpose::LlmAccountCheck => "llm-account-check",
+            Purpose::AppEgress => "app-egress",
         }
     }
 
-    fn connect_timeout(self) -> Duration {
+    pub fn connect_timeout(self) -> Duration {
         match self {
-            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source => Duration::from_secs(10),
+            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source | Purpose::AppEgress => Duration::from_secs(10),
             Purpose::LlmAccountCheck => Duration::from_secs(3),
         }
     }
@@ -207,6 +214,28 @@ impl Destination {
             DestKind::Pinned(_) => None,
         }
     }
+
+    /// Every address a raw connection may use: the pins, or the literal on
+    /// `port`. Re-checks air-gap (it may have turned on since the vet).
+    pub fn socket_addrs(&self, port: u16) -> Result<Vec<SocketAddr>, EgressError> {
+        recheck(self)?;
+        Ok(match &self.kind {
+            DestKind::IpLiteral(ip) => vec![SocketAddr::new(*ip, port)],
+            DestKind::Pinned(a) => a.clone(),
+        })
+    }
+}
+
+/// Run the gate for a bare `host:port` (a CONNECT target). `host` is a
+/// name or an IP literal (IPv6 without brackets). No IP-literal allowance:
+/// private, loopback, metadata and own addresses are always refused.
+pub fn vet_host_port(host: &str, port: u16) -> Result<Destination, EgressError> {
+    let h = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
+    let url = url::Url::parse(&format!("https://{h}:{port}/")).map_err(|_| EgressError::new("bad_host", 400, "not a host name"))?;
+    if url.port_or_known_default() != Some(port) {
+        return Err(EgressError::new("bad_host", 400, "port mismatch"));
+    }
+    Destination::vet(&url, false)
 }
 
 fn blocked(host: &str) -> EgressError {

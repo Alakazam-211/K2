@@ -176,14 +176,29 @@ pub const ROUTES: &[Route] = &[
     // (own workspace + "Allow this agent to manage Apps") in the handler.
     // Box prep (S10): the doctor is Admin (agents read it through their
     // passport); prepare runs root-helper verbs and is the owner's.
+    // Held widenings (S15 egress): a passport lists its own workspace's;
+    // approve is the owner's (handler: owner token or Owner login + a
+    // vault confirm bound to the request).
+    get("/cli/app/approvals", Member),
+    post("/cli/app/approve", Owner),
     get("/cli/app/box", Admin),
     post("/cli/app/box/prepare", Owner),
     post("/cli/app/build", Member),
     // Stage 1 holds only the per-App memory limit (the rest is S13).
     post("/cli/app/config", Member),
+    // deny is an Owner/Admin human's, or the requester's withdraw (handler).
+    post("/cli/app/deny", Member),
     post("/cli/app/deploy", Member),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
+    // Egress (S15): read and propose are Member (a passport sees its own
+    // workspace's Apps); every new host is a held request; narrowing is
+    // immediate.
+    get("/cli/app/egress", Member),
+    post("/cli/app/egress/add", Member),
+    get("/cli/app/egress/log", Member),
+    post("/cli/app/egress/mode", Member),
+    post("/cli/app/egress/rm", Member),
     // The guarded engine's install/update through the root helper (S11).
     post("/cli/app/engine/install", Owner),
     get("/cli/app/errors", Member),

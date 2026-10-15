@@ -675,6 +675,16 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/stop",
         "/cli/app/uninstall",
         "/cli/app/validate",
+        // Egress (S15): read, propose (always held for the owner), narrow,
+        // list requests, withdraw own. `/cli/app/approve` is NOT here: the
+        // owner's, in person, with a vault confirm.
+        "/cli/app/egress",
+        "/cli/app/egress/add",
+        "/cli/app/egress/log",
+        "/cli/app/egress/mode",
+        "/cli/app/egress/rm",
+        "/cli/app/approvals",
+        "/cli/app/deny",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

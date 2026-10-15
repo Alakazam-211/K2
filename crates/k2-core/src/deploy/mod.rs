@@ -118,6 +118,8 @@ pub mod codes {
     pub const SUSPENDED: &str = "suspended";
     pub const TEST_GUEST_UNAVAILABLE: &str = "test_guest_unavailable";
     pub const IS_AN_APP: &str = "is_an_app";
+    /// S13: a change that widens the App goes through config, held.
+    pub const WIDENING_HELD: &str = "widening_held";
 }
 
 /// Deploy timings (§7.2, §6.3). Defaults per the PRD; `K2_APPS_*` env

@@ -1336,6 +1336,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
+        // 0168 — the 0.46.0 App grace release: the App-scoped key
+        // (api_keys.app_service_id / app_key), the nested "…and publish
+        // open Apps" switch, apps.config_json (S13), held App requests and
+        // per-service owner-token uses. 0166/0167 are Sew's; the integrator
+        // renumbers on slips.
+        ("0168_app_grace", include_str!("../../drizzle_sql/0168_app_grace.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1996,7 +2002,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0165_app_runtime_core",
+            last_name, "0168_app_grace",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2030,6 +2036,7 @@ mod tests {
                 "0163_sources",
                 "0164_garden_data",
                 "0165_app_runtime_core",
+                "0168_app_grace",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2155,6 +2162,14 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0165_app_runtime_core'", []).unwrap();
+            // 0168 (App grace, 0.46.0) came after 0165; roll it back too.
+            conn.execute_batch(
+                "DROP TABLE app_requests; DROP TABLE app_owner_token_uses; DROP INDEX idx_api_keys_app;
+                 ALTER TABLE api_keys DROP COLUMN app_service_id; ALTER TABLE api_keys DROP COLUMN app_key;
+                 ALTER TABLE projects DROP COLUMN agents_can_publish_open_apps;",
+            )
+            .unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0168_app_grace'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

@@ -52,6 +52,9 @@ pub mod agent_hooks;
 // `connections.rs`, etc. The directory + module are deleted as of
 // Phase 2.5e; downstream callers (daemon CLI + Tauri commands) use
 // the canonical post-relocation paths directly.
+/// The 0.46.0 App grace release: App keys, held requests, config
+/// classifier, per-service warnings (scan), owner-token uses.
+pub mod app_grace;
 pub mod app_settings;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
 pub mod runtime_dir;

@@ -1036,15 +1036,54 @@ pub fn agents_can_manage_skin_for_path(project_path: &str) -> bool {
 pub fn set_agents_can_manage_skin(project_path: &str, enable: bool) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();
+    // Turning the parent off turns the nested "…and publish open Apps" off
+    // too (prd-k2-app-runtime-v1 §5.11.1).
     let n = conn
         .execute(
-            "UPDATE projects SET agents_can_manage_skin = ?1 WHERE path = ?2",
+            "UPDATE projects SET agents_can_manage_skin = ?1,
+                    agents_can_publish_open_apps = CASE WHEN ?1 = 0 THEN 0 ELSE agents_can_publish_open_apps END
+             WHERE path = ?2",
             rusqlite::params![if enable { 1i64 } else { 0i64 }, project_path],
         )
         .map_err(|e| e.to_string())?;
     if n == 0 {
         return Err(format!("Project not found: {project_path}"));
     }
+    Ok(())
+}
+
+/// The nested switch "…and publish open Apps" (0168,
+/// `projects.agents_can_publish_open_apps`; prd-k2-app-runtime-v1
+/// §5.11.1): the open path for this workspace's agent — `k2 publish run
+/// --cmd`, `--path open`, broad egress, extra ports. Only counts while the
+/// parent "Allow this agent to manage Apps" is on. Unknown → false.
+pub fn agents_can_publish_open_apps(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_skin, agents_can_publish_open_apps FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| Ok(row.get::<_, i64>(0)? == 1 && row.get::<_, i64>(1)? == 1),
+    )
+    .unwrap_or(false)
+}
+
+/// Persist the nested switch. Written only by `POST /cli/agent-access/set`
+/// (`apps_open`, Owner/Admin). Turning it on needs the parent on.
+pub fn set_agents_can_publish_open_apps(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let parent: i64 = conn
+        .query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
+        .map_err(|_| format!("Project not found: {project_id}"))?;
+    if enable && parent != 1 {
+        return Err("turn on \"Allow this agent to manage Apps\" first (k2 app access <ws> --manage on)".to_string());
+    }
+    conn.execute(
+        "UPDATE projects SET agents_can_publish_open_apps = ?1 WHERE id = ?2",
+        rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2026,6 +2065,27 @@ mod tests {
         let err = set_agents_can_manage_skin(&missing, true)
             .expect_err("unknown path write must fail");
         assert!(err.contains("Project not found"), "got {err:?}");
+    }
+
+    /// 0168 — "…and publish open Apps": nested under "Allow this agent to
+    /// manage Apps" (on needs the parent; parent off turns it off), off by
+    /// default, never through workspace/set.
+    #[test]
+    fn publish_open_apps_is_nested_under_manage_apps() {
+        let path = unique_path("agents-open-apps");
+        let pid = insert_project(&path);
+        assert!(!agents_can_publish_open_apps(&pid), "default off");
+        let err = set_agents_can_publish_open_apps(&pid, true).expect_err("needs the parent");
+        assert!(err.contains("manage Apps"), "{err}");
+        set_agents_can_manage_skin(&path, true).unwrap();
+        set_agents_can_publish_open_apps(&pid, true).unwrap();
+        assert!(agents_can_publish_open_apps(&pid));
+        set_agents_can_manage_skin(&path, false).unwrap();
+        assert!(!agents_can_publish_open_apps(&pid), "parent off turns the child off");
+        set_agents_can_manage_skin(&path, true).unwrap();
+        assert!(!agents_can_publish_open_apps(&pid), "and it stays off when the parent comes back");
+        assert!(update_project_setting(&path, "agents_can_publish_open_apps", "1").is_err());
+        assert!(!agents_can_publish_open_apps("no-such-workspace"));
     }
 
     /// Column-only hosted-mail passport. Default OFF; unknown path

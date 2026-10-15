@@ -29,6 +29,12 @@
 //! - `GET  /cli/grokbots/thread?agent=<id>&since=<seq>&limit=<n>` → `ThreadPage`
 //! - `POST /cli/grokbots/send`     `{agent, text}` → `{ok, clientNonce}`
 //!
+//! A send reaches Grok Bot as `[from <name>] <text>`, so the bot knows who
+//! wrote. The name comes from the credential, never the body (the same
+//! sources as a Thread card's `answeredBy`): the owner token → the owner's
+//! display name from Settings, a Connect login → its username. A
+//! `[from …]` the person typed is kept as text behind ours.
+//!
 //! The gateway token is never returned, logged or carried off the box.
 
 use std::collections::HashMap;
@@ -367,7 +373,8 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
             }),
         );
     }
-    match provider().send(&b.agent, &b.text) {
+    let prompt = from_envelope(&sender_name(who), &b.text);
+    match provider().send(&b.agent, &prompt) {
         Ok(r) => {
             log_debug!(
                 "[grokbots] send to {} by {} ({} bytes)",
@@ -391,6 +398,40 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
             ext_err(e)
         }
     }
+}
+
+/// Longest name the `[from …]` envelope carries (chars).
+pub const FROM_NAME_MAX: usize = 64;
+
+/// Who is sending, for the `[from …]` envelope. Credential-derived: the
+/// owner token → `owner_display_name` from Settings, a Connect login → its
+/// username. Falls back to `the owner`.
+fn sender_name(who: &Who) -> String {
+    let raw = match who {
+        Who::Owner => k2_core::app_settings::load().owner_display_name.unwrap_or_default(),
+        Who::Login { username, .. } => username.clone(),
+        _ => String::new(),
+    };
+    clean_from_name(&raw).unwrap_or_else(|| "the owner".to_string())
+}
+
+/// A name safe inside `[from <name>]`: no `[`, `]`, line breaks or other
+/// control characters (so a name can't close the envelope or start a second
+/// one), trimmed, at most [`FROM_NAME_MAX`] chars. None when nothing is left.
+pub fn clean_from_name(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '[' | ']' | '\u{2028}' | '\u{2029}'))
+        .collect();
+    let capped: String = kept.trim().chars().take(FROM_NAME_MAX).collect();
+    let capped = capped.trim();
+    (!capped.is_empty()).then(|| capped.to_string())
+}
+
+/// The prompt Grok Bot receives: `[from <name>] <text>`. Always prefixed,
+/// even when the text already starts with a `[from …]` of its own.
+pub fn from_envelope(name: &str, text: &str) -> String {
+    format!("[from {name}] {}", text.trim())
 }
 
 #[cfg(test)]

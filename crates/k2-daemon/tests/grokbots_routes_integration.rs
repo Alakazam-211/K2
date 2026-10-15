@@ -8,6 +8,7 @@
 //! - an agent passport and an App pass are 403 `grokbots_humans_only`;
 //! - the owner turns Show + Send on, lists, reads the thread and sends; the
 //!   gateway sees the bearer, the body never carries the token;
+//! - a send reaches Grok Bot as `[from <login>]` / `[from <owner name>]`;
 //! - a send emits nothing on its own, but the setting change emits
 //!   `grokbots_changed` on the session-event bus.
 //!
@@ -28,6 +29,8 @@ use serde_json::{json, Value as J};
 
 const OWNER: &str = "owner-token-grokbots";
 const A: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2346";
+/// A second agent: the send limiter is per agent.
+const B: &str = "0e5f5de8-7619-4ba4-9753-32c5470b2347";
 
 struct Conn {
     reader: BufReader<TcpStream>,
@@ -119,11 +122,15 @@ fn login(username: &str, role: Option<connect_users::Role>) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grokbots_routes_gate_consent_and_round_trip() {
-    let gw = FakeGateway::start(json!([fixture::list_item(A, "Cortana")]));
+    let gw = FakeGateway::start(json!([
+        fixture::list_item(A, "Cortana"),
+        fixture::list_item(B, "Friday")
+    ]));
     let home = k2_core::test_env::TempHome::new();
     let _ = k2_core::db::init_for_tests();
     let sand = FakeSandData::create(home.path(), gw.port);
     sand.add_agent(A, "Cortana", "Chief of staff");
+    sand.add_agent(B, "Friday", "Ops");
     sand.add_sample_chat(A);
     let mut events = k2_daemon::session_events::subscribe();
 
@@ -280,8 +287,27 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
         .filter(|r| r.path == "/api/sendPrompt")
         .collect();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].body["prompt"], json!("ping"));
+    assert_eq!(sent[0].body["prompt"], json!("[from gbadmin] ping"));
     assert_eq!(sent[0].body["clientNonce"], b["clientNonce"]);
+
+    // The owner token: the owner's display name from Settings.
+    k2_core::app_settings::update(json!({"ownerDisplayName": "Rosson Test"}))
+        .expect("owner display name");
+    let (s, b, _) = call(
+        port,
+        "POST",
+        &q("/cli/grokbots/send", OWNER),
+        Some(json!({"agent": B, "text": "hello"})),
+    );
+    assert_eq!(s, 200, "{b}");
+    let sent: Vec<_> = gw
+        .seen()
+        .into_iter()
+        .filter(|r| r.path == "/api/sendPrompt")
+        .collect();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].body["prompt"], json!("[from Rosson Test] hello"));
+    assert_eq!(sent[1].body["agentId"], json!(B));
 
     drop(d);
     drop(home);

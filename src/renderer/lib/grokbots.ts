@@ -217,6 +217,20 @@ export function parseGrokSettings(raw: unknown): GrokSettings {
   return { show: o.show === true, send: o.send === true, canEdit: o.canEdit === true }
 }
 
+/** The daemon stamps every K2 send `[from <name>] <text>` (name: no `[`,
+ *  `]` or line breaks, at most 64 chars) so the bot knows who wrote. */
+const K2_FROM_ENVELOPE = /^\[from ([^\[\]\r\n]{1,64})\] /
+
+/** Who sent a line from K2, and the text without K2's `[from …]` stamp.
+ *  Only a human line K2 sent (`viaK2`) is read this way; any other line is
+ *  shown exactly as stored. */
+export function grokK2Sender(m: GrokMessage): { from: string | null; text: string } {
+  if (!m.viaK2 || m.author !== 'human') return { from: null, text: m.text }
+  const hit = K2_FROM_ENVELOPE.exec(m.text)
+  if (!hit) return { from: null, text: m.text }
+  return { from: hit[1].trim() || null, text: m.text.slice(hit[0].length) }
+}
+
 /** Merge a fresh page into what's on screen, by seq (a later read of the
  *  same seq replaces it: Grok Bot may update a line in place). */
 export function mergeGrokMessages(prev: GrokMessage[], next: GrokMessage[]): GrokMessage[] {

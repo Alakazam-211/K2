@@ -19,6 +19,7 @@ import {
   grokAgentState,
   GROK_BOTS_SETTINGS_PATH,
   GROK_STATE_LABEL,
+  grokK2Sender,
   mergeGrokMessages,
   sendToGrokBot,
   type GrokCard,
@@ -111,13 +112,14 @@ export function GrokCardView({ card }: { card: GrokCard }): React.JSX.Element {
   }
 }
 
-function authorLabel(m: GrokMessage, agentName: string): string {
-  if (m.author === 'human') return 'You'
+function authorLabel(m: GrokMessage, agentName: string, k2From: string | null): string {
+  if (m.author === 'human') return k2From ?? 'You'
   if (m.author === 'peer') return m.fromAgent?.name ?? 'Another agent'
   return agentName
 }
 
 function MessageRow({ m, agentName, nowSec }: { m: GrokMessage; agentName: string; nowSec: number }): React.JSX.Element {
+  const sent = grokK2Sender(m)
   const time = m.atMs !== null ? formatRelativeTime(Math.floor(m.atMs / 1000), nowSec) : ''
   const notes: string[] = []
   if (m.toAgent) notes.push(`to ${m.toAgent.name}`)
@@ -133,10 +135,10 @@ function MessageRow({ m, agentName, nowSec }: { m: GrokMessage; agentName: strin
   return (
     <div data-testid="grokbot-message" data-author={m.author}>
       <ChatMessage
-        author={authorLabel(m, agentName)}
+        author={authorLabel(m, agentName, sent.from)}
         isOwner={m.author === 'human'}
         timeLabel={time}
-        body={m.text}
+        body={sent.text}
         footer={footer}
       />
     </div>
@@ -298,7 +300,9 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
                 Send
               </Button>
             </div>
-            <div className={`text-[10px] ${muted}`}>Each message runs a billed Grok turn and is sent as you.</div>
+            <div className={`text-[10px] ${muted}`}>
+              Each message runs a billed Grok turn and reaches the bot as [from your name].
+            </div>
             {sendError && <Callout tone="error">{sendError}</Callout>}
           </div>
         ) : (

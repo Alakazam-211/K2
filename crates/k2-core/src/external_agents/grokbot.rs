@@ -610,8 +610,9 @@ impl ExternalAgentProvider for GrokBot {
             .as_deref()
             .ok_or_else(|| ExtError::Unreachable("gateway.json has no token".into()))?;
         let nonce = k2_nonce();
-        // A human typing in K2 IS the human: no agent envelope. The nonce
-        // makes the send attributable to K2.
+        // `text` arrives already stamped `[from <person>]` by the daemon's
+        // route (who typed it); no agent envelope. The nonce makes the send
+        // attributable to K2.
         let resp = self
             .client(self.send_timeout)?
             .post(format!("{}{}", gw.base, schema::SEND_PROMPT_PATH))

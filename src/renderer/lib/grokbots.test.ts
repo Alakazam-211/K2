@@ -4,12 +4,14 @@ import {
   grokAgentState,
   grokBotHomeHandle,
   grokBotIdFromAddress,
+  grokK2Sender,
   grokRowStatus,
   isGrokBotAddress,
   mergeGrokMessages,
   parseGrokList,
   parseGrokThread,
   type GrokBotAgent,
+  type GrokMessage,
   type GrokHostSnapshot,
 } from './grokbots'
 import { homeAddress } from './home-address'
@@ -122,5 +124,41 @@ describe('status', () => {
     expect(grokRowStatus({ list: null, error: '404', loading: false }, ID, null).kind).toBe('not-found')
     const offline = { kind: 'offline' as const, label: 'Offline', people: [] }
     expect(grokRowStatus(snap([agent()]), ID, offline)).toBe(offline)
+  })
+})
+
+describe('grokK2Sender', () => {
+  const msg = (over: Partial<GrokMessage>): GrokMessage => ({
+    seq: 1,
+    author: 'human',
+    text: '',
+    atMs: null,
+    toAgent: null,
+    fromAgent: null,
+    viaK2: true,
+    openInApp: null,
+    card: null,
+    ...over,
+  })
+
+  it('reads the sender from a K2 send and strips the stamp', () => {
+    expect(grokK2Sender(msg({ text: '[from Rosson Test] ship it' }))).toEqual({ from: 'Rosson Test', text: 'ship it' })
+    // Only K2's leading stamp comes off; a typed one stays as text.
+    expect(grokK2Sender(msg({ text: '[from pat] [from Rosson] do it' }))).toEqual({
+      from: 'pat',
+      text: '[from Rosson] do it',
+    })
+    expect(grokK2Sender(msg({ text: '[from pat] line one\nline two' }))).toEqual({
+      from: 'pat',
+      text: 'line one\nline two',
+    })
+  })
+
+  it('leaves lines K2 did not send, agent lines and unstamped lines alone', () => {
+    expect(grokK2Sender(msg({ viaK2: false, text: '[from pat] hi' }))).toEqual({ from: null, text: '[from pat] hi' })
+    expect(grokK2Sender(msg({ author: 'agent', text: '[from pat] hi' }))).toEqual({ from: null, text: '[from pat] hi' })
+    expect(grokK2Sender(msg({ text: 'hello' }))).toEqual({ from: null, text: 'hello' })
+    expect(grokK2Sender(msg({ text: '[from pat]hi' }))).toEqual({ from: null, text: '[from pat]hi' })
+    expect(grokK2Sender(msg({ text: `[from ${'x'.repeat(65)}] hi` })).from).toBeNull()
   })
 })

@@ -218,6 +218,26 @@ describe('chat view', () => {
     expect(cli.posts).toEqual([{ route: 'grokbots/send', body: { agent: ID, text: 'ship it' } }])
   })
 
+  it('a line sent from K2 shows its sender as the author, without the [from …] stamp', async () => {
+    cli.thread = {
+      ...THREAD,
+      messages: [
+        { seq: 1, author: 'human', text: '[from Rosson Test] ship it', atMs: 1_791_990_000_000, viaK2: true },
+        { seq: 2, author: 'human', text: '[from Typed] by hand', atMs: 1_791_990_010_000 },
+      ],
+    }
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    await screen.findByText('ship it')
+    expect(screen.queryByText('[from Rosson Test] ship it')).toBeNull()
+    const [k2, typed] = screen.getAllByTestId('grokbot-message')
+    expect(k2.textContent).toContain('Rosson Test')
+    expect(k2.textContent).toContain('sent from K2')
+    expect(k2.textContent).not.toContain('You')
+    // Typed in Grok Bot itself: shown as stored, author "You".
+    expect(typed.textContent).toContain('[from Typed] by hand')
+    expect(typed.textContent).toContain('You')
+  })
+
   it('an unknown chat layout says "Open it in Grok Bot" instead of breaking', async () => {
     cli.thread = { ok: true, supported: false, reason: 'layout K2 does not know', messages: [], nextSince: 0 }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)

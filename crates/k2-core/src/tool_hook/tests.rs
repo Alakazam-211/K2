@@ -46,7 +46,12 @@ fn add_ws(handle_prefix: &str) -> (String, String) {
     let conn = db.lock();
     conn.execute(
         "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![id, format!("Name {handle}"), format!("/tmp/k2-hook-ws-{id}"), handle],
+        rusqlite::params![
+            id,
+            format!("Name {handle}"),
+            format!("/tmp/k2-hook-ws-{id}"),
+            handle
+        ],
     )
     .expect("insert project");
     (id, handle)
@@ -63,7 +68,11 @@ fn person(username: &str) -> skin::SkinPrincipal {
     skin::add_principal(username).expect("add principal")
 }
 
-fn grant(subject_kind: &str, subject: &str, scope: Option<&str>) -> Result<skin::SkinGrant, String> {
+fn grant(
+    subject_kind: &str,
+    subject: &str,
+    scope: Option<&str>,
+) -> Result<skin::SkinGrant, String> {
     skin::create_grant(&SkinGrantWrite {
         subject_kind: subject_kind.into(),
         subject_id: subject.into(),
@@ -83,7 +92,10 @@ fn rows() -> Vec<outbox::OutboxRow> {
 }
 
 fn rows_for(subject: &str) -> Vec<outbox::OutboxRow> {
-    rows().into_iter().filter(|r| r.subject_key == subject).collect()
+    rows()
+        .into_iter()
+        .filter(|r| r.subject_key == subject)
+        .collect()
 }
 
 fn row(id: &str) -> outbox::OutboxRow {
@@ -121,8 +133,15 @@ fn chat_kind_accepted_and_target_defaults_to_sew() {
     let g = grant("principal", "ann", None).expect("chat grant by username");
     assert_eq!(g.kind, "chat");
     assert_eq!(g.target_id, "sew");
-    assert_eq!(g.subject_id, ann.id, "username resolved to the principal id");
-    assert_eq!(g.scope.as_deref(), Some("member"), "principal scope defaults to member");
+    assert_eq!(
+        g.subject_id, ann.id,
+        "username resolved to the principal id"
+    );
+    assert_eq!(
+        g.scope.as_deref(),
+        Some("member"),
+        "principal scope defaults to member"
+    );
     assert_eq!(g.role_id, None);
     let r = rows_for(&pext(&ann.id));
     assert_eq!(r.len(), 1, "{r:?}");
@@ -145,9 +164,18 @@ fn chat_scope_grammar_by_subject() {
     let ann = person("ann");
     grant("principal", &ann.id, Some(" MEMBER ")).expect("member, normalized");
     skin::with_skin_conn(|c| {
-        assert_eq!(chat::parse_input_scope(c, "principal", Some("guest"))?, ChatScope::Guest);
-        assert_eq!(chat::parse_input_scope(c, "principal", None)?, ChatScope::Member);
-        assert_eq!(chat::parse_input_scope(c, "workspace", Some("Coworker"))?, ChatScope::Coworker);
+        assert_eq!(
+            chat::parse_input_scope(c, "principal", Some("guest"))?,
+            ChatScope::Guest
+        );
+        assert_eq!(
+            chat::parse_input_scope(c, "principal", None)?,
+            ChatScope::Member
+        );
+        assert_eq!(
+            chat::parse_input_scope(c, "workspace", Some("Coworker"))?,
+            ChatScope::Coworker
+        );
         assert_eq!(
             chat::parse_input_scope(c, "workspace", Some("assistant:ann"))?,
             ChatScope::AssistantOf(ann.id.clone()),
@@ -204,10 +232,16 @@ fn chat_rejects_role_other_target_non_uuid_and_long_username() {
         scope: None,
         created_by: None,
     };
-    assert_eq!(skin::create_grant(&w).unwrap_err(), "roleId is only set for kind=app");
+    assert_eq!(
+        skin::create_grant(&w).unwrap_err(),
+        "roleId is only set for kind=app"
+    );
     w.role = None;
     w.target_id = "slack".into();
-    assert_eq!(skin::create_grant(&w).unwrap_err(), "chat target must be 'sew'");
+    assert_eq!(
+        skin::create_grant(&w).unwrap_err(),
+        "chat target must be 'sew'"
+    );
     // A principal row with a non-uuid id (old fixtures stored 'p1').
     skin::with_skin_conn(|c| {
         c.execute(
@@ -233,12 +267,18 @@ fn chat_rejects_role_other_target_non_uuid_and_long_username() {
     {
         let db = crate::db::shared();
         let conn = db.lock();
-        conn.execute("UPDATE projects SET handle = 'q' WHERE id = ?1", rusqlite::params![wid])
-            .unwrap();
+        conn.execute(
+            "UPDATE projects SET handle = 'q' WHERE id = ?1",
+            rusqlite::params![wid],
+        )
+        .unwrap();
     }
     let e = grant("workspace", &wid, Some("coworker")).unwrap_err();
     assert!(e.contains("must be 2–64 characters"), "{e}");
-    assert_eq!(grant("principal", "ghost", None).unwrap_err(), "unknown principal id 'ghost'");
+    assert_eq!(
+        grant("principal", "ghost", None).unwrap_err(),
+        "unknown principal id 'ghost'"
+    );
     assert_eq!(
         grant("workspace", "no-such-ws-zz", Some("coworker")).unwrap_err(),
         "unknown workspace 'no-such-ws-zz'"
@@ -254,10 +294,16 @@ fn chat_rejects_role_other_target_non_uuid_and_long_username() {
 fn chat_rejected_when_target_disabled_and_off_linux_enable_refused() {
     let _e = setup();
     person("ann");
-    assert_eq!(grant("principal", "ann", None).unwrap_err(), CHAT_NOT_ENABLED);
+    assert_eq!(
+        grant("principal", "ann", None).unwrap_err(),
+        CHAT_NOT_ENABLED
+    );
     enable_chat();
     set_target(CHAT_KIND, false, None, None, "owner-token").unwrap();
-    assert_eq!(grant("principal", "ann", None).unwrap_err(), CHAT_NOT_ENABLED);
+    assert_eq!(
+        grant("principal", "ann", None).unwrap_err(),
+        CHAT_NOT_ENABLED
+    );
     allow_target_off_linux_for_tests(false);
     let r = set_target(CHAT_KIND, true, None, None, "owner-token");
     if cfg!(target_os = "linux") {
@@ -265,7 +311,11 @@ fn chat_rejected_when_target_disabled_and_off_linux_enable_refused() {
     } else {
         assert_eq!(r.unwrap_err(), "Sew runs on Linux only");
     }
-    assert!(!set_target(CHAT_KIND, false, None, None, "owner-token").unwrap().enabled);
+    assert!(
+        !set_target(CHAT_KIND, false, None, None, "owner-token")
+            .unwrap()
+            .enabled
+    );
     allow_target_off_linux_for_tests(true);
 }
 
@@ -294,11 +344,18 @@ fn assistant_rules_member_person_guest_refused_owner_ok() {
     assert_eq!(p["kind"], "agent");
     assert_eq!(p["agent_kind"], "assistant");
     assert_eq!(p["assistant_of"], pext(&ann.id));
-    assert_eq!(r[0].after_subject.as_deref(), Some(pext(&ann.id).as_str()), "waits for the person");
+    assert_eq!(
+        r[0].after_subject.as_deref(),
+        Some(pext(&ann.id).as_str()),
+        "waits for the person"
+    );
     let (w2, _) = add_ws("own");
     let g2 = grant("workspace", &w2, Some("assistant:owner")).expect("assistant of the owner");
     assert_eq!(g2.scope.as_deref(), Some("assistant:owner"));
-    assert_eq!(payload(&rows_for(&wext(&w2))[0])["assistant_of"], "k2:owner");
+    assert_eq!(
+        payload(&rows_for(&wext(&w2))[0])["assistant_of"],
+        "k2:owner"
+    );
     drop_ws(&w1);
     drop_ws(&w2);
 }
@@ -332,10 +389,17 @@ fn outbox_row_is_in_the_grant_transaction() {
     skin::HOOK_FAIL_BEFORE_COMMIT.store(false, Ordering::SeqCst);
     assert_eq!(r.unwrap_err(), "injected failure before commit");
     assert!(
-        skin::list_grants().unwrap().iter().all(|g| g.kind != "chat"),
+        skin::list_grants()
+            .unwrap()
+            .iter()
+            .all(|g| g.kind != "chat"),
         "rolled-back grant must not exist"
     );
-    assert_eq!(rows().len(), before, "rolled-back write leaves no outbox row");
+    assert_eq!(
+        rows().len(),
+        before,
+        "rolled-back write leaves no outbox row"
+    );
     // A committed write always has its row on disk (a crash between the
     // commit and the send loses nothing: the next worker finds it).
     let g = grant("principal", "ann", None).unwrap();
@@ -361,13 +425,20 @@ fn idem_key_format_and_stable_across_retries() {
         assert!(r.idem_key.starts_with("k2ob_"), "{}", r.idem_key);
         assert_eq!(r.idem_key.len(), 37);
         assert!(sew_wire::is_idempotency_key(&r.idem_key));
-        assert_eq!(r.idem_key, outbox::idem_key_for(&r.id), "derived from the row id");
+        assert_eq!(
+            r.idem_key,
+            outbox::idem_key_for(&r.id),
+            "derived from the row id"
+        );
     }
     let r = rows().into_iter().last().unwrap();
     record_retry(&r.id, Some(503), "unavailable: x", 5).unwrap();
     let again = row(&r.id);
     assert_eq!(again.idem_key, r.idem_key, "a retry keeps the key");
-    assert_eq!(again.payload_raw, r.payload_raw, "a retry resends the same bytes");
+    assert_eq!(
+        again.payload_raw, r.payload_raw,
+        "a retry resends the same bytes"
+    );
     assert_eq!((again.state.as_str(), again.attempts), (STATE_PENDING, 1));
     assert!(again.next_attempt_at >= r.created_at + 5);
 }
@@ -383,17 +454,29 @@ fn update_supersedes_only_unattempted_updates() {
     let first = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
     assert_eq!(first.op, "update");
     skin::set_principal_full_name("ann", Some("Ann Two")).unwrap();
-    assert_eq!(row(&first.id).state, "superseded", "unattempted update replaced");
+    assert_eq!(
+        row(&first.id).state,
+        "superseded",
+        "unattempted update replaced"
+    );
     let second = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
     record_retry(&second.id, None, "connect refused", 1).unwrap();
     skin::set_principal_full_name("ann", Some("Ann Three")).unwrap();
-    assert_eq!(row(&second.id).state, STATE_PENDING, "an attempted update is never superseded");
+    assert_eq!(
+        row(&second.id).state,
+        STATE_PENDING,
+        "an attempted update is never superseded"
+    );
     // A provision is never superseded either.
     let (wid, _) = add_ws("sup");
     let g = grant("workspace", &wid, Some("coworker")).unwrap();
     let prov = rows_for(&wext(&wid)).into_iter().last().unwrap();
     skin::delete_grant_by_id(&g.id).unwrap();
-    assert_eq!(row(&prov.id).state, STATE_PENDING, "provision then deprovision both run");
+    assert_eq!(
+        row(&prov.id).state,
+        STATE_PENDING,
+        "provision then deprovision both run"
+    );
     drop_ws(&wid);
 }
 
@@ -407,7 +490,10 @@ fn scope_updates_member_guest_and_kind_flip_refused() {
     let up = skin::update_grant_scope(&g.id, "guest", "user:boss").expect("member → guest");
     assert_eq!(up.scope.as_deref(), Some("guest"));
     let last = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((last.op.as_str(), last.cause.as_str(), last.actor.as_str()), ("provision", "grant_update", "user:boss"));
+    assert_eq!(
+        (last.op.as_str(), last.cause.as_str(), last.actor.as_str()),
+        ("provision", "grant_update", "user:boss")
+    );
     assert_eq!(payload(&last)["guest"], true);
     // Same scope again: no new row.
     let n = rows().len();
@@ -420,7 +506,10 @@ fn scope_updates_member_guest_and_kind_flip_refused() {
         skin::update_grant_scope(&wg.id, "assistant:owner", "owner-token").unwrap_err(),
         chat::KIND_FLIP_ERR
     );
-    assert_eq!(skin::update_grant_scope(&wg.id, "member", "owner-token").unwrap_err(), chat::SCOPE_ERR);
+    assert_eq!(
+        skin::update_grant_scope(&wg.id, "member", "owner-token").unwrap_err(),
+        chat::SCOPE_ERR
+    );
     // Non-hooked kinds cannot be updated.
     let app = skin::create_grant(&SkinGrantWrite {
         subject_kind: "principal".into(),
@@ -462,13 +551,23 @@ fn person_grant_delete_cascades_assistant_grants_and_guest_flip_refused() {
         .expect("deleted");
     assert_eq!(cascaded.len(), 1);
     assert_eq!(cascaded[0].subject_id, w1);
-    let left: Vec<_> = skin::list_grants().unwrap().into_iter().filter(|g| g.kind == "chat").collect();
+    let left: Vec<_> = skin::list_grants()
+        .unwrap()
+        .into_iter()
+        .filter(|g| g.kind == "chat")
+        .collect();
     assert_eq!(left.len(), 1, "only the coworker remains: {left:?}");
     assert_eq!(left[0].subject_id, w2);
     let a = rows_for(&wext(&w1)).into_iter().last().unwrap();
     let p = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((a.op.as_str(), p.op.as_str()), ("deprovision", "deprovision"));
-    assert!(a.seq < p.seq, "assistant deprovision is queued before the person's");
+    assert_eq!(
+        (a.op.as_str(), p.op.as_str()),
+        ("deprovision", "deprovision")
+    );
+    assert!(
+        a.seq < p.seq,
+        "assistant deprovision is queued before the person's"
+    );
     drop_ws(&w1);
     drop_ws(&w2);
 }
@@ -482,9 +581,15 @@ fn principal_delete_deletes_chat_grants_and_enqueues_deprovision() {
     let (wid, _) = add_ws("pd");
     grant("workspace", &wid, Some("assistant:ann")).unwrap();
     assert!(skin::remove_principal_as("ann", "user:boss").unwrap());
-    assert!(skin::list_grants().unwrap().iter().all(|g| g.kind != "chat"));
+    assert!(skin::list_grants()
+        .unwrap()
+        .iter()
+        .all(|g| g.kind != "chat"));
     let p = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((p.op.as_str(), p.cause.as_str(), p.actor.as_str()), ("deprovision", "principal_delete", "user:boss"));
+    assert_eq!(
+        (p.op.as_str(), p.cause.as_str(), p.actor.as_str()),
+        ("deprovision", "principal_delete", "user:boss")
+    );
     assert_eq!(rows_for(&wext(&wid)).last().unwrap().op, "deprovision");
     drop_ws(&wid);
 }
@@ -498,7 +603,10 @@ fn principal_email_and_full_name_enqueue_update() {
     grant("principal", "ann", None).unwrap();
     skin::set_principal_email_as("ann", Some("ann@example.com"), "owner-token").unwrap();
     let r = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((r.op.as_str(), r.cause.as_str()), ("update", "principal_update"));
+    assert_eq!(
+        (r.op.as_str(), r.cause.as_str()),
+        ("update", "principal_update")
+    );
     let p = payload(&r);
     assert_eq!(p["profile"]["email"], "ann@example.com");
     assert_eq!(p["profile"]["display_name"], "ann");
@@ -508,7 +616,10 @@ fn principal_email_and_full_name_enqueue_update() {
     assert_eq!(payload(&r)["profile"]["display_name"], "Ann Lee");
     skin::set_principal_email("ann", None).unwrap();
     let r = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert!(payload(&r)["profile"]["email"].is_null(), "cleared email is an explicit null");
+    assert!(
+        payload(&r)["profile"]["email"].is_null(),
+        "cleared email is an explicit null"
+    );
     // No chat grant → nothing enqueued.
     skin::set_principal_full_name("bob", Some("Bob")).unwrap();
     assert!(rows_for(&pext(&bob.id)).is_empty());
@@ -533,7 +644,11 @@ fn non_chat_grants_do_not_enqueue_and_keep_old_session_rules() {
         .unwrap();
         skin::delete_grant_by_id(&g.id).unwrap();
     }
-    assert_eq!(rows().len(), before, "non-hooked kinds never touch the outbox");
+    assert_eq!(
+        rows().len(),
+        before,
+        "non-hooked kinds never touch the outbox"
+    );
 }
 
 #[test]
@@ -561,14 +676,23 @@ fn disable_and_enable_chat_grant_enqueue_deprovision_and_provision() {
     deliver_all();
     skin::set_grant_enabled_as(&g.id, false, "user:boss").unwrap();
     let r = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((r.op.as_str(), r.cause.as_str()), ("deprovision", "grant_disable"));
+    assert_eq!(
+        (r.op.as_str(), r.cause.as_str()),
+        ("deprovision", "grant_disable")
+    );
     skin::set_grant_enabled_as(&g.id, true, "user:boss").unwrap();
     let r = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((r.op.as_str(), r.cause.as_str()), ("provision", "grant_enable"));
+    assert_eq!(
+        (r.op.as_str(), r.cause.as_str()),
+        ("provision", "grant_enable")
+    );
     // Re-enable needs the target on.
     skin::set_grant_enabled(&g.id, false).unwrap();
     set_target(CHAT_KIND, false, None, None, "owner-token").unwrap();
-    assert_eq!(skin::set_grant_enabled(&g.id, true).unwrap_err(), CHAT_NOT_ENABLED);
+    assert_eq!(
+        skin::set_grant_enabled(&g.id, true).unwrap_err(),
+        CHAT_NOT_ENABLED
+    );
 }
 
 // ── ordering, reserved ops, owner, targets ───────────────────────────
@@ -581,24 +705,46 @@ fn due_heads_keep_subject_order_and_wait_for_the_person() {
     grant("principal", "ann", None).unwrap();
     let (wid, _) = add_ws("ord");
     grant("workspace", &wid, Some("assistant:ann")).unwrap();
-    let due1: Vec<String> = due(CHAT_KIND, 100).unwrap().into_iter().map(|r| r.subject_key).collect();
+    let due1: Vec<String> = due(CHAT_KIND, 100)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.subject_key)
+        .collect();
     assert!(due1.contains(&"k2:owner".to_string()));
     assert!(due1.contains(&pext(&ann.id)));
-    assert!(!due1.contains(&wext(&wid)), "assistant waits for its person: {due1:?}");
+    assert!(
+        !due1.contains(&wext(&wid)),
+        "assistant waits for its person: {due1:?}"
+    );
     // Only the HEAD of a subject is due (owner provision, not owner_set).
-    let owner_due: Vec<_> = due(CHAT_KIND, 100).unwrap().into_iter().filter(|r| r.subject_key == "k2:owner").collect();
+    let owner_due: Vec<_> = due(CHAT_KIND, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.subject_key == "k2:owner")
+        .collect();
     assert_eq!(owner_due.len(), 1);
     assert_eq!(owner_due[0].op, "provision");
     // Person blocked → assistant still waits; another subject unaffected.
     let person_row = rows_for(&pext(&ann.id)).remove(0);
     record_blocked(&person_row.id, Some(400), "validation_failed: x").unwrap();
-    let due2: Vec<String> = due(CHAT_KIND, 100).unwrap().into_iter().map(|r| r.subject_key).collect();
+    let due2: Vec<String> = due(CHAT_KIND, 100)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.subject_key)
+        .collect();
     assert!(!due2.contains(&wext(&wid)));
-    assert!(due2.contains(&"k2:owner".to_string()), "other subjects keep going");
+    assert!(
+        due2.contains(&"k2:owner".to_string()),
+        "other subjects keep going"
+    );
     // Retry → done → the assistant becomes due.
     retry(&person_row.id).unwrap();
     record_done(&person_row.id, 200, "{}").unwrap();
-    let due3: Vec<String> = due(CHAT_KIND, 100).unwrap().into_iter().map(|r| r.subject_key).collect();
+    let due3: Vec<String> = due(CHAT_KIND, 100)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.subject_key)
+        .collect();
     assert!(due3.contains(&wext(&wid)), "{due3:?}");
     drop_ws(&wid);
 }
@@ -631,10 +777,14 @@ fn reserved_sew_session_revoke_is_never_selected_or_blocked() {
     let due: Vec<_> = due(CHAT_KIND, 100).unwrap();
     assert!(due.iter().all(|r| r.op != "sew_session_revoke"));
     assert!(
-        due.iter().any(|r| r.subject_key == pext(&ann.id) && r.op == "provision"),
+        due.iter()
+            .any(|r| r.subject_key == pext(&ann.id) && r.op == "provision"),
         "a later provision for the same subject is not held up by an op S27 does not deliver"
     );
-    let revoke = rows().into_iter().find(|r| r.op == "sew_session_revoke").unwrap();
+    let revoke = rows()
+        .into_iter()
+        .find(|r| r.op == "sew_session_revoke")
+        .unwrap();
     assert_eq!((revoke.state.as_str(), revoke.attempts), (STATE_PENDING, 0));
 }
 
@@ -650,8 +800,14 @@ fn target_enable_enqueues_owner_once_and_owner_state_tracks_it() {
     let ops: Vec<&str> = owner.iter().map(|r| r.op.as_str()).collect();
     assert_eq!(ops, ["provision", "owner_set"]);
     let p = payload(&owner[0]);
-    assert_eq!((p["profile"]["username"].as_str(), p["guest"].as_bool()), (Some("owner"), Some(false)));
-    assert_eq!(payload(&owner[1]), serde_json::json!({"external_id":"k2:owner","force":false}));
+    assert_eq!(
+        (p["profile"]["username"].as_str(), p["guest"].as_bool()),
+        (Some("owner"), Some(false))
+    );
+    assert_eq!(
+        payload(&owner[1]),
+        serde_json::json!({"external_id":"k2:owner","force":false})
+    );
     assert_eq!(owner_state(CHAT_KIND).unwrap(), OwnerState::Pending);
     // Enabling again is not a transition: nothing new.
     enable_chat();
@@ -672,12 +828,17 @@ fn retry_and_skip_rules_a11() {
     grant("principal", "ann", None).unwrap();
     let r = rows_for(&pext(&ann.id)).remove(0);
     let e = retry(&r.id).unwrap_err();
-    assert!(e.contains("retry needs a blocked row or a pending row that has failed"), "{e}");
+    assert!(
+        e.contains("retry needs a blocked row or a pending row that has failed"),
+        "{e}"
+    );
     record_retry(&r.id, Some(503), "unavailable: x", 600).unwrap();
     let again = retry(&r.id).expect("pending that failed may be retried (A11)");
     assert!(again.next_attempt_at <= outbox::now_secs());
     assert_eq!(again.attempts, 1, "attempts kept");
-    assert!(skip(&r.id).unwrap_err().contains("only a blocked row can be skipped"));
+    assert!(skip(&r.id)
+        .unwrap_err()
+        .contains("only a blocked row can be skipped"));
     record_blocked(&r.id, Some(400), "validation_failed: x").unwrap();
     let s = skip(&r.id).unwrap();
     assert_eq!(s.state, "skipped");
@@ -693,7 +854,10 @@ fn drop_target_grants_deletes_grants_and_skips_open_rows() {
     let g = grant("principal", "ann", None).unwrap();
     let report = drop_target_grants(CHAT_KIND).unwrap();
     assert_eq!(report.grants_deleted, 1);
-    assert!(report.rows_skipped >= 3, "owner provision + owner_set + ann: {report:?}");
+    assert!(
+        report.rows_skipped >= 3,
+        "owner provision + owner_set + ann: {report:?}"
+    );
     assert!(skin::list_grants().unwrap().iter().all(|x| x.id != g.id));
     assert!(rows().iter().all(|r| r.state == "skipped"));
 }
@@ -723,8 +887,14 @@ fn old_skin_db_gains_hook_tables_and_keeps_rows() {
             .unwrap();
         assert_eq!(n, 1, "{t} created");
     }
-    let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-    assert_eq!(v, skin::SKIN_SCHEMA_VERSION, "no ladder step taken (4 stays reserved for R3)");
+    let v: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        v,
+        skin::SKIN_SCHEMA_VERSION,
+        "no ladder step taken (4 stays reserved for R3)"
+    );
     drop(home);
 }
 
@@ -791,12 +961,25 @@ fn member(ext: ExternalId, kind: MemberKind, username: &str, display: &str) -> M
 }
 
 fn ops_for(planned: &[reconcile::PlannedOp], ext: &ExternalId) -> Vec<Op> {
-    planned.iter().filter(|p| &p.subject == ext).map(|p| p.op).collect()
+    planned
+        .iter()
+        .filter(|p| &p.subject == ext)
+        .map(|p| p.op)
+        .collect()
 }
 
 #[test]
 fn reconcile_plan_table() {
-    let (a, b, c, d, e, f, x, y) = (uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid(), uuid());
+    let (a, b, c, d, e, f, x, y) = (
+        uuid(),
+        uuid(),
+        uuid(),
+        uuid(),
+        uuid(),
+        uuid(),
+        uuid(),
+        uuid(),
+    );
     let pa = ExternalId::K2Principal(a.clone());
     let pb = ExternalId::K2Principal(b.clone());
     let pc = ExternalId::K2Principal(c.clone());
@@ -819,10 +1002,10 @@ fn reconcile_plan_table() {
     };
     let desired = vec![
         owner,
-        desired_person(&a, "absent", false, "ra"),     // absent → provision
-        desired_person(&b, "deact", false, "rb"),      // deactivated → provision
-        desired_person(&c, "guesty", true, "rc"),      // guest differs → provision
-        desired_person(&d, "named", false, "rd"),      // display differs → update
+        desired_person(&a, "absent", false, "ra"), // absent → provision
+        desired_person(&b, "deact", false, "rb"),  // deactivated → provision
+        desired_person(&c, "guesty", true, "rc"),  // guest differs → provision
+        desired_person(&d, "named", false, "rd"),  // display differs → update
         desired_agent(&e, "agente", AgentKind::Coworker, None), // agent kind differs → deprovision+provision
         desired_agent(&f, "agentf", AgentKind::Assistant, Some(pa.clone())), // pin differs → provision
     ];
@@ -841,11 +1024,25 @@ fn reconcile_plan_table() {
     let mx = member(px.clone(), MemberKind::Person, "extra", "extra"); // not desired → deprovision
     let mut my = member(wy.clone(), MemberKind::Agent, "gone", "gone");
     my.deactivated = true; // not desired but already deactivated → nothing
-    let local = member(ExternalId::Local("solo".into()), MemberKind::Person, "solo", "solo");
-    let other = member(ExternalId::Other("k2:connect:abc".into()), MemberKind::Person, "conn", "conn");
+    let local = member(
+        ExternalId::Local("solo".into()),
+        MemberKind::Person,
+        "solo",
+        "solo",
+    );
+    let other = member(
+        ExternalId::Other("k2:connect:abc".into()),
+        MemberKind::Person,
+        "conn",
+        "conn",
+    );
     let actual = vec![owner_m, mb, mc, md, me, mf, mx, my, local, other];
     let (planned, s) = reconcile::plan(&desired, &actual, &HashSet::new(), &HashMap::new());
-    assert_eq!(ops_for(&planned, &ExternalId::K2Owner), Vec::<Op>::new(), "owner: never deprovision / owner_set");
+    assert_eq!(
+        ops_for(&planned, &ExternalId::K2Owner),
+        Vec::<Op>::new(),
+        "owner: never deprovision / owner_set"
+    );
     assert_eq!(ops_for(&planned, &pa), [Op::Provision]);
     assert_eq!(ops_for(&planned, &pb), [Op::Provision]);
     assert_eq!(ops_for(&planned, &pc), [Op::Provision]);
@@ -855,9 +1052,15 @@ fn reconcile_plan_table() {
     assert_eq!(ops_for(&planned, &px), [Op::Deprovision]);
     assert_eq!(ops_for(&planned, &wy), Vec::<Op>::new());
     let upd = planned.iter().find(|p| p.subject == pd).unwrap();
-    assert_eq!(upd.payload["profile"], serde_json::json!({"display_name":"named"}));
+    assert_eq!(
+        upd.payload["profile"],
+        serde_json::json!({"display_name":"named"})
+    );
     let fprov = planned.iter().find(|p| p.subject == wf).unwrap();
-    assert_eq!(fprov.after_subject.as_deref(), Some(pa.to_string().as_str()));
+    assert_eq!(
+        fprov.after_subject.as_deref(),
+        Some(pa.to_string().as_str())
+    );
     assert_eq!((s.ignored_local, s.ignored_other), (1, 1));
     assert_eq!((s.provisioned, s.updated, s.deprovisioned), (5, 1, 2));
 }
@@ -867,7 +1070,12 @@ fn reconcile_accepts_suffixed_username_and_admin_role_is_not_drift() {
     let a = uuid();
     let pa = ExternalId::K2Principal(a.clone());
     let d = desired_person(&a, "sales", false, "r");
-    let mut m = member(pa.clone(), MemberKind::Person, &chat::suffixed_username("sales", &pa.to_string()), "sales");
+    let mut m = member(
+        pa.clone(),
+        MemberKind::Person,
+        &chat::suffixed_username("sales", &pa.to_string()),
+        "sales",
+    );
     m.install_role = InstallRole::Admin;
     let (planned, _) = reconcile::plan(&[d], &[m], &HashSet::new(), &HashMap::new());
     assert!(planned.is_empty(), "{planned:?}");
@@ -922,15 +1130,29 @@ fn apply_reconcile_removes_orphans_and_provisions_drift() {
     // Sew is empty except an owner: ann must be provisioned again.
     let mut owner_m = member(ExternalId::K2Owner, MemberKind::Person, "owner", "Owner");
     owner_m.install_role = InstallRole::Owner;
-    let mut ws_m = member(ExternalId::K2Workspace(wid.clone()), MemberKind::Agent, &handle, "x");
+    let mut ws_m = member(
+        ExternalId::K2Workspace(wid.clone()),
+        MemberKind::Agent,
+        &handle,
+        "x",
+    );
     ws_m.agent_kind = Some(AgentKind::Coworker);
     let s = apply_reconcile(CHAT_KIND, &[owner_m, ws_m]).unwrap();
     assert_eq!(s.orphans_removed, 1);
-    assert!(skin::list_grants().unwrap().iter().all(|x| x.id != wg.id), "orphan grant deleted");
+    assert!(
+        skin::list_grants().unwrap().iter().all(|x| x.id != wg.id),
+        "orphan grant deleted"
+    );
     let w = rows_for(&wext(&wid)).into_iter().last().unwrap();
-    assert_eq!((w.op.as_str(), w.cause.as_str(), w.actor.as_str()), ("deprovision", "workspace_removed", ACTOR_RECONCILE));
+    assert_eq!(
+        (w.op.as_str(), w.cause.as_str(), w.actor.as_str()),
+        ("deprovision", "workspace_removed", ACTOR_RECONCILE)
+    );
     let a = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((a.op.as_str(), a.cause.as_str()), ("provision", "reconcile"));
+    assert_eq!(
+        (a.op.as_str(), a.cause.as_str()),
+        ("provision", "reconcile")
+    );
     assert_eq!(a.grant_rev.as_deref(), Some(grant_rev(&g).as_str()));
     let t = get_target(CHAT_KIND).unwrap().unwrap();
     assert!(t.last_reconcile_at.is_some());
@@ -949,14 +1171,24 @@ fn hc2_held_subject_is_not_re_added_until_the_grant_changes() {
     let ann = person("ann");
     let g = grant("principal", "ann", None).unwrap();
     let r = rows_for(&pext(&ann.id)).remove(0);
-    record_held(&r.id, 200, r#"{"member_id":"9","skipped":["9"]}"#, "skipped by Sew (banned)").unwrap();
+    record_held(
+        &r.id,
+        200,
+        r#"{"member_id":"9","skipped":["9"]}"#,
+        "skipped by Sew (banned)",
+    )
+    .unwrap();
     assert_eq!(row(&r.id).state, "held");
     let mut owner_m = member(ExternalId::K2Owner, MemberKind::Person, "owner", "Owner");
     owner_m.install_role = InstallRole::Owner;
     // Sew has no active member for ann; reconcile must NOT re-add her.
     let s = apply_reconcile(CHAT_KIND, &[owner_m.clone()]).unwrap();
     assert_eq!(s.skipped_held, 1);
-    assert_eq!(rows_for(&pext(&ann.id)).len(), 1, "no re-add while the grant is unchanged");
+    assert_eq!(
+        rows_for(&pext(&ann.id)).len(),
+        1,
+        "no re-add while the grant is unchanged"
+    );
     let states = hook_states(&skin::list_grants().unwrap()).unwrap();
     assert_eq!(states.get(&g.id).map(|s| s.0.as_str()), Some("held"));
     assert_eq!(summary_held(), 1);
@@ -964,11 +1196,17 @@ fn hc2_held_subject_is_not_re_added_until_the_grant_changes() {
     // and reconcile no longer holds the subject under the new rev.
     skin::update_grant_scope(&g.id, "guest", "owner-token").unwrap();
     let last = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
-    assert_eq!((last.op.as_str(), last.state.as_str()), ("provision", STATE_PENDING));
+    assert_eq!(
+        (last.op.as_str(), last.state.as_str()),
+        ("provision", STATE_PENDING)
+    );
     record_done(&last.id, 200, "{}").unwrap();
     let s2 = apply_reconcile(CHAT_KIND, &[owner_m]).unwrap();
     assert_eq!(s2.skipped_held, 0);
-    assert_eq!(s2.provisioned, 1, "absent in Sew under a new grant rev → provision");
+    assert_eq!(
+        s2.provisioned, 1,
+        "absent in Sew under a new grant rev → provision"
+    );
 }
 
 fn summary_held() -> i64 {
@@ -1014,7 +1252,10 @@ fn rev147_connect_owners_and_admins_are_never_provisioned_by_role() {
     // App user changes (an App grant for a Connect-named principal) never
     // provision anyone by themselves.
     let subjects: HashSet<String> = rows().into_iter().map(|r| r.subject_key).collect();
-    assert_eq!(subjects, HashSet::from(["k2:owner".to_string(), pext(&ann.id)]));
+    assert_eq!(
+        subjects,
+        HashSet::from(["k2:owner".to_string(), pext(&ann.id)])
+    );
     let ann_row = rows_for(&pext(&ann.id)).remove(0);
     assert_eq!(ann_row.actor, "user:boss");
     // Reconcile's desired set: exactly k2:owner + the granted principal.
@@ -1026,10 +1267,19 @@ fn rev147_connect_owners_and_admins_are_never_provisioned_by_role() {
         .filter(|r| r.cause == "reconcile")
         .map(|r| r.subject_key)
         .collect();
-    assert_eq!(planned, HashSet::from(["k2:owner".to_string(), pext(&ann.id)]));
+    assert_eq!(
+        planned,
+        HashSet::from(["k2:owner".to_string(), pext(&ann.id)])
+    );
     for r in rows() {
-        assert!(!r.subject_key.contains("boss") && !r.subject_key.contains("adm"), "{r:?}");
-        assert!(r.subject_key == "k2:owner" || r.subject_key.starts_with("k2:principal:"), "{r:?}");
+        assert!(
+            !r.subject_key.contains("boss") && !r.subject_key.contains("adm"),
+            "{r:?}"
+        );
+        assert!(
+            r.subject_key == "k2:owner" || r.subject_key.starts_with("k2:principal:"),
+            "{r:?}"
+        );
     }
 }
 
@@ -1083,13 +1333,19 @@ fn outbox_statuses_and_prune_keep_open_and_held_rows() {
     let open = rows_for(&pext(&ann.id)).into_iter().last().unwrap();
     record_blocked(&open.id, Some(400), "x").unwrap();
     skin::with_skin_conn(|c| {
-        c.execute("UPDATE tool_outbox SET updated_at = 1 WHERE id = ?1", rusqlite::params![open.id])
-            .map_err(|e| e.to_string())
+        c.execute(
+            "UPDATE tool_outbox SET updated_at = 1 WHERE id = ?1",
+            rusqlite::params![open.id],
+        )
+        .map_err(|e| e.to_string())
     })
     .unwrap();
     let pruned = prune().unwrap();
     assert_eq!(pruned, all.len(), "finished rows past 90 days go");
     let left = rows();
     assert_eq!(left.len(), 1);
-    assert_eq!(left[0].state, STATE_BLOCKED, "blocked rows are never pruned");
+    assert_eq!(
+        left[0].state, STATE_BLOCKED,
+        "blocked rows are never pruned"
+    );
 }

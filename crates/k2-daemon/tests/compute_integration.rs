@@ -865,6 +865,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         created_at: 10,
         needs: Vec::new(),
         artifacts: Vec::new(),
+        stall_secs: None,
     };
     let client = format!("client-{job:0>16}");
     let db = k2_core::db::shared();

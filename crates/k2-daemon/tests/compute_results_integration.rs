@@ -594,3 +594,44 @@ async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
     drop(nb);
     drop(env);
 }
+
+// ── stall timeout (G4) ───────────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_stalled_job_ends_as_a_result_and_is_never_retried() {
+    let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(tuning_for_tests());
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    std::fs::create_dir_all(env.home.join("cli-tmp")).unwrap();
+    let ws = seed_ws(&env, "st", &[]);
+    let (_n1, _) = online_node(&env, port, "s1", 1).await;
+
+    // Via the CLI: exit 3 with the code and the detail on stderr.
+    let (rc, _, err) = k2(&env, port, &ws.path, &["compute", "run", "s1", "--no-source", "--stall-timeout", "1s", "--retries", "2", "--", "sh", "-c", "echo hi; sleep 30"]);
+    assert_eq!(rc, 3, "{err}");
+    assert!(err.contains("\"reason\": \"stalled\"") && err.contains("no output for 1s"), "{err}");
+    let r = get(port, "/cli/compute/jobs", OWNER, &format!("workspace={}", ws.id)).await;
+    let v = j(&r)["jobs"][0].clone();
+    assert_eq!((v["state"].as_str(), v["attempt"].as_i64()), (Some("timeout"), Some(1)), "a stall is a result, not retried: {v}");
+
+    // The default applies when the node enforces it; `off` sends none.
+    let mut n = 0u32;
+    let id = submit(port, &ws, &mut n, json!({"node": "s1", "argv": ["true"], "noSource": true, "timeoutSecs": 7200})).await;
+    let plan_json: String = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT plan_json FROM compute_jobs WHERE id = ?1", params![id], |r| r.get(0)).unwrap()
+    };
+    let p: Value = serde_json::from_str(&plan_json).unwrap();
+    assert_eq!(p["stall_secs"], 1800, "{p}");
+    let id = submit(port, &ws, &mut n, json!({"node": "s1", "argv": ["true"], "noSource": true, "stallSecs": 0})).await;
+    let p: Value = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        serde_json::from_str(&conn.query_row("SELECT plan_json FROM compute_jobs WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap()).unwrap()
+    };
+    assert!(p.get("stall_secs").is_none(), "{p}");
+    k2_core::compute::retry::set_tuning_for_tests(Default::default());
+    drop(env);
+}

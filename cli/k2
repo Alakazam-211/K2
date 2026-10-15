@@ -32202,7 +32202,8 @@ NEVER STUCK
   An attached run follows the new attempt ("retrying as attempt 2 on …").
   --stall-timeout 30m|off   no output for that long → timeout/stalled.
   A node with 3 infra failures in a row is set aside 30 min (--any skips
-  it; `k2 compute nodes` shows setAsideUntil).
+  it; `k2 compute nodes` shows setAsideUntil; the owner's
+  `k2 compute node resume <node>` puts it back at once).
   Delivery: a job starts at most once per attempt; a retry is a new
   attempt. Make side effects (uploads, deploys) idempotent.
 

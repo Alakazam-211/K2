@@ -31,6 +31,11 @@ pub const DIARY_WIDGET: &str = "k2:diary@1";
 /// ghost teasing in the empty pen. `diary-2.toml` moves the template to it.
 pub const DIARY_WIDGET_LATEST: &str = "k2:diary@2";
 
+/// The Kanban board (Rosson 2026-10-15, for 0.45.7): columns and cards in
+/// the widget's Garden data (`data:k2:kanban`), the catalog's
+/// `kanban-1.toml` fills the window with it.
+pub const KANBAN_WIDGET: &str = "k2:kanban@1";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 
@@ -134,6 +139,21 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("card.js", include_str!("money-alerts-1/card.js")),
         ],
     },
+    // The Kanban Garden's board (0.45.7): ported from Rosson's Roadmap
+    // board widget, generic, its cards and columns in Garden data.
+    BuiltinWidget {
+        name: "kanban",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("kanban-1/manifest.json")),
+            ("index.html", include_str!("kanban-1/index.html")),
+            ("kanban.css", include_str!("kanban-1/kanban.css")),
+            ("md.js", include_str!("kanban-1/md.js")),
+            ("kanban.js", include_str!("kanban-1/kanban.js")),
+            ("picker.js", include_str!("kanban-1/picker.js")),
+            ("dock.js", include_str!("kanban-1/dock.js")),
+        ],
+    },
 ];
 
 /// The data-source cards and the presets each pairs with (contract
@@ -157,6 +177,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:relays-dns@1", "8b54362a6ef697f6575008790b975a0d793d08aa14c5974f2447a3a54715062e"),
     ("k2:deploys@1", "7b0f85cc0e7035fa62cb2d8df96653ed2b293be8a5b8d4a46ffec6f00090dfdf"),
     ("k2:money-alerts@1", "52d89d4d821428d496e38b133f4849c1c697abc5c7d3acce21f54e8fdd1cf4a7"),
+    ("k2:kanban@1", "0baefa0890243635a3cc181c522ed7a59bc55272d84f5ffc293d3106bfaa786a"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -478,6 +499,94 @@ mod tests {
                 assert!(!words.contains(&t), "the ghost asks for something real ({t}): {l}");
             }
         }
+    }
+
+    /// k2:kanban@1 (Rosson 2026-10-15, for 0.45.7): a clean custom widget
+    /// that keeps its board in Garden data, renders notes with the bundled
+    /// marked + DOMPurify, drags with pointer events, and ships none of the
+    /// Roadmap board's K2-internal cards or hints.
+    #[test]
+    fn the_kanban_is_a_clean_custom_widget_with_a_generic_board() {
+        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET).expect("parses")).expect("k2:kanban@1 ships");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET));
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+        let c = crate::zen::widgets::check_files("k2", "kanban-1", &files);
+        assert!(c.errors.is_empty(), "{:?}", c.errors);
+        assert!(c.bundle.is_some(), "k2:kanban@1 bundles");
+        let m = c.manifest.as_ref().expect("a manifest");
+        assert_eq!(m.caps, ["agents:read", "thread:read", "thread:post", "store:read", "store:write"]);
+        for cap in &m.caps {
+            assert!(crate::zen::USER_WIDGET_CAPS.contains(&cap.as_str()), "{cap}");
+        }
+        assert!(!m.caps.iter().any(|c| c == "sources:read"), "reading sources would drop store:write");
+        let manifest: serde_json::Value = serde_json::from_str(file(w, "manifest.json")).expect("manifest is JSON");
+        assert_eq!(manifest["requires"]["libs"], serde_json::json!(["marked@18", "dompurify@3"]));
+        let html = file(w, "index.html");
+        for bad in [" onclick=", " onload=", " onerror=", "<iframe", "<object", "<embed", "<base", "http-equiv", "src=\"http", "href=\"http", "//cdn"] {
+            assert!(!html.contains(bad), "index.html has {bad}");
+        }
+        for s in ["md.js", "kanban.js", "picker.js", "dock.js"] {
+            assert!(html.contains(&format!("<script src=\"{s}\"></script>")), "index.html loads {s}");
+        }
+        // Widget verbs, and the Garden data verbs widgets reach through
+        // this computer's daemon (`garden-local`).
+        let cat = crate::contract::catalog();
+        let widget: Vec<String> = cat
+            .verbs_exposed_to(crate::contract::Exposure::Widget)
+            .iter()
+            .chain(cat.verbs_exposed_to(crate::contract::Exposure::GardenLocal).iter())
+            .map(|v| v.verb.clone())
+            .collect();
+        for name in ["md.js", "kanban.js", "picker.js", "dock.js"] {
+            let js = file(w, name);
+            for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "localStorage", "sessionStorage", "indexedDB", "eval(", "new Function", "import "] {
+                assert!(!js.contains(bad), "{name} uses {bad}");
+            }
+            // Only widget helpers the catalog exposes (plus the runtime's
+            // own members and the SDK's store/save/thread helpers).
+            for (i, _) in js.match_indices("k2.") {
+                let call: String = js[i + 3..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
+                let call = call.trim_end_matches('.');
+                if call.is_empty() {
+                    continue;
+                }
+                // `k2.widget.name.trim`, `k2.config.agent.indexOf`, `k2.connected.then`:
+                // a runtime property, then plain JavaScript on its value.
+                let head = call.split('.').next().unwrap_or(call);
+                let ok = widget.iter().any(|v| v == call)
+                    || crate::contract::gen::RUNTIME_MEMBERS.contains(&call)
+                    || (["widget", "config", "connected", "motion"].contains(&head)
+                        && crate::contract::gen::RUNTIME_MEMBERS.contains(&head))
+                    || ["store", "store.subscribe", "store.tx", "save", "viewer", "thread", "agents", "canvas"].contains(&call);
+                assert!(ok, "{name} calls k2.{call}, which isn't a widget helper");
+            }
+            // Generic: none of the Roadmap board's internal cards or hints.
+            for bad in ["Rosson", "Roadmap", "k2::local", "Parked", "Owned elsewhere", "ranking", "0.45.4", "0.46", "K2_ADDRESS"] {
+                assert!(!js.contains(bad), "{name} still has '{bad}'");
+            }
+        }
+        let js = file(w, "kanban.js");
+        // The default board: To do / Doing / Done, in Garden data, once.
+        for needle in ["{ id: 'todo', name: 'To do' }", "{ id: 'doing', name: 'Doing' }", "{ id: 'done', name: 'Done' }", "metaKey()", "ifRev: 0", "k2.store.batch(", "k2.store.subscribe(prefix"] {
+            assert!(js.contains(needle), "kanban.js lost {needle}");
+        }
+        // Pointer drag (mouse, pen, touch), never HTML5 drag and drop.
+        for needle in ["'pointerdown'", "'pointermove'", "'pointerup'", "'pointercancel'", "'Escape'", "setPointerCapture", "drag-ghost"] {
+            assert!(js.contains(needle), "kanban.js lost {needle}");
+        }
+        assert!(!js.contains("dataTransfer") && !js.contains("draggable"), "no HTML5 drag and drop");
+        // Theme: colours come from K2's --zen-* variables, not a fixed dark palette.
+        let css = file(w, "kanban.css");
+        for token in ["--zen-surface", "--zen-text", "--zen-border", "--zen-accent", "--zen-font-family", "--zen-radius"] {
+            assert!(css.contains(token), "kanban.css ignores {token}");
+        }
+        for dark in ["#0d1117", "#161b22", "#1c2330", "padding-top:56px", "padding-top: 56px"] {
+            assert!(!css.contains(dark), "kanban.css still has {dark}");
+        }
+        assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
+        let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
+        assert!(code <= 256 * 1024, "UW8: k2:kanban@1 is {code} bytes of code");
     }
 
     /// Garden v3 (contract-sources-v1 §11.4, §12.3): each data-source card

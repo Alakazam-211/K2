@@ -127,7 +127,10 @@ export default function IconCropDialog({
   // Escape to cancel
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Escape') {
+        e.preventDefault() // claim it: Settings must not close too
+        onCancel()
+      }
       if (e.key === 'Enter') handleConfirm()
     }
     window.addEventListener('keydown', handler)
@@ -141,6 +144,9 @@ export default function IconCropDialog({
       onClick={onCancel}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Crop icon"
         className="flex flex-col items-center gap-4 p-6"
         style={{
           backgroundColor: 'var(--color-bg-stripe)',

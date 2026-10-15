@@ -61,6 +61,7 @@ import PageTabs from '../TopBar/PageTabs'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
+import { escOwnedByDialog } from './settings-esc'
 
 // ── Section nav ──────────────────────────────────────────────────────
 // Top-level items, then titled groups with indented children.
@@ -246,6 +247,8 @@ export default function Settings(): React.JSX.Element {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && !searchOpen) {
+        // A dialog open on top of Settings owns this Esc (settings-esc.ts).
+        if (escOwnedByDialog(e)) return
         e.preventDefault()
         closeSettings()
         return

@@ -143,7 +143,9 @@ export default function DisableWorktreesDialog({
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !isPending) onClose()
+      if (e.key !== 'Escape') return
+      e.preventDefault() // claim it: Settings must not close too
+      if (!isPending) onClose()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -159,6 +161,9 @@ export default function DisableWorktreesDialog({
       onClick={isPending ? undefined : onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Disable Worktrees"
         className="w-[520px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

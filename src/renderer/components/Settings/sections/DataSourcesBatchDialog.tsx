@@ -20,6 +20,7 @@ import { registerZenSourcesBatchReview } from '@/lib/zen/zen-sources-review'
 import { ConfirmStep } from './DataSourceConfirm'
 import { batchHash, btn, btnPrimary, danger, every, makerLabel, muted, onLabel, scopeForHostKey, sourcesErrorText } from './data-sources-ui'
 import { SquareCheckbox } from '@/components/ui'
+import { useDialogEscape } from '../settings-esc'
 
 export interface SourcesBatchArgs {
   /** Shown in the title: Review pending for Garden "Fleet". */
@@ -191,8 +192,9 @@ export function DataSourcesBatchDialog({
   scopeOf?: (hostKey: string) => ServerScope
 }): React.JSX.Element {
   const servers = Object.entries(args.byServer)
+  useDialogEscape(onClose)
   return (
-    <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch">
+    <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch" role="dialog" aria-modal="true" aria-label="Review pending">
       <div className="bg-[var(--color-bg)] border border-[var(--color-border)] p-3 w-[560px] max-w-[95vw] max-h-[85vh] overflow-auto space-y-2">
         <p className="text-[12px] font-medium text-[var(--color-text-primary)]">
           {args.gardenName ? `Review pending for Garden “${args.gardenName}”` : 'Review pending'}

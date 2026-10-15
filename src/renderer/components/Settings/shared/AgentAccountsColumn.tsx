@@ -43,6 +43,7 @@ import {
 } from '@/stores/llm-accounts'
 import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
+import { useDialogEscape } from '../settings-esc'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [
@@ -331,6 +332,7 @@ function ApiKeyDialog({
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  useDialogEscape(onClose, !busy)
   const submit = useCallback(async () => {
     const sentKey = key.trim()
     setKey('')
@@ -349,6 +351,7 @@ function ApiKeyDialog({
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
       role="dialog"
+      aria-modal="true"
       aria-label={`Add ${toolLabel} API token`}
       data-testid="llm-apikey-dialog"
     >

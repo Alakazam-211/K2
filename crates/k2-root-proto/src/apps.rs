@@ -786,7 +786,7 @@ mod tests {
         assert!(sysctl_conf().contains("= 38600-38999\n"));
         assert!(containers_conf(OciRuntime::Youki).contains("runtime = \"youki\"\n"));
         assert!(GATEWAY_PORTS.lo >= RESERVED_PORTS.0 && PROXY_PORTS.hi <= RESERVED_PORTS.1);
-        assert!(GATEWAY_PORTS.hi < PROXY_PORTS.lo, "the ranges never overlap");
+        const { assert!(GATEWAY_PORTS.hi < PROXY_PORTS.lo, "the ranges never overlap") };
     }
 
     #[test]

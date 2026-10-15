@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use k2_core::llm_accounts::{self as wallet_core, state, store, wallet, Entry, Tool, WalletError};
-use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession};
+use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession, VisibleRow};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -186,6 +186,43 @@ pub fn find_url(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Rebuild logical lines from the visible rows. A row the terminal
+/// soft-wrapped (alacritty's WRAPLINE: the tool wrote one long line,
+/// e.g. Claude's sign-in URL, and the terminal broke it at the last
+/// column) continues on the next row with no newline between them.
+/// Rows the tool ended with its own newline stay separate lines.
+pub fn logical_lines(rows: &[VisibleRow]) -> Vec<String> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut cur = String::new();
+    for r in rows {
+        cur.push_str(&r.text);
+        if !r.wrapped {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// The sign-in URL to hold after one read. The BROWSER-shim file wins
+/// whenever it has one (the tool handed the URL over whole). A screen
+/// read never shortens what we hold: a read that is a prefix of the
+/// stored URL (cut at a row edge, or partly scrolled) keeps the stored
+/// one; a longer read that extends it, or a different URL (the tool
+/// issued a new one), replaces it.
+pub fn next_url(stored: Option<&str>, from_file: Option<String>, from_screen: Option<String>) -> Option<String> {
+    if from_file.is_some() {
+        return from_file;
+    }
+    match (stored, from_screen) {
+        (Some(old), Some(new)) if old.starts_with(new.as_str()) => Some(old.to_string()),
+        (_, Some(new)) => Some(new),
+        (old, None) => old.map(str::to_string),
+    }
 }
 
 /// A device code shown in the terminal: `XXXX-XXXX` / `XXXX-XXXXX`
@@ -508,15 +545,18 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         let Some(pty) = pty else { return };
 
         // Screen + detection.
-        let rows = pty.visible_text_rows();
-        let text = rows.join("\n");
+        // Detection reads logical lines: a URL longer than the row
+        // (Claude's is ~460 chars) soft-wraps, and reading row by row
+        // cut it at the first row's edge.
+        let rows = pty.visible_rows();
+        let text = logical_lines(&rows).join("\n");
         let file_url = std::fs::read_to_string(dir.join("urls"))
             .ok()
             .and_then(|s| s.lines().rev().find_map(|l| find_url(l)));
-        let url = file_url.or_else(|| find_url(&text));
+        let screen_url = find_url(&text);
         let code = find_device_code(&text);
         let paste = wants_pasted_code(&text);
-        let mut screen: Vec<String> = rows;
+        let mut screen: Vec<String> = rows.into_iter().map(|r| r.text.trim_end().to_string()).collect();
         while screen.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
             screen.pop();
         }
@@ -524,9 +564,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         let screen: Vec<String> = screen[start..].to_vec();
         if let Some((_, t)) = update(&id, |l| {
             l.screen = screen;
-            if url.is_some() {
-                l.url = url.clone();
-            }
+            l.url = next_url(l.url.as_deref(), file_url, screen_url);
             if code.is_some() {
                 l.code = code.clone();
             }
@@ -1122,6 +1160,91 @@ mod tests {
         assert_eq!(find_url("listening on http://localhost:1455/auth/callback"), None);
         assert_eq!(find_url("go to (https://auth.example.test/device)."), Some("https://auth.example.test/device".into()));
         assert_eq!(find_url("nothing here"), None);
+    }
+
+    /// A real-shaped Claude sign-in URL (~460 chars), longer than any
+    /// terminal row.
+    const CLAUDE_URL: &str = "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=hhX09VfGxZ4Oe_6zAToJMg0tIdpFMzGge4PW-yYvPLo&code_challenge_method=S256&state=ciSJq3Xk2mV7pL0aB9cD4eF6gH8iJ1kL2mN3oP4qR5s";
+
+    /// The exact byte shape `claude auth login --claudeai` writes
+    /// (captured from the real CLI): one line, an OSC 8 hyperlink and
+    /// a color around the URL, then the paste prompt on its own line.
+    fn claude_login_bytes(url: &str) -> Vec<u8> {
+        format!(
+            "Opening browser to sign in\u{2026}\r\nIf the browser didn't open, visit: \x1b]8;;{url}\x07\x1b[94m{url}\x1b[39m\x1b]8;;\x07\r\nPaste code here if prompted > "
+        )
+        .into_bytes()
+    }
+
+    fn screen_url(cols: usize, bytes: &[u8]) -> (Option<String>, Vec<VisibleRow>) {
+        let rows = k2_core::terminal::daemon_pty::visible_rows_from_bytes(cols, 40, bytes);
+        (find_url(&logical_lines(&rows).join("\n")), rows)
+    }
+
+    #[test]
+    fn wrapped_claude_url_is_found_whole_at_80_120_and_400_columns() {
+        assert!(CLAUDE_URL.len() > 400, "fixture must be longer than the login PTY row");
+        for cols in [80usize, 120, 400] {
+            let (url, rows) = screen_url(cols, &claude_login_bytes(CLAUDE_URL));
+            assert!(rows[1].wrapped, "{cols} cols: the URL row must be soft-wrapped: {rows:?}");
+            // The bug: the first row alone held only a cut URL.
+            let first_row_only = find_url(&rows[1].text).expect("first row has the URL start");
+            assert!(first_row_only.len() < CLAUDE_URL.len(), "{cols} cols: fixture must actually wrap");
+            assert_eq!(url.as_deref(), Some(CLAUDE_URL), "{cols} cols: whole URL, rows {rows:?}");
+            // The paste prompt after the URL is still its own line.
+            assert!(wants_pasted_code(&logical_lines(&rows).join("\n")));
+        }
+    }
+
+    #[test]
+    fn url_ending_exactly_at_the_column_edge_is_not_glued_to_the_next_line() {
+        let prefix = "visit: ";
+        let url = "https://auth.example.test/device/abcdefghijklmnopqrstuvwxyz0123456789";
+        let cols = prefix.len() + url.len();
+        let bytes = format!("{prefix}{url}\r\nEnterTheCodeBelow ABCD-1234\r\n");
+        let (found, rows) = screen_url(cols, bytes.as_bytes());
+        assert!(!rows[0].wrapped, "exact-edge row then newline is not a soft wrap: {rows:?}");
+        assert_eq!(found.as_deref(), Some(url));
+    }
+
+    #[test]
+    fn localhost_callback_is_still_skipped_when_wrapped() {
+        let local = format!("https://localhost:1455/auth/callback?state={}", "z".repeat(150));
+        let bytes = format!("Listening on {local}\r\nwaiting\r\n");
+        let (found, rows) = screen_url(80, bytes.as_bytes());
+        assert!(rows[0].wrapped, "fixture must wrap: {rows:?}");
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn short_device_urls_and_codes_still_found_through_logical_lines() {
+        // Codex / Grok device flows: short URL + code, nothing wraps.
+        let bytes = b"Open https://auth.openai.com/codex/device\r\nand enter this one-time code: ABCD-12345\r\n";
+        let rows = k2_core::terminal::daemon_pty::visible_rows_from_bytes(400, 40, bytes);
+        let text = logical_lines(&rows).join("\n");
+        assert_eq!(find_url(&text).as_deref(), Some("https://auth.openai.com/codex/device"));
+        assert_eq!(find_device_code(&text).as_deref(), Some("ABCD-12345"));
+    }
+
+    #[test]
+    fn stored_url_only_upgrades_never_shortens() {
+        let cut = &CLAUDE_URL[..360];
+        // First read was cut: a later whole read upgrades it.
+        assert_eq!(next_url(Some(cut), None, Some(CLAUDE_URL.into())).as_deref(), Some(CLAUDE_URL));
+        // A later cut read never shortens the whole one.
+        assert_eq!(next_url(Some(CLAUDE_URL), None, Some(cut.into())).as_deref(), Some(CLAUDE_URL));
+        // Same read again: unchanged.
+        assert_eq!(next_url(Some(CLAUDE_URL), None, Some(CLAUDE_URL.into())).as_deref(), Some(CLAUDE_URL));
+        // Nothing on screen this tick: keep what we have.
+        assert_eq!(next_url(Some(CLAUDE_URL), None, None).as_deref(), Some(CLAUDE_URL));
+        assert_eq!(next_url(None, None, None), None);
+        // A different URL (the tool re-issued one) replaces it.
+        let other = "https://claude.ai/oauth/authorize?code=true&state=new";
+        assert_eq!(next_url(Some(CLAUDE_URL), None, Some(other.into())).as_deref(), Some(other));
+        // The BROWSER-shim file always wins over the screen.
+        let file = "https://auth.example.test/from-file";
+        assert_eq!(next_url(Some(CLAUDE_URL), Some(file.into()), Some(CLAUDE_URL.into())).as_deref(), Some(file));
+        assert_eq!(next_url(None, Some(file.into()), None).as_deref(), Some(file));
     }
 
     #[test]

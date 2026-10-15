@@ -6,6 +6,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.45.7
 
 - **Your tunnel finds a working relay by itself.** K2 now asks k2.dev for the current list of relays when it starts, every few hours, and right after you pair, so every computer and server knows all of them, not just the first. If a relay goes down, your tunnel moves to another one. When the main relay is healthy again, K2 checks it a few times and then moves back by itself, so nobody has to restart anything. `k2 tunnel status` shows which relay you're on and where the list came from.
+- **The sign-in button opens the whole link.** When you add an AI login in Settings → LLMs, **Open sign-in page** now opens the complete sign-in link. Before, a long Claude link could be cut short, so you had to copy it from the login terminal instead.
 
 ## 0.45.6 — Live cards and hired hands
 

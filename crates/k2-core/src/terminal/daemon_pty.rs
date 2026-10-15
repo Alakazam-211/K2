@@ -79,6 +79,62 @@ impl Dimensions for TermSize {
     }
 }
 
+/// One visible grid row as plain text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisibleRow {
+    /// Styles dropped. Trailing blanks trimmed, except on a wrapped
+    /// row: content reached the last column there, so a trailing
+    /// space is real text on the wrap boundary.
+    pub text: String,
+    /// alacritty's WRAPLINE on the row's last cell: the terminal
+    /// soft-wrapped and the logical line continues on the next row
+    /// (no newline was written between them).
+    pub wrapped: bool,
+}
+
+/// Plain-text projection of a Term's visible rows with the soft-wrap
+/// flag per row. A free function over the Term so it is testable
+/// with an in-memory Term fed through the parser.
+pub fn visible_rows_of<T>(term: &Term<T>) -> Vec<VisibleRow> {
+    use alacritty_terminal::index::{Column, Line, Point};
+    use alacritty_terminal::term::cell::Flags;
+    let cols = term.columns();
+    let rows = term.screen_lines();
+    let grid = term.grid();
+    let mut out = Vec::with_capacity(rows);
+    for r in 0..(rows as i32) {
+        let mut line = String::with_capacity(cols);
+        for c in 0..cols {
+            let cell = &grid[Point::new(Line(r), Column(c))];
+            line.push(if cell.c == '\0' { ' ' } else { cell.c });
+        }
+        let wrapped = cols > 0
+            && grid[Point::new(Line(r), Column(cols - 1))]
+                .flags
+                .contains(Flags::WRAPLINE);
+        if !wrapped {
+            let trimmed = line.trim_end();
+            line.truncate(trimmed.len());
+        }
+        out.push(VisibleRow { text: line, wrapped });
+    }
+    out
+}
+
+/// Test helper: feed `bytes` through a real alacritty Term of the
+/// given size (no PTY) and return its visible rows. Lets callers test
+/// screen scraping against the terminal's own wrapping.
+#[cfg(any(test, feature = "test-util"))]
+pub fn visible_rows_from_bytes(cols: usize, rows: usize, bytes: &[u8]) -> Vec<VisibleRow> {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::vte::ansi::Processor;
+    let size = TermSize { cols, rows };
+    let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+    let mut parser: Processor = Processor::new();
+    parser.advance(&mut term, bytes);
+    visible_rows_of(&term)
+}
+
 /// Minimal `EventListener` that broadcasts alacritty lifecycle events
 /// to any number of subscribers via `tokio::sync::broadcast`. The one
 /// exception is `PtyWrite` — terminal-query answers — which routes back
@@ -1633,23 +1689,21 @@ impl DaemonPtySession {
     /// Briefly locks the Term (same FairMutex the WS snapshot path
     /// uses), so it's safe to call from any thread.
     pub fn visible_text_rows(&self) -> Vec<String> {
-        use alacritty_terminal::index::{Column, Line, Point};
         let term = self.term.lock();
-        let cols = term.columns();
-        let rows = term.screen_lines();
-        let grid = term.grid();
-        let mut out = Vec::with_capacity(rows);
-        for r in 0..(rows as i32) {
-            let mut line = String::with_capacity(cols);
-            for c in 0..cols {
-                let cell = &grid[Point::new(Line(r), Column(c))];
-                line.push(if cell.c == '\0' { ' ' } else { cell.c });
-            }
-            let trimmed = line.trim_end();
-            line.truncate(trimmed.len());
-            out.push(line);
-        }
-        out
+        // Every row trimmed, wrapped or not: byte-identical to the
+        // pre-VisibleRow projection the inject verifier relies on.
+        visible_rows_of(&term)
+            .into_iter()
+            .map(|r| r.text.trim_end().to_string())
+            .collect()
+    }
+
+    /// The visible grid rows with alacritty's soft-wrap flag, so a
+    /// caller can rebuild logical lines (a long URL the terminal
+    /// wrapped across rows). See [`visible_rows_of`].
+    pub fn visible_rows(&self) -> Vec<VisibleRow> {
+        let term = self.term.lock();
+        visible_rows_of(&term)
     }
 
     /// True when the child application has bracketed-paste mode
@@ -1981,6 +2035,39 @@ mod tests {
         assert!(cfg.program.is_none());
         assert!(cfg.cwd.is_none());
         assert!(cfg.drain_on_exit);
+    }
+
+    /// A line longer than the terminal soft-wraps: every full row but
+    /// the last carries WRAPLINE, and the rows rejoin to the original.
+    #[test]
+    fn visible_rows_flag_soft_wrapped_rows() {
+        let long: String = (0..25).map(|i| format!("{i:04}")).collect(); // 100 chars
+        let rows = visible_rows_from_bytes(40, 6, format!("{long}\r\nnext").as_bytes());
+        let flags: Vec<bool> = rows.iter().map(|r| r.wrapped).collect();
+        assert_eq!(flags, vec![true, true, false, false, false, false]);
+        assert_eq!(rows[0].text.chars().count(), 40);
+        let joined = format!("{}{}{}", rows[0].text, rows[1].text, rows[2].text);
+        assert_eq!(joined, long);
+        assert_eq!(rows[3].text, "next");
+    }
+
+    /// Text that ends exactly on the last column followed by a newline
+    /// is NOT a soft wrap (alacritty's wrap is deferred until the next
+    /// printable char), and a wrapped row keeps a typed space that
+    /// landed on the boundary.
+    #[test]
+    fn visible_rows_exact_edge_then_newline_is_not_wrapped() {
+        let exact = "x".repeat(40);
+        let rows = visible_rows_from_bytes(40, 4, format!("{exact}\r\nafter").as_bytes());
+        assert!(!rows[0].wrapped, "exact-edge row + newline must not be wrapped: {rows:?}");
+        assert_eq!(rows[0].text, exact);
+        assert_eq!(rows[1].text, "after");
+
+        let spaced = format!("{} tail", "y".repeat(39));
+        let rows = visible_rows_from_bytes(40, 4, spaced.as_bytes());
+        assert!(rows[0].wrapped);
+        assert_eq!(rows[0].text, format!("{} ", "y".repeat(39)));
+        assert_eq!(rows[1].text, "tail");
     }
 
     #[test]

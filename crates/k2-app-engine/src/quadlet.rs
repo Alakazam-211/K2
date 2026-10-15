@@ -21,8 +21,10 @@
 //! 10. caps: memory (no swap), pids, open files.
 //!
 //! Plus `StopTimeout` ≥ the drain window, an init (catatonit) so SIGTERM
-//! reaches the App, the image never pulled at start, and a per-unit
-//! journald rate limit (W §5.3: a log flood pushed Postgres p99 ×3–13).
+//! reaches the App, and the image never pulled at start. Output goes to
+//! the unit's journal; the rate limit (W §5.3) is on `user@<k2app>`
+//! (box prep's delegate drop-in): journald ignores `LogRateLimit*` on user
+//! units.
 //! Health is the daemon's HTTP probe, not a Podman healthcheck (W §5.6).
 
 use k2_root_proto::apps::AppId;
@@ -134,8 +136,6 @@ pub fn render(r: &Render) -> String {
     line("Restart=no".into());
     line("TimeoutStartSec=300".into());
     line(format!("TimeoutStopSec={}", stop + 20));
-    line("LogRateLimitIntervalSec=30s".into());
-    line("LogRateLimitBurst=1000".into());
     o
 }
 
@@ -195,8 +195,6 @@ mod tests {
             "\nSlice=k2apps-nsi_skin.slice\n",
             "\nRestart=no\n",
             "\nTimeoutStopSec=60\n",
-            "\nLogRateLimitIntervalSec=30s\n",
-            "\nLogRateLimitBurst=1000\n",
         ] {
             assert!(u.contains(want), "missing {want:?} in\n{u}");
         }

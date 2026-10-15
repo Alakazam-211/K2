@@ -159,44 +159,6 @@ export function GrokCardView({ card }: { card: GrokCard }): React.JSX.Element {
   }
 }
 
-/** The banner on a bot whose live conversation runs elsewhere: Grok Bot's
- *  current preview on top, the old local history below it. */
-export function GrokStaleBanner({
-  name,
-  preview,
-  lastActivityAt,
-  localActivityAt,
-  nowSec,
-}: {
-  name: string
-  preview: string | null
-  lastActivityAt: number | null
-  localActivityAt: number | null
-  nowSec: number
-}): React.JSX.Element {
-  const upTo =
-    localActivityAt !== null
-      ? `Showing history up to ${new Date(localActivityAt).toLocaleDateString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-        })}.`
-      : 'Showing the history on this computer.'
-  const when = lastActivityAt !== null ? ` (${formatRelativeTime(Math.floor(lastActivityAt / 1000), nowSec)})` : ''
-  return (
-    <Callout tone="warn" data-testid="grokbot-stale-banner">
-      <div>
-        {name}'s latest conversation runs outside this computer. {upTo}
-      </div>
-      {preview && (
-        <div data-testid="grokbot-stale-preview" className="mt-1">
-          {`Latest${when}: “${preview}”`}
-        </div>
-      )}
-    </Callout>
-  )
-}
-
 function authorLabel(m: GrokMessage, agentName: string, k2From: string | null): string {
   if (m.author === 'human') return k2From ?? 'You'
   if (m.author === 'peer') return m.fromAgent?.name ?? 'Another agent'
@@ -333,8 +295,8 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
 
   return (
     <div className="flex h-full w-full flex-1 flex-col overflow-hidden" data-testid="grokbot-chat">
-      {/* The top section: the bot's name and status, and (Rosson 2026-10-15)
-          a stale bot's warning under them, so it stays in view while scrolling. */}
+      {/* The top section: the bot's name and status. No stale warning
+          (Rosson 2026-10-15: "We don't need to tell people that"). */}
       <div className="border-b border-[var(--color-border)] px-4 py-2.5" data-testid="grokbot-chat-header">
         <div className="flex items-center gap-2.5">
           <ProjectAvatar
@@ -355,17 +317,6 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
             </div>
           </div>
         </div>
-        {stale && agent && (
-          <div className="mt-2">
-            <GrokStaleBanner
-              name={name}
-              preview={agent.lastMessagePreview}
-              lastActivityAt={agent.lastActivityAt}
-              localActivityAt={agent.localActivityAt}
-              nowSec={nowSec}
-            />
-          </div>
-        )}
       </div>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-2">

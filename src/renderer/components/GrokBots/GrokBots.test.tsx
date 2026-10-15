@@ -275,14 +275,11 @@ describe('chat view', () => {
       },
     }
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
-    const banner = await screen.findByTestId('grokbot-stale-banner')
-    // It sits in the top section with the bot's name (Rosson 2026-10-15).
-    expect(screen.getByTestId('grokbot-chat-header').contains(banner)).toBe(true)
-    expect(banner.textContent).toContain("Grok's latest conversation runs outside this computer.")
-    expect(banner.textContent).toContain('Showing history up to')
-    expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Done: report sent.')
     // Old local history first, then the divider, then the live lines.
     await screen.findByText('Build is green.')
+    // No stale warning (Rosson 2026-10-15: "We don't need to tell people that").
+    expect(screen.queryByTestId('grokbot-stale-banner')).toBeNull()
+    expect(screen.getByTestId('grokbot-chat-header').textContent).not.toContain('runs outside this computer')
     const divider = screen.getByTestId('grokbot-live-divider')
     expect(divider.textContent).toMatch(/^Live since .+ — older history above may be out of date$/)
     const all = screen.getAllByTestId('grokbot-message')

@@ -1051,14 +1051,30 @@ pub fn kick(node_id: &str) {
     let decision = decision_for(node_id);
     let db = k2_core::db::shared();
     let conn = db.lock();
+    let mut failed_any = false;
     for (id, (_, why)) in &decision.waiting {
         if let Some(j) = store::job_by_id(&conn, id) {
+            // Over the node's caps (queued before this check, or the
+            // node's policy shrank): fail it rather than queue forever.
+            if j.state == "queued" && why.code == scheduler::EXCEEDS_NODE_CAPS {
+                if store::set_job_state(&conn, id, JobState::Failed, Some(&why.code), Some(&why.message), compute::now()).is_ok() {
+                    store::record_event(&conn, "controller", "fail", Some(node_id), Some(&j.workspace_id), Some(id), serde_json::json!({"reason": why.code}));
+                    failed_any = true;
+                }
+                continue;
+            }
             if j.state == "queued" && j.reason.as_deref() != Some(why.code.as_str()) {
                 store::set_job_reason(&conn, id, Some(&why.code), Some(&why.message));
             }
         }
     }
-    let Some(id) = decision.place else { return };
+    let Some(id) = decision.place else {
+        if failed_any {
+            drop(conn);
+            notify_change();
+        }
+        return;
+    };
     let Some(job) = store::job_by_id(&conn, &id) else { return };
     let Some(plan) = job.plan() else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };

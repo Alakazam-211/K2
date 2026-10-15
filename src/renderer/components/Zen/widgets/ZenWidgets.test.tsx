@@ -3402,8 +3402,13 @@ describe('S6 source ratchets', () => {
     expect(zen).toContain('<AddAgentPicker home={home} onAdded={noteZenAgentAdded} />')
     expect(zen).not.toContain('addRow(')
     expect(zen).not.toContain("from '@/components/ui/SearchableAgentList'")
+    // The picker adds through the one shared add (lib/add-to-home.ts, also
+    // the Agents sidebar's "Add to Home"), which caches the picture.
     const panels = read('components/Home/HomeAddPanels.tsx')
-    expect(panels).toContain('putHomeAvatarOnAdd(hostKey, address, w)')
+    expect(panels).toContain("import { addWorkspaceToHome, type ListedWorkspace } from '@/lib/add-to-home'")
+    expect(panels).not.toContain('addRow(')
+    const add = read('lib/add-to-home.ts')
+    expect(add).toContain('putHomeAvatarOnAdd(hostKey, address, w)')
   })
 
   it('T6.3: the Agents page compose bar and Zen send through the same helpers', () => {

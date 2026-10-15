@@ -21,6 +21,10 @@ import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
 import { showContextMenu } from '@/lib/context-menu'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { useConnectHostStore } from '@/stores/connect-host'
+import { ADD_TO_HOME_MENU_ID } from '@/stores/add-to-home-dialog'
+import { addAgentToHomeFromMenu } from '@/lib/add-to-home'
+import { activeHomeHostKey } from '@/lib/home-address'
+import { workspacePlacementMenuItems } from './workspace-menu-items'
 import { usePageViewStore } from '@/stores/page-view'
 import { startCloneTo, startCloneToThisComputer } from '@/lib/start-clone-to'
 import { useGitInfo } from '@/hooks/useGit'
@@ -883,10 +887,8 @@ export default function Sidebar(): React.JSX.Element {
         { id: 'open-finder', label: 'Open in Finder' },
         { id: 'copy-path', label: 'Copy Path' },
         { id: 'focus-window', label: 'Open in Focus Window' },
-        { id: 'separator-pin', label: '', type: 'separator' },
-        { id: 'toggle-pin', label: project.pinned ? 'Unpin' : 'Pin to Top' },
-        { id: 'toggle-active', label: project.manuallyActive ? 'Remove from Active Bar' : 'Add to Active Bar' },
-        ...(!project.manuallyActive ? [{ id: 'active-24h', label: 'Active for 24hrs' }] : []),
+        // Pin/Unpin, "Add to Home" right under it, then the Active Bar rows.
+        ...workspacePlacementMenuItems(project),
       ]
 
       // Open in [IDE] — after pin/Active so a long editor list doesn't bury them.
@@ -955,6 +957,12 @@ export default function Sidebar(): React.JSX.Element {
         await invoke('projects_open_in_editor', { editorId, path: project.path })
       } else if (clickedId === 'new-worktree') {
         setWorktreeDialog({ projectId: project.id, projectPath: project.path })
+      } else if (clickedId === ADD_TO_HOME_MENU_ID) {
+        // Homes are this device's view state: no daemon write, no refetch.
+        // The row's host is the server this window was on when the menu
+        // opened (a remote's own key, `local` for this computer) — the same
+        // key Home's "This server" picker uses.
+        addAgentToHomeFromMenu(activeHomeHostKey(activeHost), project)
       } else if (clickedId === 'toggle-pin') {
         await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, pinned: project.pinned ? 0 : 1 })
         void emit('sync:projects').catch(() => {})

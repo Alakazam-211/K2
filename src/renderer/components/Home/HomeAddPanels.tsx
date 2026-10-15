@@ -49,18 +49,11 @@ import {
   type AgentListSection,
 } from '@/components/ui/SearchableAgentList'
 import { isWebClient } from '@/lib/is-web'
-import { putHomeAvatarOnAdd } from '@/lib/home-avatars'
+import { addWorkspaceToHome, type ListedWorkspace } from '@/lib/add-to-home'
 
-/** A workspace as a server's `projects/list` sends it (the fields the
- *  picker reads; the wire has more). */
-export interface ListedWorkspace {
-  id: string
-  name: string
-  handle?: string | null
-  path?: string | null
-  color?: string | null
-  iconUrl?: string | null
-}
+/** A workspace as a server's `projects/list` sends it (lives with the add
+ *  helper in lib/add-to-home.ts; re-exported for the picker's callers). */
+export type { ListedWorkspace }
 
 /** A cached image for a Home address, when the listing has none (S4 fills
  *  it from the local avatar cache, P8/P19). */
@@ -76,20 +69,9 @@ export function listedIconUrl(v: unknown): string | null {
   return typeof v === 'string' && v.startsWith('data:image/') ? v : null
 }
 
-/** Add `w` to `home`; returns the row's address (null: no handle). */
-function addTo(home: Home, hostKey: string, w: ListedWorkspace): string | null {
-  const h = workspaceHandle(w)
-  if (!h) return null
-  const address = homeAddress(h, hostKey)
-  useHomesStore.getState().addRow(home.id, {
-    address,
-    workspaceId: w.id,
-    label: w.name,
-  })
-  // Cache the row's picture from this listing right away (picker-and-remote-avatars S4).
-  putHomeAvatarOnAdd(hostKey, address, w)
-  return address
-}
+/** Add `w` to `home` — the one shared add (lib/add-to-home.ts), also used
+ *  by the Agents sidebar's right-click "Add to Home". */
+const addTo = addWorkspaceToHome
 
 /** Rename repair from a freshly listed server: rows on `hostKey` whose
  *  handle moved get the new address; labels follow the name. */

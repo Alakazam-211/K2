@@ -225,7 +225,7 @@ pub fn list_item(id: &str, name: &str) -> Value {
         "awaitingUserResponse": null, "hasUnread": false, "unreadCount": 0,
         "lastEntry": {"kind": "message", "text": "t"},
         "lastMessageId": "m", "lastMessagePreview": "p", "lastMessagePreviewSource": null,
-        "lastMessageAuthorId": null, "newestEntryId": "e0", "lastMessageTaskId": null,
+        "lastMessageAuthorId": null, "newestEntryId": null, "lastMessageTaskId": null,
         "pushMessageContent": null, "notificationsEnabled": true, "notifyOnUpdatesEnabled": true,
         "isHiddenFromSidebar": false, "voiceId": null, "voiceSpeed": 1, "voiceLanguage": "en",
         "origin": "local", "isGroup": false, "memberIds": [], "harness": "grok",

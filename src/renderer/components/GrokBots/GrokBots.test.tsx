@@ -168,6 +168,18 @@ describe('Agents sidebar', () => {
   })
 })
 
+describe('row hover text', () => {
+  it("uses Grok Bot's current preview, not this computer's last line", async () => {
+    cli.list = listWith({
+      agents: [item(ID, 'Grok', { stale: true, lastMessagePreview: 'Shipped the October report' })],
+    })
+    render(<GrokBotSidebarSection />)
+    await screen.findByText('Grok')
+    const row = document.querySelector(`[data-grokbot-row="${ID}"] [title]`) as HTMLElement
+    expect(row.getAttribute('title')).toBe('Grok — Assistant\nShipped the October report')
+  })
+})
+
 describe('My Home', () => {
   it('a Grok Bot Home row shows the tag and live status and opens the chat', async () => {
     const row = { address: `grokbot-${ID}::local`, workspaceId: ID, label: 'Cortana' }
@@ -236,6 +248,44 @@ describe('chat view', () => {
     // Typed in Grok Bot itself: shown as stored, author "You".
     expect(typed.textContent).toContain('[from Typed] by hand')
     expect(typed.textContent).toContain('You')
+  })
+
+  it('a stale bot shows the banner with its current preview above the old history, and a greyed-out compose box', async () => {
+    cli.list = listWith({
+      sendEnabled: true,
+      agents: [
+        item(ID, 'Grok', {
+          stale: true,
+          lastMessagePreview: 'Shipped the October report',
+          lastActivityAt: Date.now() - 2 * 3600_000,
+          localActivityAt: Date.UTC(2026, 7, 30, 12),
+        }),
+      ],
+    })
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    const banner = await screen.findByTestId('grokbot-stale-banner')
+    expect(banner.textContent).toContain("Grok's latest conversation runs outside this computer.")
+    expect(banner.textContent).toContain('Showing history up to')
+    expect(banner.textContent).toContain('2026')
+    expect(screen.getByTestId('grokbot-stale-preview').textContent).toContain('Shipped the October report')
+    // The old local history is still shown below.
+    await screen.findByText('Build is green.')
+    const compose = screen.getByTestId('grokbot-compose-stale')
+    expect((compose.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((compose.querySelector('textarea') as HTMLTextAreaElement).placeholder).toBe(
+      "This bot's live conversation runs outside this computer; message it in Grok Bot.",
+    )
+    expect((compose.querySelector('button') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('grokbot-compose')).toBeNull()
+    expect(cli.posts).toEqual([])
+  })
+
+  it('a current bot has no stale banner', async () => {
+    cli.list = listWith({ sendEnabled: true })
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    await screen.findByTestId('grokbot-compose')
+    expect(screen.queryByTestId('grokbot-stale-banner')).toBeNull()
+    expect(screen.queryByTestId('grokbot-compose-stale')).toBeNull()
   })
 
   it('an unknown chat layout says "Open it in Grok Bot" instead of breaking', async () => {

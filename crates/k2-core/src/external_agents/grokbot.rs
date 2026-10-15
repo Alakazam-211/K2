@@ -88,6 +88,21 @@ pub mod schema {
     pub const AGENT_HIDDEN: &str = "isHiddenFromSidebar";
     /// Chat change marker: K2 re-reads `store.db` only when these move.
     pub const AGENT_REV_KEYS: &[&str] = &["snapshotEpoch", "snapshotSeq", "newestEntryId"];
+    /// Latest activity anywhere vs on this computer (ms since epoch). An
+    /// agent whose live conversation runs elsewhere (another box, the
+    /// cloud) has `lastActivityAt` ahead of `localActivityAt` (seen on a
+    /// real box 2026-10-15; the gateway has no transcript endpoint).
+    pub const AGENT_LAST_ACTIVITY: &str = "lastActivityAt";
+    pub const AGENT_LOCAL_ACTIVITY: &str = "localActivityAt";
+    /// The newest transcript entry's id (`transcript_entries.id`).
+    pub const AGENT_NEWEST_ENTRY: &str = "newestEntryId";
+    /// One-line preview of the latest message, current even when stale.
+    pub const AGENT_LAST_PREVIEW: &str = "lastMessagePreview";
+    /// `lastActivityAt` may lead `localActivityAt` by this much before the
+    /// agent counts as stale (clock skew, a write in flight).
+    pub const STALE_TOLERANCE_MS: i64 = 60_000;
+    /// `transcript_entries.id`, for the newest-entry lookup.
+    pub const ID_COLUMN: &str = "id";
 
     /// Per-agent folder and the only two files K2 opens in it.
     pub const AGENTS_DIR: &str = "agents";
@@ -303,6 +318,10 @@ impl GrokBot {
                 working: false,
                 needs_you: false,
                 unread_count: 0,
+                stale: false,
+                last_message_preview: None,
+                last_activity_at: None,
+                local_activity_at: None,
                 rev: String::new(),
                 id,
             });
@@ -355,6 +374,14 @@ impl GrokBot {
                 .map(|k| o.get(*k).map(|v| v.to_string()).unwrap_or_default())
                 .collect::<Vec<_>>()
                 .join("|");
+            let last_activity_at = o.get(schema::AGENT_LAST_ACTIVITY).and_then(epoch_ms);
+            let local_activity_at = o.get(schema::AGENT_LOCAL_ACTIVITY).and_then(epoch_ms);
+            let newest = str_of(o, schema::AGENT_NEWEST_ENTRY);
+            let stale = activity_is_elsewhere(last_activity_at, local_activity_at)
+                || newest.is_some_and(|e| {
+                    newest_entry_settled(last_activity_at, now_ms())
+                        && self.store_has_entry(&id, e) == Some(false)
+                });
             out.push(ExternalAgent {
                 kind: KIND,
                 name: str_of(o, schema::AGENT_NAME)
@@ -375,6 +402,10 @@ impl GrokBot {
                     .and_then(Value::as_u64)
                     .map(|n| n.min(u32::MAX as u64) as u32)
                     .unwrap_or(0),
+                stale,
+                last_message_preview: str_of(o, schema::AGENT_LAST_PREVIEW).and_then(clean_preview),
+                last_activity_at,
+                local_activity_at,
                 rev,
                 id,
             });
@@ -407,6 +438,50 @@ impl GrokBot {
         let _ = conn.busy_timeout(Duration::from_millis(250));
         let _ = conn.pragma_update(None, "query_only", true);
         Ok(Some(conn))
+    }
+
+    /// Whether `entry_id` is in the agent's local `store.db`. None when
+    /// K2 can't tell (no store, unknown layout, unreadable). A hit is
+    /// remembered (an entry never leaves), so a current agent costs one
+    /// lookup per new entry, not one per poll.
+    fn store_has_entry(&self, agent_id: &str, entry_id: &str) -> Option<bool> {
+        type Key = (PathBuf, String, String);
+        static FOUND: std::sync::Mutex<Option<std::collections::HashSet<Key>>> =
+            std::sync::Mutex::new(None);
+        let key = (self.root.clone(), agent_id.to_string(), entry_id.to_string());
+        if FOUND
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|f| f.contains(&key))
+        {
+            return Some(true);
+        }
+        let conn = self.open_store(agent_id).ok()??;
+        if !transcript_layout_known(&conn) {
+            return None;
+        }
+        let found = match conn.query_row(
+            &format!(
+                "SELECT 1 FROM {} WHERE {} = ?1 LIMIT 1",
+                schema::TRANSCRIPT_TABLE,
+                schema::ID_COLUMN
+            ),
+            [entry_id],
+            |_| Ok(()),
+        ) {
+            Ok(()) => true,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(_) => return None,
+        };
+        if found {
+            FOUND
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_or_insert_with(Default::default)
+                .insert(key);
+        }
+        Some(found)
     }
 
     /// Cheap stat-based change marker for an agent's chat (size + mtime of
@@ -602,6 +677,11 @@ impl ExternalAgentProvider for GrokBot {
         let Some(agent) = roster.iter().find(|a| a.id == agent_id) else {
             return Err(ExtError::UnknownAgent(agent_id.to_string()));
         };
+        if agent.stale {
+            // Its live conversation runs elsewhere: a send here might run
+            // against this computer's old context.
+            return Err(ExtError::Stale);
+        }
         if agent.working && !schema::SEND_WHILE_BUSY_ALLOWED {
             return Err(ExtError::BadInput("the agent is busy".into()));
         }
@@ -894,6 +974,67 @@ fn denied() -> std::io::Error {
         std::io::ErrorKind::PermissionDenied,
         "path outside K2's Grok Bot allowlist",
     )
+}
+
+/// A timestamp as ms since epoch: a number (ms, or seconds when small) or
+/// an RFC 3339 string. 0, negative or unparseable is None.
+fn epoch_ms(v: &Value) -> Option<i64> {
+    let ms = match v {
+        Value::Number(n) => {
+            let n = n.as_f64()?;
+            if n < 100_000_000_000.0 {
+                (n * 1000.0) as i64
+            } else {
+                n as i64
+            }
+        }
+        Value::String(s) => chrono::DateTime::parse_from_rfc3339(s.trim())
+            .ok()?
+            .timestamp_millis(),
+        _ => return None,
+    };
+    (ms > 0).then_some(ms)
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// Stale rule 1: the agent was active more recently than this computer's
+/// copy of its chat goes (beyond [`schema::STALE_TOLERANCE_MS`]).
+pub fn activity_is_elsewhere(last: Option<i64>, local: Option<i64>) -> bool {
+    matches!((last, local), (Some(l), Some(loc)) if l - loc > schema::STALE_TOLERANCE_MS)
+}
+
+/// Stale rule 2 (newest entry missing from `store.db`) only applies once
+/// that entry has had time to land: no activity in the last
+/// [`schema::STALE_TOLERANCE_MS`]. A turn being written right now never
+/// reads as stale.
+pub fn newest_entry_settled(last: Option<i64>, now: i64) -> bool {
+    match last {
+        Some(l) => now - l > schema::STALE_TOLERANCE_MS,
+        None => true,
+    }
+}
+
+/// Longest preview carried (chars).
+pub const MAX_PREVIEW_CHARS: usize = 300;
+
+/// A preview as plain one-line text: control characters become spaces,
+/// runs of whitespace collapse, capped at [`MAX_PREVIEW_CHARS`]. Hidden
+/// host prompts are dropped.
+pub fn clean_preview(raw: &str) -> Option<String> {
+    if raw.trim_start().starts_with(schema::HIDDEN_PREFIX) {
+        return None;
+    }
+    let spaced: String = raw
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') { ' ' } else { c })
+        .collect();
+    let one_line = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    let capped: String = one_line.chars().take(MAX_PREVIEW_CHARS).collect();
+    let capped = capped.trim_end();
+    (!capped.is_empty()).then(|| capped.to_string())
 }
 
 fn str_of<'a>(o: &'a Map<String, Value>, key: &str) -> Option<&'a str> {

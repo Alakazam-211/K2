@@ -40,6 +40,17 @@ impl SendLimiter {
         q.push_back(now_ms);
         Ok(())
     }
+
+    /// Take back a send recorded at `at_ms` that never ran (refused before
+    /// it reached the product), so it doesn't count against the limits.
+    pub fn unrecord(&self, agent_id: &str, at_ms: i64) {
+        let mut map = self.sent.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(q) = map.get_mut(agent_id) {
+            if let Some(i) = q.iter().rposition(|&t| t == at_ms) {
+                q.remove(i);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

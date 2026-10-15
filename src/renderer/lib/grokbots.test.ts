@@ -28,6 +28,10 @@ const agent = (over: Partial<GrokBotAgent> = {}): GrokBotAgent => ({
   working: false,
   needsYou: false,
   unreadCount: 0,
+  stale: false,
+  lastMessagePreview: null,
+  lastActivityAt: null,
+  localActivityAt: null,
   ...over,
 })
 
@@ -86,6 +90,29 @@ describe('parsing', () => {
     expect(JSON.stringify(p.messages[1].card)).not.toContain('LEAK')
     expect(p.messages[2].card).toEqual({ type: 'template-share', name: 'Demo', body: null, shareUrl: null })
     expect(parseGrokThread({ supported: false, reason: 'odd' }).supported).toBe(false)
+  })
+
+  it('reads stale, the current preview and both activity times', () => {
+    const l = parseGrokList({
+      agents: [
+        {
+          id: ID,
+          name: 'Grok',
+          stale: true,
+          lastMessagePreview: 'Shipped the October report',
+          lastActivityAt: 1_792_070_040_000,
+          localActivityAt: 1_788_052_860_000,
+        },
+        { id: 'y', name: 'Old', stale: 'yes', lastActivityAt: 0, localActivityAt: 'x' },
+      ],
+    })
+    expect(l.agents[0]).toMatchObject({
+      stale: true,
+      lastMessagePreview: 'Shipped the October report',
+      lastActivityAt: 1_792_070_040_000,
+      localActivityAt: 1_788_052_860_000,
+    })
+    expect(l.agents[1]).toMatchObject({ stale: false, lastMessagePreview: null, lastActivityAt: null, localActivityAt: null })
   })
 
   it('merges pages by seq, a later read replaces the line', () => {

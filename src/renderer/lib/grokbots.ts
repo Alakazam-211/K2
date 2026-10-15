@@ -32,7 +32,19 @@ export interface GrokBotAgent {
   working: boolean
   needsYou: boolean
   unreadCount: number
+  /** The bot's live conversation runs outside this computer (another box
+   *  or Grok's cloud): the chat K2 reads here is old, and sends are refused. */
+  stale: boolean
+  /** Grok Bot's own preview of the latest message (current even when stale). */
+  lastMessagePreview: string | null
+  /** Latest activity anywhere (ms). */
+  lastActivityAt: number | null
+  /** How far this computer's copy of the chat goes (ms). */
+  localActivityAt: number | null
 }
+
+/** What a stale bot's compose box and a refused send say. */
+export const GROK_STALE_SEND_TEXT = "This bot's live conversation runs outside this computer; message it in Grok Bot."
 
 export interface GrokBotStatus {
   reachable: boolean
@@ -119,6 +131,10 @@ export function parseGrokAgent(raw: unknown): GrokBotAgent | null {
     working: o.working === true,
     needsYou: o.needsYou === true,
     unreadCount: typeof o.unreadCount === 'number' ? o.unreadCount : 0,
+    stale: o.stale === true,
+    lastMessagePreview: str(o.lastMessagePreview),
+    lastActivityAt: typeof o.lastActivityAt === 'number' && o.lastActivityAt > 0 ? o.lastActivityAt : null,
+    localActivityAt: typeof o.localActivityAt === 'number' && o.localActivityAt > 0 ? o.localActivityAt : null,
   }
 }
 

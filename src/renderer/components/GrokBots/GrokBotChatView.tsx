@@ -18,6 +18,7 @@ import {
   fetchGrokThread,
   grokAgentState,
   GROK_BOTS_SETTINGS_PATH,
+  GROK_STALE_SEND_TEXT,
   GROK_STATE_LABEL,
   grokK2Sender,
   mergeGrokMessages,
@@ -110,6 +111,44 @@ export function GrokCardView({ card }: { card: GrokCard }): React.JSX.Element {
         </div>
       )
   }
+}
+
+/** The banner on a bot whose live conversation runs elsewhere: Grok Bot's
+ *  current preview on top, the old local history below it. */
+export function GrokStaleBanner({
+  name,
+  preview,
+  lastActivityAt,
+  localActivityAt,
+  nowSec,
+}: {
+  name: string
+  preview: string | null
+  lastActivityAt: number | null
+  localActivityAt: number | null
+  nowSec: number
+}): React.JSX.Element {
+  const upTo =
+    localActivityAt !== null
+      ? `Showing history up to ${new Date(localActivityAt).toLocaleDateString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        })}.`
+      : 'Showing the history on this computer.'
+  const when = lastActivityAt !== null ? ` (${formatRelativeTime(Math.floor(lastActivityAt / 1000), nowSec)})` : ''
+  return (
+    <Callout tone="warn" data-testid="grokbot-stale-banner">
+      <div>
+        {name}'s latest conversation runs outside this computer. {upTo}
+      </div>
+      {preview && (
+        <div data-testid="grokbot-stale-preview" className="mt-1">
+          {`Latest${when}: “${preview}”`}
+        </div>
+      )}
+    </Callout>
+  )
 }
 
 function authorLabel(m: GrokMessage, agentName: string, k2From: string | null): string {
@@ -229,6 +268,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
   const state = agent && list ? grokAgentState(agent, list.status) : null
   const nowSec = Math.floor(Date.now() / 1000)
   const sendOn = list?.sendEnabled === true
+  const stale = agent?.stale === true
 
   return (
     <div className="flex h-full w-full flex-1 flex-col overflow-hidden" data-testid="grokbot-chat">
@@ -252,6 +292,19 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
         </div>
       </div>
 
+      {/* Pinned above the (old) history so it stays in view while scrolling. */}
+      {stale && agent && (
+        <div className="px-2 pt-2">
+          <GrokStaleBanner
+            name={name}
+            preview={agent.lastMessagePreview}
+            lastActivityAt={agent.lastActivityAt}
+            localActivityAt={agent.localActivityAt}
+            nowSec={nowSec}
+          />
+        </div>
+      )}
+
       <div ref={listRef} className="flex-1 overflow-y-auto px-2 py-2">
         {list && !list.enabled && (
           <Callout tone="info">Local Grok Bots are off on this server. Turn on Show in {GROK_BOTS_SETTINGS_PATH}.</Callout>
@@ -271,7 +324,19 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
       </div>
 
       <div className="border-t border-[var(--color-border)] px-3 py-2">
-        {sendOn ? (
+        {sendOn && stale ? (
+          <div className="flex items-end gap-2 opacity-60" data-testid="grokbot-compose-stale">
+            <textarea
+              disabled
+              rows={2}
+              placeholder={GROK_STALE_SEND_TEXT}
+              className="flex-1 cursor-not-allowed resize-none rounded-[var(--radius-box)] border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--color-text-muted)] outline-none"
+            />
+            <Button variant="accent" disabled>
+              Send
+            </Button>
+          </div>
+        ) : sendOn ? (
           <div className="flex flex-col gap-1.5" data-testid="grokbot-compose">
             {state === 'working' && (
               <div className={`text-[11px] ${muted}`}>{name} is busy. Your message may wait until it finishes.</div>

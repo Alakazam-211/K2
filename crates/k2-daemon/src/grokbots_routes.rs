@@ -28,6 +28,9 @@
 //! - `GET  /cli/grokbots/status`   → `{enabled, sendEnabled, status}`
 //! - `GET  /cli/grokbots/thread?agent=<id>&since=<seq>&limit=<n>` → `ThreadPage`
 //! - `POST /cli/grokbots/send`     `{agent, text}` → `{ok, clientNonce}`
+//!   (409 `grokbots_stale` when the bot's live conversation runs outside
+//!   this computer: its local chat is old, so a send could run against old
+//!   context; the person messages it in Grok Bot instead)
 //!
 //! A send reaches Grok Bot as `[from <name>] <text>`, so the bot knows who
 //! wrote. The name comes from the credential, never the body (the same
@@ -136,10 +139,14 @@ fn admin_only() -> CliResponse {
 }
 
 fn ext_err(e: ExtError) -> CliResponse {
+    if matches!(e, ExtError::Stale) {
+        return refuse("409 Conflict", "grokbots_stale", e.to_string());
+    }
     let status = match e {
         ExtError::NotInstalled | ExtError::UnknownAgent(_) => "404 Not Found",
         ExtError::BadInput(_) => "400 Bad Request",
         ExtError::Unreachable(_) | ExtError::Protocol(_) => "502 Bad Gateway",
+        ExtError::Stale => "409 Conflict",
     };
     refuse(status, e.code(), e.to_string())
 }
@@ -389,6 +396,10 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
             )
         }
         Err(e) => {
+            if matches!(e, ExtError::Stale) {
+                // Refused before it reached Grok Bot: no turn ran.
+                limiter().unrecord(&b.agent, now);
+            }
             log_debug!(
                 "[grokbots] send to {} by {} failed: {}",
                 b.agent,

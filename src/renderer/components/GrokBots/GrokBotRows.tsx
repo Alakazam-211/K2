@@ -66,6 +66,14 @@ function GrokAvatar({ id, name, color, avatar }: { id: string; name: string; col
   )
 }
 
+/** A row's hover text. The latest-message line is Grok Bot's own preview
+ *  (current even when the bot's chat lives elsewhere), never the last line
+ *  of this computer's copy. */
+export function rowTitle(name: string, agent: GrokBotAgent): string {
+  const head = agent.title ? `${name} — ${agent.title}` : name
+  return agent.lastMessagePreview ? `${head}\n${agent.lastMessagePreview}` : head
+}
+
 /** The menu on a Grok Bot row in the Agents sidebar. */
 export async function grokBotAgentsMenu(e: React.MouseEvent, hostKey: string, agent: GrokBotAgent): Promise<void> {
   e.preventDefault()
@@ -102,7 +110,7 @@ export function GrokBotAgentRow({
         dimmed={state === 'not-running'}
         onClick={() => useGrokBotsStore.getState().openChat({ hostKey, agentId: agent.id })}
         onContextMenu={(e) => void grokBotAgentsMenu(e, hostKey, agent)}
-        title={agent.title ? `${agent.name} — ${agent.title}` : agent.name}
+        title={rowTitle(agent.name, agent)}
         avatar={<GrokAvatar id={agent.id} name={agent.name} color={agent.color} avatar={agent.avatar} />}
         name={agent.name}
         nameAside={<GrokBotTag />}
@@ -177,7 +185,7 @@ export function GrokBotHomeRow({ home, row, index }: { home: Home; row: HomeRow;
             if (clicked === 'home-remove') useHomesStore.getState().removeRow(home.id, row.address)
           })
         }}
-        title={unavailable ?? (agent?.title ? `${row.label} — ${agent.title}` : `Open ${row.label}`)}
+        title={unavailable ?? (agent ? rowTitle(row.label, agent) : `Open ${row.label}`)}
         avatar={
           <GrokAvatar
             id={agentId}

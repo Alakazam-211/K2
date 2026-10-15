@@ -402,3 +402,42 @@ fn from_names_are_cleaned_and_capped() {
     assert_eq!(capped.chars().count(), FROM_NAME_MAX);
     assert_eq!(from_envelope("Pat", "  hi\nthere "), "[from Pat] hi\nthere");
 }
+
+#[test]
+fn a_stale_bot_refuses_sends_with_409_and_lists_its_current_preview() {
+    // Own agent id: the send limiter is process-wide.
+    const S: &str = "c0ffee00-0000-4000-8000-0000000000e5";
+    let e = env();
+    e.sand.add_agent(S, "Grok", "x");
+    e.sand.add_sample_chat(S);
+    let mut item = fixture::list_item(S, "Grok");
+    item["lastActivityAt"] = json!(1_792_070_040_000_i64);
+    item["localActivityAt"] = json!(1_788_052_860_000_i64);
+    item["newestEntryId"] = json!("t115s656");
+    item["lastMessagePreview"] = json!("Shipped the October report");
+    e.gw.set(|s| s.agents = json!([item.clone()]));
+    turn_on(true, true);
+
+    let b = body(&get("/cli/grokbots/list", Who::Owner, &[]));
+    let a = &b["agents"][0];
+    assert_eq!(a["stale"], json!(true), "{b}");
+    assert_eq!(a["lastMessagePreview"], json!("Shipped the October report"));
+    assert_eq!(a["lastActivityAt"], json!(1_792_070_040_000_i64));
+    assert_eq!(a["localActivityAt"], json!(1_788_052_860_000_i64));
+
+    // Twice: a refused send takes no rate-limit slot (no 429 the second time).
+    for _ in 0..2 {
+        let r = post("/cli/grokbots/send", Who::Owner, json!({"agent": S, "text": "hi"}));
+        assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        let rb = body(&r);
+        assert_eq!(rb["error"], json!("grokbots_stale"));
+        assert_eq!(
+            rb["message"],
+            json!("This bot's live conversation runs outside this computer; message it in Grok Bot.")
+        );
+    }
+    assert!(
+        e.gw.seen().iter().all(|r| r.path != "/api/sendPrompt"),
+        "nothing reached Grok Bot"
+    );
+}

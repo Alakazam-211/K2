@@ -68,8 +68,17 @@ pub fn tick(p: &GrokBot, seen: &mut Seen) -> Change {
         };
         revs.insert(a.id.clone(), rev);
         roster_parts.push(format!(
-            "{}|{}|{:?}|{}|{}|{}|{}",
-            a.id, a.name, a.title, a.working, a.needs_you, a.unread_count, a.source
+            "{}|{}|{:?}|{}|{}|{}|{}|{}|{:?}|{:?}",
+            a.id,
+            a.name,
+            a.title,
+            a.working,
+            a.needs_you,
+            a.unread_count,
+            a.source,
+            a.stale,
+            a.last_message_preview,
+            a.last_activity_at
         ));
     }
     let roster_key = roster_parts.join("\n");
@@ -194,6 +203,9 @@ mod tests {
         let home = crate::test_support::TempHome::new();
         let sand = FakeSandData::create(home.path(), gw.port);
         sand.add_agent(A, "Cortana", "x");
+        // The entry the gateway will name as newest is in store.db (else
+        // the agent would turn stale, a roster change).
+        sand.add_entry(A, json!({"kind":"message","id":"e1","role":"user","content":"hi"}));
         let p = GrokBot::for_current_user();
         let mut seen = Seen::default();
         assert!(tick(&p, &mut seen).is_empty(), "first poll only primes");
@@ -213,6 +225,13 @@ mod tests {
 
         // box-wide busy flips → roster/status changed
         gw.set(|s| s.busy = true);
+        assert!(tick(&p, &mut seen).roster);
+
+        // the conversation moves elsewhere (stale) → roster changed
+        gw.set(|s| {
+            s.agents[0]["lastActivityAt"] = json!(1_792_070_040_000_i64);
+            s.agents[0]["localActivityAt"] = json!(1_788_000_000_000_i64);
+        });
         assert!(tick(&p, &mut seen).roster);
     }
 

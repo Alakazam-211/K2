@@ -115,7 +115,8 @@ fn gateway_roster_carries_per_agent_status_and_hides_hidden_agents() {
     );
     let s = serde_json::to_string(&list).expect("json");
     assert!(!s.contains(FAKE_TOKEN));
-    assert!(!s.contains("rev"), "rev is internal: {s}");
+    // The key, not the substring (`lastMessagePreview` contains "rev").
+    assert!(!s.contains("\"rev\""), "rev is internal: {s}");
 }
 
 #[test]
@@ -409,7 +410,7 @@ fn send_posts_prompt_agent_and_k2_nonce_with_bearer() {
     assert_eq!(
         sp.body["prompt"],
         json!("hello there"),
-        "human send has no envelope"
+        "the adapter sends the text as given (the daemon route adds [from …])"
     );
     assert_eq!(sp.body["agentId"], json!(A));
     assert_eq!(sp.body["clientNonce"], json!(r.client_nonce));
@@ -502,4 +503,101 @@ fn only_the_daemon_users_home_is_read() {
     assert_eq!(g.data_path(), home.path().join("sand-data"));
     assert!(!g.installed());
     assert!(fixture::opened_under(&other).is_empty());
+}
+
+// ── stale agents (live conversation elsewhere) ──────────────────────────
+
+const DAY_MS: i64 = 86_400_000;
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+#[test]
+fn stale_rule_one_last_activity_ahead_of_local() {
+    let t = now() - 30 * DAY_MS;
+    let mut ahead = fixture::list_item(A, "Cortana");
+    ahead["lastActivityAt"] = json!(t + 61_000);
+    ahead["localActivityAt"] = json!(t);
+    ahead["lastMessagePreview"] = json!("  Deployed\nthe   site \u{1b}[31m ok ");
+    let mut close = fixture::list_item(B, "Jarvis");
+    close["lastActivityAt"] = json!(t + 59_000);
+    close["localActivityAt"] = json!(t);
+    let gw = FakeGateway::start(json!([ahead, close]));
+    let (_home, _sand) = setup(&gw);
+    let g = GrokBot::for_current_user();
+    let list = g.list_agents().expect("list");
+    assert!(list[0].stale, "61 s ahead is stale: {:?}", list[0]);
+    assert!(!list[1].stale, "59 s is inside the tolerance: {:?}", list[1]);
+    assert_eq!(list[0].last_activity_at, Some(t + 61_000));
+    assert_eq!(list[0].local_activity_at, Some(t));
+    assert_eq!(list[0].last_message_preview.as_deref(), Some("Deployed the site [31m ok"));
+    let v = serde_json::to_value(&list).expect("json");
+    assert_eq!(v[0]["stale"], json!(true));
+    assert_eq!(v[0]["lastMessagePreview"], json!("Deployed the site [31m ok"));
+    assert_eq!(v[0]["lastActivityAt"], json!(t + 61_000));
+    assert_eq!(v[0]["localActivityAt"], json!(t));
+    assert!(v[1].get("stale").is_none(), "not stale is left out: {}", v[1]);
+
+    // A stale agent refuses sends before anything reaches the gateway.
+    let e = g.send(A, "hi").expect_err("stale");
+    assert!(matches!(e, ExtError::Stale), "{e:?}");
+    assert_eq!(e.code(), "stale");
+    assert!(gw.seen().iter().all(|r| r.path != "/api/sendPrompt"));
+    g.send(B, "hi").expect("a current agent still sends");
+}
+
+#[test]
+fn stale_rule_two_newest_entry_not_in_the_local_store() {
+    let old = now() - 45 * DAY_MS;
+    let mut missing = fixture::list_item(A, "Cortana");
+    missing["lastActivityAt"] = json!(old);
+    missing["localActivityAt"] = json!(old);
+    missing["newestEntryId"] = json!("t115s656");
+    let mut present = fixture::list_item(B, "Jarvis");
+    present["lastActivityAt"] = json!(old);
+    present["localActivityAt"] = json!(old);
+    present["newestEntryId"] = json!("s1");
+    let gw = FakeGateway::start(json!([missing, present]));
+    let (_home, sand) = setup(&gw);
+    sand.add_sample_chat(A);
+    sand.add_sample_chat(B);
+    let g = GrokBot::for_current_user();
+    let list = g.list_agents().expect("list");
+    assert!(list[0].stale, "newest entry missing locally: {:?}", list[0]);
+    assert!(!list[1].stale, "newest entry is in store.db: {:?}", list[1]);
+
+    // A turn written right now (activity inside the tolerance) is not
+    // stale while its entry lands.
+    gw.set(|s| s.agents[0]["lastActivityAt"] = json!(now()));
+    gw.set(|s| s.agents[0]["localActivityAt"] = json!(now()));
+    assert!(!g.list_agents().expect("list")[0].stale);
+
+    // Once the entry lands it is found (and remembered).
+    gw.set(|s| s.agents[0]["lastActivityAt"] = json!(old));
+    gw.set(|s| s.agents[0]["localActivityAt"] = json!(old));
+    assert!(g.list_agents().expect("list")[0].stale);
+    sand.add_entry(A, json!({"kind":"message","id":"t115s656","role":"user","content":"x"}));
+    assert!(!g.list_agents().expect("list")[0].stale);
+}
+
+#[test]
+fn stale_helpers_parse_times_and_clean_previews() {
+    assert!(activity_is_elsewhere(Some(200_000), Some(100_000)));
+    assert!(!activity_is_elsewhere(Some(160_000), Some(100_000)));
+    assert!(!activity_is_elsewhere(None, Some(100_000)));
+    assert!(!activity_is_elsewhere(Some(200_000), None));
+    assert!(newest_entry_settled(None, 1_000_000));
+    assert!(newest_entry_settled(Some(900_000), 1_000_000));
+    assert!(!newest_entry_settled(Some(950_000), 1_000_000));
+    assert_eq!(epoch_ms(&json!(1_791_990_000_000_i64)), Some(1_791_990_000_000));
+    assert_eq!(epoch_ms(&json!(1_791_990_000_i64)), Some(1_791_990_000_000), "seconds become ms");
+    assert_eq!(epoch_ms(&json!("2026-10-15T13:14:00Z")), Some(1_792_070_040_000));
+    assert_eq!(epoch_ms(&json!(0)), None);
+    assert_eq!(epoch_ms(&json!("soon")), None);
+    assert_eq!(clean_preview("a\r\n\tb"), Some("a b".into()));
+    assert_eq!(clean_preview("[SAND_HIDDEN_PROMPT] x"), None);
+    assert_eq!(clean_preview(" \n "), None);
+    let long = clean_preview(&"é".repeat(400)).expect("capped");
+    assert_eq!(long.chars().count(), MAX_PREVIEW_CHARS);
 }

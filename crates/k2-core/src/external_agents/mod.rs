@@ -51,6 +51,22 @@ pub struct ExternalAgent {
     pub needs_you: bool,
     /// Unread lines in the product's own app.
     pub unread_count: u32,
+    /// The agent's live conversation runs outside this computer (another
+    /// box, or the product's cloud): the local chat store is behind, so
+    /// K2 shows its history as old and refuses sends to it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
+    /// The product's own one-line preview of the latest message (plain
+    /// text, capped). Current even when the local chat store is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    /// Latest activity anywhere (ms since epoch).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<i64>,
+    /// Latest activity on this computer (ms since epoch): how far the local
+    /// chat store goes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_activity_at: Option<i64>,
     /// Change marker for the agent's chat (product-specific; compared for
     /// equality only). Never sent to clients.
     #[serde(skip)]
@@ -249,6 +265,9 @@ pub enum ExtError {
     Protocol(String),
     /// Bad input from the caller.
     BadInput(String),
+    /// The agent's live conversation runs outside this computer, so a send
+    /// here could run against old context.
+    Stale,
 }
 
 impl ExtError {
@@ -259,6 +278,7 @@ impl ExtError {
             ExtError::Unreachable(_) => "unreachable",
             ExtError::Protocol(_) => "protocol",
             ExtError::BadInput(_) => "bad_input",
+            ExtError::Stale => "stale",
         }
     }
 }
@@ -271,6 +291,10 @@ impl std::fmt::Display for ExtError {
             ExtError::Unreachable(m) => write!(f, "not reachable: {m}"),
             ExtError::Protocol(m) => write!(f, "unexpected answer: {m}"),
             ExtError::BadInput(m) => write!(f, "{m}"),
+            ExtError::Stale => write!(
+                f,
+                "This bot's live conversation runs outside this computer; message it in Grok Bot."
+            ),
         }
     }
 }

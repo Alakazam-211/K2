@@ -152,7 +152,25 @@ pub fn engine_version() -> std::result::Result<Value, String> {
 // ── env and secrets ──────────────────────────────────────────────────
 
 /// Names the engine or K2 sets itself; a manifest can't declare them.
-const OWN: &[&str] = &["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ", "NODE_OPTIONS"];
+const OWN: &[&str] = &[
+    "PATH",
+    "HOME",
+    "PORT",
+    "NODE_ENV",
+    "TMPDIR",
+    "LANG",
+    "TZ",
+    "NODE_OPTIONS",
+    // The egress proxy (S15): the engine sets these.
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "NODE_USE_ENV_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+];
 
 /// The container's environment from the daemon's side: the manifest's
 /// declared variables, then the App identity (S24/AR37: `K2_APP_ID` = the
@@ -413,7 +431,28 @@ pub fn logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
 pub fn remove_app(app: &str, purge: bool) -> Result<Value> {
     let v = call(&Request::RemoveApp { app: app.into(), data: purge }, None, Duration::from_secs(1200))?;
     remove_gateway_rule(app);
+    super::egress_proxy::stop(app);
     Ok(v)
+}
+
+/// The App's egress proxy port from an engine answer (`pxPort`, engine
+/// protocol 2), or the one its gateway port implies.
+pub fn proxy_port_of(answer: &Value, gw: Option<u16>) -> Option<u16> {
+    answer["pxPort"]
+        .as_u64()
+        .and_then(|p| u16::try_from(p).ok())
+        .filter(|p| *p != 0)
+        .or_else(|| gw.and_then(k2_root_proto::apps::proxy_port_for_gateway))
+}
+
+/// Open the App's egress proxy listener (S15). Without it the App has no
+/// way out at all (fail closed), so a failure is logged, never fatal.
+pub fn ensure_proxy(app: &str, px: Option<u16>) -> std::result::Result<u16, String> {
+    let px = px.ok_or_else(|| "no proxy port for this App's slot".to_string())?;
+    if k2_root_proto::apps::PROXY_PORTS.lo > px || px > k2_root_proto::apps::PROXY_PORTS.hi {
+        return Err(format!("proxy port {px} is outside K2's proxy range"));
+    }
+    super::egress_proxy::ensure(app, px).map(|_| px)
 }
 
 impl RuntimeEngine for GuardedEngine {
@@ -427,7 +466,8 @@ impl RuntimeEngine for GuardedEngine {
             memory_limit: true,
             cpu_limit: false,
             read_only_seed: true,
-            // No egress at all until the proxy (S15): the table drops it.
+            // Egress only through the App's own proxy (S15); the table
+            // drops everything else.
             egress_gate: true,
             exec: true,
             adopt: true,
@@ -512,6 +552,13 @@ impl RuntimeEngine for GuardedEngine {
             close_new_link();
             return Err(eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")));
         }
+        // S15: the App's egress proxy listens before the App starts, so a
+        // request at boot finds it (same slot offset as the gateway port).
+        let px_planned = k2_root_proto::apps::proxy_port_for_gateway(gw);
+        match ensure_proxy(app.as_str(), px_planned) {
+            Ok(px) => log_line(spec, &format!("guarded: egress proxy on 127.0.0.1:{px} (k2 app egress {})", spec.app_id)),
+            Err(e) => log_line(spec, &format!("guarded: egress proxy not listening ({e}); the App has no egress until it is")),
+        }
         let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(420)) {
             Ok(v) => v,
             Err(mut e) => {
@@ -531,6 +578,12 @@ impl RuntimeEngine for GuardedEngine {
         log_line(spec, &format!("guarded container {unit} started on 127.0.0.1:{port}; its output is in the unit's journal (k2 app logs)"));
         if let Err(e) = install_gateway_rule(app.as_str(), gw) {
             log_line(spec, &format!("guarded: gateway rule not installed ({e}); the App can't reach K2 until it is"));
+        }
+        // The engine's answer is the truth for the forward it rendered.
+        if let Some(px) = proxy_port_of(&v, Some(gw)).filter(|p| Some(*p) != px_planned) {
+            if let Err(e) = ensure_proxy(app.as_str(), Some(px)) {
+                log_line(spec, &format!("guarded: egress proxy not listening ({e}); the App has no egress until it is"));
+            }
         }
         Ok(RunHandle {
             app_id: spec.app_id.clone(),
@@ -595,7 +648,8 @@ impl RuntimeEngine for GuardedEngine {
                 continue;
             };
             let Ok(port) = u16::try_from(port) else { continue };
-            if let Some(gw) = i["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()) {
+            let gw = i["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok());
+            if let Some(gw) = gw {
                 // After a daemon restart the rule may point at an old inode.
                 let _ = install_gateway_rule(app, gw);
                 // S14: the link listener is the daemon's, so it re-opens;
@@ -610,6 +664,10 @@ impl RuntimeEngine for GuardedEngine {
                         }
                     }
                 }
+            }
+            // The proxy is the daemon's: re-open it for the running App.
+            if let Err(e) = ensure_proxy(app, proxy_port_of(&i, gw)) {
+                k2_core::log_debug!("[apps] {app}: egress proxy after adopt: {e}");
             }
             out.push(RunHandle {
                 app_id: app.into(),
@@ -660,6 +718,7 @@ mod tests {
                 ("PATH".to_string(), "/evil".to_string()),
                 ("NODE_OPTIONS".to_string(), "--inspect".to_string()),
                 ("BAD-NAME".to_string(), "x".to_string()),
+                ("HTTPS_PROXY".to_string(), "http://evil:1".to_string()),
                 ("MULTI".to_string(), "a\nb".to_string()),
             ]
             .into_iter()
@@ -677,7 +736,7 @@ mod tests {
     fn env_is_the_manifest_plus_identity_and_the_link() {
         let e = guarded_env(&spec(), Some("C.UTF-8".into()), Some("bad\nzone".into()));
         assert_eq!(e["API_BASE"], "https://x");
-        for never in ["K2_HOOK_TOKEN", "PATH", "NODE_OPTIONS", "BAD-NAME", "MULTI", "TZ"] {
+        for never in ["K2_HOOK_TOKEN", "PATH", "NODE_OPTIONS", "BAD-NAME", "MULTI", "TZ", "HTTPS_PROXY"] {
             assert!(!e.contains_key(never), "{never}");
         }
         assert_eq!(e["K2_APP_ID"], "6f1c0d7e-1111-4222-8333-944455556666", "AR37: the service UUID");
@@ -715,6 +774,13 @@ mod tests {
         assert!(wire::image_ok(&base_image_for("aarch64").unwrap().local()));
         assert!(base_image_for("riscv64").is_none());
         assert_eq!(code_of(Some("caller_not_daemon")), "engine_caller_refused");
+        // S15: the proxy port from the engine's answer, else the gateway's offset.
+        assert_eq!(proxy_port_of(&json!({"pxPort": 38_905}), Some(38_601)), Some(38_905));
+        assert_eq!(proxy_port_of(&json!({"pxPort": 0}), Some(38_601)), Some(38_901), "a protocol-1 state file");
+        assert_eq!(proxy_port_of(&json!({}), Some(38_601)), Some(38_901));
+        assert_eq!(proxy_port_of(&json!({}), None), None);
+        assert!(ensure_proxy("x", None).is_err());
+        assert!(ensure_proxy("x", Some(38_601)).unwrap_err().contains("outside"));
         assert_eq!(code_of(Some("podman_failed")), codes::ENGINE_UNAVAILABLE);
     }
 

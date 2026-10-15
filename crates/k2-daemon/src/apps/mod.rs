@@ -8,6 +8,8 @@ pub mod alerts;
 pub mod app_key_routes;
 pub mod attribution;
 pub mod box_prep;
+pub mod egress_proxy;
+pub mod egress_routes;
 pub mod engine_install;
 pub mod gateway;
 pub mod grace;

@@ -7,7 +7,8 @@
 //!   workspace switch "Allow this agent to manage Apps"
 //!   (`agents_can_manage_skin`, §5.11.1): without it the call is refused
 //!   `apps_manage_off`. (The held-request path for agents without the
-//!   switch is S42; widenings held for the owner are S20.)
+//!   switch is S42; widenings held for the owner are S20. New egress
+//!   hosts are already held, for every caller: `egress_routes`, S15.)
 //! - A plain K2 shell tab is a human: treated as the owner (NT5).
 //! - App passes, API keys and API sessions are refused (`wrong_credential`).
 //!
@@ -71,11 +72,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p)
+    ROUTES.contains(&p) || super::egress_routes::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || super::egress_routes::POST_ROUTES.contains(&p)
 }
 
 // ── refusals ─────────────────────────────────────────────────────────
@@ -107,6 +108,7 @@ fn status_line(code: u16) -> &'static str {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         409 => "409 Conflict",
+        410 => "410 Gone",
         413 => "413 Payload Too Large",
         422 => "422 Unprocessable Entity",
         503 => "503 Service Unavailable",
@@ -357,6 +359,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/uninstall" => uninstall(&who, body),
         "/cli/app/link" => link(&who, params),
         "/cli/app/link/rotate" => link_rotate(&who, body),
+        // Egress (S15) and held widenings.
+        p if super::egress_routes::ROUTES.contains(&p) => super::egress_routes::handle(p, &who, body, params),
         _ => Err(no("not_found", 404, "no such App route")),
     };
     respond(r)
@@ -665,7 +669,15 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, v)?;
     let dep = super::supervisor::begin(&app, &seed, store::KIND_DEPLOY, &actor(who), s(v, "reason"))?;
-    deployment_answer(&dep, wait_secs(v))
+    // S15: hosts the Seed asks for that aren't allowed yet become a held
+    // request; the deploy goes on, and the App can't reach them until the
+    // owner approves.
+    let egress = super::egress_routes::request_manifest_hosts(who, &app.app_id, &seed, &dep);
+    let mut out = deployment_answer(&dep, wait_secs(v))?;
+    if let Some(e) = egress {
+        out["egress"] = e;
+    }
+    Ok(out)
 }
 
 /// POST `/cli/app/deploy {app, seed|folder, reason?, wait?, types?}`.
@@ -1314,6 +1326,7 @@ fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     }
     super::supervisor::stop_app(&app, &actor(who))?;
     super::supervisor::forget(&app.app_id);
+    super::egress_proxy::stop(&app.app_id);
     if cfg!(target_os = "linux") && k2_root_proto::apps::AppId::parse(&app.app_id).is_some() && std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {
         // Guarded leftovers (stopped units, the id slot on purge, the
         // gateway rule). Best effort: a process-only App has none.

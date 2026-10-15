@@ -446,7 +446,20 @@ impl RuntimeEngine for GuardedEngine {
             pass_hex: None,
         };
         wire::check_start(&s).map_err(|w| eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")))?;
-        let v = call(&Request::Start(Box::new(s)), None, Duration::from_secs(420))?;
+        let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(420)) {
+            Ok(v) => v,
+            Err(mut e) => {
+                // The unit's own words (Podman / the OCI runtime) are in the
+                // journal, which only the root helper reads for k2app.
+                if let Ok(t) = logs(app.as_str(), &spec.deployment_id, 12) {
+                    let t: String = t.trim().chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+                    if !t.is_empty() {
+                        e.message.push_str(&format!("; the unit said: {t}"));
+                    }
+                }
+                return Err(e);
+            }
+        };
         let unit = v["unit"].as_str().unwrap_or_default().to_string();
         log_line(spec, &format!("guarded container {unit} started on 127.0.0.1:{port}; its output is in the unit's journal (k2 app logs)"));
         if let Err(e) = install_gateway_rule(app.as_str(), gw) {

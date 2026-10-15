@@ -102,6 +102,11 @@ pub struct AppSpec {
     /// The App's drain window (manifest `host.drainSecs`, else the
     /// default): a walled engine's stop timeout must cover it (AR45).
     pub drain_secs: u64,
+    /// Per-App disk ceilings as stored (`apps.io_max_json`; NULL = K2's
+    /// default ceiling). Walled engines parse and enforce it.
+    pub io_max_json: Option<String>,
+    /// The `process` exception's device grants (enum tokens).
+    pub devices: Vec<String>,
     /// The App folder's writable parts.
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,

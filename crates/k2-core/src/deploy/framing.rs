@@ -93,9 +93,211 @@ pub fn frame(app_id: &str, what: &str, raw: &str, cap: usize) -> String {
     )
 }
 
+/// The interactive form (`k2 app shell`, §5.9): a byte stream filter that
+/// keeps what a terminal needs to draw (text, CR/LF/BS/TAB, CSI cursor and
+/// colour sequences, two-byte escapes) and drops every string sequence
+/// (OSC — titles, OSC 52 clipboard writes, hyperlinks —, DCS, SOS, PM,
+/// APC) and every C1 control, in 7-bit or UTF-8 form, across chunk
+/// boundaries. What the App prints can draw on the screen; it can never
+/// set a title, write a clipboard or talk to the terminal itself.
+#[derive(Debug, Default)]
+pub struct TermFilter {
+    st: TermSt,
+    /// UTF-8 continuation bytes still expected.
+    cont: u8,
+    /// Bytes in the current CSI or string (both are capped).
+    len: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum TermSt {
+    #[default]
+    Ground,
+    Esc,
+    Csi,
+    /// Saw 0xC2 (a possible UTF-8 C1 control).
+    C2,
+    Str,
+    StrEsc,
+    StrC2,
+}
+
+/// Longest CSI kept; longest string sequence swallowed before giving up
+/// on it (the rest prints as text: data, never terminal commands).
+const CSI_CAP: usize = 64;
+const STR_CAP: usize = 64 * 1024;
+
+impl TermFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(input.len());
+        for &b in input {
+            match self.st {
+                TermSt::Ground => {
+                    if self.cont > 0 && (0x80..=0xbf).contains(&b) {
+                        self.cont -= 1;
+                        out.push(b);
+                        continue;
+                    }
+                    self.cont = 0;
+                    match b {
+                        0x1b => self.st = TermSt::Esc,
+                        0xc2 => self.st = TermSt::C2,
+                        // A stray C1 byte (not inside a UTF-8 character).
+                        0x80..=0x9f => {}
+                        0xc3..=0xdf => {
+                            self.cont = 1;
+                            out.push(b);
+                        }
+                        0xe0..=0xef => {
+                            self.cont = 2;
+                            out.push(b);
+                        }
+                        0xf0..=0xf4 => {
+                            self.cont = 3;
+                            out.push(b);
+                        }
+                        _ => out.push(b),
+                    }
+                }
+                TermSt::Esc => match b {
+                    b']' | b'P' | b'X' | b'^' | b'_' => {
+                        self.st = TermSt::Str;
+                        self.len = 0;
+                    }
+                    b'[' => {
+                        out.extend_from_slice(b"\x1b[");
+                        self.st = TermSt::Csi;
+                        self.len = 0;
+                    }
+                    // ESC ESC: the first one is dropped, keep looking.
+                    0x1b => {}
+                    0x20..=0x7e => {
+                        out.push(0x1b);
+                        out.push(b);
+                        self.st = TermSt::Ground;
+                    }
+                    _ => self.st = TermSt::Ground,
+                },
+                TermSt::Csi => {
+                    self.len += 1;
+                    if (0x20..=0x3f).contains(&b) && self.len < CSI_CAP {
+                        out.push(b);
+                    } else if (0x40..=0x7e).contains(&b) {
+                        out.push(b);
+                        self.st = TermSt::Ground;
+                    } else {
+                        // Not a CSI byte, or far too long: end it with a
+                        // harmless final so the terminal leaves CSI.
+                        out.push(b'm');
+                        self.st = TermSt::Ground;
+                    }
+                }
+                TermSt::C2 => match b {
+                    // DCS, SOS, OSC, PM, APC.
+                    0x90 | 0x98 | 0x9d | 0x9e | 0x9f => {
+                        self.st = TermSt::Str;
+                        self.len = 0;
+                    }
+                    0x9b => {
+                        out.extend_from_slice(b"\x1b[");
+                        self.st = TermSt::Csi;
+                        self.len = 0;
+                    }
+                    0x80..=0x9f => self.st = TermSt::Ground,
+                    0xa0..=0xbf => {
+                        out.push(0xc2);
+                        out.push(b);
+                        self.st = TermSt::Ground;
+                    }
+                    _ => {
+                        // Not a character after all: re-read this byte.
+                        self.st = TermSt::Ground;
+                        out.extend(self.push(&[b]));
+                    }
+                },
+                TermSt::Str | TermSt::StrEsc | TermSt::StrC2 => {
+                    self.len += 1;
+                    let ends = match (self.st, b) {
+                        (_, 0x07) => true,
+                        (TermSt::StrEsc, b'\\') => true,
+                        (TermSt::StrC2, 0x9c) => true,
+                        _ => false,
+                    };
+                    if ends || self.len > STR_CAP {
+                        self.st = TermSt::Ground;
+                    } else {
+                        self.st = match b {
+                            0x1b => TermSt::StrEsc,
+                            0xc2 => TermSt::StrC2,
+                            _ => TermSt::Str,
+                        };
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(chunks: &[&[u8]]) -> Vec<u8> {
+        let mut f = TermFilter::new();
+        let mut out = Vec::new();
+        for c in chunks {
+            out.extend(f.push(c));
+        }
+        out
+    }
+
+    #[test]
+    fn terminal_filter_keeps_drawing_and_drops_terminal_commands() {
+        // Colours, cursor moves, CR/LF/BS, UTF-8 text: kept as is.
+        let keep = "\x1b[1;31mred\x1b[0m\r\nline\x08x\t\x1b[2J\x1b[H é ✓ 🎉\x1b7\x1b8".as_bytes();
+        assert_eq!(run(&[keep]), keep);
+        // OSC 52 (clipboard), a title, a hyperlink: gone, by BEL or ST.
+        assert_eq!(run(&[b"a\x1b]52;c;ZXZpbA==\x07b"]), b"ab");
+        assert_eq!(run(&[b"a\x1b]0;pwned\x1b\\b"]), b"ab");
+        assert_eq!(run(&[b"\x1b]8;;http://x\x07link\x1b]8;;\x07"]), b"link");
+        // DCS (sixel, DECRQSS), APC, PM, SOS.
+        assert_eq!(run(&[b"p\x1bPq#0;2;0;0;0\x1b\\q"]), b"pq");
+        assert_eq!(run(&[b"1\x1b_x\x07" as &[u8], b"2\x1b^y\x1b\\3\x1bXz\x07"]), b"123");
+        // The same through UTF-8 C1 controls (C2 9D = OSC, C2 9C = ST).
+        assert_eq!(run(&[b"a\xc2\x9d52;c;x\xc2\x9cb"]), b"ab");
+        assert_eq!(run(&[b"a\xc2\x90q\x07b"]), b"ab");
+        // A stray 8-bit C1 byte and a lone C1 control: dropped.
+        assert_eq!(run(&[b"a\x9db\xc2\x85c"]), b"abc");
+        // Split anywhere: the state carries over.
+        let whole = b"x\x1b]52;c;QUFB\x07y\x1b[32mz";
+        for cut in 0..whole.len() {
+            assert_eq!(run(&[&whole[..cut], &whole[cut..]]), b"xy\x1b[32mz", "cut at {cut}");
+        }
+        // A UTF-8 character split across chunks stays whole.
+        let e = "é".as_bytes();
+        assert_eq!(run(&[&e[..1], &e[1..]]), e);
+        // A runaway CSI is closed; a runaway string ends at the cap.
+        let mut long = b"\x1b[".to_vec();
+        long.extend(std::iter::repeat_n(b'1', 200));
+        long.extend_from_slice(b"Zok");
+        let out = run(&[&long]);
+        assert!(out.ends_with(b"ok"), "{:?}", String::from_utf8_lossy(&out));
+        let mut f = TermFilter::new();
+        f.push(b"\x1b]52;c;");
+        assert!(f.push(&vec![b'A'; STR_CAP + 10]).len() < 20, "an endless OSC stays swallowed up to the cap");
+    }
+
+    #[test]
+    fn same_rules_as_the_line_framing_for_titles_and_clipboard() {
+        let raw = "t\x1b]2;title\x07u\x1b]52;c;x\x1b\\v";
+        assert_eq!(strip_controls(raw), "tuv");
+        assert_eq!(run(&[raw.as_bytes()]), b"tuv");
+    }
 
     #[test]
     fn strips_escapes_controls_and_bidi() {

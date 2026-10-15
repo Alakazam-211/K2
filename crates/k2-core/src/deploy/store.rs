@@ -186,11 +186,19 @@ pub struct AppRow {
     pub created_by: String,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Per-App disk ceilings (0168): JSON, NULL = K2's default ceiling
+    /// (`k2_root_proto::apps::IoMax::from_column`).
+    pub io_max_json: Option<String>,
+    /// The `process` exception's device grants (0168): a JSON array of
+    /// tokens (`dri-render128`, …).
+    pub devices_json: String,
+    /// Who approved the `process` exception, when and how (0168).
+    pub exception_json: Option<String>,
 }
 
 const APP_COLS: &str = "app_id, service_id, seed_id, owner_workspace, path, source, folder_path, live_seed, live_tree_hash, \
                         live_deployment, preview_seed, isolation, memory_limit_bytes, front_port, state, state_reason, \
-                        created_by, created_at, updated_at";
+                        created_by, created_at, updated_at, io_max_json, devices_json, exception_json";
 
 fn app_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppRow> {
     Ok(AppRow {
@@ -213,7 +221,24 @@ fn app_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppRow> {
         created_by: r.get(16)?,
         created_at: r.get(17)?,
         updated_at: r.get(18)?,
+        io_max_json: r.get(19)?,
+        devices_json: r.get(20)?,
+        exception_json: r.get(21)?,
     })
+}
+
+impl AppRow {
+    /// The device tokens granted to the `process` exception.
+    pub fn devices(&self) -> Vec<String> {
+        serde_json::from_str(&self.devices_json).unwrap_or_default()
+    }
+
+    /// The open path's `process` exception (§4.3): owner-approved, walled
+    /// by the unit sandbox. Not stage 1's preview process engine (that one
+    /// is `path = guarded`, `isolation = process`).
+    pub fn is_process_exception(&self) -> bool {
+        self.path == "open" && self.isolation == "process"
+    }
 }
 
 pub struct NewApp<'a> {
@@ -294,6 +319,37 @@ pub fn set_memory_limit(conn: &Connection, app_id: &str, bytes: Option<i64>) -> 
         "UPDATE apps SET memory_limit_bytes = ?2, updated_at = ?3 WHERE app_id = ?1",
         params![app_id, bytes, super::now()],
     )?;
+    Ok(())
+}
+
+/// Per-App disk ceilings (JSON, `None` = K2's default ceiling).
+pub fn set_io_max(conn: &Connection, app_id: &str, io_max_json: Option<&str>) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE apps SET io_max_json = ?2, updated_at = ?3 WHERE app_id = ?1",
+        params![app_id, io_max_json, super::now()],
+    )?;
+    Ok(())
+}
+
+/// The `process` exception on (`Some(approval)`: `path = open`,
+/// `isolation = process`, the device grants) or off (`None`: back to the
+/// guarded container, no devices). One statement, so a reader never sees
+/// half of it.
+pub fn set_process_exception(
+    conn: &Connection,
+    app_id: &str,
+    approval: Option<(&str, &[String])>,
+) -> rusqlite::Result<()> {
+    match approval {
+        Some((exception_json, devices)) => conn.execute(
+            "UPDATE apps SET path = 'open', isolation = 'process', devices_json = ?2, exception_json = ?3, updated_at = ?4 WHERE app_id = ?1",
+            params![app_id, serde_json::to_string(devices).unwrap_or_else(|_| "[]".into()), exception_json, super::now()],
+        )?,
+        None => conn.execute(
+            "UPDATE apps SET path = 'guarded', isolation = 'container', devices_json = '[]', exception_json = NULL, updated_at = ?2 WHERE app_id = ?1",
+            params![app_id, super::now()],
+        )?,
+    };
     Ok(())
 }
 
@@ -456,6 +512,8 @@ pub(crate) mod tests {
     pub(crate) fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(include_str!("../../drizzle_sql/0165_app_runtime_core.sql").replace("--> statement-breakpoint", "").as_str())
+            .unwrap();
+        c.execute_batch(include_str!("../../drizzle_sql/0168_app_walls_lite.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
         c
     }

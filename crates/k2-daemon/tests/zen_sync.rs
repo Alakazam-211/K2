@@ -98,7 +98,7 @@ fn copy_of(fp: &str) -> PartState {
 }
 
 fn view(page: PartState, theme: PartState) -> View {
-    View { preview: None, page: Some(page), theme: Some(theme), meta: false }
+    View { page: Some(page), theme: Some(theme), ..View::default() }
 }
 
 fn resolve_as(f: &ZenFiles, id: &str, v: &View) -> J {
@@ -889,6 +889,11 @@ fn gs51_garden1_companion_port_is_news_after_0455() {
     let g2 = gid(&f, 1);
     write_garden(&f, &g2, CONTENT_ONLY.as_bytes());
     let mine = new_garden(&f, "mine", "texting", Some(LAYOUT_ONLY));
+    // Synced Gardens whose look K2's 0.45.6 change doesn't touch: Diaries
+    // (k2.diary@1, as on Rosson's box, and today's k2.diary@2) and a blank one.
+    let diary1 = new_garden(&f, "Diary 2", "k2.diary@1", None);
+    let diary2 = new_garden(&f, "Diary now", "diary", None);
+    let blank = new_garden(&f, "blank", "blank", None);
     // 0.45.5's first read: the upgrade pass, then the person reads the card
     // and keeps "mine" as their own copy (Settings → Gardens).
     f.news().expect("news on 0.45.5");
@@ -905,6 +910,21 @@ fn gs51_garden1_companion_port_is_news_after_0455() {
     assert_eq!(news["previousDefaults"], old_fp.as_str(), "0.45.5's set is the previous one: {news}");
     let items = news["items"].as_array().expect("items");
     let updates: Vec<&J> = items.iter().filter(|i| i["kind"] == "update").collect();
+    for (id, what) in [(&diary1, "k2.diary@1"), (&diary2, "k2.diary@2"), (&blank, "k2.blank@1")] {
+        assert!(!f.sync_state().garden(id).part(Part::Page).is_copy(), "{what} Garden stays synced");
+        assert!(
+            !updates.iter().any(|i| i["garden"] == id.as_str()),
+            "a synced {what} Garden's look didn't change: no update item: {news}"
+        );
+        let on_0455 = View { synced_on: Some((Part::Page, old_fp.clone())), ..view(synced(), synced()) };
+        assert_eq!(
+            sync::part_view(&resolve_now(&f, id), Part::Page),
+            sync::part_view(&resolve_as(&f, id, &on_0455), Part::Page),
+            "{what}: synced on 0.45.5 and on this build, the page is the same"
+        );
+        assert_eq!(f.keep_previous_offered(id).expect("offered"), Vec::<Part>::new(), "{what}: no previous look to keep");
+    }
+    assert_eq!(f.keep_previous_offered(&g1).expect("offered"), vec![Part::Page], "Garden 1 can keep 0.45.5's page");
     assert_eq!(updates.len(), 1, "exactly one update item, Garden 1's: {news}");
     assert_eq!(updates[0]["garden"], g1.as_str(), "{news}");
     assert_eq!(updates[0]["part"], "page", "the page changed, not the theme: {news}");

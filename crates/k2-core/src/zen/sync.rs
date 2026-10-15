@@ -342,6 +342,13 @@ pub struct View {
     pub theme: Option<PartState>,
     /// Add the `sync` block (and work out `newerDefault`).
     pub meta: bool,
+    /// Resolve this part, when it is synced, on the archived set `fp` as it
+    /// looked while that set was K2's live one: the set's values AND GS21's
+    /// move to the family's newest template in that set. Not the same as an
+    /// own copy of `fp`, which shows exactly the template id the file names
+    /// (a synced `k2.diary@1` Garden shows diary@2; its copy shows diary@1).
+    /// For "what changed since `fp`" (GS26, GS43a); never stored.
+    pub synced_on: Option<(Part, String)>,
 }
 
 impl View {
@@ -355,7 +362,7 @@ impl View {
     }
 
     fn bare(page: PartState, theme: PartState) -> View {
-        View { preview: None, page: Some(page), theme: Some(theme), meta: false }
+        View { page: Some(page), theme: Some(theme), ..View::default() }
     }
 }
 
@@ -580,8 +587,19 @@ impl ZenFiles {
         let page_state = pick(Part::Page, &view.page);
         let theme_state = pick(Part::Theme, &view.theme);
         let mut damaged = Vec::new();
-        let page = self.part_defaults(&page_state, &mut damaged);
-        let theme = self.part_defaults(&theme_state, &mut damaged);
+        // `synced_on` only picks the set a synced part reads; its state
+        // stays synced, so the page's template still moves to the family's
+        // newest in that set (GS21).
+        let set_of = |p: Part, st: &PartState| -> PartState {
+            match &view.synced_on {
+                Some((q, fp)) if *q == p && !st.is_copy() => {
+                    PartState { mode: Mode::Copy, defaults: Some(fp.clone()), since: None, reason: None }
+                }
+                _ => st.clone(),
+            }
+        };
+        let page = self.part_defaults(&set_of(Part::Page, &page_state), &mut damaged);
+        let theme = self.part_defaults(&set_of(Part::Theme, &theme_state), &mut damaged);
         GardenDefaults { page, page_state, theme, theme_state, damaged }
     }
 
@@ -955,24 +973,31 @@ impl ZenFiles {
     pub fn keep_previous_offered(&self, id: &str) -> Result<Vec<Part>, ZenError> {
         let sf = self.sync_state();
         let Some(prev) = sf.previous_defaults.clone() else { return Ok(Vec::new()) };
-        let entry = sf.garden(id);
-        let prev_state = PartState { mode: Mode::Copy, defaults: Some(prev.clone()), since: None, reason: None };
         if self.archived_defaults(&prev).is_err() {
             return Ok(Vec::new());
         }
+        self.synced_parts_moved_since(id, &prev)
+    }
+
+    /// The synced parts of Garden `id` that look different now than they
+    /// did while `prev` was K2's live set (GS26's offer, GS43a's update
+    /// news). "Then" is the part synced on `prev` (`View::synced_on`), not
+    /// an own copy of `prev`: a copy shows exactly the template id the file
+    /// names, so a synced `k2.diary@1` Garden (drawn as the family's newest,
+    /// diary@2, by GS21) would count as moved on every release though
+    /// nothing on its screen changed.
+    pub fn synced_parts_moved_since(&self, id: &str, prev: &str) -> Result<Vec<Part>, ZenError> {
+        let entry = self.sync_state().garden(id);
+        let (pg, th) = (entry.part(Part::Page), entry.part(Part::Theme));
+        let now_v = self.resolve_view(Some(id), &View::bare(pg.clone(), th.clone()))?;
         let mut out = Vec::new();
         for p in [Part::Page, Part::Theme] {
             if entry.part(p).is_copy() {
                 continue;
             }
-            let (pg, th) = (entry.part(Part::Page), entry.part(Part::Theme));
-            let (with_prev_page, with_prev_theme) = match p {
-                Part::Page => (prev_state.clone(), th.clone()),
-                Part::Theme => (pg.clone(), prev_state.clone()),
-            };
-            let now_v = self.resolve_view(Some(id), &View::bare(pg, th))?;
-            let prev_v = self.resolve_view(Some(id), &View::bare(with_prev_page, with_prev_theme))?;
-            if part_view(&now_v, p) != part_view(&prev_v, p) {
+            let then = View { synced_on: Some((p, prev.to_string())), ..View::bare(pg.clone(), th.clone()) };
+            let then_v = self.resolve_view(Some(id), &then)?;
+            if part_view(&now_v, p) != part_view(&then_v, p) {
                 out.push(p);
             }
         }

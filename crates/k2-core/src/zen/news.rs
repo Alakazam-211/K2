@@ -23,7 +23,7 @@ use serde_json::{json, Value as J};
 
 use super::defaults::Defaults;
 use super::store::{ZenError, ZenFiles};
-use super::sync::{now, part_view, Mode, Part, PartState, View};
+use super::sync::{now, Part, View};
 
 /// The news file.
 pub const NEWS_FILE: &str = "news.json";
@@ -150,27 +150,11 @@ impl ZenFiles {
         if self.archived_defaults(prev).is_err() {
             return Ok(0);
         }
-        let sf = self.sync_state();
-        let prev_state = PartState { mode: Mode::Copy, defaults: Some(prev.to_string()), since: None, reason: None };
         let mut items = Vec::new();
         for g in self.gardens() {
-            let entry = sf.garden(&g.id);
-            let (pg, th) = (entry.part(Part::Page), entry.part(Part::Theme));
-            let mut moved = Vec::new();
-            for p in [Part::Page, Part::Theme] {
-                if entry.part(p).is_copy() {
-                    continue;
-                }
-                let now_v = self.resolve_view(Some(&g.id), &View { page: Some(pg.clone()), theme: Some(th.clone()), ..View::default() })?;
-                let then = match p {
-                    Part::Page => View { page: Some(prev_state.clone()), theme: Some(th.clone()), ..View::default() },
-                    Part::Theme => View { page: Some(pg.clone()), theme: Some(prev_state.clone()), ..View::default() },
-                };
-                let prev_v = self.resolve_view(Some(&g.id), &then)?;
-                if part_view(&now_v, p) != part_view(&prev_v, p) {
-                    moved.push(p);
-                }
-            }
+            // Synced on `prev` vs synced on `live`: only what really moved
+            // on screen is news.
+            let moved = self.synced_parts_moved_since(&g.id, prev)?;
             if moved.is_empty() {
                 continue;
             }
@@ -336,5 +320,96 @@ impl ZenFiles {
         }
         self.write_news_file(&n)?;
         Ok(json!({ "ok": true, "seen": marked }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::defaults::DefaultsSet;
+    use super::super::sync::{Mode, PartState};
+    use super::*;
+
+    struct Tmp(PathBuf);
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// This binary's set, edited, with its fingerprint recomputed.
+    fn set_with(edit: impl FnOnce(&mut DefaultsSet)) -> Defaults {
+        let mut s = DefaultsSet::from_binary();
+        edit(&mut s);
+        s.fingerprint = s.compute_fingerprint().expect("fingerprint");
+        Defaults::from_set(s).unwrap_or_else(|e| panic!("set must load: {e}"))
+    }
+
+    /// The release before: Garden 1's columns were 30/70.
+    fn texting_moved(s: &mut DefaultsSet) {
+        let t = s.templates.get_mut(super::super::TEMPLATE_ID).expect("texting");
+        assert!(t.contains("size = 34") && t.contains("size = 66"), "texting fixture");
+        *t = t.replacen("size = 34", "size = 30", 1).replacen("size = 66", "size = 70", 1);
+    }
+
+    /// A folder set up on `prev` with a synced Garden 1 (texting) and a
+    /// synced Garden made from `k2.diary@1`, then this binary's set starts
+    /// on it. Returns the folder (on this binary's set), `prev`'s
+    /// fingerprint and the two Garden ids.
+    fn upgraded(tag: &str, prev: Defaults) -> (Tmp, ZenFiles, String, String, String) {
+        let d = std::env::temp_dir().join(format!("k2-zen-news-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        let root = d.join(".k2").join("zen");
+        assert!(root.starts_with(std::env::temp_dir()), "tests never touch the real Zen folder");
+        let tmp = Tmp(d);
+        let prev_fp = prev.fingerprint().to_string();
+        let f = ZenFiles::with_defaults(&root, prev);
+        f.setup().expect("setup");
+        let g1 = f.gardens()[0].id.clone();
+        let diary = f.new_garden("Old diary", Some("k2.diary@1"), None, None).expect("diary@1 Garden").id;
+        assert_eq!(f.sync_state().live_defaults.as_deref(), Some(prev_fp.as_str()), "set up on prev");
+        let f = ZenFiles::with_defaults(&root, set_with(|_| {}));
+        f.sync_boot();
+        assert_eq!(f.sync_state().previous_defaults.as_deref(), Some(prev_fp.as_str()), "the upgrade rotated");
+        (tmp, f, prev_fp, g1, diary)
+    }
+
+    fn update_gardens(f: &ZenFiles) -> Vec<String> {
+        f.read_news().items.iter().map(|i| i.garden.clone()).collect()
+    }
+
+    /// The comparison rule: "then" is the part synced on the previous set
+    /// (GS21's family move included), not an own copy of it. A synced
+    /// `k2.diary@1` Garden draws diary@2 on both sets, so it didn't move,
+    /// though a copy of the previous set would draw diary@1.
+    #[test]
+    fn a_synced_older_catalog_garden_is_not_news_when_its_look_stayed() {
+        let (_t, f, prev, g1, diary) = upgraded("same", set_with(texting_moved));
+        assert_eq!(f.synced_parts_moved_since(&g1, &prev).expect("g1"), vec![Part::Page], "Garden 1's columns moved");
+        assert_eq!(f.synced_parts_moved_since(&diary, &prev).expect("diary"), Vec::<Part>::new(), "the Diary looks the same");
+        assert_eq!(update_gardens(&f), vec![g1.clone()], "only Garden 1 is news");
+        assert_eq!(f.keep_previous_offered(&diary).expect("offered"), Vec::<Part>::new(), "nothing to keep on the Diary");
+        assert_eq!(f.keep_previous_offered(&g1).expect("offered"), vec![Part::Page]);
+
+        // Why an own copy is the wrong "then": it holds the exact id.
+        let copy = PartState { mode: Mode::Copy, defaults: Some(prev.clone()), since: None, reason: None };
+        let tpl = |v: &View| f.resolve_view(Some(&diary), v).expect("resolve")["page"]["template"].clone();
+        assert_eq!(tpl(&View::default()), json!("k2.diary@2"), "synced: the family's newest");
+        assert_eq!(tpl(&View { page: Some(copy), ..View::default() }), json!("k2.diary@1"), "a copy: the id the Garden names");
+        let synced_then = View { synced_on: Some((Part::Page, prev.clone())), ..View::default() };
+        assert_eq!(tpl(&synced_then), json!("k2.diary@2"), "synced on the previous set: its newest");
+    }
+
+    /// A family move IS news: the previous set had no diary@2, so the synced
+    /// `k2.diary@1` Garden drew diary@1 then and diary@2 now.
+    #[test]
+    fn a_new_family_version_is_news_for_its_synced_gardens() {
+        let (_t, f, prev, g1, diary) = upgraded("family", set_with(|s| {
+            assert!(s.templates.remove("k2.diary@2").is_some(), "this build ships k2.diary@2");
+        }));
+        assert_eq!(f.synced_parts_moved_since(&diary, &prev).expect("diary"), vec![Part::Page]);
+        assert_eq!(f.synced_parts_moved_since(&g1, &prev).expect("g1"), Vec::<Part>::new(), "Garden 1 didn't move");
+        let items = update_gardens(&f);
+        assert!(items.contains(&diary), "the Diary's new version is news: {items:?}");
+        assert!(!items.contains(&g1), "Garden 1 isn't: {items:?}");
+        assert_eq!(f.keep_previous_offered(&diary).expect("offered"), vec![Part::Page], "diary@1 is the previous look");
     }
 }

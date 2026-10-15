@@ -825,6 +825,9 @@ async fn serve(mut c: TcpStream, app: String, l: Arc<Listener>, stop: watch::Rec
     let id = l.next_tunnel.fetch_add(1, Ordering::SeqCst);
     l.tunnels.lock().unwrap_or_else(|e| e.into_inner()).insert(id, (h.host.clone(), h.port, cut_tx));
     let (upb, downb, how) = splice(c, up, stop, cut_rx).await;
+    // What went up before the splice (the SNI-checked first bytes, or the
+    // rewritten HTTP head and the body bytes read with it).
+    let upb = upb + lead.len() as u64;
     l.tunnels.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     l.bytes_up.fetch_add(upb, Ordering::SeqCst);
     l.bytes_down.fetch_add(downb, Ordering::SeqCst);

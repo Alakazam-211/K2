@@ -102,6 +102,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'project-groups': 'Projects',
   tickets: 'Tickets',
   'zen-gardens': 'Gardens',
+  'zen-widget-data': 'Widget data',
   'context-catalog': 'Context Catalog',
   /** @deprecated — content under General → Workspaces */
   'agent-skills': 'General',

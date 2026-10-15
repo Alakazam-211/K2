@@ -245,7 +245,7 @@ fn author_unknown(w: &Placed) -> DataError {
         "author_unknown",
         403,
         format!(
-            "nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine in Settings \u{2192} Gardens",
+            "nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine in Settings \u{2192} Gardens \u{2192} Widget data",
             w.widget
         ),
     )

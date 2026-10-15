@@ -77,3 +77,32 @@ describe('Settings nav Apps', () => {
     expect(button).toContain('BETA')
   })
 })
+
+describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own section)', () => {
+  it('Gardens is a group like K2 Server and Logs: Gardens then Widget data, before K2 Server', () => {
+    const start = src.indexOf("title: 'Gardens'")
+    const server = src.indexOf("title: 'K2 Server'")
+    expect(start).toBeGreaterThan(0)
+    expect(server).toBeGreaterThan(start)
+    const gardens = src.slice(start, server)
+    expect(gardens).toContain(
+      [
+        "{ id: 'zen-gardens', label: 'Gardens' },",
+        "{ id: 'zen-widget-data', label: 'Widget data' },",
+      ].join('\n              '),
+    )
+    // No longer a top-level page; Data Sources stays under K2 Server.
+    expect(src).not.toContain("{ kind: 'item', id: 'zen-gardens'")
+    expect(gardens).not.toContain("id: 'data-sources'")
+    // Both pages route, search and fall back like the rest.
+    expect(src).toContain("activeSection === 'zen-gardens'")
+    expect(src).toContain("activeSection === 'zen-widget-data'")
+    expect(src).toContain('<ZenGardensSection />')
+    expect(src).toContain('<ZenWidgetDataSection />')
+    expect(src).toContain('...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),')
+    expect(src).toContain('...(zenAvailable() ? ZEN_WIDGET_DATA_MANIFEST : []),')
+    expect(src).toContain("(activeSection === 'zen-gardens' || activeSection === 'zen-widget-data')")
+    expect(SECTION_LABELS['zen-gardens']).toBe('Gardens')
+    expect(SECTION_LABELS['zen-widget-data']).toBe('Widget data')
+  })
+})

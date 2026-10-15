@@ -750,7 +750,7 @@ pub(crate) fn with_made_by(v: &mut J) -> Result<(), ZenError> {
 /// lock-checked: a widget folder isn't a Garden.
 pub const AGENT_WIDGET_WRITES: &[&str] = &["/cli/zen/widget/new", "/cli/zen/widget/sign"];
 
-const CLAIM_OWNER_ONLY: &str = "Only you can claim a widget (It's mine), in Settings \u{2192} Gardens or from a terminal outside K2. Agents and K2 terminals can't.";
+const CLAIM_OWNER_ONLY: &str = "Only you can claim a widget (It's mine), in Settings \u{2192} Gardens \u{2192} Widget data or from a terminal outside K2. Agents and K2 terminals can't.";
 
 /// Requests only a person may make: resuming a paused widget.
 fn person_only(path: &str) -> bool {

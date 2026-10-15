@@ -45035,7 +45035,7 @@ except Exception:
     fi
     case "$code" in
         person_only|owner_only)
-            echo "This needs a person. Run it outside K2, or use Settings → Gardens." >&2
+            echo "This needs a person. Run it outside K2, or use Settings → Gardens → Widget data." >&2
             exit 3 ;;
         not_granted|self_grant|level_too_high|not_own|author_unknown) exit 3 ;;
         space_not_found|agent_not_found|project_not_found|grant_not_found|widget_not_found|no_snapshot) exit 4 ;;
@@ -45139,7 +45139,8 @@ k2 zen data — a widget's data on this computer (the person only)
 Each custom widget has its own keyspace (data:<widget>) that it reads and
 writes with k2.store, and that agents you allow read and write with
 `k2 store --widget`. These commands are for you, the person: inside a K2
-terminal they're refused (run them outside K2, or use Settings → Gardens).
+terminal they're refused (run them outside K2, or use Settings → Gardens →
+Widget data).
 
 USAGE
   k2 zen data list [--json]
@@ -46822,7 +46823,8 @@ fields), a batch id per gesture, and subscribe for live changes.
    The widget shows each change at once, labelled with the agent's handle.
 
 If the widget says nobody signed it: k2 zen validate --widget board-lite,
-or It's mine in Settings → Gardens. Data and grants: k2 zen guide services.
+or It's mine in Settings → Gardens → Widget data. Data and grants: k2 zen
+guide services.
 EOF
 }
 
@@ -47846,7 +47848,7 @@ if err is not None:
     code = err.get("code") if isinstance(err, dict) else err
     msg = d.get("message") or (err.get("hint") if isinstance(err, dict) else None) or str(code)
     if code in ("owner_only", "zen_local_only"):
-        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
+        print("Only the person can %s this widget: click It\x27s mine in Settings → Gardens → Widget data, or run k2 zen widget claim outside K2." % verb if verb == "claim" else "Error: %s" % msg, file=sys.stderr)
         sys.exit(3)
     print("Error: %s" % msg, file=sys.stderr)
     sys.exit(4 if code in ("unknown_widget", "not_found") else 1)

@@ -49,6 +49,7 @@ import { TicketsSection, TICKETS_MANIFEST } from './sections/TicketsSection'
 import { NotificationsSection, NOTIFICATIONS_MANIFEST } from './sections/NotificationsSection'
 import { threadPushAvailable } from './sections/useNotifyPrefs'
 import { ZenGardensSection, ZEN_GARDENS_MANIFEST } from './sections/ZenGardensSection'
+import { ZenWidgetDataSection, ZEN_WIDGET_DATA_MANIFEST } from './sections/ZenWidgetDataSection'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import { loadZenSettings, useZenGardensSettingsShown } from '@/lib/zen/zen-settings'
 import { AGENT_SKILLS_MANIFEST } from './sections/AgentSkillsSection'
@@ -78,10 +79,14 @@ type NavBlock =
   | { kind: 'item'; id: SettingsSection; label: string; beta?: boolean }
   | { kind: 'group'; title: string; items: NavLeaf[] }
 
-/** The sidebar. `zenGardens`: show Settings → Gardens, which is
+/** The sidebar. `zenGardens`: show the Gardens group, which is
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
- *  item 17). Placed between Tickets and Context Catalog. Tickets sits
- *  directly beneath Projects (0.45.4, Rosson). `notifications`: the window's
+ *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
+ *  their own section … like K2 Server and Logs"): Gardens (list, lock,
+ *  sync, theme, folder) then Widget data, the first group after the
+ *  top-level pages. Data Sources stays under K2 Server (it is the server's;
+ *  Widget data links to it). Tickets sits directly beneath Projects
+ *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
 export function settingsNav({
@@ -109,7 +114,6 @@ export function settingsNav({
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },
-    ...(zenGardens ? ([{ kind: 'item', id: 'zen-gardens' as const, label: 'Gardens' }] satisfies NavBlock[]) : []),
     { kind: 'item', id: 'context-catalog', label: 'Context Catalog' },
     { kind: 'item', id: 'token-usage', label: 'Token Usage' },
     { kind: 'item', id: 'compute', label: 'Compute', beta: true },
@@ -120,6 +124,18 @@ export function settingsNav({
       : []),
     ...(import.meta.env.DEV
       ? ([{ kind: 'item', id: 'dictation-lab' as const, label: 'Dictation Lab (dev)' }] satisfies NavBlock[])
+      : []),
+    ...(zenGardens
+      ? ([
+          {
+            kind: 'group',
+            title: 'Gardens',
+            items: [
+              { id: 'zen-gardens', label: 'Gardens' },
+              { id: 'zen-widget-data', label: 'Widget data' },
+            ],
+          },
+        ] satisfies NavBlock[])
       : []),
     {
       kind: 'group',
@@ -184,7 +200,7 @@ export default function Settings(): React.JSX.Element {
   // as k2-connect/connections below.
   const isRemote = useConnectHostStore((s) => s.activeHost) !== 'local'
   const [searchOpen, setSearchOpen] = useState(false)
-  // Settings → Gardens shows where the Zen toggle shows. Read this
+  // The Gardens group shows where the Zen toggle shows. Read this
   // computer's Gardens once per open so a daemon without them hides it.
   const zenGardensShown = useZenGardensSettingsShown()
   // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
@@ -204,6 +220,7 @@ export default function Settings(): React.JSX.Element {
       ...(threadPushAvailable() ? NOTIFICATIONS_MANIFEST : []),
       ...CONTEXT_CATALOG_MANIFEST,
       ...(zenAvailable() ? ZEN_GARDENS_MANIFEST : []),
+      ...(zenAvailable() ? ZEN_WIDGET_DATA_MANIFEST : []),
       ...AGENT_SKILLS_MANIFEST,
       ...HEARTBEATS_MANIFEST,
       ...TERMINAL_MANIFEST,
@@ -245,8 +262,8 @@ export default function Settings(): React.JSX.Element {
     if (isAirgap() && activeSection === 'k2-connect') {
       setSection('connections')
     }
-    // No Zen in this client (web, Windows until G-Win): no Gardens.
-    if (!zenAvailable() && activeSection === 'zen-gardens') {
+    // No Zen in this client (web, Windows until G-Win): no Gardens group.
+    if (!zenAvailable() && (activeSection === 'zen-gardens' || activeSection === 'zen-widget-data')) {
       setSection('general')
     }
     // A server without Thread push has no Notifications page.
@@ -570,6 +587,11 @@ export default function Settings(): React.JSX.Element {
         {zenAvailable() && activeSection === 'zen-gardens' && (
           <SectionErrorBoundary>
             <ZenGardensSection />
+          </SectionErrorBoundary>
+        )}
+        {zenAvailable() && activeSection === 'zen-widget-data' && (
+          <SectionErrorBoundary>
+            <ZenWidgetDataSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'email-hosting' && (

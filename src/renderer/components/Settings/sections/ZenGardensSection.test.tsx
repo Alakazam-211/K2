@@ -6,10 +6,13 @@
 // app socket (`session-events`), Tauri and the opener plugin.
 //
 // Asserted (fail loudly):
-//   - the nav item shows exactly where the Zen toggle shows (Mac yes,
-//     Windows no until G-Win, Focus window no), sits between Projects and
-//     Context Catalog, and hides when this computer's daemon has no Gardens
-//     routes (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
+//   - the Gardens group (0.45.7: Gardens, then Widget data) shows exactly
+//     where the Zen toggle shows (Mac yes, Windows no until G-Win, Focus
+//     window no), is the first group after the top-level pages (before K2
+//     Server), and hides when this computer's daemon has no Gardens routes
+//     (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
+//   - Widget data is its own page (the same block that sat under the list),
+//     with a pointer to Gardens before setup and a link to Data Sources;
 //   - not set up: one "Set up Gardens" button that POSTs `zen/setup`;
 //   - list, rename (the name is the editor, with Save) and delete (asks in
 //     K2's confirm dialog; a copy stays in history) hit the LOCAL scope
@@ -286,6 +289,8 @@ import {
 import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import Settings, { settingsNav } from '../Settings'
 import { ZEN_GARDENS_MANIFEST, ZenGardensSection } from './ZenGardensSection'
+import { ZEN_WIDGET_DATA_MANIFEST, ZenWidgetDataSection } from './ZenWidgetDataSection'
+import { SECTION_LABELS } from '../searchManifest'
 import { __resetZenTemplatesForTests } from '@/lib/zen/zen-templates'
 import { __resetZenSyncForTests } from '@/lib/zen/zen-sync'
 import { useHomesStore } from '@/stores/homes'
@@ -464,19 +469,40 @@ afterEach(() => {
 })
 
 describe('Settings → Gardens: where it shows', () => {
-  it('sits between Tickets (under Projects) and Context Catalog in the sidebar', () => {
-    const ids = settingsNav({ zenGardens: true }).flatMap((b) => (b.kind === 'item' ? [b.id] : []))
-    const at = ids.indexOf('zen-gardens')
-    expect(at).toBeGreaterThan(0)
-    expect(ids[at - 1]).toBe('tickets')
-    expect(ids[at - 2]).toBe('project-groups')
-    expect(ids[at + 1]).toBe('context-catalog')
-    const label = settingsNav({ zenGardens: true }).find((b) => b.kind === 'item' && b.id === 'zen-gardens')
-    expect(label).toEqual({ kind: 'item', id: 'zen-gardens', label: 'Gardens' })
-    expect(settingsNav({ zenGardens: false }).some((b) => b.kind === 'item' && b.id === 'zen-gardens')).toBe(false)
+  it('0.45.7: a Gardens group (Gardens, Widget data), the first group after the top-level pages', () => {
+    const nav = settingsNav({ zenGardens: true })
+    const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
+    expect(groups[0]).toBe('Gardens')
+    expect(groups[1]).toBe('K2 Server')
+    const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
+    // Every block before it is a top-level page; the next one is K2 Server.
+    expect(nav.slice(0, at).every((b) => b.kind === 'item')).toBe(true)
+    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'K2 Server' })
+    expect(nav[at]).toEqual({
+      kind: 'group',
+      title: 'Gardens',
+      items: [
+        { id: 'zen-gardens', label: 'Gardens' },
+        { id: 'zen-widget-data', label: 'Widget data' },
+      ],
+    })
+    // Gardens is no longer a top-level page; Tickets → Context Catalog close up.
+    const items = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : []))
+    expect(items).not.toContain('zen-gardens')
+    expect(items[items.indexOf('tickets') + 1]).toBe('context-catalog')
+    // Where Gardens don't show, neither does the group or either page.
+    const off = settingsNav({ zenGardens: false })
+    expect(off.some((b) => b.kind === 'group' && b.title === 'Gardens')).toBe(false)
+    const offIds = off.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
+    expect(offIds).not.toContain('zen-gardens')
+    expect(offIds).not.toContain('zen-widget-data')
+    // Data Sources stays under K2 Server (it is the server's).
+    const server = nav.find((b) => b.kind === 'group' && b.title === 'K2 Server')
+    expect(server?.kind === 'group' && server.items.some((i) => i.id === 'data-sources')).toBe(true)
+    expect(nav[at].kind === 'group' && nav[at].items.some((i) => i.id === 'data-sources')).toBe(false)
   })
 
-  it('desktop Mac: the rendered sidebar shows Gardens right after Projects → Tickets, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data) before K2 Server, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -486,11 +512,17 @@ describe('Settings → Gardens: where it shows', () => {
     await settle()
     const ids = navIds()
     const at = ids.indexOf('zen-gardens')
-    expect(at).toBeGreaterThan(0)
-    expect(ids[at - 1]).toBe('tickets')
-    expect(ids[at - 2]).toBe('project-groups')
-    expect(ids[at + 1]).toBe('context-catalog')
+    expect(at).toBeGreaterThan(ids.indexOf('keybindings'))
+    expect(ids[at + 1]).toBe('zen-widget-data')
+    expect(ids[at + 2]).toBe('k2-access')
+    expect(ids[ids.indexOf('tickets') + 1]).toBe('context-catalog')
+    // The group header sits right above its first leaf, which is indented.
+    const leaf = document.querySelector('[data-settings-nav="zen-gardens"]') as HTMLElement
+    expect(leaf.previousElementSibling?.textContent).toBe('Gardens')
+    expect(leaf.className).toContain('pl-7')
+    expect((document.querySelector('[data-settings-nav="zen-widget-data"]') as HTMLElement).className).toContain('pl-7')
     expect(screen.getByRole('button', { name: 'Gardens' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Widget data' })).toBeTruthy()
     // The same window shows the Zen toggle.
     expect(document.querySelectorAll('[data-zen-enter]').length).toBeGreaterThan(0)
     // The probe went to this computer's daemon only.
@@ -519,6 +551,7 @@ describe('Settings → Gardens: where it shows', () => {
       )
       await settle()
       expect(navIds()).not.toContain('zen-gardens')
+      expect(navIds()).not.toContain('zen-widget-data')
       expect(navIds()).toContain('project-groups')
       expect(document.querySelector('[data-zen-enter]')).toBeNull()
       expect(zenCalls()).toEqual([])
@@ -541,16 +574,34 @@ describe('Settings → Gardens: where it shows', () => {
     await waitFor(() => expect(useZenSettingsStore.getState().failure?.kind).toBe('outdated'))
     await settle()
     expect(navIds()).not.toContain('zen-gardens')
+    expect(navIds()).not.toContain('zen-widget-data')
     expect(navIds()).toContain('context-catalog')
   })
 
-  it('a deep link to Gardens where Zen does not exist falls back to General', async () => {
-    setPlatform('Win32')
-    useSettingsStore.setState({ activeSection: 'zen-gardens' })
+  it('a deep link to Gardens or Widget data where Zen does not exist falls back to General', async () => {
+    for (const section of ['zen-gardens', 'zen-widget-data'] as const) {
+      setPlatform('Win32')
+      useSettingsStore.setState({ activeSection: section })
+      render(<Settings />)
+      await settle()
+      expect(useSettingsStore.getState().activeSection).toBe('general')
+      expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
+      expect(document.querySelector('[data-zen-widget-data-section]')).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('the old id still opens the Gardens list: openSettings(\'zen-gardens\') (What\'s New, deep links)', async () => {
+    useSettingsStore.setState({ settingsOpen: false, activeSection: 'general' })
+    useSettingsStore.getState().openSettings('zen-gardens')
+    expect(useSettingsStore.getState().activeSection).toBe('zen-gardens')
     render(<Settings />)
-    await settle()
-    expect(useSettingsStore.getState().activeSection).toBe('general')
-    expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-zen-garden-row="g-1"]')).not.toBeNull())
+    expect(document.querySelector('[data-zen-gardens-section]')).not.toBeNull()
+    // The sync checkboxes What's New points at are still on this page.
+    expect(document.querySelector('[data-zen-garden-sync="g-1"]')).not.toBeNull()
+    expect(SECTION_LABELS['zen-gardens']).toBe('Gardens')
+    expect(SECTION_LABELS['zen-widget-data']).toBe('Widget data')
   })
 
   it('the copied layout is still Settings → LLMs’ (AgentsSection source)', () => {
@@ -1306,11 +1357,64 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
     // The search manifest has no widget-permissions entry either. Garden
     // data grants (prd-gardens-local-services-v1 rev 3, Rosson 2026-10-14)
     // are which AGENTS may read a widget's data, not widget permissions;
-    // they live in the Widget data block (its own entry and test).
-    expect(document.querySelector('[data-garden-data-stub]')).not.toBeNull()
+    // they live on the Widget data page (0.45.7: its own page in the
+    // Gardens group, its own entry and test), not on this one.
+    expect(document.querySelector('[data-garden-data-stub]')).toBeNull()
     expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.widgets')
-    expect(
-      JSON.stringify(ZEN_GARDENS_MANIFEST.filter((e) => e.id !== 'zen-gardens.data')),
-    ).not.toMatch(/permission|grant|sending/i)
+    expect(ZEN_GARDENS_MANIFEST.map((e) => e.id)).not.toContain('zen-gardens.data')
+    expect(JSON.stringify(ZEN_GARDENS_MANIFEST)).not.toMatch(/permission|grant|sending/i)
+  })
+})
+
+describe('Settings → Gardens → Widget data: its own page (0.45.7)', () => {
+  it('clicking Widget data opens it: the same Widget data block, in the plain scrolling content area', async () => {
+    render(<Settings />)
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: 'Widget data' }))
+    await settle()
+    expect(useSettingsStore.getState().activeSection).toBe('zen-widget-data')
+    await waitFor(() => expect(document.querySelector('[data-garden-data-stub]')).not.toBeNull())
+    // Not on the Gardens page any more.
+    expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
+    const page = document.querySelector('[data-zen-widget-data-section]') as HTMLElement
+    const area = page.closest('.flex-1.min-h-0.relative') as HTMLElement
+    expect(area.className.split(/\s+/)).toEqual(expect.arrayContaining(['overflow-y-auto', 'p-6']))
+    // Its nav row is the active one.
+    expect((document.querySelector('[data-settings-nav="zen-widget-data"]') as HTMLElement).className).toContain(
+      'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]',
+    )
+  })
+
+  it('the search entry moved with it: zen-gardens.data opens Widget data and lands on the block', async () => {
+    expect(ZEN_WIDGET_DATA_MANIFEST).toHaveLength(1)
+    const entry = ZEN_WIDGET_DATA_MANIFEST[0]
+    expect(entry.id).toBe('zen-gardens.data')
+    expect(entry.section).toBe('zen-widget-data')
+    useSettingsStore.setState({ activeSection: entry.section })
+    render(<Settings />)
+    await waitFor(() => expect(document.querySelector(`[data-settings-id="${entry.id}"]`)).not.toBeNull())
+  })
+
+  it('not set up: no Widget data block, a pointer to Gardens (where setup is), and nothing posted', async () => {
+    h.setUp = false
+    h.gardens = []
+    useSettingsStore.setState({ activeSection: 'zen-widget-data' })
+    render(<Settings />)
+    await waitFor(() => expect(document.querySelector('[data-zen-widget-data-setup]')).not.toBeNull())
+    expect(document.querySelector('[data-garden-data-stub]')).toBeNull()
+    expect(zenPosts()).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gardens' }))
+    await settle()
+    expect(useSettingsStore.getState().activeSection).toBe('zen-gardens')
+    expect(document.querySelector('[data-zen-gardens-setup]')).not.toBeNull()
+  })
+
+  it('links to Data Sources, which stays under K2 Server', async () => {
+    // The page alone: the link only routes; Data Sources itself isn't faked here.
+    useSettingsStore.setState({ activeSection: 'zen-widget-data' })
+    render(<ZenWidgetDataSection />)
+    await waitFor(() => expect(document.querySelector('[data-zen-widget-data-sources-link]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Open Data Sources' }))
+    expect(useSettingsStore.getState().activeSection).toBe('data-sources')
   })
 })

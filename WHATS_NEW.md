@@ -17,6 +17,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **No false "fresh look" on a Diary.** After an update, a Diary Garden that follows K2's default no longer gets a "has a fresh look" card when nothing about it changed.
 - **The sign-in button opens the whole link.** When you add an AI login in Settings → LLMs, **Open sign-in page** now opens the complete sign-in link. Before, a long Claude link could be cut short, so you had to copy it from the login terminal instead.
 - **See when each login's usage refreshes.** In Settings → LLMs → Tokens, each subscription's usage now shows how long until it resets, like the usage menu in the top bar (for example "Session 42% · 3h"). Each token counts down to its own reset, and nothing shows when K2 doesn't know the time yet.
+- **Gardens get their own section in Settings.** Like K2 Server and Logs, Settings now has a **Gardens** group: **Gardens** (your Gardens, Lock and Keep in sync, the theme and the folder) and **Widget data** (each custom widget's data, its grants, It's mine, export and delete), which used to sit under the Gardens list. Nothing else changed.
 
 **After updating**
 - Local Grok Bots stay off until you turn on **Show** (and, if you want to message them, **Send**) in Settings → K2 Server → **Local Grok Bots**.

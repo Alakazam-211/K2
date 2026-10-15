@@ -55,8 +55,14 @@ export type SettingsSection =
   /** Settings → Notifications (0.45.5, prd-thread-push-notifications-v1 §9):
    *  your phone pushes, workspace defaults, people. Needs `thread-push-v1`. */
   | 'notifications'
-  /** Settings → Gardens (this computer's Zen Gardens; desktop only, like the Zen toggle). */
+  /** Settings → Gardens → Gardens (this computer's Zen Gardens: list, lock,
+   *  sync, theme, folder; desktop only, like the Zen toggle). The Gardens
+   *  group's first page, so `openSettings('zen-gardens')` lands here (0.45.7). */
   | 'zen-gardens'
+  /** Settings → Gardens → Widget data (each custom widget's data on this
+   *  computer: grants, It's mine, export, delete). Its own page from 0.45.7;
+   *  before, a block under the Gardens list. */
+  | 'zen-widget-data'
   | 'context-catalog'
   | 'timer'
   /** @deprecated Help guide lives under General → Workspaces. Deep-links redirect. */

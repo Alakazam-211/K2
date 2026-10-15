@@ -33,7 +33,7 @@
   function report(err) {
     const code = err && err.code
     if (code === 'author_unknown') {
-      show('Nobody signed this version of the widget, so it gets no data. Run k2 zen validate --widget board-lite, or click It’s mine in Settings → Gardens.')
+      show('Nobody signed this version of the widget, so it gets no data. Run k2 zen validate --widget board-lite, or click It’s mine in Settings → Gardens → Widget data.')
     } else if (code === 'not_granted') {
       show('This widget’s maker has no grant for this data. Settings → Gardens → Widget data: Let … use this data, or It’s mine.')
     } else if (code === 'cap_not_granted') {

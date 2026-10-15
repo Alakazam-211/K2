@@ -182,7 +182,9 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
             && !k.starts_with(|c: char| c.is_ascii_digit());
         if !ok {
             errors.push(issue("manifest_invalid", format!("env name \"{k}\": upper-case letters, digits and _"), at("env")));
-        } else if k.starts_with("K2_") || k == "PORT" || k == "PATH" || k == "HOME" {
+        } else if k.starts_with("K2_")
+            || ["PORT", "PATH", "HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY"].contains(&k.as_str())
+        {
             errors.push(issue("manifest_invalid", format!("env name \"{k}\" is set by K2 and can't be declared"), at("env")));
         } else if sensitive_name(k) {
             errors.push(issue(
@@ -190,6 +192,20 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
                 format!("env \"{k}\" names a secret; a manifest never holds secret values (grant it from the vault)"),
                 at("env"),
             ));
+        }
+    }
+    if let Some(e) = &m.egress {
+        if e.hosts.len() > super::egress::MAX_HOSTS_PER_REQUEST {
+            errors.push(issue(
+                "manifest_invalid",
+                format!("egress.hosts: at most {} hosts", super::egress::MAX_HOSTS_PER_REQUEST),
+                at("egress.hosts"),
+            ));
+        }
+        for h in &e.hosts {
+            if let Err(why) = super::egress::parse_spec(h) {
+                errors.push(issue("egress_host_invalid", format!("egress.hosts: {why}"), at("egress.hosts")));
+            }
         }
     }
     if !m.build.is_empty() {

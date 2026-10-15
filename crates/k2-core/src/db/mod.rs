@@ -1342,6 +1342,10 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // per-service owner-token uses. 0166/0167 are Sew's; the integrator
         // renumbers on slips.
         ("0168_app_grace", include_str!("../../drizzle_sql/0168_app_grace.sql")),
+        // 0168 — App egress (runtime S15, 0.46.0): per-App egress policy,
+        // host list and held widening requests. New tables only. 0166–0167
+        // are Sew's; the integrator renumbers on slips.
+        ("0168_app_egress", include_str!("../../drizzle_sql/0168_app_egress.sql")),
     ];
 
     for (name, sql) in migrations {

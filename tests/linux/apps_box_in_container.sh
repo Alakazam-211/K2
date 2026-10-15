@@ -207,8 +207,8 @@ expect_rc 0 "nft apply (open)"
 # Capture first: with pipefail, `nft … | grep -q` fails when grep exits
 # early and nft takes SIGPIPE.
 TABLE="$(inns nft list table inet k2app)"
-grep -q "chain k2app_v2" <<<"$TABLE" || fail "chain"
-grep -q "meta skuid $U jump k2app_v2" <<<"$TABLE" || fail "skuid rule: $TABLE"
+grep -q "chain k2app_v3" <<<"$TABLE" || fail "chain"
+grep -q "meta skuid $U jump k2app_v3" <<<"$TABLE" || fail "skuid rule: $TABLE"
 grep -q "chain k2app_apps" <<<"$TABLE" || fail "per-App chain"
 req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft apply again (atomic replace)"

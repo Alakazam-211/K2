@@ -153,7 +153,7 @@ fn nft_lists_both(t: &T) {
         NFT,
         "list",
         0,
-        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v2\n\t\tmeta skuid 995 jump k2app_v2\n\t}\n\tchain k2app_v2 {\n\t}\n}\n",
+        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v3\n\t\tmeta skuid 995 jump k2app_v3\n\t}\n\tchain k2app_v3 {\n\t}\n}\n",
     );
 }
 
@@ -219,7 +219,7 @@ fn ensure_process_user_is_its_own_system_user_never_k2app() {
 fn nft_covers_process_apps_once_their_user_exists() {
     let t = box_root();
     with_process_user(&t);
-    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"]));
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
     let fed: Vec<_> = t
         .calls()
         .into_iter()
@@ -227,7 +227,7 @@ fn nft_covers_process_apps_once_their_user_exists() {
         .collect();
     let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 995 jump k2app_v2"));
+    assert!(want.contains("meta skuid 995 jump k2app_v3"));
 }
 
 #[test]
@@ -1504,6 +1504,11 @@ fn nft_app_needs_the_current_table_and_remove_drops_the_rule() {
     let t = box_root();
     with_app_user(&t);
     rule(&t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v1\n\t}\n}\n");
+    assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38600"]).code, exit::STATE);
+    // Nor a v2 one (it admitted the whole proxy range; v3 is per-App, S15).
+    let t = box_root();
+    with_app_user(&t);
+    rule(&t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v2\n\t}\n\tchain k2app_v2 {\n\t}\n}\n");
     assert_eq!(t.call(&["apps", "nft", "app", "jobs", "38600"]).code, exit::STATE);
 
     let t = box_root();

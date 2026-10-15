@@ -415,6 +415,9 @@ struct ConnectorState {
     /// the configured primary. A single-relay config never rotates, so
     /// this stays the legacy endpoint and status is unchanged.
     current_relay: Arc<Mutex<RelayEndpoint>>,
+    /// Whether `current_relay` is the primary (index 0 of the list the
+    /// supervisor runs), republished with it (0.45.7).
+    relay_primary: Arc<AtomicBool>,
     /// Whether frps accepted the current child's proxy (holder evidence
     /// for a release).
     proxy: Arc<ProxyRegistration>,
@@ -478,7 +481,7 @@ impl std::fmt::Display for SpawnBlock {
 /// the supervisor before EVERY respawn — a disable or release landing
 /// mid-flight stops the tunnel at the next child exit and is never undone
 /// by a stale in-memory copy.
-fn spawn_gate() -> Result<(), SpawnBlock> {
+fn spawn_gate() -> Result<TunnelConfig, SpawnBlock> {
     if crate::airgap::enabled() {
         return Err(SpawnBlock::Airgap);
     }
@@ -493,7 +496,78 @@ fn spawn_gate() -> Result<(), SpawnBlock> {
     if !cfg.enabled {
         return Err(SpawnBlock::Disabled);
     }
-    Ok(())
+    // The fresh on-disk config: the supervisor adopts a changed relay
+    // list from it at each reconnect (0.45.7).
+    Ok(cfg)
+}
+
+/// TCP connect budget for one probe of the primary relay.
+const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How often a SOLO supervisor whose session the watchdog declared dead
+/// re-reads `tunnel.json` for a longer relay list (0.45.7).
+const SOLO_LIST_CHECK_EVERY: Duration = Duration::from_secs(5);
+
+#[cfg(test)]
+static TEST_FAILBACK_POLICY: Mutex<Option<super::failover::FailbackPolicy>> = Mutex::new(None);
+
+/// Overrides the fail-back timing for supervisors started while it lives
+/// (tests only; hold it inside `with_temp_home`).
+#[cfg(test)]
+pub(crate) struct TestFailbackPolicy;
+
+#[cfg(test)]
+impl TestFailbackPolicy {
+    pub(crate) fn install(p: super::failover::FailbackPolicy) -> Self {
+        *TEST_FAILBACK_POLICY.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+        TestFailbackPolicy
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestFailbackPolicy {
+    fn drop(&mut self) {
+        *TEST_FAILBACK_POLICY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+fn failback_policy() -> super::failover::FailbackPolicy {
+    #[cfg(test)]
+    {
+        if let Some(p) = *TEST_FAILBACK_POLICY.lock().unwrap_or_else(|e| e.into_inner()) {
+            return p;
+        }
+    }
+    super::failover::FailbackPolicy::DEFAULT
+}
+
+fn new_selector(relays: Vec<RelayEndpoint>) -> RelaySelector {
+    RelaySelector::with_policy(
+        relays,
+        super::failover::DEFAULT_FAILURE_THRESHOLD,
+        failback_policy(),
+    )
+}
+
+/// One health probe of a relay: a plain TCP connect to its frps port.
+/// Healthy = some resolved address accepted within the budget.
+fn probe_relay(relay: &RelayEndpoint) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let addrs = match (relay.host.as_str(), relay.port).to_socket_addrs() {
+        Ok(a) => a.collect::<Vec<_>>(),
+        Err(_) => return false,
+    };
+    addrs
+        .iter()
+        .any(|a| TcpStream::connect_timeout(a, PRIMARY_PROBE_TIMEOUT).is_ok())
+}
+
+/// The on-disk relay list differs from the one the supervisor runs.
+fn disk_relays_differ(selector: &RelaySelector) -> bool {
+    match config::load() {
+        Ok(c) => c.relay_list() != selector.relays(),
+        Err(_) => false,
+    }
 }
 
 /// Reported status of the connector.
@@ -547,6 +621,19 @@ pub struct TunnelStatus {
     /// (or its config gone) and repaired it: the reason it repaired.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repaired: Option<String>,
+    /// Running only (0.45.7): the frps port of the relay in use
+    /// (`server_addr` is its host).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+    /// Running only (0.45.7): whether the relay in use is the primary
+    /// (index 0). `false` = failed over; the supervisor probes the primary
+    /// and returns after 3 healthy probes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_primary: Option<bool>,
+    /// The relay list on disk: where it came from (`fetched` /
+    /// `provisioned` / `default`), its order, and the last k2.dev refresh.
+    /// Always emitted.
+    pub relay_list: super::relay_list::RelayListStatus,
 }
 
 impl TunnelStatus {
@@ -554,6 +641,7 @@ impl TunnelStatus {
         // Disk truth for the tri-state: the connector singleton being
         // empty says nothing about WHY the tunnel is down.
         let cfg = config::load().unwrap_or_default();
+        let relay_list = super::relay_list::status_for(&cfg);
         Self {
             running: false,
             public_url: None,
@@ -569,6 +657,9 @@ impl TunnelStatus {
             frpc_config_present: None,
             frpc_config: Some(frpc_config_path().display().to_string()),
             repaired: None,
+            server_port: None,
+            relay_primary: None,
+            relay_list,
         }
     }
 }
@@ -776,6 +867,7 @@ pub fn start(
     // was just rendered above); the supervise loop republishes it on every
     // rotation so status() always names the relay actually being dialed.
     let current_relay = Arc::new(Mutex::new(cfg.relay_list()[0].clone()));
+    let relay_primary = Arc::new(AtomicBool::new(true));
     let proxy = Arc::new(ProxyRegistration::new(&cfg));
     let health = Arc::new(FrpcHealth::new());
     spawn_supervised(
@@ -783,6 +875,7 @@ pub fn start(
         child.clone(),
         running.clone(),
         current_relay.clone(),
+        relay_primary.clone(),
         &cfg,
         resolved_port_slot.clone(),
         default_local_port,
@@ -811,6 +904,7 @@ pub fn start(
         child,
         running,
         current_relay,
+        relay_primary,
         proxy,
         health,
     };
@@ -930,12 +1024,16 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
     // every failover/fail-back), not the configured primary. For a legacy
     // single-endpoint config the slot IS server_addr — never rotated — so
     // the reported value is byte-identical to the pre-failover status.
-    let server_addr = st
+    let relay = st
         .current_relay
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .host
         .clone();
+    let server_addr = relay.host.clone();
+    // The list status reads the file (the refresher may have written a
+    // newer list than the running one); fall back to the running config.
+    let relay_list =
+        super::relay_list::status_for(&config::load().unwrap_or_else(|_| st.cfg.clone()));
     let cfg_path = frpc_config_path();
     let unhealthy = unhealthy_reason(st);
     TunnelStatus {
@@ -954,6 +1052,9 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
         frpc_config_present: Some(cfg_path.exists()),
         frpc_config: Some(cfg_path.display().to_string()),
         repaired: None,
+        server_port: Some(relay.port),
+        relay_primary: Some(st.relay_primary.load(Ordering::SeqCst)),
+        relay_list,
     }
 }
 
@@ -1271,6 +1372,8 @@ impl RunHealth<'_> {
 /// Wait for the current child to end.
 ///
 /// * Single relay ([`RelaySelector::is_solo`]) — poll `try_wait` so we can
+///   (0.45.7: a dead session is cycled ONLY when `tunnel.json` now lists
+///   other relays, so a refreshed list reaches it; see the solo loop.)
 ///   observe `stop()` and kill the child we're holding. The Child was
 ///   TAKEN from the slot, so `stop()` can't reach the handle; without
 ///   this poll a solo frpc is orphaned on SIGTERM/Stop until the next
@@ -1296,8 +1399,12 @@ fn wait_for_exit(
     run: &mut RunHealth<'_>,
 ) -> ChildOutcome {
     let mut ticks_since_probe = 0u32;
-    // Solo: stop-observability + localPort self-heal — no watchdog / fail-back.
+    // Solo: stop-observability + localPort self-heal — no fail-back. The
+    // watchdog only acts when the session is dead AND `tunnel.json` now
+    // lists other relays (0.45.7: a refreshed list must reach a box whose
+    // only relay died mid-session — frpc would retry it forever).
     if selector.is_solo() {
+        let mut last_list_check: Option<Instant> = None;
         loop {
             run.tick(spawned_at);
             match child.try_wait() {
@@ -1312,6 +1419,23 @@ fn wait_for_exit(
                 let _ = child.kill();
                 let _ = child.wait();
                 return ChildOutcome::Exited(None);
+            }
+            if let Some(w) = watch {
+                let check_due =
+                    last_list_check.map_or(true, |t| t.elapsed() >= SOLO_LIST_CHECK_EVERY);
+                if w.is_dead() && check_due {
+                    last_list_check = Some(Instant::now());
+                    if disk_relays_differ(selector) {
+                        crate::log_debug!(
+                            "[tunnel] relay {} session is dead and tunnel.json lists other \
+                             relays — reconnecting to apply the new list",
+                            selector.current()
+                        );
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return ChildOutcome::WatchdogKill;
+                    }
+                }
             }
             if probe_local_desync(
                 &mut ticks_since_probe,
@@ -1373,14 +1497,28 @@ fn wait_for_exit(
             return ChildOutcome::LocalPortUnreachable;
         }
         // A child alive past HEALTHY_UPTIME is a working relay: reset the
-        // failure counter and extend the fail-back streak. The selector
-        // says when the streak has earned a return to the primary.
+        // failure counter.
         if spawned_at.elapsed() >= HEALTHY_UPTIME {
-            if let Some(sw) = selector.on_success(Instant::now()) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return ChildOutcome::FailBack(sw);
-            }
+            selector.on_success();
+        }
+        // Fail-back (0.45.7): on a fallback, TCP-probe the primary on the
+        // selector's schedule; after enough healthy probes in a row (and
+        // its random delay) return to it with one controlled reconnect.
+        // Never fires while the primary is in use.
+        if selector.primary_probe_due(Instant::now()) {
+            let primary = selector.primary().clone();
+            let healthy = probe_relay(&primary);
+            selector.on_primary_probe(healthy, Instant::now());
+            crate::log_debug!(
+                "[tunnel] primary relay {primary} probe: {} ({} healthy in a row)",
+                if healthy { "healthy" } else { "unreachable" },
+                selector.probe_streak()
+            );
+        }
+        if let Some(sw) = selector.poll_failback(Instant::now()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return ChildOutcome::FailBack(sw);
         }
         std::thread::sleep(SUPERVISE_POLL);
     }
@@ -1473,7 +1611,7 @@ fn ensure_live_local_port_before_respawn(
 /// classifies each child death by uptime — under [`HEALTHY_UPTIME`] counts
 /// as a relay failure, over it as a success — and feeds a [`RelaySelector`].
 /// When the selector rotates (3 consecutive failures → next relay,
-/// wrapping; or a stable run on a fallback → back to the primary), the
+/// wrapping; or 3 healthy probes of the primary → back to it), the
 /// supervisor re-renders `frpc.toml` for the new relay before respawning,
 /// resets the backoff, and republishes `current_relay` so `status()`
 /// reports the relay actually being dialed. With a single relay the
@@ -1501,6 +1639,7 @@ fn spawn_supervised(
     child_slot: Arc<Mutex<Option<Child>>>,
     running: Arc<AtomicBool>,
     current_relay: Arc<Mutex<RelayEndpoint>>,
+    relay_primary: Arc<AtomicBool>,
     cfg: &TunnelConfig,
     resolved_local_port: Arc<AtomicU16>,
     daemon_http_port: u16,
@@ -1508,12 +1647,12 @@ fn spawn_supervised(
     proxy: Arc<ProxyRegistration>,
     health: Arc<FrpcHealth>,
 ) -> Result<(), String> {
-    // Mid-session watchdog only in multi-relay mode: it exists to drive
-    // ROTATION. Solo still polls for stop (orphan fix) but never arms a
-    // SessionWatch (nowhere to rotate). One SessionWatch per spawned
-    // child so every multi run starts with a clean disconnect streak.
-    let multi = cfg.relay_list().len() > 1;
-    let new_watch = move || multi.then(|| Arc::new(SessionWatch::new()));
+    // One SessionWatch per spawned child so every run starts with a clean
+    // disconnect streak. Multi-relay: it drives ROTATION. Solo (0.45.7):
+    // it only lets a dead session reconnect when `tunnel.json` gained
+    // other relays (see `wait_for_exit`); otherwise frpc keeps its own
+    // retry, exactly as before.
+    let new_watch = || Some(Arc::new(SessionWatch::new()));
 
     // First spawn happens synchronously so `start()` fails loud if the
     // very first launch can't even exec. Like every spawn, it renders the
@@ -1540,13 +1679,32 @@ fn spawn_supervised(
             let initial_backoff = Duration::from_millis(500);
             let max_backoff = Duration::from_secs(30);
             let mut backoff = initial_backoff;
-            let mut selector = RelaySelector::new(cfg_thread.relay_list());
+            let mut selector = new_selector(cfg_thread.relay_list());
             // Republish the selector's current relay into the shared slot
             // status() reads — called after every rotation decision so the
             // reported endpoint tracks the selector (the render source of
             // truth) even across a failed frpc.toml rewrite.
-            let publish_relay = |relay: &RelayEndpoint| {
-                *current_relay.lock().unwrap_or_else(|p| p.into_inner()) = relay.clone();
+            let publish_relay = |sel: &RelaySelector| {
+                *current_relay.lock().unwrap_or_else(|p| p.into_inner()) = sel.current().clone();
+                relay_primary.store(sel.on_primary(), Ordering::SeqCst);
+            };
+            // 0.45.7: a relay list that changed on disk (k2.dev refresh,
+            // pairing, a manual edit) is applied HERE, at a reconnect —
+            // never as a live restart. The relay in use stays in use when
+            // the new list still has it.
+            let adopt_disk_list = |sel: &mut RelaySelector, disk: &TunnelConfig| {
+                let list = disk.relay_list();
+                if list.as_slice() == sel.relays() {
+                    return;
+                }
+                let moved = sel.adopt(list);
+                crate::log_debug!(
+                    "[tunnel] relay list changed on disk — applying it at this reconnect \
+                     ({} relay(s); dialing {}{})",
+                    sel.relays().len(),
+                    sel.current(),
+                    if moved { ", the old relay is no longer listed" } else { "" }
+                );
             };
             // Frozen localPort for every normal rewrite (R1). Self-heal
             // may update `port_slot` then re-read via this helper.
@@ -1590,12 +1748,18 @@ fn spawn_supervised(
                         // a disable/release landing mid-flight must stop
                         // the class of respawns, terminally (no backoff
                         // retry-loop from a refused device).
-                        if let Err(block) = spawn_gate() {
-                            crate::log_debug!(
-                                "[tunnel] respawn blocked — supervisor exiting: {block}"
-                            );
-                            running.store(false, Ordering::SeqCst);
-                            return;
+                        match spawn_gate() {
+                            Err(block) => {
+                                crate::log_debug!(
+                                    "[tunnel] respawn blocked — supervisor exiting: {block}"
+                                );
+                                running.store(false, Ordering::SeqCst);
+                                return;
+                            }
+                            Ok(disk) => {
+                                adopt_disk_list(&mut selector, &disk);
+                                publish_relay(&selector);
+                            }
                         }
                         watch = new_watch();
                         match render_and_spawn(
@@ -1662,7 +1826,7 @@ fn spawn_supervised(
                         // re-render, reset backoff, respawn immediately
                         // (no failure happened, so no penalty sleep).
                         crate::log_debug!(
-                            "[tunnel] relay fail-back: {} -> {} (stable on fallback; retrying primary)",
+                            "[tunnel] relay fail-back: {} -> {} (primary passed its health probes)",
                             sw.from,
                             sw.to
                         );
@@ -1677,23 +1841,25 @@ fn spawn_supervised(
                                 selector.current()
                             );
                         }
-                        publish_relay(selector.current());
+                        publish_relay(&selector);
+                        super::relay_list::request_refresh("relay switch");
                         backoff = initial_backoff;
                     }
                     ChildOutcome::Exited(code) => {
                         // Classify the run for the selector: a quick death
                         // is a failed dial on the current relay, a long run
-                        // was a working connection (resets the counter, and
-                        // on a fallback may complete the fail-back streak).
+                        // was a working connection (resets the counter; the
+                        // return to the primary is probe-driven, never here).
                         let switch = if spawned_at.elapsed() >= HEALTHY_UPTIME {
-                            selector.on_success(Instant::now())
+                            selector.on_success();
+                            None
                         } else {
                             selector.on_failure()
                         };
                         if let Some(sw) = switch {
                             if sw.is_failback() {
                                 crate::log_debug!(
-                                    "[tunnel] relay fail-back: {} -> {} (stable on fallback; retrying primary)",
+                                    "[tunnel] relay fail-back: {} -> {} (primary passed its health probes)",
                                     sw.from,
                                     sw.to
                                 );
@@ -1716,7 +1882,8 @@ fn spawn_supervised(
                                     selector.current()
                                 );
                             }
-                            publish_relay(selector.current());
+                            publish_relay(&selector);
+                            super::relay_list::request_refresh("relay switch");
                             // Fresh target — dial it promptly instead of
                             // inheriting the dead relay's grown backoff.
                             backoff = initial_backoff;
@@ -1768,7 +1935,8 @@ fn spawn_supervised(
                                     selector.current()
                                 );
                             }
-                            publish_relay(selector.current());
+                            publish_relay(&selector);
+                            super::relay_list::request_refresh("relay switch");
                             // Fresh target — dial it promptly instead of
                             // inheriting the dead relay's grown backoff.
                             backoff = initial_backoff;
@@ -1826,13 +1994,21 @@ fn spawn_supervised(
                 }
                 // Same ON-DISK gate before the post-exit respawn: read at
                 // frpc-spawn time, never from a cached copy (PRD tunnel-
-                // disable-unpair pre-mortem). Terminal on block.
-                if let Err(block) = spawn_gate() {
-                    crate::log_debug!(
-                        "[tunnel] respawn blocked — supervisor exiting: {block}"
-                    );
-                    running.store(false, Ordering::SeqCst);
-                    return;
+                // disable-unpair pre-mortem). Terminal on block. The same
+                // fresh read carries a changed relay list into this
+                // reconnect (0.45.7).
+                match spawn_gate() {
+                    Err(block) => {
+                        crate::log_debug!(
+                            "[tunnel] respawn blocked — supervisor exiting: {block}"
+                        );
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    Ok(disk) => {
+                        adopt_disk_list(&mut selector, &disk);
+                        publish_relay(&selector);
+                    }
                 }
                 watch = new_watch();
                 // Re-render on EVERY spawn (2026-10-14): respawning with the
@@ -2659,11 +2835,34 @@ mod tests {
         });
     }
 
+    /// A fake frpc that stays up (a healthy, connected tunnel) and records
+    /// each launch in `<dir>/spawns`.
+    fn long_lived_frpc(dir: &Path) -> PathBuf {
+        std::fs::create_dir_all(dir).expect("mk fake-frpc dir");
+        let script = dir.join("frpc-up.sh");
+        crate::test_env::write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\necho spawn >> '{}'\nexec sleep 600\n",
+                dir.join("spawns").display()
+            ),
+        );
+        script
+    }
+
+    fn spawn_count(dir: &Path) -> usize {
+        std::fs::read_to_string(dir.join("spawns"))
+            .expect("the fake frpc must have recorded its launches")
+            .lines()
+            .count()
+    }
+
     /// Setting `relays` through the UPDATE path (`set_config`) must not
     /// disturb a currently-connected tunnel — exactly like server_addr,
-    /// it's persist-only, picked up by the NEXT start. Guards the "no new
-    /// restart semantic" contract end to end: running tunnel keeps its
-    /// endpoint + rendered frpc.toml; a stop/start dials the new primary.
+    /// it's persist-only. Guards the "no live restart" contract end to end:
+    /// a healthy running tunnel keeps its child, endpoint and rendered
+    /// frpc.toml; a stop/start dials the new primary. (0.45.7: a RECONNECT
+    /// also picks the list up — see the next test.)
     #[test]
     fn set_relays_while_running_applies_only_on_next_start() {
         with_temp_home(|| {
@@ -2677,9 +2876,12 @@ mod tests {
             })
             .expect("seed legacy config");
 
-            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+            let dir = crate::test_env::unique_temp_path("fake-frpc-up");
+            let frpc = long_lived_frpc(&dir);
+            let st = start(None, 57839, &FrpcBinary::Explicit(frpc.clone()))
                 .expect("start on legacy endpoint");
             assert!(st.running);
+            wait_until("the first frpc launch", 10, || dir.join("spawns").exists());
 
             // Mutate the relay list through the same surface the daemon's
             // POST /cli/tunnel/config uses, while the tunnel is up.
@@ -2706,10 +2908,14 @@ mod tests {
                 toml.contains("serverAddr = \"9.9.9.9\""),
                 "set_config must not re-render the live frpc.toml\n{toml}"
             );
+            // Give a (wrong) live restart time to happen, then prove none did.
+            std::thread::sleep(Duration::from_secs(3));
+            assert_eq!(spawn_count(&dir), 1, "a list change alone must not restart frpc");
+            assert_eq!(status().server_addr.as_deref(), Some("9.9.9.9"));
 
             // The NEXT start picks the new list up: dials the new primary.
             stop().expect("stop");
-            let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
+            let st = start(None, 57839, &FrpcBinary::Explicit(frpc))
                 .expect("restart with relays");
             assert_eq!(
                 st.server_addr.as_deref(),
@@ -2722,6 +2928,218 @@ mod tests {
                 "restart must render the new preferred relay\n{toml}"
             );
             stop().expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// 0.45.7: a relay list written while the tunnel runs (k2.dev refresh,
+    /// pairing) is applied at the next RECONNECT — here /bin/true exits at
+    /// once, so the supervisor reconnects continually and must dial the new
+    /// primary without anyone calling stop/start.
+    #[test]
+    fn a_changed_relay_list_is_applied_at_the_next_reconnect() {
+        with_temp_home(|| {
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                server_port: 7009,
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed legacy config");
+            start(None, 57839, &FrpcBinary::Explicit(true_bin())).expect("start");
+            config::update(|c| {
+                c.relays = vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ];
+            })
+            .expect("write a new list");
+            wait_until("the reconnect to adopt the new list", 30, || {
+                std::fs::read_to_string(frpc_config_path())
+                    .map(|t| t.contains("serverAddr = \"10.0.0."))
+                    .unwrap_or(false)
+            });
+            let st = status();
+            assert!(st.running);
+            assert!(
+                st.server_addr.as_deref().is_some_and(|a| a.starts_with("10.0.0.")),
+                "status must follow the adopted list: {:?}",
+                st.server_addr
+            );
+            assert_eq!(st.relay_list.relays, vec!["10.0.0.1:7000", "10.0.0.2:7000"]);
+            stop().expect("stop");
+        });
+    }
+
+    /// 0.45.7, the 2026-10-15 shape: a SOLO tunnel whose only relay died
+    /// mid-session (frpc alive, storming reconnect errors) stays put while
+    /// the list is unchanged — frpc's own retry, as before — and reconnects
+    /// to the new list once `tunnel.json` gains relays.
+    #[test]
+    fn solo_dead_session_reconnects_only_when_the_list_gains_relays() {
+        with_temp_home(|| {
+            let dir = crate::test_env::unique_temp_path("fake-frpc-solo");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = dir.join("frpc-stuck.sh");
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\necho spawn >> '{}'\n\
+                     echo '[I] [service.go:299] login to server success, get run id [test]'\n\
+                     while true; do\n\
+                     \techo '[W] [service.go:132] connect to server error: dial tcp 9.9.9.9:7009: i/o timeout'\n\
+                     \tsleep 0.1\n\
+                     done\n",
+                    dir.join("spawns").display()
+                ),
+            );
+            config::save(&TunnelConfig {
+                server_addr: "9.9.9.9".to_string(),
+                server_port: 7009,
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed legacy config");
+            start(None, 57839, &FrpcBinary::Explicit(script)).expect("start");
+            // The watchdog declares death in well under a second; with the
+            // list unchanged the solo child must NOT be cycled.
+            std::thread::sleep(Duration::from_secs(4));
+            assert_eq!(spawn_count(&dir), 1, "unchanged list → leave frpc's own retry alone");
+
+            config::update(|c| {
+                c.relays = vec![
+                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
+                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
+                ];
+            })
+            .expect("the refreshed list lands");
+            wait_until("the dead solo session to reconnect on the new list", 30, || {
+                std::fs::read_to_string(frpc_config_path())
+                    .map(|t| t.contains("serverAddr = \"10.0.0.1\""))
+                    .unwrap_or(false)
+            });
+            assert!(spawn_count(&dir) >= 2, "the stuck child was replaced");
+            stop().expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// Fast fail-back timing for the supervisor tests: probe every 1 s, 3
+    /// healthy probes, no random delay.
+    fn fast_failback() -> TestFailbackPolicy {
+        TestFailbackPolicy::install(super::super::failover::FailbackPolicy {
+            probe_every: Duration::from_secs(1),
+            probe_spread: Duration::ZERO,
+            healthy_probes: 3,
+            failback_delay_max: Duration::ZERO,
+        })
+    }
+
+    /// 0.45.7 fail-back, end to end: the primary refuses frpc at first (the
+    /// fake exits at once for its port), the supervisor fails over, then —
+    /// with the primary's port answering TCP — 3 healthy probes bring it
+    /// back to the primary with one reconnect.
+    #[test]
+    fn supervisor_fails_back_to_the_primary_after_healthy_probes() {
+        with_temp_home(|| {
+            let _policy = fast_failback();
+            // The primary "relay": a bound loopback port (TCP connects
+            // succeed from the backlog; nothing needs to accept).
+            let primary = std::net::TcpListener::bind("127.0.0.1:0").expect("bind primary");
+            let p_port = primary.local_addr().expect("addr").port();
+            let fallback = crate::test_env::ClosedPort::new();
+            let f_port = fallback.port();
+
+            let dir = crate::test_env::unique_temp_path("fake-frpc-failback");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = dir.join("frpc-pick.sh");
+            // Dials to the primary fail fast until `allow` exists; dials
+            // anywhere else stay up. Every dial is recorded.
+            crate::test_env::write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\nport=$(grep '^serverPort' \"$2\" | tr -dc 0-9)\n\
+                     echo $port >> '{dials}'\n\
+                     if [ \"$port\" = \"{p_port}\" ] && [ ! -e '{allow}' ]; then exit 1; fi\n\
+                     exec sleep 600\n",
+                    dials = dir.join("dials").display(),
+                    allow = dir.join("allow").display(),
+                ),
+            );
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "127.0.0.1".to_string(), port: p_port },
+                    RelayEndpoint { host: "127.0.0.1".to_string(), port: f_port },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed two-relay config");
+            start(None, 57839, &FrpcBinary::Explicit(script)).expect("start");
+
+            wait_until("failover to the fallback", 30, || {
+                status().server_port == Some(f_port)
+            });
+            let st = status();
+            assert_eq!(st.relay_primary, Some(false), "on the fallback");
+            // The primary now takes frpc again; its port answers probes.
+            std::fs::write(dir.join("allow"), b"").expect("allow primary");
+            wait_until("fail-back to the primary", 30, || {
+                status().server_port == Some(p_port)
+            });
+            assert_eq!(status().relay_primary, Some(true));
+            wait_until("the primary to be dialed again", 10, || {
+                std::fs::read_to_string(dir.join("dials"))
+                    .map(|d| d.lines().last() == Some(p_port.to_string().as_str()))
+                    .unwrap_or(false)
+            });
+            stop().expect("stop");
+            drop(primary);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// 0.45.7: while the primary is the relay in use nothing probes it and
+    /// nothing fails back.
+    #[test]
+    fn no_failback_probes_while_on_the_primary() {
+        with_temp_home(|| {
+            let _policy = fast_failback();
+            let primary = std::net::TcpListener::bind("127.0.0.1:0").expect("bind primary");
+            primary.set_nonblocking(true).expect("nonblocking");
+            let p_port = primary.local_addr().expect("addr").port();
+            let dir = crate::test_env::unique_temp_path("fake-frpc-onprimary");
+            let frpc = long_lived_frpc(&dir);
+            config::save(&TunnelConfig {
+                relays: vec![
+                    RelayEndpoint { host: "127.0.0.1".to_string(), port: p_port },
+                    RelayEndpoint { host: "127.0.0.1".to_string(), port: 9 },
+                ],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed");
+            start(None, 57839, &FrpcBinary::Explicit(frpc)).expect("start");
+            std::thread::sleep(Duration::from_secs(4));
+            match primary.accept() {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Ok((_, from)) => panic!("the primary in use was probed (connection from {from})"),
+                Err(e) => panic!("accept: {e}"),
+            }
+            let st = status();
+            assert_eq!(st.relay_primary, Some(true));
+            assert_eq!(st.server_port, Some(p_port));
+            assert_eq!(spawn_count(&dir), 1, "no reconnect while on the primary");
+            stop().expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
         });
     }
 

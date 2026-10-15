@@ -1,6 +1,14 @@
+import { useMemo } from 'react'
 import { primaryScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
+import { useConnectHostStore } from '@/stores/connect-host'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
+import { publishedSubdomains } from '@/lib/published-subdomains'
+import {
+  AddPublishedSubdomainForm,
+  PublishedSubdomainRowActions,
+} from './PublishedSubdomainControls'
 import {
   nestedPublicUrl,
   sortedTargets,
@@ -15,6 +23,13 @@ import {
 // Workspace names resolve through the projects store when the id is
 // registered here; a foreign/dangling id renders as the raw id — honest,
 // never fabricated.
+//
+// 0.45.7: the local server's owner or an admin also gets **Add published
+// subdomain** and per-row **Change target** / **Remove** (the desktop twin
+// of `k2 publish subdomain create | point | rm`; calls in
+// lib/published-subdomains.ts). `canManage` comes from the Connect section
+// (local host + whoami role); the panel re-checks the window's host so a
+// remote server never shows them.
 
 // One label/value row, matching the drawer's identity-row idiom.
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
@@ -28,9 +43,14 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
-export function TunnelUrlsPanel(): React.JSX.Element {
-  const { status, subs } = useTunnelUrls(primaryScope())
+export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } = {}): React.JSX.Element {
+  const scope = primaryScope()
+  const { status, subs } = useTunnelUrls(scope)
   const projects = useProjectsStore((s) => s.projects)
+  const activeHost = useConnectHostStore((s) => s.activeHost)
+  const confirm = useConfirmDialogStore((s) => s.confirm)
+  const manage = canManage && activeHost === 'local'
+  const api = useMemo(() => publishedSubdomains(scope), [scope])
 
   const running = status?.running ?? false
   const publicUrl = status?.public_url ?? null
@@ -114,12 +134,16 @@ export function TunnelUrlsPanel(): React.JSX.Element {
             Not available on this daemon.
           </p>
         ) : rows.length === 0 ? (
-          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
-            No nested URLs —{' '}
-            <span className="font-mono">
-              k2 publish subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
-            </span>
-          </p>
+          manage ? (
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">No nested URLs yet.</p>
+          ) : (
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              No nested URLs —{' '}
+              <span className="font-mono">
+                k2 publish subdomain create &lt;label&gt; --target localhost:&lt;port&gt;
+              </span>
+            </p>
+          )
         ) : (
           <div className="mt-1.5">
             <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] pb-1 border-b border-[var(--color-border)]">
@@ -157,10 +181,28 @@ export function TunnelUrlsPanel(): React.JSX.Element {
                   >
                     {workspaceName(info.projectId)}
                   </span>
+                  {manage && (
+                    <PublishedSubdomainRowActions
+                      api={api}
+                      label={label}
+                      target={info.target}
+                      projectId={info.projectId}
+                      host={(url ?? label).replace(/^https:\/\//, '')}
+                      confirmRemove={confirm}
+                    />
+                  )}
                 </div>
               )
             })}
           </div>
+        )}
+        {manage && subs !== null && (
+          <AddPublishedSubdomainForm
+            api={api}
+            primary={primary || status?.subdomain || ''}
+            publicUrl={publicUrl}
+            workspaces={projects}
+          />
         )}
       </div>
     </div>

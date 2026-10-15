@@ -51,6 +51,7 @@ import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
 import { AgentsCanCreateConnectionsRow } from '../shared/AgentsCanCreateConnectionsRow'
 import { ConnectLoginIngressRow } from '../shared/ConnectLoginIngressRow'
 import { TunnelUrlsPanel } from './TunnelUrlsPanel'
+import { canManagePublishedSubdomains } from '@/lib/published-subdomains'
 import {
   signIn as accountSignIn,
   signOut as accountSignOut,
@@ -573,6 +574,8 @@ export function K2ConnectSection({
     if (panel === 'tunnel') {
       void (async () => {
         if (isRemote) return // expose UI is local-only; see isRemote note
+        // 0.45.7: the role gates Add / Change target / Remove on URLs.
+        void refreshWhoami()
         await loadConfig()
         if (cancelled) return
         void refreshStatus()
@@ -1715,7 +1718,7 @@ export function K2ConnectSection({
         {/* URLs on Tunnel for both This Mac and remote active host */}
         <SettingsGroup title="URLs">
           <div data-settings-id="k2-connect.urls">
-            <TunnelUrlsPanel />
+            <TunnelUrlsPanel canManage={canManagePublishedSubdomains(isRemote, myRole)} />
           </div>
         </SettingsGroup>
         </>

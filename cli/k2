@@ -1,6 +1,3 @@
-            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
-            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; [ "$_CP_STATUS" = 202 ] && return 2; return 0; fi            # 202 = held for the owner (the body says status: held).
-            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
 #!/bin/bash
 # K2 CLI — Agent interface to K2 workspace orchestration
 # This script communicates with the K2 daemon via HTTP.

@@ -1273,11 +1273,13 @@ fn handle_access(
         && toggle != "vault_manage"
         && toggle != "compute_operate"
         && toggle != "projects_manage"
+        && toggle != "apps_manage"
+        && toggle != "apps_open"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'apps_manage', 'apps_open', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
         ));
     }
     let value = match v.get("value") {
@@ -1343,6 +1345,27 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "projects_manage", "agentsCanManageProjects": value }),
             format!("ok {} projects_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "apps_manage" || toggle == "apps_open" {
+        // App runtime admin switches (prd-k2-app-runtime-v1 §5.11.1, AR13):
+        // "Allow this agent to manage Apps" (`agents_can_manage_skin`) and
+        // the nested "…and publish open Apps" (0168). Off on the parent
+        // turns the child off; on for the child needs the parent. Flipping
+        // one is the owner's standing approval for what it covers.
+        if toggle == "apps_manage" {
+            k2_core::workspace::settings::set_agents_can_manage_skin(&ws.path, value)
+                .map_err(|e| err("workspace_not_found", 404, e))?;
+        } else {
+            k2_core::workspace::settings::set_agents_can_publish_open_apps(&ws.id, value)
+                .map_err(|e| err("parent_switch_off", 409, e))?;
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        let manage = k2_core::workspace::settings::agents_can_manage_skin_for_path(&ws.path);
+        let open = k2_core::workspace::settings::agents_can_publish_open_apps(&ws.id);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": toggle, "agentsCanManageApps": manage, "agentsCanPublishOpenApps": open }),
+            format!("ok {} {toggle}={value}", ws.handle),
         ));
     }
     if toggle == "vault_manage" {

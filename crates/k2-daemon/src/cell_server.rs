@@ -687,6 +687,19 @@ mod unix_impl {
             // K2 compute nodes: the agent verbs for THIS cell's session
             // (owner verbs never pass require_hook on this socket). The two
             // node sockets are TCP-only.
+            // 0.46.0 App grace (no preview flag): this cell's passport; the
+            // handler scopes it to its own workspace's Apps and holds what
+            // widens.
+            p if crate::apps::grace::is_route(p) => {
+                if crate::apps::grace::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::apps::grace::MAX_BODY {
+                    return from_cli(crate::apps::grace::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::apps::grace::handle(p, who, body, params))
+            }
             // App runtime stage 1: this cell's passport (the handler applies
             // the workspace scope and "Allow this agent to manage Apps").
             p if crate::apps::routes::is_route(p) => {
@@ -939,7 +952,8 @@ mod unix_impl {
                 let mut params = params.clone();
                 crate::routes::http::merge_json_object_params(&mut params, body);
                 stamp_principal(&mut params, principal);
-                from_cli(crate::publish_routes::dispatch_post(p, &params))
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::publish_routes::dispatch_post_as(p, &params, who))
             }
             // PR1 federation dual-auth: peers / peer-roster / send over the
             // cell UDS. Dark when federation is off (same 404 as TCP). Principal

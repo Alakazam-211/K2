@@ -1022,6 +1022,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
     // that can hire agents, for every caller (owner token included).
     "hire-key-mint",
+    // 0.46.0 App grace: approving a held App request (`secretId` = the
+    // request id), and minting an App-scoped key (`secretId` = the App's
+    // service id). Every caller, owner token included.
+    "app-approve",
+    "app-key-mint",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

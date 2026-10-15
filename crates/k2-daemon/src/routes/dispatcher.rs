@@ -1151,6 +1151,27 @@ async fn handle_one_request(
         return DispatchOutcome::Done;
     }
 
+    // 0.46.0 App grace: an owner-token call a published `--cmd` service
+    // makes is counted per (service, route) for `k2 app warnings`, and
+    // refused when that service runs in clean mode (the 0.46.1 behaviour,
+    // opted into early). Linux attribution; a cheap check skips the rest.
+    if ingress == Ingress::Loopback && !cookie_only && super::http::token_is_owner(&query, state.token.as_str()) {
+        if let (Ok(peer), Ok(local)) = (stream.peer_addr(), stream.local_addr()) {
+            if crate::apps::attribution::worth_checking(peer) {
+                let p = path.clone();
+                let verdict = tokio::task::spawn_blocking(move || crate::apps::attribution::owner_token_call(peer, local, &p))
+                    .await
+                    .unwrap_or(crate::apps::attribution::Verdict::NotAnApp);
+                if let crate::apps::attribution::Verdict::Refuse { service_id, name } = verdict {
+                    let _ = stream.read(&mut buf).await;
+                    let body = crate::apps::attribution::refusal_body(&service_id, &name);
+                    super::http::send_response(&mut *stream, "403 Forbidden", "application/json", &body).await;
+                    return DispatchOutcome::Done;
+                }
+            }
+        }
+    }
+
     // K2 Cloud S1 — restricted must-change-password sessions. A live
     // connect-user session whose account is flagged `must_change_password`
     // may only reach whoami / change-password / logout (+ the public
@@ -5991,6 +6012,34 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // 0.46.0 App grace (Rosson's cross-over plan): warnings, clean mode,
+        // App keys, held requests. Not behind the preview flag: they serve
+        // every published --cmd service. Caller rules live in the handler.
+        p if crate::apps::grace::is_route(p) => {
+            if crate::apps::grace::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::grace::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::apps::grace::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::apps::grace::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
         // K2_APPS / appsPreview is on. Passport rules live in the handler.
         p if crate::apps::routes::is_route(p) => {
@@ -7496,11 +7545,13 @@ async fn handle_one_request(
             }
             let label_caller =
                 label_caller_for(scoped_principal.is_some(), &query, state.token.as_str());
+            // S13 (§8.2): `run` maps an agent's new --cmd onto the App rules.
+            let publish_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
                 crate::label_owner::with_caller(label_caller, || {
                     crate::caller_workspace::with_request_principal(scoped_principal, || {
-                        crate::publish_routes::dispatch_post(&p_owned, &params)
+                        crate::publish_routes::dispatch_post_as(&p_owned, &params, publish_who)
                     })
                 })
             })
@@ -9009,6 +9060,36 @@ async fn handle_one_request(
         "/v1/jwks" => {
             let _ = stream.read(&mut buf).await;
             let r = crate::v1_capabilities::handle_v1_jwks();
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // 0.46.0 App grace: `/v1/apps/<service id>/…`, the App-scoped key's
+        // door (vs-live 2 §6). Open whether or not the `/v1` surface is (an
+        // App's BFF runs on every box); only an App key for that App gets
+        // past the handler's uniform 404.
+        p if crate::apps::app_key_routes::is_route(p) => {
+            let body = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::app_key_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::apps::app_key_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = bearer_token
+                .clone()
+                .or_else(|| super::http::extract_token(&query).map(str::to_string));
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::apps::app_key_routes::handle(&p_owned, is_post, presented.as_deref(), &body, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // ── P3a (sandbox / K2-as-a-server) — the EXTERNAL `/v1/*` surface.

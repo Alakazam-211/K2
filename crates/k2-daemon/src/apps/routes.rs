@@ -111,7 +111,20 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
-fn refusal_response(r: &Refusal) -> CliResponse {
+/// The route answer: `200` with the JSON, `202` when the JSON says the
+/// change is held for the owner (`status: held`, exit 2 in the CLI), or
+/// the refusal.
+pub(crate) fn respond(r: R<J>) -> CliResponse {
+    match r {
+        Ok(v) if v.get("status").and_then(J::as_str) == Some("held") => {
+            CliResponse { status: "202 Accepted", content_type: "application/json", body: v.to_string() }
+        }
+        Ok(v) => CliResponse::ok_json(v.to_string()),
+        Err(e) => refusal_response(&e),
+    }
+}
+
+pub(crate) fn refusal_response(r: &Refusal) -> CliResponse {
     let mut err = json!({ "code": r.code, "hint": r.hint });
     if let Some(J::Object(m)) = &r.extra {
         for (k, v) in m {
@@ -341,10 +354,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/uninstall" => uninstall(&who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     };
-    match r {
-        Ok(v) => CliResponse::ok_json(v.to_string()),
-        Err(e) => refusal_response(&e),
-    }
+    respond(r)
 }
 
 /// POST `/cli/app/build {folder, types?}` → the Seed (S6). Deploys nothing.
@@ -606,6 +616,23 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
     if iso == app.isolation {
         return Ok(app);
     }
+    // S13: lowering the wall (guarded → process) is on the always-per-event
+    // list (§5.6): it goes through `k2 app config --isolation process`,
+    // held for the owner's confirm, never through a deploy flag.
+    let state = config_state(&app)?;
+    if k2_core::app_grace::config::classify(&k2_core::app_grace::config::Op::Isolation(iso.into()), &state)
+        != k2_core::app_grace::config::Class::Narrow
+    {
+        return Err(no(
+            codes::WIDENING_HELD,
+            409,
+            format!(
+                "moving {} from {} to {iso} lowers its wall: ask for it with k2 app config {} --isolation {iso} \
+                 (held for the owner's approval)",
+                app.app_id, app.isolation, app.app_id
+            ),
+        ));
+    }
     if iso == "container" {
         if !cfg!(target_os = "linux") {
             return Err(no(codes::ENGINE_UNAVAILABLE, 409, "the guarded engine runs on Linux boxes only"));
@@ -712,32 +739,251 @@ fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }))
 }
 
-/// POST `/cli/app/config {app, memory}`: stage 1 holds only the per-App
-/// memory limit (`none` by default; the user decides). The rest of §4.4 is
-/// S13.
-fn config(who: &Who, body: &[u8]) -> R<J> {
-    need_manage(who)?;
-    let v = json_body(body)?;
-    let app = app_for(who, s(&v, "app"))?;
-    let raw = v.get("memory").ok_or_else(|| no(codes::BAD_REQUEST, 400, "nothing to change (memory: 8G | 512M | none)"))?;
+// ── S13: App config (§4.4) — narrowing applies now, widening is held ─
+
+use k2_core::app_grace::config::{self as appcfg, Class, Op};
+
+/// The App's config as one state (columns + `config_json`).
+pub(crate) fn config_state(app: &AppRow) -> R<appcfg::State> {
+    let config = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        appcfg::load(&conn, &app.app_id).map_err(db_err)?
+    };
+    Ok(appcfg::State { memory_limit_bytes: app.memory_limit_bytes, isolation: app.isolation.clone(), path: app.path.clone(), config })
+}
+
+fn str_list(v: &J, k: &str) -> Vec<String> {
+    match v.get(k) {
+        Some(J::Array(a)) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+        Some(J::String(x)) => x.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect(),
+        _ => vec![],
+    }
+}
+
+fn opt_size(v: &J, k: &str) -> R<Option<Option<i64>>> {
+    let Some(raw) = v.get(k) else { return Ok(None) };
     let raw = match raw {
         J::Null => "none".to_string(),
         J::String(x) => x.clone(),
         other => other.to_string(),
     };
-    let bytes = deploy::parse_memory(&raw).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    Ok(Some(deploy::parse_memory(&raw).map_err(|e| no(codes::BAD_REQUEST, 400, format!("{k}: {e}")))?))
+}
+
+fn opt_u32(v: &J, k: &str) -> R<Option<Option<u32>>> {
+    match v.get(k) {
+        None => Ok(None),
+        Some(J::Null) => Ok(Some(None)),
+        Some(J::String(x)) if x == "none" => Ok(Some(None)),
+        Some(x) => {
+            let n = x.as_u64().or_else(|| x.as_str().and_then(|t| t.parse().ok())).filter(|n| *n > 0 && *n <= u32::MAX as u64);
+            n.map(|n| Some(Some(n as u32))).ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("{k}: a positive number or none")))
+        }
+    }
+}
+
+fn opt_bool(v: &J, k: &str) -> R<Option<bool>> {
+    match v.get(k) {
+        None => Ok(None),
+        Some(J::Bool(b)) => Ok(Some(*b)),
+        Some(J::String(x)) if x == "on" || x == "true" => Ok(Some(true)),
+        Some(J::String(x)) if x == "off" || x == "false" => Ok(Some(false)),
+        Some(_) => Err(no(codes::BAD_REQUEST, 400, format!("{k}: on or off"))),
+    }
+}
+
+fn one_of(v: &J, k: &str, allowed: &[&str]) -> R<Option<String>> {
+    match s(v, k) {
+        None => Ok(None),
+        Some(x) if allowed.contains(&x) => Ok(Some(x.to_string())),
+        Some(x) => Err(no(codes::BAD_REQUEST, 400, format!("{k} is {}, not '{x}'", allowed.join(" | ")))),
+    }
+}
+
+/// The ops one config body asks for (§4.4 names, camelCase).
+pub(crate) fn config_ops(v: &J) -> R<Vec<Op>> {
+    let mut ops = Vec::new();
+    if let Some(m) = opt_size(v, "memory")? {
+        ops.push(Op::Memory(m));
+    }
+    if let Some(n) = opt_u32(v, "cpuWeight")? {
+        ops.push(Op::CpuWeight(n));
+    }
+    if let Some(n) = opt_u32(v, "tasks")? {
+        ops.push(Op::Tasks(n));
+    }
+    if let Some(d) = opt_size(v, "disk")? {
+        ops.push(Op::Disk(d));
+    }
+    for h in str_list(v, "egressAdd") {
+        ops.push(Op::EgressAdd(appcfg::parse_egress_host(&h).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
+    }
+    for h in str_list(v, "egressRm") {
+        ops.push(Op::EgressRm(appcfg::parse_egress_host(&h).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
+    }
+    if let Some(m) = one_of(v, "egressMode", &["allowlist", "broad"])? {
+        ops.push(Op::EgressMode(m));
+    }
+    for p in str_list(v, "portAdd") {
+        ops.push(Op::PortAdd(appcfg::parse_port(&p).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
+    }
+    for p in str_list(v, "portRm") {
+        ops.push(Op::PortRm(appcfg::parse_port(&p).map_err(|e| no(codes::BAD_REQUEST, 400, e))?));
+    }
+    if v.get("recycleEvery").is_some() {
+        let secs = match s(v, "recycleEvery") {
+            None | Some("none") => None,
+            Some(x) => Some(parse_secs(x).ok_or_else(|| no(codes::BAD_REQUEST, 400, "recycleEvery: 24h, 90m or none"))?),
+        };
+        ops.push(Op::RecycleEvery(secs));
+    }
+    if v.get("recycleAt").is_some() {
+        let pct = match s(v, "recycleAt") {
+            None | Some("none") => None,
+            Some(x) => Some(
+                x.trim_end_matches('%').parse::<u8>().ok().filter(|p| (10..=99).contains(p)).ok_or_else(|| no(codes::BAD_REQUEST, 400, "recycleAt: 50%–99% or none"))?,
+            ),
+        };
+        ops.push(Op::RecycleAt(pct));
+    }
+    if let Some(i) = one_of(v, "isolation", &["container", "vm", "process", "none"])? {
+        if i == "vm" {
+            return Err(no(codes::ENGINE_UNAVAILABLE, 409, "the VM switch isn't offered yet (stage V); container is the strongest wall today"));
+        }
+        if i == "none" && cfg!(target_os = "linux") {
+            return Err(no(codes::BAD_REQUEST, 400, "isolation none is for dev machines only"));
+        }
+        ops.push(Op::Isolation(i));
+    }
+    if let Some(p) = one_of(v, "path", &["guarded", "open"])? {
+        ops.push(Op::Path(p));
+    }
+    if let Some(r) = one_of(v, "risk", &["normal", "high"])? {
+        ops.push(Op::Risk(r));
+    }
+    if let Some(b) = opt_bool(v, "dbPrivate")? {
+        ops.push(Op::DbPrivate(b));
+    }
+    if let Some(b) = opt_bool(v, "dbRaw")? {
+        ops.push(Op::DbRaw(b));
+    }
+    Ok(ops)
+}
+
+fn parse_secs(x: &str) -> Option<i64> {
+    let x = x.trim();
+    let (n, mul) = match x.chars().last()? {
+        'h' => (&x[..x.len() - 1], 3600),
+        'm' => (&x[..x.len() - 1], 60),
+        's' => (&x[..x.len() - 1], 1),
+        'd' => (&x[..x.len() - 1], 86400),
+        _ => (x, 1),
+    };
+    n.parse::<i64>().ok().filter(|v| *v > 0).map(|v| v * mul)
+}
+
+/// Apply ops to an App now (callers decided they may). Audited, mirrored.
+pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
+    let app = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_app(&conn, app_id).map_err(db_err)?
+    }
+    .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{app_id}'")))?;
+    let mut state = config_state(&app)?;
+    let lines: Vec<String> = ops.iter().map(|op| appcfg::describe(op, &state)).collect();
+    for op in ops {
+        appcfg::apply(op, &mut state);
+    }
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::set_memory_limit(&conn, &app.app_id, bytes).map_err(db_err)?;
+        appcfg::store(&conn, &app.app_id, &state, deploy::now()).map_err(db_err)?;
+        if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, &app.app_id, "config", by, None, &json!({ "changes": lines, "ops": ops })) {
+            k2_core::log_debug!("[apps] audit {} config: {e}", app.app_id);
+        }
     }
-    audit_human(&app.app_id, "config", who, json!({ "memoryLimitBytes": bytes, "was": app.memory_limit_bytes }));
     mirror(&app.app_id);
-    Ok(json!({
+    Ok(json!({ "applied": lines, "config": state }))
+}
+
+/// May this caller make a change of this class at once?
+fn may_apply(who: &Who, class: Class, open_on: bool) -> bool {
+    match class {
+        Class::Narrow | Class::Budget => true,
+        Class::PerEvent => false,
+        Class::Open => matches!(who, Who::Owner | Who::Shell { .. } | Who::Login { role: Role::Owner, .. }) || (agent_ws(who).is_some() && open_on),
+        Class::Owner => matches!(who, Who::Owner | Who::Shell { .. } | Who::Login { role: Role::Owner, .. }),
+    }
+}
+
+fn hold_reason(class: Class) -> &'static str {
+    match class {
+        Class::Open => "an open-path feature: the owner, or an agent whose workspace has \"…and publish open Apps\"",
+        Class::Owner => "a widening only the owner makes",
+        Class::PerEvent => "on the always-per-event list: a fresh owner confirm, even from the owner token",
+        _ => "",
+    }
+}
+
+/// POST `/cli/app/config {app, memory?, cpuWeight?, tasks?, disk?,
+/// egressAdd?, egressRm?, egressMode?, portAdd?, portRm?, recycleEvery?,
+/// recycleAt?, isolation?, path?, risk?, dbPrivate?, dbRaw?}` (S13, §4.4).
+/// Each change is classified on its own: what the caller may make at once
+/// applies now; the rest becomes one held request for the owner.
+fn config(who: &Who, body: &[u8]) -> R<J> {
+    need_manage(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let ops = config_ops(&v)?;
+    if ops.is_empty() {
+        return Err(no(
+            codes::BAD_REQUEST,
+            400,
+            "nothing to change (memory, cpuWeight, tasks, disk, egressAdd/Rm, egressMode, portAdd/Rm, recycleEvery/At, isolation, path, risk, dbPrivate, dbRaw)",
+        ));
+    }
+    let state = config_state(&app)?;
+    let open_on = agent_ws(who).is_some_and(k2_core::workspace::settings::agents_can_publish_open_apps);
+    let mut now_ops: Vec<Op> = Vec::new();
+    let mut held: Vec<(Op, Class)> = Vec::new();
+    for op in ops {
+        let class = appcfg::classify(&op, &state);
+        if may_apply(who, class, open_on) {
+            now_ops.push(op);
+        } else {
+            held.push((op, class));
+        }
+    }
+    let applied = if now_ops.is_empty() { None } else { Some(apply_config_ops(&app.app_id, &now_ops, &actor(who))?) };
+    let mut out = json!({
         "ok": true,
         "app": app_for(who, Some(&app.app_id))?,
-        "note": "The process engine in this preview doesn't enforce memory limits; the walled engines do (a later 0.46 release).",
-    }))
+        "applied": applied.as_ref().map(|a| a["applied"].clone()).unwrap_or(json!([])),
+        "note": "Stored now; the walls that enforce egress, ports and the private database arrive in 0.46.1. \
+                 The process engine in this preview doesn't enforce memory limits; the walled engines do.",
+    });
+    if !held.is_empty() {
+        let t = super::grace::target(&Who::Owner, Some(&app.service_id))?;
+        let diff: Vec<String> = held.iter().map(|(op, _)| appcfg::describe(op, &state)).collect();
+        let mut reasons: Vec<String> = held.iter().map(|(op, c)| format!("{}: {}", appcfg::describe(op, &state), hold_reason(*c))).collect();
+        reasons.dedup();
+        let ops: Vec<&Op> = held.iter().map(|(op, _)| op).collect();
+        let h = super::grace::hold(
+            who,
+            k2_core::app_grace::requests::KIND_CONFIG,
+            Some(&t),
+            &app.app_id,
+            &app.owner_workspace,
+            json!({ "app": app.app_id, "ops": ops }),
+            json!(diff),
+            reasons,
+        )?;
+        out["status"] = json!("held");
+        out["held"] = h;
+    }
+    Ok(out)
 }
 
 // ── S8: list, inspect, history, logs, errors, uninstall ──────────────

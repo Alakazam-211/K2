@@ -126,6 +126,18 @@ fn live_insert(entry: Arc<LiveChild>) {
         .insert(key, entry);
 }
 
+/// Every live `--cmd`/skin child: (workspace id, publish name, pid). Each
+/// child leads its own session (`setsid`), so its pid is also the session
+/// id of everything it starts (0.46.0 owner-token attribution).
+pub fn live_children() -> Vec<(String, String, i32)> {
+    live()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|c| (c.project_id.clone(), c.name.clone(), c.pid))
+        .collect()
+}
+
 fn live_remove(project_id: &str, name: &str) -> Option<Arc<LiveChild>> {
     live()
         .lock()
@@ -348,6 +360,7 @@ fn spawn_prepared(
     mut c: Command,
     project_id: &str,
     name: &str,
+    enrich: bool,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     // A daemon that handed off starts no service: the successor owns them.
     k2_core::handoff_state::guard()?;
@@ -355,7 +368,12 @@ fn spawn_prepared(
     let log_p = log_path(project_id, name);
     let (out, err) = log_stdio(&log_p)?;
     c.stdin(Stdio::null()).stdout(out).stderr(err);
-    enrich_path(&mut c);
+    // Clean mode (0.46.0 grace) sets the system PATH itself: no login-shell
+    // enrichment, so a program found only through the daemon user's own
+    // bin folders shows up now, not at the 0.46.1 cut-over.
+    if enrich {
+        enrich_path(&mut c);
+    }
 
     #[cfg(unix)]
     {
@@ -398,17 +416,19 @@ fn spawn_child(
         c.arg("-c").arg(cmd).current_dir(cwd);
         // K2 vault (§10.5, Q16): clean env + granted secrets for new
         // services; services from before the vault keep inheriting.
+        let mut enrich = true;
         if let Some((service_id, port)) = service {
-            crate::vault::publish_env::apply(&mut c, service_id, project_id, cwd, port);
+            let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
+            enrich = !applied.fixed_path;
         }
-        spawn_prepared(c, project_id, name)
+        spawn_prepared(c, project_id, name, enrich)
     }
     #[cfg(windows)]
     {
         let _ = service;
         let mut c = Command::new("cmd.exe");
         c.arg("/c").arg(cmd).current_dir(cwd);
-        spawn_prepared(c, project_id, name)
+        spawn_prepared(c, project_id, name, true)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -426,7 +446,7 @@ fn spawn_argv(
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     let mut c = Command::new(exe);
     c.args(args).current_dir(cwd);
-    spawn_prepared(c, project_id, name)
+    spawn_prepared(c, project_id, name, true)
 }
 
 /// Resolve the k2-daemon binary for `--skin-gateway`. Prefer the live
@@ -633,6 +653,7 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         json.frame_warning = frame_warning_get(&row.project_id, &row.name);
     }
     if row.kind != KIND_SKIN {
+        json.clean_mode = crate::vault::publish_env::is_clean_mode(&row.id);
         if crate::vault::publish_env::is_legacy(&row.id) {
             json.env_mode = Some("legacy".into());
             json.env_removed_in = Some(crate::vault::publish_env::LEGACY_ENV_REMOVED_IN.into());

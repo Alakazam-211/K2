@@ -33,6 +33,13 @@ pub struct ServiceEnv {
     /// Names (never values) a legacy service inherited at its last start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inherited_names: Vec<String>,
+    /// 0.46.0 grace: the 0.46.1 behaviour, opted into early (Rosson's
+    /// cross-over plan, 2026-10-14). Implies `clean`, plus: `PATH` is the
+    /// system folders only, `HOME` is the service's own folder under
+    /// `~/.k2/publish-homes/`, and an owner-token call the daemon traces
+    /// to this service is refused (Linux).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clean_mode: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -97,10 +104,11 @@ pub fn get(service_id: &str) -> ServiceEnv {
 }
 
 /// Rosson 2026-10-10: services from before 0.45.4 keep inheriting the
-/// daemon's environment in 0.45.x, with this notice wherever the service
-/// shows (status, `k2 publish list`, the Published drawer, `k2 vault
-/// doctor`). New services start clean.
-pub const LEGACY_ENV_REMOVED_IN: &str = "0.46.0";
+/// daemon's environment, with this notice wherever the service shows
+/// (status, `k2 publish list`, the Published drawer, `k2 vault doctor`).
+/// New services start clean. The 2026-10-14 cross-over plan moved the end
+/// from 0.46.0 to 0.46.1: 0.46.0 adds the new ways and removes nothing.
+pub const LEGACY_ENV_REMOVED_IN: &str = k2_core::app_grace::CUTOVER_RELEASE;
 
 /// The deprecation notice for one service (`name` = its publish name).
 pub fn legacy_env_notice(name: &str) -> String {
@@ -108,7 +116,9 @@ pub fn legacy_env_notice(name: &str) -> String {
         "This service still inherits the K2 daemon's whole environment because it existed \
          before 0.45.4. That ends in K2 {LEGACY_ENV_REMOVED_IN}: it will then start with a \
          clean environment plus only the secrets granted to it. Switch now with \
-         `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`)."
+         `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`), \
+         see what would break with `k2 app warnings {name}`, or try the whole \
+         {LEGACY_ENV_REMOVED_IN} behaviour first with `k2 app clean-mode {name} on`."
     )
 }
 
@@ -142,6 +152,9 @@ pub fn set(service_id: &str, mode: Option<&str>, env_file: Option<Option<String>
         e.mode = md.to_string();
         if md == "clean" {
             e.inherited_names.clear();
+        } else {
+            // Inheriting again ends the early 0.46.1 behaviour too.
+            e.clean_mode = false;
         }
     }
     if let Some(f) = env_file {
@@ -150,6 +163,53 @@ pub fn set(service_id: &str, mode: Option<&str>, env_file: Option<Option<String>
     let out = e.clone();
     save(&m)?;
     Ok(out)
+}
+
+/// Turn clean mode (the 0.46.1 behaviour) on or off for one service. On
+/// also switches the env mode to `clean`; off keeps `clean` (it never
+/// gives the daemon's environment back: that is `set(.., "legacy")`,
+/// owner only). Names recorded while the service was legacy are kept, so
+/// the warnings can still name them.
+pub fn set_clean_mode(service_id: &str, on: bool) -> Result<ServiceEnv, String> {
+    let _g = LOCK.lock();
+    let mut m = load();
+    let e = m.services.entry(service_id.to_string()).or_insert_with(|| ServiceEnv { mode: "clean".into(), ..Default::default() });
+    e.clean_mode = on;
+    if on {
+        e.mode = "clean".into();
+    }
+    let out = e.clone();
+    save(&m)?;
+    Ok(out)
+}
+
+pub fn is_clean_mode(service_id: &str) -> bool {
+    load().services.get(service_id).is_some_and(|e| e.clean_mode)
+}
+
+/// The ids of every service in clean mode.
+pub fn clean_mode_ids() -> Vec<String> {
+    load().services.into_iter().filter(|(_, e)| e.clean_mode).map(|(id, _)| id).collect()
+}
+
+/// A clean-mode service's own `HOME` (`~/.k2/publish-homes/<service id>`,
+/// 0700): `$HOME/.k2/…` lookups no longer find the daemon's files, as in
+/// the 0.46.1 wall.
+pub fn service_home(service_id: &str) -> PathBuf {
+    let safe: String = service_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    k2_core::paths::k2_home().join("publish-homes").join(safe)
+}
+
+fn ensure_service_home(service_id: &str) -> PathBuf {
+    let h = service_home(service_id);
+    if std::fs::create_dir_all(&h).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    h
 }
 
 fn record_inherited(service_id: &str, names: Vec<String>) {
@@ -204,23 +264,89 @@ pub fn app_identity_env(service_id: &str, daemon_port: u16) -> Vec<(&'static str
     v
 }
 
+/// 0.46.0 grace: the variables every published `--cmd` service gets on
+/// top of S24's identity, in every mode: `K2_APP_NAME` (its publish name)
+/// and `K2_GATEWAY_URL` (where an SDK's `fromEnv()` reaches K2; the
+/// daemon's loopback until the 0.46.1 link replaces it). A BFF that read
+/// `~/.k2/heartbeat.port` keeps working from `K2_HOST`/`K2_PORT`.
+pub fn service_identity_env(service_id: &str, name: &str, daemon_port: u16) -> Vec<(&'static str, String)> {
+    let mut v = app_identity_env(service_id, daemon_port);
+    if !name.is_empty() {
+        v.push((crate::apps::process_engine::APP_NAME_ENV, name.to_string()));
+    }
+    if daemon_port != 0 {
+        v.push(("K2_GATEWAY_URL", format!("http://127.0.0.1:{daemon_port}")));
+    }
+    v
+}
+
+/// What [`apply_service`] did.
+#[derive(Debug, Default)]
+pub struct Applied {
+    /// File secrets to remove when the service stops.
+    pub secrets_dir: Option<PathBuf>,
+    /// Clean mode set `PATH` itself: the spawner must not enrich it.
+    pub fixed_path: bool,
+}
+
 /// Prepare the child's environment. Returns the secrets dir to remove
 /// when the service stops (file deliveries).
 pub fn apply(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path, port: u16) -> Option<PathBuf> {
+    apply_service(cmd, service_id, "", workspace_id, cwd, port).secrets_dir
+}
+
+/// Prepare a published service's environment (`name` = its publish name).
+///
+/// - `legacy`: the daemon's whole environment (recorded by name), plus the
+///   identity block and, since 0.46.0, the secrets granted to it (adding,
+///   not removing: 0.46.0 removes nothing).
+/// - `clean`: the base, `PORT`, the identity block, the grants.
+/// - clean mode: as `clean`, but `PATH` is
+///   [`k2_core::app_grace::scan::CLEAN_PATH`] and `HOME` is the service's
+///   own folder.
+pub fn apply_service(cmd: &mut Command, service_id: &str, name: &str, workspace_id: &str, cwd: &Path, port: u16) -> Applied {
     let se = get(service_id);
-    let identity = app_identity_env(service_id, crate::publish_runtime::loopback_port());
-    if se.mode == "legacy" {
+    let identity = service_identity_env(service_id, name, crate::publish_runtime::loopback_port());
+    if se.mode == "legacy" && !se.clean_mode {
         let mut names: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
         names.sort();
         record_inherited(service_id, names);
         cmd.envs(identity);
-        return None;
+        let secrets_dir = apply_granted(cmd, service_id, workspace_id, cwd);
+        return Applied { secrets_dir, fixed_path: false };
     }
     cmd.env_clear();
     cmd.envs(base_env());
+    if se.clean_mode {
+        cmd.env("PATH", k2_core::app_grace::scan::CLEAN_PATH);
+        cmd.env("HOME", ensure_service_home(service_id));
+    }
     cmd.env("PORT", port.to_string());
     cmd.envs(identity);
-    apply_granted(cmd, service_id, workspace_id, cwd)
+    let secrets_dir = apply_granted(cmd, service_id, workspace_id, cwd);
+    Applied { secrets_dir, fixed_path: se.clean_mode }
+}
+
+/// The names a service's process gets from K2 itself in clean mode (and,
+/// by name, in the 0.46.1 wall): the base names, `PORT`, the identity
+/// block. Grants and `.env.k2` names are added by the caller.
+pub fn clean_mode_names() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = BASE_EXACT.to_vec();
+    v.extend([
+        "PORT",
+        APP_ID_ENV,
+        "K2_HOST",
+        "K2_PORT",
+        crate::apps::process_engine::APP_NAME_ENV,
+        "K2_GATEWAY_URL",
+        super::spawn::SECRETS_DIR_ENV,
+    ]);
+    v
+}
+
+/// Does `name` belong to the clean base (exact names, `LC_*`, `K2_PUBLISH_*`)?
+pub fn is_clean_base_name(name: &str) -> bool {
+    clean_mode_names().contains(&name) || name.starts_with("LC_") || name.starts_with("K2_PUBLISH_")
 }
 
 /// What the vault grants one service at start: `.env.k2` values (literals
@@ -361,6 +487,44 @@ mod tests {
         });
     }
 
+    /// 0.46.0 grace: every service gets K2_APP_NAME and K2_GATEWAY_URL;
+    /// clean mode fixes PATH to the system folders and gives the service
+    /// its own HOME (so `$HOME/.k2/…` no longer finds the daemon's files),
+    /// and the spawner is told not to enrich PATH. Turning it on also
+    /// switches a legacy service to clean; legacy turns clean mode off.
+    #[test]
+    fn clean_mode_fixes_path_and_home_and_names_the_gateway() {
+        crate::test_support::with_temp_home(|| {
+            let id = uuid::Uuid::new_v4().to_string();
+            set(&id, Some("legacy"), None).expect("legacy");
+            let dir = std::env::temp_dir();
+            let mut cmd = Command::new("true");
+            let a = apply_service(&mut cmd, &id, "jobs", "ws-1", &dir, 4321);
+            assert!(!a.fixed_path, "legacy keeps today's PATH");
+            assert_eq!(env_of(&cmd, "K2_APP_NAME").as_deref(), Some("jobs"));
+            let on = set_clean_mode(&id, true).expect("on");
+            assert!(on.clean_mode && on.mode == "clean", "{on:?}");
+            assert_eq!(clean_mode_ids(), vec![id.clone()]);
+            let mut cmd = Command::new("true");
+            let a = apply_service(&mut cmd, &id, "jobs", "ws-1", &dir, 4321);
+            assert!(a.fixed_path);
+            assert_eq!(env_of(&cmd, "PATH").as_deref(), Some(k2_core::app_grace::scan::CLEAN_PATH));
+            let home = env_of(&cmd, "HOME").expect("HOME");
+            assert_eq!(std::path::PathBuf::from(&home), service_home(&id));
+            assert!(std::path::Path::new(&home).is_dir());
+            assert!(home.starts_with(&k2_core::paths::k2_home().join("publish-homes").display().to_string()), "{home}");
+            assert_eq!(env_of(&cmd, "K2_APP_ID").as_deref(), Some(id.as_str()));
+            let gw = service_identity_env(&id, "jobs", 5555);
+            assert!(gw.contains(&("K2_GATEWAY_URL", "http://127.0.0.1:5555".to_string())), "{gw:?}");
+            assert!(is_clean_base_name("K2_GATEWAY_URL") && is_clean_base_name("LC_ALL") && !is_clean_base_name("DATABASE_URL"));
+            let off = set_clean_mode(&id, false).expect("off");
+            assert!(!off.clean_mode && off.mode == "clean", "off never gives the inherited env back: {off:?}");
+            set_clean_mode(&id, true).expect("on again");
+            let legacy = set(&id, Some("legacy"), None).expect("legacy");
+            assert!(!legacy.clean_mode, "inheriting again ends clean mode");
+        });
+    }
+
     #[test]
     fn env_k2_parsing() {
         let v = parse_env_k2("# c\nexport A=1\nSTRIPE_KEY=\"k2v://ws/sales/STRIPE_KEY\"\n\nB='x y'\n");
@@ -380,7 +544,7 @@ mod tests {
             assert!(!is_legacy(&new), "a service with no entry is not legacy");
             assert_eq!(legacy_ids(), vec![old.clone()]);
             let n = legacy_env_notice("shop");
-            assert!(n.contains("0.46.0") && n.contains("k2 publish env shop clean"), "{n}");
+            assert!(n.contains("0.46.1") && n.contains("k2 publish env shop clean") && n.contains("k2 app clean-mode shop on"), "{n}");
             set(&old, Some("clean"), None).expect("clean");
             assert!(!is_legacy(&old));
             assert!(legacy_ids().is_empty());

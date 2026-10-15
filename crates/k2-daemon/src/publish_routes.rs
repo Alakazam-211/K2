@@ -100,6 +100,93 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     })
 }
 
+thread_local! {
+    /// The classified caller of the current POST (set by
+    /// [`dispatch_post_as`]); `None` = not classified (unit tests, old
+    /// call sites), treated as a human.
+    static CALLER: std::cell::RefCell<Option<crate::compute_routes::Who>> = const { std::cell::RefCell::new(None) };
+}
+
+/// [`dispatch_post`] with the classified caller, so `run` can apply the
+/// App runtime's `--cmd` mapping (prd-k2-app-runtime-v1 §8.2, S13).
+pub fn dispatch_post_as(path: &str, params: &HashMap<String, String>, who: crate::compute_routes::Who) -> CliResponse {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            CALLER.with(|c| *c.borrow_mut() = None);
+        }
+    }
+    let _clear = Clear;
+    CALLER.with(|c| *c.borrow_mut() = Some(who));
+    dispatch_post(path, params)
+}
+
+fn caller_agent_ws() -> Option<String> {
+    CALLER.with(|c| match c.borrow().as_ref() {
+        Some(crate::compute_routes::Who::Agent { project_id, .. }) => Some(project_id.clone()),
+        _ => None,
+    })
+}
+
+/// The release the `--cmd` mapping is enforced from (§8.2: "before
+/// 0.46.1: unchanged"). An owner opts in early with
+/// `K2_OPEN_APPS_GATE=enforce` in the daemon's environment.
+pub const PUBLISH_RUN_GATE_FROM: &str = k2_core::app_grace::CUTOVER_RELEASE;
+
+fn publish_run_gate_enforced() -> bool {
+    std::env::var("K2_OPEN_APPS_GATE").is_ok_and(|v| v.trim() == "enforce")
+}
+
+/// §8.2 / §5.11.5: a **new** `--cmd` service from an agent is an open-path
+/// App, so it needs "Allow this agent to manage Apps" and "…and publish
+/// open Apps". `None` = no gate applies (a human, `--skin`, a re-run of an
+/// existing label, or both switches on).
+fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> {
+    let ws = caller_agent_ws()?;
+    if skin || ws != project_id {
+        return None;
+    }
+    let exists = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().is_some()
+    };
+    if exists {
+        return None;
+    }
+    let manage = resolve_project_path(project_id).is_some_and(|p| k2_core::workspace::settings::agents_can_manage_skin_for_path(&p));
+    let open = k2_core::workspace::settings::agents_can_publish_open_apps(project_id);
+    if manage && open {
+        return None;
+    }
+    Some(format!(
+        "from K2 {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App: it needs \"Allow this agent to manage Apps\" \
+         and \"…and publish open Apps\" on this workspace (k2 app access <workspace> --manage on --open on, owner/admin), \
+         or the run is held for the owner"
+    ))
+}
+
+/// Run a publish request the owner approved (a held `publish_run`).
+pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value, crate::apps::routes::Refusal> {
+    let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let spec = RunSpec {
+        project_id: g("projectId"),
+        name: g("name"),
+        cmd: g("cmd"),
+        cwd: PathBuf::from(g("cwd")),
+        port: body.get("port").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+        no_tunnel: body.get("noTunnel").and_then(|v| v.as_bool()).unwrap_or(false),
+        replace_spec: true,
+        skin: false,
+        skin_root: String::new(),
+        cwd_explicit: body.get("cwdExplicit").and_then(|v| v.as_bool()).unwrap_or(false),
+        transfer: false,
+    };
+    publish_runtime::run(spec)
+        .map(|svc| serde_json::to_value(svc).unwrap_or(serde_json::Value::Null))
+        .map_err(|e| crate::apps::routes::no("publish_failed", 409, e.message))
+}
+
 /// POST dispatcher.
 pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliResponse {
     match path {
@@ -478,6 +565,28 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         .map(PathBuf::from)
         .or_else(|| resolve_project_path(&project_id).map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(&project));
+    // S13 (§8.2): an agent's new --cmd service is an open-path App.
+    let gate = publish_run_gate(&project_id, &name, skin);
+    if let Some(why) = gate.as_deref() {
+        if publish_run_gate_enforced() {
+            let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+            let body = serde_json::json!({
+                "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
+                "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
+            });
+            let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
+            return crate::apps::routes::respond(crate::apps::grace::hold(
+                &who,
+                k2_core::app_grace::requests::KIND_PUBLISH_RUN,
+                None,
+                &name,
+                &project_id,
+                body,
+                diff,
+                vec![why.to_string()],
+            ));
+        }
+    }
     match publish_runtime::run(RunSpec {
         project_id,
         name,
@@ -492,7 +601,16 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         transfer: boolish(params, &["transfer"]),
     }) {
         Ok(svc) => {
-            CliResponse::ok_json(serde_json::to_string(&svc).unwrap_or_else(|_| "{}".into()))
+            let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
+            if let (Some(why), Some(o)) = (gate, v.as_object_mut()) {
+                // 0.46.0 removes nothing: the run goes through, with the
+                // notice of what changes at the cut-over.
+                o.insert(
+                    "crossover".into(),
+                    serde_json::json!({ "from": PUBLISH_RUN_GATE_FROM, "wouldHold": true, "hint": why }),
+                );
+            }
+            CliResponse::ok_json(v.to_string())
         }
         Err(e) => err_to_resp(e),
     }
@@ -716,7 +834,7 @@ mod tests {
             let row = |n: &str| rows.iter().find(|r| r["name"] == n).unwrap_or_else(|| panic!("{n} missing: {v}")).clone();
             let o = row("oldshop");
             assert_eq!(o["envMode"], "legacy", "{o}");
-            assert_eq!(o["envRemovedIn"], "0.46.0", "{o}");
+            assert_eq!(o["envRemovedIn"], "0.46.1", "{o}");
             assert!(o["envDeprecation"].as_str().expect("notice").contains("k2 publish env oldshop clean"), "{o}");
             let n = row("newshop");
             assert_eq!(n["envMode"], "clean", "{n}");

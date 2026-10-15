@@ -48,6 +48,9 @@ pub enum Purpose {
     /// `/api/oauth/profile`), asked during a token switch. Short: a slow
     /// answer means "can't tell", never a wait.
     LlmAccountCheck,
+    /// 0.46.0 App grace: an App calling an outside API through K2 with a
+    /// secret granted to its service, by name (`/v1/apps/<id>/fetch`).
+    AppFetch,
 }
 
 impl Purpose {
@@ -57,12 +60,13 @@ impl Purpose {
             Purpose::VaultProxy => "vault-proxy",
             Purpose::Source => "source",
             Purpose::LlmAccountCheck => "llm-account-check",
+            Purpose::AppFetch => "app-fetch",
         }
     }
 
     fn connect_timeout(self) -> Duration {
         match self {
-            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source => Duration::from_secs(10),
+            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source | Purpose::AppFetch => Duration::from_secs(10),
             Purpose::LlmAccountCheck => Duration::from_secs(3),
         }
     }

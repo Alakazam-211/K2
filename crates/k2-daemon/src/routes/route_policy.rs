@@ -176,11 +176,20 @@ pub const ROUTES: &[Route] = &[
     // (own workspace + "Allow this agent to manage Apps") in the handler.
     // Box prep (S10): the doctor is Admin (agents read it through their
     // passport); prepare runs root-helper verbs and is the owner's.
+    // 0.46.0 grace (not behind the preview flag): held App requests. The
+    // owner approves in person (confirm); an Admin denies; the requesting
+    // passport withdraws its own through deny.
+    get("/cli/app/approvals", Member),
+    post("/cli/app/approve", Owner),
     get("/cli/app/box", Admin),
     post("/cli/app/box/prepare", Owner),
     post("/cli/app/build", Member),
-    // Stage 1 holds only the per-App memory limit (the rest is S13).
+    // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
+    // off is held unless the owner turns it off.
+    post("/cli/app/clean-mode", Member),
+    // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Member),
+    post("/cli/app/deny", Admin),
     post("/cli/app/deploy", Member),
     // Litmus L3: who, commit, live/failed/stalled of one deployment.
     get("/cli/app/deployment", Member),
@@ -190,6 +199,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Member),
+    // 0.46.0 grace: App-scoped keys. Minting needs the owner's confirm
+    // (anyone else's mint is held); revoking narrows (Admin; a passport for
+    // its own Apps).
+    post("/cli/app/key/mint", Member),
+    post("/cli/app/key/revoke", Admin),
+    get("/cli/app/keys", Member),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
     post("/cli/app/restart", Member),
@@ -199,6 +214,8 @@ pub const ROUTES: &[Route] = &[
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Member),
     post("/cli/app/validate", Member),
+    // 0.46.0 grace: what breaks at the 0.46.1 cut-over, per service.
+    get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),
     post("/cli/auth/logout", Member),
@@ -1189,6 +1206,7 @@ pub fn post_allowed(path: &str) -> bool {
     lookup(path).is_some_and(|r| r.post.is_some())
         || V1_POST_EXACT.contains(&path)
         || HOOK_POST_EXACT.contains(&path)
+        || crate::apps::app_key_routes::post_allowed(path)
         || path == "/v1/w"
         || path.starts_with("/v1/w/")
 }

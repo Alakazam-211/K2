@@ -111,7 +111,7 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "packageOwned": !ctx.is_canonical_path(),
         "keyIds": keys,
         "testKeys": ctx.test_keys,
-        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true},
+        "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true},
         "stalwartPin": STALWART_PINNED_VERSION,
         "stalwartPinSha256": artifact_for_arch(ctx.arch).map(|a| a.sha256).ok(),
         "stalwartPrevious": STALWART_PREVIOUS_VERSION,
@@ -126,6 +126,10 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
                 "sha256": upgrade_from_artifact(rel.version, ctx.arch).map(|a| a.sha256).ok(),
             }))
             .collect::<Vec<_>>(),
+        // Sew (protocol 7): this build's pin, so the daemon can tell an
+        // old helper from a bad download (S29 G8, `k2_helper_pin_mismatch`).
+        "sewPin": k2_root_proto::sew::pinned().version,
+        "sewPinSha256": k2_root_proto::sew::pinned_artifact(ctx.arch).map(|a| a.tarball_sha256).ok(),
         "refused": refused,
         "daemons": daemons,
         "build": crate::BUILD_MARKER,

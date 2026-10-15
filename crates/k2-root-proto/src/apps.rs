@@ -1369,7 +1369,7 @@ mod tests {
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601 };
         let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
-        assert!(r.contains("meta skuid 998 jump k2app_v2"), "process Apps' user gets the same chain");
+        assert!(r.contains("meta skuid 998 jump k2app_v3"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
         assert!(r.contains("meta skuid 997 jump k2app_v3"));
         // No App reaches the whole gateway or proxy range: only its own

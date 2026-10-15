@@ -203,7 +203,7 @@ pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<St
 }
 
 /// The live Seed's manifest caps (the ceiling of the App's link pass).
-fn seed_caps(seed_dir: &Path) -> Result<Vec<String>> {
+pub(crate) fn seed_caps(seed_dir: &Path) -> Result<Vec<String>> {
     let path = seed_dir.join(k2_core::deploy::manifest::MANIFEST_FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| eng_err(codes::SEED_NOT_FOUND, format!("{}: {e}", path.display())))?;
     let m: k2_core::deploy::manifest::Manifest =
@@ -213,7 +213,7 @@ fn seed_caps(seed_dir: &Path) -> Result<Vec<String>> {
 
 /// Rotations reach the App through the engine (`pass-write` swaps the
 /// file every instance of the App mounts).
-fn deliver_for(app: &str) -> super::gateway::Deliver {
+pub(crate) fn deliver_for(app: &str) -> super::gateway::Deliver {
     let app = app.to_string();
     std::sync::Arc::new(move |raw: &str| {
         call(&Request::PassWrite { app: app.clone(), pass_hex: wire::hex_encode(raw.as_bytes()) }, None, Duration::from_secs(30))
@@ -223,7 +223,7 @@ fn deliver_for(app: &str) -> super::gateway::Deliver {
 }
 
 /// The link an installed App gets on `gw` (adopt after a daemon restart).
-fn link_spec_for(app_id: &str, gw: u16) -> Option<super::gateway::LinkSpec> {
+pub(crate) fn link_spec_for(app_id: &str, gw: u16) -> Option<super::gateway::LinkSpec> {
     let (app, seed) = {
         let db = k2_core::db::shared();
         let conn = db.lock();

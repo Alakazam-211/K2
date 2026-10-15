@@ -165,13 +165,14 @@ pub fn stage(e: &Engine, s: &ProcessSpec) -> R<Value> {
                 _ => return Err(bad("secret target")),
             }
         }
-        let has_pass = match &s.pass_hex {
-            Some(p) => {
-                write_file(&stage.join("pass"), &hex_decode(p).ok_or_else(|| bad("pass"))?, 0o644)?;
-                true
-            }
-            None => false,
-        };
+        if let Some(p) = &s.pass_hex {
+            write_file(&stage.join("pass"), &hex_decode(p).ok_or_else(|| bad("pass"))?, 0o644)?;
+        }
+        // Protocol 2: the process exception always has an App pass. When
+        // the spec carries none, the daemon delivers it with `pass-write`
+        // after `process-activate` and before the unit starts (the gateway
+        // link's port is known only once the stage assigned the slot).
+        let has_pass = true;
         let run = ProcessRun {
             app: app.as_str().into(),
             deployment: s.deployment.clone(),

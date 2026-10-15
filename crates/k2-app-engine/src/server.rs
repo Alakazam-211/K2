@@ -106,6 +106,14 @@ impl Engine {
         let file = dir.join(PASS_FILE_NAME);
         sys::write_atomic(&file, &raw, 0o444).map_err(|e| (codes::IO, e))?;
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).map_err(|e| (codes::IO, format!("chmod pass: {e}")))?;
+        // The process exception reads its pass from its own process folder
+        // (bound read-only into its unit; `K2_PASS_FILE`): same swap.
+        let proc_dir = self.apps().join(app.as_str()).join("process");
+        if proc_dir.is_dir() {
+            let pf = proc_dir.join(PASS_FILE_NAME);
+            sys::write_atomic(&pf, &raw, 0o644).map_err(|e| (codes::IO, e))?;
+            std::fs::set_permissions(&pf, std::fs::Permissions::from_mode(0o644)).map_err(|e| (codes::IO, format!("chmod pass: {e}")))?;
+        }
         Ok(dir)
     }
 
@@ -1020,6 +1028,17 @@ mod tests {
         let a = ask(format!("{{\"verb\":\"pass-write\",\"app\":\"../x\",\"pass_hex\":\"{}\"}}\n", wire::hex_encode(b"k2skn_x")));
         assert_eq!(a.code.as_deref(), Some(codes::BAD_REQUEST));
         assert_eq!(std::fs::read(&file).unwrap(), b"k2skn_second", "refusals never touch the file");
+        // A process-exception App reads its pass from its process folder
+        // (`K2_PASS_FILE`): pass-write replaces it there too, readable by
+        // k2appx ("other"), and only when that folder exists.
+        assert!(!d.path().join("apps/jobs/process/pass").exists());
+        std::fs::create_dir_all(d.path().join("apps/jobs/process")).unwrap();
+        let a = ask(w2(b"k2skn_third"));
+        assert!(a.ok, "{a:?}");
+        let pf = d.path().join("apps/jobs/process/pass");
+        assert_eq!(std::fs::read(&pf).unwrap(), b"k2skn_third");
+        assert_eq!(mode(&pf), 0o644);
+        assert_eq!(std::fs::read(&file).unwrap(), b"k2skn_third", "and the container mount");
     }
 
     #[test]

@@ -505,8 +505,17 @@ fn spawn_gate() -> Result<TunnelConfig, SpawnBlock> {
 const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How often a SOLO supervisor whose session the watchdog declared dead
-/// re-reads `tunnel.json` for a longer relay list (0.45.7).
+/// re-reads `tunnel.json` for a longer relay list (0.45.7). Short in
+/// tests so they can wait on several checks.
+#[cfg(not(test))]
 const SOLO_LIST_CHECK_EVERY: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SOLO_LIST_CHECK_EVERY: Duration = Duration::from_millis(250);
+
+/// Solo dead-session list checks that found the list UNCHANGED (and so
+/// left frpc's own retry alone). Lets tests wait on the decision itself
+/// instead of sleeping.
+static SOLO_LIST_UNCHANGED_CHECKS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
 static TEST_FAILBACK_POLICY: Mutex<Option<super::failover::FailbackPolicy>> = Mutex::new(None);
@@ -1527,6 +1536,7 @@ fn wait_for_exit(
                         let _ = child.wait();
                         return ChildOutcome::WatchdogKill;
                     }
+                    SOLO_LIST_UNCHANGED_CHECKS.fetch_add(1, Ordering::SeqCst);
                 }
             }
             if probe_local_desync(
@@ -3096,11 +3106,25 @@ mod tests {
                 ..Default::default()
             })
             .expect("seed legacy config");
+            // Launches recorded so far (0 before the fake has written its
+            // line — a polling condition, never an assertion default).
+            let launches = || {
+                std::fs::read_to_string(dir.join("spawns"))
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0)
+            };
+            let checks_before = SOLO_LIST_UNCHANGED_CHECKS.load(Ordering::SeqCst);
             start(None, 57839, &FrpcBinary::Explicit(script)).expect("start");
-            // The watchdog declares death in well under a second; with the
-            // list unchanged the solo child must NOT be cycled.
-            std::thread::sleep(Duration::from_secs(4));
+            wait_until("the first fake frpc launch", 10, || launches() >= 1);
+            // Wait on the DECISION, not a clock: the watchdog declares the
+            // session dead, and the solo supervisor re-reads the (unchanged)
+            // list three times and leaves frpc's own retry alone each time.
+            // (A stale supervisor from an earlier test can add at most one.)
+            wait_until("three unchanged-list checks on the dead solo session", 30, || {
+                SOLO_LIST_UNCHANGED_CHECKS.load(Ordering::SeqCst) >= checks_before + 4
+            });
             assert_eq!(spawn_count(&dir), 1, "unchanged list → leave frpc's own retry alone");
+            assert_eq!(status().server_addr.as_deref(), Some("9.9.9.9"));
 
             config::update(|c| {
                 c.relays = vec![
@@ -3109,12 +3133,15 @@ mod tests {
                 ];
             })
             .expect("the refreshed list lands");
+            // The supervisor renders frpc.toml for the new relay BEFORE it
+            // launches the new child, so wait for both (2026-10-15 flake:
+            // the launch count was read between the two).
             wait_until("the dead solo session to reconnect on the new list", 30, || {
-                std::fs::read_to_string(frpc_config_path())
-                    .map(|t| t.contains("serverAddr = \"10.0.0.1\""))
-                    .unwrap_or(false)
+                launches() >= 2
+                    && std::fs::read_to_string(frpc_config_path())
+                        .map(|t| t.contains("serverAddr = \"10.0.0.1\""))
+                        .unwrap_or(false)
             });
-            assert!(spawn_count(&dir) >= 2, "the stuck child was replaced");
             stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });

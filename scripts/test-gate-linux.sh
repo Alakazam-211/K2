@@ -22,6 +22,13 @@
 #                        panics still carry file:line and messages)
 #   K2_GATE_KEEP=1       keep the workdir (logs, target) after the run
 #   K2_GATE_THREADS      --test-threads (default: libtest's choice)
+#   K2_GATE_REALPG_PORT / K2_GATE_REALPG_SOCK / K2_GATE_REALPG_BIN
+#                        a throwaway Postgres 16 cluster (TCP port, socket dir,
+#                        bin dir with psql): set all three and the gate RUNS
+#                        the allowlisted real-Postgres smoke against it (a
+#                        failure fails the gate); set only some and the gate
+#                        refuses to start. Never point it at the box's own
+#                        server: the smoke creates and drops roles.
 
 set -uo pipefail
 
@@ -36,6 +43,7 @@ ALLOWLIST=(
   "tunnel::connector::tests::live_start_stop_roundtrip"            # real frpc vs live Connect; manual only
   "classify_routes::tests::checkbox_on_no_marker_reaches_model_path" # needs the bundled GGUF model
   "cell_egress::tests::refused_localhost_port_is_refused_while_a_cell_table_exists" # root + nft; run below as root
+  "sql::tests::real_pg::real_pg_guest_doors_smoke"                  # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
 )
 
 # Root-only ignored tests the gate RUNS explicitly when it is root:
@@ -45,6 +53,17 @@ ROOT_RUNS=(
 )
 
 avail_gb() { df --output=avail -BG "$1" | tail -1 | tr -dc '0-9'; }
+
+# The real-Postgres smoke: all three knobs or none (a partial set is a
+# misconfigured gate, never a silent skip).
+REALPG_SET=0
+for v in K2_GATE_REALPG_PORT K2_GATE_REALPG_SOCK K2_GATE_REALPG_BIN; do
+  [ -n "${!v:-}" ] && REALPG_SET=$((REALPG_SET + 1))
+done
+if [ $REALPG_SET -ne 0 ] && [ $REALPG_SET -ne 3 ]; then
+  echo "refusing to run: set all of K2_GATE_REALPG_PORT/SOCK/BIN or none"
+  exit 2
+fi
 
 mkdir -p "$WORK" || exit 2
 FREE=$(avail_gb "$WORK")
@@ -68,6 +87,8 @@ THREAD_ARGS=()
 
 # Run cargo in a clean environment: only what the toolchain needs, a fresh
 # HOME and TMPDIR per package, no SHELL, no K2_* / K2SO_* variables.
+# Extra VAR=value pairs for one clean_cargo call: EXTRA_ENV=(...) clean_cargo ...
+EXTRA_ENV=()
 clean_cargo() {
   local log=$1; shift
   local h t rc
@@ -78,7 +99,7 @@ clean_cargo() {
       CARGO_HOME="$CARGO_HOME_DIR" RUSTUP_HOME="$RUSTUP_HOME_DIR" \
       CARGO_TARGET_DIR="$WORK/target" CARGO_INCREMENTAL=0 \
       CARGO_PROFILE_DEV_DEBUG="${K2_GATE_DEBUG:-0}" CARGO_PROFILE_TEST_DEBUG="${K2_GATE_DEBUG:-0}" \
-      "$CARGO_BIN" "$@" ) > "$log" 2>&1
+      ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$CARGO_BIN" "$@" ) > "$log" 2>&1
   rc=$?
   rm -rf "$h" "$t"
   return $rc
@@ -103,6 +124,17 @@ if [ "$(id -u)" -eq 0 ]; then
   done
 else
   echo "gate: not root: root-only allowlisted tests not run"
+fi
+
+if [ $REALPG_SET -eq 3 ]; then
+  echo "gate: real-Postgres smoke on 127.0.0.1:$K2_GATE_REALPG_PORT"
+  EXTRA_ENV=(REALPG_PORT="$K2_GATE_REALPG_PORT" REALPG_SOCK="$K2_GATE_REALPG_SOCK" REALPG_BIN="$K2_GATE_REALPG_BIN")
+  if ! clean_cargo "$LOGS/realpg.log" test -p k2-daemon --lib -- --ignored --exact sql::tests::real_pg::real_pg_guest_doors_smoke; then
+    STATUS=1
+  fi
+  EXTRA_ENV=()
+else
+  echo "gate: K2_GATE_REALPG_* not set: real-Postgres smoke not run (allowlisted)"
 fi
 
 echo

@@ -12,7 +12,11 @@ dir, builds with its own target dir, and runs `cargo test -p k2-core` and
 `TMPDIR`, no `SHELL`, no `K2_*` / `K2SO_*`. It runs **as root**. It is green only
 when every test binary reports 0 failed and the ignored tests are exactly its
 allowlist. Write tests that pass there, as a normal user on a Mac, in any order,
-on any thread count.
+on any thread count. Allowlisted tests the gate runs itself: the root + nft
+check (as root), and the real-Postgres smoke
+(`sql::tests::real_pg::real_pg_guest_doors_smoke`) when all of
+`K2_GATE_REALPG_PORT/SOCK/BIN` name a throwaway Postgres 16 cluster (a partial
+set refuses to start; the test panics when its `REALPG_*` vars are missing).
 
 ## Rules
 

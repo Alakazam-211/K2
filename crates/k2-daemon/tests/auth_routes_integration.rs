@@ -200,29 +200,18 @@ fn try_parse(raw: &[u8]) -> Option<(u16, String, Option<String>, bool)> {
 /// Redirect `$HOME` to a fresh tempdir (so connect-users.json writes are
 /// isolated) and run `f`, restoring `$HOME` after. The caller already
 /// holds `TEST_LOCK`. The in-memory DB is initialized once per process.
+///
+/// `TempHome` also points `K2_RUNTIME_DIR` at `<home>/run`, so the tunnel
+/// start/stop routes never resolve the REAL private runtime dir
+/// (`/run/user/<uid>/k2` on Linux), which the prod-isolation guard in
+/// `k2_core::runtime_dir` refuses for a test process.
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev = std::env::var_os("HOME");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "k2so-630-{}-{nanos}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&tmp).expect("create temp HOME");
-    std::env::set_var("HOME", &tmp);
+    let _home = k2_core::test_env::TempHome::new();
     // In-memory DB (process-wide singleton) so the catchall data routes
     // (/cli/projects/list etc.) have a real connection to read.
     let _ = k2_core::db::init_for_tests();
 
     f();
-
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Seed a connect-user with a role and return a live session token for it.

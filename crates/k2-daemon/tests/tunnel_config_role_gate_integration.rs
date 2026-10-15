@@ -137,24 +137,15 @@ fn try_parse(raw: &[u8]) -> Option<(u16, String, bool)> {
 /// Redirect `$HOME` to a fresh tempdir (isolating connect-users.json +
 /// connect-sessions.json + `~/.k2/tunnel.json`) and run `f`, restoring
 /// `$HOME` after. Caller holds `TEST_LOCK`.
+///
+/// `TempHome` also points `K2_RUNTIME_DIR` at `<home>/run`: the tunnel
+/// status / start / stop routes resolve the private runtime dir
+/// (frpc.toml), and without it a test process resolves the REAL one
+/// (`/run/user/<uid>/k2` on Linux) and is refused by the prod-isolation
+/// guard in `k2_core::runtime_dir`.
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev = std::env::var_os("HOME");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir()
-        .join(format!("k2-tunnel-repair-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&tmp).expect("create temp HOME");
-    std::env::set_var("HOME", &tmp);
-
+    let _home = k2_core::test_env::TempHome::new();
     f();
-
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 fn futures_block<F: std::future::Future>(fut: F) -> F::Output {

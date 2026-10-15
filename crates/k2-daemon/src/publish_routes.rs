@@ -649,9 +649,17 @@ mod tests {
         assert_eq!(resp.status, "404 Not Found");
     }
 
-    fn cache_lock() -> std::sync::MutexGuard<'static, ()> {
+    /// The subdomain-cache lock, taken AFTER a temp `$HOME` (env lock
+    /// first, the module lock second; see `k2_core::test_env::serial`).
+    /// The leftovers route reads `tunnel_status()`, which resolves the
+    /// private runtime dir; the `TempHome` points `K2_RUNTIME_DIR` under
+    /// itself so the test never resolves the REAL `/run/user/<uid>/k2`
+    /// (refused by `k2_core::runtime_dir` when this process looks like a
+    /// test, which depends on what sibling tests are doing).
+    fn cache_lock() -> (std::sync::MutexGuard<'static, ()>, crate::test_support::TempHome) {
         static M: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        M.lock().unwrap_or_else(|e| e.into_inner())
+        let home = crate::test_support::TempHome::new();
+        (M.lock().unwrap_or_else(|e| e.into_inner()), home)
     }
 
     fn seed_ws(id: &str, path: &str, name: &str) {
@@ -928,6 +936,9 @@ mod tests {
 
     #[test]
     fn subdomain_unclaim_drops_own_sticker_not_foreign() {
+        // leftovers_json → tunnel_status() → private runtime dir: keep it
+        // under a temp HOME (K2_RUNTIME_DIR), never the real one.
+        let _home = crate::test_support::TempHome::new();
         let pid = std::process::id();
         let docs = format!("docs-unclaim-{pid}");
         let sales = format!("sales-unclaim-{pid}");

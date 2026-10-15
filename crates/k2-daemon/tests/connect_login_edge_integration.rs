@@ -131,25 +131,17 @@ fn try_parse(raw: &[u8]) -> Option<(Resp, bool)> {
     ))
 }
 
+/// Fresh temp `$HOME` (with `.k2/`). `TempHome` also points
+/// `K2_RUNTIME_DIR` at `<home>/run`: the tunnel ingress paths resolve the
+/// private runtime dir, and a test process must never get the REAL one
+/// (`/run/user/<uid>/k2` on Linux; refused by `k2_core::runtime_dir`).
 fn with_temp_home<F: FnOnce()>(f: F) {
-    let prev = std::env::var_os("HOME");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!("k2-edge-login-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(tmp.join(".k2")).expect("create temp HOME");
-    std::env::set_var("HOME", &tmp);
+    let _home = k2_core::test_env::TempHome::new();
     let _ = k2_core::db::init_for_tests();
     // No limiter reset here: every `test_harness::start` daemon owns its
     // own login limiter, so a sibling test's failed-login burst can never
     // 429 this test's logins.
     f();
-    match prev {
-        Some(p) => std::env::set_var("HOME", p),
-        None => std::env::remove_var("HOME"),
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 fn futures_block<F: std::future::Future>(fut: F) -> F::Output {

@@ -195,7 +195,7 @@ pub const RESERVED_APP_IDS: &[&str] = &[
     "list", "inspect", "history", "logs", "errors", "top", "audit", "stop", "start", "restart", "exec",
     "shell", "suspend", "resume", "soak", "guest", "config", "approvals", "approve", "deny", "adopt",
     "transfer", "pack", "access", "doctor", "call", "user", "users", "role", "roles", "grant", "grants",
-    "token", "tokens", "hydra", "front-door", "help", "verbs", "box", "deployment", "status",
+    "token", "tokens", "hydra", "front-door", "help", "verbs", "box", "deployment", "status", "engine", "link",
 ];
 
 /// Core `k2` nouns an App id can't take either (§8.4).

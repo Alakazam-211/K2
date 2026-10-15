@@ -10,15 +10,19 @@
 //!    engine once each;
 //! 2. `prepare` gives the App its id slot and gateway port and pays the
 //!    first start of its id mapping (W §5.5) — before any switch;
-//! 3. `start` renders the Quadlet unit (the floor, §4.2) and starts it; the
-//!    daemon then installs the App's gateway rule (root helper `apps nft
-//!    app`, which nft resolves to the cgroup inode now, W §2.12);
+//! 3. `start` opens the App's gateway link (S14, `gateway.rs`: a listener
+//!    on the slot's gateway port and a fresh one-hour App pass), renders
+//!    the Quadlet unit (the floor, §4.2) and starts it; the daemon then
+//!    installs the App's gateway rule (root helper `apps nft app`, which
+//!    nft resolves to the cgroup inode now, W §2.12);
 //! 4. health, the switch, drain, the watch window and rollback are the
 //!    shared pipeline's (`supervisor.rs`), probing the App's port on host
 //!    loopback from the daemon (AR45: daemon-side HTTP probing).
 //!
-//! Secrets granted to the service and the App pass (S14) travel as Podman
-//! secrets, never in the unit or the env file.
+//! Secrets granted to the service travel as Podman secrets, never in the
+//! unit or the env file. The App pass (S14) is a file the engine keeps in
+//! the App's pass folder (tmpfs), mounted read-only at `/run/k2`; the
+//! gateway rotates it through the engine's `pass-write`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -153,10 +157,11 @@ const OWN: &[&str] = &["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ
 /// The container's environment from the daemon's side: the manifest's
 /// declared variables, then the App identity (S24/AR37: `K2_APP_ID` = the
 /// published service UUID, `K2_APP_NAME` = the slug) and the gateway link
-/// (`K2_HOST`/`K2_PORT` point at the link inside the wall, AR37). The
-/// engine adds `PORT`, `HOME`, `TMPDIR`, `NODE_OPTIONS`, `K2_APP_DATA`,
-/// `K2_APP_CACHE` and the secret/pass file variables.
-pub fn guarded_env(spec: &AppSpec, gw_port: u16, host_lang: Option<String>, host_tz: Option<String>) -> BTreeMap<String, String> {
+/// (`K2_HOST`/`K2_PORT` point at the link inside the wall, AR37; the same
+/// in-wall `127.0.0.1:8730` for every App, S14). The engine adds `PORT`,
+/// `HOME`, `TMPDIR`, `NODE_OPTIONS`, `K2_APP_DATA`, `K2_APP_CACHE` and the
+/// secret/pass file variables.
+pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<String>) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     for (k, v) in &spec.env {
         if !OWN.contains(&k.as_str()) && !k.starts_with("K2_") && wire::env_name_ok(k) && wire::value_ok(v, 32 * 1024) {
@@ -174,9 +179,46 @@ pub fn guarded_env(spec: &AppSpec, gw_port: u16, host_lang: Option<String>, host
     env.insert(super::process_engine::APP_NAME_ENV.into(), spec.app_id.clone());
     env.insert("K2_APP_DEPLOYMENT".into(), spec.deployment_id.clone());
     env.insert("K2_HOST".into(), "127.0.0.1".into());
-    env.insert("K2_PORT".into(), gw_port.to_string());
-    env.insert("K2_GATEWAY_URL".into(), format!("http://127.0.0.1:{gw_port}"));
+    env.insert("K2_PORT".into(), wire::IN_WALL_GATEWAY_PORT.to_string());
+    env.insert("K2_GATEWAY_URL".into(), super::gateway::in_wall_url());
     env
+}
+
+/// The live Seed's manifest caps (the ceiling of the App's link pass).
+fn seed_caps(seed_dir: &Path) -> Result<Vec<String>> {
+    let path = seed_dir.join(k2_core::deploy::manifest::MANIFEST_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|e| eng_err(codes::SEED_NOT_FOUND, format!("{}: {e}", path.display())))?;
+    let m: k2_core::deploy::manifest::Manifest =
+        serde_json::from_str(&text).map_err(|e| eng_err(codes::MANIFEST_INVALID, format!("the Seed's manifest: {e}")))?;
+    Ok(m.caps)
+}
+
+/// Rotations reach the App through the engine (`pass-write` swaps the
+/// file every instance of the App mounts).
+fn deliver_for(app: &str) -> super::gateway::Deliver {
+    let app = app.to_string();
+    std::sync::Arc::new(move |raw: &str| {
+        call(&Request::PassWrite { app: app.clone(), pass_hex: wire::hex_encode(raw.as_bytes()) }, None, Duration::from_secs(30))
+            .map(|_| ())
+            .map_err(|e| e.message)
+    })
+}
+
+/// The link an installed App gets on `gw` (adopt after a daemon restart).
+fn link_spec_for(app_id: &str, gw: u16) -> Option<super::gateway::LinkSpec> {
+    let (app, seed) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let app = k2_core::deploy::store::get_app(&conn, app_id).ok().flatten()?;
+        let seed = app.live_seed.as_deref().and_then(|h| k2_core::deploy::store::get_seed(&conn, h).ok().flatten());
+        (app, seed)
+    };
+    let caps: Vec<String> = seed
+        .and_then(|s| serde_json::from_value::<k2_core::deploy::manifest::Manifest>(s.manifest).ok())
+        .map(|m| m.caps)
+        .unwrap_or_default();
+    let (caps, rooms, _) = super::gateway::link_policy(&caps, &app.owner_workspace);
+    Some(super::gateway::LinkSpec { app_id: app.app_id, service_id: app.service_id, workspace_id: app.owner_workspace, port: gw, caps, rooms })
 }
 
 fn k2_core_app_id_env() -> &'static str {
@@ -424,7 +466,29 @@ impl RuntimeEngine for GuardedEngine {
             .remove(&spec.deployment_id)
             .ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "start before prepare"))?;
         let seed_hash = spec_seed_hash(p).ok_or_else(|| eng_err(codes::SEED_NOT_FOUND, "the prepared Seed has no hash"))?;
-        let env = guarded_env(spec, gw, std::env::var("LANG").ok(), std::env::var("TZ").ok());
+        let env = guarded_env(spec, std::env::var("LANG").ok(), std::env::var("TZ").ok());
+        // S14: the App's gateway link and a fresh pass, before the App
+        // starts (it may call K2 on boot). A redeploy keeps the listener.
+        let (caps, rooms, dropped_caps) = super::gateway::link_policy(&seed_caps(&p.workdir)?, &spec.workspace_id);
+        if !dropped_caps.is_empty() {
+            log_line(spec, &format!("guarded: caps the App pass can't carry (owner widenings, 0.46.1): {}", dropped_caps.join(", ")));
+        }
+        let had_link = super::gateway::port_of(app.as_str()).is_some();
+        let link = super::gateway::LinkSpec {
+            app_id: app.as_str().into(),
+            service_id: spec.service_id.clone(),
+            workspace_id: spec.workspace_id.clone(),
+            port: gw,
+            caps,
+            rooms,
+        };
+        let pass = super::gateway::open(link, Some(deliver_for(app.as_str())))
+            .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("the App's gateway link: {e}")))?;
+        let close_new_link = || {
+            if !had_link {
+                super::gateway::close(app.as_str(), Some(&spec.service_id), true);
+            }
+        };
         let g = crate::vault::publish_env::granted(&spec.service_id, &spec.workspace_id, &p.workdir);
         let (secrets, dropped) = secret_items(g.env, g.files);
         if !dropped.is_empty() {
@@ -442,13 +506,16 @@ impl RuntimeEngine for GuardedEngine {
             memory_mib: memory_mib(spec.memory_limit_bytes),
             drain_secs: spec.drain_secs.min(600),
             secrets,
-            // The App pass arrives with the gateway link (S14).
-            pass_hex: None,
+            pass_hex: Some(wire::hex_encode(pass.as_bytes())),
         };
-        wire::check_start(&s).map_err(|w| eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")))?;
+        if let Err(w) = wire::check_start(&s) {
+            close_new_link();
+            return Err(eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")));
+        }
         let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(420)) {
             Ok(v) => v,
             Err(mut e) => {
+                close_new_link();
                 // The unit's own words (Podman / the OCI runtime) are in the
                 // journal, which only the root helper reads for k2app.
                 if let Ok(t) = logs(app.as_str(), &spec.deployment_id, 12) {
@@ -531,6 +598,18 @@ impl RuntimeEngine for GuardedEngine {
             if let Some(gw) = i["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()) {
                 // After a daemon restart the rule may point at an old inode.
                 let _ = install_gateway_rule(app, gw);
+                // S14: the link listener is the daemon's, so it re-opens;
+                // the App gets a fresh pass (the one it holds stays valid
+                // until it expires).
+                if super::gateway::port_of(app).is_none() {
+                    if let Some(spec) = link_spec_for(app, gw) {
+                        let deliver = deliver_for(app);
+                        match super::gateway::open(spec, Some(deliver.clone())).and_then(|raw| deliver(&raw)) {
+                            Ok(()) => {}
+                            Err(e) => k2_core::log_debug!("[apps] adopt {app}: gateway link: {e}"),
+                        }
+                    }
+                }
             }
             out.push(RunHandle {
                 app_id: app.into(),
@@ -596,7 +675,7 @@ mod tests {
 
     #[test]
     fn env_is_the_manifest_plus_identity_and_the_link() {
-        let e = guarded_env(&spec(), 38_601, Some("C.UTF-8".into()), Some("bad\nzone".into()));
+        let e = guarded_env(&spec(), Some("C.UTF-8".into()), Some("bad\nzone".into()));
         assert_eq!(e["API_BASE"], "https://x");
         for never in ["K2_HOOK_TOKEN", "PATH", "NODE_OPTIONS", "BAD-NAME", "MULTI", "TZ"] {
             assert!(!e.contains_key(never), "{never}");
@@ -604,8 +683,9 @@ mod tests {
         assert_eq!(e["K2_APP_ID"], "6f1c0d7e-1111-4222-8333-944455556666", "AR37: the service UUID");
         assert_eq!(e["K2_APP_NAME"], "nsi-skin");
         assert_eq!(e["K2_HOST"], "127.0.0.1");
-        assert_eq!(e["K2_PORT"], "38601", "inside the wall K2_PORT is the link");
-        assert_eq!(e["K2_GATEWAY_URL"], "http://127.0.0.1:38601");
+        assert_eq!(e["K2_PORT"], "8730", "inside the wall K2_PORT is the link, the same port for every App");
+        assert_eq!(e["K2_GATEWAY_URL"], "http://127.0.0.1:8730");
+        assert!(!e.contains_key("K2_PASS_FILE"), "the engine sets the pass file variable");
         assert_eq!(e["LANG"], "C.UTF-8");
         assert_eq!(e["NODE_ENV"], "production");
     }

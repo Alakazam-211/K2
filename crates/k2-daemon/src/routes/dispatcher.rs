@@ -42,11 +42,17 @@ use tokio::net::TcpStream;
 ///   bytes that arrived through the public K2 Connect tunnel (E2E splice
 ///   or cleartext frpc). The MOST restricted: no HTML account page, and
 ///   password login only with a K2 edge attestation (G1–G6).
+/// - `App` — an App's gateway link (`apps::gateway`, runtime S14): a walled
+///   App calling K2 with its App pass. Narrower still: the link's gate
+///   admits only the App-facing route table and only that link's pass
+///   before any route runs; everywhere else it is treated like `Tunnel`
+///   (never local, never vouched for).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ingress {
     Loopback,
     Lan,
     Tunnel,
+    App,
 }
 
 impl Ingress {
@@ -96,6 +102,7 @@ impl Ingress {
             Ingress::Loopback => "loopback",
             Ingress::Lan => "lan",
             Ingress::Tunnel => "tunnel",
+            Ingress::App => "app-link",
         }
     }
 }
@@ -363,7 +370,7 @@ fn proxied_client(
         Ingress::Loopback => peer.is_some_and(|p| p.is_loopback()),
         // LM4: a loopback peer on `Lan` is a reclassified local proxy.
         Ingress::Lan => peer.is_some_and(|p| p.is_loopback() || trusted.contains(&p)),
-        Ingress::Tunnel => false,
+        Ingress::Tunnel | Ingress::App => false,
     };
     if !peer_trusted {
         return None;
@@ -391,6 +398,8 @@ fn login_throttle_key(
             Some(ip) => ThrottleKey::Client(ip.to_string()),
             None => ThrottleKey::TunnelShared,
         },
+        // The link's gate never admits a login route; shared if it did.
+        Ingress::App => ThrottleKey::TunnelShared,
         Ingress::Lan => match proxied_client(ingress, peer, headers_blob, trusted).or(peer) {
             Some(ip) => ThrottleKey::Client(ip.to_string()),
             None => ThrottleKey::Client("-".to_string()),
@@ -415,6 +424,7 @@ fn skin_login_throttle_key(
 ) -> ThrottleKey {
     match ingress {
         Ingress::Tunnel => ThrottleKey::Uncapped,
+        Ingress::App => ThrottleKey::Client("app-link".to_string()),
         Ingress::Loopback => match proxied_client(ingress, peer, headers_blob, trusted) {
             Some(ip) => ThrottleKey::Client(ip.to_string()),
             None => ThrottleKey::Uncapped,
@@ -494,6 +504,7 @@ fn login_client_trust(
             Some(_) => ClientTrust::Vouched,
             None => ClientTrust::Anonymous,
         },
+        Ingress::App => ClientTrust::Anonymous,
         Ingress::Lan => lan_client_trust(peer, headers_blob, trusted),
     }
 }
@@ -508,7 +519,7 @@ fn skin_login_client_trust(
 ) -> ClientTrust {
     match ingress {
         Ingress::Loopback => ClientTrust::Local,
-        Ingress::Tunnel => ClientTrust::Anonymous,
+        Ingress::Tunnel | Ingress::App => ClientTrust::Anonymous,
         Ingress::Lan => lan_client_trust(peer, headers_blob, trusted),
     }
 }
@@ -973,6 +984,21 @@ async fn handle_one_request(
         // Force-close: we cannot safely find the next request boundary in
         // a chunked stream we don't decode, so keep-alive is unsafe here.
         return DispatchOutcome::Done;
+    }
+
+    // Runtime S14: a request on an App's gateway link passes the link's
+    // gate (Host, no cookies, the App-facing route table, this link's App
+    // pass) before anything else routes it. Every request of the
+    // connection, keep-alive included.
+    if ingress == Ingress::App {
+        match crate::apps::gateway::gate(&req, method, path_and_query) {
+            crate::apps::gateway::Gate::Continue => {}
+            crate::apps::gateway::Gate::Answer { status, body } => {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(&mut *stream, status, "application/json", &body).await;
+                return DispatchOutcome::Done;
+            }
+        }
     }
 
     // Phase 4.5: handle CORS preflight before the method allowlist.
@@ -1740,7 +1766,7 @@ async fn handle_one_request(
             }
             let _ = stream.read(&mut buf).await;
             let skin_pass = if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
-                let r = match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token) {
+                let r = match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass) {
                     // Session passes defer the cap to the room (handler).
                     Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::ACTIVITY_READ) => Ok(pass),
                     Some(_) => Err(crate::skin_routes::missing_cap_response(crate::skin_routes::ACTIVITY_READ)),
@@ -1779,7 +1805,7 @@ async fn handle_one_request(
         "/cli/agent/identity" | "/cli/agent/handle" => {
             let presented = super::http::extract_token(&query);
             let caller = if presented.is_some_and(k2_core::skin::is_skin_token) {
-                match presented.and_then(k2_core::skin::resolve_skin_token) {
+                match presented.and_then(crate::apps::gateway::resolve_pass) {
                     Some(pass) => Ok(crate::agent_identity_routes::Caller::App(pass)),
                     None => Err(crate::skin_routes::revoked_skin_response()),
                 }
@@ -1964,7 +1990,7 @@ async fn handle_one_request(
             let skin_ws = if super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token)
             {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
@@ -2032,7 +2058,7 @@ async fn handle_one_request(
             let skin_ws = if super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token)
             {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::FILES_READ) =>
@@ -2092,7 +2118,7 @@ async fn handle_one_request(
             let skin_ws = if super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token)
             {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     // AH29: activity:read, heartbeats:read or (0.43.3)
                     // tickets:read opens the socket; each frame checks
@@ -2359,7 +2385,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -5247,7 +5273,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -5523,7 +5549,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -5599,7 +5625,7 @@ async fn handle_one_request(
                 .is_some_and(k2_core::skin::is_skin_token);
             let mut skin_pass = None;
             let refusal = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => Some(crate::skin_routes::revoked_skin_response()),
                     Some(pass) if pass.dispatcher_admits_cap(crate::skin_routes::FILES_WRITE) => {
@@ -5812,7 +5838,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -6454,7 +6480,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -6578,7 +6604,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
             } else {
                 None
             };
@@ -6721,7 +6747,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     None => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -7045,7 +7071,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass) if pass.session => Some(pass),
                     Some(_) => {
@@ -7127,7 +7153,7 @@ async fn handle_one_request(
                 .is_some_and(k2_core::skin::is_skin_token);
             let mut scoped_principal = None;
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass) if !pass.session => {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -8199,7 +8225,7 @@ async fn handle_one_request(
                     let _ = stream.read(&mut buf).await;
                     let presented = super::http::extract_token(&query);
                     if presented.is_some_and(k2_core::skin::is_skin_token) {
-                        match presented.and_then(k2_core::skin::resolve_skin_token) {
+                        match presented.and_then(crate::apps::gateway::resolve_pass) {
                             Some(pass) => {
                                 tokio::task::spawn_blocking(move || {
                                     crate::skin_routes::handle_agents_get(&pass)
@@ -10270,7 +10296,7 @@ async fn handle_one_request(
                 .is_some_and(k2_core::skin::is_skin_token);
             let mut scoped_principal = None;
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass) if !pass.session => {
                         let r = crate::skin_routes::platform_store_forbidden();
@@ -10362,7 +10388,7 @@ async fn handle_one_request(
                 .is_some_and(k2_core::skin::is_skin_token);
             let mut scoped_principal = None;
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass) if !pass.session => {
                         let r = crate::skin_routes::platform_store_forbidden();
@@ -10559,7 +10585,7 @@ async fn handle_one_request(
             }
             let mut bound_skin = None;
             let (auth_ok, scoped_principal) = if skin_presented && p == "/cli/thread" {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
@@ -10684,7 +10710,7 @@ async fn handle_one_request(
                 let _ = stream.read(&mut buf).await;
                 Vec::new()
             };
-            let pass = super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token);
+            let pass = super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass);
             let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
             let method_owned = method.clone();
@@ -10830,7 +10856,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::FILES_READ) =>
@@ -10898,7 +10924,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::TICKETS_READ) =>
@@ -10961,7 +10987,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::WIKI_READ) =>
@@ -11024,7 +11050,7 @@ async fn handle_one_request(
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
             let skin_pass = if skin_presented {
-                match super::http::extract_token(&query).and_then(k2_core::skin::resolve_skin_token)
+                match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)
                         if pass.dispatcher_admits_cap(crate::skin_routes::FILES_READ) =>

@@ -49,6 +49,21 @@ TOOLS=""
 LABELS=()
 
 die() { echo "install-node-macos: $*" >&2; exit 1; }
+# bootout returns before launchd lets go of the label; a bootstrap right
+# after fails with "5: Input/output error" and leaves the service unloaded.
+reload_daemon() {
+    local label=$1 plist=$2 i
+    launchctl bootout "system/$label" 2>/dev/null || true
+    for i in $(seq 1 50); do
+        launchctl print "system/$label" >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+    for i in 1 2 3; do
+        launchctl bootstrap system "$plist" 2>/dev/null && return 0
+        sleep 1
+    done
+    launchctl bootstrap system "$plist"
+}
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
@@ -239,15 +254,13 @@ chmod 0644 "$CONFIG_DIR/admin.toml"
 "$BIN" admin install-files --os macos --binary "$BIN" --home "$HOME_DIR" --config-dir "$CONFIG_DIR" \
     --state-dir "$ADMIN_STATE" --socket "$ADMIN_SOCKET" --group "$gid" --out "$tmp" >/dev/null
 install -m 0644 -o root -g wheel "$tmp/dev.k2.node-admin.plist" "$ADMIN_PLIST"
-launchctl bootout system/dev.k2.node-admin 2>/dev/null || true
-launchctl bootstrap system "$ADMIN_PLIST" || die "dev.k2.node-admin didn't load (System Settings → General → Login Items may block background items)"
+reload_daemon dev.k2.node-admin "$ADMIN_PLIST" || die "dev.k2.node-admin didn't load (System Settings → General → Login Items may block background items)"
 if [ -f "$HOME_DIR/state/controller.json" ]; then
     "$BIN" admin pin --config-dir "$CONFIG_DIR" --home "$HOME_DIR" >/dev/null || true
 fi
 
 echo "== LaunchDaemon"
-launchctl bootout system/dev.k2.node 2>/dev/null || true
-launchctl bootstrap system "$PLIST"
+reload_daemon dev.k2.node "$PLIST" || die "dev.k2.node didn't load (System Settings → General → Login Items may block background items)"
 sleep 2
 launchctl print system/dev.k2.node 2>/dev/null | grep -qE "state = running" || die "dev.k2.node didn't start: see $HOME_DIR/log/k2-node.log"
 

@@ -111,6 +111,28 @@ fn helper_caller(ingress: Ingress, query: &str, owner_token: &str) -> crate::pow
     }
 }
 
+/// 0.45.7 — who drives a `/cli/tunnel/*` request, for the tunnel audit
+/// line and the stop reason: the actor kind (`owner-token`,
+/// `user:<name>` for a Connect login such as an ops or remote user,
+/// `agent:<handle>` for a session passport, `app:`/`app-token:`) plus the
+/// ingress (`loopback` = on the box, `lan`, `tunnel` = a remote client
+/// through K2 Connect). Never a token.
+fn tunnel_route_caller(query: &str, owner_token: &str, ingress: Ingress) -> String {
+    let who = super::http::actor_label(query, owner_token, None)
+        .unwrap_or_else(|| "unauthenticated".to_string());
+    format!("{who} via {}", ingress.as_str())
+}
+
+/// 0.45.7 — the audit line for a mutating `/cli/tunnel/*` request
+/// (`None` for reads and every other path). `path` is the bare path (the
+/// query, which may carry `?token=`, is never part of it).
+fn tunnel_route_audit_line(method: &str, path: &str, caller: &str) -> Option<String> {
+    if !path.starts_with("/cli/tunnel/") || !super::http::method_may_mutate(method) {
+        return None;
+    }
+    Some(format!("[tunnel/route] {method} {path} caller={caller}"))
+}
+
 /// #67 — resolve the EFFECTIVE remote-instruct opt-in for the workspace
 /// that owns the live PTY `session_id`.
 ///
@@ -1071,6 +1093,16 @@ async fn handle_one_request(
         )
         .await;
         return DispatchOutcome::Done;
+    }
+
+    // 0.45.7: every mutating tunnel request is logged with its caller
+    // BEFORE any gate, so a stop/start/config write in the field always
+    // names who sent it (rejected ones included).
+    if path.starts_with("/cli/tunnel/") {
+        let caller = tunnel_route_caller(&query, state.token.as_str(), ingress);
+        if let Some(line) = tunnel_route_audit_line(&method, &path, &caller) {
+            k2_core::log_debug!("{line}");
+        }
     }
 
 
@@ -2662,7 +2694,11 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let resp = match k2_core::tunnel::stop_tunnel() {
+            let reason = format!(
+                "POST /cli/tunnel/stop by {}",
+                tunnel_route_caller(&query, state.token.as_str(), ingress)
+            );
+            let resp = match k2_core::tunnel::stop_tunnel(&reason) {
                 Ok(()) => {
                     // Honest post-stop status: re-read from the connector
                     // (reap always runs on stop; status should be stopped).
@@ -11241,6 +11277,37 @@ fn auth_scope_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tunnel_route_audit_logs_mutations_with_caller_and_never_reads() {
+        let caller = "owner-token via loopback";
+        for (method, path) in [
+            ("POST", "/cli/tunnel/stop"),
+            ("POST", "/cli/tunnel/start"),
+            ("POST", "/cli/tunnel/config"),
+            ("POST", "/cli/tunnel/disable"),
+            ("DELETE", "/cli/tunnel/subdomains/claim"),
+        ] {
+            let line = tunnel_route_audit_line(method, path, caller)
+                .unwrap_or_else(|| panic!("{method} {path} must be logged"));
+            assert_eq!(line, format!("[tunnel/route] {method} {path} caller={caller}"));
+        }
+        assert_eq!(tunnel_route_audit_line("GET", "/cli/tunnel/status", caller), None);
+        assert_eq!(tunnel_route_audit_line("GET", "/cli/tunnel/config", caller), None);
+        assert_eq!(tunnel_route_audit_line("POST", "/cli/publish/run", caller), None);
+    }
+
+    #[test]
+    fn tunnel_route_caller_names_kind_and_ingress_never_the_token() {
+        let owner = "owner-secret-token-value";
+        let as_owner = tunnel_route_caller(&format!("token={owner}"), owner, Ingress::Loopback);
+        assert_eq!(as_owner, "owner-token via loopback");
+        assert!(!as_owner.contains(owner));
+        let remote = tunnel_route_caller(&format!("token={owner}"), owner, Ingress::Tunnel);
+        assert_eq!(remote, "owner-token via tunnel");
+        // No credential: resolved without touching any session store.
+        assert_eq!(tunnel_route_caller("", owner, Ingress::Lan), "unauthenticated via lan");
+    }
 
     #[test]
     fn auth_scope_failure_missing_token_is_classic_forbidden() {

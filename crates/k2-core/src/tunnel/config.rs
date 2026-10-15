@@ -475,6 +475,14 @@ pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
     let tmp = dir.join(format!("tunnel.json.tmp.{}", std::process::id()));
     let body = serde_json::to_string_pretty(cfg)
         .map_err(|e| format!("serialize tunnel config: {e}"))?;
+    // Unchanged content → no write (0.45.7): re-applying the same config
+    // (a tunnel start, a device-id push, a same-identity config POST) must
+    // not touch tunnel.json, so its mtime only moves when something
+    // actually changed. The mode is still enforced.
+    if fs::read(&file).is_ok_and(|on_disk| on_disk == body.as_bytes()) {
+        restrict_mode(&file);
+        return Ok(());
+    }
     fs::write(&tmp, body.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     restrict_mode(&tmp);
     fs::rename(&tmp, &file).map_err(|e| {
@@ -585,6 +593,30 @@ mod tests {
             let back = load().expect("load");
             assert_eq!(back, cfg, "config must round-trip byte-for-byte");
             assert_eq!(back.token, "tok_secret", "token must persist");
+        });
+    }
+
+    #[test]
+    fn save_with_unchanged_content_does_not_rewrite_the_file() {
+        with_temp_home(|| {
+            let cfg = TunnelConfig {
+                subdomain: "afs".to_string(),
+                token: "tok".to_string(),
+                ..Default::default()
+            };
+            save(&cfg).expect("first save");
+            let mtime = || {
+                fs::metadata(config_path()).expect("tunnel.json").modified().expect("mtime")
+            };
+            let first = mtime();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            save(&cfg).expect("same save");
+            update(|_| {}).expect("no-op update");
+            assert_eq!(mtime(), first, "unchanged content must not touch tunnel.json");
+
+            save(&TunnelConfig { auto_start: true, ..cfg }).expect("changed save");
+            assert_ne!(mtime(), first, "a real change is written");
+            assert!(load().expect("load").auto_start);
         });
     }
 

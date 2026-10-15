@@ -239,8 +239,11 @@ pub fn start_tunnel(
 }
 
 /// Stop the tunnel (kills the supervised `frpc` child; no restart).
-pub fn stop_tunnel() -> Result<(), String> {
-    connector::stop()
+///
+/// `reason` names the caller (route + caller kind, shutdown, update) for
+/// the `[tunnel] stop` log line.
+pub fn stop_tunnel(reason: &str) -> Result<(), String> {
+    connector::stop(reason)
 }
 
 /// **Disable** the tunnel (PRD `prd-tunnel-disable-unpair-v1.md` §2A) —
@@ -251,7 +254,7 @@ pub fn stop_tunnel() -> Result<(), String> {
 /// symmetric one-click undo. Returns the post-disable status.
 pub fn disable_tunnel() -> Result<TunnelStatus, String> {
     config::update(|c| c.enabled = false)?;
-    connector::stop()?;
+    connector::stop("disable: tunnel paused, enabled=false persisted")?;
     Ok(connector::status())
 }
 
@@ -502,11 +505,11 @@ pub(crate) mod test_support {
         let _home = crate::test_env::TempHome::new();
 
         // Ensure a clean connector singleton for this test.
-        let _ = super::connector::stop();
+        let _ = super::connector::stop("test teardown");
 
         f();
 
         // Best-effort connector teardown.
-        let _ = super::connector::stop();
+        let _ = super::connector::stop("test teardown");
     }
 }

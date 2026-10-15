@@ -224,7 +224,12 @@ fn reconcile_locked(
         }
         if error.is_none() {
             if running_cfg.is_some() && !running_same {
-                if let Err(e) = connector::stop() {
+                let why = format!(
+                    "identity change: running {:?}, config now {:?}",
+                    running_cfg.as_ref().map(|r| r.subdomain.as_str()).unwrap_or(""),
+                    current.subdomain
+                );
+                if let Err(e) = connector::stop(&why) {
                     steps.push(IdentityStep::failed("tunnel", format!("stop old tunnel: {e}")));
                     error = Some(e);
                 }
@@ -250,7 +255,11 @@ fn reconcile_locked(
         // (config moved under it, released, disabled) must go down: it
         // would keep serving the old name.
         if running_cfg.is_some() && !running_same {
-            match connector::stop() {
+            let why = format!(
+                "identity change: the config no longer runs {:?} (moved, released or disabled)",
+                running_cfg.as_ref().map(|r| r.subdomain.as_str()).unwrap_or("")
+            );
+            match connector::stop(&why) {
                 Ok(()) => steps.push(IdentityStep::ok("tunnel", "stopped the tunnel for the old name")),
                 Err(e) => {
                     steps.push(IdentityStep::failed("tunnel", e.clone()));
@@ -309,6 +318,13 @@ pub fn apply_config(
     let after = config::load()?;
     request_relays_on_token_change(&previous, &TunnelIdentity::of(&after));
     if TunnelIdentity::of(&after) == previous {
+        // Same identity: never a stop/restart (0.45.7). `config::save`
+        // also skipped the write when nothing changed at all.
+        if after == before {
+            crate::log_debug!(
+                "[tunnel] config apply: nothing changed — tunnel.json untouched, tunnel left as is"
+            );
+        }
         return Ok((super::get_config_view()?, None));
     }
     let report = reconcile_locked(&previous, was_running, daemon_port, bin);
@@ -568,6 +584,39 @@ mod tests {
         panic!("no `true` binary at /usr/bin/true or /bin/true");
     }
 
+    /// A fake `frpc` that reports frps accepted `k2so-<sub>` and stays up
+    /// (a live, registered tunnel — what a paused machine wakes up with).
+    fn registered_frpc(sub: &str) -> FrpcBinary {
+        let dir = crate::test_env::unique_temp_path("fake-frpc");
+        std::fs::create_dir_all(&dir).expect("mk fake-frpc dir");
+        let script = dir.join("frpc");
+        crate::test_env::write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\necho '[I] [proxy/proxy_wrapper.go:204] [0a1b2c3d] [k2so-{sub}] start proxy success'\nexec sleep 60\n"
+            ),
+        );
+        FrpcBinary::Explicit(script)
+    }
+
+    fn wait_registered() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !connector::proxy_registered() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the fake frpc's `start proxy success` line was never seen"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn cfg_mtime() -> std::time::SystemTime {
+        std::fs::metadata(config::config_path())
+            .expect("tunnel.json exists")
+            .modified()
+            .expect("mtime")
+    }
+
     /// Tunnel-ingress stub (E2E off in these tests: the E2E listener lives
     /// in k2-daemon and is covered by its switch integration test). Refuses
     /// the `broken` subdomain to drive the rollback path.
@@ -661,7 +710,7 @@ mod tests {
             let steps: Vec<&str> = report.steps.iter().map(|s| s.step.as_str()).collect();
             assert_eq!(steps, vec!["config", "listener", "routing", "tunnel"], "{report:?}");
             assert!(report.steps.iter().all(|s| s.ok), "{report:?}");
-            let _ = connector::stop();
+            let _ = connector::stop("test teardown");
             reset_routing();
         });
     }
@@ -705,7 +754,7 @@ mod tests {
             );
             assert_eq!(running_sub().as_deref(), Some("afs"), "the old tunnel is back up");
             assert!(frpc_toml().contains("k2so-afs"));
-            let _ = connector::stop();
+            let _ = connector::stop("test teardown");
             reset_routing();
         });
     }
@@ -753,6 +802,11 @@ mod tests {
             let report = report.expect("identity changed → report");
             assert!(report.ok, "{report:?}");
             assert_eq!(running_sub().as_deref(), Some("k2n1-m4"));
+            let reason = connector::last_stop_reason().expect("the restart stopped the old tunnel");
+            assert!(
+                reason.contains("identity change") && reason.contains("afs") && reason.contains("k2n1-m4"),
+                "the stop must say why: {reason}"
+            );
 
             // A device-id-only write is not an identity change.
             let (_, none) = apply_config(
@@ -766,7 +820,7 @@ mod tests {
             .expect("apply");
             assert!(none.is_none());
             assert_eq!(running_sub().as_deref(), Some("k2n1-m4"));
-            let _ = connector::stop();
+            let _ = connector::stop("test teardown");
             reset_routing();
         });
     }
@@ -786,7 +840,126 @@ mod tests {
             // Same identity → idempotent (no restart, same status).
             let again = connector::start(None, 57839, &true_bin()).expect("idempotent");
             assert_eq!(again.subdomain.as_deref(), Some("k2n1-m4"));
-            let _ = connector::stop();
+            let _ = connector::stop("test teardown");
+        });
+    }
+
+    #[test]
+    fn a_real_identity_change_restarts_frpc_once() {
+        with_temp_home(|| {
+            let _env = env();
+            seed("afs", "tok-afs");
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start afs");
+            wait_registered();
+            let gen = connector::spawn_generation();
+            let (_, report) = apply_config(
+                super::super::TunnelConfigUpdate {
+                    token: Some("tok-rotated".to_string()),
+                    ..Default::default()
+                },
+                57839,
+                &registered_frpc("afs"),
+            )
+            .expect("apply");
+            assert!(report.expect("a token change is an identity change").ok);
+            assert_eq!(connector::spawn_generation(), gen + 1, "a new token must restart frpc");
+            assert_eq!(running_sub().as_deref(), Some("afs"));
+            let _ = connector::stop("test teardown");
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn same_identity_config_apply_is_a_noop_with_no_file_write() {
+        // grokbot 2026-10-15: the tunnel was stopped and restarted and
+        // tunnel.json rewritten with the same content after every pause.
+        // Re-applying the running config must change nothing at all.
+        with_temp_home(|| {
+            let _env = env();
+            seed("afs", "tok-afs");
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start afs");
+            wait_registered();
+            let gen = connector::spawn_generation();
+            let bytes = std::fs::read(config::config_path()).expect("cfg bytes");
+            let mtime = cfg_mtime();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            let (view, report) = apply_config(
+                super::super::TunnelConfigUpdate {
+                    subdomain: Some("afs".to_string()),
+                    token: Some("tok-afs".to_string()),
+                    device_id: Some("dev-app".to_string()),
+                    ..Default::default()
+                },
+                57839,
+                &registered_frpc("afs"),
+            )
+            .expect("apply");
+            assert!(report.is_none(), "same identity → no identity change: {report:?}");
+            assert_eq!(view.subdomain, "afs");
+            assert_eq!(connector::spawn_generation(), gen, "frpc must not be restarted");
+            assert!(connector::proxy_registered(), "the live frpc stays registered");
+            assert_eq!(running_sub().as_deref(), Some("afs"));
+            assert_eq!(std::fs::read(config::config_path()).expect("cfg bytes"), bytes);
+            assert_eq!(cfg_mtime(), mtime, "tunnel.json must not be rewritten");
+
+            // A start against the same config is idempotent too.
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start again");
+            assert_eq!(connector::spawn_generation(), gen);
+            assert_eq!(cfg_mtime(), mtime, "start must not rewrite tunnel.json");
+            let _ = connector::stop("test teardown");
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn start_after_a_pause_keeps_a_registered_tunnel_when_the_token_reads_empty() {
+        // Right after a wake the vault-held token can read back empty
+        // (`config::load` turns a failed vault read into ""). A start then
+        // saw "another identity", stopped the live frpc and failed with
+        // "tunnel not configured", leaving the box dark.
+        with_temp_home(|| {
+            let _env = env();
+            seed("afs", "tok-afs");
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start afs");
+            wait_registered();
+            let gen = connector::spawn_generation();
+            config::save(&TunnelConfig {
+                subdomain: "afs".to_string(),
+                token: String::new(),
+                device_id: Some("dev-app".to_string()),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("tokenless read-back");
+
+            let st = connector::start(None, 57839, &registered_frpc("afs"))
+                .expect("start must not fail over a live tunnel");
+            assert!(st.running, "{st:?}");
+            assert_eq!(connector::spawn_generation(), gen, "frpc must not be restarted");
+            assert!(connector::proxy_registered(), "the live frpc stays registered");
+            let _ = connector::stop("test teardown");
+            reset_routing();
+        });
+    }
+
+    #[test]
+    fn start_leaves_a_registered_frpc_up_when_its_rendered_config_vanished() {
+        with_temp_home(|| {
+            let _env = env();
+            seed("afs", "tok-afs");
+            connector::start(None, 57839, &registered_frpc("afs")).expect("start afs");
+            wait_registered();
+            let gen = connector::spawn_generation();
+            std::fs::remove_file(connector::frpc_config_path()).expect("remove frpc.toml");
+
+            let st = connector::start(None, 57839, &registered_frpc("afs")).expect("start");
+            assert!(st.running);
+            assert_eq!(connector::spawn_generation(), gen, "a registered frpc must not be restarted");
+            assert!(connector::proxy_registered());
+            assert!(frpc_toml().contains("k2so-afs"), "the config is re-rendered in place");
+            let _ = connector::stop("test teardown");
+            reset_routing();
         });
     }
 

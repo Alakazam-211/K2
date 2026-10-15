@@ -1382,7 +1382,7 @@ async fn async_main() {
     // is a normal outcome, logged and ignored.
     // Published-service pids are NOT in the frpc `pkill -f` pattern and
     // must not be reaped here (boot respawn honors desired=running).
-    match tokio::task::spawn_blocking(k2_core::tunnel::stop_tunnel).await {
+    match tokio::task::spawn_blocking(|| k2_core::tunnel::stop_tunnel("daemon shutdown")).await {
         Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
         Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
         Err(e) => log_debug!("[daemon] tunnel stop join error: {e}"),

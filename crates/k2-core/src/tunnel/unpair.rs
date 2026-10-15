@@ -434,7 +434,7 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
 
     // 1. Tunnel down first — a releasing device must stop contesting the
     //    name immediately, before any network round-trip.
-    super::connector::stop()?;
+    super::connector::stop("release: unpairing this device's tunnel identity")?;
 
     // 2. Upstream revocation, only from the holder. Transient failure →
     //    queued for boot-time replay; terminal failure → recorded, never

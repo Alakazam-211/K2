@@ -1065,7 +1065,7 @@ pub fn handle_apply(
         // stop_tunnel is idempotent and already used from HTTP tunnel routes;
         // if the tunnel was never up this is a no-op. Main shutdown also
         // calls stop_tunnel — double-call is safe.
-        match k2_core::tunnel::stop_tunnel() {
+        match k2_core::tunnel::stop_tunnel("update apply: binary swapped, pre-shutdown reap") {
             Ok(()) => k2_core::log_debug!(
                 "[daemon] P3 update/apply — stop_tunnel after swap (pre-shutdown reap)"
             ),

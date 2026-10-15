@@ -709,25 +709,55 @@ pub fn start(
     // config gone — 2026-10-14) is repaired the same way: stop + a fresh
     // start re-renders the config and respawns frpc. "Tunnel started" over
     // a dead frpc was the bug.
+    //
+    // Pause-safe (0.45.7, grokbot): a start that lands while frpc is alive
+    // never restarts it for a reason frpc can ride out on its own. A
+    // machine that was paused or asleep comes back with frpc reconnecting
+    // by itself (and the supervisor + watchdog handle a dead one), so:
+    //   * frps has the live run's proxy registered → never restart, even
+    //     when the rendered config file went missing (frpc read it at
+    //     spawn; it is re-rendered here, in place, and before any respawn);
+    //   * the config on disk can't start a tunnel at all (no token — e.g.
+    //     the vault read failed right after a wake) → keep the live
+    //     tunnel; stopping it would only trade a working tunnel for an
+    //     error.
     if let Some(st) = guard.as_ref() {
         if st.running.load(Ordering::SeqCst) {
             let mut desired = config::load()?;
             if let Some(sub) = subdomain_override.as_deref() {
                 desired.subdomain = sub.to_string();
             }
+            let stop_reason;
             if super::identity::TunnelIdentity::of(&desired)
                 == super::identity::TunnelIdentity::of(&st.cfg)
             {
                 match unhealthy_reason(st) {
                     None => return Ok(status_from(st)),
+                    Some(why) if st.proxy.is_registered() => {
+                        crate::log_debug!(
+                            "[tunnel] start: {why}, but frps has the live frpc's proxy \
+                             registered — leaving frpc up and re-rendering the config in place"
+                        );
+                        rerender_in_place(st);
+                        return Ok(status_from(st));
+                    }
                     Some(why) => {
                         crate::log_debug!(
                             "[tunnel] start: tunnel is running but not serving ({why}) — \
                              re-rendering the config and restarting frpc"
                         );
+                        stop_reason = format!("start: repair, running but not serving ({why})");
                         repaired = Some(why);
                     }
                 }
+            } else if !desired.is_connectable() {
+                crate::log_debug!(
+                    "[tunnel] start: the config on disk cannot start a tunnel (no token or \
+                     server; the vault may be unreadable) — keeping the running tunnel for \
+                     {:?} up instead of restarting it into a failure",
+                    st.cfg.subdomain
+                );
+                return Ok(status_from(st));
             } else {
                 crate::log_debug!(
                     "[tunnel] start: running tunnel serves {:?} but the config now says {:?} \
@@ -735,9 +765,13 @@ pub fn start(
                     st.cfg.subdomain,
                     desired.subdomain
                 );
+                stop_reason = format!(
+                    "start: identity change, running {:?} but the config says {:?}",
+                    st.cfg.subdomain, desired.subdomain
+                );
             }
             drop(guard);
-            stop()?;
+            stop(&stop_reason)?;
             guard = state().lock().unwrap_or_else(|p| p.into_inner());
             // A concurrent start may have won the slot while it was free.
             if let Some(st) = guard.as_ref() {
@@ -911,6 +945,7 @@ pub fn start(
     let mut status = status_from(&st);
     status.repaired = repaired;
     *guard = Some(st);
+    SPAWN_GENERATION.fetch_add(1, Ordering::SeqCst);
     Ok(status)
 }
 
@@ -924,8 +959,21 @@ pub fn start(
 /// Hardened (Bug B / Phase 4b): `running=false` FIRST, slot kill, pattern
 /// reap, short re-check, second reap (and SIGKILL if still alive) so a
 /// graceful daemon exit under `KillMode=process` cannot leave orphan frpc.
-pub fn stop() -> Result<(), String> {
+///
+/// `reason` names the caller and why (0.45.7): every stop is logged with
+/// it, so a stop in the field is never anonymous again.
+pub fn stop(reason: &str) -> Result<(), String> {
     let mut guard = state().lock().unwrap_or_else(|p| p.into_inner());
+    let live = guard.as_ref().filter(|st| st.running.load(Ordering::SeqCst));
+    crate::log_debug!(
+        "{}",
+        stop_log_line(
+            reason,
+            live.map(|st| st.cfg.subdomain.as_str()),
+            live.is_some_and(|st| st.proxy.is_registered()),
+        )
+    );
+    *last_stop_reason_slot().lock().unwrap_or_else(|p| p.into_inner()) = Some(reason.to_string());
     if let Some(st) = guard.as_ref() {
         // 1) Tell the supervisor not to respawn — MUST be first.
         st.running.store(false, Ordering::SeqCst);
@@ -942,7 +990,7 @@ pub fn stop() -> Result<(), String> {
     //    before this fix. Safe when nothing matches (pkill no-match = ok).
     let cfg_path = frpc_config_path();
     crate::log_debug!(
-        "[tunnel] stop: reaping stray frpc matching `{}`",
+        "[tunnel] stop ({reason}): reaping stray frpc matching `{}`",
         stray_frpc_pattern(&cfg_path)
     );
     reap_stray_frpc(&cfg_path);
@@ -974,6 +1022,50 @@ pub fn stop() -> Result<(), String> {
     // 6) Clear connector state so status() reports stopped.
     *guard = None;
     Ok(())
+}
+
+/// The `[tunnel] stop` log line: who/why, and what was running. Pure so
+/// the wording is unit-tested; never carries a token.
+fn stop_log_line(reason: &str, running_sub: Option<&str>, registered: bool) -> String {
+    match running_sub {
+        Some(sub) => format!(
+            "[tunnel] stop ({reason}): stopping the tunnel for {sub:?} (frps proxy registered: {registered})"
+        ),
+        None => format!("[tunnel] stop ({reason}): no tunnel running; reaping any stray frpc"),
+    }
+}
+
+fn last_stop_reason_slot() -> &'static Mutex<Option<String>> {
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// The reason given to the most recent [`stop`] (`None` = never stopped
+/// in this process).
+pub fn last_stop_reason() -> Option<String> {
+    last_stop_reason_slot().lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// Fresh frpc supervisors started by [`start`] in this process. A start
+/// that found the tunnel already serving does not bump it, so equal
+/// values before and after a call prove frpc was not restarted.
+static SPAWN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn spawn_generation() -> u64 {
+    SPAWN_GENERATION.load(Ordering::SeqCst)
+}
+
+/// Re-render a missing frpc.toml for the LIVE run without touching frpc
+/// (it read the file at spawn). Same inputs the supervisor uses.
+fn rerender_in_place(st: &ConnectorState) {
+    if frpc_config_path().exists() {
+        return;
+    }
+    let relay = st.current_relay.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let port = st.resolved_local_port.load(Ordering::SeqCst);
+    if let Err(e) = write_relay_config(&st.cfg, &relay, port, config::e2e_enabled(&st.cfg)) {
+        crate::log_debug!("[tunnel] WARN: in-place re-render of frpc.toml failed: {e}");
+    }
 }
 
 /// The config the RUNNING connector started with (`None` when stopped).
@@ -2549,7 +2641,7 @@ mod tests {
                 "E2E start must render an https proxy\n{toml}"
             );
 
-            let _ = stop();
+            let _ = stop("test teardown");
         });
     }
 
@@ -2581,7 +2673,7 @@ mod tests {
                 "main loopback port must never be the tunnel target\n{toml}"
             );
             assert!(toml.contains("type = \"http\""), "{toml}");
-            let _ = stop();
+            let _ = stop("test teardown");
 
             // A failing hook must abort the start (no fallback to :57839).
             drop(hook);
@@ -2650,7 +2742,7 @@ mod tests {
             assert!(rotated.contains("subdomain = \"rosson\""), "{rotated}");
             assert!(rotated.contains("name = \"k2so-rosson\""), "{rotated}");
 
-            stop().expect("stop");
+            stop("test").expect("stop");
             assert!(!status().running);
         });
     }
@@ -2734,7 +2826,7 @@ mod tests {
             );
             assert!(log.contains("connect to server error"), "{log}");
 
-            stop().expect("stop");
+            stop("test").expect("stop");
             assert!(!status().running);
             let _ = std::fs::remove_dir_all(&dir);
         });
@@ -2773,7 +2865,7 @@ mod tests {
                 Some("9.9.9.9"),
                 "single-relay status must report the configured endpoint"
             );
-            let _ = stop();
+            let _ = stop("test teardown");
         });
     }
 
@@ -2830,7 +2922,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(200));
             }
 
-            stop().expect("stop");
+            stop("test").expect("stop");
             assert!(!status().running);
         });
     }
@@ -2914,7 +3006,7 @@ mod tests {
             assert_eq!(status().server_addr.as_deref(), Some("9.9.9.9"));
 
             // The NEXT start picks the new list up: dials the new primary.
-            stop().expect("stop");
+            stop("test").expect("stop");
             let st = start(None, 57839, &FrpcBinary::Explicit(frpc))
                 .expect("restart with relays");
             assert_eq!(
@@ -2927,7 +3019,7 @@ mod tests {
                 toml.contains("serverAddr = \"10.0.0.1\""),
                 "restart must render the new preferred relay\n{toml}"
             );
-            stop().expect("stop");
+            stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -2969,7 +3061,7 @@ mod tests {
                 st.server_addr
             );
             assert_eq!(st.relay_list.relays, vec!["10.0.0.1:7000", "10.0.0.2:7000"]);
-            stop().expect("stop");
+            stop("test").expect("stop");
         });
     }
 
@@ -3023,7 +3115,7 @@ mod tests {
                     .unwrap_or(false)
             });
             assert!(spawn_count(&dir) >= 2, "the stuck child was replaced");
-            stop().expect("stop");
+            stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -3099,7 +3191,7 @@ mod tests {
                     .map(|d| d.lines().last() == Some(p_port.to_string().as_str()))
                     .unwrap_or(false)
             });
-            stop().expect("stop");
+            stop("test").expect("stop");
             drop(primary);
             let _ = std::fs::remove_dir_all(&dir);
         });
@@ -3138,7 +3230,7 @@ mod tests {
             assert_eq!(st.relay_primary, Some(true));
             assert_eq!(st.server_port, Some(p_port));
             assert_eq!(spawn_count(&dir), 1, "no reconnect while on the primary");
-            stop().expect("stop");
+            stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -3180,7 +3272,7 @@ mod tests {
             let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
                 .expect("re-enabled tunnel must start");
             assert!(st.running);
-            stop().expect("stop");
+            stop("test").expect("stop");
         });
     }
 
@@ -3231,7 +3323,7 @@ mod tests {
             let st = start(None, 57839, &FrpcBinary::Explicit(true_bin()))
                 .expect("fresh identity must start");
             assert!(st.running);
-            stop().expect("stop");
+            stop("test").expect("stop");
         });
     }
 
@@ -3277,7 +3369,7 @@ mod tests {
             }
             let st = status();
             assert!(!st.enabled, "status must show the persisted disable");
-            stop().expect("stop is idempotent after the gate exit");
+            stop("test").expect("stop is idempotent after the gate exit");
         });
     }
 
@@ -3415,7 +3507,7 @@ mod tests {
             assert!(!proxy_registered(), "a respawn must clear the registration");
             assert!(registered_config().is_none());
 
-            stop().expect("stop");
+            stop("test").expect("stop");
             assert!(!proxy_registered());
             // The hook is process-global: leaving it installed made
             // `supervisor_rotation_keeps_frozen_local_port` (which expects
@@ -3534,23 +3626,27 @@ mod tests {
             });
             assert_eq!(status().frpc_last_error, None);
 
-            // 4) Config gone while frpc keeps running: status says so, and
-            //    `start()` repairs (re-renders) rather than "already running".
+            // 4) Config gone while frpc keeps running AND frps has its proxy
+            //    registered: status says so, and `start()` re-renders the
+            //    config in place WITHOUT restarting the live frpc (0.45.7
+            //    pause-safety: frpc read the file at spawn; the supervisor
+            //    re-renders before any respawn).
             std::fs::write(&hold, "1").expect("hold the fake up");
+            wait_until("the held run is registered", 10, || proxy_registered());
             std::fs::remove_file(frpc_config_path()).expect("delete frpc.toml a third time");
             let st = status();
             assert_eq!(st.frpc_healthy, Some(false), "{st:?}");
             assert_eq!(st.frpc_config_present, Some(false), "{st:?}");
-            let st = start(None, 57839, &bin).expect("repair start");
-            let why = st.repaired.clone().expect("a missing config must be repaired");
-            assert!(why.contains("missing"), "{why}");
-            assert!(frpc_config_path().exists(), "start re-rendered the config");
+            let gen = spawn_generation();
+            let st = start(None, 57839, &bin).expect("start over a registered frpc");
+            assert_eq!(st.repaired, None, "a registered frpc must not be restarted: {st:?}");
+            assert_eq!(spawn_generation(), gen, "no new supervisor");
+            assert!(frpc_config_path().exists(), "start re-rendered the config in place");
+            assert_eq!(st.frpc_healthy, Some(true), "{st:?}");
+            assert_eq!(start_count(), 3, "the live frpc kept running");
             std::fs::remove_file(&hold).expect("release the hold");
-            wait_until("healthy after the second repair", 15, || {
-                start_count() == 4 && status().frpc_healthy == Some(true)
-            });
 
-            stop().expect("stop");
+            stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
@@ -3559,7 +3655,7 @@ mod tests {
     fn status_is_stopped_before_any_start() {
         with_temp_home(|| {
             // Ensure a clean singleton for this test.
-            let _ = stop();
+            let _ = stop("test teardown");
             assert_eq!(status(), TunnelStatus::stopped());
         });
     }
@@ -3567,10 +3663,30 @@ mod tests {
     #[test]
     fn stop_is_idempotent_on_stopped_connector() {
         with_temp_home(|| {
-            stop().expect("first stop ok");
-            stop().expect("second stop ok");
+            stop("test").expect("first stop ok");
+            stop("test").expect("second stop ok");
             assert!(!status().running);
         });
+    }
+
+    #[test]
+    fn stop_records_and_logs_its_reason() {
+        with_temp_home(|| {
+            stop("POST /cli/tunnel/stop by owner-token via loopback").expect("stop");
+            assert_eq!(
+                last_stop_reason().as_deref(),
+                Some("POST /cli/tunnel/stop by owner-token via loopback")
+            );
+        });
+        assert_eq!(
+            stop_log_line("daemon shutdown", Some("grokbot"), true),
+            "[tunnel] stop (daemon shutdown): stopping the tunnel for \"grokbot\" \
+             (frps proxy registered: true)"
+        );
+        assert_eq!(
+            stop_log_line("update apply", None, false),
+            "[tunnel] stop (update apply): no tunnel running; reaping any stray frpc"
+        );
     }
 
     /// stop() always reaps by config pattern even when the Child slot is
@@ -3613,7 +3729,7 @@ mod tests {
             );
 
             // No connector STATE — slot is empty by construction.
-            stop().expect("stop must succeed with empty STATE");
+            stop("test").expect("stop must succeed with empty STATE");
             assert!(!status().running);
 
             // pkill SIGTERMs the stand-in; the Child handle reaps the
@@ -3673,7 +3789,7 @@ mod tests {
             // is empty — the historical bug path.
             std::thread::sleep(Duration::from_millis(200));
 
-            stop().expect("stop solo tunnel");
+            stop("test").expect("stop solo tunnel");
             assert!(!status().running, "status must be stopped after stop()");
 
             // Child must not still be holding the config path (reap + poll kill).
@@ -3785,7 +3901,7 @@ mod tests {
             )
             .expect("port invariant must hold after relay rotation");
 
-            stop().expect("stop");
+            stop("test").expect("stop");
         });
     }
 
@@ -3937,7 +4053,7 @@ mod tests {
         assert!(st.running);
         std::thread::sleep(Duration::from_secs(2));
         assert!(status().running);
-        stop().expect("stop live tunnel");
+        stop("test").expect("stop live tunnel");
         assert!(!status().running);
     }
 }

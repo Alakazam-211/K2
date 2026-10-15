@@ -128,8 +128,10 @@ export const ZEN_TEMPLATES_FALLBACK: readonly ZenTemplateInfo[] = [
   {
     id: 'k2.texting@1',
     short: 'texting',
-    label: 'Start with the default',
-    description: 'Garden 1’s layout: your agents beside a conversation.',
+    // Rosson 2026-10-15: offered by name, next to the Diary (Rust
+    // `GARDEN_ONE_LABEL` / `GARDEN_ONE_DESCRIPTION`).
+    label: 'Garden 1',
+    description: 'K2’s default: your agents beside a conversation, pinned agents on top, live activity above the box.',
     section: 'start',
     newUsers: true,
   },

@@ -164,7 +164,7 @@ pub fn catalog_template(id: &str) -> Option<&'static str> {
 /// The texting start's card in New Garden (Rosson 2026-10-15).
 pub const GARDEN_ONE_LABEL: &str = "Garden 1";
 pub const GARDEN_ONE_DESCRIPTION: &str =
-    "K2's default: your agents beside a conversation, pinned agents on top, live activity above the box.";
+    "K2’s default: your agents beside a conversation, pinned agents on top, live activity above the box.";
 
 /// Where a template shows in New Garden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

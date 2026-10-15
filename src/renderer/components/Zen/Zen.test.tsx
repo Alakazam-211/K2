@@ -456,7 +456,7 @@ describe('Gardens (G22–G25)', () => {
     expect(document.querySelector('[data-zen-garden-menu]')).toBeNull()
   })
 
-  it('+ New Garden opens the modal: Start with the default makes Garden 1’s page, Start empty makes an empty Garden (TG4.2, Rosson 2026-10-08)', async () => {
+  it('+ New Garden opens the modal: the Garden 1 card makes Garden 1’s page, Start empty makes an empty Garden (TG4.2, Rosson 2026-10-08)', async () => {
     mount()
     await enterViaTopBar()
     await pageReady()
@@ -471,7 +471,7 @@ describe('Gardens (G22–G25)', () => {
     await waitFor(() => expect(document.querySelectorAll('[data-zen-new-garden-card]').length).toBe(2))
     const cards = Array.from(document.querySelectorAll('[data-zen-new-garden-card]'))
     expect(cards.map((c) => [c.getAttribute('data-zen-new-garden-card'), c.querySelector('.truncate')?.textContent])).toEqual([
-      ['texting', 'Start with the default'],
+      ['texting', 'Garden 1'],
       ['blank', 'Start empty and ask my agent'],
     ])
     expect(cards[0].getAttribute('aria-checked')).toBe('true')

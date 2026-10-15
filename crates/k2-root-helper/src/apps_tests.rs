@@ -1272,7 +1272,7 @@ fn logs_read_one_deployments_unit_for_the_daemon_only() {
     assert_eq!(v["unit"], "k2app-nsi-skin--d-0123456789ab.service");
     assert_eq!(
         calls_of(&t, k2_root_proto::paths::JOURNALCTL),
-        vec!["--no-pager -o cat -n 200 _UID=996 _SYSTEMD_USER_UNIT=k2app-nsi-skin--d-0123456789ab.service".to_string()]
+        vec!["--no-pager -o cat -n 200 _SYSTEMD_OWNER_UID=996 _SYSTEMD_USER_UNIT=k2app-nsi-skin--d-0123456789ab.service".to_string()]
     );
     t.as_agent();
     assert_eq!(t.call(&["apps", "logs", "nsi-skin", "d-0123456789ab", "200"]).code, exit::NOT_DAEMON);

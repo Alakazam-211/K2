@@ -61,6 +61,19 @@ fn upstream() -> (u16, std::sync::mpsc::Receiver<Vec<u8>>) {
     (port, rx)
 }
 
+/// The log line lands just after the client sees the close: wait for it.
+fn wait_log(app: &str, what: &str, pred: impl Fn(&J) -> bool) -> Vec<J> {
+    let t = Instant::now();
+    loop {
+        let log = tail(app, 100);
+        if log.iter().any(&pred) {
+            return log;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "{what}: {log:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn listen(app: &str, p: Policy) -> u16 {
     ensure(app, 0).expect("listen");
     set_policy(app, p);
@@ -284,8 +297,8 @@ fn connect_tunnels_allowed_hosts_and_refuses_the_rest() {
     assert!(s.contains(&("other.example.test".into(), up, false, codes::DENIED.into())), "{s:?}");
     assert!(s.contains(&("rosson.k2.dev".into(), 443, false, codes::SELF.into())), "{s:?}");
     // The log has one line per connection, host and port only.
-    let log = tail(app, 100);
-    assert!(log.iter().any(|l| l["result"] == "ok" && l["host"] == "up.example.test" && l["up"] == 5), "{log:?}");
+    let log = wait_log(app, "the ok tunnel", |l| l["result"] == "ok" && l["host"] == "up.example.test");
+    assert!(log.iter().any(|l| l["result"] == "ok" && l["up"] == 5 && l["down"] == 10), "bytes both ways: {log:?}");
     assert!(log.iter().any(|l| l["result"] == "refused" && l["code"] == codes::SELF));
     let raw = std::fs::read_to_string(log_path(app)).unwrap();
     assert!(!raw.contains("token=x") && !raw.contains("/cli/"), "never paths or queries: {raw}");
@@ -346,7 +359,11 @@ fn tls_must_name_the_connect_host() {
     c.write_all(&client_hello("evil.example.com")).unwrap();
     let mut buf = [0u8; 64];
     assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)), "closed");
-    assert!(rx.recv_timeout(Duration::from_millis(600)).is_err(), "the upstream got nothing");
+    // The upstream (an allowed host) was dialed, but no byte reached it.
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(got) => assert!(got.is_empty(), "the upstream got {} bytes", got.len()),
+        Err(_) => {}
+    }
     // The matching name passes, bytes and all.
     let (mut c, _) = connect(px, &format!("up.example.test:{up}"));
     let hello = client_hello("up.example.test");
@@ -355,8 +372,7 @@ fn tls_must_name_the_connect_host() {
     assert!(n > 0 && buf.starts_with(b"echo:"));
     drop(c);
     assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), hello);
-    let log = tail(app, 10);
-    assert!(log.iter().any(|l| l["code"] == codes::SNI), "{log:?}");
+    wait_log(app, "the SNI refusal", |l| l["code"] == codes::SNI);
     stop(app);
 }
 
@@ -391,7 +407,7 @@ fn narrowing_and_stopping_cut_open_tunnels_and_idle_ones_close() {
     let t = Instant::now();
     assert!(matches!(c.read(&mut buf), Ok(0) | Err(_)));
     assert!(t.elapsed() < Duration::from_secs(5), "closed for idling");
-    let log = tail(app, 20);
+    let log = wait_log(app, "the idle close", |l| l["end"] == "idle");
     for end in ["narrowed", "app_stopped", "idle"] {
         assert!(log.iter().any(|l| l["end"] == end), "{end}: {log:?}");
     }

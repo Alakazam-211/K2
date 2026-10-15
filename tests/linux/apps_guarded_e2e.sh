@@ -284,7 +284,13 @@ sleep 3
 UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
 n="$(journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="$UNIT" 2>/dev/null | grep -c 'flood a2' || true)"
 [ "$n" -lt 20000 ] || fail "flood lines kept: $n of 20000 (no rate limit)"
-journalctl --no-pager --since "-2min" | grep -q "Suppressed [0-9]* messages from user@$(id -u k2app).service" || fail "no journald suppression for user@k2app"
+# journald reports the suppressed count when the 30 s window closes.
+SUP=0
+for _ in $(seq 1 45); do
+	journalctl --no-pager --since "-3min" | grep -q "Suppressed [0-9]* messages from user@$(id -u k2app).service" && { SUP=1; break; }
+	sleep 1
+done
+[ "$SUP" = 1 ] || fail "no journald suppression for user@k2app"
 ok "20000 log lines in a burst: the journal kept $n; journald suppressed the rest (LogRateLimit on user@k2app, all Apps together)"
 
 echo "== crash: K2 restarts it (backoff) =="
@@ -369,11 +375,11 @@ systemctl daemon-reload
 systemctl start k2-daemon.service
 sleep 1
 N=0
-req() { # mode body → answer
-	N=$((N + 1))
-	echo "$N $1 $2" >/run/k2fd/req
-	for _ in $(seq 1 1200); do [ -f "/run/k2fd/$N.out" ] && break; sleep 0.25; done
-	cat "/run/k2fd/$N.out"
+req() { # mode body → answer (a fresh id per call: callers pipe it, so no shared counter)
+	local id="r$RANDOM$RANDOM$RANDOM"
+	echo "$id $1 $2" >/run/k2fd/req
+	for _ in $(seq 1 1200); do [ -f "/run/k2fd/$id.out" ] && break; sleep 0.25; done
+	cat "/run/k2fd/$id.out"
 }
 req daemon '{"verb":"version"}' | grep -q '"ok":true' || fail "the daemon's main process was refused"
 req agent '{"verb":"version"}' | grep -q caller_not_daemon || fail "the daemon's child was admitted"
@@ -399,6 +405,36 @@ ok "App pass at /run/k2/pass (K2_PASS_FILE), file and env secrets arrive as Podm
 req daemon '{"verb":"stop","app":"esc-a","deployment":"'"$DEP"'"}' | grep -q '"ok":true' || fail "stop"
 [ -z "$(asapp podman secret ls --format '{{.Name}}' | grep -- "--$DEP--" || true)" ] || fail "secrets left after stop"
 ok "stop removes the deployment's Podman secrets"
+
+echo "== youki (opt-in) from the upstream release when the distro has none =="
+if [ ! -x /usr/bin/youki ]; then
+	curl -fsSL -o /tmp/youki.tgz "https://github.com/youki-dev/youki/releases/download/v0.7.0/youki-0.7.0-$ARCH-gnu.tar.gz"
+	tar -xzf /tmp/youki.tgz -C /tmp youki
+	install -m 0755 /tmp/youki /usr/bin/youki
+fi
+info "youki $(/usr/bin/youki --version | head -n1)"
+req helper "apps runtime youki" >/tmp/yk.json
+jq_ 'assert v["rc"]==0, v' /tmp/yk.json
+DEP2=d-0000000000f2
+req daemon "$(printf '%s' "$START" | sed "s/$DEP/$DEP2/; s/41999/41998/")" >/tmp/st2.json
+if grep -q '"ok":true' /tmp/st2.json; then
+	for _ in $(seq 1 100); do curl -sf "http://127.0.0.1:41998/healthz" >/dev/null && break; sleep 0.3; done
+	[ "$(asapp podman inspect "k2app-esc-a--$DEP2" --format '{{.OCIRuntime}}')" = youki ] || fail "not on youki"
+	curl -s "http://127.0.0.1:41998/probe" >/tmp/py.json
+	jq_ 'assert v["capEff"]=="0000000000000000" and v["noNewPrivs"]=="1" and v["seccomp"]=="2", v; assert v["unshareU"]["ok"] is False, v["unshareU"]; assert v["writeRoot"]["ok"] is False and v["writeData"]["ok"] is True; assert v["passFile"]["out"]=="k2skn_e2e_pass"' /tmp/py.json
+	req daemon '{"verb":"stop","app":"esc-a","deployment":"'"$DEP2"'"}' | grep -q '"ok":true' || fail "stop youki"
+	ok "youki: the same container floor from inside (CapEff 0, NoNewPrivs, seccomp, no unshare -U, ro root, data rw, pass secret)"
+else
+	# youki 0.7.0 rootless under Podman 5.4.2 can't run the floor: the
+	# read-only root, the tmpfs mounts and the App's id map each fail with
+	# "failed to prepare rootfs" (probed one flag at a time).
+	journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="k2app-esc-a--$DEP2.service" | grep -q "prepare rootfs" \
+		|| fail "youki start failed another way: $(cat /tmp/st2.json) $(journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="k2app-esc-a--$DEP2.service" | tail -n 5)"
+	[ -z "$(asapp podman ps -a --format '{{.Names}}' | grep -- "--$DEP2" || true)" ] || fail "a youki container was left"
+	info "youki $(/usr/bin/youki --version | head -n1 | awk '{print $NF}') can't run the guarded floor rootless (read-only root, tmpfs, id map: 'failed to prepare rootfs')"
+	ok "youki fails closed: the start errors, nothing is left, nothing falls back to crun"
+fi
+req helper "apps runtime crun" | grep -q '"rc": 0' || fail "back to crun"
 
 echo "== pg hba-app against a real Postgres =="
 HBA="$(ls /etc/postgresql/*/main/pg_hba.conf | head -n1)"

@@ -86,15 +86,29 @@ pub const RESERVED_PORTS: (u16, u16) = (38_600, 38_999);
 pub const SYSCTL_FILE: &str = "/etc/sysctl.d/90-k2-apps.conf";
 pub const RESERVED_PORTS_PROC: &str = "/proc/sys/net/ipv4/ip_local_reserved_ports";
 /// The port ranges the daemon passes to `apps nft apply` by default:
-/// per-App gateway links, the egress proxy, the box's Postgres.
+/// per-App gateway links, per-App egress proxy listeners, the box's
+/// Postgres. An App's gateway and proxy ports share its slot offset
+/// ([`proxy_port_for_gateway`]); each is admitted only to that App's
+/// cgroup (per-App rules), never as a range.
 pub const GATEWAY_PORTS: PortRange = PortRange {
     lo: 38_600,
     hi: 38_899,
 };
 pub const PROXY_PORTS: PortRange = PortRange {
     lo: 38_900,
-    hi: 38_949,
+    hi: 38_999,
 };
+
+/// The App's egress proxy port (S15) for its gateway port: the same
+/// offset in [`PROXY_PORTS`]. `None` outside the gateway range or past
+/// the proxy range.
+pub fn proxy_port_for_gateway(gw: u16) -> Option<u16> {
+    if !(GATEWAY_PORTS.lo..=GATEWAY_PORTS.hi).contains(&gw) {
+        return None;
+    }
+    let p = PROXY_PORTS.lo as u32 + (gw - GATEWAY_PORTS.lo) as u32;
+    (p <= PROXY_PORTS.hi as u32).then_some(p as u16)
+}
 pub const DB_PORTS: PortRange = PortRange {
     lo: 5_432,
     hi: 5_432,
@@ -104,8 +118,9 @@ pub const DB_PORTS: PortRange = PortRange {
 /// tables (AR24).
 pub const NFT_TABLE: &str = "k2app";
 /// The chain name doubles as the ruleset version marker (v2: gateway
-/// ports only through per-App rules, runtime slice 3).
-pub const NFT_CHAIN: &str = "k2app_v2";
+/// ports only through per-App rules, runtime slice 3; v3: the egress
+/// proxy ports too, S15, so no App reaches another App's proxy).
+pub const NFT_CHAIN: &str = "k2app_v3";
 /// The per-App chain (`apps nft app`): one accept per App for its own
 /// gateway port, matched on the App's cgroup.
 pub const NFT_APPS_CHAIN: &str = "k2app_apps";
@@ -535,7 +550,8 @@ pub fn containers_conf(rt: OciRuntime) -> String {
 }
 
 /// One per-App accept: sockets in `cgroup` (a path under
-/// `/sys/fs/cgroup`, `level` components deep) may reach `gw_port` on
+/// `/sys/fs/cgroup`, `level` components deep) may reach `gw_port`, and
+/// the App's egress proxy port ([`proxy_port_for_gateway`], S15), on
 /// loopback. nft resolves the path to the cgroup's inode when the rule
 /// loads (W §2.12), so the daemon re-applies after every App start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,25 +578,30 @@ pub fn app_cgroups(uid: u32, id: &AppId) -> [(String, u32); 2] {
 }
 
 fn app_rule_line(r: &AppRule) -> String {
+    let ports = match proxy_port_for_gateway(r.gw_port) {
+        Some(px) => format!("{{ {}, {px} }}", r.gw_port),
+        None => r.gw_port.to_string(),
+    };
     format!(
-        "socket cgroupv2 level {} \"{}\" oifname \"lo\" tcp dport {} accept",
-        r.level, r.cgroup, r.gw_port
+        "socket cgroupv2 level {} \"{}\" oifname \"lo\" tcp dport {ports} accept",
+        r.level, r.cgroup
     )
 }
 
 /// The `inet k2app` table (§10.4, W §5.6): for sockets owned by `k2app`
 /// (container Apps reach the host through pasta, which runs as `k2app`;
 /// process Apps run as `k2app`), allow replies, each App's own gateway
-/// port (per-App cgroup rules, [`NFT_APPS_CHAIN`]), the egress proxy and
+/// and egress proxy ports (per-App cgroup rules, [`NFT_APPS_CHAIN`]) and
 /// the box's Postgres on loopback, and drop everything else: other
-/// loopback ports (other Apps' gateway ports included), any address of
-/// this host (`host.containers.internal` reached a 0.0.0.0 service in W),
-/// DNS, private and link-local nets, and the internet (egress goes through
-/// the proxy on loopback). The leading `table` + `delete table` make
-/// `nft -f` replace it atomically. `gw` is the range per-App ports must
-/// sit in; nothing accepts it as a whole.
+/// loopback ports (other Apps' gateway and proxy ports included), any
+/// address of this host (`host.containers.internal` reached a 0.0.0.0
+/// service in W), DNS, private and link-local nets, and the internet
+/// (egress goes through the App's own proxy on loopback, S15). The
+/// leading `table` + `delete table` make `nft -f` replace it atomically.
+/// `gw` and `px` are the ranges per-App ports sit in; nothing accepts
+/// either as a whole.
 pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
-    let _ = gw;
+    let _ = (gw, px);
     let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r))).collect();
     format!(
         "table inet {t}\n\
@@ -596,7 +617,6 @@ pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: 
          \tchain {c} {{\n\
          \t\tct state established,related accept\n\
          \t\tjump {a}\n\
-         \t\toifname \"lo\" tcp dport {px} accept\n\
          \t\toifname \"lo\" tcp dport {db} accept\n\
          \t\tfib daddr type local counter drop\n\
          \t\tmeta l4proto {{ tcp, udp }} th dport 53 counter drop\n\
@@ -608,7 +628,6 @@ pub fn nft_ruleset(uid: u32, gw: PortRange, px: PortRange, db: PortRange, apps: 
         t = NFT_TABLE,
         c = NFT_CHAIN,
         a = NFT_APPS_CHAIN,
-        px = px.nft(),
         db = db.nft(),
     )
 }
@@ -767,6 +786,24 @@ mod tests {
         assert!(sysctl_conf().contains("= 38600-38999\n"));
         assert!(containers_conf(OciRuntime::Youki).contains("runtime = \"youki\"\n"));
         assert!(GATEWAY_PORTS.lo >= RESERVED_PORTS.0 && PROXY_PORTS.hi <= RESERVED_PORTS.1);
+        assert!(GATEWAY_PORTS.hi < PROXY_PORTS.lo, "the ranges never overlap");
+    }
+
+    #[test]
+    fn proxy_port_shares_the_gateway_offset() {
+        assert_eq!(proxy_port_for_gateway(38_600), Some(38_900));
+        assert_eq!(proxy_port_for_gateway(38_663), Some(38_963));
+        assert_eq!(proxy_port_for_gateway(38_699), Some(38_999));
+        assert_eq!(proxy_port_for_gateway(38_700), None, "past the proxy range");
+        assert_eq!(proxy_port_for_gateway(38_599), None);
+        assert_eq!(proxy_port_for_gateway(38_900), None, "a proxy port is not a gateway port");
+        // Every engine slot has both.
+        for slot in 0..crate::engine::MAX_SLOTS {
+            let gw = crate::engine::gateway_port(slot).unwrap();
+            assert!(proxy_port_for_gateway(gw).is_some(), "slot {slot}");
+        }
+        let r = AppRule { cgroup: "x".into(), level: 2, gw_port: 38_899 };
+        assert!(app_rule_line(&r).ends_with("tcp dport 38899 accept"), "no proxy port past the range");
     }
 
     #[test]
@@ -778,20 +815,21 @@ mod tests {
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601 };
         let r = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
-        assert!(r.contains("meta skuid 997 jump k2app_v2"));
-        // No App reaches the whole gateway range: only its own port, by cgroup.
+        assert!(r.contains("meta skuid 997 jump k2app_v3"));
+        // No App reaches the whole gateway or proxy range: only its own
+        // gateway and proxy ports, by cgroup (S15).
         assert!(!r.contains("38600-38899"), "{r}");
+        assert!(!r.contains("38900-38999") && !r.contains("dport 389"), "{r}");
         assert!(r.contains(
-            "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport 38601 accept"
+            "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
         ));
-        assert!(r.contains("oifname \"lo\" tcp dport 38900-38949 accept"));
         assert!(r.contains("oifname \"lo\" tcp dport 5432 accept"));
         assert!(r.contains("fib daddr type local counter drop"));
         // Established first, then the per-App chain, the catch-all drop last.
         let est = r.find("ct state established").unwrap();
         let jump = r.find("jump k2app_apps").unwrap();
-        let px = r.find("tcp dport 38900").unwrap();
-        assert!(est < jump && jump < px);
+        let db = r.find("tcp dport 5432").unwrap();
+        assert!(est < jump && jump < db);
         assert!(r.trim_end().ends_with("counter drop\n\t}\n}"));
         let empty = nft_ruleset(997, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
         assert!(empty.contains("\tchain k2app_apps {\n\t}\n"));

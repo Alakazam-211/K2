@@ -1103,7 +1103,7 @@ mod tests {
                 "apps linger on",
                 "apps reserve-ports on",
                 "apps io-cost on",
-                "apps nft apply 38600-38899 38900-38949 5432",
+                "apps nft apply 38600-38899 38900-38999 5432",
                 "apps process-unit on",
                 "apps runtime crun",
             ]
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(
             p,
             vec![
-                "apps nft apply 38600-38899 38900-38949 5432",
+                "apps nft apply 38600-38899 38900-38999 5432",
                 "apps reserve-ports on",
                 "apps io-cost on"
             ]
@@ -1243,7 +1243,7 @@ mod tests {
         s["reservedPorts"]["file"] = json!(false);
         s["ioCost"]["available"] = json!(false);
         let p: Vec<String> = reapply_plan(Some(&s)).iter().map(|a| a.join(" ")).collect();
-        assert_eq!(p, vec!["apps nft apply 38600-38899 38900-38949 5432"]);
+        assert_eq!(p, vec!["apps nft apply 38600-38899 38900-38999 5432"]);
         // Every re-apply verb is open (a tightening) on the helper's table.
         for argv in reapply_plan(Some(&{
             let mut s = good_status();

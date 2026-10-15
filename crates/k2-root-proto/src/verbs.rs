@@ -1104,7 +1104,7 @@ mod tests {
             &["apps", "delegate", "on"],
             &["apps", "io-cost", "on"],
             &["apps", "reserve-ports", "on"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
             &["apps", "packages", "install"],
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
@@ -1130,9 +1130,9 @@ mod tests {
             &["apps", "install-engine"],
             &["apps", "logs", "jobs", "d-0123456789ab", "200"],
             // Non-canonical ranges could widen what Apps reach.
-            &["apps", "nft", "apply", "1024-2047", "38900-38949", "5432"],
+            &["apps", "nft", "apply", "1024-2047", "38900-38999", "5432"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5433"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5433"],
         ];
         for a in open {
             assert_eq!(Verb::parse(a).unwrap().class(), Class::Open, "{a:?}");
@@ -1178,12 +1178,12 @@ mod tests {
             &["apps", "reserve-ports", "on", "38600-38999"],
             // nft: ranges are bounded and exact.
             &["apps", "nft", "apply"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38949"],
-            &["apps", "nft", "apply", "1-65535", "38900-38949", "5432"],
-            &["apps", "nft", "apply", "22", "38900-38949", "5432"],
-            &["apps", "nft", "apply", "38600-40000", "38900-38949", "5432"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432;flush ruleset"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38949", "5432", "53"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999"],
+            &["apps", "nft", "apply", "1-65535", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "22", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "38600-40000", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432;flush ruleset"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432", "53"],
             &["apps", "nft", "flush"],
             &["apps", "nft", "remove", "k2app"],
             // packages: never a name.

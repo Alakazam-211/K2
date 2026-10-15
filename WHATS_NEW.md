@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.45.7
+
+- **Your tunnel finds a working relay by itself.** K2 now asks k2.dev for the current list of relays when it starts, every few hours, and right after you pair, so every computer and server knows all of them, not just the first. If a relay goes down, your tunnel moves to another one. When the main relay is healthy again, K2 checks it a few times and then moves back by itself, so nobody has to restart anything. `k2 tunnel status` shows which relay you're on and where the list came from.
+
 ## 0.45.6 — Live cards and hired hands
 
 - **Live cards from the outside world.** Your server can now watch outside services for you: an HTTP JSON check that runs on a schedule, even with no window open. Each item is rated ok, warn or crit, with a short history. Agents propose a source with `k2 sources propose`; you approve it in Settings → K2 Server → **Data Sources**, with a vault confirm when it uses a secret. Built-in Garden cards show it (fleet grid, version spread, relays and DNS, deploys, money alerts), and custom widgets can read it too. A trigger can wake an agent when something really changes, never on a brief blip. Keys stay in the vault and are bound to one exact site. You can also choose to store only states and never the values.

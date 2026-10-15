@@ -15003,7 +15003,26 @@ if d.get("running"):
         print(f"  Local port: {lp}")
     if d.get("server_addr"):
         sa = d["server_addr"]
+        # 0.45.7: port + whether this is the primary relay or a fallback.
+        if d.get("server_port"):
+            sa = f"{sa}:{d['server_port']}"
+        if d.get("relay_primary") is True:
+            sa += " (primary relay)"
+        elif d.get("relay_primary") is False:
+            sa += " (fallback relay; returns to the primary once it answers again)"
         print(f"  Server:     {sa}")
+# 0.45.7: the relay list and where it came from (fetched from k2.dev,
+# provisioned, or the built-in default). Older daemons omit it.
+rl = d.get("relay_list")
+if isinstance(rl, dict):
+    import datetime
+    relays = ", ".join(rl.get("relays") or []) or "(none)"
+    print(f"  Relays:     {relays} [{rl.get('source', '?')}]")
+    if rl.get("checked_at"):
+        ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
+        print(f"  Relay list: checked with k2.dev {ts}")
+    if rl.get("last_error"):
+        print("  Relay list: last refresh failed: " + rl["last_error"])
 # 0.45.2: re-launch on boot, and which name the encrypted listener serves.
 if "autoStart" in d:
     print("  Auto-start: " + ("on" if d.get("autoStart") else "off (k2 tunnel enable turns it on)"))

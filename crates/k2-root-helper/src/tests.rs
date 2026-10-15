@@ -1642,3 +1642,7 @@ fn handoff_dropin_refuses_a_user_scope_daemon() {
 // The `apps` namespace (protocol 6) lives in its own file, same fakes.
 #[path = "apps_tests.rs"]
 mod apps_tests;
+
+// The `engine sew` namespace (protocol 7) lives in its own file, same fakes.
+#[path = "sew_tests.rs"]
+mod sew_tests;

@@ -26,6 +26,7 @@ pub mod keep;
 pub mod mail;
 pub mod mail_data;
 pub mod pg;
+pub mod sew;
 pub mod sys;
 
 #[cfg(test)]
@@ -43,14 +44,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=6 arch=x86_64;"
+    " proto=7 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=6 arch=aarch64;"
+    " proto=7 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -219,6 +220,8 @@ fn dispatch(
         Verb::AppsCoresSlice(n) => Some(apps::cores_slice(ctx, who, *n)?),
         Verb::AppsBudget(b) => Some(apps::budget(ctx, *b)?),
         Verb::AppsUnprep => Some(apps::unprep(ctx, who)?),
+
+        Verb::Sew(v) => Some(sew::run(ctx, v, stdin, who)?),
     })
 }
 

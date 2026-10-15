@@ -16,7 +16,9 @@
 //! - **Client shape.** rustls, TLS ≥ 1.2, built-in roots, no option to
 //!   accept invalid certificates; `*_PROXY` env ignored; no automatic
 //!   redirects (callers decide); no automatic decompression (callers ask
-//!   for `identity` and decode themselves); timeouts always set.
+//!   for `identity` and decode themselves); timeouts always set; a default
+//!   `User-Agent` ([`USER_AGENT`]) that a request's own header replaces
+//!   (GitHub and other APIs refuse requests without one).
 //!
 //! Vault fetch is the first user. Other outbound clients move here later.
 //! Errors carry only fixed text and the host, never a path or query.
@@ -26,6 +28,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use k2_vault::hosts::{canonical_ip, is_blocked_ip};
+
+/// The default `User-Agent` on every egress client. Some APIs (GitHub)
+/// answer 403 to a request without one. A header set on the request (a
+/// source's own `User-Agent`, an LLM CLI's through the proxy) wins.
+pub const USER_AGENT: &str = concat!("K2/", env!("CARGO_PKG_VERSION"), " (+https://k2.dev)");
 
 /// Who is asking. Sets the connect timeout and the log label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +244,7 @@ pub fn client(purpose: Purpose, dest: &Destination, timeout: Duration) -> Result
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
+        .user_agent(USER_AGENT)
         .no_gzip()
         .no_brotli()
         .no_deflate()
@@ -283,6 +291,7 @@ pub fn async_client(purpose: Purpose, dest: &Destination, read_idle: Duration) -
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
+        .user_agent(USER_AGENT)
         .no_gzip()
         .no_brotli()
         .no_deflate()

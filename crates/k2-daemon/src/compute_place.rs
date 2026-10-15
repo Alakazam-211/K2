@@ -21,7 +21,7 @@
 //! The controller is often a laptop: after it sleeps, nobody is "lost"
 //! or "timed out" until nodes had a chance to reconnect (`awake_since`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
@@ -553,15 +553,6 @@ pub fn sweep(now: i64) {
     if changed {
         compute_ws::notify_change();
     }
-}
-
-/// For display: a node's set-aside state and offline time.
-pub fn node_extras(n: &NodeRow, now: i64) -> BTreeMap<&'static str, serde_json::Value> {
-    let mut m = BTreeMap::new();
-    if let Some(u) = set_aside_until(&n.id, now) {
-        m.insert("setAsideUntil", serde_json::json!(u));
-    }
-    m
 }
 
 #[cfg(test)]

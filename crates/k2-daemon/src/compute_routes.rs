@@ -820,6 +820,8 @@ fn node_pause(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if pause.is_none() {
         // Resuming a retiring node keeps it (the machine was switched back on).
         let _ = compute::access::unmark_retiring_at(&compute::access::retiring_path(), &n.id);
+        // …and puts a node set aside for infra failures back at once.
+        crate::compute_place::clear_set_aside(&n.id);
     }
     compute_ws::kick(&n.id);
     Ok(serde_json::json!({"ok": true, "node": n.name, "controllerPause": pause,

@@ -1028,6 +1028,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // App's service id). Every caller, the owner token included (AR14).
     "app-approve",
     "app-key-mint",
+    // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
+    // guarded container into the process exception (`secretId` = App id).
+    "app-process-exception",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

@@ -170,6 +170,38 @@ expect_has "errors list the failed deploy" "$out" "health_failed"
 echo "== config / stop / start / uninstall =="
 expect_has "memory set" "$(k2 app config smoke --memory 8G)" "memory limit 8192 MiB"
 expect_has "memory cleared" "$(k2 app config smoke --memory none)" "memory limit none"
+
+echo "== disk ceilings / exec / shell / process exception (lane D) =="
+expect_has "io: tighten writes" "$(k2 app config smoke --io-write 20M --io-write-iops 500)" "write 20 MiB/s"
+expect_has "io: shows on inspect" "$(k2 app inspect smoke --json)" '"wiops":500'
+expect_has "io: the owner may lift it" "$(k2 app config smoke --io none)" "write none"
+expect_has "io: back to the default" "$(k2 app config smoke --io default)" "write 40 MiB/s"
+set +e
+k2 app config smoke --io-write 40X > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "io: a bad rate exits 2" "$rc" "2"
+set +e
+k2 app exec smoke -- ls > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "exec into a preview (process-engine) App is refused (exit 3)" "$rc" "3"
+expect_has "exec says why" "$(cat "$SANDBOX/out")" "exec_unavailable"
+set +e
+k2 app exec smoke > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "exec without a command is usage (exit 2)" "$rc" "2"
+set +e
+k2 app shell smoke < /dev/null > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "shell into a preview App is refused before the upgrade (exit 3)" "$rc" "3"
+expect_has "shell says why" "$(cat "$SANDBOX/out")" "exec_unavailable"
+expect_has "exception off on a guarded/preview App is a no-op" "$(k2 app exception smoke off)" "(no change)"
+resp="$(curl -s -X POST -H 'Content-Type: application/json' --data '{"app":"smoke","on":true}' "http://127.0.0.1:$PORT/cli/app/exception?token=$OWNER_TOKEN")"
+case "$resp" in
+    *owner_confirm_required*|*engine_unavailable*) ok "exception on without an owner confirm is refused ($(printf '%s' "$resp" | head -c 80))" ;;
+    *) bad "exception on without a confirm: $resp" ;;
+esac
+expect_has "audit has the io change" "$(k2 app history smoke --json)" '"event":"config"'
+
 expect_has "stop" "$(k2 app stop smoke)" "smoke: stopped"
 expect_eq "front answers 503 when stopped" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$FRONT/")" "503"
 expect_has "start" "$(k2 app start smoke)" "live on port"

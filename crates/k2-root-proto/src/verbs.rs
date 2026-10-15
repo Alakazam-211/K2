@@ -30,6 +30,10 @@ pub const CAP_INSTALL_BIN: usize = 256 * 1024 * 1024;
 pub const CAP_SELF_UPDATE: usize = 8 * 1024 * 1024;
 /// `apps install-engine`: `<u32 BE sig len><sig><ELF>` of k2-app-engine.
 pub const CAP_ENGINE: usize = 64 * 1024 * 1024;
+/// `engine sew rotate-master`: 43 base64url chars + an optional `\n`.
+pub const CAP_SEW_KEY: usize = 64;
+/// `engine sew install|config|media install`: one small JSON object.
+pub const CAP_SEW_JSON: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -147,6 +151,247 @@ pub struct PsqlFlags {
     pub unaligned: bool,
 }
 
+/// `engine sew systemctl <op>`: fixed unit sets, never a unit name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SewSystemctl {
+    /// `enable sew-db.service sew.service sew-backup.timer sew-drill.timer`
+    Enable,
+    /// `start sew-db.service`
+    StartDb,
+    /// `start sew-migrate.service` (runs the binary's own migrations)
+    Migrate,
+    /// `start sew.service sew-backup.timer sew-drill.timer`
+    Start,
+    /// `restart sew.service`
+    Restart,
+    /// `stop sew.service` (boot enablement untouched)
+    Stop,
+    /// `disable --now sew.service sew-db.service sew-backup.timer sew-drill.timer`
+    DisableNow,
+}
+
+impl SewSystemctl {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Enable => "enable",
+            Self::StartDb => "start-db",
+            Self::Migrate => "migrate",
+            Self::Start => "start",
+            Self::Restart => "restart",
+            Self::Stop => "stop",
+            Self::DisableNow => "disable-now",
+        }
+    }
+    fn parse(t: &str) -> Option<Self> {
+        Some(match t {
+            "enable" => Self::Enable,
+            "start-db" => Self::StartDb,
+            "migrate" => Self::Migrate,
+            "start" => Self::Start,
+            "restart" => Self::Restart,
+            "stop" => Self::Stop,
+            "disable-now" => Self::DisableNow,
+            _ => return None,
+        })
+    }
+    pub const ALL: [SewSystemctl; 7] =
+        [Self::Enable, Self::StartDb, Self::Migrate, Self::Start, Self::Restart, Self::Stop, Self::DisableNow];
+}
+
+/// The `engine sew` namespace (protocol 7, Sew S29 K11). Argv is enum
+/// tokens plus, for purge and restore, one validated id
+/// ([`crate::sew::install_id_ok`], [`crate::sew::bundle_id_ok`]). URLs,
+/// hosts, paths and keys come on stdin as JSON or key text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SewVerb {
+    /// Pin, on-disk binary (sha → known version), staged tarballs, units,
+    /// config/data presence. Read-only.
+    Status,
+    /// Stdin: the core release tarball. Kept only when its sha256 is the
+    /// pin's for this arch.
+    Stage,
+    /// Stdin: the `sew-media` release tarball, pin-checked the same way.
+    StageMedia,
+    /// Remove the staged files.
+    Unstage,
+    /// Install `sew` from the staged tarball when `/usr/local/bin/sew` is
+    /// absent (member sha = pin). Never replaces an installed binary.
+    InstallBin,
+    /// Stdin: [`crate::sew::InstallRequest`]. `sew install --config-json
+    /// <staged json> --master-key-from - --no-start`, then the daemon's uid
+    /// (from the caller check) into `[mgmt] allow_uids` (SW7).
+    Install,
+    /// Stdin: [`crate::sew::ConfigRequest`] → `sew config set` per key.
+    Config,
+    Systemctl(SewSystemctl),
+    /// `sew upgrade --tarball <staged pin tarball> --sha256 <pin>` run by
+    /// the known installed binary. Sew backs up, swaps, migrates, checks
+    /// health and rolls back by itself; its exit code comes back as data.
+    Upgrade,
+    /// `sew upgrade --rollback` (never `--accept-data-loss-since`).
+    Rollback,
+    /// `sew uninstall` (data, config and secrets kept).
+    Uninstall,
+    /// `sew uninstall --purge --yes-delete-all-data=<id>` [`--keep-backups`].
+    Purge { install_id: String, keep_backups: bool },
+    Doctor,
+    /// Stdin: the new master key text → `sew keys rotate-master --new-from -`.
+    RotateMaster,
+    /// `sew keys drop-prev`.
+    DropPrev,
+    /// `sew backup now`.
+    Backup,
+    /// `sew backup list`.
+    Backups,
+    /// Stop `sew.service`, `sew restore <id> --replace` (Sew takes its
+    /// safety bundle first), start it again.
+    Restore(String),
+    /// The mgmt token (`sewsvc_…`) for the daemon: SW7 lets its uid onto the
+    /// socket without the `sew-mgmt` group, so it can't read the file.
+    Token,
+    /// Stdin: [`crate::sew::MediaRequest`] → `sew media install
+    /// --config-json` with the staged media tarball (Sew writes its own
+    /// sysctl drop-in when `sysctl` is `apply`).
+    MediaInstall,
+    MediaUninstall,
+}
+
+impl SewVerb {
+    fn parse(rest: &[&str]) -> Option<Self> {
+        Some(match rest {
+            ["status"] => Self::Status,
+            ["stage"] => Self::Stage,
+            ["stage-media"] => Self::StageMedia,
+            ["unstage"] => Self::Unstage,
+            ["install-bin"] => Self::InstallBin,
+            ["install"] => Self::Install,
+            ["config"] => Self::Config,
+            ["systemctl", op] => Self::Systemctl(SewSystemctl::parse(op)?),
+            ["upgrade"] => Self::Upgrade,
+            ["rollback"] => Self::Rollback,
+            ["uninstall"] => Self::Uninstall,
+            ["purge", id] if crate::sew::install_id_ok(id) => {
+                Self::Purge { install_id: id.to_string(), keep_backups: false }
+            }
+            ["purge", id, "keep-backups"] if crate::sew::install_id_ok(id) => {
+                Self::Purge { install_id: id.to_string(), keep_backups: true }
+            }
+            ["doctor"] => Self::Doctor,
+            ["rotate-master"] => Self::RotateMaster,
+            ["drop-prev"] => Self::DropPrev,
+            ["backup"] => Self::Backup,
+            ["backups"] => Self::Backups,
+            ["restore", id] if crate::sew::bundle_id_ok(id) => Self::Restore(id.to_string()),
+            ["token"] => Self::Token,
+            ["media", "install"] => Self::MediaInstall,
+            ["media", "uninstall"] => Self::MediaUninstall,
+            _ => return None,
+        })
+    }
+
+    fn tail(&self) -> Vec<String> {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        match self {
+            Self::Status => s(&["status"]),
+            Self::Stage => s(&["stage"]),
+            Self::StageMedia => s(&["stage-media"]),
+            Self::Unstage => s(&["unstage"]),
+            Self::InstallBin => s(&["install-bin"]),
+            Self::Install => s(&["install"]),
+            Self::Config => s(&["config"]),
+            Self::Systemctl(op) => s(&["systemctl", op.token()]),
+            Self::Upgrade => s(&["upgrade"]),
+            Self::Rollback => s(&["rollback"]),
+            Self::Uninstall => s(&["uninstall"]),
+            Self::Purge { install_id, keep_backups: false } => s(&["purge", install_id]),
+            Self::Purge { install_id, keep_backups: true } => s(&["purge", install_id, "keep-backups"]),
+            Self::Doctor => s(&["doctor"]),
+            Self::RotateMaster => s(&["rotate-master"]),
+            Self::DropPrev => s(&["drop-prev"]),
+            Self::Backup => s(&["backup"]),
+            Self::Backups => s(&["backups"]),
+            Self::Restore(id) => s(&["restore", id]),
+            Self::Token => s(&["token"]),
+            Self::MediaInstall => s(&["media", "install"]),
+            Self::MediaUninstall => s(&["media", "uninstall"]),
+        }
+    }
+
+    /// `open`: read-only, sha-pin gated, or converging to what K2 sets
+    /// anyway (start, restart, enable, a backup). `daemon`: sets a
+    /// credential, hands over a secret, changes config, stops or removes
+    /// the service, migrates or replaces data, or swaps the binary.
+    fn class(&self) -> Class {
+        use SewSystemctl as S;
+        match self {
+            Self::Status
+            | Self::Stage
+            | Self::StageMedia
+            | Self::Unstage
+            | Self::InstallBin
+            | Self::Doctor
+            | Self::Backup
+            | Self::Backups
+            | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart) => Class::Open,
+            Self::Install
+            | Self::Config
+            | Self::Systemctl(S::Migrate | S::Stop | S::DisableNow)
+            | Self::Upgrade
+            | Self::Rollback
+            | Self::Uninstall
+            | Self::Purge { .. }
+            | Self::RotateMaster
+            | Self::DropPrev
+            | Self::Restore(_)
+            | Self::Token
+            | Self::MediaInstall
+            | Self::MediaUninstall => Class::Daemon,
+        }
+    }
+
+    fn stdin_cap(&self) -> Option<usize> {
+        match self {
+            Self::Stage | Self::StageMedia => Some(CAP_INSTALL_BIN),
+            Self::Install | Self::Config | Self::MediaInstall => Some(CAP_SEW_JSON),
+            Self::RotateMaster => Some(CAP_SEW_KEY),
+            _ => None,
+        }
+    }
+
+    fn reads_only(&self) -> bool {
+        matches!(self, Self::Status | Self::Doctor | Self::Backups)
+    }
+
+    /// One of each (tests, docs).
+    pub fn catalog() -> Vec<SewVerb> {
+        let mut v = vec![
+            Self::Status,
+            Self::Stage,
+            Self::StageMedia,
+            Self::Unstage,
+            Self::InstallBin,
+            Self::Install,
+            Self::Config,
+            Self::Upgrade,
+            Self::Rollback,
+            Self::Uninstall,
+            Self::Purge { install_id: "48831765147549701".into(), keep_backups: false },
+            Self::Purge { install_id: "none".into(), keep_backups: true },
+            Self::Doctor,
+            Self::RotateMaster,
+            Self::DropPrev,
+            Self::Backup,
+            Self::Backups,
+            Self::Restore("20260927T031512Z".into()),
+            Self::Token,
+            Self::MediaInstall,
+            Self::MediaUninstall,
+        ];
+        v.extend(SewSystemctl::ALL.into_iter().map(Self::Systemctl));
+        v
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verb {
     // helper
@@ -254,6 +499,8 @@ pub enum Verb {
     /// `Some((MemoryMax MiB, TasksMax))` = write; `None` = `off`.
     AppsBudget(Option<(u64, u64)>),
     AppsUnprep,
+    // engine sew (protocol 7, Sew S29 K11; see `crate::sew`)
+    Sew(SewVerb),
 }
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
@@ -529,6 +776,7 @@ impl Verb {
                 bounded(t, BUDGET_TASKS).ok_or(REFUSED)?,
             ))),
             ["apps", "unprep"] => Verb::AppsUnprep,
+            ["engine", "sew", rest @ ..] => Verb::Sew(SewVerb::parse(rest).ok_or(REFUSED)?),
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -677,6 +925,11 @@ impl Verb {
                 s(&["apps", "budget", &m.to_string(), &t.to_string()])
             }
             Verb::AppsUnprep => s(&["apps", "unprep"]),
+            Verb::Sew(v) => {
+                let mut a = s(&["engine", "sew"]);
+                a.extend(v.tail());
+                a
+            }
         }
     }
 
@@ -767,6 +1020,7 @@ impl Verb {
             | Verb::AppsCoresSlice(_)
             | Verb::AppsBudget(_)
             | Verb::AppsUnprep => Daemon,
+            Verb::Sew(v) => v.class(),
             // Re-applying the canonical ranges is a tightening anyone may
             // ask for (boot, drift). Other ranges could open more loopback
             // ports to Apps: the daemon's call.
@@ -791,6 +1045,7 @@ impl Verb {
             Verb::MailInstallBin => Some(CAP_INSTALL_BIN),
             Verb::AppsInstallEngine => Some(CAP_ENGINE),
             Verb::PgPsql { .. } => Some(CAP_SQL),
+            Verb::Sew(v) => v.stdin_cap(),
             _ => None,
         }
     }
@@ -799,6 +1054,9 @@ impl Verb {
     /// concurrency is Postgres's job, and a 60 s statement must not starve
     /// a restart).
     pub fn takes_lock(&self) -> bool {
+        if let Verb::Sew(v) = self {
+            return !v.reads_only();
+        }
         !matches!(
             self,
             Verb::HelperVersion
@@ -842,6 +1100,7 @@ impl Verb {
             "pg" => "pg",
             "daemon" => "daemon",
             "apps" => "apps",
+            "engine" => "sew",
             _ => "keep",
         }
     }
@@ -956,6 +1215,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsBudget(None),
         Verb::AppsUnprep,
     ];
+    v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     for on in [true, false] {
         v.push(Verb::AppsLinger(on));
         v.push(Verb::AppsDelegate(on));
@@ -1441,6 +1701,11 @@ mod tests {
                 Verb::MailInstallBin => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::PgPsql { .. } => assert_eq!(cap, Some(CAP_SQL)),
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
+                Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
+                Verb::Sew(SewVerb::Install | SewVerb::Config | SewVerb::MediaInstall) => {
+                    assert_eq!(cap, Some(CAP_SEW_JSON))
+                }
+                Verb::Sew(SewVerb::RotateMaster) => assert_eq!(cap, Some(CAP_SEW_KEY)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
             if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet | Verb::AppsLogs { .. }) {
@@ -1449,5 +1714,114 @@ mod tests {
         }
         assert!(!Verb::HelperVersion.needs_root());
         assert!(catalog().iter().filter(|v| !v.needs_root()).count() == 1);
+    }
+
+    /// `engine sew` (protocol 7): classes written out by hand. A verb
+    /// moving class must change this test on purpose.
+    #[test]
+    fn sew_class_table() {
+        let open: &[&[&str]] = &[
+            &["engine", "sew", "status"],
+            &["engine", "sew", "stage"],
+            &["engine", "sew", "stage-media"],
+            &["engine", "sew", "unstage"],
+            &["engine", "sew", "install-bin"],
+            &["engine", "sew", "doctor"],
+            &["engine", "sew", "backup"],
+            &["engine", "sew", "backups"],
+            &["engine", "sew", "systemctl", "enable"],
+            &["engine", "sew", "systemctl", "start-db"],
+            &["engine", "sew", "systemctl", "start"],
+            &["engine", "sew", "systemctl", "restart"],
+        ];
+        let daemon: &[&[&str]] = &[
+            &["engine", "sew", "install"],
+            &["engine", "sew", "config"],
+            &["engine", "sew", "systemctl", "migrate"],
+            &["engine", "sew", "systemctl", "stop"],
+            &["engine", "sew", "systemctl", "disable-now"],
+            &["engine", "sew", "upgrade"],
+            &["engine", "sew", "rollback"],
+            &["engine", "sew", "uninstall"],
+            &["engine", "sew", "purge", "48831765147549701"],
+            &["engine", "sew", "purge", "none", "keep-backups"],
+            &["engine", "sew", "rotate-master"],
+            &["engine", "sew", "drop-prev"],
+            &["engine", "sew", "restore", "20260927T031512Z"],
+            &["engine", "sew", "token"],
+            &["engine", "sew", "media", "install"],
+            &["engine", "sew", "media", "uninstall"],
+        ];
+        for a in open {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Open, "{a:?}");
+            assert_eq!(v.namespace(), "sew");
+        }
+        for a in daemon {
+            let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
+            assert_eq!(v.class(), Class::Daemon, "{a:?}");
+            assert!(v.takes_lock(), "{a:?}");
+        }
+        assert_eq!(open.len() + daemon.len(), SewVerb::catalog().len(), "every sew verb is in one table");
+        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"], &["engine", "sew", "backups"]] {
+            assert!(!Verb::parse(read).unwrap().takes_lock(), "{read:?}");
+        }
+        assert!(Verb::parse(&["engine", "sew", "stage"]).unwrap().takes_lock());
+    }
+
+    /// URLs, hosts, paths, keys, units, users and Sew flags never parse as
+    /// `engine sew` argv: they come on stdin or not at all.
+    #[test]
+    fn sew_attack_table_is_refused() {
+        let rejects: &[&[&str]] = &[
+            &["engine"],
+            &["engine", "sew"],
+            &["engine", "stalwart", "status"],
+            &["engine", "sew", "status", "--json"],
+            &["engine", "sew", "install", "http://127.0.0.1:1/v1/chat/jwks"],
+            &["engine", "sew", "install", "--provider", "standalone"],
+            &["engine", "sew", "install", "--cred-mode", "plain"],
+            &["engine", "sew", "stage", "/tmp/sew.tar.gz"],
+            &["engine", "sew", "install-bin", "/tmp/sew"],
+            &["engine", "sew", "config", "server.public_url"],
+            &["engine", "sew", "config-set", "keys.mirror.path", "/mnt/x"],
+            &["engine", "sew", "systemctl", "start", "k2-daemon.service"],
+            &["engine", "sew", "systemctl", "restart", "sew-db.service"],
+            &["engine", "sew", "systemctl", "daemon-reexec"],
+            &["engine", "sew", "systemctl", "edit"],
+            &["engine", "sew", "systemctl", "start", "postgresql@16-main"],
+            &["engine", "sew", "systemctl"],
+            &["engine", "sew", "upgrade", "--accept-data-loss-since=x"],
+            &["engine", "sew", "rollback", "--accept-data-loss-since=20260927T031512Z"],
+            &["engine", "sew", "uninstall", "--purge"],
+            &["engine", "sew", "purge"],
+            &["engine", "sew", "purge", "0"],
+            &["engine", "sew", "purge", "01"],
+            &["engine", "sew", "purge", "abc"],
+            &["engine", "sew", "purge", "1", "keep"],
+            &["engine", "sew", "purge", "1", "keep-backups", "x"],
+            &["engine", "sew", "purge", "1;id"],
+            &["engine", "sew", "purge", "--yes-delete-all-data=1"],
+            &["engine", "sew", "restore"],
+            &["engine", "sew", "restore", "/var/lib/sew/backups/x"],
+            &["engine", "sew", "restore", ".."],
+            &["engine", "sew", "restore", "x.tar"],
+            &["engine", "sew", "restore", "20260927T031512Z", "--replace"],
+            &["engine", "sew", "restore", "20260927T031512Z", "--no-safety-backup"],
+            &["engine", "sew", "rotate-master", "--new-from", "-"],
+            &["engine", "sew", "token", "k2"],
+            &["engine", "sew", "media", "install", "wss://x.y"],
+            &["engine", "sew", "media", "install", "--turn-cert", "/etc/shadow"],
+            &["engine", "sew", "media"],
+            &["engine", "sew", "media", "upgrade"],
+            &["engine", "sew", "mgmt-group", "add"],
+            &["engine", "sew", "sysctl", "net.core.rmem_max=1"],
+            &["engine", "sew", "status;id"],
+            &["engine", "sew", "status id"],
+            &["engine", "sew", ""],
+        ];
+        for r in rejects {
+            assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");
+        }
     }
 }

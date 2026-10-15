@@ -742,15 +742,28 @@ fn resolve_existing_prefix(abs: &Path) -> Option<PathBuf> {
 /// once symlinks are followed, compared ASCII case-folded. With
 /// `ancestors`, the room root itself counts too.
 pub fn abs_in_agent_config(root: &str, abs: &Path, ancestors: bool) -> bool {
+    resolved_in_agent_config(root, resolve_existing_prefix(abs).as_deref(), ancestors)
+}
+
+/// `abs` with its parent resolved (symlinks followed) and the LAST segment
+/// kept as written, never followed. `None` as in [`resolve_existing_prefix`].
+fn resolve_parent_keep_leaf(abs: &Path) -> Option<PathBuf> {
+    let name = abs.file_name()?;
+    resolve_existing_prefix(abs.parent()?).map(|p| p.join(name))
+}
+
+/// [`abs_in_agent_config`] on an already resolved target (`None` = could
+/// not be resolved: fails closed).
+fn resolved_in_agent_config(root: &str, target: Option<&Path>, ancestors: bool) -> bool {
     let Ok(canon_root) = std::fs::canonicalize(root) else {
         return true;
     };
-    let Some(target) = resolve_existing_prefix(abs) else {
+    let Some(target) = target else {
         return true;
     };
     let fold = |p: &Path| p.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
     let root_s = fold(&canon_root);
-    let target_s = fold(&target);
+    let target_s = fold(target);
     if target_s == root_s {
         return ancestors;
     }
@@ -789,13 +802,47 @@ fn refuse_protected_write(
     abs: &Path,
     ancestors: bool,
 ) -> Option<CliResponse> {
+    refuse_protected_write_at(pass, resolved, rel, abs, ancestors, true)
+}
+
+/// [`refuse_protected_write`] for a NEW name that the door never writes
+/// through: upload-chunk publishes with a no-replace hard link (or a
+/// rename after a no-follow existence check) and picks `name (1).ext` when
+/// anything, a symlink included, already sits at `<dir>/<name>`. So the
+/// leaf is checked as written and NOT followed. Following it made an
+/// existing leaf symlink that points out of the room (resolved target not
+/// under the room → fail closed) refuse an ordinary upload with
+/// `agent_config_protected`. The folder is still resolved (the caller has
+/// also checked it on its own), and `.k2` as the name is still refused.
+fn refuse_protected_new_name(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    abs: &Path,
+) -> Option<CliResponse> {
+    refuse_protected_write_at(pass, resolved, rel, abs, false, false)
+}
+
+fn refuse_protected_write_at(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    abs: &Path,
+    ancestors: bool,
+    follow_leaf: bool,
+) -> Option<CliResponse> {
     if let Some(r) = refuse_heartbeats_area(resolved, rel, abs, ancestors) {
         return Some(r);
     }
+    let full = if follow_leaf {
+        resolve_existing_prefix(abs)
+    } else {
+        resolve_parent_keep_leaf(abs)
+    };
     // R2 again on the fully resolved target: a symlinked folder followed
     // by not-yet-created segments is invisible to a plain canonicalize.
-    if let Some(full) = resolve_existing_prefix(abs) {
-        if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &full, ancestors) {
+    if let Some(full) = full.as_deref() {
+        if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, full, ancestors) {
             return Some(heartbeats_area_response());
         }
     }
@@ -803,7 +850,7 @@ fn refuse_protected_write(
         return None;
     }
     if lexically_in_agent_config(rel, ancestors)
-        || abs_in_agent_config(&resolved.path, abs, ancestors)
+        || resolved_in_agent_config(&resolved.path, full.as_deref(), ancestors)
     {
         return Some(agent_config_protected_response());
     }
@@ -1157,13 +1204,11 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         return r;
     }
     let name = gu::final_name(&filename);
-    if let Some(r) = refuse_protected_write(
-        pass,
-        &resolved,
-        &format!("{dir}/{name}"),
-        &jailed_dir.join(&name),
-        false,
-    ) {
+    // The published name never writes through an existing entry (see
+    // `refuse_protected_new_name`), so the leaf is not followed here.
+    if let Some(r) =
+        refuse_protected_new_name(pass, &resolved, &format!("{dir}/{name}"), &jailed_dir.join(&name))
+    {
         return r;
     }
     let root = match Path::new(&resolved.path).canonicalize() {
@@ -2843,10 +2888,27 @@ mod tests {
             assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move into {dest}"));
         }
         // move OUT of the folder.
-        for src in [".k2/agent/ROLE.md", ".k2/inbox", ".K2/agent", "agentdir/ROLE.md"] {
+        for src in [".k2/agent/ROLE.md", ".k2/inbox", "agentdir/ROLE.md"] {
             let body = json_bytes(serde_json::json!({"workspace": h, "sources": [src], "destination": "notes"}));
             assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move out {src}"));
         }
+        // `.K2` spelling, on the room's own filesystem. Case-insensitive
+        // (macOS default APFS): `.K2` IS `.k2`. Case-sensitive (Linux):
+        // `.K2` is a separate folder, which the check refuses anyway (the
+        // name is folded on every platform: harmless there, and a Linux
+        // room can still sit on a case-folding mount). A move source must
+        // exist, so give `.K2/agent` its own folder when it is not `.k2`.
+        let case_folds = room.dir.join(".K2").exists();
+        if !case_folds {
+            std::fs::create_dir_all(room.dir.join(".K2/agent")).expect("separate .K2/agent");
+        }
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": [".K2/agent"], "destination": "notes"}));
+        assert_protected(
+            &handle_move_gated(&body, Some(pass.clone())),
+            &format!("move out .K2/agent (case-folding fs: {case_folds})"),
+        );
+        assert!(room.dir.join(".K2/agent").is_dir(), "refused move left .K2/agent in place");
+        assert!(!room.dir.join("notes/agent").exists(), "nothing moved into notes");
         // rename OUT of (source in .k2) and INTO (new name is .k2).
         for (path, new_name) in [(".k2/agent/ROLE.md", "ROLE.old"), (".k2/inbox", "box"), ("notes", ".K2")] {
             let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "new_name": new_name}));
@@ -2903,6 +2965,55 @@ mod tests {
         let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/t.md"], "destination": "notes/sub"}));
         assert_eq!(handle_move_gated(&body, Some(pass.clone())).status, "200 OK");
         assert!(room.dir.join("notes/sub/t.md").exists());
+    }
+
+    /// Regression (0.45.6 gate): upload-chunk never writes through an entry
+    /// already at the final name (it publishes `name (1).ext` beside it),
+    /// so a leaf symlink there, pointing out of the room or into `.k2`,
+    /// must not turn an ordinary upload into `agent_config_protected`.
+    /// upload-binary DOES write through a dangling leaf (`fs::write` after
+    /// an `exists()` probe), so it keeps following the leaf: refused.
+    #[cfg(unix)]
+    #[test]
+    fn upload_chunk_publishes_beside_a_leaf_symlink_and_still_guards_k2() {
+        let room = config_room("leaf");
+        let pass = writer(&room, false);
+        let outside = std::env::temp_dir().join(format!("k2-cfg-out-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        let victim = outside.join("victim.txt");
+        std::fs::write(&victim, b"untouched").expect("victim");
+        std::os::unix::fs::symlink(&victim, room.dir.join("notes/out.bin")).expect("leaf out");
+        std::os::unix::fs::symlink(room.dir.join(".k2/agent/ROLE.md"), room.dir.join("notes/role.md"))
+            .expect("leaf into .k2");
+
+        for (name, beside) in [("out.bin", "notes/out (1).bin"), ("role.md", "notes/role (1).md")] {
+            let r = handle_upload_chunk_gated(&chunk_body(&room, "notes", name), Some(pass.clone()));
+            assert_eq!(r.status, "200 OK", "upload-chunk notes/{name}: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json body");
+            assert_eq!(v["path"], beside, "published beside the link: {}", r.body);
+            assert_eq!(std::fs::read(room.dir.join(beside)).expect("published"), b"hi");
+        }
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
+        assert_eq!(room.read_role(), "original role");
+
+        // Still guarded: `.k2` as the name at the root, and a folder that
+        // resolves into `.k2`.
+        assert_protected(
+            &handle_upload_chunk_gated(&chunk_body(&room, ".", ".k2"), Some(pass.clone())),
+            "upload-chunk ./.k2",
+        );
+        assert_protected(
+            &handle_upload_chunk_gated(&chunk_body(&room, "cfg/inbox", "x.bin"), Some(pass.clone())),
+            "upload-chunk cfg/inbox",
+        );
+        // upload-binary follows the leaf: a link into `.k2` is refused.
+        assert_protected(
+            &handle_upload_binary_gated(&upload_body(&room, "notes", "role.md"), Some(pass.clone())),
+            "upload-binary through a leaf link into .k2",
+        );
+        assert_eq!(room.read_role(), "original role");
+        assert_eq!(std::fs::read_dir(room.dir.join(".k2/inbox")).expect("inbox").count(), 0);
+        std::fs::remove_dir_all(&outside).expect("cleanup outside");
     }
 
     #[test]

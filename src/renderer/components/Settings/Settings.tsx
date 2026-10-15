@@ -111,9 +111,10 @@ function thirdPartyBotLeaves(): NavLeaf[] {
   return [...live, ...soon]
 }
 
-/** The sidebar. Top-level pages, then groups: Gardens, LLMs, Access,
+/** The sidebar. Top-level pages, then groups: LLMs, Access, Gardens,
  *  Network, Editors / Fonts, Logs, Cores (Sidecars before 0.45.7; ids
- *  unchanged), 3rd Party Bots.
+ *  unchanged), 3rd Party Bots. Gardens sits right after Access (Rosson
+ *  2026-10-15: "Move Gardens beneath Access").
  *  LLMs is a group from 0.45.7 (Rosson: "Group the LLM details under one
  *  section as well: LLMs · Tokens · Token Usage"): LLMs (id `agents`:
  *  default agent, launch bar, presets, CLI install), Tokens (id
@@ -131,8 +132,7 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  `useZenGardensSettingsShown()` (where the Zen toggle shows, prd-zen-gardens-v1
  *  item 17). Gardens is its own group from 0.45.7 (Rosson: "give Gardens
  *  their own section … like K2 Server and Logs"): Gardens (list, lock,
- *  sync, theme, folder), Widget data, then Data Sources; the first group
- *  after the top-level pages. Tickets sits directly beneath Projects
+ *  sync, theme, folder), Widget data, then Data Sources. Tickets sits directly beneath Projects
  *  (0.45.4, Rosson). `notifications`: the window's
  *  server reports `thread-push-v1`; Notifications sits directly after General
  *  (prd-thread-push-notifications-v1 §9). */
@@ -163,19 +163,6 @@ export function settingsNav({
     ...(import.meta.env.DEV
       ? ([{ kind: 'item', id: 'dictation-lab' as const, label: 'Dictation Lab (dev)' }] satisfies NavBlock[])
       : []),
-    ...(zenGardens
-      ? ([
-          {
-            kind: 'group',
-            title: 'Gardens',
-            items: [
-              { id: 'zen-gardens', label: 'Gardens' },
-              { id: 'zen-widget-data', label: 'Widget data' },
-              { id: 'data-sources', label: 'Data Sources' },
-            ],
-          },
-        ] satisfies NavBlock[])
-      : []),
     {
       kind: 'group',
       title: 'LLMs',
@@ -196,6 +183,19 @@ export function settingsNav({
         { id: 'vault', label: 'Vault' },
       ],
     },
+    ...(zenGardens
+      ? ([
+          {
+            kind: 'group',
+            title: 'Gardens',
+            items: [
+              { id: 'zen-gardens', label: 'Gardens' },
+              { id: 'zen-widget-data', label: 'Widget data' },
+              { id: 'data-sources', label: 'Data Sources' },
+            ],
+          },
+        ] satisfies NavBlock[])
+      : []),
     {
       kind: 'group',
       title: 'Network',

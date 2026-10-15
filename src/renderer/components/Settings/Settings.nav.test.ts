@@ -26,7 +26,9 @@ describe('Settings nav Apps', () => {
     expect(accessStart).toBeGreaterThan(src.indexOf("title: 'LLMs'"))
     expect(networkStart).toBeGreaterThan(accessStart)
     expect(editors).toBeGreaterThan(networkStart)
-    const access = src.slice(accessStart, networkStart)
+    // Gardens sits between Access and Network (Rosson 2026-10-15).
+    const access = src.slice(accessStart, src.indexOf("title: 'Gardens'"))
+    expect(src.indexOf("title: 'Gardens'")).toBeGreaterThan(accessStart)
     const network = src.slice(networkStart, editors)
     expect(access).toContain(
       [
@@ -91,12 +93,13 @@ describe('Settings nav Apps', () => {
 })
 
 describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own section)', () => {
-  it('Gardens is a group like Access and Logs: Gardens, Widget data, Data Sources, before LLMs', () => {
+  it('Gardens is a group like Access and Logs: Gardens, Widget data, Data Sources, beneath Access', () => {
     const start = src.indexOf("title: 'Gardens'")
-    const llms = src.indexOf("title: 'LLMs'")
-    expect(start).toBeGreaterThan(0)
-    expect(llms).toBeGreaterThan(start)
-    const gardens = src.slice(start, llms)
+    const access = src.indexOf("title: 'Access'")
+    const network = src.indexOf("title: 'Network'")
+    expect(start).toBeGreaterThan(access)
+    expect(network).toBeGreaterThan(start)
+    const gardens = src.slice(start, network)
     expect(gardens).toContain(
       [
         "{ id: 'zen-gardens', label: 'Gardens' },",
@@ -120,12 +123,12 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
 })
 
 describe('Settings nav LLMs group (0.45.7, Rosson: LLMs · Tokens · Token Usage)', () => {
-  it('LLMs is a group: LLMs, Tokens, Token Usage, after Gardens and before Access', () => {
+  it('LLMs is a group: LLMs, Tokens, Token Usage, before Access; Gardens follows Access', () => {
     const start = src.indexOf("title: 'LLMs'")
     const gardens = src.indexOf("title: 'Gardens'")
     const server = src.indexOf("title: 'Access'")
-    expect(start).toBeGreaterThan(gardens)
     expect(server).toBeGreaterThan(start)
+    expect(gardens).toBeGreaterThan(server)
     expect(src.slice(start, server)).toContain(
       [
         "{ id: 'agents', label: 'LLMs' },",

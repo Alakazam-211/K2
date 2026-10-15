@@ -40,7 +40,7 @@ describe('Settings → LLMs group', () => {
       expect(items).not.toContain('agents')
       expect(items).not.toContain('token-usage')
       const titles = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
-      expect(titles[zenGardens ? 1 : 0]).toBe('LLMs')
+      expect(titles[0]).toBe('LLMs')
     }
   })
 
@@ -59,9 +59,9 @@ describe('Settings → LLMs group', () => {
 })
 
 describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
-  it('group order: Gardens, LLMs, Access, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
+  it('group order: LLMs, Access, Gardens, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
     expect(titles(settingsNav({ zenGardens: true }))).toEqual([
-      'Gardens', 'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
+      'LLMs', 'Access', 'Gardens', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
     expect(titles(settingsNav({ zenGardens: false }))).toEqual([
       'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',

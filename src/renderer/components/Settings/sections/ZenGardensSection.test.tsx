@@ -8,8 +8,8 @@
 // Asserted (fail loudly):
 //   - the Gardens group (0.45.7: Gardens, then Widget data) shows exactly
 //     where the Zen toggle shows (Mac yes, Windows no until G-Win, Focus
-//     window no), is the first group after the top-level pages (before K2
-//     Server), and hides when this computer's daemon has no Gardens routes
+//     window no), sits right after Access (Rosson 2026-10-15: "Move
+//     Gardens beneath Access"), and hides when this computer's daemon has no Gardens routes
 //     (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
 //   - Widget data is its own page (the same block that sat under the list),
 //     with a pointer to Gardens before setup and a link to Data Sources;
@@ -469,17 +469,14 @@ afterEach(() => {
 })
 
 describe('Settings → Gardens: where it shows', () => {
-  it('0.45.7: a Gardens group (Gardens, Widget data, Data Sources), the first group after the top-level pages', () => {
+  it('0.45.7: a Gardens group (Gardens, Widget data, Data Sources), right after Access', () => {
     const nav = settingsNav({ zenGardens: true })
     const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
-    expect(groups[0]).toBe('Gardens')
-    // LLMs, then Access (0.45.7).
-    expect(groups[1]).toBe('LLMs')
-    expect(groups[2]).toBe('Access')
+    // LLMs, Access, then Gardens (Rosson 2026-10-15), then Network.
+    expect(groups.slice(0, 4)).toEqual(['LLMs', 'Access', 'Gardens', 'Network'])
     const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
-    // Every block before it is a top-level page; the next one is LLMs.
-    expect(nav.slice(0, at).every((b) => b.kind === 'item')).toBe(true)
-    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'LLMs' })
+    expect(nav[at - 1]).toMatchObject({ kind: 'group', title: 'Access' })
+    expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'Network' })
     expect(nav[at]).toEqual({
       kind: 'group',
       title: 'Gardens',
@@ -509,7 +506,7 @@ describe('Settings → Gardens: where it shows', () => {
     expect(network?.kind === 'group' && network.items.at(-1)).toEqual({ id: 'data-sources', label: 'Data Sources' })
   })
 
-  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data, Data Sources) before LLMs, and the Zen toggle shows too', async () => {
+  it('desktop Mac: the rendered sidebar shows the Gardens group (header, Gardens, Widget data, Data Sources) after Access, and the Zen toggle shows too', async () => {
     render(
       <>
         <Settings />
@@ -519,10 +516,10 @@ describe('Settings → Gardens: where it shows', () => {
     await settle()
     const ids = navIds()
     const at = ids.indexOf('zen-gardens')
-    expect(at).toBeGreaterThan(ids.indexOf('keybindings'))
+    expect(ids[at - 1]).toBe('vault')
     expect(ids[at + 1]).toBe('zen-widget-data')
     expect(ids[at + 2]).toBe('data-sources')
-    expect(ids[at + 3]).toBe('agents')
+    expect(ids[at + 3]).toBe('k2-connect')
     expect(ids.filter((id) => id === 'data-sources').length).toBe(1)
     expect(ids[ids.indexOf('tickets') + 1]).toBe('context-catalog')
     // The group header sits right above its first leaf, which is indented.

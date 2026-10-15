@@ -559,8 +559,8 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &jailed, false) {
-        return heartbeats_area_response();
+    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, false) {
+        return r;
     }
     let abs = jailed.to_string_lossy().to_string();
     match fsc::write_file(&abs, &content) {
@@ -671,6 +671,143 @@ fn refuse_heartbeats_area(
     } else {
         None
     }
+}
+
+// ── Agent config folder (GH#72) ────────────────────────────────────────
+//
+// Rosson 2026-10-14: an App guest's `files:write` stops at the room's
+// `.k2/` folder (the agent's own config: its role, inbox, skills) unless
+// the guest's grant carries the opt-in `files:agentconfig` for that room.
+// Reads are unchanged. Every guest write door (write-file, upload-binary,
+// upload-chunk, create, copy, move, rename) goes through
+// [`refuse_protected_write`], so this is the one check. Guests have no
+// delete door. The owner token, Connect users, agent sessions and the
+// daemon never take this path (they never carry a `SkinPass`).
+
+/// `true` when one path segment names the agent config folder: `.k2`,
+/// ASCII case-folded (`.K2` on a case-insensitive disk is the same
+/// folder), with trailing dots/spaces ignored (Windows strips them).
+fn is_agent_config_segment(seg: &str) -> bool {
+    seg.trim_end_matches(['.', ' ']).eq_ignore_ascii_case(".k2")
+}
+
+/// Normal segments of a room-relative path, with `/` and `\` both
+/// treated as separators and `.` dropped.
+fn rel_segments(rel: &str) -> Vec<&str> {
+    rel.trim()
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect()
+}
+
+/// Lexical: `rel` is `.k2` or under it. With `ancestors`, the room root
+/// itself counts too (moving or renaming it would carry `.k2/` along).
+pub fn lexically_in_agent_config(rel: &str, ancestors: bool) -> bool {
+    let segs = rel_segments(rel);
+    match segs.first() {
+        Some(first) => is_agent_config_segment(first),
+        None => ancestors,
+    }
+}
+
+/// `abs` with every existing prefix resolved (symlinks followed) and the
+/// not-yet-created tail kept as written. `None` when an existing prefix
+/// can't be resolved (a dangling symlink): callers fail closed.
+fn resolve_existing_prefix(abs: &Path) -> Option<PathBuf> {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = abs.to_path_buf();
+    loop {
+        match std::fs::canonicalize(&cur) {
+            Ok(mut out) => {
+                for seg in tail.iter().rev() {
+                    out.push(seg);
+                }
+                return Some(out);
+            }
+            Err(_) => {
+                if std::fs::symlink_metadata(&cur).is_ok() {
+                    // Exists but won't resolve: a dangling or looping link.
+                    return None;
+                }
+                let name = cur.file_name()?.to_owned();
+                let parent = cur.parent()?.to_path_buf();
+                tail.push(name);
+                cur = parent;
+            }
+        }
+    }
+}
+
+/// Resolved: `abs` (already jailed) lands at or under the room's `.k2/`
+/// once symlinks are followed, compared ASCII case-folded. With
+/// `ancestors`, the room root itself counts too.
+pub fn abs_in_agent_config(root: &str, abs: &Path, ancestors: bool) -> bool {
+    let Ok(canon_root) = std::fs::canonicalize(root) else {
+        return true;
+    };
+    let Some(target) = resolve_existing_prefix(abs) else {
+        return true;
+    };
+    let fold = |p: &Path| p.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let root_s = fold(&canon_root);
+    let target_s = fold(&target);
+    if target_s == root_s {
+        return ancestors;
+    }
+    match target_s.strip_prefix(&format!("{}/", root_s.trim_end_matches('/'))) {
+        Some(rest) => rest
+            .split('/')
+            .find(|s| !s.is_empty() && *s != ".")
+            .is_some_and(is_agent_config_segment),
+        // Jailed paths stay under the room; anything else fails closed.
+        None => true,
+    }
+}
+
+/// 403 for a guest write into the agent's config folder.
+pub fn agent_config_protected_response() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "agent_config_protected",
+            "message": "the agent's .k2 folder is protected: app guests can't write it unless the owner turns on files:agentconfig for this room",
+        })
+        .to_string(),
+    }
+}
+
+/// The one write check for every guest file door. `rel` is the
+/// room-relative path the guest sent (or the landed path, e.g.
+/// `<dir>/<filename>`), `abs` its jailed absolute path. `ancestors` is set
+/// for a move/rename source (the root carries `.k2/` along). R2 heartbeat
+/// ground is checked first and holds even with the opt-in.
+fn refuse_protected_write(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    abs: &Path,
+    ancestors: bool,
+) -> Option<CliResponse> {
+    if let Some(r) = refuse_heartbeats_area(resolved, rel, abs, ancestors) {
+        return Some(r);
+    }
+    // R2 again on the fully resolved target: a symlinked folder followed
+    // by not-yet-created segments is invisible to a plain canonicalize.
+    if let Some(full) = resolve_existing_prefix(abs) {
+        if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &full, ancestors) {
+            return Some(heartbeats_area_response());
+        }
+    }
+    if pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_AGENT_CONFIG) {
+        return None;
+    }
+    if lexically_in_agent_config(rel, ancestors)
+        || abs_in_agent_config(&resolved.path, abs, ancestors)
+    {
+        return Some(agent_config_protected_response());
+    }
+    None
 }
 
 fn skin_resolve_write(
@@ -821,10 +958,11 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_heartbeats_area(&resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &jailed_dir, false) {
         return r;
     }
-    if let Some(r) = refuse_heartbeats_area(
+    if let Some(r) = refuse_protected_write(
+        pass,
         &resolved,
         &format!("{dir}/{filename}"),
         &jailed_dir.join(&filename),
@@ -1015,11 +1153,12 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_heartbeats_area(&resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &jailed_dir, false) {
         return r;
     }
     let name = gu::final_name(&filename);
-    if let Some(r) = refuse_heartbeats_area(
+    if let Some(r) = refuse_protected_write(
+        pass,
         &resolved,
         &format!("{dir}/{name}"),
         &jailed_dir.join(&name),
@@ -1078,8 +1217,8 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(d) => d,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if crate::heartbeat_app_routes::abs_touches_heartbeats(&resolved.path, &canon_dir, false) {
-        return heartbeats_area_response();
+    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &canon_dir, false) {
+        return r;
     }
     let part = gu::guest_part_name(&principal, &resolved.project_id, &canon_dir, &name, &upload_id);
     let part_abs = canon_dir.join(&part);
@@ -1138,7 +1277,7 @@ fn handle_skin_create(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_heartbeats_area(&resolved, &rel, &jailed, false) {
+    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, false) {
         return r;
     }
     let abs = jailed.to_string_lossy().to_string();
@@ -1190,7 +1329,7 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
             Ok(p) => {
                 // R2: a move carries the source away, so `.` / `.k2` count.
                 if is_move {
-                    if let Some(r) = refuse_heartbeats_area(&resolved, rel, &p, true) {
+                    if let Some(r) = refuse_protected_write(pass, &resolved, rel, &p, true) {
                         return r;
                     }
                 }
@@ -1203,14 +1342,15 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_heartbeats_area(&resolved, &dest, &dest_path, false) {
+    if let Some(r) = refuse_protected_write(pass, &resolved, &dest, &dest_path, false) {
         return r;
     }
     // The landed path is `<dest>/<source name>` when dest is a folder.
     for abs in abs_sources.iter() {
         let Some(leaf) = Path::new(abs).file_name() else { continue };
         let leaf_s = leaf.to_string_lossy();
-        if let Some(r) = refuse_heartbeats_area(
+        if let Some(r) = refuse_protected_write(
+            pass,
             &resolved,
             &format!("{dest}/{leaf_s}"),
             &dest_path.join(leaf),
@@ -1315,7 +1455,7 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
         Err(e) => return CliResponse::bad_request(e),
     };
     // R2: neither the source nor the renamed path may be heartbeat ground.
-    if let Some(r) = refuse_heartbeats_area(&resolved, &rel, &jailed, true) {
+    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, true) {
         return r;
     }
     if let Some(parent) = jailed.parent() {
@@ -1323,7 +1463,8 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
             .parent()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Some(r) = refuse_heartbeats_area(
+        if let Some(r) = refuse_protected_write(
+            pass,
             &resolved,
             &format!("{parent_rel}/{new_name}"),
             &parent.join(&new_name),
@@ -2537,6 +2678,354 @@ mod tests {
         );
         assert_eq!(std::fs::read(&file).expect("file stayed"), b"keep-me");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GH#72: guests can't write the agent's config folder by default ──
+
+    struct ConfigRoom {
+        dir: PathBuf,
+        handle: String,
+        id: String,
+    }
+
+    impl Drop for ConfigRoom {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    impl ConfigRoom {
+        fn role_md(&self) -> PathBuf {
+            self.dir.join(".k2/agent/ROLE.md")
+        }
+        fn read_role(&self) -> String {
+            std::fs::read_to_string(self.role_md()).expect("ROLE.md must exist")
+        }
+    }
+
+    /// A room with `.k2/agent/ROLE.md`, `.k2/inbox/`, `.k2/heartbeats/`,
+    /// `notes/a.md`, and `cfg -> .k2` / `agentdir -> .k2/agent` symlinks.
+    fn config_room(tag: &str) -> ConfigRoom {
+        let dir = std::env::temp_dir().join(format!("k2-cfg-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(".k2/agent")).expect("agent dir");
+        std::fs::create_dir_all(dir.join(".k2/inbox")).expect("inbox dir");
+        std::fs::create_dir_all(dir.join(".k2/heartbeats/digest")).expect("hb dir");
+        std::fs::create_dir_all(dir.join("notes")).expect("notes dir");
+        std::fs::write(dir.join(".k2/agent/ROLE.md"), b"original role").expect("role");
+        std::fs::write(dir.join("notes/a.md"), b"note a").expect("note");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join(".k2"), dir.join("cfg")).expect("cfg link");
+            std::os::unix::fs::symlink(dir.join(".k2/agent"), dir.join("agentdir"))
+                .expect("agentdir link");
+        }
+        let dir = dir.canonicalize().expect("canon");
+        let handle = format!("cf{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = insert_handled_project(&dir.to_string_lossy(), &handle);
+        ConfigRoom { dir, handle, id }
+    }
+
+    fn writer(room: &ConfigRoom, opt_in: bool) -> SkinPass {
+        let mut caps = vec![
+            k2_core::skin::CAP_THREAD_READ,
+            k2_core::skin::CAP_FILES_READ,
+            k2_core::skin::CAP_FILES_WRITE,
+        ];
+        if opt_in {
+            caps.push(k2_core::skin::CAP_FILES_AGENT_CONFIG);
+        }
+        session_pass(&room.id, &caps)
+    }
+
+    fn assert_protected(resp: &CliResponse, label: &str) {
+        assert_eq!(resp.status, "403 Forbidden", "{label}: {}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json body");
+        assert_eq!(v["error"], "agent_config_protected", "{label}: {}", resp.body);
+    }
+
+    fn write_body(room: &ConfigRoom, path: &str, content: &str) -> Vec<u8> {
+        serde_json::json!({"workspace": room.handle, "path": path, "content": content})
+            .to_string()
+            .into_bytes()
+    }
+
+    fn upload_body(room: &ConfigRoom, dir: &str, filename: &str) -> Vec<u8> {
+        serde_json::json!({"workspace": room.handle, "dir": dir, "filename": filename, "base64": "aGk="})
+            .to_string()
+            .into_bytes()
+    }
+
+    fn chunk_body(room: &ConfigRoom, dir: &str, filename: &str) -> Vec<u8> {
+        serde_json::json!({
+            "workspace": room.handle,
+            "dir": dir,
+            "filename": filename,
+            "upload_id": uuid::Uuid::new_v4().to_string(),
+            "offset": 0,
+            "base64": "aGk=",
+            "is_last": true,
+            "total_bytes": 2,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn json_bytes(v: serde_json::Value) -> Vec<u8> {
+        v.to_string().into_bytes()
+    }
+
+    #[test]
+    fn guest_writes_into_agent_config_are_refused_by_default() {
+        let room = config_room("deny");
+        let pass = writer(&room, false);
+        let h = room.handle.clone();
+
+        // write-file: the role file, a new inbox item, a new agent file.
+        for path in [".k2/agent/ROLE.md", ".k2/inbox/task.md", ".k2/agent/new.txt", ".k2"] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_protected(&r, &format!("write-file {path}"));
+        }
+        // Case, separator and trailing-dot variants of the folder name.
+        for path in [
+            ".K2/agent/ROLE.md",
+            ".K2/inbox/x.md",
+            ".k2\\agent\\ROLE.md",
+            ".k2./agent/x.md",
+            "./.k2/inbox/x.md",
+        ] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_protected(&r, &format!("write-file variant {path}"));
+        }
+        // Symlinks inside the room that resolve into .k2, including a
+        // not-yet-created folder behind the link.
+        #[cfg(unix)]
+        for path in ["cfg/agent/ROLE.md", "agentdir/ROLE.md", "cfg/inbox/x.md", "cfg/newdir/x.md"] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_protected(&r, &format!("write-file via symlink {path}"));
+        }
+        // `..` never reaches the check: the jail refuses it first.
+        for path in ["notes/../.k2/agent/ROLE.md", "../x/.k2/agent/ROLE.md"] {
+            let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
+            assert_eq!(r.status, "400 Bad Request", "{path}: {}", r.body);
+            assert!(r.body.contains("'..'"), "{path}: {}", r.body);
+        }
+
+        // upload-binary: into the folder, and a file named .k2 at the root.
+        for (dir, name) in [
+            (".k2/inbox", "x.bin"),
+            (".k2", "x.bin"),
+            (".", ".k2"),
+            ("cfg/inbox", "x.bin"),
+            ("cfg/brandnew", "x.bin"),
+        ] {
+            let r = handle_upload_binary_gated(&upload_body(&room, dir, name), Some(pass.clone()));
+            assert_protected(&r, &format!("upload-binary {dir}/{name}"));
+        }
+        // upload-chunk: a chunk and a status probe.
+        for dir in [".k2/inbox", "cfg/inbox", ".K2/agent", "cfg/brandnew"] {
+            let r = handle_upload_chunk_gated(&chunk_body(&room, dir, "big.bin"), Some(pass.clone()));
+            assert_protected(&r, &format!("upload-chunk {dir}"));
+        }
+        let status = json_bytes(serde_json::json!({
+            "workspace": h, "dir": ".k2/inbox", "filename": "big.bin", "upload_id": "u1", "status": true,
+        }));
+        assert_protected(&handle_upload_chunk_gated(&status, Some(pass.clone())), "upload-chunk status");
+
+        // create (mkdir and file).
+        for (path, is_dir) in [(".k2/skills", true), (".k2/inbox/new.md", false), ("cfg/brandnew", true)] {
+            let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "is_directory": is_dir}));
+            assert_protected(&handle_create_gated(&body, Some(pass.clone())), &format!("create {path}"));
+        }
+        // copy / move INTO the folder.
+        for dest in [".k2/inbox", ".k2/agent", "cfg/inbox"] {
+            let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/a.md"], "destination": dest}));
+            assert_protected(&handle_copy_gated(&body, Some(pass.clone())), &format!("copy into {dest}"));
+            assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move into {dest}"));
+        }
+        // move OUT of the folder.
+        for src in [".k2/agent/ROLE.md", ".k2/inbox", ".K2/agent", "agentdir/ROLE.md"] {
+            let body = json_bytes(serde_json::json!({"workspace": h, "sources": [src], "destination": "notes"}));
+            assert_protected(&handle_move_gated(&body, Some(pass.clone())), &format!("move out {src}"));
+        }
+        // rename OUT of (source in .k2) and INTO (new name is .k2).
+        for (path, new_name) in [(".k2/agent/ROLE.md", "ROLE.old"), (".k2/inbox", "box"), ("notes", ".K2")] {
+            let body = json_bytes(serde_json::json!({"workspace": h, "path": path, "new_name": new_name}));
+            assert_protected(&handle_rename_gated(&body, Some(pass.clone())), &format!("rename {path} -> {new_name}"));
+        }
+        // `.k2` itself (and the root) is also R2 heartbeat ground: still 403.
+        for src in [".k2", "."] {
+            let body = json_bytes(serde_json::json!({"workspace": h, "sources": [src], "destination": "notes"}));
+            let r = handle_move_gated(&body, Some(pass.clone()));
+            assert_eq!(r.status, "403 Forbidden", "move {src}: {}", r.body);
+        }
+
+        // Nothing changed on disk.
+        assert_eq!(room.read_role(), "original role");
+        assert_eq!(std::fs::read_dir(room.dir.join(".k2/inbox")).expect("inbox").count(), 0);
+        assert!(!room.dir.join(".k2/agent/new.txt").exists());
+        assert!(!room.dir.join(".k2/skills").exists());
+        assert!(!room.dir.join(".k2/brandnew").exists());
+        assert!(!room.dir.join(".k2/newdir").exists());
+        assert!(room.dir.join("notes/a.md").exists(), "a refused move must leave the source");
+        assert!(room.dir.join("notes").is_dir());
+
+        // Reads under .k2 still work (2026-09-29 ruling).
+        let mut q = HashMap::new();
+        q.insert("workspace".to_string(), h.clone());
+        q.insert("path".to_string(), ".k2/agent/ROLE.md".to_string());
+        let r = handle_read_file_gated(&q, Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "read ROLE.md: {}", r.body);
+        assert!(r.body.contains("original role"), "{}", r.body);
+        // Copying OUT of .k2 is a read: allowed.
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": [".k2/agent/ROLE.md"], "destination": "notes"}));
+        let r = handle_copy_gated(&body, Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "copy out of .k2: {}", r.body);
+        assert_eq!(std::fs::read_to_string(room.dir.join("notes/ROLE.md")).expect("copy"), "original role");
+
+        // Ordinary room files still work, every door.
+        let r = handle_write_file_gated(&write_body(&room, "notes/today.md", "ok"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = handle_write_file_gated(&write_body(&room, "k2-notes.md", "ok"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "a name that merely contains k2: {}", r.body);
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": "notes/.k2", "is_directory": true}));
+        let r = handle_create_gated(&body, Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "a nested .k2 folder isn't the agent's: {}", r.body);
+        let r = handle_write_file_gated(&write_body(&room, "notes/.k2/x.md", "ok"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "a .k2 folder that isn't the room's: {}", r.body);
+        let r = handle_upload_binary_gated(&upload_body(&room, "notes", "u.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = handle_upload_chunk_gated(&chunk_body(&room, "notes/big", "big.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": "notes/sub", "is_directory": true}));
+        assert_eq!(handle_create_gated(&body, Some(pass.clone())).status, "200 OK");
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": "notes/today.md", "new_name": "t.md"}));
+        assert_eq!(handle_rename_gated(&body, Some(pass.clone())).status, "200 OK");
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/t.md"], "destination": "notes/sub"}));
+        assert_eq!(handle_move_gated(&body, Some(pass.clone())).status, "200 OK");
+        assert!(room.dir.join("notes/sub/t.md").exists());
+    }
+
+    #[test]
+    fn opt_in_lets_a_guest_write_agent_config_but_not_heartbeats() {
+        let room = config_room("allow");
+        let pass = writer(&room, true);
+        let h = room.handle.clone();
+
+        let r = handle_write_file_gated(&write_body(&room, ".k2/agent/ROLE.md", "owner allowed"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(room.read_role(), "owner allowed");
+        let r = handle_write_file_gated(&write_body(&room, ".k2/inbox/task.md", "t"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = handle_upload_binary_gated(&upload_body(&room, ".k2/inbox", "x.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = handle_upload_chunk_gated(&chunk_body(&room, ".k2/inbox", "big.bin"), Some(pass.clone()));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": ".k2/skills", "is_directory": true}));
+        assert_eq!(handle_create_gated(&body, Some(pass.clone())).status, "200 OK");
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": ["notes/a.md"], "destination": ".k2/inbox"}));
+        assert_eq!(handle_copy_gated(&body, Some(pass.clone())).status, "200 OK");
+        let body = json_bytes(serde_json::json!({"workspace": h, "path": ".k2/inbox/a.md", "new_name": "b.md"}));
+        assert_eq!(handle_rename_gated(&body, Some(pass.clone())).status, "200 OK");
+        let body = json_bytes(serde_json::json!({"workspace": h, "sources": [".k2/inbox/b.md"], "destination": "notes"}));
+        assert_eq!(handle_move_gated(&body, Some(pass.clone())).status, "200 OK");
+        assert!(room.dir.join("notes/b.md").exists());
+        assert!(room.dir.join(".k2/inbox/task.md").exists());
+        assert!(room.dir.join(".k2/inbox/x.bin").exists());
+        assert!(room.dir.join(".k2/inbox/big.bin").exists());
+        assert!(room.dir.join(".k2/skills").is_dir());
+
+        // R2 holds even with the opt-in: heartbeat ground stays managed.
+        let r = handle_write_file_gated(&write_body(&room, ".k2/heartbeats/digest/notes.md", "x"), Some(pass.clone()));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("heartbeats_area"), "{}", r.body);
+        #[cfg(unix)]
+        {
+            let r = handle_write_file_gated(&write_body(&room, "cfg/heartbeats/newhb/x.md", "x"), Some(pass.clone()));
+            assert_eq!(r.status, "403 Forbidden", "symlink + new folder into heartbeats: {}", r.body);
+            assert!(r.body.contains("heartbeats_area"), "{}", r.body);
+            let body = json_bytes(serde_json::json!({"workspace": h, "path": "cfg/heartbeats/newhb", "is_directory": true}));
+            let r = handle_create_gated(&body, Some(pass.clone()));
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            assert!(r.body.contains("heartbeats_area"), "{}", r.body);
+            assert!(!room.dir.join(".k2/heartbeats/newhb").exists());
+        }
+
+        // The opt-in is per room: it does not carry to a room without it.
+        let other = config_room("other");
+        let mut policy = pass.room_policy.clone();
+        policy.insert(other.id.clone(), vec![k2_core::skin::CAP_FILES_WRITE.to_string()]);
+        let two_rooms = SkinPass {
+            rooms: vec![room.id.clone(), other.id.clone()],
+            room_policy: policy,
+            ..pass.clone()
+        };
+        let r = handle_write_file_gated(&write_body(&other, ".k2/agent/ROLE.md", "x"), Some(two_rooms.clone()));
+        assert_protected(&r, "opt-in is per room");
+        assert_eq!(other.read_role(), "original role");
+        let r = handle_write_file_gated(&write_body(&room, ".k2/agent/ROLE.md", "again"), Some(two_rooms));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(room.read_role(), "again");
+    }
+
+    #[test]
+    fn owner_writes_into_agent_config_are_unaffected() {
+        let room = config_room("owner");
+        let body = serde_json::json!({
+            "path": room.role_md().to_string_lossy(),
+            "content": "owner text",
+        })
+        .to_string();
+        let r = handle_write_file_gated(body.as_bytes(), None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(room.read_role(), "owner text");
+        let body = serde_json::json!({
+            "path": room.dir.join(".k2/inbox/owner.md").to_string_lossy(),
+            "is_directory": false,
+        })
+        .to_string();
+        let r = handle_create_gated(body.as_bytes(), None);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert!(room.dir.join(".k2/inbox/owner.md").exists());
+    }
+
+    #[test]
+    fn agent_config_path_checks() {
+        for (rel, want) in [
+            (".k2", true),
+            (".k2/agent/ROLE.md", true),
+            ("./.k2/inbox", true),
+            (".K2/agent", true),
+            (".k2\\agent", true),
+            (".k2./x", true),
+            (".k2 /x", true),
+            ("notes/.k2/x", false),
+            ("k2/x", false),
+            (".k2x/y", false),
+            ("notes", false),
+        ] {
+            assert_eq!(lexically_in_agent_config(rel, false), want, "{rel}");
+        }
+        assert!(lexically_in_agent_config(".", true), "the root carries .k2 along");
+        assert!(!lexically_in_agent_config(".", false));
+
+        let room = config_room("abs");
+        let root = room.dir.to_string_lossy().into_owned();
+        assert!(abs_in_agent_config(&root, &room.dir.join(".k2/agent/ROLE.md"), false));
+        assert!(abs_in_agent_config(&root, &room.dir.join(".k2/new/deeper/x"), false));
+        assert!(!abs_in_agent_config(&root, &room.dir.join("notes/a.md"), false));
+        assert!(!abs_in_agent_config(&root, &room.dir.join("notes/new/deeper"), false));
+        assert!(!abs_in_agent_config(&root, &room.dir, false));
+        assert!(abs_in_agent_config(&root, &room.dir, true));
+        #[cfg(unix)]
+        {
+            assert!(abs_in_agent_config(&root, &room.dir.join("cfg/agent/ROLE.md"), false));
+            assert!(abs_in_agent_config(&root, &room.dir.join("cfg/new/deeper/x"), false));
+            assert!(abs_in_agent_config(&root, &room.dir.join("agentdir"), false));
+            // A dangling link fails closed.
+            std::os::unix::fs::symlink(room.dir.join("nowhere"), room.dir.join("dangle"))
+                .expect("dangling link");
+            assert!(abs_in_agent_config(&root, &room.dir.join("dangle/x"), false));
+        }
     }
 
     #[test]

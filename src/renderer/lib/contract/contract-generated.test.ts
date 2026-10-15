@@ -180,7 +180,7 @@ describe('TUWA10: one cap table', () => {
       'thread:read': 'Read the Thread',
       'thread:post': 'Post to the Thread',
       'files:read': 'Read files (also shows heartbeat instructions)',
-      'files:write': 'Write files (not .k2/heartbeats)',
+      'files:write': "Write files (not the agent's .k2 folder)",
       'tickets:read': 'Read tickets and get live ticket updates',
       'tickets:post': 'Open, answer, assign and set status on tickets',
       'wiki:read': 'Read the wiki',
@@ -191,6 +191,7 @@ describe('TUWA10: one cap table', () => {
       'heartbeats:write': 'Add, edit, turn on or off, archive and fire heartbeats',
       'agent:identity': "Change the agent's name, color and picture",
       'agent:handle': "Change the agent's handle (its address)",
+      'files:agentconfig': "Also allow writing the agent's .k2 folder (not recommended)",
     })
   })
 

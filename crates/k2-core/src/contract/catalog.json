@@ -36,7 +36,7 @@
     {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
     {"name": "app:navigate", "label": "Switch the rail view"},
     {"name": "files:read", "exposure": ["app"], "label": "Read files (also shows heartbeat instructions)"},
-    {"name": "files:write", "exposure": ["app"], "label": "Write files (not .k2/heartbeats)"},
+    {"name": "files:write", "exposure": ["app"], "label": "Write files (not the agent's .k2 folder)"},
     {"name": "tickets:read", "exposure": ["app"], "label": "Read tickets and get live ticket updates"},
     {"name": "tickets:post", "exposure": ["app"], "label": "Open, answer, assign and set status on tickets"},
     {"name": "wiki:read", "exposure": ["app"], "label": "Read the wiki"},
@@ -50,7 +50,12 @@
       "label": "Add, edit, turn on or off, archive and fire heartbeats"
     },
     {"name": "agent:identity", "exposure": ["app"], "label": "Change the agent's name, color and picture"},
-    {"name": "agent:handle", "exposure": ["app"], "label": "Change the agent's handle (its address)"}
+    {"name": "agent:handle", "exposure": ["app"], "label": "Change the agent's handle (its address)"},
+    {
+      "name": "files:agentconfig",
+      "exposure": ["app"],
+      "label": "Also allow writing the agent's .k2 folder (not recommended)"
+    }
   ],
   "errors": [
     {

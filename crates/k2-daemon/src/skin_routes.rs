@@ -242,6 +242,28 @@ pub fn actor_is_agent(actor: &str) -> bool {
     actor.starts_with("agent:")
 }
 
+/// GH#72 (Rosson 2026-10-14): [`skin::CAP_FILES_AGENT_CONFIG`] — letting
+/// App guests write the agent's own `.k2/` folder — is owner tooling. An
+/// agent with "manage Apps" may not add it to a role's room, mint it on a
+/// platform pass, widen a pass that holds it, or hand a role that holds
+/// it to a guest. Removing it (tightening) stays open to agents.
+fn agent_config_refused() -> CliResponse {
+    owner_only_with_hint(
+        "files:agentconfig (app guests may write the agent's .k2 folder) is owner-only — ask your human (Settings → User Access, or k2 app role room <role> <handle> --caps …,files:write,files:agentconfig)",
+    )
+}
+
+fn caps_have_agent_config(caps: Option<&[String]>) -> bool {
+    caps.is_some_and(|c| c.iter().any(|x| x == skin::CAP_FILES_AGENT_CONFIG))
+}
+
+/// Stored room policy of a role (`None` when no such role yet).
+fn stored_role_policy(id_or_name: &str) -> Result<Option<RoomPolicy>, CliResponse> {
+    skin::find_role(id_or_name)
+        .map(|r| r.map(|r| r.room_policy))
+        .map_err(CliResponse::internal_error)
+}
+
 fn app_field(v: &serde_json::Value) -> Option<&str> {
     str_field(v, &["app", "appId", "app_id"])
 }
@@ -577,6 +599,9 @@ pub fn handle_tokens_post(body: &[u8], actor: &str) -> CliResponse {
         return CliResponse::bad_request("missing name");
     };
     let caps = caps_field(&v);
+    if actor_is_agent(actor) && caps_have_agent_config(caps.as_deref()) {
+        return agent_config_refused();
+    }
     let rooms = match rooms_field(&v) {
         None => {
             return CliResponse::bad_request("rooms must include at least one workspace");
@@ -630,6 +655,21 @@ pub fn handle_tokens_rooms(body: &[u8], actor: &str) -> CliResponse {
     let Some(list) = rooms_field(&v) else {
         return CliResponse::bad_request("missing rooms");
     };
+    if actor_is_agent(actor) {
+        // A platform pass is caps × rooms: new rooms on a pass that holds
+        // the `.k2/` opt-in would widen it.
+        match skin::list_tokens() {
+            Ok(tokens) => {
+                if tokens
+                    .iter()
+                    .any(|t| t.id == id && caps_have_agent_config(Some(&t.caps)))
+                {
+                    return agent_config_refused();
+                }
+            }
+            Err(e) => return CliResponse::internal_error(e),
+        }
+    }
     let rooms = match resolve_rooms_or_400(Some(list)) {
         Ok(ids) => ids,
         Err(e) => return e,
@@ -1105,6 +1145,9 @@ pub fn handle_roles_post(body: &[u8], actor: &str) -> CliResponse {
         Ok(None) => RoomPolicy::new(),
         Err(e) => return e,
     };
+    if actor_is_agent(actor) && skin::policy_has_agent_config(&policy) {
+        return agent_config_refused();
+    }
     // `app` may be a service id or `<workspace>/<name>` (S24-15); `host`
     // means host-wide (NULL), the same as leaving it out.
     let app_id = match opt_text_field(&v, &["appId", "app_id", "app"]) {
@@ -1143,6 +1186,17 @@ pub fn handle_roles_update(body: &[u8], actor: &str) -> CliResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+    if actor_is_agent(actor) {
+        if let Some(new) = policy.as_ref() {
+            let old = match stored_role_policy(id_or_name) {
+                Ok(o) => o,
+                Err(e) => return e,
+            };
+            if !skin::agent_config_added(old.as_ref(), new).is_empty() {
+                return agent_config_refused();
+            }
+        }
+    }
     match skin::update_role(id_or_name, policy.as_ref()) {
         Ok(role) => {
             k2_core::log_debug!(
@@ -1183,6 +1237,17 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
         skin::clear_role_room(id_or_name, project_id)
     } else {
         let caps = caps_field(&v);
+        if actor_is_agent(actor) && caps_have_agent_config(caps.as_deref()) {
+            let had = match stored_role_policy(id_or_name) {
+                Ok(old) => old.as_ref().and_then(|p| p.get(project_id)).is_some_and(|c| {
+                    c.iter().any(|x| x == skin::CAP_FILES_AGENT_CONFIG)
+                }),
+                Err(e) => return e,
+            };
+            if !had {
+                return agent_config_refused();
+            }
+        }
         skin::set_role_room(id_or_name, project_id, caps.as_deref())
     };
     match result {
@@ -1228,6 +1293,13 @@ pub fn handle_roles_assign(body: &[u8], actor: &str) -> CliResponse {
     let Some(role) = str_field(&v, &["role", "name", "id"]) else {
         return CliResponse::bad_request("missing role");
     };
+    if actor_is_agent(actor) {
+        match stored_role_policy(role) {
+            Ok(Some(p)) if skin::policy_has_agent_config(&p) => return agent_config_refused(),
+            Ok(_) => {}
+            Err(e) => return e,
+        }
+    }
     match skin::assign_role(username, role) {
         Ok(p) => {
             k2_core::log_debug!(
@@ -2145,6 +2217,23 @@ mod tests {
         assert_eq!(v["error"]["code"], "owner_only", "{v}");
         let r = handle_users_post(br#"{"username":"eve","role":"x"}"#, "owner-token");
         assert!(r.status.starts_with("400"), "role needs app: {}", r.body);
+    }
+
+    /// GH#72: an agent can't mint the `.k2/` write opt-in on a platform
+    /// pass. Refused before any store is touched.
+    #[test]
+    fn agent_cannot_mint_the_agent_config_opt_in() {
+        let r = handle_tokens_post(
+            br#"{"name":"agent-tok","caps":["files:write","files:agentconfig"],"rooms":["sales"]}"#,
+            "agent:sales",
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only", "{v}");
+        assert!(
+            v["error"]["hint"].as_str().expect("hint").contains("files:agentconfig"),
+            "{v}"
+        );
     }
 
     #[test]

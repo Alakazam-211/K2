@@ -43,7 +43,7 @@ export const K2_CAPS = {
   'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
   'app:navigate': { label: 'Switch the rail view', exposure: [] },
   'files:read': { label: 'Read files (also shows heartbeat instructions)', exposure: ['app'] },
-  'files:write': { label: 'Write files (not .k2/heartbeats)', exposure: ['app'] },
+  'files:write': { label: "Write files (not the agent's .k2 folder)", exposure: ['app'] },
   'tickets:read': { label: 'Read tickets and get live ticket updates', exposure: ['app'] },
   'tickets:post': { label: 'Open, answer, assign and set status on tickets', exposure: ['app'] },
   'wiki:read': { label: 'Read the wiki', exposure: ['app'] },
@@ -54,6 +54,7 @@ export const K2_CAPS = {
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
   'agent:identity': { label: "Change the agent's name, color and picture", exposure: ['app'] },
   'agent:handle': { label: "Change the agent's handle (its address)", exposure: ['app'] },
+  'files:agentconfig': { label: "Also allow writing the agent's .k2 folder (not recommended)", exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS

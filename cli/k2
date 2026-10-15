@@ -6424,6 +6424,8 @@ Usage: k2 app <user|role|grant|token|hydra|front-door> ...
                                         --app tags the role for one App (usable only on that App's grants).
   k2 app role room <role> <handle> [--caps thread:read,thread:post,files:read]
                                         Add/replace functions on one room. Omit --caps = Thread-only. Not --caps with --agent.
+                                        files:write never reaches the agent's .k2/ folder unless you add
+                                        files:agentconfig too (owner only; not recommended). k2 study apps.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
   k2 app role list                     Roles (per-room lines; no secrets)
@@ -6466,7 +6468,9 @@ HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
 Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
 thread:post (POST /cli/thread/post),
 files:read (GET /cli/fs/read-dir|read-file|read-binary|read-range + WS /cli/fs/events),
-files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move).
+files:write (POST /cli/fs/write-file|upload-binary|upload-chunk|create|copy|move|rename;
+  never into the agent's .k2/ folder),
+files:agentconfig (opt-in, owner only: also lets files:write reach .k2/; not recommended).
 Rooms: workspace handles. Empty = Thread dark.
 Grid/PTY is never an app room. Capability check paths (full):
   GET /cli/sessions/grid  and  GET /cli/sessions/bytes
@@ -23847,6 +23851,24 @@ FILES
   the rest of the fs family stay 404 not found. Never /cli/fs/*. Never owner BFF.
   Never /cli/sessions/events for files. Token never in the browser.
   ensure-pinned-chat is thread:read find-only (never spawn, never forceRespawn).
+
+THE AGENT'S .k2 FOLDER (0.45.6)
+  files:write stops at the room's .k2/ folder: that is the agent's own
+  config (its role, inbox, skills, settings). Every write door refuses a
+  target in .k2/ (any letter case, through a symlink too): write-file,
+  upload-binary, upload-chunk, create, copy or move into it, move or
+  rename out of it.
+    403 {"error":"agent_config_protected","message":"…"}
+  Reads are unchanged: files:read reads .k2/ like any other folder, and
+  copying a file OUT of .k2/ is a read.
+  Opt-in, per room, owner only: add files:agentconfig next to files:write
+    k2 app role room <role> <handle> --caps files:read,files:write,files:agentconfig
+  or tick "Also allow writing the agent's .k2 folder (not recommended)"
+  under files:write in Settings → User Access. It means nothing without
+  files:write (refused alone). .k2/heartbeats/ stays heartbeat-managed
+  even with it (heartbeats_area). An agent with "manage Apps" can never
+  add it, mint it on a platform token, widen a token that holds it, or
+  give a guest a role that holds it (403 owner_only).
 
 TICKETS
   Exact paths on the official origin (cookie k2_skin_ui; never ?token=):

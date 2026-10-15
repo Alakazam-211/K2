@@ -127,6 +127,12 @@ export const FEATURES = {
    *  Settings → User Access offers the two caps only at or above this (an
    *  older server refuses an unknown cap). Confirm at the release cut. */
   'agent-identity': '0.45.5',
+  /** GH#72: app guests' `files:write` stops at the agent's `.k2/` folder,
+   *  and the `files:agentconfig` opt-in exists. Settings → User Access
+   *  offers the "Also allow writing the agent's .k2 folder" box only at or
+   *  above this (an older server refuses the unknown cap). Confirm at the
+   *  release cut. */
+  'agent-config-write': '0.45.6',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

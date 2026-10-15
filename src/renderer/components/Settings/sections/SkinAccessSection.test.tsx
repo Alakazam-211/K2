@@ -32,6 +32,9 @@ import {
   SKIN_AGENT_IDENTITY_CAPS,
   SKIN_FILE_CAPS,
   SKIN_STORE_CAPS,
+  SKIN_AGENT_CONFIG_CAP,
+  SKIN_AGENT_CONFIG_LABEL,
+  toggleSkinCap,
   parseFrontDoor,
   parseSkinUsers,
   parseSkinTokens,
@@ -659,6 +662,62 @@ describe('SkinAccessSection', () => {
     expect(body.appId).toBeUndefined()
   })
 
+  it('GH#72: the .k2 folder opt-in shows only under files:write, is off by default, and drops with it', async () => {
+    expect(SKIN_AGENT_CONFIG_CAP).toBe('files:agentconfig')
+    expect(SKIN_AGENT_CONFIG_LABEL).toBe("Also allow writing the agent's .k2 folder (not recommended)")
+    expect(SKIN_CAP_CHOICES as readonly string[]).not.toContain('files:agentconfig')
+    expect(DEFAULT_SKIN_CAPS as readonly string[]).not.toContain('files:agentconfig')
+    expect([...toggleSkinCap(new Set(['files:write', 'files:agentconfig']), 'files:write', false)]).toEqual([])
+    expect([...toggleSkinCap(new Set(['files:write']), 'files:agentconfig', true)]).toEqual([
+      'files:write',
+      'files:agentconfig',
+    ])
+
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+    fireEvent.change(screen.getByLabelText('New skin role name'), { target: { value: 'editor' } })
+    fireEvent.click(screen.getByLabelText('Role agent sales'))
+    const label = 'Role sales agent .k2 folder'
+    expect(screen.queryByLabelText(label)).toBeNull()
+    fireEvent.click(screen.getByLabelText('Role sales files:write'))
+    const box = screen.getByLabelText(label) as HTMLInputElement
+    expect(box.checked).toBe(false)
+    expect(screen.getAllByText(SKIN_AGENT_CONFIG_LABEL).length).toBeGreaterThan(0)
+    // Unticking files:write hides the box and drops the opt-in.
+    fireEvent.click(box)
+    fireEvent.click(screen.getByLabelText('Role sales files:write'))
+    expect(screen.queryByLabelText(label)).toBeNull()
+    fireEvent.click(screen.getByLabelText('Role sales files:write'))
+    expect((screen.getByLabelText(label) as HTMLInputElement).checked).toBe(false)
+    fireEvent.click(screen.getByLabelText(label))
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles', {
+        name: 'editor',
+        roomAccess: [
+          { handle: 'sales', caps: ['thread:read', 'thread:post', 'files:write', 'files:agentconfig'] },
+        ],
+      })
+    })
+  })
+
+  it('GH#72: a role without the opt-in never sends files:agentconfig', async () => {
+    render(<SkinAccessSection />)
+    await loaded()
+    fireEvent.click(screen.getByRole('button', { name: 'Host' }))
+    fireEvent.change(screen.getByLabelText('New skin role name'), { target: { value: 'writer' } })
+    fireEvent.click(screen.getByLabelText('Role agent sales'))
+    fireEvent.click(screen.getByLabelText('Role sales files:write'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create role' }))
+    await waitFor(() => {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('skin/roles', {
+        name: 'writer',
+        roomAccess: [{ handle: 'sales', caps: ['thread:read', 'thread:post', 'files:write'] }],
+      })
+    })
+  })
+
   it('shows tokens and Hydra only after Host, and never Guests or Leftover Caddy', async () => {
     render(<SkinAccessSection />)
     await loaded()
@@ -897,7 +956,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'thread:read': 'Read the Thread',
       'thread:post': 'Post to the Thread',
       'files:read': 'Read files (also shows heartbeat instructions)',
-      'files:write': 'Write files (not .k2/heartbeats)',
+      'files:write': "Write files (not the agent's .k2 folder)",
       'tickets:read': 'Read tickets and get live ticket updates',
       'tickets:post': 'Open, answer, assign and set status on tickets',
       'wiki:read': 'Read the wiki',

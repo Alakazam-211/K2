@@ -106,6 +106,12 @@ for needle in "agent:identity" "agent:handle" "/cli/agent/identity" "/cli/agent/
     assert_contains "app-identity names $needle" "$id_out" "$needle"
 done
 
+echo "== k2 study apps: the agent's .k2 folder (GH#72) =="
+apps_out="$("$K2" study apps)"
+for needle in "THE AGENT'S .k2 FOLDER" "agent_config_protected" "files:agentconfig" "Also allow writing the agent's .k2 folder (not recommended)" "owner_only"; do
+    assert_contains "apps names $needle" "$apps_out" "$needle"
+done
+
 echo "== k2 study app-tickets (prd-app-tickets-websocket-v1) =="
 tk_out="$("$K2" study app-tickets)"
 assert_contains "tickets socket path" "$tk_out" "WS   /cli/activity/events?workspace=<handle>"

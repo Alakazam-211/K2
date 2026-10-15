@@ -296,6 +296,8 @@ pub fn set_workspace_handle(project_path: &str, requested: &str) -> Result<Strin
     drop(conn);
     rewrite_agent_md_name(project_path, &slug)?;
     invalidate_agent_display_name_cache(project_path);
+    // Sew S27: chat profiles mirror this; the grant-hook sweep fixes drift.
+    crate::tool_hook::kick_reconcile();
     Ok(slug)
 }
 

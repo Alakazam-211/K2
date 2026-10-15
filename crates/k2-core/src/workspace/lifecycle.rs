@@ -333,6 +333,9 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
         );
     }
     emit(HookEvent::SyncProjects, serde_json::Value::Null);
+    // Sew S27 §14.4: reconcile deletes this workspace's chat grant and
+    // deprovisions its agent (different DB; no shared transaction).
+    crate::tool_hook::kick_reconcile();
     Ok(serde_json::json!({
         "success": true,
         "removed": path,

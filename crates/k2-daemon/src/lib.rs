@@ -77,6 +77,7 @@ pub mod root_helper;
 pub mod root_helper_routes;
 // Workspace data sidecar (prd-workspace-data-sidecar-v1) — supervised
 // Postgres + JSONB store. Linux-only at RUNTIME (`sql_supported`).
+pub mod sew;
 pub mod sql;
 pub mod sql_routes;
 pub mod v1_db;

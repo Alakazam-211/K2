@@ -1336,7 +1336,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0165_app_runtime_core",
             include_str!("../../drizzle_sql/0165_app_runtime_core.sql"),
         ),
-        // 0166/0167 are Sew's (they land with Sew; never reuse them here).
+        // 0166 — Sew on K2 (Sew S29, K11/K12): the supervisor's singleton
+        // `sew_server` row (with S32's `app_url` folded in) and the
+        // per-agent "Manage Sew" switch `projects.agents_can_manage_chat`
+        // (DEFAULT 0 = off). Reserved for Sew before 0168–0170 took
+        // their numbers; 0.46.0 ships it in numeric order (a dev DB that ran
+        // an r3 build without it applies it after 0170: additive only).
+        // 0167 stays Sew's (S30, 0.46.x); never reuse it.
+        ("0166_sew_server", include_str!("../../drizzle_sql/0166_sew_server.sql")),
         // 0168 — the 0.46.0 App grace release: the App-scoped key
         // (api_keys.app_service_id / app_key), the nested "…and publish
         // open Apps" switch, apps.config_json (S13), `app_widenings` (every
@@ -2057,6 +2064,7 @@ mod tests {
                 "0163_sources",
                 "0164_garden_data",
                 "0165_app_runtime_core",
+                "0166_sew_server",
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
@@ -2234,7 +2242,17 @@ mod tests {
             for t in ["deploy_audit", "deployments", "apps", "seeds"] {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
-            for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite", "0171_app_box_services"] {
+            // 0166 (Sew server + the Manage Sew switch) came after 0165.
+            conn.execute_batch("DROP TABLE sew_server; ALTER TABLE projects DROP COLUMN agents_can_manage_chat;")
+                .unwrap();
+            for m in [
+                "0165_app_runtime_core",
+                "0166_sew_server",
+                "0168_app_grace",
+                "0169_app_egress",
+                "0170_app_walls_lite",
+                "0171_app_box_services",
+            ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }
             let last: String = conn

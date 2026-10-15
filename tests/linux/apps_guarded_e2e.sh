@@ -186,7 +186,7 @@ K2 app list | grep -q "Guarded (container)" || fail "label"
 ok "label: Guarded (container)"
 K2 app logs esc-a >/tmp/la.txt 2>&1 || true
 grep -q "id mapping warmed in" /tmp/la.txt || fail "prepare warmed the mapping before the switch: $(tail -n 5 /tmp/la.txt)"
-grep -q "esc a1 up" /tmp/la.txt || fail "the App's own output via k2 app logs (journal): $(tail -n 5 /tmp/la.txt)"
+grep -q "esc a1 up" /tmp/la.txt || { head -c 6000 /tmp/la.txt; fail "the App's own output via k2 app logs (journal)"; }
 ok "first id mapping paid at prepare (before the switch); App output reaches k2 app logs from the unit journal"
 
 SVC="$(K2 app list --json | python3 -c "import json,sys; print([a for a in json.load(sys.stdin)['apps'] if a['appId']=='esc-a'][0]['serviceId'])")"

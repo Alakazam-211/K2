@@ -102,14 +102,14 @@ REMOTE
 		;;
 	vm)
 		echo "== the guarded e2e in a throwaway Debian 13 VM =="
-		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
+		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" "${K2_IT_KEEP_VM:-}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
 set -euo pipefail
-R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"
+R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"; KEEP="${5:-}"
 mkdir -p "$R/vm"
 podman build -q -t "$IMAGE" -f "$R/it/tests/Containerfile.vm-it" "$R/it/tests" >/dev/null
 NAME="k2-vm-it-$STAMP"
 trap 'podman rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
-podman run --rm --name "$NAME" -e K2_IT_BAKED="$BAKED" --device /dev/kvm -v "$R/vm:/vm" -v "$R/it:/it:ro" "$IMAGE" bash /it/tests/guarded_vm_driver.sh
+podman run --rm --name "$NAME" -e K2_IT_BAKED="$BAKED" -e K2_IT_KEEP_VM="$KEEP" --device /dev/kvm -v "$R/vm:/vm" -v "$R/it:/it:ro" "$IMAGE" bash /it/tests/guarded_vm_driver.sh
 REMOTE
 		;;
 	clean)

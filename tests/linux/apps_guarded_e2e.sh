@@ -95,7 +95,9 @@ echo "== engine install (S11) =="
 ED=/opt/k2-engine-it
 install -d -m 0755 "$ED"
 install -m 0644 "$IT/bin/k2-app-engine" "$ED/k2-app-engine-linux-$ARCH"
-"$IT/bin/testsign" engine-sig "$ED/k2-app-engine-linux-$ARCH" "$VER" 1 "$ARCH" >"$ED/k2-app-engine-linux-$ARCH.sig"
+# The protocol the engine build speaks (2 in 0.46.0), from the binary itself.
+EPROTO="$("$IT/bin/k2-app-engine" version | python3 -c 'import json,sys; print(json.load(sys.stdin)["protocol"])')"
+"$IT/bin/testsign" engine-sig "$ED/k2-app-engine-linux-$ARCH" "$VER" "$EPROTO" "$ARCH" >"$ED/k2-app-engine-linux-$ARCH.sig"
 # A tampered copy is refused before any root call.
 TD=/opt/k2-engine-bad
 install -d -m 0755 "$TD"

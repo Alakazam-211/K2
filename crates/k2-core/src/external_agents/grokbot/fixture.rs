@@ -177,6 +177,38 @@ pub fn sample_entries() -> Vec<Value> {
     ]
 }
 
+/// The non-text `send-message` shapes (payload shapes 2026-10-15; fake
+/// values, real field names).
+pub fn card_entries() -> Vec<Value> {
+    vec![
+        json!({"kind":"send-message","id":"s101","timestampMs":1_791_990_000_000_i64,
+            "message":{"type":"widget","widget":{
+                "prompt":"Which environment should I deploy to?","helpText":"You can change this later.",
+                "options":[
+                    {"label":"Staging","value":"deploy to staging","description":"Safe default","style":"primary"},
+                    {"label":"Production","value":"deploy to production","style":"default"},
+                    {"label":"Not now","value":"skip deploy"}],
+                "allowCustom":true,"dismissOnMoveOn":true}},
+            "respondedValue":"deploy to staging","widgetSkipped":false,"widgetDismissed":false}),
+        json!({"kind":"send-message","id":"s105","timestampMs":1_791_990_000_500_i64,
+            "message":{"type":"widget","widget":{"prompt":"Ship it?","options":[{"label":"Yes","value":"yes ship"}]}},
+            "widgetSkipped":true}),
+        json!({"kind":"send-message","id":"s102","timestampMs":1_791_990_001_000_i64,
+            "message":{"type":"connector","connector":"example-connector","serverId":"exmpl01","variant":"connect"}}),
+        json!({"kind":"send-message","id":"s103","timestampMs":1_791_990_002_000_i64,
+            "message":{"type":"secret-request","secretRequest":{
+                "label":"Bot token","description":"Paste the token from the platform's developer settings.",
+                "target":{"kind":"channel-credential","platform":"exampleapp","field":"bot_token"}}},
+            "secretProvided":true}),
+        json!({"kind":"send-message","id":"s104","timestampMs":1_791_990_003_000_i64,
+            "requestId":"00000000-0000-0000-0000-000000000000",
+            "message":{"type":"bot-template-share","shareId":"tmpl_EXAMPLE000000000","name":"Demo",
+                "avatarShape":"blob","avatarColor":"teal",
+                "body":"A short description of what this bot template does.",
+                "shareUrl":"https://example.invalid/t/EXAMPLE","version":1,"published":true,"visibility":"public"}}),
+    ]
+}
+
 /// One `listAgents` item in the sampled shape.
 pub fn list_item(id: &str, name: &str) -> Value {
     json!({

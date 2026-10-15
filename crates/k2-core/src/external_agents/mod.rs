@@ -114,6 +114,78 @@ pub struct ThreadMessage {
     /// Grok Bot" instead of the text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_in_app: Option<String>,
+    /// A read-only card for an interactive line (a question, a connect
+    /// request, a credential request, a shared template). Answered in the
+    /// product's own app, never through K2; never carries a secret value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<Card>,
+}
+
+/// One choice on a [`Card::Choice`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOption {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The human picked this one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub chosen: bool,
+}
+
+/// How the human dealt with a question card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CardState {
+    Open,
+    Answered,
+    Skipped,
+    Dismissed,
+}
+
+/// Read-only interactive lines (see [`ThreadMessage::card`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Card {
+    /// A question with choice buttons.
+    #[serde(rename_all = "camelCase")]
+    Choice {
+        prompt: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        help_text: Option<String>,
+        options: Vec<CardOption>,
+        state: CardState,
+        /// Free-text answer that matched no option.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        custom_answer: Option<String>,
+    },
+    /// "Connect this integration."
+    #[serde(rename_all = "camelCase")]
+    Connector {
+        connector: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        variant: Option<String>,
+    },
+    /// A credential request. Only whether it was provided — never a value.
+    #[serde(rename_all = "camelCase")]
+    SecretRequest {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
+        provided: bool,
+    },
+    /// A shared bot template.
+    #[serde(rename_all = "camelCase")]
+    TemplateShare {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        /// `https://` only.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        share_url: Option<String>,
+    },
 }
 
 /// One page of an agent's chat.

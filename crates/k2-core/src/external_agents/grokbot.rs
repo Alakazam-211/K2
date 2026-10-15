@@ -29,8 +29,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
 use super::{
-    valid_agent_id, AgentRef, Author, Detection, ExtError, ExternalAgent, ExternalAgentProvider,
-    ProviderStatus, SendReceipt, ThreadMessage, ThreadPage,
+    valid_agent_id, AgentRef, Author, Card, CardOption, CardState, Detection, ExtError,
+    ExternalAgent, ExternalAgentProvider, ProviderStatus, SendReceipt, ThreadMessage, ThreadPage,
 };
 
 pub const KIND: &str = "grokbot";
@@ -117,6 +117,17 @@ pub mod schema {
     /// (`widget`, `connector`, `secret-request`, `bot-template-share`) show
     /// as "Open in Grok Bot".
     pub const SEND_MESSAGE_TEXT_TYPE: &str = "text";
+    /// Non-text `send-message` types K2 draws as read-only cards
+    /// (shapes 2026-10-15). Answered in Grok Bot only.
+    pub const SEND_MESSAGE_WIDGET_TYPE: &str = "widget";
+    pub const SEND_MESSAGE_CONNECTOR_TYPE: &str = "connector";
+    pub const SEND_MESSAGE_SECRET_TYPE: &str = "secret-request";
+    pub const SEND_MESSAGE_TEMPLATE_TYPE: &str = "bot-template-share";
+    /// Entry-level (outside `message`) response flags.
+    pub const WIDGET_RESPONDED: &str = "respondedValue";
+    pub const WIDGET_SKIPPED: &str = "widgetSkipped";
+    pub const WIDGET_DISMISSED: &str = "widgetDismissed";
+    pub const SECRET_PROVIDED: &str = "secretProvided";
     pub const TO_AGENT: &str = "toAgent";
     pub const FROM_AGENT: &str = "fromAgent";
     pub const TIMESTAMP: &str = "timestampMs";
@@ -652,6 +663,7 @@ fn entry_to_message(seq: i64, entry: &str) -> Option<ThreadMessage> {
         from_agent: o.get(schema::FROM_AGENT).and_then(agent_ref),
         via_k2,
         open_in_app: None,
+        card: None,
     };
     if kind == schema::KIND_MESSAGE {
         let role = str_of(&o, "role")?;
@@ -676,6 +688,7 @@ fn entry_to_message(seq: i64, entry: &str) -> Option<ThreadMessage> {
             msg.text = content_text(m.get("content"))?;
         } else {
             msg.open_in_app = Some(ty.replace('-', " "));
+            msg.card = card_of(ty, m, &o);
         }
     } else {
         return None;
@@ -684,6 +697,71 @@ fn entry_to_message(seq: i64, entry: &str) -> Option<ThreadMessage> {
         return None;
     }
     Some(msg)
+}
+
+/// Longest string K2 copies into a card field.
+const MAX_CARD_TEXT: usize = 2_000;
+
+fn card_str(o: &Map<String, Value>, key: &str) -> Option<String> {
+    str_of(o, key).map(|s| s.chars().take(MAX_CARD_TEXT).collect())
+}
+
+/// A read-only card for a non-text `send-message` (shapes:
+/// `research-grokbot-payload-shapes-2026-10-15.md`). `m` is `message`,
+/// `entry` the whole row (the human's response flags live there). Never
+/// copies a secret value (the transcript holds none; K2 reads only
+/// `secretProvided`).
+fn card_of(ty: &str, m: &Map<String, Value>, entry: &Map<String, Value>) -> Option<Card> {
+    match ty {
+        schema::SEND_MESSAGE_WIDGET_TYPE => {
+            let w = m.get("widget").and_then(Value::as_object)?;
+            let prompt = card_str(w, "prompt")?;
+            let responded = str_of(entry, schema::WIDGET_RESPONDED).map(str::to_string);
+            let mut matched = false;
+            let mut options = Vec::new();
+            for op in w.get("options").and_then(Value::as_array).into_iter().flatten().take(12) {
+                let Some(op) = op.as_object() else { continue };
+                let Some(label) = card_str(op, "label") else { continue };
+                let chosen = responded.as_deref().is_some_and(|r| str_of(op, "value") == Some(r));
+                matched |= chosen;
+                options.push(CardOption { label, description: card_str(op, "description"), chosen });
+            }
+            let flag = |k: &str| entry.get(k).and_then(Value::as_bool) == Some(true);
+            let state = if responded.is_some() {
+                CardState::Answered
+            } else if flag(schema::WIDGET_SKIPPED) {
+                CardState::Skipped
+            } else if flag(schema::WIDGET_DISMISSED) {
+                CardState::Dismissed
+            } else {
+                CardState::Open
+            };
+            let custom_answer =
+                if matched { None } else { responded.map(|r| r.chars().take(MAX_CARD_TEXT).collect()) };
+            Some(Card::Choice { prompt, help_text: card_str(w, "helpText"), options, state, custom_answer })
+        }
+        schema::SEND_MESSAGE_CONNECTOR_TYPE => Some(Card::Connector {
+            connector: card_str(m, "connector")?,
+            variant: card_str(m, "variant"),
+        }),
+        schema::SEND_MESSAGE_SECRET_TYPE => {
+            let r = m.get("secretRequest").and_then(Value::as_object)?;
+            Some(Card::SecretRequest {
+                label: card_str(r, "label")?,
+                description: card_str(r, "description"),
+                platform: r.get("target").and_then(Value::as_object).and_then(|t| card_str(t, "platform")),
+                provided: entry.get(schema::SECRET_PROVIDED).and_then(Value::as_bool) == Some(true),
+            })
+        }
+        schema::SEND_MESSAGE_TEMPLATE_TYPE => Some(Card::TemplateShare {
+            name: card_str(m, "name")?,
+            body: card_str(m, "body"),
+            share_url: str_of(m, "shareUrl")
+                .filter(|u| u.starts_with("https://") && u.len() <= 2_048)
+                .map(str::to_string),
+        }),
+        _ => None,
+    }
 }
 
 fn content_text(v: Option<&Value>) -> Option<String> {

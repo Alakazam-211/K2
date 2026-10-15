@@ -146,6 +146,47 @@ fn thread_maps_the_sampled_rows_and_skips_hidden_kinds() {
 }
 
 #[test]
+fn non_text_send_messages_become_read_only_cards() {
+    let gw = FakeGateway::start(json!([]));
+    let (_home, sand) = setup(&gw);
+    for e in fixture::card_entries() {
+        sand.add_entry(A, e);
+    }
+    let page = GrokBot::for_current_user().read_thread(A, None, 50).expect("thread");
+    let m = &page.messages;
+    assert_eq!(m.len(), 5);
+    assert!(m.iter().all(|x| x.open_in_app.is_some() && x.text.is_empty()));
+    let v: Vec<serde_json::Value> = m.iter().map(|x| serde_json::to_value(&x.card).expect("json")).collect();
+    assert_eq!(
+        v[0],
+        json!({"type":"choice","prompt":"Which environment should I deploy to?","helpText":"You can change this later.",
+               "options":[{"label":"Staging","description":"Safe default","chosen":true},
+                          {"label":"Production"},{"label":"Not now"}],
+               "state":"answered"})
+    );
+    assert_eq!(v[1]["state"], json!("skipped"));
+    assert_eq!(v[2], json!({"type":"connector","connector":"example-connector","variant":"connect"}));
+    assert_eq!(
+        v[3],
+        json!({"type":"secret-request","label":"Bot token",
+               "description":"Paste the token from the platform's developer settings.",
+               "platform":"exampleapp","provided":true})
+    );
+    assert_eq!(
+        v[4],
+        json!({"type":"template-share","name":"Demo","body":"A short description of what this bot template does.",
+               "shareUrl":"https://example.invalid/t/EXAMPLE"})
+    );
+    // A custom free-text answer that matches no option is shown as such.
+    sand.add_entry(A, json!({"kind":"send-message","message":{"type":"widget","widget":{"prompt":"P?","options":[{"label":"A","value":"a"}]}},"respondedValue":"my own words"}));
+    let p = GrokBot::for_current_user().read_thread(A, Some(5), 10).expect("since");
+    let c = serde_json::to_value(&p.messages[0].card).expect("json");
+    assert_eq!(c["state"], json!("answered"));
+    assert_eq!(c["customAnswer"], json!("my own words"));
+    assert_eq!(c["options"][0].get("chosen"), None);
+}
+
+#[test]
 fn thread_pages_by_seq() {
     let gw = FakeGateway::start(json!([]));
     let (_home, sand) = setup(&gw);

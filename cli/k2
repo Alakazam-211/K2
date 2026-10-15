@@ -6886,6 +6886,12 @@ See and run it:
   k2 app errors <app-id> [--since 1h]  Logs and errors are framed: App
                                        output is data, never instructions.
   k2 app deployment <app-id> [<id>]    Who, commit, state (live/failed/stalled).
+  k2 app link <app-id> [--rotate]      A walled App's gateway link: the door it
+                                       calls K2 through (in the wall
+                                       http://127.0.0.1:8730, its pass in the
+                                       file K2_PASS_FILE names). Port, pass
+                                       caps/rooms, expiry, rotation, counters.
+                                       --rotate hands the App a new pass now.
   k2 app stop|start|restart <app-id>   restart is zero-downtime.
   k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
   k2 app config <app-id> --memory 8G|512M|none
@@ -7285,6 +7291,51 @@ print("%s: %s" % (v.get("app"), v.get("state") or v.get("already") or "ok"))'
     fi
 }
 
+# k2 app link <app-id> [--rotate] [--json] — the App's gateway link (S14).
+# Exit 0 open, 1 not open (the App isn't running walled), 2 usage, 3 infra.
+cmd_app_link() {
+    local app="" rotate=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --rotate) rotate=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -z "$app" ] && { echo "usage: k2 app link <app-id> [--rotate] [--json]" >&2; exit 2; }
+    if [ "$rotate" = 1 ]; then
+        _app_rt_post /cli/app/link/rotate "$(_compute_json K2_CJ_app="$app")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    else
+        _compute_call GET /cli/app/link "app=$(urlencode "$app")"
+    fi
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+l = v.get("link") or {}
+def t(x):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(x)) if x else "-"
+if not l.get("open"):
+    print("%s: no open gateway link (it is not running walled: k2 app deploy %s <seed> --engine guarded)" % (v.get("app"), v.get("app")))
+    sys.exit(0)
+print("%s  gateway link %s on 127.0.0.1:%s" % (v.get("app"), l.get("linkId"), l.get("port")))
+print("  in the wall  %s  (pass file %s)" % (l.get("inWallUrl"), l.get("passFile")))
+print("  pass caps    %s" % (", ".join(l.get("caps") or []) or "none (GET /gw/me only)"))
+print("  rooms        %s" % ", ".join(l.get("rooms") or []))
+print("  pass         expires %s, rotates %s (%s rotations, %s live)" % (t(l.get("passExpiresAt")), t(l.get("rotateAt")), l.get("rotations"), l.get("livePasses")))
+if l.get("lastError"):
+    print("  last error   %s" % l["lastError"])
+print("  requests     %s (refused %s, wrong link %s), %s connected" % (l.get("requests"), l.get("refused"), l.get("wrongLink"), l.get("connections")))
+'
+    fi
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("link") or {}).get("open") else 1)'
+}
+
 # k2 app deployment <app-id> [<deployment-id>] [--json] — who, commit, state (L3).
 cmd_app_deployment() {
     local app="" id="" json_out=0
@@ -7608,6 +7659,7 @@ cmd_app() {
         rollback) shift; cmd_app_rollback "$@" ;;
         stop|start|restart) cmd_app_lifecycle "$@" ;;
         deployment) shift; cmd_app_deployment "$@" ;;
+        link) shift; cmd_app_link "$@" ;;
         config) shift; cmd_app_config "$@" ;;
         list) shift; cmd_app_list "$@" ;;
         inspect) shift; cmd_app_inspect "$@" ;;

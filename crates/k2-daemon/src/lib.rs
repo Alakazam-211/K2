@@ -394,6 +394,8 @@ pub mod test_harness {
         let tunnel_port = crate::tunnel_ingress_listener::spawn(state.clone())
             .await
             .expect("spawn tunnel-ingress listener");
+        // App gateway links (runtime S14) dispatch with this harness's state.
+        crate::apps::gateway::install(state.clone());
 
         tokio::spawn(async move {
             loop {

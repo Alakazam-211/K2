@@ -870,7 +870,9 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_STOPPED, None));
     }
     db(|c| store::set_state(c, &app.app_id, store::STATE_STOPPED, None))?;
-    audit(&app.app_id, "stop", actor, json!({}));
+    // S14: a stopped App has no gateway link and no live pass.
+    let revoked = super::gateway::close(&app.app_id, Some(&app.service_id), true);
+    audit(&app.app_id, "stop", actor, json!({ "passesRevoked": revoked }));
     Ok(())
 }
 
@@ -884,6 +886,7 @@ pub fn forget(app_id: &str) {
     state().lock().unwrap_or_else(|e| e.into_inner()).remove(app_id);
     router::clear(app_id);
     router::close_front(app_id);
+    super::gateway::close(app_id, None, false);
 }
 
 /// Wait (bounded) for a deployment to leave pending/starting.

@@ -3,6 +3,10 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.0
+
+- **Walled Apps reach K2 through their own door (App runtime preview, Linux).** An App deployed with `k2 app deploy … --engine guarded` now gets a gateway link: it calls `http://127.0.0.1:8730` from inside its container, with an App pass K2 keeps in the file `K2_PASS_FILE` names. The pass works only on that App's own link, never on K2's main port, the tunnel or another App's link. It carries the permissions in the App's manifest, for its own workspace only, lives an hour and is replaced before then without dropping a request. Only the routes Apps already use through the App page helper are open on the link. Stopping or uninstalling the App ends every pass. `k2 app link <app>` shows the link (port, permissions, expiry, refused calls) and `k2 app link <app> --rotate` hands the App a new pass now; an agent can do both for its own workspace's Apps with "Allow this agent to manage Apps". `link` and `engine` are now reserved App names.
+
 ## 0.45.7 — Grok Bots at home
 
 - **Grok Bots on your server show up in K2.** If Grok Bot runs on the same computer as your K2 server, K2 can find its agents and list them in Agents with a **Grok Bot** tag. Click one to read its chat, or right-click → **Add to Home** to keep it on My Home and in your Gardens, with live Working / Needs you / Idle status. Questions, connect requests and credential requests from a Grok Bot show as cards you answer in Grok Bot itself; K2 never asks for or shows a secret. Turn it on in Settings → K2 Server → **Local Grok Bots**, which first shows the folder and the agents it found. It's off until you turn it on, and only the owner or an admin can change it. Agents and App guests never see Grok Bot chats.

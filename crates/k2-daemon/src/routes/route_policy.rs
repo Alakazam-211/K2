@@ -190,6 +190,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Member),
+    // S14: the App's gateway link (status; rotate the App pass now).
+    get("/cli/app/link", Member),
+    post("/cli/app/link/rotate", Member),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
     post("/cli/app/restart", Member),

@@ -1554,6 +1554,8 @@ pub fn skin_host_forbidden(path: &str) -> Option<CliResponse> {
         || path == "/cli/sessions/bytes"
         || path.starts_with("/cli/terminal/")
         || path == "/cli/auth/login"
+        // Sew S28 §17 item 5: no chat pass or key route on a skin Host.
+        || path.starts_with("/cli/sew/")
         || path.starts_with("/v1/");
     if !blocked {
         return None;

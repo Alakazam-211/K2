@@ -77,6 +77,15 @@ pub mod link;
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
 
+/// Sew S27/S28: the `chat` grant kind. A principal with an enabled
+/// `kind=chat` grant on [`CHAT_GRANT_TARGET`] may mint chat passes
+/// (`POST /cli/sew/pass`) and may log in to the box with only that grant
+/// (S28 §13, Thread dark). **S27 owns writing these grants** (`grant_kind`
+/// gains `chat` there); S28 only reads them.
+pub const CHAT_GRANT_KIND: &str = "chat";
+/// The one Sew per box (S27: `target_id` is always `sew`).
+pub const CHAT_GRANT_TARGET: &str = "sew";
+
 /// Q8 default (S24-6): switching a guest's box login off ends EVERY login
 /// session of that guest, App sessions included — it is the one "turn this
 /// person off" switch in User Access. `false` = only host sessions end.
@@ -2054,21 +2063,33 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
         let Some(id) = id else {
             return Ok(false);
         };
-        conn.execute(
+        // S28 §12: the person's Sew sessions end with them. Check the chat
+        // grant before the grants go, in the same transaction as the
+        // deletes.
+        let tx = immediate_tx(conn)?;
+        let had_chat = principal_has_chat_grant_conn(&tx, &id)?;
+        tx.execute(
             "DELETE FROM tokens WHERE principal_id = ?1 AND session = 1",
             params![id],
         )
         .map_err(|e| format!("skin session delete: {e}"))?;
         // No FK from grants to principals. Leave the row and app detail
         // would keep showing a raw uuid.
-        conn.execute(
+        tx.execute(
             "DELETE FROM grants WHERE subject_kind = 'principal' AND subject_id = ?1",
             params![id],
         )
         .map_err(|e| format!("skin principal grants delete: {e}"))?;
-        let n = conn
+        let n = tx
             .execute("DELETE FROM principals WHERE id = ?1", params![id])
             .map_err(|e| format!("skin principal delete: {e}"))?;
+        if n > 0 && had_chat {
+            crate::sew_revoke::enqueue(
+                &tx,
+                &crate::sew_revoke::SewSessionRevoke::ExternalId(crate::sew_revoke::principal_external_id(&id)),
+            )?;
+        }
+        tx.commit().map_err(|e| format!("skin principal delete commit: {e}"))?;
         Ok(n > 0)
     })?;
     if r {
@@ -2229,10 +2250,18 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
         let Some(principal) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        let Some(grant) = enabled_app_grant(conn, &principal.id, &app)? else {
-            return Err(HOST_LOGIN_DENIED.to_string());
+        let (policy, role_name) = match enabled_app_grant(conn, &principal.id, &app)? {
+            Some(grant) => grant_login_policy(conn, &grant)?,
+            // Sew S28 §13 (G7): chat-only login. A box login (`host`) with
+            // no host grant but a `chat` grant gets a session with an
+            // EMPTY room policy (Thread, files, tickets, wiki and store
+            // stay dark): it exists to mint chat passes. App logins keep
+            // needing that App's own grant (rev 147).
+            None if app == HOST_APP_ID && principal_has_chat_grant_conn(conn, &principal.id)? => {
+                (thread_only_policy(&[]), None)
+            }
+            None => return Err(HOST_LOGIN_DENIED.to_string()),
         };
-        let (policy, role_name) = grant_login_policy(conn, &grant)?;
         let caps = union_caps(&policy);
         let rooms = rooms_from_policy(&policy);
         let caps_stored = caps_json(&caps);
@@ -2388,12 +2417,14 @@ pub fn set_principal_password(
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
-        conn.execute(
+        let tx = immediate_tx(conn)?;
+        tx.execute(
             "UPDATE principals SET password_hash = ?1 WHERE id = ?2",
             params![hash, p.id],
         )
         .map_err(|e| format!("skin password update: {e}"))?;
-        revoke_sessions_for_principal(conn, &p.id)?;
+        revoke_sessions_for_principal(&tx, &p.id)?;
+        tx.commit().map_err(|e| format!("skin password commit: {e}"))?;
         Ok(SkinPrincipal {
             id: p.id,
             username: p.username,
@@ -2546,29 +2577,188 @@ pub fn principal_agent_workspace(principal_id: &str) -> Result<Option<String>, S
     })
 }
 
+// ── Sew chat grant + session-revoke ops (S28 §12, K8) ────────────────
+
+fn principal_has_chat_grant_conn(conn: &Connection, principal_id: &str) -> Result<bool, String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM grants
+             WHERE subject_kind = 'principal' AND subject_id = ?1
+               AND kind = ?2 AND target_id = ?3 AND enabled != 0",
+            params![principal_id, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("skin chat grant lookup: {e}"))?;
+    Ok(n > 0)
+}
+
+/// Whether a principal holds an enabled `chat` grant on `sew` (S28 §5).
+/// Read live on every pass mint, never from a session snapshot.
+pub fn principal_has_chat_grant(principal_id: &str) -> Result<bool, String> {
+    with_conn(|conn| principal_has_chat_grant_conn(conn, principal_id))
+}
+
+/// Test seam until S27's `grant_kind` accepts `chat`: write (or re-enable)
+/// a principal's `chat` grant directly.
+#[cfg(any(test, feature = "test-util"))]
+pub fn insert_chat_grant_for_tests(principal_id: &str) -> Result<(), String> {
+    with_conn(|conn| {
+        let n = conn
+            .execute(
+                "UPDATE grants SET enabled = 1
+                 WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = ?2 AND target_id = ?3",
+                params![principal_id, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
+            )
+            .map_err(|e| format!("test chat grant enable: {e}"))?;
+        if n == 0 {
+            conn.execute(
+                "INSERT INTO grants (id, subject_kind, subject_id, kind, target_id, role_id, scope, created_at, enabled, created_by)
+                 VALUES (?1, 'principal', ?2, ?3, ?4, NULL, NULL, ?5, 1, 'test')",
+                params![uuid::Uuid::new_v4().to_string(), principal_id, CHAT_GRANT_KIND, CHAT_GRANT_TARGET, now_secs()],
+            )
+            .map_err(|e| format!("test chat grant insert: {e}"))?;
+        }
+        Ok(())
+    })
+}
+
+/// Test seam: delete a principal's `chat` grant directly (S27 owns the
+/// real route).
+#[cfg(any(test, feature = "test-util"))]
+pub fn delete_chat_grant_for_tests(principal_id: &str) -> Result<(), String> {
+    with_conn(|conn| {
+        conn.execute(
+            "DELETE FROM grants WHERE subject_kind = 'principal' AND subject_id = ?1 AND kind = ?2 AND target_id = ?3",
+            params![principal_id, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
+        )
+        .map_err(|e| format!("test chat grant delete: {e}"))?;
+        Ok(())
+    })
+}
+
+/// An Immediate transaction on the shared connection (S28-A3: `with_conn`
+/// alone is autocommit). The revoke write and its Sew outbox op commit or
+/// roll back together. Never nested: only the public entry points open one.
+fn immediate_tx(conn: &Connection) -> Result<rusqlite::Transaction<'_>, String> {
+    rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("skin begin immediate: {e}"))
+}
+
+/// [`with_conn`] inside one Immediate transaction: commits when `f`
+/// succeeds, rolls back (the transaction drops) when it fails. For the
+/// grant writes that end sessions, so their Sew ops ride the same commit.
+fn with_immediate<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
+    with_conn(|conn| {
+        let tx = immediate_tx(conn)?;
+        let r = f(&tx)?;
+        tx.commit().map_err(|e| format!("skin commit: {e}"))?;
+        Ok(r)
+    })
+}
+
+/// Queue `sew_session_revoke` ops that did not come from a `skin.db` write
+/// (Connect sessions live in a JSON file, S28 §12). No-op without an
+/// outbox sink, so a box without Sew never opens `skin.db` for this.
+pub fn enqueue_sew_revokes(ops: &[crate::sew_revoke::SewSessionRevoke]) -> Result<(), String> {
+    if ops.is_empty() || !crate::sew_revoke::sink_installed() {
+        for op in ops {
+            crate::log_debug!("[skin] sew_session_revoke {} not queued: no Sew outbox (S27)", op.label());
+        }
+        return Ok(());
+    }
+    with_conn(|conn| {
+        let tx = immediate_tx(conn)?;
+        for op in ops {
+            crate::sew_revoke::enqueue(&tx, op)?;
+        }
+        tx.commit().map_err(|e| format!("skin sew revoke commit: {e}"))
+    })
+}
+
+/// Live (not yet revoked) login-session rows matching `filter`, as
+/// `(token id, principal id)`. `filter` is a fixed SQL fragment over
+/// `tokens` with `?1`.. bound from `args`.
+fn live_session_rows(
+    conn: &Connection,
+    filter: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<(String, String)>, String> {
+    let sql = format!(
+        "SELECT id, principal_id FROM tokens
+         WHERE session = 1 AND revoked_at IS NULL AND principal_id IS NOT NULL AND ({filter})"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("skin session list: {e}"))?;
+    let rows = stmt
+        .query_map(args, |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("skin session list: {e}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("skin session list: {e}"))
+}
+
+/// One `{k2_sid: skn_<id>}` op per ended session whose principal holds a
+/// `chat` grant at this moment (S28 §12). `conn` is inside the revoke's
+/// transaction.
+fn enqueue_session_revokes(conn: &Connection, ended: &[(String, String)]) -> Result<(), String> {
+    let mut chat: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    for (token_id, principal_id) in ended {
+        let has = match chat.get(principal_id.as_str()) {
+            Some(v) => *v,
+            None => {
+                let v = principal_has_chat_grant_conn(conn, principal_id)?;
+                chat.insert(principal_id.as_str(), v);
+                v
+            }
+        };
+        if has {
+            crate::sew_revoke::enqueue(conn, &crate::sew_revoke::SewSessionRevoke::K2Sid(crate::sew_revoke::skin_sid(token_id)))?;
+        }
+    }
+    Ok(())
+}
+
+/// Every live login session of one principal ends (password set, change
+/// or reset; box login off; a non-App grant removed). Sew ends every
+/// session of `k2:principal:<id>` (one op), when the principal has a
+/// `chat` grant and at least one session ended.
 fn revoke_sessions_for_principal(conn: &Connection, principal_id: &str) -> Result<usize, String> {
-    conn.execute(
-        "UPDATE tokens SET revoked_at = ?1
-         WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL",
-        params![now_secs(), principal_id],
-    )
-    .map_err(|e| format!("skin session revoke: {e}"))
+    let n = conn
+        .execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL",
+            params![now_secs(), principal_id],
+        )
+        .map_err(|e| format!("skin session revoke: {e}"))?;
+    if n > 0 && principal_has_chat_grant_conn(conn, principal_id)? {
+        crate::sew_revoke::enqueue(
+            conn,
+            &crate::sew_revoke::SewSessionRevoke::ExternalId(crate::sew_revoke::principal_external_id(principal_id)),
+        )?;
+    }
+    Ok(n)
 }
 
 /// End one principal's live login sessions bound to one App (S24-6). An old
-/// session row with no App is a `host` session.
+/// session row with no App is a `host` session. Sew ends the chat
+/// sessions minted from exactly those (`skn_<id>` each).
 fn revoke_sessions_for_principal_app(
     conn: &Connection,
     principal_id: &str,
     app: &str,
 ) -> Result<usize, String> {
-    conn.execute(
-        "UPDATE tokens SET revoked_at = ?1
-         WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL
-           AND COALESCE(app_service_id, ?3) = ?4",
-        params![now_secs(), principal_id, HOST_APP_ID, app],
-    )
-    .map_err(|e| format!("skin session revoke: {e}"))
+    let ended = live_session_rows(
+        conn,
+        "principal_id = ?1 AND COALESCE(app_service_id, ?2) = ?3",
+        &[&principal_id, &HOST_APP_ID, &app],
+    )?;
+    let n = conn
+        .execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE principal_id = ?2 AND session = 1 AND revoked_at IS NULL
+               AND COALESCE(app_service_id, ?3) = ?4",
+            params![now_secs(), principal_id, HOST_APP_ID, app],
+        )
+        .map_err(|e| format!("skin session revoke: {e}"))?;
+    enqueue_session_revokes(conn, &ended)?;
+    Ok(n)
 }
 
 /// S24-20: a published service went away (`publish rm`). End every live
@@ -2580,12 +2770,18 @@ pub fn revoke_sessions_for_app(service_id: &str) -> Result<usize, String> {
         return Err("revoke sessions: need a published service id".to_string());
     }
     with_conn(|conn| {
-        conn.execute(
-            "UPDATE tokens SET revoked_at = ?1
-             WHERE session = 1 AND revoked_at IS NULL AND app_service_id = ?2",
-            params![now_secs(), service_id],
-        )
-        .map_err(|e| format!("skin session revoke: {e}"))
+        let tx = immediate_tx(conn)?;
+        let ended = live_session_rows(&tx, "app_service_id = ?1", &[&service_id])?;
+        let n = tx
+            .execute(
+                "UPDATE tokens SET revoked_at = ?1
+                 WHERE session = 1 AND revoked_at IS NULL AND app_service_id = ?2",
+                params![now_secs(), service_id],
+            )
+            .map_err(|e| format!("skin session revoke: {e}"))?;
+        enqueue_session_revokes(&tx, &ended)?;
+        tx.commit().map_err(|e| format!("skin session revoke commit: {e}"))?;
+        Ok(n)
     })
 }
 
@@ -3067,12 +3263,21 @@ pub fn revoke_token(id: &str) -> Result<bool, String> {
         return Err("missing token id".to_string());
     }
     let r = with_conn(|conn| {
-        let n = conn
+        // S28-A3: read the row, revoke it and queue its Sew op in one
+        // Immediate transaction; only a login session (`session=1`) whose
+        // principal holds a `chat` grant gets an op.
+        let tx = immediate_tx(conn)?;
+        let ended = live_session_rows(&tx, "id = ?1", &[&id])?;
+        let n = tx
             .execute(
                 "UPDATE tokens SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL",
                 params![now_secs(), id],
             )
             .map_err(|e| format!("skin token revoke: {e}"))?;
+        if n > 0 {
+            enqueue_session_revokes(&tx, &ended)?;
+        }
+        tx.commit().map_err(|e| format!("skin token revoke commit: {e}"))?;
         Ok(n > 0)
     })?;
     if r {
@@ -4033,7 +4238,7 @@ pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
     if id.is_empty() {
         return Err("missing grant id".to_string());
     }
-    with_conn(|conn| {
+    with_immediate(|conn| {
         let Some(grant) = grant_by_id(conn, id)? else {
             return Ok(false);
         };
@@ -4071,7 +4276,7 @@ pub fn delete_grant_by_key(
     if target_id.is_empty() {
         return Err("missing target id".to_string());
     }
-    with_conn(|conn| {
+    with_immediate(|conn| {
         let n = conn
             .execute(
                 "DELETE FROM grants
@@ -4105,7 +4310,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
         return Err("missing grant id".to_string());
     }
     let flag: i64 = if enabled { 1 } else { 0 };
-    with_conn(|conn| {
+    with_immediate(|conn| {
         let n = conn
             .execute(
                 "UPDATE grants SET enabled = ?1 WHERE id = ?2",
@@ -4137,7 +4342,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
 /// host ones. An existing row is left as the owner wrote it.
 pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
     let username = normalize_username(username)?;
-    with_conn(|conn| {
+    with_immediate(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -5163,18 +5368,23 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
         let row = conn
             .query_row(
                 "SELECT t.id, t.principal_id, t.session, t.name, p.username, t.caps, t.rooms, t.room_policy,
-                        t.app_service_id
+                        t.app_service_id,
+                        EXISTS (
+                          SELECT 1 FROM grants g
+                          WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
+                            AND g.kind = 'app' AND g.target_id = COALESCE(t.app_service_id, ?3)
+                            AND g.enabled != 0),
+                        EXISTS (
+                          SELECT 1 FROM grants g
+                          WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
+                            AND g.kind = ?4 AND g.target_id = ?5 AND g.enabled != 0)
                  FROM tokens t
                  LEFT JOIN principals p ON p.id = t.principal_id
                  WHERE t.key_hash = ?1 AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > ?2)
                    AND t.link_id IS NULL
-                   AND (t.session = 0 OR (p.id IS NOT NULL AND EXISTS (
-                        SELECT 1 FROM grants g
-                        WHERE g.subject_kind = 'principal' AND g.subject_id = t.principal_id
-                          AND g.kind = 'app' AND g.target_id = COALESCE(t.app_service_id, ?3)
-                          AND g.enabled != 0)))",
-                params![key_hash, now, HOST_APP_ID],
+                   AND (t.session = 0 OR p.id IS NOT NULL)",
+                params![key_hash, now, HOST_APP_ID, CHAT_GRANT_KIND, CHAT_GRANT_TARGET],
                 |r| {
                     let principal_id: Option<String> = r.get(1)?;
                     let session: i64 = r.get(2)?;
@@ -5203,7 +5413,25 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                     } else {
                         (caps, rooms)
                     };
-                    Ok(SkinPass {
+                    let app_ok: bool = r.get(9)?;
+                    let chat_ok: bool = r.get(10)?;
+                    let app = if session_b {
+                        blank_to_none(app_raw).unwrap_or_else(|| HOST_APP_ID.to_string())
+                    } else {
+                        String::new()
+                    };
+                    // A login session needs its App's enabled grant — or,
+                    // for a chat-only box login (S28 §13), an enabled
+                    // `chat` grant AND an empty room policy, so a session
+                    // minted under a host grant never outlives that grant
+                    // with its rooms.
+                    let admitted = !session_b
+                        || app_ok
+                        || (chat_ok && app == HOST_APP_ID && room_policy.is_empty());
+                    if !admitted {
+                        return Ok(None);
+                    }
+                    Ok(Some(SkinPass {
                         id: r.get(0)?,
                         principal_id,
                         username: stamp,
@@ -5211,16 +5439,13 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                         rooms,
                         session: session_b,
                         room_policy,
-                        app: if session_b {
-                            blank_to_none(app_raw).unwrap_or_else(|| HOST_APP_ID.to_string())
-                        } else {
-                            String::new()
-                        },
-                    })
+                        app,
+                    }))
                 },
             )
             .optional()
-            .map_err(|e| format!("skin token resolve: {e}"))?;
+            .map_err(|e| format!("skin token resolve: {e}"))?
+            .flatten();
         Ok(row)
     })
     .ok()
@@ -9796,3 +10021,8 @@ mod tests {
         });
     }
 }
+
+// Sew S28 K7/K8: chat grant, chat-only login, revoke ops, Connect ids.
+#[cfg(test)]
+#[path = "skin_sew_tests.rs"]
+mod sew_tests;

@@ -109,6 +109,8 @@ pub mod skin;
 // The App-facing route table shared by the browser helper and the App
 // gateway link (runtime S14, AR8). See module docs.
 pub mod app_surface;
+// Sew S28 §12 / K8: `sew_session_revoke` ops into S27's outbox (sink seam).
+pub mod sew_revoke;
 // Skin front door (slice 3): Caddy path-filter renderer + apply (nested
 // `skin.<sub>.k2.dev` on the existing tunnel; never a second frpc).
 pub mod skin_door;

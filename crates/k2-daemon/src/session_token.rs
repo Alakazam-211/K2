@@ -443,6 +443,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/tunnel/",
         "/cli/daemon/",
         "/cli/sessions/v2/", // PTY spawn/close = RCE-adjacent
+        // Sew (S28 §17 item 8, S32 §11.1): agents never get chat passes,
+        // the key routes or the install owner. Exact paths, so S30's agent
+        // verbs under `/cli/sew/chat/` stay possible.
+        "/cli/sew/pass",
+        "/cli/sew/owner-handoff",
+        "/cli/sew/keys",
         // `/cli/terminal/*` mutations (write/spawn/kill/…) stay denied;
         // C2 admits exact `/cli/terminal/read` via ALLOW_EXACT below so
         // agents can peer-gated `k2 read` of connected workspaces.

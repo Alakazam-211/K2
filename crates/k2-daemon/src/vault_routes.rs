@@ -1022,9 +1022,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Agent hire (prd-agent-hire-templates-v1 HT5/T18): minting an API key
     // that can hire agents, for every caller (owner token included).
     "hire-key-mint",
-    // 0.46.0 App grace: approving a held App request (`secretId` = the
-    // request id), and minting an App-scoped key (`secretId` = the App's
-    // service id). Every caller, owner token included.
+    // App runtime (prd-k2-app-runtime-v1 §5.6): approving a held App
+    // request (0.46.0 grace kinds and S15 egress widenings; `secretId` =
+    // the request id), and minting an App-scoped key (`secretId` = the
+    // App's service id). Every caller, the owner token included (AR14).
     "app-approve",
     "app-key-mint",
 ];

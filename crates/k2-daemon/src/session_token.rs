@@ -678,14 +678,21 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/uninstall",
         "/cli/app/validate",
         // 0.46.0 grace: warnings, clean mode (on narrows; off is held), App
-        // keys (a mint is held for the owner; revoke narrows), held
-        // requests (read own; withdraw own through deny). `approve` is NOT
-        // here: the owner, in person.
+        // keys (a mint is held for the owner; revoke narrows).
         "/cli/app/warnings",
         "/cli/app/clean-mode",
         "/cli/app/key/mint",
         "/cli/app/keys",
         "/cli/app/key/revoke",
+        // Egress (S15): read, propose (always held for the owner), narrow.
+        "/cli/app/egress",
+        "/cli/app/egress/add",
+        "/cli/app/egress/log",
+        "/cli/app/egress/mode",
+        "/cli/app/egress/rm",
+        // Held requests: list own, withdraw own through deny.
+        // `/cli/app/approve` is NOT here: the owner's, in person, with a
+        // vault confirm.
         "/cli/app/approvals",
         "/cli/app/deny",
         "/cli/sidecar/new",

@@ -51274,7 +51274,7 @@ EOF
         # Exact match only. Does not steal app-update or update --app.
         case "${2:-}" in
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall)
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny)
                 shift; cmd_app "$@"
                 ;;
             *)

@@ -13,9 +13,13 @@ K2="$K2_CLI"
 
 pass=0
 fail=0
+# Search with a here-string, never `printf | grep -q`: under pipefail, grep -q
+# exits at the first match, printf takes SIGPIPE on a long page and the
+# pipeline reads as "no match" (a false FAIL here, a false PASS in
+# assert_absent).
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else
@@ -25,7 +29,7 @@ assert_contains() {
 }
 assert_absent() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if grep -Fq -- "$needle" <<<"$hay"; then
         echo "  FAIL: $label (unexpected $(printf %q "$needle"))" >&2
         fail=$((fail + 1))
     else

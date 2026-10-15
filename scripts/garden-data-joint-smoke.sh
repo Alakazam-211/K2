@@ -34,7 +34,7 @@ run() {
     RC=$?
 }
 expect_rc() { if [ "$RC" = "$2" ]; then ok "$1 (exit $RC)"; else bad "$1 (exit $RC, want $2): $OUT"; fi; }
-expect_has() { if printf '%s' "$OUT" | grep -Fq -- "$2"; then ok "$1"; else bad "$1 (missing $(printf %q "$2") in: $OUT)"; fi; }
+expect_has() { if grep -Fq -- "$2" <<<"$OUT"; then ok "$1"; else bad "$1 (missing $(printf %q "$2") in: $OUT)"; fi; }
 confirm() {
     local a=""
     printf '  ? %s [y/N] ' "$1"

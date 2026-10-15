@@ -1439,6 +1439,23 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
             }
         });
 
+        // 0.45.7 relay list: one refresh from k2.dev BEFORE the auto-start
+        // (so frpc dials a current list — a device that only knew one
+        // relay learns the others), then the daemon-owned loop (every
+        // `refresh_s`, after relay switches and token changes). Runs with
+        // or without a client; refresh_once skips air-gap, disabled,
+        // released and unpaired configs itself. Blocking HTTP (≤10 s) →
+        // worker pool; a failure keeps the old list and never touches boot.
+        match tokio::task::spawn_blocking(k2_core::tunnel::relay_list::start_daemon_refresher)
+            .await
+        {
+            Ok(k2_core::tunnel::relay_list::RefreshOutcome::Failed(e)) => log_debug!(
+                "[daemon/tunnel] relay list boot refresh failed (keeping the old list): {e}"
+            ),
+            Ok(_) => {}
+            Err(e) => log_debug!("[daemon/tunnel] relay list boot refresh join error: {e}"),
+        }
+
         // Cheap read of the opt-in flag off the boot path.
         let cfg = match k2_core::tunnel::config::load() {
             Ok(c) => c,

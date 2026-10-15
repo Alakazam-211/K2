@@ -24,6 +24,9 @@
 //!   * [`failover`]  — pure multi-relay failover policy: which relay of
 //!                     the ordered fallback list frpc should dial now
 //!                     (frpc itself can't fail over — one `serverAddr`).
+//!   * [`relay_list`] — 0.45.7: keeps `relays` current from k2.dev
+//!                     (`GET /api/tunnel/relays`) at boot, every
+//!                     `refresh_s`, after relay switches and pairing.
 //!   * [`watchdog`]  — pure mid-session relay-death detection: frpc never
 //!                     exits when an ESTABLISHED session's relay dies (it
 //!                     reconnect-retries internally), so the connector
@@ -51,6 +54,7 @@ pub mod failover;
 pub mod identity;
 pub mod ingress;
 pub mod lease;
+pub mod relay_list;
 pub mod render;
 pub mod subdomains;
 pub mod tls;
@@ -183,8 +187,10 @@ pub fn set_config(upd: TunnelConfigUpdate) -> Result<TunnelConfigView, String> {
         // list, reverting to the legacy single-endpoint pair. Persist-only:
         // a running tunnel keeps the relays it started with until the next
         // (re)start reads the config — exactly like server_addr above.
+        // An explicit list is provisioned, not fetched (0.45.7 status source).
         if let Some(r) = upd.relays {
             c.relays = r;
+            c.relays_fetched_at = None;
         }
         if let Some(s) = upd.subdomain {
             c.subdomain = s.trim().to_string();

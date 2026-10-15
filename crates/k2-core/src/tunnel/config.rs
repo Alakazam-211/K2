@@ -171,6 +171,16 @@ pub struct TunnelConfig {
     /// destructive divorce.
     #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
     pub enabled: bool,
+
+    /// 0.45.7 relay-list refresh: unix seconds when the daemon last wrote
+    /// `relays` from the k2.dev relay list (`GET /api/tunnel/relays`, see
+    /// [`super::relay_list`]). `None` = the list on disk was never fetched
+    /// (provisioned by hand / the provisioner, or the built-in default).
+    /// Written only together with a CHANGED list; an explicit `relays`
+    /// write through `/cli/tunnel/config` clears it. Skipped when absent so
+    /// older files keep their shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relays_fetched_at: Option<u64>,
 }
 
 /// True when K2 Connect end-to-end encryption (Option A) is enabled for
@@ -264,6 +274,7 @@ impl Default for TunnelConfig {
             // Enabled by default — `false` is the persisted PAUSE
             // (PRD tunnel-disable-unpair §2A).
             enabled: default_enabled(),
+            relays_fetched_at: None,
         }
     }
 }
@@ -351,12 +362,51 @@ pub fn install_token_vault(v: Box<dyn TokenVault>) -> bool {
     TOKEN_VAULT.set(v).is_ok()
 }
 
+/// Test-only stand-in for the vault holder (the real one is a process
+/// `OnceLock` and lives in k2-daemon over the keychain). Scoped by
+/// [`TestTokenVault`]; never consulted outside `cfg(test)`.
+#[cfg(test)]
+static TEST_VAULT: std::sync::Mutex<Option<std::sync::Arc<dyn TokenVault>>> =
+    std::sync::Mutex::new(None);
+
+/// Installs an in-memory token vault for one test; removed on drop.
+/// Hold it inside a `TempHome` (the env lock) so tests never overlap.
+#[cfg(test)]
+pub(crate) struct TestTokenVault;
+
+#[cfg(test)]
+impl TestTokenVault {
+    pub(crate) fn install(v: std::sync::Arc<dyn TokenVault>) -> Self {
+        *TEST_VAULT.lock().unwrap_or_else(|p| p.into_inner()) = Some(v);
+        TestTokenVault
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestTokenVault {
+    fn drop(&mut self) {
+        *TEST_VAULT.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
+/// Run `f` with the installed token vault (if any).
+fn with_vault<R>(f: impl FnOnce(Option<&dyn TokenVault>) -> R) -> R {
+    #[cfg(test)]
+    {
+        let test = TEST_VAULT.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(v) = test {
+            return f(Some(&*v));
+        }
+    }
+    f(TOKEN_VAULT.get().map(|b| b.as_ref()))
+}
+
 /// Forget the vault-held token (Release / unpair).
 pub fn clear_vault_token() -> Result<(), String> {
-    match TOKEN_VAULT.get() {
+    with_vault(|v| match v {
         Some(v) => v.clear(),
         None => Ok(()),
-    }
+    })
 }
 
 /// The token as it sits in `tunnel.json` itself (adoption reads it once).
@@ -370,8 +420,8 @@ pub fn file_token() -> Result<String, String> {
 pub fn load() -> Result<TunnelConfig, String> {
     let mut cfg = load_file()?;
     if cfg.token.trim().is_empty() {
-        if let Some(v) = TOKEN_VAULT.get() {
-            cfg.token = v.get().unwrap_or_default();
+        if let Some(t) = with_vault(|v| v.map(|v| v.get().unwrap_or_default())) {
+            cfg.token = t;
         }
     }
     Ok(cfg)
@@ -397,20 +447,27 @@ pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
     // With the vault holder installed, the token goes to the vault and the
     // file keeps everything else.
     let stripped;
-    let cfg = match TOKEN_VAULT.get() {
-        Some(v) => {
-            let t = cfg.token.trim();
-            if t.is_empty() {
-                v.clear()?;
-            } else if v.get().as_deref() != Some(t) {
-                v.set(t)?;
+    let vaulted = with_vault(|v| -> Result<bool, String> {
+        match v {
+            Some(v) => {
+                let t = cfg.token.trim();
+                if t.is_empty() {
+                    v.clear()?;
+                } else if v.get().as_deref() != Some(t) {
+                    v.set(t)?;
+                }
+                Ok(true)
             }
-            let mut c = cfg.clone();
-            c.token = String::new();
-            stripped = c;
-            &stripped
+            None => Ok(false),
         }
-        None => cfg,
+    })?;
+    let cfg = if vaulted {
+        let mut c = cfg.clone();
+        c.token = String::new();
+        stripped = c;
+        &stripped
+    } else {
+        cfg
     };
     let dir = config_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
@@ -431,6 +488,16 @@ pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
 /// Read-modify-write helper: load, apply `f`, persist. The whole cycle
 /// runs under the process lock so concurrent updates don't clobber.
 pub fn update(f: impl FnOnce(&mut TunnelConfig)) -> Result<TunnelConfig, String> {
+    update_if(|c| {
+        f(c);
+        true
+    })
+}
+
+/// [`update`] that persists ONLY when `f` returns true (it changed
+/// something). Same process lock, so a conditional write can't interleave
+/// with another update. Returns the (possibly unchanged) config.
+pub fn update_if(f: impl FnOnce(&mut TunnelConfig) -> bool) -> Result<TunnelConfig, String> {
     use std::sync::{Mutex, OnceLock};
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _g = LOCK
@@ -438,8 +505,9 @@ pub fn update(f: impl FnOnce(&mut TunnelConfig)) -> Result<TunnelConfig, String>
         .lock()
         .unwrap_or_else(|p| p.into_inner());
     let mut cfg = load()?;
-    f(&mut cfg);
-    save(&cfg)?;
+    if f(&mut cfg) {
+        save(&cfg)?;
+    }
     Ok(cfg)
 }
 
@@ -511,6 +579,7 @@ mod tests {
                 device_label: Some("MacIntel".to_string()),
                 e2e: true,
                 enabled: true,
+                relays_fetched_at: Some(1_792_060_000),
             };
             save(&cfg).expect("save");
             let back = load().expect("load");

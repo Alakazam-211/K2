@@ -307,12 +307,22 @@ pub fn apply_config(
         super::unpair::note_repair(t)?;
     }
     let after = config::load()?;
+    request_relays_on_token_change(&previous, &TunnelIdentity::of(&after));
     if TunnelIdentity::of(&after) == previous {
         return Ok((super::get_config_view()?, None));
     }
     let report = reconcile_locked(&previous, was_running, daemon_port, bin);
     // The view re-reads disk so `released` reflects a re-pair.
     Ok((super::get_config_view()?, Some(report)))
+}
+
+/// 0.45.7: a new (non-empty) token is a pairing / re-pair — ask the
+/// daemon's relay-list loop for a fresh list (async, best-effort: the
+/// write that triggered it never fails on the fetch).
+fn request_relays_on_token_change(before: &TunnelIdentity, after: &TunnelIdentity) {
+    if !after.token_fp.is_empty() && after.token_fp != before.token_fp {
+        super::relay_list::request_refresh("tunnel token changed");
+    }
 }
 
 /// A subdomain switch request (Settings picker / `k2 tunnel switch`).
@@ -487,6 +497,9 @@ pub fn switch_subdomain(
     steps.append(&mut report.steps);
     report.steps = steps;
     if report.ok {
+        if let Ok(after) = config::load() {
+            request_relays_on_token_change(&previous, &TunnelIdentity::of(&after));
+        }
         return Ok(report);
     }
 

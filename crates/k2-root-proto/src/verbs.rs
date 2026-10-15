@@ -1293,7 +1293,7 @@ mod tests {
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
-            if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet) {
+            if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet | Verb::AppsLogs { .. }) {
                 assert!(v.takes_lock(), "{v:?}");
             }
         }

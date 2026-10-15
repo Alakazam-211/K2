@@ -61,3 +61,34 @@ async fn artifacts_and_junit_come_back_with_the_result() {
     assert_eq!(a.code, "artifact_not_found", "only names the job reported, never a path");
     drop(n);
 }
+
+/// A job that prints nothing for `stall_secs` ends as `timeout/stalled`
+/// (its whole group is stopped); one that keeps printing runs to its end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_job_stalls_out_and_a_chatty_one_does_not() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-stall", "", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    let offer = c.until(|f| matches!(f, Frame::Offer(_))).await;
+    let Some(Frame::Offer(o)) = offer.last() else { unreachable!() };
+    assert!(o.features.iter().any(|f| f == k2_node_proto::frames::FEATURE_STALL), "{:?}", o.features);
+
+    let mut p = plan("s1", &["/bin/sh", "-c", "echo hi; sleep 30"]);
+    p.stall_secs = Some(1);
+    let t = std::time::Instant::now();
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "s1").await;
+    let end = states_of(&fr, "s1").into_iter().last().unwrap();
+    assert_eq!((end.state, end.reason.as_deref(), end.detail.as_deref()), (JobState::Timeout, Some("stalled"), Some("no output for 1s")));
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "stopped long before the 30 s sleep: {:?}", t.elapsed());
+    let sys = text(&logs_of(&fr, "s1"), k2_node_proto::frames::LogStream::Sys);
+    assert!(sys.contains("[k2-node] stopping job: stalled"), "{sys}");
+
+    let mut p = plan("s2", &["/bin/sh", "-c", "for i in 1 2 3 4 5 6 7; do echo $i; sleep 0.3; done"]);
+    p.stall_secs = Some(1);
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "s2").await;
+    let end = states_of(&fr, "s2").into_iter().last().unwrap();
+    assert_eq!((end.state, end.exit.and_then(|e| e.code)), (JobState::Done, Some(0)), "output kept it alive for over 2 s");
+    drop(n);
+}

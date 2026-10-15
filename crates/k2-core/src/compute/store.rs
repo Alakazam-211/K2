@@ -424,6 +424,9 @@ pub struct JobCtl {
     /// Earlier attempts that ended in an infrastructure failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_attempts: Vec<AttemptNote>,
+    /// `--stall-timeout` as asked: None = the default, 0 = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_secs: Option<i64>,
 }
 
 /// What an `--any` job asks of a node.
@@ -1020,6 +1023,7 @@ mod tests {
             created_at: 10,
             needs: Vec::new(),
             artifacts: Vec::new(),
+            stall_secs: None,
         }
     }
 

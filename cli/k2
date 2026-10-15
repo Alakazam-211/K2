@@ -14334,7 +14334,7 @@ Agents:
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m]]
                  [--artifact GLOB]... [--json]
-                 [--queue-timeout 30m|off] [--retries N]
+                 [--queue-timeout 30m|off] [--retries N] [--stall-timeout 30m|off]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
@@ -14418,7 +14418,9 @@ Never stuck: a job that can't start within --queue-timeout (default 30m
 attached, 24h --detach) fails with queue_timeout; --any jobs move off a node
 that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when --any.
-A non-zero exit, a timeout or a cancel is a result and never retried.
+A job that prints nothing for --stall-timeout (default 30m) ends as
+timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
+result and never retried.
 Exit codes: 0–255 = the command's own exit (attached runs); 2 = bad usage;
 3 = infra, with a JSON code on stderr (node_offline, not_granted,
 compute_off, queue_full, owner_only, job_started, …); 130 = you detached
@@ -14842,7 +14844,7 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries=""
+    local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall=""
     local -a labels=() envs=() needs=() artifacts=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -14872,6 +14874,12 @@ cmd_compute_run() {
                 case "${2:-}" in
                     off|none|0) qtimeout=0 ;;
                     *) qtimeout="$(_compute_secs "${2:-}")" ;;
+                esac
+                shift 2 ;;
+            --stall-timeout)
+                case "${2:-}" in
+                    off|none|0) stall=0 ;;
+                    *) stall="$(_compute_secs "${2:-}")" ;;
                 esac
                 shift 2 ;;
             --raw) raw=1; shift ;;
@@ -14949,7 +14957,7 @@ print(json.dumps(out))' "${needs[@]}")"
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_arch="$arch" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \

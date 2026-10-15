@@ -1483,6 +1483,7 @@ mod tests {
             created_at: 10,
             needs: Vec::new(),
             artifacts: Vec::new(),
+            stall_secs: None,
         };
         store::insert_job(
             conn,

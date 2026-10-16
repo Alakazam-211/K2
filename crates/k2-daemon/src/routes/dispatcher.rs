@@ -5086,6 +5086,97 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // POST /cli/browser/notes (+ /redeliver) — Design mode page notes
+        // (prd-browser-design-mode-v1 D-A9/D-A10/D-A13). One Thread item
+        // with a `design` origin that wakes + injects the pinned Chat like
+        // the Thread send button. Auth = a Thread post's: the owner token,
+        // a Connect login (plus the #67 remote-instruct opt-in, applied in
+        // the handler), or an agent passport on its own workspace
+        // (`k2 browser note`). App passes are refused in v1.
+        p if is_post
+            && post_allowed
+            && (p == "/cli/browser/notes" || p == "/cli/browser/notes/redeliver") =>
+        {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"app passes cannot send design notes"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let (auth_ok, scoped_principal) =
+                token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
+            if !auth_ok {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut params = super::http::parse_params(&path, &query);
+            // Never trust a query-string stamp: only a validated passport
+            // may set the principal below.
+            params.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
+            let caller = if let Some(ref principal) = scoped_principal {
+                if let Some(v) = {
+                    let presented = bearer_token
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| super::http::extract_token(&query));
+                    presented.and_then(|t| crate::session_token::require_hook(t, p))
+                } {
+                    params.insert("cell_session_id".to_string(), v.session_id);
+                }
+                crate::caller_workspace::stamp_principal(&mut params, principal);
+                crate::browser_routes::NotesCaller::Agent
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                crate::browser_routes::NotesCaller::Owner
+            } else {
+                match super::http::extract_token(&query).and_then(k2_core::connect_users::validate_session) {
+                    Some(username) => crate::browser_routes::NotesCaller::ConnectUser(username),
+                    None => {
+                        super::http::send_response(
+                            &mut *stream,
+                            "403 Forbidden",
+                            "application/json",
+                            r#"{"error":"invalid or missing token"}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            };
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::caller_workspace::with_request_principal(scoped_principal, || {
+                    if p_owned == "/cli/browser/notes" {
+                        crate::browser_routes::handle_notes(&params, &body_bytes, &caller)
+                    } else {
+                        crate::browser_routes::handle_notes_redeliver(&params, &body_bytes, &caller)
+                    }
+                })
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // POST /cli/workspace/api-key — B3a (sandbox). Set/clear the
         // PER-WORKSPACE Anthropic API key (BYO key). Body (JSON):
         // `{"project": "<path>", "key": "<api key>"}` (empty `key` clears it).

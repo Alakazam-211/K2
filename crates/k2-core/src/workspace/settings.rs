@@ -141,6 +141,10 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         "default_model",
         // 0106 — splice workspace default on dead resume. Values: '0' | '1'.
         "force_model_on_resume",
+        // 0179 — Design mode (prd-browser-design-mode-v1): the pinned
+        // Design tab + the + menu's Design entry. Values: '0' | '1'
+        // (default 1 / ON). See `get_design_mode_enabled`.
+        "design_mode_enabled",
     ]
 }
 
@@ -260,6 +264,11 @@ pub fn update_project_setting(
     if field == "completion_sound_enabled" && value != "0" && value != "1" {
         return Err(format!(
             "completion_sound_enabled must be '0' or '1', got {value:?}"
+        ));
+    }
+    if field == "design_mode_enabled" && value != "0" && value != "1" {
+        return Err(format!(
+            "design_mode_enabled must be '0' or '1', got {value:?}"
         ));
     }
     if field == "force_model_on_resume" && value != "0" && value != "1" {
@@ -432,7 +441,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 dns_manage_enabled, agents_can_create_connections, \
                 api_guest_policy, wiki_public_chat, api_skip_permissions, \
                 host_session_cell_cap, hide_api_sessions, completion_sound_enabled, \
-                default_model, force_model_on_resume \
+                default_model, force_model_on_resume, design_mode_enabled \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -478,6 +487,7 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                     if t.is_empty() { None } else { Some(t) }
                 });
             let force_model_on_resume = row.get::<_, i64>(17).unwrap_or(0) != 0;
+            let design_mode = row.get::<_, i64>(18).unwrap_or(1) != 0;
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -507,6 +517,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "completionSoundEnabled": completion_sound,
                 "defaultModel": default_model,
                 "forceModelOnResume": force_model_on_resume,
+                // Design mode: pinned Design tab + Design in the + menu (default ON).
+                "designModeEnabled": design_mode,
             }))
         },
     )
@@ -953,6 +965,22 @@ pub fn get_completion_sound_enabled(project_path: &str) -> bool {
     let conn = db.lock();
     conn.query_row(
         "SELECT completion_sound_enabled FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+    .map(|v| v != 0)
+    .unwrap_or(true)
+}
+
+/// Design mode for this workspace (migration 0179): the pinned Design tab
+/// and the + menu's Design entry. Default ON. Unknown path → true (same
+/// as a missing column / pre-migration row).
+pub fn get_design_mode_enabled(project_path: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT design_mode_enabled FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| row.get::<_, i64>(0),
     )
@@ -1674,6 +1702,38 @@ mod tests {
             err.contains("completion_sound_enabled"),
             "error must name the field, got {err}"
         );
+    }
+
+    #[test]
+    fn design_mode_enabled_defaults_on_and_round_trips() {
+        let path = unique_path("design-mode");
+        let _pid = insert_project(&path);
+
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["designModeEnabled"], true);
+        assert!(get_design_mode_enabled(&path));
+        let row = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::db::schema::Project::list(&conn)
+                .expect("list")
+                .into_iter()
+                .find(|p| p.path == path)
+                .expect("row")
+        };
+        assert_eq!(row.design_mode_enabled, 1, "the projects list carries it for every client");
+
+        update_project_setting(&path, "design_mode_enabled", "0").expect("off");
+        assert!(!get_design_mode_enabled(&path));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["designModeEnabled"], false);
+
+        update_project_setting(&path, "design_mode_enabled", "1").expect("on");
+        assert!(get_design_mode_enabled(&path));
+
+        let err = update_project_setting(&path, "design_mode_enabled", "on")
+            .expect_err("non 0/1 must fail loudly");
+        assert!(err.contains("design_mode_enabled"), "error must name the field, got {err}");
     }
 
     /// A fresh workspace row defaults to DNS-manage OFF (fail-closed),

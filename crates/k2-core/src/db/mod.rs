@@ -1391,6 +1391,16 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
             "0178_git_review_notes",
             include_str!("../../drizzle_sql/0178_git_review_notes.sql"),
         ),
+        // 0179 — Design mode per-workspace switch (prd-browser-design-mode-v1
+        // late decision, Rosson 2026-10-16): `projects.design_mode_enabled`,
+        // DEFAULT 1. Took 0179 at integration (0178 is the Changes notes).
+        //
+        // Additive only: renumber freely on a slip (and edit the two
+        // migration-order tests below).
+        (
+            "0179_workspace_design_mode",
+            include_str!("../../drizzle_sql/0179_workspace_design_mode.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2054,7 +2064,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0178_git_review_notes",
+            last_name, "0179_workspace_design_mode",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2095,6 +2105,7 @@ mod tests {
                 "0171_app_box_services",
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
+                "0179_workspace_design_mode",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2136,6 +2147,7 @@ mod tests {
                 "0171_app_box_services",
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
+                "0179_workspace_design_mode",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2328,6 +2340,8 @@ mod tests {
             for t in ["deploy_audit", "deployments", "apps", "seeds"] {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
+            // 0179 (Design mode switch) came after them all; its column goes first.
+            conn.execute_batch("ALTER TABLE projects DROP COLUMN design_mode_enabled;").unwrap();
             // 0178 (review notes) came after them all; its table goes first.
             conn.execute_batch("DROP TABLE git_review_notes;").unwrap();
             // 0166 (Sew server + the Manage Sew switch) came after 0165.
@@ -2348,6 +2362,7 @@ mod tests {
                 "0171_app_box_services",
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
+                "0179_workspace_design_mode",
             ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }

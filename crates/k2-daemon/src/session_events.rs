@@ -565,6 +565,12 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "activity_changed", "seq": number, "instanceId":
     /// string, "row": Row|null, "removed": string|null, "turnEnded":
     /// { "outcome", "reason", "at" }|null, "workspace": Rollup|null }`.
+    /// Since 0.46.0 (plan-agent-status-unify-v1 D1) the `Rollup` also
+    /// carries `live` (live PTYs under the workspace: session rows whose
+    /// PTY runs plus legacy shells) and `busy` (sessions mid-turn or with
+    /// subagents running), and a frame may carry ONLY `workspace` (`row`
+    /// and `removed` null) when a legacy shell came or went. Older clients
+    /// ignore the extra keys and apply the rollup as usual.
     ActivityChanged {
         seq: u64,
         #[serde(rename = "instanceId")]

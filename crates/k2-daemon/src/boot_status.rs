@@ -323,6 +323,14 @@ pub const FEATURE_GROKBOTS: &str = "grokbots-v1";
 /// `POST /cli/zen/call` on this computer's daemon.
 pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 
+/// plan-agent-status-unify-v1 D1/D2 (0.46.0): the activity rollup carries
+/// `live` and `busy` (snapshot `workspaces[]` and every `activity_changed`
+/// `workspace`), and `presence/summary` `agentActivity` entries carry
+/// `heartbeat`, `live`, `busy` and `counts` (idle workspaces with a live
+/// PTY or a heartbeat listed too). A client drops its own live-session
+/// poll (`liveSessionCwds`) only on a server that reports this key.
+pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -354,6 +362,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_SOURCES);
     out.push(FEATURE_GARDEN_DATA);
     out.push(FEATURE_GROKBOTS);
+    out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -400,6 +409,7 @@ mod tests {
                 "sources-v1",
                 "garden-data-v1",
                 "grokbots-v1",
+                "activity-live-busy",
                 "thread-push-v1"
             ]
         );

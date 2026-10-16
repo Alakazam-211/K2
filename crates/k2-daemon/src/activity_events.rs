@@ -11,6 +11,16 @@
 //!   Home, Zen, rooms and apps. A row belongs to the workspace the store
 //!   resolved at registration (longest registered project prefix of the
 //!   session cwd); a row with no project rolls up under its own path.
+//! - **Live and busy (0.46.0, plan-agent-status-unify-v1 D1).** The rollup
+//!   also counts `live` (live PTYs under the workspace: every v2 session
+//!   row whose PTY has not exited, plus the legacy `TerminalManager`
+//!   shells resolved by the same longest-prefix rule) and `busy` (rows
+//!   mid-turn or with subagents still running, whatever their display, so
+//!   "working" and "needs you" can show together). Legacy shells have no
+//!   row and no event of their own: the publisher re-reads them on a
+//!   create/kill nudge, every [`SHELL_CHECK_MS`] and before a snapshot,
+//!   and sends a workspace-only frame (`row` and `removed` null) for each
+//!   workspace whose shell count changed.
 //! - **One event (RL2).** Every row change or removal goes out as one
 //!   `activity_changed` frame on the session-events bus, carrying the row
 //!   and its workspace rollup, a store-wide `seq` and the daemon's
@@ -46,6 +56,10 @@ use crate::session_events::{self, SessionEvent};
 /// RL2: one frame per row per this window (the last state always goes out).
 pub const COALESCE_MS: i64 = 100;
 
+/// D1: how often the publisher re-reads the legacy shells when nothing
+/// nudged it (a shell's process can exit without a route call).
+pub const SHELL_CHECK_MS: i64 = 5_000;
+
 /// One row as the rollup reads it (§7.2 JSON).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowView {
@@ -58,6 +72,11 @@ pub struct RowView {
     /// The row's `counts` (§7.2, 0.45.2): live subagents and this turn's
     /// lead tool calls and shell commands.
     pub counts: ActivityCounts,
+    /// D1: the row's `lead.state` is `working` (mid-turn).
+    pub lead_working: bool,
+    /// D1: the session's PTY is still running (the row's `reason` is not
+    /// `pty_exited`). A reaped session has no row at all.
+    pub live: bool,
 }
 
 /// Numbers only: live subagents, this turn's lead tool calls, and the
@@ -105,8 +124,62 @@ impl RowView {
             display: parse_display(v.get("display")?.as_str()?)?,
             turn_started_at: v.get("turnStartedAt").and_then(Value::as_i64),
             counts: ActivityCounts::from_json(v.get("counts")),
+            lead_working: v.pointer("/lead/state").and_then(Value::as_str) == Some("working"),
+            live: v.get("reason").and_then(Value::as_str) != Some("pty_exited"),
         })
     }
+
+    /// D1 `busy`: the session is mid-turn or still has subagents running,
+    /// even when its lead (or a subagent) waits on you. Counted only on a
+    /// `working` or `waiting` row: a stale (`unverifiable`) or unconfirmed
+    /// row never spins.
+    pub fn is_busy(&self) -> bool {
+        match self.display {
+            Display::Working => true,
+            Display::Waiting => self.lead_working || self.counts.subagents > 0,
+            Display::Monitoring | Display::Unverifiable | Display::Idle => false,
+        }
+    }
+}
+
+/// D1: one live legacy `TerminalManager` PTY (a plain shell pane), keyed
+/// like a row: the registered project that owns its cwd, else its cwd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellView {
+    pub project_id: Option<String>,
+    pub workspace_path: Option<String>,
+}
+
+impl ShellView {
+    fn key(&self) -> WorkspaceKey {
+        WorkspaceKey { project_id: self.project_id.clone(), workspace_path: self.workspace_path.clone() }
+    }
+}
+
+/// Every live legacy shell's cwd (`/cli/terminal/list-running`'s list).
+pub fn legacy_shell_cwds() -> Vec<String> {
+    let manager = k2_core::terminal::shared();
+    let manager = manager.lock();
+    manager.list_terminal_ids().into_iter().map(|(_, cwd)| cwd).collect()
+}
+
+/// Resolve legacy shell cwds onto workspaces (one project read).
+fn resolve_shells(cwds: &[String]) -> Vec<ShellView> {
+    if cwds.is_empty() {
+        return Vec::new();
+    }
+    shells_in(cwds, &activity_store::registered_projects())
+}
+
+/// [`resolve_shells`] against a given project list (`(id, path)`).
+pub fn shells_in(cwds: &[String], projects: &[(String, String)]) -> Vec<ShellView> {
+    cwds.iter()
+        .filter(|c| !c.is_empty())
+        .map(|cwd| match activity_store::project_in(cwd, projects) {
+            Some((pid, path)) => ShellView { project_id: Some(pid), workspace_path: Some(path) },
+            None => ShellView { project_id: None, workspace_path: Some(cwd.clone()) },
+        })
+        .collect()
 }
 
 /// RL1 ranking: `waiting > working > monitoring > unverifiable > idle`.
@@ -149,9 +222,17 @@ impl WorkspaceKey {
     }
 
     pub fn matches(&self, row: &RowView) -> bool {
+        self.matches_parts(row.project_id.as_deref(), row.workspace_path.as_deref())
+    }
+
+    pub fn matches_shell(&self, shell: &ShellView) -> bool {
+        self.matches_parts(shell.project_id.as_deref(), shell.workspace_path.as_deref())
+    }
+
+    fn matches_parts(&self, project_id: Option<&str>, workspace_path: Option<&str>) -> bool {
         match &self.project_id {
-            Some(pid) => row.project_id.as_deref() == Some(pid.as_str()),
-            None => row.project_id.is_none() && row.workspace_path == self.workspace_path,
+            Some(pid) => project_id == Some(pid.as_str()),
+            None => project_id.is_none() && workspace_path == self.workspace_path.as_deref(),
         }
     }
 }
@@ -175,6 +256,11 @@ pub struct Rollup {
     pub counts: DisplayCounts,
     /// The earliest `turnStartedAt` among the `working` sessions.
     pub since: Option<i64>,
+    /// D1: live PTYs under the workspace (session rows whose PTY runs,
+    /// plus legacy shells). 0 = everything reaped.
+    pub live: usize,
+    /// D1: sessions mid-turn or with subagents running ([`RowView::is_busy`]).
+    pub busy: usize,
 }
 
 impl Rollup {
@@ -192,22 +278,33 @@ impl Rollup {
                 "idle": c.idle,
             },
             "since": self.since,
+            "live": self.live,
+            "busy": self.busy,
         })
     }
 }
 
-/// RL1: fold the rows `key` owns. A workspace with no rows is idle.
-pub fn rollup(key: &WorkspaceKey, rows: &[RowView]) -> Rollup {
+/// RL1: fold the rows (and, D1, the legacy shells) `key` owns. A
+/// workspace with no rows is idle.
+pub fn rollup(key: &WorkspaceKey, rows: &[RowView], shells: &[ShellView]) -> Rollup {
     let mut out = Rollup {
         project_id: key.project_id.clone(),
         workspace_path: key.workspace_path.clone(),
         display: Display::Idle,
         counts: DisplayCounts::default(),
         since: None,
+        live: shells.iter().filter(|s| key.matches_shell(s)).count(),
+        busy: 0,
     };
     for row in rows.iter().filter(|r| key.matches(r)) {
         if out.workspace_path.is_none() {
             out.workspace_path = row.workspace_path.clone();
+        }
+        if row.live {
+            out.live += 1;
+        }
+        if row.is_busy() {
+            out.busy += 1;
         }
         match row.display {
             Display::Working => out.counts.working += 1,
@@ -228,8 +325,9 @@ pub fn rollup(key: &WorkspaceKey, rows: &[RowView]) -> Rollup {
     out
 }
 
-/// Every workspace that has at least one row, ordered by key.
-pub fn rollups(rows: &[RowView]) -> Vec<Rollup> {
+/// Every workspace that has at least one row or legacy shell, ordered by
+/// key.
+pub fn rollups(rows: &[RowView], shells: &[ShellView]) -> Vec<Rollup> {
     let mut keys: Vec<WorkspaceKey> = Vec::new();
     for row in rows {
         let Some(k) = WorkspaceKey::of(row) else { continue };
@@ -239,8 +337,33 @@ pub fn rollups(rows: &[RowView]) -> Vec<Rollup> {
             keys.push(k);
         }
     }
+    for shell in shells {
+        if !keys.iter().any(|have| have.matches_shell(shell)) {
+            keys.push(shell.key());
+        }
+    }
     keys.sort();
-    keys.iter().map(|k| rollup(k, rows)).collect()
+    keys.iter().map(|k| rollup(k, rows, shells)).collect()
+}
+
+/// D1: live legacy shells per workspace key.
+fn shell_counts(shells: &[ShellView]) -> BTreeMap<WorkspaceKey, usize> {
+    let mut out: BTreeMap<WorkspaceKey, usize> = BTreeMap::new();
+    for s in shells {
+        *out.entry(s.key()).or_insert(0) += 1;
+    }
+    out
+}
+
+/// D1: the workspaces whose legacy shell count differs between `before`
+/// and `after`.
+fn shell_changes(before: &[ShellView], after: &[ShellView]) -> Vec<WorkspaceKey> {
+    let (a, b) = (shell_counts(before), shell_counts(after));
+    let mut keys: Vec<WorkspaceKey> = a.keys().chain(b.keys()).cloned().collect();
+    keys.sort();
+    keys.dedup();
+    keys.retain(|k| a.get(k) != b.get(k));
+    keys
 }
 
 /// `turnEnded` on the wire (§7.3, plus the end `reason` for S5's toast
@@ -304,6 +427,9 @@ struct Publisher {
     /// RL5: the last compat `session_activity_changed` word per session.
     compat: HashMap<String, &'static str>,
     known: HashMap<String, Known>,
+    /// D1: the legacy shells as of the last check, and when that was.
+    shells: Vec<ShellView>,
+    shells_checked_at: i64,
 }
 
 impl Publisher {
@@ -342,7 +468,7 @@ impl Publisher {
             return;
         };
         let key = WorkspaceKey::of(&view);
-        let workspace = key.as_ref().map(|k| rollup(k, &all_views()).to_json());
+        let workspace = key.as_ref().map(|k| rollup(k, &all_views(), &self.shells).to_json());
         self.known.insert(sid.to_string(), Known { agent_name: view.agent_name.clone(), key });
         self.send(Some(row), None, turn, workspace);
         self.last_emit.insert(sid.to_string(), now);
@@ -364,7 +490,7 @@ impl Publisher {
             self.compat.remove(sid);
         }
         let key = known.and_then(|k| k.key).or_else(|| key_for_path(workspace_path));
-        let workspace = key.map(|k| rollup(&k, &all_views()).to_json());
+        let workspace = key.map(|k| rollup(&k, &all_views(), &self.shells).to_json());
         self.send(None, Some(sid.to_string()), None, workspace);
     }
 
@@ -407,6 +533,33 @@ impl Publisher {
             self.emit_row(&sid, turn, now);
         }
         self.pending.values().map(|p| p.due).min()
+    }
+
+    /// D1: re-read the legacy shells. Each workspace whose shell count
+    /// changed gets a workspace-only frame (`row` and `removed` null) with
+    /// its new rollup. Reads nothing more when there were and are none.
+    fn reconcile_shells(&mut self, now: i64) {
+        self.shells_checked_at = now;
+        let cwds = legacy_shell_cwds();
+        if cwds.is_empty() && self.shells.is_empty() {
+            return;
+        }
+        let next = resolve_shells(&cwds);
+        self.apply_shells(next);
+    }
+
+    /// D1: take `next` as the legacy shell set and announce the changes.
+    fn apply_shells(&mut self, next: Vec<ShellView>) {
+        let changed = shell_changes(&self.shells, &next);
+        self.shells = next;
+        if changed.is_empty() {
+            return;
+        }
+        let views = all_views();
+        for key in changed {
+            let workspace = rollup(&key, &views, &self.shells).to_json();
+            self.send(None, None, None, Some(workspace));
+        }
     }
 
     /// A30: the store bus lagged. Re-read the store: rows that vanished
@@ -472,7 +625,10 @@ pub fn note_registered(session_id: &str) {
 /// under the publisher lock, so `seq` is the last frame these rows are at
 /// least as new as.
 pub fn snapshot(only: Option<&WorkspaceKey>) -> Value {
-    let p = publisher().lock();
+    let mut p = publisher().lock();
+    // D1: the legacy shells as of now (a change goes out as a frame
+    // first, so `seq` still covers it).
+    p.reconcile_shells(now_ms());
     let mut rows: Vec<Value> = activity_store::rows_json();
     let mut views: Vec<RowView> = rows.iter().filter_map(RowView::from_json).collect();
     if let Some(key) = only {
@@ -481,8 +637,8 @@ pub fn snapshot(only: Option<&WorkspaceKey>) -> Value {
     }
     rows.sort_by(|a, b| a["sessionId"].as_str().cmp(&b["sessionId"].as_str()));
     let workspaces: Vec<Value> = match only {
-        Some(key) => vec![rollup(key, &views).to_json()],
-        None => rollups(&views).iter().map(Rollup::to_json).collect(),
+        Some(key) => vec![rollup(key, &views, &p.shells).to_json()],
+        None => rollups(&views, &p.shells).iter().map(Rollup::to_json).collect(),
     };
     json!({
         "instanceId": crate::boot_status::instance_id(),
@@ -492,6 +648,14 @@ pub fn snapshot(only: Option<&WorkspaceKey>) -> Value {
         "rows": rows,
         "workspaces": workspaces,
     })
+}
+
+/// D1: a legacy shell was created or killed (`/cli/terminal/create`,
+/// `/cli/terminal/kill`). Re-read the shells now so the workspace's `live`
+/// goes out without waiting for the next check. The caller must not hold
+/// the `TerminalManager` lock.
+pub fn note_shells_changed() {
+    publisher().lock().reconcile_shells(now_ms());
 }
 
 /// The current display of every live row, by session id (the server
@@ -535,7 +699,13 @@ pub fn spawn() {
         }
         let flusher = std::thread::Builder::new().name("activity-flush".into()).spawn(|| loop {
             let now = now_ms();
-            let next = publisher().lock().flush_due(now);
+            let next = {
+                let mut p = publisher().lock();
+                if now - p.shells_checked_at >= SHELL_CHECK_MS {
+                    p.reconcile_shells(now);
+                }
+                p.flush_due(now)
+            };
             let wait = next.map_or(Duration::from_secs(1), |t| Duration::from_millis((t - now).max(1) as u64));
             wait_for_wake(wait);
         });
@@ -558,6 +728,8 @@ mod tests {
             display: d,
             turn_started_at: started,
             counts: ActivityCounts::default(),
+            lead_working: d == Display::Working,
+            live: true,
         }
     }
 
@@ -576,7 +748,7 @@ mod tests {
             view("g", None, Some("/loose"), Waiting, None),
             view("h", None, None, Working, Some(1)),
         ];
-        let all = rollups(&rows);
+        let all = rollups(&rows, &[]);
         assert_eq!(all.len(), 3, "{all:?}");
         let p1 = all.iter().find(|r| r.project_id.as_deref() == Some("p1")).expect("p1");
         assert_eq!(p1.display, Working);
@@ -596,17 +768,144 @@ mod tests {
             for hi in &order[i..] {
                 let rows = vec![view("x", Some("p"), None, *lo, Some(1)), view("y", Some("p"), None, *hi, Some(2))];
                 let key = WorkspaceKey::of(&rows[0]).expect("key");
-                assert_eq!(rollup(&key, &rows).display, *hi, "{lo:?} vs {hi:?}");
+                assert_eq!(rollup(&key, &rows, &[]).display, *hi, "{lo:?} vs {hi:?}");
             }
         }
         // A workspace with no rows is idle with zero counts.
-        let empty = rollup(&WorkspaceKey { project_id: Some("none".into()), workspace_path: None }, &rows);
+        let empty = rollup(&WorkspaceKey { project_id: Some("none".into()), workspace_path: None }, &rows, &[]);
         assert_eq!((empty.display, empty.counts, empty.since), (Idle, DisplayCounts::default(), None));
         let j = p1.to_json();
         assert_eq!(j["display"], "working");
         assert_eq!(j["counts"]["working"], 2);
         assert_eq!(j["since"], 300);
         assert_eq!(j["projectId"], "p1");
+        assert_eq!(j["live"], 4, "every p1 row is a live PTY: {j}");
+        assert_eq!(j["busy"], 2, "the two working rows: {j}");
+    }
+
+    /// D1 `live`: session rows whose PTY runs plus legacy shells, by the
+    /// workspace's key; an exited PTY and another workspace's shell don't
+    /// count.
+    #[test]
+    fn rollup_live_counts_agent_rows_and_plain_shells_across_sessions() {
+        use Display::*;
+        let mut exited = view("x", Some("p1"), Some("/w/one"), Idle, None);
+        exited.live = false;
+        let rows = vec![
+            view("a", Some("p1"), Some("/w/one"), Working, Some(1)),
+            view("b", Some("p1"), Some("/w/one"), Idle, None),
+            exited,
+            view("c", Some("p2"), Some("/w/two"), Idle, None),
+        ];
+        let shell = |pid: Option<&str>, path: &str| ShellView {
+            project_id: pid.map(str::to_string),
+            workspace_path: Some(path.to_string()),
+        };
+        let shells = vec![shell(Some("p1"), "/w/one"), shell(Some("p3"), "/w/three"), shell(None, "/tmp/loose")];
+        let all = rollups(&rows, &shells);
+        let find = |pred: &dyn Fn(&Rollup) -> bool| all.iter().find(|r| pred(r)).cloned().expect("rollup");
+        let p1 = find(&|r| r.project_id.as_deref() == Some("p1"));
+        assert_eq!(p1.live, 3, "2 running rows + 1 shell, not the exited row: {p1:?}");
+        assert_eq!(p1.counts.idle, 2, "the exited row still counts as an idle row");
+        let p2 = find(&|r| r.project_id.as_deref() == Some("p2"));
+        assert_eq!((p2.live, p2.busy, p2.display), (1, 0, Idle));
+        // A workspace with only a shell still gets a rollup (idle, live 1).
+        let p3 = find(&|r| r.project_id.as_deref() == Some("p3"));
+        assert_eq!((p3.live, p3.display, p3.counts), (1, Idle, DisplayCounts::default()));
+        assert_eq!(p3.workspace_path.as_deref(), Some("/w/three"));
+        let loose = find(&|r| r.project_id.is_none());
+        assert_eq!((loose.live, loose.workspace_path.as_deref()), (1, Some("/tmp/loose")));
+        assert_eq!(all.len(), 4, "{all:?}");
+        // Reaped: no rows and no shells → live 0.
+        let key = WorkspaceKey { project_id: Some("p1".into()), workspace_path: Some("/w/one".into()) };
+        assert_eq!(rollup(&key, &[], &[]).live, 0);
+        assert_eq!(rollup(&key, &[], &[]).to_json()["live"], 0);
+    }
+
+    /// D1 `busy`: a row mid-turn or with subagents running, whatever its
+    /// display; a waiting lead with a running subagent is busy AND waiting.
+    #[test]
+    fn rollup_busy_counts_mid_turn_and_subagent_sessions() {
+        use Display::*;
+        let with = |sid: &str, d: Display, lead_working: bool, subagents: u64| {
+            let mut v = view(sid, Some("p"), Some("/w"), d, Some(1));
+            v.lead_working = lead_working;
+            v.counts.subagents = subagents;
+            v
+        };
+        // Lead waits on you while one subagent runs.
+        let asks = with("a", Waiting, false, 1);
+        assert!(asks.is_busy());
+        let r = rollup(&WorkspaceKey::of(&asks).expect("key"), &[asks.clone()], &[]);
+        assert_eq!((r.display, r.busy, r.counts.working), (Waiting, 1, 0));
+        // A child waits while the lead is mid-turn: busy too.
+        assert!(with("b", Waiting, true, 0).is_busy());
+        // Waiting with nothing else running: not busy.
+        assert!(!with("c", Waiting, false, 0).is_busy());
+        // Working (a subagent or an owed notification) is always busy.
+        assert!(with("d", Working, false, 0).is_busy());
+        // Background shells only, stale or idle rows never spin.
+        assert!(!with("e", Monitoring, false, 0).is_busy());
+        assert!(!with("f", Unverifiable, true, 2).is_busy());
+        assert!(!with("g", Idle, false, 0).is_busy());
+        let rows = vec![
+            asks,
+            with("h", Working, true, 0),
+            with("i", Monitoring, false, 0),
+            with("j", Waiting, false, 0),
+            with("k", Unverifiable, true, 0),
+        ];
+        let r = rollup(&WorkspaceKey::of(&rows[0]).expect("key"), &rows, &[]);
+        assert_eq!((r.display, r.busy, r.live), (Waiting, 2, 5), "{r:?}");
+        assert_eq!(r.to_json()["busy"], 2);
+    }
+
+    /// D1: the row JSON feeds `lead_working` and `live`.
+    #[test]
+    fn row_view_reads_lead_state_and_pty_exit() {
+        let row = |lead: &str, reason: &str| {
+            json!({
+                "sessionId": "s", "agentName": "tab-s", "projectId": "p", "workspacePath": "/w",
+                "display": "waiting", "lead": { "state": lead }, "reason": reason,
+                "counts": { "subagents": 1, "tools": 0, "commands": 0 },
+            })
+        };
+        let v = RowView::from_json(&row("working", "waiting_permission")).expect("row");
+        assert!(v.lead_working && v.live && v.is_busy());
+        let v = RowView::from_json(&row("waiting", "pty_exited")).expect("row");
+        assert!(!v.lead_working && !v.live);
+        assert_eq!(v.counts.subagents, 1);
+    }
+
+    /// D1: a legacy shell's cwd resolves to the registered workspace that
+    /// owns it (longest prefix, so a nested workspace takes its own); one
+    /// outside every workspace keys by its cwd. The shell diff names only
+    /// workspaces whose count moved.
+    #[test]
+    fn legacy_shells_resolve_by_longest_prefix_and_diff_by_workspace() {
+        let projects = vec![("parent".to_string(), "/w".to_string()), ("child".to_string(), "/w/app".to_string())];
+        let cwds = vec!["/w/app/src".to_string(), "/w/docs".to_string(), "/else".to_string(), String::new()];
+        let shells = shells_in(&cwds, &projects);
+        assert_eq!(
+            shells,
+            vec![
+                ShellView { project_id: Some("child".into()), workspace_path: Some("/w/app".into()) },
+                ShellView { project_id: Some("parent".into()), workspace_path: Some("/w".into()) },
+                ShellView { project_id: None, workspace_path: Some("/else".into()) },
+            ]
+        );
+        let child = WorkspaceKey { project_id: Some("child".into()), workspace_path: Some("/w/app".into()) };
+        let parent = WorkspaceKey { project_id: Some("parent".into()), workspace_path: Some("/w".into()) };
+        assert_eq!(rollup(&child, &[], &shells).live, 1, "the nested shell counts for the child");
+        assert_eq!(rollup(&parent, &[], &shells).live, 1, "not for the parent too");
+        // One more shell in the child, the loose one gone.
+        let after = shells_in(&["/w/app".to_string(), "/w/app/x".to_string(), "/w".to_string()], &projects);
+        let changed = shell_changes(&shells, &after);
+        let loose = WorkspaceKey { project_id: None, workspace_path: Some("/else".into()) };
+        let mut want = vec![loose, child];
+        want.sort();
+        assert_eq!(changed, want);
+        assert!(shell_changes(&after, &after).is_empty());
     }
 
     /// A31 / RL5: the old three words.

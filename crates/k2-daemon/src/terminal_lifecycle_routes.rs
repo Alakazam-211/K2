@@ -194,20 +194,25 @@ pub fn handle_create(body_bytes: &[u8]) -> CliResponse {
         body.args = Some(spawn_args);
     }
 
-    let manager = k2_core::terminal::shared();
-    let mut manager = manager.lock();
-    let create_result = manager.create_with_env(
-        body.id.clone(),
-        body.cwd,
-        body.command,
-        body.args,
-        body.cols,
-        body.rows,
-        sink,
-        passport_env,
-    );
+    let create_result = {
+        let manager = k2_core::terminal::shared();
+        let mut manager = manager.lock();
+        manager.create_with_env(
+            body.id.clone(),
+            body.cwd,
+            body.command,
+            body.args,
+            body.cols,
+            body.rows,
+            sink,
+            passport_env,
+        )
+    };
     match create_result {
         Ok(()) => {
+            // plan-agent-status-unify-v1 D1: the workspace's `live` count
+            // goes out now (the manager lock is released above).
+            crate::activity_events::note_shells_changed();
             if let Some(sid) = passport_sid {
                 crate::session_token::activate_cell_uds(sid, None);
             }
@@ -232,10 +237,15 @@ pub fn handle_kill(body_bytes: &[u8]) -> CliResponse {
         Ok(b) => b,
         Err(e) => return CliResponse::bad_request(format!("invalid body: {e}")),
     };
-    let manager = k2_core::terminal::shared();
-    let mut manager = manager.lock();
-    match manager.kill(&body.id) {
+    let kill_result = {
+        let manager = k2_core::terminal::shared();
+        let mut manager = manager.lock();
+        manager.kill(&body.id)
+    };
+    match kill_result {
         Ok(()) => {
+            // plan-agent-status-unify-v1 D1: `live` drops now.
+            crate::activity_events::note_shells_changed();
             // COMPAT-58: revoke any scoped passport minted for this terminal
             // id + drop its UDS. No-op when flag off / never minted.
             if let Some(sid) = k2_core::session::SessionId::parse(&body.id) {

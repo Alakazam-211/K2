@@ -283,19 +283,32 @@ pub(crate) fn project_for_cwd(cwd: &str) -> Option<(String, String)> {
     if cwd.is_empty() {
         return None;
     }
+    project_in(cwd, &registered_projects())
+}
+
+/// Every registered project as `(id, path)` (the audit sentinels left
+/// out): one read for callers that resolve many cwds.
+pub(crate) fn registered_projects() -> Vec<(String, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let mut stmt = conn
-        .prepare("SELECT id, path FROM projects WHERE id NOT IN ('_orphan', '_broadcast')")
-        .ok()?;
-    let rows: Vec<(String, String)> = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .ok()?
-        .filter_map(Result::ok)
-        .collect();
-    let paths: Vec<String> = rows.iter().map(|(_, p)| p.clone()).collect();
+    let Ok(mut stmt) = conn.prepare("SELECT id, path FROM projects WHERE id NOT IN ('_orphan', '_broadcast')")
+    else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else {
+        return Vec::new();
+    };
+    rows.filter_map(Result::ok).collect()
+}
+
+/// [`project_for_cwd`] against an already-read project list.
+pub(crate) fn project_in(cwd: &str, projects: &[(String, String)]) -> Option<(String, String)> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let paths: Vec<String> = projects.iter().map(|(_, p)| p.clone()).collect();
     let idx = crate::session_events::longest_registered_project_index(cwd, &paths)?;
-    rows.into_iter().nth(idx)
+    projects.get(idx).cloned()
 }
 
 /// What the store needs to know about a session at registration.

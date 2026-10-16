@@ -2097,7 +2097,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let mut stmt = conn
-            .prepare("SELECT name FROM _migrations WHERE name > '0164' ORDER BY id")
+            .prepare("SELECT name FROM _migrations WHERE name >= '0165' ORDER BY id")
             .unwrap();
         let tail: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
         assert_eq!(
@@ -2127,7 +2127,7 @@ mod tests {
         // Running again is a no-op (every name is recorded once).
         run_migrations(&conn).unwrap();
         let again: i64 = conn
-            .query_row("SELECT COUNT(*) FROM _migrations WHERE name > '0164'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name >= '0165'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(again, 5);
     }
@@ -2299,7 +2299,19 @@ mod tests {
             for t in ["deploy_audit", "deployments", "apps", "seeds"] {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
-            for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite"] {
+            // 0177 (publish probe grace) came after them: its two columns.
+            conn.execute_batch(
+                "ALTER TABLE published_services DROP COLUMN probe_timeout_ms;
+                 ALTER TABLE published_services DROP COLUMN hostname_pending;",
+            )
+            .unwrap();
+            for m in [
+                "0165_app_runtime_core",
+                "0168_app_grace",
+                "0169_app_egress",
+                "0170_app_walls_lite",
+                "0177_published_services_probe_timeout",
+            ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }
             let last: String = conn

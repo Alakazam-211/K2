@@ -24,16 +24,6 @@ const EXEMPT: &[(&str, &str, &str)] = &[
         "204 CORS preflight, no body",
     ),
     (
-        "k2-daemon/src/wiki_routes.rs",
-        "write_site_options",
-        "204 CORS preflight, no body",
-    ),
-    (
-        "k2-daemon/src/sources/fetch_tests.rs",
-        "http",
-        "test-only fake upstream the source fetcher calls; never served by the daemon",
-    ),
-    (
         "k2-daemon/src/cell_server.rs",
         "write_response",
         "UDS / vsock cell API, never reached by a browser",
@@ -47,6 +37,11 @@ const EXEMPT: &[(&str, &str, &str)] = &[
         "k2-daemon/src/domains/acme.rs",
         "spawn",
         "Http01Guard::spawn: ACME HTTP-01 token for the CA, text/plain",
+    ),
+    (
+        "k2-daemon/src/apps/egress_proxy.rs",
+        "serve",
+        "App egress proxy `200 Connection Established` to a CONNECT: opens a tunnel for the App's client; every byte after it is the upstream's, never a document",
     ),
 ];
 
@@ -170,35 +165,67 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Files that are only compiled for tests: `#[cfg(test)] mod x;` in a
-/// parent names them.
+/// parent names them, including the `#[cfg(test)] #[path = "x_tests.rs"]
+/// mod tests;` shape (the path is relative to the parent file's folder).
 fn test_only_files(files: &[PathBuf]) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
     for f in files {
         let src = std::fs::read_to_string(f).unwrap_or_else(|e| panic!("read {}: {e}", f.display()));
-        let lines: Vec<&str> = src.lines().collect();
-        let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let parent = f.parent().expect("parent");
-        let mod_dir = if matches!(stem, "mod" | "lib" | "main") {
-            parent.to_path_buf()
-        } else {
-            parent.join(stem)
-        };
-        for (i, l) in lines.iter().enumerate() {
-            if l.trim() != "#[cfg(test)]" {
-                continue;
-            }
-            let Some(next) = lines.get(i + 1) else { continue };
-            let t = next.trim();
-            let t = t
-                .strip_prefix("pub(crate) ")
-                .or_else(|| t.strip_prefix("pub "))
-                .unwrap_or(t);
-            let Some(name) = t.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) else {
-                continue;
-            };
-            out.insert(mod_dir.join(format!("{name}.rs")));
-            out.insert(mod_dir.join(name).join("mod.rs"));
+        out.extend(test_only_mods(f, &src));
+    }
+    out
+}
+
+/// The files `src` (the file at `f`) declares as `#[cfg(test)]` modules.
+fn test_only_mods(f: &Path, src: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = src.lines().collect();
+    let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let parent = f.parent().expect("parent");
+    let mod_dir = if matches!(stem, "mod" | "lib" | "main") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    for (i, l) in lines.iter().enumerate() {
+        if l.trim() != "#[cfg(test)]" {
+            continue;
         }
+        // Other attributes may sit between `#[cfg(test)]` and `mod`; a
+        // `#[path = "…"]` among them names the file.
+        let mut path_attr: Option<&str> = None;
+        let mut j = i + 1;
+        while let Some(next) = lines.get(j) {
+            let t = next.trim();
+            if !t.starts_with("#[") {
+                break;
+            }
+            if let Some(v) = t
+                .strip_prefix("#[path")
+                .map(str::trim_start)
+                .and_then(|r| r.strip_prefix('='))
+                .and_then(|r| r.trim().strip_suffix(']'))
+                .map(|r| r.trim().trim_matches('"'))
+            {
+                path_attr = Some(v);
+            }
+            j += 1;
+        }
+        let Some(next) = lines.get(j) else { continue };
+        let t = next.trim();
+        let t = t
+            .strip_prefix("pub(crate) ")
+            .or_else(|| t.strip_prefix("pub "))
+            .unwrap_or(t);
+        let Some(name) = t.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) else {
+            continue;
+        };
+        if let Some(p) = path_attr {
+            out.push(parent.join(p));
+            continue;
+        }
+        out.push(mod_dir.join(format!("{name}.rs")));
+        out.push(mod_dir.join(name).join("mod.rs"));
     }
     out
 }
@@ -308,4 +335,27 @@ mod tests {
         ],
         "{ws:?}"
     );
+}
+
+#[test]
+fn test_only_files_follow_path_attributes() {
+    let f = Path::new("/c/src/apps/egress_proxy.rs");
+    let src = "fn real() {}\n#[cfg(test)]\n#[path = \"egress_proxy_tests.rs\"]\nmod tests;\n#[cfg(test)]\npub(crate) mod plain;\n";
+    assert_eq!(
+        test_only_mods(f, src),
+        vec![
+            PathBuf::from("/c/src/apps/egress_proxy_tests.rs"),
+            PathBuf::from("/c/src/apps/egress_proxy/plain.rs"),
+            PathBuf::from("/c/src/apps/egress_proxy/plain/mod.rs"),
+        ]
+    );
+    // A `#[path]` test file is not walked: it is never served.
+    let walked: Vec<String> = walked_files().into_iter().map(|(rel, _)| rel).collect();
+    assert!(
+        walked.iter().any(|r| r == "k2-daemon/src/apps/egress_proxy.rs"),
+        "walk must see egress_proxy.rs"
+    );
+    for test_file in ["k2-daemon/src/apps/egress_proxy_tests.rs", "k2-daemon/src/sources/fetch_tests.rs"] {
+        assert!(!walked.iter().any(|r| r == test_file), "{test_file} is test-only and must not be walked");
+    }
 }

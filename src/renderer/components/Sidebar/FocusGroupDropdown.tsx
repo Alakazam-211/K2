@@ -1,16 +1,22 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { PickerOptionLabel, PickerTriggerLabel } from './picker-label'
 
 interface FocusGroupOption {
   id: string | null
   name: string
   color?: string | null
+  /** Agents the nav lists under this pick, shown right after the name. */
+  count?: number
 }
 
 interface FocusGroupDropdownProps {
   options: FocusGroupOption[]
   value: string | null
   onChange: (id: string | null) => void
+  /** The button's count when it differs from the shown option's (no group
+   *  picked yet: the button names the first group, the nav lists all). */
+  triggerCount?: number
   /** Extra attributes on the open menu (it is portalled, so a host styles it
    *  by these, not by its place under the trigger). */
   menuAttributes?: Record<`data-${string}`, string>
@@ -20,6 +26,7 @@ export default function FocusGroupDropdown({
   options,
   value,
   onChange,
+  triggerCount,
   menuAttributes,
 }: FocusGroupDropdownProps): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
@@ -97,9 +104,7 @@ export default function FocusGroupDropdown({
         {selected.color && (
           <span className="w-2 h-2 flex-shrink-0" style={{ backgroundColor: selected.color }} />
         )}
-        <span className="text-[11px] font-semibold text-[var(--color-text-primary)] uppercase tracking-wide truncate flex-1">
-          {selected.name}
-        </span>
+        <PickerTriggerLabel name={selected.name} count={triggerCount ?? selected.count} />
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
@@ -160,7 +165,7 @@ export default function FocusGroupDropdown({
                     ) : (
                       <span className="w-2 flex-shrink-0" />
                     )}
-                    <span className="truncate flex-1">{option.name}</span>
+                    <PickerOptionLabel name={option.name} count={option.count} />
                     {isActive && (
                       <svg className="w-3 h-3 flex-shrink-0 text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />

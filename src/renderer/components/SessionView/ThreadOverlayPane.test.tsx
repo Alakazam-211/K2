@@ -9,7 +9,7 @@ import {
   ThreadOverlayPane,
 } from './ThreadOverlayPane'
 import { overlayViewer } from './sessionViewTab'
-import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
+import { coerceThreadTurn, overlayItemFromThreadPost, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
@@ -1160,5 +1160,51 @@ describe('Thread working strip keeps the scroll pin (S7)', () => {
     box.scrollHeight = 850
     rerenderPane(view)
     expect(box.scrollTop).toBe(120)
+  })
+})
+
+// Rosson 2026-10-16: his own post read "You -" until the echo. It reads
+// "You · just now" on send and then minutes, like an agent's message.
+describe('own post time on the author line', () => {
+  afterEach(() => cleanup())
+  const ownerViewer: ThreadViewer = { principal: 'owner', aliases: [] }
+  const timeText = (): string => {
+    const row = screen.getByTestId('thread-item')
+    const el = row.querySelector('span.tabular-nums')
+    if (!el) throw new Error(`no time element in ${row.innerHTML}`)
+    return el.textContent ?? ''
+  }
+  const sent = 2_000_000
+  const own = (): OverlayThreadItem => {
+    const item = overlayItemFromThreadPost(
+      { ok: true, id: 'own', seq: 9, from: 'Rosson', body: 'hey', via: 'compose', author: { kind: 'owner', login: 'owner' } },
+      'hey',
+      sent,
+    )
+    if (!item) throw new Error('no row from the post answer')
+    return item
+  }
+
+  it('reads just now on send, then minutes', () => {
+    renderInRoom(overlayRoom, <ThreadItemRow item={own()} viewer={ownerViewer} nowSec={sent} />)
+    expect(screen.getByText('You')).toBeTruthy()
+    expect(timeText()).toBe('just now')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={own()} viewer={ownerViewer} nowSec={sent + 125} />)
+    expect(timeText()).toBe('2m ago')
+  })
+
+  it('an agent message reads the same way', () => {
+    const agent: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 10,
+      id: 'agent',
+      doc: { id: 'agent', kind: 'text', from: 'k2', body: 'reply', created_at: sent },
+    }
+    renderInRoom(overlayRoom, <ThreadItemRow item={agent} viewer={ownerViewer} nowSec={sent} />)
+    expect(timeText()).toBe('just now')
+    cleanup()
+    renderInRoom(overlayRoom, <ThreadItemRow item={agent} viewer={ownerViewer} nowSec={sent + 125} />)
+    expect(timeText()).toBe('2m ago')
   })
 })

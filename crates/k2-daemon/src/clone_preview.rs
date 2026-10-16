@@ -3,7 +3,7 @@
 //! preview` show before anything is built.
 //!
 //! ```text
-//! POST /cli/clone/preview {project_path, sinceDays?}
+//! POST /cli/clone/preview {project_path | workspace, sinceDays?}
 //! → { ok, workspace:{id,handle,path}, history:{sessions,files,entries},
 //!     threads:{available, …B's summary…},
 //!     secrets:{available, rows:[{name,kind,group,default,copyable,note}], notCarried:[…]},
@@ -28,7 +28,11 @@ use serde_json::{json, Value as J};
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewBody {
+    /// The workspace's absolute path, or (CLI) its name, handle or id.
+    #[serde(default)]
     project_path: String,
+    #[serde(default)]
+    workspace: String,
     #[serde(default)]
     since_days: Option<u32>,
 }
@@ -64,9 +68,17 @@ pub fn handle(who: &Who, body: &[u8]) -> CliResponse {
 fn preview(who: &Who, body: &[u8]) -> R<J> {
     let b: PreviewBody =
         serde_json::from_slice(body).map_err(|e| no("bad_request", 400, format!("invalid JSON body: {e}")))?;
-    let canonical = k2_core::fs_commands::validate_path(&b.project_path).map_err(|e| no("bad_request", 400, e))?;
-    let ws = crate::compute_routes::ws_by_token(&canonical.to_string_lossy())
-        .ok_or_else(|| no("bad_request", 400, format!("not a registered workspace on this server: {}", canonical.display())))?;
+    let token = if b.project_path.trim().is_empty() { b.workspace.trim() } else { b.project_path.trim() };
+    if token.is_empty() {
+        return Err(no("bad_request", 400, "name the workspace (project_path or workspace)"));
+    }
+    let ws = if token.starts_with('/') {
+        let canonical = k2_core::fs_commands::validate_path(token).map_err(|e| no("bad_request", 400, e))?;
+        crate::compute_routes::ws_by_token(&canonical.to_string_lossy())
+    } else {
+        crate::compute_routes::ws_by_token(token)
+    }
+    .ok_or_else(|| no("bad_request", 400, format!("not a registered workspace on this server: {token}")))?;
     if let Some(d) = b.since_days {
         if d == 0 || d > 3650 {
             return Err(no("bad_request", 400, "sinceDays is 1–3650"));

@@ -22,6 +22,8 @@
 //!   node IP, the TURN host + cert from K2 Connect's turn mode, renewal,
 //!   `voice.public_url`, status mapping.
 //! - [`users`]: Sew's own users on a standalone install (setup links).
+//! - [`service_user`]: the preflight hard stop that keeps Sew from adopting
+//!   a login account named `sew` as its service user.
 //!
 //! `k2 hostchat` (K14) drives all of it; [`supervisor::changed`] fires the
 //! `sew:changed` hook, mirrored as the app-level `sew_changed` event.
@@ -33,6 +35,7 @@
 pub mod ops;
 pub mod routes;
 pub mod secrets;
+pub mod service_user;
 pub mod sew_wire;
 pub mod store;
 pub mod supervisor;

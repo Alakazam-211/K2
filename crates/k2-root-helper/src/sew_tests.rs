@@ -247,8 +247,6 @@ fn every_root_exec_verb_refuses_an_unknown_or_missing_binary_and_runs_nothing() 
             (vec!["engine", "sew", "doctor"], vec![]),
             (vec!["engine", "sew", "rotate-master"], KEY.as_bytes().to_vec()),
             (vec!["engine", "sew", "drop-prev"], vec![]),
-            (vec!["engine", "sew", "backup"], vec![]),
-            (vec!["engine", "sew", "backups"], vec![]),
             (vec!["engine", "sew", "restore", "20260927T031512Z"], vec![]),
             (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
             (vec!["engine", "sew", "media", "uninstall"], vec![]),
@@ -557,15 +555,14 @@ fn restore_stops_sew_restores_and_always_starts_it_again() {
 }
 
 #[test]
-fn backups_read_without_the_lock_backup_takes_it() {
+fn backups_are_not_root_verbs_since_sw15() {
+    // The daemon backs up and lists over Sew's mgmt socket as itself.
     let t = box_root();
     with_pin_installed(&t);
-    sew_answers(&t, 0, r#"[{"id":"20260927T031512Z","kind":"daily","created_at":"x","bytes":10}]"#);
-    let v = json(&t.call(&["engine", "sew", "backups"]));
-    assert_eq!(v["sew"][0]["id"], "20260927T031512Z");
-    ok(&t.call(&["engine", "sew", "backup"]));
-    let argvs: Vec<Vec<String>> = sew_calls(&t).into_iter().map(|(a, _)| a).collect();
-    assert_eq!(argvs, vec![vec!["backup", "list", "--json"], vec!["backup", "now", "--json"]]);
+    for argv in [&["engine", "sew", "backup"][..], &["engine", "sew", "backups"]] {
+        assert_eq!(t.call(argv).code, exit::ARGV, "{argv:?}");
+    }
+    assert!(sew_calls(&t).is_empty());
 }
 
 // ── media ────────────────────────────────────────────────────────────────

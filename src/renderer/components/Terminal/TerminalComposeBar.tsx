@@ -947,7 +947,7 @@ export function TerminalComposeBar({
     // COMPOSE_TOOL.pad on both sides (the hit area), and the group's margin
     // and gap are solved so both visible gaps are COMPOSE_TOOL.gap.
     const toolLayout = composeToolLayout()
-    const tool = { width: 'auto', minWidth: 0, height: 32, padding: `0 ${COMPOSE_TOOL.pad}px` }
+    const tool = { width: 'auto', minWidth: 0, height: COMPOSE_TOOL.height, padding: `0 ${COMPOSE_TOOL.pad}px` }
     return (
       <div
         ref={barRef}
@@ -1020,6 +1020,7 @@ export function TerminalComposeBar({
             onClick={() => void send()}
             label="Send message"
             title="Send"
+            size={COMPOSE_TOOL.height}
           />
         </ThreadComposeBox>
       </div>
@@ -1136,6 +1137,10 @@ export function TerminalComposeBar({
  *  the field's outer edge to the "+" ink, and the "+" ink to the "/" ink. */
 export const COMPOSE_TOOL = {
   gap: 10,
+  /** "+", "/" and Send are this tall (Send is this square): the one-line
+   *  textarea's height, so the field is 26 + 2×6 padding + 2×1 border =
+   *  40px tall (Rosson 2026-10-16: 6px less than the 46px it was). */
+  height: 26,
   /** Each button's side padding around its ink (the hit area). */
   pad: 5,
   /** Ink widths of the two drawn glyphs. */

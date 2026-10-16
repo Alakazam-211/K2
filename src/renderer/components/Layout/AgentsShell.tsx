@@ -30,6 +30,7 @@ import { useHomeRoomSelected } from '@/components/Home/home-room'
 import { useHomesStore, selectedHome } from '@/stores/homes'
 import { usePageViewStore } from '@/stores/page-view'
 import { LeftPanelContent, RightPanelContent } from './WorkspaceDrawers'
+import { NoTabBarDrawerToggles } from './DrawerTabBarToggle'
 import { RoomProvider } from '@/components/Room/RoomContext'
 import { primaryRoom } from '@/stores/room'
 import { RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
@@ -46,14 +47,17 @@ interface ShellWorkspace {
   worktreePath?: string | null
 }
 
-/** The main area with no room — one look for both pages. */
-export function RoomEmptyState({ hint }: { hint: string }): React.JSX.Element {
+/** The main area with no room — one look for both pages. With
+ *  `drawerToggles` (the drawers are beside it), a closed drawer's » / «
+ *  toggle sits in the top corner, since there is no tab bar to hold it. */
+export function RoomEmptyState({ hint, drawerToggles = false }: { hint: string; drawerToggles?: boolean }): React.JSX.Element {
   return (
     <div
       className="relative flex h-full w-full flex-1 items-center justify-center overflow-hidden"
       data-toast-host="workspace"
       data-room-empty=""
     >
+      {drawerToggles && <NoTabBarDrawerToggles />}
       <div className="text-center">
         <h2 className="text-lg font-medium text-[var(--color-text-muted)]">K2</h2>
         <p className="text-xs text-[var(--color-text-muted)] mt-2 opacity-60">{hint}</p>
@@ -139,7 +143,7 @@ export default function AgentsShell({
             {!roomShown && remote === null && grok === null && <RoomEmptyState hint={emptyHint} />}
           </>
         ) : remote === null && grok === null ? (
-          <RoomEmptyState hint={emptyHint} />
+          <RoomEmptyState hint={emptyHint} drawerToggles={roomShown} />
         ) : null}
       </RoomProvider>
     </Layout>

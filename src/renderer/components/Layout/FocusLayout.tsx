@@ -7,7 +7,6 @@ import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
-import { DrawerIcon } from '@/components/icons/K2Icons'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { Surface } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
@@ -29,12 +28,11 @@ export default function FocusLayout({
 }: FocusLayoutProps): React.JSX.Element {
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)
   const rightPanelOpen = usePanelsStore((s) => s.rightPanelOpen)
-  const toggleLeftPanel = usePanelsStore((s) => s.toggleLeftPanel)
-  const toggleRightPanel = usePanelsStore((s) => s.toggleRightPanel)
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg)]">
-      {/* Top bar — no primary sidebar toggle, but has left/right panel toggles */}
+      {/* Top bar — no primary sidebar toggle. The drawer toggles live in the
+          room and drawer tab bars (`Layout/DrawerTabBarToggle.tsx`). */}
       <Surface
         role2="surface"
         bordered={false}
@@ -75,33 +73,9 @@ export default function FocusLayout({
           )}
         </div>
 
-        {/* Right: presence roster + timer + left/right panel toggles + window controls */}
+        {/* Right: presence roster + timer + window controls */}
         <DesktopChromeRight>
-          <TopBarUtilities>
-            <button
-              onClick={toggleLeftPanel}
-              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-              style={{
-                // @ts-expect-error -- Electron-specific CSS property
-                WebkitAppRegion: 'no-drag'
-              }}
-              title="Toggle left panel"
-            >
-              <DrawerIcon side="left" open={leftPanelOpen} />
-            </button>
-
-            <button
-              onClick={toggleRightPanel}
-              className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-              style={{
-                // @ts-expect-error -- Electron-specific CSS property
-                WebkitAppRegion: 'no-drag'
-              }}
-              title="Toggle right panel"
-            >
-              <DrawerIcon side="right" open={rightPanelOpen} />
-            </button>
-          </TopBarUtilities>
+          <TopBarUtilities />
         </DesktopChromeRight>
       </Surface>
 

@@ -9,7 +9,7 @@ import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
 import K2MarkButton from './K2MarkButton'
 import TopBarUtilities from './TopBarUtilities'
-import { DrawerIcon, RunIcon } from '@/components/icons/K2Icons'
+import { RunIcon } from '@/components/icons/K2Icons'
 import { Surface } from '@/components/ui'
 import {
   topBarLeftClusterMinWidth,
@@ -21,13 +21,6 @@ interface TopBarProps {
   projectName?: string
   projectPath?: string
   workspaceName?: string
-  leftPanelVisible?: boolean
-  rightPanelVisible?: boolean
-  onToggleLeftPanel?: () => void
-  onToggleRightPanel?: () => void
-  /** False on pages where the drawers open from » / « toggles in the tab
-   *  bars instead (drawer-controls experiment, `Layout/drawer-handles.ts`). */
-  showDrawerToggles?: boolean
   onRunCommand?: (command: string) => void
 }
 
@@ -35,11 +28,6 @@ export default function TopBar({
   projectName,
   projectPath,
   workspaceName,
-  leftPanelVisible = false,
-  rightPanelVisible = false,
-  onToggleLeftPanel,
-  onToggleRightPanel,
-  showDrawerToggles = true,
   onRunCommand
 }: TopBarProps): React.JSX.Element {
   const [hasRun, setHasRun] = useState(false)
@@ -119,7 +107,9 @@ export default function TopBar({
         )}
       </div>
 
-      {/* Right: run button + panel toggles + window controls */}
+      {/* Right: run button + utilities + window controls. The drawer
+          toggles live in the room and drawer tab bars
+          (`Layout/DrawerTabBarToggle.tsx`), not here. */}
       <DesktopChromeRight>
         {/* 0.43.2 Z14/Z36: only this bar (Agents and Home) follows a
             focused remote Home room. */}
@@ -140,37 +130,7 @@ export default function TopBar({
               </button>
             ) : null
           }
-        >
-          {showDrawerToggles ? (
-            <>
-              {/* Left panel toggle (opens panel to the left of terminal) */}
-              <button
-                onClick={onToggleLeftPanel}
-                className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-                style={{
-                  // @ts-expect-error -- Electron-specific CSS property
-                  WebkitAppRegion: 'no-drag'
-                }}
-                title="Toggle left panel"
-              >
-                <DrawerIcon side="left" open={leftPanelVisible} />
-              </button>
-
-              {/* Right panel toggle (opens panel to the right of terminal) */}
-              <button
-                onClick={onToggleRightPanel}
-                className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-                style={{
-                  // @ts-expect-error -- Electron-specific CSS property
-                  WebkitAppRegion: 'no-drag'
-                }}
-                title="Toggle right panel"
-              >
-                <DrawerIcon side="right" open={rightPanelVisible} />
-              </button>
-            </>
-          ) : null}
-        </TopBarUtilities>
+        />
       </DesktopChromeRight>
     </Surface>
   )

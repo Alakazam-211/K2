@@ -242,16 +242,13 @@ describe('top bars share the Agents bar, not Focus', () => {
     )
   })
 
-  it('puts Projects nav and chat, and Wiki close, after the utilities start; Tickets has no close', () => {
+  it('Projects has no nav/chat toggles in the top bar; Wiki close after the utilities start; Tickets has no close', () => {
+    // 0.46.0: the Projects nav and chat toggles moved off the top bar
+    // (nav: bottom of the nav / rail; chat: tab row or chat header).
     const projects = read('src/renderer/components/Projects/ProjectsPage.tsx')
-    const navAt = projects.indexOf('title="Toggle projects nav"')
-    const chatAt = projects.indexOf('title="Toggle project chat"')
-    const utilsAt = projects.indexOf('<TopBarUtilities>')
-    const utilsEnd = projects.indexOf('</TopBarUtilities>')
-    expect(utilsAt).toBeGreaterThan(-1)
-    expect(navAt).toBeGreaterThan(utilsAt)
-    expect(chatAt).toBeGreaterThan(navAt)
-    expect(chatAt).toBeLessThan(utilsEnd)
+    expect(projects).toContain('<TopBarUtilities />')
+    expect(projects).not.toContain('title="Toggle projects nav"')
+    expect(projects).not.toContain('title="Toggle project chat"')
 
     // Tickets is a page tab like Projects: no close X, no Esc-to-close.
     const tickets = read('src/renderer/components/Feedback/FeedbackPage.tsx')
@@ -280,7 +277,8 @@ describe('top bars share the Agents bar, not Focus', () => {
     expect(focus).toContain('<Surface')
     expect(focus).toContain('role2="surface"')
     expect(focus).toContain('<K2MarkButton />')
-    expect(focus).toContain('<TopBarUtilities>')
+    // 0.46.0: no drawer toggles in the Focus top bar (they live in the tab bars).
+    expect(focus).toContain('<TopBarUtilities />')
     expect(focus).not.toContain('PageTabs')
     expect(gate).toContain('<K2MarkButton />')
     expect(gate).toContain('<DesktopChromeLeft />')

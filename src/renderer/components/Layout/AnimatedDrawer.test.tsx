@@ -173,4 +173,31 @@ describe('AnimatedDrawer', () => {
     expect(el.style.width).toBe('')
     expect(el.className).toContain('border-l')
   })
+
+  it('a drawer that draws its own border and resize edge: no border, clipped only while sliding', () => {
+    function Chat({ open }: { open: boolean }): React.JSX.Element {
+      return (
+        <AnimatedDrawer open={open} side="right" bordered={false} clipAtRest={false}>
+          <div style={{ width: 300 }} />
+        </AnimatedDrawer>
+      )
+    }
+    const { rerender } = render(<Chat open />)
+    const el = must(drawer('right'))
+    expect(el.className).not.toContain('border-l')
+    expect(el.className).not.toContain('overflow-hidden')
+    rerender(<Chat open={false} />)
+    expect(el.style.overflow).toBe('hidden')
+    rerender(<Chat open />)
+    endTransition(el)
+    expect(el.style.overflow).toBe('')
+    expect(el.className).not.toContain('overflow-hidden')
+  })
+
+  it('the default drawer is bordered on the room side and clips at rest', () => {
+    render(ui(true))
+    const el = must(drawer('left'))
+    expect(el.className).toContain('border-r')
+    expect(el.className).toContain('overflow-hidden')
+  })
 })

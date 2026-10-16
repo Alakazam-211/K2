@@ -147,7 +147,7 @@ describe('K2Icons (A3)', () => {
   })
 })
 
-describe('TopBar Run and drawer toggles draw A3 icons', () => {
+describe('TopBar Run draws its A3 icon; no drawer toggles', () => {
   it('Run: the squared play triangle, same button, tooltip and hover colour', async () => {
     const onRun = vi.fn()
     render(<TopBar projectPath="/w/cortana" onRunCommand={onRun} />)
@@ -162,48 +162,10 @@ describe('TopBar Run and drawer toggles draw A3 icons', () => {
     await waitFor(() => expect(onRun).toHaveBeenCalledWith('bun dev'))
   })
 
-  it('drawer toggles: A3 drawer icon per side, open vs closed, titles and clicks unchanged', () => {
-    const onLeft = vi.fn()
-    const onRight = vi.fn()
-    const { rerender } = render(
-      <TopBar leftPanelVisible rightPanelVisible={false} onToggleLeftPanel={onLeft} onToggleRightPanel={onRight} />,
-    )
-    const left = screen.getByTitle('Toggle left panel')
-    const right = screen.getByTitle('Toggle right panel')
-    for (const b of [left, right]) {
-      for (const cls of ['h-6', 'w-6', 'hover:bg-[var(--color-bg-elevated)]', 'hover:text-[var(--color-text-primary)]']) {
-        expect([cls, b.classList.contains(cls)]).toEqual([cls, true])
-      }
-    }
-    const l = svgIn(left)
-    const r = svgIn(right)
-    expect([l.getAttribute('data-k2-icon'), l.getAttribute('width'), l.getAttribute('data-drawer-side'), l.getAttribute('data-drawer-open')]).toEqual([
-      'drawer',
-      '16',
-      'left',
-      'true',
-    ])
-    expect([r.getAttribute('data-k2-icon'), r.getAttribute('width'), r.getAttribute('data-drawer-side'), r.getAttribute('data-drawer-open')]).toEqual([
-      'drawer',
-      '16',
-      'right',
-      'false',
-    ])
-    expect(divider(l).getAttribute('stroke-dasharray')).toBeNull()
-    expect(divider(r).getAttribute('stroke-dasharray')).toBe('0.5 4')
-
-    fireEvent.click(left)
-    fireEvent.click(right)
-    expect([onLeft.mock.calls.length, onRight.mock.calls.length]).toEqual([1, 1])
-
-    rerender(<TopBar leftPanelVisible={false} rightPanelVisible onToggleLeftPanel={onLeft} onToggleRightPanel={onRight} />)
-    expect(svgIn(screen.getByTitle('Toggle left panel')).getAttribute('data-drawer-open')).toBe('false')
-    expect(svgIn(screen.getByTitle('Toggle right panel')).getAttribute('data-drawer-open')).toBe('true')
-  })
-
-  it('no drawer toggles where the drawers open from edge handles', () => {
-    render(<TopBar showDrawerToggles={false} />)
+  it('no drawer toggles: the drawers open from the room and drawer tab bars (0.46.0)', () => {
+    render(<TopBar />)
     expect(screen.queryByTitle('Toggle left panel')).toBeNull()
     expect(screen.queryByTitle('Toggle right panel')).toBeNull()
+    expect(document.querySelector('[data-k2-icon="drawer"]')).toBeNull()
   })
 })

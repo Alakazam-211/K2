@@ -50,7 +50,7 @@ import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
-import { useRoomTabBarDrawerToggle } from '@/components/Layout/drawer-handles'
+import { useRoomTabBarDrawerToggle } from '@/components/Layout/drawer-toggles'
 
 interface TabBarProps {
   cwd: string
@@ -188,7 +188,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
   const reorderTabs = useRoomTabs((s) => s.reorderTabs)
-  // Drawer-controls experiment (Agents): a closed drawer's » / « toggle
+  // A closed workspace drawer's » / « toggle
   // takes its own slot at the far left of the leftmost column's bar and
   // the far right of the rightmost column's bar.
   const showLeftDrawerToggle = useRoomTabBarDrawerToggle('left') && groupIndex === 0

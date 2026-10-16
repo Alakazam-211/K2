@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 //
-// Drawer-controls experiment: on the Agents page the » / « toggles in the
-// tab bars replace the top bar's drawer buttons; Home (same shell) keeps
-// the buttons until Rosson extends it (`drawer-handles.ts`). The drawer's
-// own resize edge still resizes it.
+// Drawer controls (0.46.0): on every page with drawers the » / « toggles
+// in the tab bars replace the top bar's drawer buttons (Agents and Home
+// share this Layout). The drawer's own resize edge still resizes it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -47,7 +46,6 @@ vi.mock('@/lib/daemon-settings', () => ({
 
 import Layout from './Layout'
 import TabbedPanel from '@/components/TabbedPanel/TabbedPanel'
-import { DRAWER_TABBAR_TOGGLE_PAGES, drawerTabBarTogglesOn, useDrawerTabBarToggles } from './drawer-handles'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { usePanelsStore } from '@/stores/panels'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -88,30 +86,9 @@ afterEach(() => {
   document.body.style.userSelect = ''
 })
 
-describe('drawer controls switch', () => {
-  it('is on for Agents only', () => {
-    expect([...DRAWER_TABBAR_TOGGLE_PAGES]).toEqual(['agents'])
-    expect(drawerTabBarTogglesOn('agents')).toBe(true)
-    expect(drawerTabBarTogglesOn('home')).toBe(false)
-  })
-
-  it('Layout turns the tab bar toggles on for Agents and off for Home', () => {
-    function Probe(): React.JSX.Element {
-      return <div data-testid="probe" data-on={useDrawerTabBarToggles() ? 'yes' : 'no'} />
-    }
-    render(
-      <Layout leftPanel={<div />} rightPanel={<div />}>
-        <Probe />
-      </Layout>,
-    )
-    expect(screen.getByTestId('probe').getAttribute('data-on')).toBe('yes')
-    onPage('home')
-    expect(screen.getByTestId('probe').getAttribute('data-on')).toBe('no')
-  })
-})
-
-describe('Agents page', () => {
-  it('drops the top bar drawer buttons and has no edge grips', () => {
+describe('Agents and Home (one shell)', () => {
+  it.each(['agents', 'home'] as const)('%s: no top bar drawer buttons, no edge grips', (page) => {
+    onPage(page)
     renderShell()
     expect(screen.queryByTitle('Toggle left panel')).toBeNull()
     expect(screen.queryByTitle('Toggle right panel')).toBeNull()
@@ -156,21 +133,12 @@ describe('Agents page', () => {
   })
 })
 
-describe('other pages keep the top bar drawer buttons', () => {
-  it('Home (same shell) has the buttons', () => {
-    onPage('home')
-    renderShell()
-    fireEvent.click(screen.getByTitle('Toggle left panel'))
-    expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
-    expect(screen.getByTitle('Toggle right panel')).toBeTruthy()
-  })
-
-  it('switching Agents to Home brings the buttons back without remounting the room', () => {
+describe('page switches', () => {
+  it('Agents to Home: still no top bar buttons, and the room is not remounted', () => {
     renderShell()
     const room = screen.getByTestId('room')
-    expect(screen.queryByTitle('Toggle left panel')).toBeNull()
     onPage('home')
-    expect(screen.getByTitle('Toggle left panel')).toBeTruthy()
+    expect(screen.queryByTitle('Toggle left panel')).toBeNull()
     expect(screen.getByTestId('room')).toBe(room)
   })
 })

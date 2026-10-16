@@ -4,7 +4,6 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { startUsageCachePoll, useSubscriptionUsageStore } from '@/stores/subscription-usage'
 import { scopeMayWrite } from '@/kessel/server-scope'
 import { roomServerState, usePoolHostStatus, useTopBarScope } from '@/components/TopBar/top-bar-scope'
-import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import {
   buttonChips,
   formatResetsIn,
@@ -21,9 +20,10 @@ import {
  *
  * 0.43.2 Z16/Z19: with a remote Home room focused, it shows THAT server's
  * numbers (its CLI logins run the room's agents), read through the room's
- * scope, as "{server} | 42%" (the bar's own divider, `TopBarPipe`). An
- * offline room or one that needs a sign-in says so, after the same
- * divider; it never shows the window server's numbers instead.
+ * scope. An offline room or one that needs a sign-in says so; it never
+ * shows the window server's numbers instead. The server's name is not
+ * drawn here (Rosson 2026-10-16): the centre breadcrumb names it, and the
+ * tooltip and menu say whose numbers these are.
  */
 export default function UsageButton(): React.JSX.Element {
   const target = useTopBarScope()
@@ -109,12 +109,9 @@ export default function UsageButton(): React.JSX.Element {
         }}
         title={roomLabel ? `${roomLabel}'s subscription usage` : undefined}
       >
-        {roomLabel ? (
-          <span className="flex items-center gap-1" data-testid="usage-server">
-            <span className="max-w-[120px] truncate">{roomLabel}</span>
-            <TopBarPipe />
-          </span>
-        ) : null}
+        {/* Rosson 2026-10-16: no server name here any more; the top bar's
+            centre breadcrumb names a remote room's server. The tooltip and
+            the menu still say whose usage this is. */}
         {serverState === 'offline' ? (
           <span data-testid="usage-server-state">offline</span>
         ) : serverState === 'signin' ? (

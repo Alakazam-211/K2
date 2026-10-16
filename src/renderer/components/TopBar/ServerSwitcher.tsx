@@ -39,17 +39,7 @@ import { webFeatures } from '@/web/features'
 import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
 import { useTopBarScope } from './top-bar-scope'
 import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
-
-function statusColor(status: ConnectionStatus): string {
-  switch (status) {
-    case 'connected':
-      return '#3fb950' // green
-    case 'connecting':
-      return '#d29922' // amber
-    case 'offline':
-      return '#f85149' // red
-  }
-}
+import { statusColor } from './server-status'
 
 /** Address shown under a saved host in the dropdown. Omit default
  *  https port 443 (`rosson.k2.dev`, not `rosson.k2.dev:443`). LAN /
@@ -203,8 +193,7 @@ export const SERVER_ICON_PX = K2_ICON_PX
  *  a wrap-around border"): a soft theme wash with a 1px low-contrast border
  *  all round and the theme's field radius (square in the default theme,
  *  rounded where the theme rounds fields). Hover and the open dropdown
- *  lift it a step. Following a remote Home room swaps the border to dashed
- *  (the old outlined-pill cue). Tokens only, so every theme gets its own
+ *  lift it a step. Tokens only, so every theme gets its own
  *  shades. Exported for tests. */
 export const SERVER_CHIP_BASE_CLASS =
   'border rounded-[var(--radius-field)] transition-colors'
@@ -220,27 +209,17 @@ export const SERVER_CHIP_HOVER_CLASS =
  *  so -8 leaves 6px. */
 export const SERVER_CHIP_MARGIN_RIGHT_PX = -8
 
-export function serverChipClass({ open, followsRoom }: { open: boolean; followsRoom: boolean }): string {
-  return [
-    SERVER_CHIP_BASE_CLASS,
-    open ? SERVER_CHIP_LIFT_CLASS : `${SERVER_CHIP_REST_CLASS} ${SERVER_CHIP_HOVER_CLASS}`,
-    followsRoom ? 'border-dashed' : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-/** Z20: the trigger's words while a remote Home room is focused. */
-export function followedRoomTitle(roomServer: string, windowServer: string): string {
-  return `Looking at ${roomServer} on Home. This window is on ${windowServer}.`
+export function serverChipClass({ open }: { open: boolean }): string {
+  return `${SERVER_CHIP_BASE_CLASS} ${open ? SERVER_CHIP_LIFT_CLASS : `${SERVER_CHIP_REST_CLASS} ${SERVER_CHIP_HOVER_CLASS}`}`
 }
 
 /**
  * `followRoom` (the Agents/Home bar only, Z36): while a remote Home room is
- * focused, the trigger names THAT room's server in an outlined pill (Z20,
- * Q4). The dropdown still checks the window's own server and starts with
- * "Looking at {server} (Home room)". Picking a server still switches the
- * window; picking the room's own server promotes the room (Z7).
+ * focused, the trigger still names and lights the WINDOW's server (Rosson
+ * 2026-10-16; the centre breadcrumb names the room's server), and carries
+ * `data-follows-room`. The dropdown checks the window's own server and
+ * starts with "Looking at {server} (Home room)". Picking a server still
+ * switches the window; picking the room's own server promotes the room (Z7).
  */
 export default function ServerSwitcher({ followRoom = false }: { followRoom?: boolean } = {}): React.JSX.Element {
   const followed = useTopBarScope(followRoom)
@@ -446,7 +425,10 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   // when sign-in is required (the only user-action state). Shown as the
   // server icon's LEDs; the words are in the tooltip and accessible name.
   const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
-  const shownServer = roomServer ?? activeLabel
+  // Rosson 2026-10-16: the trigger always names the WINDOW's server, also
+  // while Home shows a room on another server; the top bar's centre
+  // breadcrumb (`TopBarTitle`) names the room's server instead.
+  const shownServer = activeLabel
 
   return (
     <div
@@ -459,12 +441,8 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         data-testid="server-switcher-trigger"
         data-follows-room={roomServer !== null ? 'true' : undefined}
         aria-expanded={open}
-        className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open, followsRoom: roomServer !== null })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
-        title={
-          roomServer !== null
-            ? `${followedRoomTitle(roomServer, activeLabel)} (⌘L)`
-            : `${activeLabel} — ${ind.title} (⌘L)`
-        }
+        className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
+        title={`${activeLabel} — ${ind.title} (⌘L)`}
         aria-label={`${shownServer} — ${ind.title}`}
         aria-keyshortcuts="Meta+L"
       >

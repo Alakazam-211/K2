@@ -21,6 +21,8 @@ test-signer = ["dep:ring", "dep:blake2", "dep:base64"]
 sew-test-pins = []
 # ...plus 0.1.1 as the pin (0.1.0 stays known): the upgrade half of the cycle.
 sew-test-pins-upgrade = ["sew-test-pins"]
+# TEST BRANCH ONLY: pin Sew 0.1.2 (F19) alone.
+sew-test-pins-012 = ["sew-test-pins"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

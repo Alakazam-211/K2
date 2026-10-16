@@ -60,6 +60,7 @@ airgap = ["k2-core/airgap"]
 # with the same value or the daemon refuses the helper (pin mismatch).
 sew-test-pins = ["k2-root-proto/sew-test-pins"]
 sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
+sew-test-pins-012 = ["sew-test-pins", "k2-root-proto/sew-test-pins-012"]
 
 [dependencies]
 # Session Stream + Awareness Bus primitives are now always compiled

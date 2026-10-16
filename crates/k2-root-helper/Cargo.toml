@@ -27,6 +27,7 @@ test-keys = ["k2-root-proto/test-signer"]
 # enable it; sign-root-helper.sh refuses a binary built with it.
 sew-test-pins = ["k2-root-proto/sew-test-pins"]
 sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
+sew-test-pins-012 = ["sew-test-pins", "k2-root-proto/sew-test-pins-012"]
 
 [dependencies]
 k2-root-proto = { path = "../k2-root-proto" }

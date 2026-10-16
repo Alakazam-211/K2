@@ -73,9 +73,7 @@ const CORNER_SLOP = 1.5
  * radius minus the border). No rounded ancestor: square.
  */
 export function dockAppearance(dock: Element): DockAppearance {
-  const parsed = parseCssColor(getComputedStyle(dock).backgroundColor || '')
-  // A transparent dock has no colour of its own: leave the engine default.
-  const background = parsed && parsed[3] > 0 ? parsed : null
+  const background = paneBackground(dock)
   const d = dock.getBoundingClientRect()
   let node: Element | null = dock.parentElement
   while (node && node !== document.documentElement) {
@@ -108,6 +106,19 @@ export function dockAppearance(dock: Element): DockAppearance {
     node = node.parentElement
   }
   return { background, cornerRadius: 0, corners: NO_CORNERS }
+}
+
+/** The colour painted behind the dock: its own background, else the
+ *  nearest ancestor's that is not transparent. Null when none is (leave
+ *  the engine default). */
+export function paneBackground(dock: Element): DockAppearance['background'] {
+  let node: Element | null = dock
+  while (node) {
+    const parsed = parseCssColor(getComputedStyle(node).backgroundColor || '')
+    if (parsed && parsed[3] > 0) return parsed
+    node = node.parentElement
+  }
+  return null
 }
 
 export function sameAppearance(a: DockAppearance | null, b: DockAppearance): boolean {

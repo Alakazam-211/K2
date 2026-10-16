@@ -806,7 +806,7 @@ export function BrowserPane({
       {/* Docking area — the native child webview is positioned exactly
           over this div. DOM content here only shows when the view is
           absent (not created / stub build / error). */}
-      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden bg-[var(--color-bg)]">
+      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden">
         {frame && (
           // Freeze-frame: the page as it was, pinned top-left at its own
           // size so a shrinking dock (drawer slide) clips it, never squashes.

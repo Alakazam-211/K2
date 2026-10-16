@@ -93,6 +93,12 @@ describe('dockAppearance', () => {
     expect(dockAppearance(document.getElementById('dock2') as HTMLElement).cornerRadius).toBe(0)
   })
 
+  it('the background comes from the nearest ancestor that paints one', () => {
+    document.body.innerHTML =
+      '<div style="background-color: rgb(1, 2, 3)"><div style="background-color: rgba(0, 0, 0, 0)"><div id="dock"></div></div></div>'
+    expect(dockAppearance(document.getElementById('dock') as HTMLElement).background).toEqual([1, 2, 3, 255])
+  })
+
   it('sameAppearance compares by value; nothing sent yet is never the same', () => {
     const a = { background: null, cornerRadius: 0, corners: [false, false, false, false] as [boolean, boolean, boolean, boolean] }
     expect(sameAppearance(null, a)).toBe(false)

@@ -57,12 +57,12 @@ fn seed_source(conn: &Connection) -> (String, String, String) {
     overlay::post_thread_with_origin(conn, &p, &pid, "bob", to, "guest post", "thread", None, Some(PostAuthor::guest("bob")))
         .unwrap();
     overlay::post_thread(conn, &p, &pid, "Rosson", to, "old compose post", "compose").unwrap();
-    overlay::post_choice(conn, &p, &pid, &handle, to, "Ship it?", vec!["Go".into(), "Wait".into()], false, Some(now_secs() + 30 * 86_400))
+    overlay::post_choice(conn, &p, &pid, &handle, to, "Ship it?", vec!["Go".into(), "Wait".into()], false, Some(overlay::now_secs() + 30 * 86_400))
         .unwrap();
     let (answered, _) =
         overlay::post_choice(conn, &p, &pid, &handle, to, "Lunch?", vec!["Yes".into()], false, None).unwrap();
     overlay::answer_card(&p, &pid, &answered.id, Some("Yes"), None, Some(PostAuthor::owner_named("Rosson"))).unwrap();
-    overlay::post_secret(conn, &p, &pid, &handle, to, "STRIPE_KEY", Some("need it"), Default::default(), Some(now_secs() + 30 * 86_400))
+    overlay::post_secret(conn, &p, &pid, &handle, to, "STRIPE_KEY", Some("need it"), Default::default(), Some(overlay::now_secs() + 30 * 86_400))
         .unwrap();
     let (set, _) =
         overlay::post_secret(conn, &p, &pid, &handle, to, "DB_URL", None, Default::default(), None).unwrap();
@@ -143,7 +143,7 @@ fn export_caps_drop_oldest_first_and_since_days_cuts() {
     pin(&conn, &pid, &p);
     for (i, age_days) in [40i64, 20, 10, 1].iter().enumerate() {
         let mut d = OverlayDoc::text(uid(), handle.clone(), handle.clone(), format!("line {i}"), "thread");
-        d.created_at = now_secs() - age_days * 86_400;
+        d.created_at = overlay::now_secs() - age_days * 86_400;
         let seq = catalog::next_thread_seq(&conn, &p, &pid).unwrap();
         store::commit_write(&d, Some((&p, seq)), &[], None).unwrap();
     }
@@ -242,7 +242,7 @@ fn import_rewrites_authors_closes_cards_adds_divider_and_continues_live() {
     );
     // No expiry rows for imported cards: a sweep far in the future closes nothing here.
     // (Read-only look at the index: a real sweep would touch other tests.)
-    let due = store::due_card_expiries(now_secs() + 400 * 86_400).unwrap();
+    let due = store::due_card_expiries(overlay::now_secs() + 400 * 86_400).unwrap();
     assert!(due.iter().all(|(_, _, conv)| conv != &dst_pin), "{due:?}");
     // Imported lines are read-only (CL31); the Thread continues live below.
     assert_eq!(

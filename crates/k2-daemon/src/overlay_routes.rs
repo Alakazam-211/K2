@@ -4856,6 +4856,12 @@ mod tests {
     #[test]
     fn imported_thread_is_read_only_and_settles_on_resolve() {
         use k2_core::overlay::transfer as t;
+        fn resolved_ok(addr: &str) -> ResolvedOverlay {
+            match resolve_addr(addr) {
+                Ok(r) => r,
+                Err(e) => panic!("resolve {addr}: {} {}", e.status, e.body),
+            }
+        }
         let uid = || uuid::Uuid::new_v4().to_string();
         let src = format!("ovlctsrc{}", &uid()[..8]);
         let (src_id, _) = seed(&src);
@@ -4885,8 +4891,8 @@ mod tests {
             .expect("imported card")
             .id;
 
-        assert_eq!(resolve_addr(&dst).expect("pending history resolves").conversation_id, key);
-        assert_eq!(resolve_addr(&key).expect("import key resolves").project_id, dst_id);
+        assert_eq!(resolved_ok(&dst).conversation_id, key);
+        assert_eq!(resolved_ok(&key).project_id, dst_id);
         let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": dst, "text": "hi", "from": "k2" }));
         assert_error_code(&posted, "409 Conflict", "imported_read_only");
         let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": key, "text": "hi", "from": "k2" }));
@@ -4903,7 +4909,7 @@ mod tests {
         // The clone's first chat pins: the next resolve settles the history.
         let new_pin = uid();
         pin(&dst_id, &new_pin);
-        assert_eq!(resolve_addr(&dst).unwrap().conversation_id, new_pin);
+        assert_eq!(resolved_ok(&dst).conversation_id, new_pin);
         assert_eq!(overlay::read_thread(&new_pin, 0).unwrap().len(), 3, "divider + 2 imported lines");
         assert!(overlay::read_thread(&key, 0).unwrap().is_empty());
         let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": dst, "text": "live", "from": "k2" }));

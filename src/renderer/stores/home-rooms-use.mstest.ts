@@ -364,14 +364,16 @@ describe("B's room is usable on Home while the window is on A (Home M5)", () => 
 
   it('splitting saves the shared columns on B (D1), with a revision', async () => {
     const before = await stored(B_PORT, B_OWNER, projB)
+    // Split from a regular tab moves that tab into the new column.
+    room.tabs.getState().setActiveTabInGroup(0, 'tab-b2')
     room.tabs.getState().splitTerminalArea(CHECKOUT)
     room.tabs.getState().flushLayoutPersist()
     const after = await untilStoredOnB((cols) => cols.length === 2, 'the split in B’s layout')
     expect(after.revision).toBeGreaterThan(before.revision)
     const json = JSON.parse((await stored(B_PORT, B_OWNER, projB)).layoutJson) as StoredLayout
     expect(json.splitCount).toBe(2)
-    expect(after.cols[0]).toEqual(['tab-b1', 'tab-b2'])
-    expect(after.cols[1].length).toBe(1)
+    expect(after.cols[0]).toEqual(['tab-b1'])
+    expect(after.cols[1]).toEqual(['tab-b2'])
     // B's own room state says the same.
     expect(room.tabs.getState().splitCount).toBe(2)
     room.tabs.getState().unsplitTerminalArea()

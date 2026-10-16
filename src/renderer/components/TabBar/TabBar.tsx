@@ -1265,7 +1265,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           {splitCount < 3 && (
             <button
               className="flex h-full w-9 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]"
-              onClick={() => splitTerminalArea(cwd)}
+              onClick={() => splitTerminalArea(cwd, groupIndex)}
               title="Split into columns"
             >
               <svg

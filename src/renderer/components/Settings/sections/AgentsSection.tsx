@@ -41,7 +41,7 @@ export const AGENTS_MANIFEST: SettingEntry[] = [
     group: 'Defaults',
     label: 'Default AI Agent',
     description: defaultAgentLaunchCopy(),
-    keywords: ['agent', 'default', 'claude', 'codex', 'gemini'],
+    keywords: ['agent', 'default', 'claude', 'codex', 'gemini', 'llm', 'llms', 'models', 'language models'],
   },
   {
     id: 'agents.show-launch-bar',
@@ -748,7 +748,7 @@ export function AgentsSection(): React.JSX.Element {
       </div>
 
       {/* Right: CLI Tools Setup. Tokens (the right column before 0.45.7) is
-          its own page now: Settings → LLMs → Tokens (LlmTokensSection). */}
+          its own page now: Settings → Language Models → Subscriptions / Tokens (LlmTokensSection). */}
       <div className="flex-1 min-w-0 overflow-y-auto border-l border-[var(--color-border)] p-6 pl-6 pr-3 [scrollbar-gutter:stable]">
         <CLIInstallGuide />
       </div>
@@ -770,14 +770,14 @@ const CLI_INSTALL_ENTRIES: {
     command: 'claude',
     installCommand: CLI_INSTALL_COMMANDS.claude,
     docs: 'https://docs.anthropic.com/en/docs/claude-code',
-    notes: 'Then add the subscription under LLMs → Tokens.',
+    notes: 'Then add the subscription under Language Models → Subscriptions / Tokens.',
   },
   {
     name: 'OpenAI Codex',
     command: 'codex',
     installCommand: CLI_INSTALL_COMMANDS.codex,
     docs: 'https://github.com/openai/codex',
-    notes: 'Then add the subscription under LLMs → Tokens.',
+    notes: 'Then add the subscription under Language Models → Subscriptions / Tokens.',
   },
   {
     name: 'Grok',
@@ -785,7 +785,7 @@ const CLI_INSTALL_ENTRIES: {
     installCommand: CLI_INSTALL_COMMANDS.grok,
     docs: 'https://docs.x.ai/build',
     notes:
-      "xAI's terminal coding agent. Then add the subscription under LLMs → Tokens. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
+      "xAI's terminal coding agent. Then add the subscription under Language Models → Subscriptions / Tokens. For headless use without a subscription, set the XAI_API_KEY environment variable. Skip approval prompts (\"yolo\" mode) with \"grok --always-approve\".",
   },
   {
     name: 'Gemini CLI',

@@ -186,6 +186,14 @@ function retainServerSwitcherOutsideClick(): () => void {
 /** What the switcher calls this computer's daemon, everywhere (Z20). */
 export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
 
+/** 0.46.0 experiment (Rosson 2026-10-16): the trigger is one fixed width so
+ *  the top bar never shifts when the server changes; a longer name ends in
+ *  an ellipsis (the full name is in the tooltip). 160px leaves ~120px for
+ *  the name at 11px — `rosson.k2.dev`, `z3thon.k2.dev`, `This computer` and
+ *  most box names (~20 characters) fit whole. Exported for tests. */
+export const SERVER_SWITCHER_WIDTH_PX = 160
+export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[160px] shrink-0'
+
 /** Z20: the trigger's words while a remote Home room is focused. */
 export function followedRoomTitle(roomServer: string, windowServer: string): string {
   return `Looking at ${roomServer} on Home. This window is on ${windowServer}.`
@@ -387,8 +395,8 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
-          className="flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)]"
-          title={ind.title}
+          className={`${SERVER_SWITCHER_WIDTH_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)]`}
+          title={`${activeLabel} — ${ind.title}`}
           aria-label={`Connected host: ${activeLabel}`}
         >
           <span
@@ -402,7 +410,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
               display: 'inline-block',
             }}
           />
-          <span className="max-w-[160px] truncate">{activeLabel}</span>
+          <span className="min-w-0 flex-1 truncate">{activeLabel}</span>
         </div>
       </div>
     )
@@ -418,13 +426,13 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         onClick={() => toggle()}
         data-testid="server-switcher-trigger"
         data-follows-room={roomServer !== null ? 'true' : undefined}
-        className={`flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag ${
+        className={`${SERVER_SWITCHER_WIDTH_CLASS} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag ${
           roomServer !== null ? 'border border-[var(--color-border)]' : ''
         }`}
         title={
           roomServer !== null
             ? `${followedRoomTitle(roomServer, activeLabel)} (⌘L)`
-            : `${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`
+            : `${activeLabel} — ${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`
         }
         aria-keyshortcuts="Meta+L"
       >
@@ -446,10 +454,10 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
             />
           )
         })()}
-        <span className="max-w-[140px] truncate" data-testid="server-switcher-label">
+        <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
           {roomServer ?? activeLabel}
         </span>
-        <svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg className="shrink-0" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="2 4 5 7 8 4" />
         </svg>
       </button>

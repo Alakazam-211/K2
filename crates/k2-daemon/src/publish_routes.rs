@@ -13,7 +13,7 @@ use k2_core::tunnel::config::SUBDOMAIN_HOST;
 use crate::cli::{need_project, opt_param, str_param};
 use crate::cli_response::CliResponse;
 use crate::label_owner;
-use crate::publish_runtime::{self, PublishError, RunSpec};
+use crate::publish_runtime::{self, ProbeTimeout, PublishError, RunSpec};
 
 const FOREIGN_STICKER: &str =
     "label_owned_by_other_workspace: not yours; ask the server owner to transfer it";
@@ -77,6 +77,43 @@ fn parse_port(params: &HashMap<String, String>) -> Result<u16, CliResponse> {
                 Ok(p)
             }
         })
+}
+
+/// `--probe-timeout` on `/cli/publish/run`: `probeTimeout` is a duration
+/// (`90s`, `10m`, `1500ms`, bare seconds) or `default`; `probeTimeoutMs`
+/// is whole milliseconds. Absent = keep the stored grace (new rows get the
+/// default). Capped at 15 min.
+fn parse_probe_timeout_param(params: &HashMap<String, String>) -> Result<ProbeTimeout, CliResponse> {
+    if let Some(raw) = opt_param(params, "probeTimeoutMs").or_else(|| opt_param(params, "probe_timeout_ms")) {
+        let ms: u64 = raw.trim().parse().map_err(|_| {
+            CliResponse::bad_request("probeTimeoutMs must be a whole number of milliseconds (at most 900000 = 15m)")
+        })?;
+        if ms == 0 || ms > k2_core::published_services::PROBE_TIMEOUT_MAX_MS {
+            return Err(CliResponse::bad_request(
+                "--probe-timeout must be more than 0 and at most 15m (probeTimeoutMs 1..=900000)",
+            ));
+        }
+        return Ok(ProbeTimeout::Ms(ms));
+    }
+    if let Some(raw) = opt_param(params, "probeTimeout").or_else(|| opt_param(params, "probe_timeout")) {
+        if raw.trim().eq_ignore_ascii_case("default") {
+            return Ok(ProbeTimeout::Default);
+        }
+        return k2_core::published_services::parse_probe_timeout(&raw)
+            .map(ProbeTimeout::Ms)
+            .map_err(CliResponse::bad_request);
+    }
+    Ok(ProbeTimeout::Keep)
+}
+
+/// The held-request form of a run's `--probe-timeout` (`"<ms>ms"`,
+/// `"default"`, or null).
+fn probe_timeout_body(p: ProbeTimeout) -> serde_json::Value {
+    match p {
+        ProbeTimeout::Keep => serde_json::Value::Null,
+        ProbeTimeout::Default => serde_json::json!("default"),
+        ProbeTimeout::Ms(ms) => serde_json::json!(format!("{ms}ms")),
+    }
 }
 
 /// GET dispatcher: list + logs + leftovers + 405 twins for POST-only paths.
@@ -169,6 +206,13 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> 
 /// Run a publish request the owner approved (a held `publish_run`).
 pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value, crate::apps::routes::Refusal> {
     let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let probe_timeout = match body.get("probeTimeout").and_then(|v| v.as_str()) {
+        None => ProbeTimeout::Keep,
+        Some(v) if v.trim().eq_ignore_ascii_case("default") => ProbeTimeout::Default,
+        Some(v) => k2_core::published_services::parse_probe_timeout(v)
+            .map(ProbeTimeout::Ms)
+            .map_err(|e| crate::apps::routes::no("publish_failed", 409, e))?,
+    };
     let spec = RunSpec {
         project_id: g("projectId"),
         name: g("name"),
@@ -181,6 +225,7 @@ pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value
         skin_root: String::new(),
         cwd_explicit: body.get("cwdExplicit").and_then(|v| v.as_bool()).unwrap_or(false),
         transfer: false,
+        probe_timeout,
     };
     publish_runtime::run(spec)
         .map(|svc| serde_json::to_value(svc).unwrap_or(serde_json::Value::Null))
@@ -561,6 +606,10 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         Err(resp) => return resp,
     };
     let no_tunnel = boolish(params, &["noTunnel", "no_tunnel"]);
+    let probe_timeout = match parse_probe_timeout_param(params) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
     let cwd = opt_param(params, "cwd")
         .map(PathBuf::from)
         .or_else(|| resolve_project_path(&project_id).map(PathBuf::from))
@@ -573,6 +622,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
             let body = serde_json::json!({
                 "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
                 "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
+                "probeTimeout": probe_timeout_body(probe_timeout),
             });
             let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
             return crate::apps::routes::respond(crate::apps::grace::hold(
@@ -599,6 +649,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         skin_root,
         cwd_explicit,
         transfer: boolish(params, &["transfer"]),
+        probe_timeout,
     }) {
         Ok(svc) => {
             let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
@@ -1218,5 +1269,105 @@ mod tests {
     fn leftovers_get_requires_project() {
         let resp = dispatch("/cli/publish/leftovers", &HashMap::new()).unwrap();
         assert_eq!(resp.status, "400 Bad Request");
+    }
+
+    /// `--probe-timeout` on the run route: a duration (or ms) is stored on
+    /// the row and comes back in the Service JSON; over 15 min, zero and
+    /// junk are 400 before any row; the GET twin stays 405 with it.
+    #[test]
+    fn run_route_round_trips_probe_timeout_and_enforces_the_cap() {
+        let home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "3000");
+        let pid = std::process::id();
+        let ws = format!("grace-route-{pid}");
+        let dir = home.path().join("ws-grace-route");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_s = dir.to_string_lossy().to_string();
+        seed_ws(&ws, &dir_s, "Grace");
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let name = format!("graceroute{pid}");
+        let params = |extra: &[(&str, &str)]| {
+            let mut p = HashMap::new();
+            p.insert("project".to_string(), ws.clone());
+            p.insert("name".to_string(), name.clone());
+            p.insert(
+                "cmd".to_string(),
+                format!(
+                    "python3 -c \"import socket,itertools; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',{port})); s.listen(8); [s.accept()[0].close() for _ in itertools.count()]\""
+                ),
+            );
+            p.insert("port".to_string(), port.to_string());
+            p.insert("noTunnel".to_string(), "1".to_string());
+            for (k, v) in extra {
+                p.insert(k.to_string(), v.to_string());
+            }
+            p
+        };
+
+        for (k, v, want) in [
+            ("probeTimeout", "16m", "at most 15m"),
+            ("probeTimeout", "0s", "--probe-timeout"),
+            ("probeTimeout", "soon", "--probe-timeout"),
+            ("probeTimeoutMs", "900001", "at most 15m"),
+            ("probeTimeoutMs", "0", "at most 15m"),
+        ] {
+            let r = dispatch_post("/cli/publish/run", &params(&[(k, v)]));
+            assert_eq!(r.status, "400 Bad Request", "{k}={v}: {}", r.body);
+            assert!(r.body.contains(want), "{k}={v}: {}", r.body);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            assert!(
+                k2_core::published_services::get_by_project_name(&conn, &ws, &name).unwrap().is_none(),
+                "{k}={v} must not write a row"
+            );
+        }
+
+        let get = dispatch("/cli/publish/run", &params(&[("probeTimeout", "2m")])).expect("GET twin");
+        assert_eq!(get.status, "405 Method Not Allowed", "POST-only guard: {}", get.body);
+
+        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeout", "2m")]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["probeTimeoutMs"], 120_000, "{v}");
+        assert_eq!(v["probeTimeoutEffectiveMs"], 120_000, "{v}");
+        assert_eq!(v["status"], "running", "{v}");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let row = k2_core::published_services::get_by_project_name(&conn, &ws, &name).unwrap().expect("row");
+            assert_eq!(row.probe_timeout_ms, Some(120_000), "stored on the row");
+        }
+        let list = dispatch("/cli/publish/list", &{
+            let mut p = HashMap::new();
+            p.insert("project".to_string(), ws.clone());
+            p
+        })
+        .expect("list");
+        let lv: serde_json::Value = serde_json::from_str(&list.body).unwrap();
+        let svc = lv["services"]
+            .as_array()
+            .expect("services")
+            .iter()
+            .find(|s| s["name"] == name.as_str())
+            .expect("listed")
+            .clone();
+        assert_eq!(svc["probeTimeoutMs"], 120_000, "list JSON carries it: {svc}");
+        publish_runtime::stop(&ws, &name).expect("stop");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // probeTimeoutMs wins; then `default` clears it.
+        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeoutMs", "90000")]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["probeTimeoutMs"], 90_000, "{v}");
+        publish_runtime::stop(&ws, &name).expect("stop");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeout", "default")]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert!(v["probeTimeoutMs"].is_null(), "{v}");
+        assert_eq!(v["probeTimeoutEffectiveMs"], 3000, "{v}");
+
+        let _ = publish_runtime::rm(&ws, &name, true);
     }
 }

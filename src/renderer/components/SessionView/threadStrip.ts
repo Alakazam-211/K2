@@ -291,7 +291,7 @@ export const COUNTER_ICON_GAP_PX = 2
 export const COUNTER_CHECK_PX = 11
 /** Space between the subagents' running and done groups. */
 export const COUNTER_GROUP_GAP_PX = 7
-/** The braille spinner's box, in em of the counter text. */
+/** The working grid's box (the 3×3 cell spinner), in em of the counter text. */
 export const COUNTER_SPINNER_EM = 0.8
 
 /** A conservative width estimate (px) of drawer text at `fontPx`, digits

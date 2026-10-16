@@ -39,6 +39,7 @@ import { webFeatures } from '@/web/features'
 import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
 import { useTopBarScope } from './top-bar-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { ServerStatusIcon } from '@/components/icons/ServerStatusIcon'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -194,6 +195,9 @@ export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
  *  most box names (~20 characters) fit whole. Exported for tests. */
 export const SERVER_SWITCHER_WIDTH_PX = 160
 export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[160px] shrink-0'
+/** The server icon at the trigger's left (its LEDs are the status light):
+ *  the page-tab icons' 14px. Leaves ~106px for the name. */
+export const SERVER_ICON_PX = 14
 
 /** Z20: the trigger's words while a remote Home room is focused. */
 export function followedRoomTitle(roomServer: string, windowServer: string): string {
@@ -401,24 +405,20 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         <div
           className={`${SERVER_SWITCHER_WIDTH_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)]`}
           title={`${activeLabel} — ${ind.title}`}
-          aria-label={`Connected host: ${activeLabel}`}
+          aria-label={`Connected host: ${activeLabel} — ${ind.title}`}
         >
-          <span
-            aria-label={ind.title}
-            style={{
-              width: 7,
-              height: 7,
-      
-              background: ind.color,
-              flexShrink: 0,
-              display: 'inline-block',
-            }}
-          />
+          <ServerStatusIcon ledColor={ind.color} size={SERVER_ICON_PX} label={ind.title} />
           <span className="min-w-0 flex-1 truncate">{activeLabel}</span>
         </div>
       </div>
     )
   }
+
+  // Recovery-aware status: amber while restarting/re-authenticating, red
+  // when sign-in is required (the only user-action state). Shown as the
+  // server icon's LEDs; the words are in the tooltip and accessible name.
+  const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
+  const shownServer = roomServer ?? activeLabel
 
   return (
     <div
@@ -436,30 +436,14 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         title={
           roomServer !== null
             ? `${followedRoomTitle(roomServer, activeLabel)} (⌘L)`
-            : `${activeLabel} — ${hostIndicator(connectionStatus, recovery, activeHost !== 'local').title} (⌘L)`
+            : `${activeLabel} — ${ind.title} (⌘L)`
         }
+        aria-label={`${shownServer} — ${ind.title}`}
         aria-keyshortcuts="Meta+L"
       >
-        {/* Recovery-aware dot: amber while restarting/re-authenticating,
-            red when sign-in is required (the only user-action state). */}
-        {(() => {
-          const ind = hostIndicator(connectionStatus, recovery, activeHost !== 'local')
-          return (
-            <span
-              aria-label={ind.title}
-              style={{
-                width: 7,
-                height: 7,
-        
-                background: ind.color,
-                flexShrink: 0,
-                display: 'inline-block',
-              }}
-            />
-          )
-        })()}
+        <ServerStatusIcon ledColor={ind.color} size={SERVER_ICON_PX} />
         <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
-          {roomServer ?? activeLabel}
+          {shownServer}
         </span>
         <svg className="shrink-0" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="2 4 5 7 8 4" />

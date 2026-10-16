@@ -11,6 +11,7 @@ pub mod attribution;
 pub mod box_prep;
 pub mod egress_proxy;
 pub mod egress_routes;
+pub mod box_service_routes;
 pub mod engine_install;
 pub mod exception;
 pub mod exec;

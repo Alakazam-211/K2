@@ -134,7 +134,9 @@ pub fn proxy_env(px_port: u16) -> Vec<(&'static str, String)> {
 /// S15 the egress proxy forward and proxy variables, `pxPort` in the
 /// prepare/start/adopt answers; lane D the MAC shim, `io` on start, exec
 /// timeouts, `exec-tty` terminals and the process exception's staging
-/// (`process-stage|activate|state`, its pass refreshed by `pass-write`).
+/// (`process-stage|activate|state`, its pass refreshed by `pass-write`);
+/// box services' `boxForwards` on start (an optional field, announced in
+/// `version`'s `features`, so it extends 2 rather than bumping it).
 pub const ENGINE_PROTOCOL: u32 = 2;
 
 pub fn asset_name(arch: &str) -> String {
@@ -476,6 +478,36 @@ pub struct StartSpec {
     pub pass_hex: Option<String>,
     /// The App's disk ceilings (§6.2, `io.max` through the unit).
     pub io: IoMax,
+    /// Box services (0.46.0, owner-approved): pasta forwards the
+    /// container's `127.0.0.1:<appPort>` to host `127.0.0.1:<hostPort>`,
+    /// like the gateway link. Approved or still held; the per-App nft rule
+    /// (root helper) admits only the approved ones, so a held or revoked
+    /// one is a forward to a closed door. An extension inside protocol 2:
+    /// left out when empty (older protocol-2 engines refuse the field, so
+    /// the daemon sends it only to an engine whose `version` lists
+    /// [`FEATURE_BOX_FORWARD`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub box_forwards: Vec<BoxForward>,
+}
+
+/// One box service forward into the wall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoxForward {
+    pub app_port: u16,
+    pub host_port: u16,
+}
+
+/// What an engine build supports beyond its protocol number (the
+/// `version` answer's `features`). Extensions within protocol 2 (0.46.0
+/// ships one engine protocol bump).
+pub const FEATURE_BOX_FORWARD: &str = "box-forward";
+pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD];
+
+/// A box forward's port inside the wall: an App port shape (≥ 1024, not
+/// 8730, not K2's range) and never the App's own `$PORT`.
+pub fn box_forward_ok(f: &BoxForward, app_port: u16) -> bool {
+    app_port_ok(f.app_port) && f.app_port != app_port && crate::apps::box_port_ok(f.host_port)
 }
 
 /// The pass folder inside the container, read-only.
@@ -640,6 +672,14 @@ pub fn check_start(s: &StartSpec) -> Result<AppId, &'static str> {
     if s.io.check().is_err() {
         return Err("io");
     }
+    if s.box_forwards.len() > crate::apps::MAX_BOX_SERVICES {
+        return Err("box forwards");
+    }
+    for (i, f) in s.box_forwards.iter().enumerate() {
+        if !box_forward_ok(f, s.port) || s.box_forwards[..i].iter().any(|g| g.app_port == f.app_port) {
+            return Err("box forward");
+        }
+    }
     Ok(app)
 }
 
@@ -708,6 +748,7 @@ mod tests {
             secrets: vec![SecretItem { env: None, file: Some("db.json".into()), value_hex: hex_encode(b"{}") }],
             pass_hex: Some(hex_encode(b"k2skn_x")),
             io: IoMax::k2_default(),
+            box_forwards: vec![],
         }
     }
 
@@ -773,12 +814,45 @@ mod tests {
             Box::new(|s| s.port = IN_WALL_GATEWAY_PORT),
             Box::new(|s| s.io.wbps = Some(1)),
             Box::new(|s| s.io.wiops = Some(u64::MAX)),
+            // Box forwards: the deny-list on the host side; an App-port
+            // shape inside, never the App's own port; no repeats; at most 8.
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 22 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 5432 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 38_601 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: IN_WALL_GATEWAY_PORT, host_port: 8470 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 38_901, host_port: 8470 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 41_234, host_port: 8470 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 80, host_port: 8470 }]),
+            Box::new(|s| s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 8470 }, BoxForward { app_port: 8470, host_port: 7880 }]),
+            Box::new(|s| s.box_forwards = (0..9).map(|i| BoxForward { app_port: 9000 + i, host_port: 9000 + i }).collect()),
         ];
         for (i, f) in bad.iter().enumerate() {
             let mut s = spec();
             f(&mut s);
             assert!(check_start(&s).is_err(), "case {i}");
         }
+    }
+
+    #[test]
+    fn box_forwards_extend_protocol_2_without_changing_old_starts() {
+        // No forwards: the wire is byte-for-byte what a protocol-2 engine
+        // without the extension reads (the field is left out).
+        let plain = serde_json::to_string(&Request::Start(Box::new(spec()))).unwrap();
+        assert!(!plain.contains("boxForwards"), "{plain}");
+        let mut s = spec();
+        s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 8470 }, BoxForward { app_port: 7880, host_port: 7880 }];
+        assert!(check_start(&s).is_ok());
+        let line = serde_json::to_string(&Request::Start(Box::new(s.clone()))).unwrap();
+        assert!(line.contains("\"boxForwards\":[{\"appPort\":8470,\"hostPort\":8470}"), "{line}");
+        let back: Request = serde_json::from_str(&line).unwrap();
+        assert_eq!(back, Request::Start(Box::new(s)));
+        // Remapped inside the wall is fine.
+        let mut s = spec();
+        s.box_forwards = vec![BoxForward { app_port: 9000, host_port: 8470 }];
+        assert!(check_start(&s).is_ok());
+        assert!(serde_json::from_str::<BoxForward>(r#"{"appPort":1,"hostPort":2,"proto":"udp"}"#).is_err());
+        assert_eq!(ENGINE_PROTOCOL, 2, "box forwards ride protocol 2 (0.46.0 ships one bump)");
+        assert!(ENGINE_FEATURES.contains(&FEATURE_BOX_FORWARD));
     }
 
     #[test]

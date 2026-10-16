@@ -150,6 +150,59 @@ async function probe() {
   };
 }
 
+// Box services (0.46.0): what this App gets at 127.0.0.1:<port> inside the
+// wall — a GET, an upload of `bytes`, and an HTTP upgrade held open for a
+// second, then echoed (the e2e's echo server on host loopback answers).
+function upload(p, bytes, ms = 8000) {
+  return new Promise((res) => {
+    const r = http.request({ host: "127.0.0.1", port: p, path: "/upload", method: "POST", timeout: ms, headers: { "content-length": bytes } }, (x) => {
+      let b = "";
+      x.on("data", (d) => (b += d));
+      x.on("end", () => res({ status: x.statusCode, body: b.trim() }));
+    });
+    r.on("timeout", () => { r.destroy(); res({ status: 0, body: "timeout" }); });
+    r.on("error", (e) => res({ status: 0, body: e.code || "error" }));
+    const chunk = Buffer.alloc(64 * 1024, 120);
+    let left = bytes;
+    const pump = () => {
+      while (left > 0) {
+        const n = Math.min(left, chunk.length);
+        left -= n;
+        if (!r.write(n === chunk.length ? chunk : chunk.subarray(0, n))) return r.once("drain", pump);
+      }
+      r.end();
+    };
+    pump();
+  });
+}
+function upgrade(p, ms = 6000) {
+  return new Promise((res) => {
+    const s = net.connect({ host: "127.0.0.1", port: p });
+    let b = "", stage = "head";
+    const t = setTimeout(() => { s.destroy(); res({ status: 0, echo: "", err: "timeout" }); }, ms);
+    s.on("connect", () => s.write("GET /ws HTTP/1.1\r\nHost: box\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"));
+    s.on("data", (d) => {
+      b += d;
+      if (stage === "head" && b.includes("\r\n\r\n")) {
+        const status = Number((b.split(" ")[1] || "0"));
+        b = "";
+        stage = "open";
+        if (status !== 101) { clearTimeout(t); s.destroy(); return res({ status, echo: "" }); }
+        setTimeout(() => s.write("ping-after-1s"), 1000);
+        return;
+      }
+      if (stage === "open" && b.includes("ping-after-1s")) {
+        clearTimeout(t); s.destroy(); res({ status: 101, echo: b });
+      }
+    });
+    s.on("error", (e) => { clearTimeout(t); res({ status: 0, echo: "", err: e.code || "error" }); });
+  });
+}
+async function box(p, bytes) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("K2_BOX_")));
+  return { env, get: await get(`http://127.0.0.1:${p}/hello`, 4000), upload: await upload(p, bytes), upgrade: await upgrade(p) };
+}
+
 const server = http.createServer(async (req, res) => {
   inflight++;
   try {
@@ -162,6 +215,9 @@ const server = http.createServer(async (req, res) => {
     } else if (u.pathname === "/egress") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(await egress(u.searchParams.get("target") || "example.com:443")));
+    } else if (u.pathname === "/box") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(await box(Number(u.searchParams.get("port")), Number(u.searchParams.get("bytes") || 0))));
     } else if (u.pathname === "/flood") {
       for (let i = 0; i < 20000; i++) console.log(`flood ${TAG} line ${i}`);
       res.end("flooded\n");

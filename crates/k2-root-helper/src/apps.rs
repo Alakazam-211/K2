@@ -942,11 +942,14 @@ pub fn nft_apply(ctx: &Ctx, gw: PortRange, px: PortRange, db: PortRange) -> HRes
 
 // ── per-App gateway rules (slice 3) ─────────────────────────────────────
 
-/// `apps-nft.json`: App id → its gateway port.
+/// `apps-nft.json`: App id → its gateway port, and App id → its approved
+/// box services' host ports (0.46.0; absent in older files).
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NftApps {
     pub apps: std::collections::BTreeMap<String, u16>,
+    #[serde(default, rename = "boxPorts", skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub box_ports: std::collections::BTreeMap<String, Vec<u16>>,
 }
 
 fn load_nft_apps(ctx: &Ctx) -> HResult<NftApps> {
@@ -971,9 +974,13 @@ fn app_rules(ctx: &Ctx, uid: u32, s: &NftApps, gw: PortRange) -> Vec<AppRule> {
         if !(gw.lo..=gw.hi).contains(port) {
             continue;
         }
+        // Re-validated: a doctored state file never opens a refused port.
+        let mut box_ports: Vec<u16> = s.box_ports.get(id.as_str()).cloned().unwrap_or_default();
+        box_ports.retain(|p| k2_root_proto::apps::box_port_ok(*p));
+        box_ports.truncate(k2_root_proto::apps::MAX_BOX_SERVICES);
         for (cg, level) in app_cgroups(uid, &id) {
             if ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir() {
-                out.push(AppRule { cgroup: cg, level, gw_port: *port });
+                out.push(AppRule { cgroup: cg, level, gw_port: *port, box_ports: box_ports.clone() });
             }
         }
     }
@@ -993,15 +1000,29 @@ fn reload_app_rules(ctx: &Ctx, uid: u32, s: &NftApps) -> HResult<usize> {
     Ok(rules.len())
 }
 
-/// `apps nft app <id> <gw>` (daemon): record the App's gateway port and
-/// reload the per-App chain. A port another App holds is refused.
-pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16) -> HResult<J> {
+/// `apps nft app <id> <gw> [<box-port>…]` (daemon): record the App's
+/// gateway port and its box services' host ports (the list replaces the
+/// previous one) and reload the per-App chain. A port another App holds
+/// is refused.
+pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16, box_ports: &[u16]) -> HResult<J> {
     let pw = app_user(ctx)?;
     let mut s = load_nft_apps(ctx)?;
     if let Some((other, _)) = s.apps.iter().find(|(a, p)| **p == gw && a.as_str() != id.as_str()) {
         return Err(Fail::state(format!("refused: gateway port {gw} belongs to App {other}")));
     }
-    let changed = s.apps.insert(id.as_str().to_string(), gw) != Some(gw);
+    if box_ports.len() > k2_root_proto::apps::MAX_BOX_SERVICES || !box_ports.iter().all(|p| k2_root_proto::apps::box_port_ok(*p)) {
+        return Err(Fail::state("refused: a box service port is on the deny-list"));
+    }
+    let mut changed = s.apps.insert(id.as_str().to_string(), gw) != Some(gw);
+    let before = s.box_ports.get(id.as_str()).cloned().unwrap_or_default();
+    if before != box_ports {
+        changed = true;
+        if box_ports.is_empty() {
+            s.box_ports.remove(id.as_str());
+        } else {
+            s.box_ports.insert(id.as_str().to_string(), box_ports.to_vec());
+        }
+    }
     if changed {
         save_nft_apps(ctx, &s)?;
     }
@@ -1010,13 +1031,14 @@ pub fn nft_app(ctx: &Ctx, id: &AppId, gw: u16) -> HResult<J> {
         .iter()
         .filter(|(cg, _)| ctx.p(&format!("{CGROUP_ROOT}/{cg}")).is_dir())
         .count();
-    Ok(json!({"app": id.as_str(), "gwPort": gw, "changed": changed, "rules": n, "cgroupsNow": matched}))
+    Ok(json!({"app": id.as_str(), "gwPort": gw, "boxPorts": box_ports, "changed": changed, "rules": n, "cgroupsNow": matched}))
 }
 
 pub fn nft_app_remove(ctx: &Ctx, id: &AppId) -> HResult<J> {
     let pw = app_user(ctx)?;
     let mut s = load_nft_apps(ctx)?;
-    let changed = s.apps.remove(id.as_str()).is_some();
+    let had_box = s.box_ports.remove(id.as_str()).is_some();
+    let changed = s.apps.remove(id.as_str()).is_some() || had_box;
     if changed {
         save_nft_apps(ctx, &s)?;
     }
@@ -1977,5 +1999,6 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "engineUnit": engine_unit_state(ctx),
         "engineTmpfiles": exists(ctx, TMPFILES_FILE),
         "nftApps": load_nft_apps(ctx).map(|s| json!(s.apps)).unwrap_or(json!(null)),
+        "nftBoxPorts": load_nft_apps(ctx).map(|s| json!(s.box_ports)).unwrap_or(json!(null)),
     }))
 }

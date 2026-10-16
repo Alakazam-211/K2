@@ -13,7 +13,8 @@
 // room path, nothing more. An empty Home does nothing. On window open the
 // answer may not be known yet (the server's list or the row's status still
 // loading), so it waits for the stores, once per entry, and gives up after
-// AUTO_SELECT_WAIT_MS or the moment something is selected.
+// AUTO_SELECT_WAIT_MS or the moment something is selected. Picking another
+// Home in the Home picker is an entry too (Rosson 2026-10-16).
 
 import { useEffect } from 'react'
 import { useHomesStore, selectedHome, type Home } from '@/stores/homes'
@@ -76,8 +77,10 @@ export function trySelectTopHomeRow(): boolean {
 }
 
 /** Mounted with Home on screen (`HomeShellEffects`): each mount is an
- *  entry (tab, shortcut, a window opening on Home). */
+ *  entry (tab, shortcut, a window opening on Home), and so is picking
+ *  another Home in the Home picker. */
 export function useSelectTopHomeRowOnEnter(): void {
+  const homeId = useHomesStore((s) => selectedHome(s).id)
   useEffect(() => {
     if (trySelectTopHomeRow()) return
     let done = false
@@ -100,5 +103,5 @@ export function useSelectTopHomeRowOnEnter(): void {
       hostPool.store.subscribe(check),
     )
     return stop
-  }, [])
+  }, [homeId])
 }

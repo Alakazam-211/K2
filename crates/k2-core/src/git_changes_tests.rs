@@ -673,6 +673,46 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     assert_eq!(row(&sn, "untracked", "wt_new.txt").status, "U");
 }
 
+/// C5: `init_repo` makes an unborn repo (no commit, `main`); stage, unstage
+/// and the first commit work with no HEAD; init never re-initializes.
+#[test]
+fn init_then_first_commit_and_unstage_without_head() {
+    let d = tmp("init-first");
+    write(&d, "readme.md", "hi\n");
+    write(&d, "notes.txt", "n\n");
+    crate::git::init_repo(s(&d)).expect("init");
+    let repo = Repository::open(&d).expect("open");
+    assert!(repo.head().is_err(), "no commits yet");
+    assert!(crate::git::init_repo(s(&d)).is_err(), "no re-init");
+    let mut cfg = repo.config().expect("config");
+    cfg.set_str("user.name", "K2 Test").expect("user.name");
+    cfg.set_str("user.email", "k2-test@example.com").expect("user.email");
+    let sn = snap(&d, None);
+    assert!(sn.unborn, "unborn snapshot");
+    let want = git2::Config::open_default()
+        .ok()
+        .and_then(|c| c.get_string("init.defaultBranch").ok())
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    assert_eq!(sn.branch.as_deref(), Some(want.as_str()));
+
+    crate::git::stage_file(s(&d), "readme.md").expect("stage");
+    crate::git::stage_file(s(&d), "notes.txt").expect("stage");
+    crate::git::unstage_file(s(&d), "notes.txt").expect("unstage with no HEAD");
+    let sn = snap(&d, None);
+    assert_eq!(row(&sn, "staged", "readme.md").status, "A");
+    assert_eq!(row(&sn, "untracked", "notes.txt").status, "U");
+
+    let c = crate::git::commit(s(&d), "first").expect("first commit");
+    let head = repo.head().expect("head now").peel_to_commit().expect("commit");
+    assert_eq!(head.id().to_string(), c.oid);
+    assert_eq!(head.parent_count(), 0);
+    assert_eq!(repo.head().expect("head").shorthand(), Some(want.as_str()));
+    let sn = snap(&d, None);
+    assert!(!sn.unborn);
+    assert_eq!(sn.counts.staged, 0);
+}
+
 /// C5 gap 3: the untracked folder row (`x/`) stages like `git add x/`:
 /// every file under it, recursively, minus what .gitignore excludes, and
 /// nothing outside it (a sibling `x-other` or `x*` is left alone).

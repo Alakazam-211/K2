@@ -827,6 +827,11 @@ pub(crate) fn write_index_with_retry(index: &mut git2::Index) -> Result<(), Stri
     Err("Index locked after retries".to_string())
 }
 
+/// HEAD names a branch with no commits yet (or no HEAD at all).
+fn is_unborn(e: &git2::Error) -> bool {
+    matches!(e.code(), git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound)
+}
+
 /// `git init` at exactly `path` (libgit2: a `.git` folder, no commit; the
 /// first branch follows `init.defaultBranch`, else `main`). The caller
 /// checks that no repository already holds `path`.
@@ -884,7 +889,16 @@ pub fn stage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
 pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
     let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
 
-    let head = repo.head().map_err(|e| format!("Failed to get HEAD: {e}"))?;
+    let head = match repo.head() {
+        Ok(h) => h,
+        // No commits yet: unstaging = dropping the path from the index.
+        Err(e) if is_unborn(&e) => {
+            let mut index = get_index_with_retry(&repo)?;
+            index.remove_path(Path::new(file_path)).map_err(|e| format!("Failed to unstage file: {e}"))?;
+            return write_index_with_retry(&mut index);
+        }
+        Err(e) => return Err(format!("Failed to get HEAD: {e}")),
+    };
     let head_commit = head.peel_to_commit().map_err(|e| format!("Failed to get HEAD commit: {e}"))?;
     let head_tree = head_commit.tree().map_err(|e| format!("Failed to get HEAD tree: {e}"))?;
 
@@ -956,11 +970,17 @@ pub fn commit(repo_path: &str, message: &str) -> Result<CommitResult, String> {
     let tree_oid = index.write_tree().map_err(|e| format!("Failed to write tree: {e}"))?;
     let tree = repo.find_tree(tree_oid).map_err(|e| format!("Failed to find tree: {e}"))?;
 
-    let head = repo.head().map_err(|e| format!("Failed to get HEAD: {e}"))?;
-    let parent = head.peel_to_commit().map_err(|e| format!("Failed to get parent commit: {e}"))?;
+    // A repo with no commits yet (fresh `git init`, the Changes tab's
+    // Initialize repository): the first commit has no parent.
+    let parent = match repo.head() {
+        Ok(head) => Some(head.peel_to_commit().map_err(|e| format!("Failed to get parent commit: {e}"))?),
+        Err(e) if is_unborn(&e) => None,
+        Err(e) => return Err(format!("Failed to get HEAD: {e}")),
+    };
+    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
 
     let oid = repo
-        .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
         .map_err(|e| format!("Failed to create commit: {e}"))?;
 
     Ok(CommitResult {

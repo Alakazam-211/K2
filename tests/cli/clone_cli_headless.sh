@@ -185,10 +185,10 @@ post "$PA" "/cli/settings/update?token=$TA" '{"allowClonePersonalComputers":true
 echo "== proposals (a person) =="
 prop="$(ka clone propose --to here --workspace salesws --why "a spare copy" --skip STRIPE_KEY --json)"
 PID_="$(printf '%s' "$prop" | jget proposal.id)"
-expect_has "proposal held" "$prop" '"status": "held"'
+expect_eq "proposal held" "$(printf '%s' "$prop" | jget status)" "held"
 expect_has "listed" "$(ka clone proposals)" "$PID_"
 expect_has "denied" "$(ka clone deny "$PID_" --reason "not now")" "$PID_ denied"
-expect_has "listed with --all" "$(ka clone proposals --all --json)" '"status": "denied"'
+expect_eq "listed with --all" "$(ka clone proposals --all --json | jget proposals.0.status)" "denied"
 
 echo "== agents can't clone =="
 set +e

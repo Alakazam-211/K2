@@ -80,8 +80,7 @@ fn enable_sequence_is_recorded_exactly_and_the_key_rides_only_install_stdin() {
             "engine sew systemctl enable",
             "engine sew systemctl start-db",
             "engine sew systemctl migrate",
-            "engine sew systemctl start",
-            "engine sew systemctl restart", // SW7: allow_uids changed → restart
+            "engine sew systemctl start", // no restart: Sew wrote allow_uids before its first start (SW5)
             "engine sew token",
             "engine sew unstage",
         ]

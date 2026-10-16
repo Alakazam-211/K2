@@ -109,10 +109,10 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   terminal: 'Terminal',
   'code-editor': 'Code',
   editors: 'Defaults',
-  agents: 'Models',
+  agents: 'Providers / Models',
   'llm-tokens': 'Subs / Tokens',
   /** @deprecated — use Language Models → Models */
-  'editors-agents': 'Models',
+  'editors-agents': 'Providers / Models',
   keybindings: 'Key Bindings',
   timer: 'Timer',
   heartbeats: 'Heartbeats',

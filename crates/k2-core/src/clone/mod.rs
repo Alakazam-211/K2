@@ -51,7 +51,7 @@ mod unpack;
 #[cfg(test)]
 mod tests;
 
-pub use bundle::{build_bundle, read_manifest_from_bundle};
+pub use bundle::{build_bundle, build_bundle_with_extras, read_manifest_from_bundle};
 pub use identity::{
     apply_clone_identity, capture_chat_pins, capture_pinned_chat, session_ids_from_entries,
 };
@@ -238,6 +238,26 @@ pub struct CloneManifest {
     /// unpack into `chat_session_names`.
     #[serde(default)]
     pub chat_pins: Vec<ChatPinEntry>,
+    /// One id per clone (uuid), minted by the source daemon. Binds the
+    /// bundle's Threads import (and the vault carry, slice A) to this
+    /// clone. `None` on bundles from before 0.46.0. Additive: `version`
+    /// stays 1 and older destinations ignore it (no `deny_unknown_fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone_id: Option<String>,
+    /// Summary of `threads/threads.json` when the clone brings its Threads
+    /// (counts only). `None` = no Threads in the bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<crate::overlay::transfer::ThreadsSummary>,
+}
+
+/// Optional, additive bundle parts (0.46.0): the clone id and the Threads
+/// export. `Default` = a bundle exactly like before.
+#[derive(Debug, Clone, Default)]
+pub struct BundleExtras {
+    pub clone_id: Option<String>,
+    /// `threads/threads.json` bytes (`k2-threads-export/1`).
+    pub threads_json: Option<Vec<u8>>,
+    pub threads: Option<crate::overlay::transfer::ThreadsSummary>,
 }
 
 impl CloneInventory {
@@ -285,6 +305,8 @@ impl CloneInventory {
             settings,
             pinned_chat,
             chat_pins,
+            clone_id: None,
+            threads: None,
         }
     }
 }

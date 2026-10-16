@@ -6,6 +6,7 @@
 //! chatter       conv/seq:020        → id
 //! chatterlog    seq:020             → id
 //! card_expiry   expires:020/id      → conv   (cards with an expiresAt)
+//! import_ids    project/host/doc    → id     (imported lines, dedupe)
 //! ```
 //!
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
@@ -34,6 +35,11 @@ const EXT_IDS: TableDefinition<&str, &str> = TableDefinition::new("ext_ids");
 /// Collected conversations: `{conv}` → the collector's JSON cursor
 /// (high-water marks, counters). Never a token.
 const EXT_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("ext_state");
+/// Imported Thread lines (a clone carries its Threads, CL6):
+/// `{project_id}/{source_host}/{source_doc_id}` -> local doc id. Keyed by
+/// doc, not conversation, so it survives [`move_conversation`] (a pending
+/// import settling onto the pin) and a re-run never adds a line twice.
+const IMPORT_IDS: TableDefinition<&str, &str> = TableDefinition::new("import_ids");
 
 static DB: OnceLock<Result<Database, String>> = OnceLock::new();
 
@@ -979,5 +985,116 @@ pub fn ext_state(conversation_id: &str) -> Result<Option<Vec<u8>>, String> {
         .get(conversation_id)
         .map_err(|e| format!("overlay get ext_state: {e}"))?
         .map(|g| g.value().to_vec());
+    Ok(out)
+}
+
+// ── imported conversations (a clone carries its Threads) ────────────────
+
+/// What one [`import_docs`] wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImportWrite {
+    /// New lines written (the divider included).
+    pub written: usize,
+    /// Lines skipped because their import key was already present.
+    pub skipped: usize,
+    /// The conversation's last Thread seq after the write.
+    pub last_seq: i64,
+}
+
+/// The local doc an import key names, if that line was imported already.
+pub fn import_id(key: &str) -> Result<Option<String>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let t = match txn.open_table(IMPORT_IDS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(format!("overlay open import_ids: {e}")),
+    };
+    let out = t
+        .get(key)
+        .map_err(|e| format!("overlay get import_ids: {e}"))?
+        .map(|g| g.value().to_string());
+    Ok(out)
+}
+
+/// Append imported lines to `conversation_id` in ONE redb write
+/// transaction: bodies, Thread pointers (seqs after both `start_after` and
+/// the last pointer already there) and `import_ids` entries commit
+/// together or not at all. An entry whose key is already in `import_ids`
+/// is skipped. `divider` (key, doc) is written first, and only when at
+/// least one entry is new. No card-expiry rows (imported cards are
+/// closed). `before_commit` runs before the commit (the caller's SQLite
+/// catalog half); an Err aborts everything. Callers hold the overlay
+/// write lock.
+pub fn import_docs(
+    conversation_id: &str,
+    start_after: i64,
+    entries: &[(String, OverlayDoc)],
+    divider: Option<(String, OverlayDoc)>,
+    before_commit: impl FnOnce(ImportWrite) -> Result<(), String>,
+) -> Result<ImportWrite, String> {
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    let out = {
+        let mut ids = txn.open_table(IMPORT_IDS).map_err(|e| format!("overlay open import_ids: {e}"))?;
+        let mut docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+        let mut thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+        let mut fresh: Vec<&(String, OverlayDoc)> = Vec::with_capacity(entries.len());
+        let mut seen = std::collections::HashSet::new();
+        let mut skipped = 0usize;
+        for e in entries {
+            let known = ids
+                .get(e.0.as_str())
+                .map_err(|e| format!("overlay get import_ids: {e}"))?
+                .is_some();
+            if known || !seen.insert(e.0.as_str()) {
+                skipped += 1;
+            } else {
+                fresh.push(e);
+            }
+        }
+        let last = {
+            let start = format!("{conversation_id}/");
+            let end = conv_end(conversation_id);
+            let mut range = thread
+                .range(start.as_str()..end.as_str())
+                .map_err(|e| format!("overlay thread range: {e}"))?;
+            match range.next_back() {
+                Some(entry) => {
+                    let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+                    parse_conv_pointer("thread", k.value(), v.value())?.0
+                }
+                None => 0,
+            }
+        };
+        let mut seq = last.max(start_after);
+        let mut written = 0usize;
+        let divider = match divider {
+            Some((key, doc)) if !fresh.is_empty() => {
+                let known = ids
+                    .get(key.as_str())
+                    .map_err(|e| format!("overlay get import_ids: {e}"))?
+                    .is_some();
+                (!known).then_some((key, doc))
+            }
+            _ => None,
+        };
+        let lines = divider.iter().chain(fresh.into_iter());
+        for (key, doc) in lines {
+            let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
+            seq += 1;
+            docs.insert(doc.id.as_str(), json.as_slice())
+                .map_err(|e| format!("overlay insert docs: {e}"))?;
+            thread
+                .insert(conv_key(conversation_id, seq).as_str(), doc.id.as_str())
+                .map_err(|e| format!("overlay insert thread: {e}"))?;
+            ids.insert(key.as_str(), doc.id.as_str())
+                .map_err(|e| format!("overlay insert import_ids: {e}"))?;
+            written += 1;
+        }
+        ImportWrite { written, skipped, last_seq: seq }
+    };
+    before_commit(out)?;
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok(out)
 }

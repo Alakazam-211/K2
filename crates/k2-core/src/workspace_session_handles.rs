@@ -1061,7 +1061,8 @@ pub fn project_id_for_session_id(
     ) {
         return Ok(Some(id));
     }
-    Ok(None)
+    // Imported history with no session of its own (`import:<id>`, CL30).
+    crate::overlay::transfer::project_for_import_key(conn, session_id)
 }
 
 /// Workspace address token: `projects.handle` (D7). Falls back to slugging

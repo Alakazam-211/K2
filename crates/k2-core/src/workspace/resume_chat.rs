@@ -837,12 +837,19 @@ fn persist_session_identity(project_id: Option<&str>, session_id: Option<&str>, 
     let conn = db.lock();
     let row_id = uuid::Uuid::new_v4().to_string();
     let _ = match session_id {
-        Some(sid) => conn.execute(
-            "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
-             VALUES (?1, ?2, ?3, ?4, 'user', 'running', unixepoch()) \
-             ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = ?4, last_activity_at = unixepoch()",
-            params![row_id, pid, sid, harness],
-        ),
+        Some(sid) => {
+            let r = conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'user', 'running', unixepoch()) \
+                 ON CONFLICT(project_id) DO UPDATE SET session_id = ?3, harness = ?4, last_activity_at = unixepoch()",
+                params![row_id, pid, sid, harness],
+            );
+            // A clone's imported main Thread waited for this pin (CL5).
+            if let Err(e) = crate::overlay::transfer::settle_pending(&conn, pid) {
+                crate::log_debug!("[clone/threads] settle on pin {sid} for {pid}: {e}");
+            }
+            r
+        }
         None => conn.execute(
             "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
              VALUES (?1, ?2, NULL, ?3, 'user', 'running', unixepoch()) \

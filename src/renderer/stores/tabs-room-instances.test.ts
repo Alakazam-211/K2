@@ -120,6 +120,7 @@ vi.mock('@/stores/session-events', () => ({
   onSessionRemovedApp: vi.fn(() => () => undefined),
   onAppHello: vi.fn(() => () => undefined),
   onOpenUrl: vi.fn(() => () => undefined),
+  onOpenChanges: vi.fn(() => () => undefined),
   onceRecovered: vi.fn(() => () => undefined),
 }))
 vi.mock('@/lib/terminal-daemon', () => ({

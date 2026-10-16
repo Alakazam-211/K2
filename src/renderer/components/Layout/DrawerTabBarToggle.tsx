@@ -28,6 +28,7 @@ export function DrawerToggleButton({
   name = `${side} drawer`,
   testId,
   size = 'fill',
+  divider = placement === 'room' && size === 'fill',
   children,
 }: {
   side: Side
@@ -41,6 +42,14 @@ export function DrawerToggleButton({
   /** 'fill': full height of its strip (tab bars). 'square': the nav
    *  toggles' fixed box (`NAV_TOGGLE_BOX`, 32×32), e.g. beside Send. */
   size?: 'fill' | 'square'
+  /** A divider on the edge facing the room's tabs (left drawer: right
+   *  edge; right drawer: left edge), the tabs' own `border-[var(--color-border)]`
+   *  1px line, so a closed drawer's toggle reads as its own cell like a tab.
+   *  Default: on for a closed drawer's slot in a tab strip ('room' +
+   *  'fill'); off when open, where the drawer's own border is the line
+   *  (no doubling). Pass false where the slot already has a border (the
+   *  Tickets rail). */
+  divider?: boolean
   /** Extra marks drawn on the button (e.g. an unread dot). */
   children?: ReactNode
 }): React.JSX.Element {
@@ -49,6 +58,9 @@ export function DrawerToggleButton({
   // edge); closing points at the edge the drawer collapses to.
   const direction: Side = opening ? (side === 'left' ? 'right' : 'left') : side
   const label = `${opening ? 'Show' : 'Hide'} ${name}`
+  const dividerClass = divider
+    ? `${side === 'left' ? 'border-r' : 'border-l'} border-[var(--color-border)]`
+    : ''
   return (
     <button
       type="button"
@@ -60,6 +72,7 @@ export function DrawerToggleButton({
       data-drawer-tabbar-toggle={side}
       data-placement={placement}
       data-size={size}
+      data-divider={divider ? (side === 'left' ? 'right' : 'left') : undefined}
       // 'fill' (in a tab strip) takes the strip's own background and the
       // strip's icon colours (as the split / + buttons); 'square' keeps the
       // nav toggle's tinted box.
@@ -67,7 +80,7 @@ export function DrawerToggleButton({
         size === 'square'
           ? `${NAV_TOGGLE_BOX} bg-white/[0.04] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]`
           : 'h-full w-8 self-stretch bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]'
-      } flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
+      } ${dividerClass} flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}
@@ -92,15 +105,17 @@ export default function DrawerTabBarToggle({
 export function NoTabBarDrawerToggles(): React.JSX.Element {
   const left = useRoomTabBarDrawerToggle('left')
   const right = useRoomTabBarDrawerToggle('right')
+  // The corner slot keeps the tab strip's bottom line too, so the toggle
+  // reads as a cell (divider on its inner edge, line below) with no tabs.
   return (
     <>
       {left && (
-        <div className={`absolute left-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT}`} data-no-tabbar-drawer-toggle="left">
+        <div className={`absolute left-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT} border-b border-[var(--color-border)]`} data-no-tabbar-drawer-toggle="left">
           <DrawerTabBarToggle side="left" placement="room" />
         </div>
       )}
       {right && (
-        <div className={`absolute right-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT}`} data-no-tabbar-drawer-toggle="right">
+        <div className={`absolute right-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT} border-b border-[var(--color-border)]`} data-no-tabbar-drawer-toggle="right">
           <DrawerTabBarToggle side="right" placement="room" />
         </div>
       )}

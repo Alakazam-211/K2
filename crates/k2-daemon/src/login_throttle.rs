@@ -221,6 +221,22 @@ impl LoginLimiter {
         table.check_and_record(key, limit, now)
     }
 
+    /// Is `key` at or over `limit` hits in the window ending at `now`?
+    /// Records nothing (a failure counter checked before the attempt).
+    pub fn is_limited(&self, key: &str, limit: usize, now: i64) -> bool {
+        let key = if key.is_empty() { "-" } else { key };
+        let mut g = self.locked();
+        let table = if key.starts_with(SKIN_KEY_PREFIX) { &mut g.skin } else { &mut g.connect };
+        table.prune_key(key, now);
+        table.hits.get(key).is_some_and(|q| q.len() >= limit)
+    }
+
+    /// Record one hit for `key` (a failed login), keeping at most
+    /// `limit + 1` of them.
+    pub fn record_with_limit(&self, key: &str, limit: usize, now: i64) {
+        let _ = self.check_and_record_with_limit(key, limit, now);
+    }
+
     /// LM4 — true when `door` has seen [`GLOBAL_FAIL_LIMIT`] anonymous
     /// failed logins inside the window ending at `now`; the caller refuses
     /// an ANONYMOUS attempt (429) before argon2. Does not record anything.

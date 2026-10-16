@@ -19,10 +19,19 @@
 //!   helper-only rows; sockets need their parameter; else 404
 //!   `not_on_link`);
 //! - JSON bodies on writes (415 `json_required`);
-//! - **this link's App pass** (`k2skn_`, header or `?token=`): a pass for
-//!   another link or App, a guest session or a platform token is
+//! - **this link's App pass** (`k2skn_`, header or `?token=`), or **a guest
+//!   session of this same App** (AR50: the guest's rooms and caps, audited
+//!   as `guest:<principal>`): a pass for another link or App, another App's
+//!   session, the box login, a remote pass or a platform token is
 //!   `pass_wrong_link`; no pass `pass_required`; anything else
-//!   `pass_invalid`.
+//!   `pass_invalid`;
+//! - **`/v1/apps/<this App's own id>/…` with the App key** (`k2sk_`, S45;
+//!   not a catalog row, the gate names it): another id is `not_on_link`,
+//!   any other credential `wrong_credential`; the handler checks the key.
+//!
+//! Guest logins through the link (`POST /cli/skin/login`, a link-only
+//! catalog row) are bound to the link's App and throttled per App, per
+//! (App, username) failure and link-wide ([`link_login`]).
 //!
 //! Then the route's own handler runs with the pass, exactly as it does for
 //! the browser helper: caps and rooms decide. A link pass carries the
@@ -103,13 +112,32 @@ pub fn current() -> Option<Arc<LinkCtx>> {
 }
 
 /// The dispatcher's one pass resolver. On a link only that link's App
-/// pass resolves; anywhere else a link pass never does (k2-core keeps it
-/// out of `resolve_skin_token`).
+/// pass, or a guest session of that same App (AR50), resolves; anywhere
+/// else a link pass never does (k2-core keeps it out of
+/// `resolve_skin_token`).
 pub fn resolve_pass(raw: &str) -> Option<SkinPass> {
     match current() {
-        Some(l) => passes::resolve_link_pass(raw, &l.link_id, &l.service_id),
+        Some(l) => passes::resolve_link_pass(raw, &l.link_id, &l.service_id).or_else(|| app_session(raw, &l.service_id)),
         None => k2_core::skin::resolve_skin_token(raw),
     }
+}
+
+/// AR50: a guest's App session (`k2skn_`, `session = 1`) bound to the App
+/// `app_service_id` (it logged in with that App, or through its link). A
+/// session of another App, the box login (`host`) and every non-session
+/// pass are `None`. The guest's own rooms and caps come with it.
+pub fn app_session(raw: &str, app_service_id: &str) -> Option<SkinPass> {
+    if app_service_id.trim().is_empty() {
+        return None;
+    }
+    k2_core::skin::resolve_skin_token(raw).filter(|p| p.session && p.app == app_service_id)
+}
+
+/// `/v1/apps/<id>/<verb…>` → `<id>` (the App-scoped key's door, S45).
+pub fn v1_app_id(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(super::app_key_routes::PREFIX)?;
+    let (id, verb) = rest.split_once('/')?;
+    (!id.is_empty() && !verb.is_empty() && !id.contains("..")).then_some(id)
 }
 
 /// The link id a listener on `port` gets (stable across daemon restarts,
@@ -435,6 +463,113 @@ fn ensure_ticker() {
     });
 }
 
+// ── guest logins through the link ────────────────────────────────────
+
+/// Guest logins (`POST /cli/skin/login`) through one App's link per
+/// window ([`crate::login_throttle::WINDOW_SECS`]): an App's BFF logs
+/// every one of its guests in from the same loopback socket.
+pub const LINK_LOGINS_PER_APP: usize = 60;
+/// Failed logins per (App, username) per window, like the main login.
+pub const LINK_LOGIN_FAILS_PER_USER: usize = crate::login_throttle::LIMIT;
+/// Guest logins through every App's link together per window.
+pub const LINK_LOGINS_ALL_APPS: usize = 300;
+
+/// The limiter keys of a login on `app`'s link (the skin table).
+pub fn link_login_keys(app_service_id: &str, username: &str) -> (String, String, String) {
+    let p = crate::login_throttle::SKIN_KEY_PREFIX;
+    (
+        format!("{p}app-link:{app_service_id}"),
+        format!("{p}app-link:{app_service_id}:user:{}", username.trim().to_ascii_lowercase()),
+        format!("{p}app-link:*"),
+    )
+}
+
+/// What the dispatcher does with a guest login on a link.
+pub enum LinkLogin {
+    /// Go on with this body (bound to the link's App) and remember the
+    /// username key for [`link_login_refused`].
+    Proceed { body: Vec<u8>, user_key: String },
+    /// Answer this and close.
+    Refuse { status: &'static str, body: String },
+}
+
+fn form_field(body: &[u8], key: &str) -> Option<String> {
+    url::form_urlencoded::parse(body).find(|(k, _)| k == key).map(|(_, v)| v.into_owned())
+}
+
+fn body_username(body: &[u8], form: bool) -> String {
+    if form {
+        return form_field(body, "username").unwrap_or_default();
+    }
+    serde_json::from_slice::<Value>(body).ok().and_then(|v| v["username"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
+/// A guest login on the current link: bind it to the link's App (a body
+/// naming another App is refused), then the per-App bucket, the
+/// link-wide bucket and the (App, username) failure count. `None` = not
+/// on a link.
+pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], content_type: &str) -> Option<LinkLogin> {
+    let l = current()?;
+    let svc = l.service_id.as_str();
+    let form = content_type.to_ascii_lowercase().starts_with("application/x-www-form-urlencoded");
+    let refuse = |status: &'static str, code: &str, hint: &str| LinkLogin::Refuse {
+        status,
+        body: refusal(code, hint, Some(&l.app_id), None, None),
+    };
+    // Bind to this App.
+    let body: Vec<u8> = if form {
+        match form_field(body, "app") {
+            Some(a) if !a.trim().is_empty() && a.trim() != svc => {
+                return Some(refuse("403 Forbidden", "app_mismatch", "a link logs guests in to its own App only"));
+            }
+            _ => {
+                let mut out = url::form_urlencoded::Serializer::new(String::new());
+                for (k, v) in url::form_urlencoded::parse(body).filter(|(k, _)| k != "app") {
+                    out.append_pair(&k, &v);
+                }
+                out.append_pair("app", svc);
+                out.finish().into_bytes()
+            }
+        }
+    } else {
+        let mut v: Value = match serde_json::from_slice(body) {
+            Ok(Value::Object(m)) => Value::Object(m),
+            _ => return Some(refuse("400 Bad Request", "bad_request", "a login body is a JSON object")),
+        };
+        let named = ["app", "appId"].iter().find_map(|k| v.get(*k).and_then(Value::as_str).map(|s| s.trim().to_string()));
+        match named {
+            Some(a) if !a.is_empty() && a != svc => {
+                return Some(refuse("403 Forbidden", "app_mismatch", "a link logs guests in to its own App only"));
+            }
+            _ => {
+                v["app"] = json!(svc);
+                if let Some(m) = v.as_object_mut() {
+                    m.remove("appId");
+                }
+            }
+        }
+        v.to_string().into_bytes()
+    };
+    let (per_app, per_user, all) = link_login_keys(svc, &body_username(&body, form));
+    let now = limiter.now();
+    if limiter.is_limited(&per_user, LINK_LOGIN_FAILS_PER_USER, now) {
+        return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed logins for this guest on this App; wait 5 minutes"));
+    }
+    if limiter.check_and_record_with_limit(&per_app, LINK_LOGINS_PER_APP, now) == crate::login_throttle::Verdict::Limited {
+        return Some(refuse("429 Too Many Requests", "rate_limited", "too many guest logins through this App's link; wait a few minutes"));
+    }
+    if limiter.check_and_record_with_limit(&all, LINK_LOGINS_ALL_APPS, now) == crate::login_throttle::Verdict::Limited {
+        return Some(refuse("429 Too Many Requests", "rate_limited", "too many guest logins through App links on this server; wait a few minutes"));
+    }
+    Some(LinkLogin::Proceed { body, user_key: per_user })
+}
+
+/// A login on a link was refused (bad password, locked): count it for
+/// that (App, username).
+pub fn link_login_refused(limiter: &crate::login_throttle::LoginLimiter, user_key: &str) {
+    limiter.record_with_limit(user_key, LINK_LOGIN_FAILS_PER_USER, limiter.now());
+}
+
 // ── the gate ─────────────────────────────────────────────────────────
 
 /// What the dispatcher does with a request on a link.
@@ -527,6 +662,9 @@ pub fn route_allowed(method: &str, path: &str, query: &str, upgrade: bool) -> bo
 #[derive(Default)]
 struct Seen {
     subscribed: bool,
+    /// Who the call is (`app` by default; `guest:<principal>` for an App
+    /// session; `app-key` on `/v1/apps/<own id>`).
+    actor: Option<String>,
 }
 
 /// Check one request on a link (the dispatcher calls this before anything
@@ -555,7 +693,7 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
         super::audit::Begin {
             method,
             path,
-            actor: "app",
+            actor: seen.actor.as_deref().unwrap_or("app"),
             room: Some(c.workspace_id.clone()),
             bytes_in,
             refused: refused.as_ref().map(|(n, code)| (*n, code.as_str())),
@@ -576,7 +714,17 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
     }
     let me = path == "/gw/me";
     let upgrade = header(head, "upgrade").is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
-    if !(me && method == "GET") && !route_allowed(method, path, query, upgrade) {
+    // S45 in the wall: `/v1/apps/<this App's own service id>/…` with the
+    // App key (its handler checks the key's App); any other App's id is
+    // not on this link. Not a catalog row: the App key door isn't a
+    // `/cli` verb, so the link gate names it here.
+    let v1 = v1_app_id(path);
+    if let Some(id) = v1 {
+        if id != c.service_id || upgrade {
+            return deny(Some(c), 404, "not_on_link", &format!("{method} {path} isn't open on this link (only /v1/apps/<this App's id>/…)"));
+        }
+    }
+    if v1.is_none() && !(me && method == "GET") && !route_allowed(method, path, query, upgrade) {
         return deny(
             Some(c),
             404,
@@ -612,13 +760,32 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
         );
     }
     let presented = bearer(head).or_else(|| query_token(query));
+    if v1.is_some() {
+        // Only the App key (`k2sk_`) opens its door; the handler answers
+        // its uniform 404 to a key for another App.
+        return match presented {
+            Some(k) if k2_core::skin::is_api_key_prefix(k) => {
+                seen.actor = Some("app-key".into());
+                Gate::Continue
+            }
+            Some(_) => deny(Some(c), 401, "wrong_credential", "/v1/apps/<id>/… on the link takes the App key ($K2_SECRETS_DIR/K2_APP_KEY)"),
+            None => deny(Some(c), 401, "pass_required", "send the App key ($K2_SECRETS_DIR/K2_APP_KEY) as Authorization: Bearer"),
+        };
+    }
     let Some(raw) = presented else {
         return deny(Some(c), 401, "pass_required", "send this App's pass (the file K2_PASS_FILE names) as Authorization: Bearer");
     };
     if !k2_core::skin::is_skin_token(raw) || k2_core::skin::is_api_key_prefix(raw) {
-        return deny(Some(c), 401, "wrong_credential", "only this App's pass works on its gateway link");
+        return deny(Some(c), 401, "wrong_credential", "only this App's pass (or a guest session of this App) works on its gateway link");
     }
-    let Some(pass) = passes::resolve_link_pass(raw, &c.link_id, &c.service_id) else {
+    let resolved = match passes::resolve_link_pass(raw, &c.link_id, &c.service_id) {
+        Some(p) => Some(p),
+        // AR50: a guest session of this same App, with the guest's rooms.
+        None => app_session(raw, &c.service_id).inspect(|p| {
+            seen.actor = Some(format!("guest:{}", p.principal_id.as_deref().unwrap_or(p.username.as_str())));
+        }),
+    };
+    let Some(pass) = resolved else {
         return match passes::classify_presented(raw) {
             PresentedPass::Unknown => deny(Some(c), 401, "pass_invalid", "the pass is expired or revoked: read K2_PASS_FILE again (K2 rotates it)"),
             other => {
@@ -626,7 +793,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
                 let what = match other {
                     PresentedPass::Link { app_service_id, .. } if app_service_id != c.service_id => "another App's pass",
                     PresentedPass::Link { .. } => "a pass for another link",
-                    _ => "a pass that isn't a link pass",
+                    _ => "a pass that is neither this link's nor a session of this App",
                 };
                 k2_core::log_debug!("[apps/gateway] {}: pass_wrong_link ({what}) on :{}", c.app_id, c.port);
                 deny(Some(c), 403, "pass_wrong_link", &format!("{what} was presented on {}'s gateway link", c.app_id))
@@ -642,6 +809,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             "link": c.link_id,
             "caps": pass.caps,
             "rooms": pass.rooms,
+            "as": if pass.session { "guest" } else { "app" },
             "passFile": k2_root_proto::engine::PASS_TARGET,
             "rotation": "K2 rotates the pass at 80% of its hour; read the file again on pass_invalid",
         });
@@ -712,5 +880,111 @@ mod tests {
         assert_eq!(caps, vec!["thread:read".to_string()]);
         assert_eq!(rooms, vec!["ws-1".to_string()]);
         assert_eq!(dropped, vec!["files:agentconfig".to_string()]);
+    }
+
+    #[test]
+    fn v1_app_ids_parse() {
+        assert_eq!(v1_app_id("/v1/apps/svc-1/whoami"), Some("svc-1"));
+        assert_eq!(v1_app_id("/v1/apps/svc-1/users/rooms"), Some("svc-1"));
+        assert_eq!(v1_app_id("/v1/apps/svc-1/"), None);
+        assert_eq!(v1_app_id("/v1/apps//whoami"), None);
+        assert_eq!(v1_app_id("/v1/apps/../whoami"), None);
+        assert_eq!(v1_app_id("/v1/sessions"), None);
+    }
+
+    fn ctx(app: &str, svc: &str) -> Arc<LinkCtx> {
+        Arc::new(LinkCtx {
+            app_id: app.into(),
+            service_id: svc.into(),
+            workspace_id: "ws-1".into(),
+            port: 1,
+            link_id: "gw:1".into(),
+            stats: LinkStats::default(),
+        })
+    }
+
+    fn login(l: &crate::login_throttle::LoginLimiter, svc: &str, body: &str, ct: &str) -> LinkLogin {
+        LINK.sync_scope(ctx(&format!("app-{svc}"), svc), || link_login(l, body.as_bytes(), ct)).expect("on a link")
+    }
+
+    fn proceed(r: LinkLogin) -> (Vec<u8>, String) {
+        match r {
+            LinkLogin::Proceed { body, user_key } => (body, user_key),
+            LinkLogin::Refuse { status, body } => panic!("refused {status}: {body}"),
+        }
+    }
+
+    fn refused(r: LinkLogin) -> (&'static str, String) {
+        match r {
+            LinkLogin::Refuse { status, body } => (status, serde_json::from_str::<Value>(&body).unwrap()["error"]["code"].as_str().unwrap().to_string()),
+            LinkLogin::Proceed { .. } => panic!("expected a refusal"),
+        }
+    }
+
+    /// A guest login through a link is bound to the link's App, whatever
+    /// the body says (another App is refused), JSON or form.
+    #[test]
+    fn a_link_login_is_bound_to_the_links_app() {
+        let l = crate::login_throttle::LoginLimiter::new();
+        assert!(link_login(&l, b"{}", "application/json").is_none(), "off a link: nothing to do");
+        let (b, _) = proceed(login(&l, "svc-a", r#"{"username":"ann","password":"x"}"#, "application/json"));
+        let v: Value = serde_json::from_slice(&b).unwrap();
+        assert_eq!((v["app"].as_str(), v["username"].as_str()), (Some("svc-a"), Some("ann")));
+        let (b, _) = proceed(login(&l, "svc-a", r#"{"username":"ann","password":"x","appId":"svc-a"}"#, "application/json"));
+        assert_eq!(serde_json::from_slice::<Value>(&b).unwrap()["app"], "svc-a");
+        assert_eq!(
+            refused(login(&l, "svc-a", r#"{"username":"ann","password":"x","app":"svc-b"}"#, "application/json")),
+            ("403 Forbidden", "app_mismatch".to_string())
+        );
+        assert_eq!(refused(login(&l, "svc-a", "[1]", "application/json")).1, "bad_request");
+        let (b, k) = proceed(login(&l, "svc-a", "username=Ann+B&password=x", "application/x-www-form-urlencoded"));
+        let pairs: Vec<(String, String)> = url::form_urlencoded::parse(&b).into_owned().collect();
+        assert!(pairs.contains(&("app".into(), "svc-a".into())) && pairs.contains(&("username".into(), "Ann B".into())), "{pairs:?}");
+        assert!(k.ends_with(":user:ann b"), "{k}");
+        assert_eq!(refused(login(&l, "svc-a", "username=a&password=x&app=svc-b", "application/x-www-form-urlencoded")).1, "app_mismatch");
+    }
+
+    /// Per App (not one bucket for every App), per (App, username)
+    /// failures, and a link-wide cap.
+    #[test]
+    fn link_logins_are_throttled_per_app_per_user_and_overall() {
+        let l = crate::login_throttle::LoginLimiter::new();
+        let body = |u: &str| format!(r#"{{"username":"{u}","password":"x"}}"#);
+        // Lane 4's in-wall suite: six logins through one App are fine.
+        for i in 0..6 {
+            proceed(login(&l, "svc-a", &body(&format!("g{i}")), "application/json"));
+        }
+        // Failures count per (App, username): the 6th try after 5 refusals waits.
+        for _ in 0..LINK_LOGIN_FAILS_PER_USER {
+            let (_, k) = proceed(login(&l, "svc-a", &body("mallory"), "application/json"));
+            link_login_refused(&l, &k);
+        }
+        assert_eq!(refused(login(&l, "svc-a", &body("Mallory"), "application/json")), ("429 Too Many Requests", "rate_limited".to_string()));
+        proceed(login(&l, "svc-a", &body("alice"), "application/json"));
+        proceed(login(&l, "svc-b", &body("mallory"), "application/json"));
+        // Per App: this App's bucket fills; another App's doesn't. So far
+        // svc-a took 6 + 5 + 1 logins and svc-b 1 (a refusal before the
+        // App bucket records nothing).
+        let mut a = 6 + LINK_LOGIN_FAILS_PER_USER + 1;
+        let mut all = a + 1;
+        while a < LINK_LOGINS_PER_APP {
+            proceed(login(&l, "svc-a", &body(&format!("u{a}")), "application/json"));
+            a += 1;
+            all += 1;
+        }
+        assert_eq!(refused(login(&l, "svc-a", &body("late"), "application/json")).1, "rate_limited");
+        proceed(login(&l, "svc-b", &body("late"), "application/json"));
+        all += 1;
+        // Link-wide: every App together.
+        let mut app = 0;
+        while all < LINK_LOGINS_ALL_APPS {
+            proceed(login(&l, &format!("svc-x{app}"), &body("u"), "application/json"));
+            all += 1;
+            app += 1;
+        }
+        assert_eq!(refused(login(&l, "svc-fresh", &body("u"), "application/json")).1, "rate_limited", "the link-wide cap");
+        // The window passes.
+        l.advance_clock_for_tests(crate::login_throttle::WINDOW_SECS + 1);
+        proceed(login(&l, "svc-a", &body("mallory"), "application/json"));
     }
 }

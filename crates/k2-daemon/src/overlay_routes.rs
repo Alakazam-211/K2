@@ -1842,7 +1842,8 @@ fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
 #[derive(Debug, Clone)]
 pub(crate) struct DesignDelivery {
     pub thread_item_id: String,
-    pub seq: i64,
+    /// None when a retried item now sits in an earlier conversation.
+    pub seq: Option<i64>,
     pub delivered: bool,
     pub target_session_id: Option<String>,
     pub addr: String,
@@ -1933,7 +1934,7 @@ pub(crate) fn design_post(
     let delivery = deliver_design(&resolved, &item.id, &from, via, text, received_at);
     Ok(DesignDelivery {
         thread_item_id: item.id,
-        seq: item.seq,
+        seq: Some(item.seq),
         delivered: delivery.success,
         target_session_id: delivery.target_session_id,
         addr: resolved.addr.clone(),
@@ -1983,29 +1984,48 @@ pub(crate) fn design_redeliver(
     let principal = crate::caller_workspace::principal_from_params(params);
     let (caller_from, _, _) = design_sender(params, &resolved, session_author);
     authorize_write(principal.as_ref(), &resolved, &caller_from)?;
-    let item = overlay::find_thread_item(&resolved.conversation_id, id)
+    let missing = || not_found(format!("no Thread item {id} in {}", resolved.addr));
+    let (doc, seq) = match overlay::find_thread_item(&resolved.conversation_id, id)
         .map_err(|e| error_json("500 Internal Server Error", "store", e))?
-        .ok_or_else(|| not_found(format!("no Thread item {id} in {}", resolved.addr)))?;
-    let Some(origin) = item.doc.design.clone() else {
+    {
+        Some(item) => (item.doc, Some(item.seq)),
+        // A wake can re-pin the agent's Chat to a new conversation, and the
+        // stored item stays in the one it was posted to. Find it by id and
+        // check it is a Design post addressed to THIS workspace.
+        None => {
+            let doc = overlay::get_doc(id)
+                .map_err(|e| error_json("500 Internal Server Error", "store", e))?
+                .filter(|d| d.kind == "text" && d.design.is_some())
+                .ok_or_else(missing)?;
+            let same_room = doc.to.as_deref().is_some_and(|to| {
+                to == resolved.addr || resolve_addr(to).is_ok_and(|r| r.project_id == resolved.project_id)
+            });
+            if !same_room {
+                return Err(missing());
+            }
+            (doc, None)
+        }
+    };
+    let Some(origin) = doc.design.clone() else {
         return Err(usage("only a design-notes post can be redelivered"));
     };
     let owner_token = !principal_is_bound(params)
         && (session_author.trim().is_empty() || session_author.trim().eq_ignore_ascii_case("owner"));
-    if !owner_token && item.doc.from != caller_from {
+    if !owner_token && doc.from != caller_from {
         return Err(forbidden("only the sender can redeliver these notes"));
     }
-    let text = item.doc.body.clone().unwrap_or_default();
-    let via = item.doc.via.clone().unwrap_or_else(|| "compose".to_string());
+    let text = doc.body.clone().unwrap_or_default();
+    let via = doc.via.clone().unwrap_or_else(|| "compose".to_string());
     audit_design("design.note.redeliver", &origin, &caller_from, &resolved.addr, &text);
-    let delivery = deliver_design(&resolved, &item.id, &item.doc.from, &via, &text, started_at);
+    let delivery = deliver_design(&resolved, &doc.id, &doc.from, &via, &text, started_at);
     Ok(DesignDelivery {
-        thread_item_id: item.id,
-        seq: item.seq,
+        thread_item_id: doc.id,
+        seq,
         delivered: delivery.success,
         target_session_id: delivery.target_session_id,
         addr: resolved.addr.clone(),
         conversation_id: resolved.conversation_id.clone(),
-        from: item.doc.from,
+        from: doc.from,
     })
 }
 

@@ -16,7 +16,10 @@ vi.mock('@/stores/settings', () => ({
 vi.mock('@/lib/remote-session', () => ({ reviveRemoteSession: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 
+import type { ConnectionStatus } from '@/stores/connect-host'
+import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import ServerSwitcher, {
+  SERVER_ICON_PX,
   SERVER_SWITCHER_WIDTH_CLASS,
   SERVER_SWITCHER_WIDTH_PX,
   THIS_COMPUTER_LABEL,
@@ -38,6 +41,8 @@ function host(id: string, label: string): ConnectHost {
 const LONG = 'a-really-long-customer-server-name.example.k2.dev'
 const pickHost = vi.fn<(h: 'local' | ConnectHost) => void>()
 const realPickHost = useConnectHostStore.getState().pickHost
+const realStatus = useConnectHostStore.getState().connectionStatus
+const realRecovery = useConnectHostStore.getState().recovery
 
 function renderOn(active: 'local' | ConnectHost, hosts: ConnectHost[] = []): HTMLButtonElement {
   act(() => {
@@ -58,7 +63,13 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
   afterEach(() => {
     cleanup()
     act(() => useServerSwitcherStore.setState({ open: false }))
-    useConnectHostStore.setState({ pickHost: realPickHost, activeHost: 'local', hosts: [] })
+    useConnectHostStore.setState({
+      pickHost: realPickHost,
+      activeHost: 'local',
+      hosts: [],
+      connectionStatus: realStatus,
+      recovery: realRecovery,
+    })
   })
 
   it('the width class is the 160px constant and does not shrink', () => {
@@ -100,6 +111,57 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     const t = renderOn('local')
     expect(screen.getByTestId('server-switcher-label').textContent).toBe(THIS_COMPUTER_LABEL)
     expect(t.getAttribute('title')?.startsWith(`${THIS_COMPUTER_LABEL} — `)).toBe(true)
+  })
+
+  it('the server icon sits at the left, before the name, at 14px', () => {
+    const t = renderOn(host('rosson', 'rosson.k2.dev'))
+    const first = t.firstElementChild
+    expect(first?.getAttribute('data-testid')).toBe('server-status-icon')
+    expect(first?.nextElementSibling?.getAttribute('data-testid')).toBe('server-switcher-label')
+    expect(SERVER_ICON_PX).toBe(14)
+    expect(first?.getAttribute('width')).toBe(String(SERVER_ICON_PX))
+    // Two rack frames + two LEDs, as in the Companion's Servers tab.
+    expect(first?.querySelectorAll('rect')).toHaveLength(2)
+    expect(first?.querySelectorAll('circle[data-led]')).toHaveLength(2)
+  })
+
+  it('the LEDs are the status light: colour per state, the words in the accessible name', () => {
+    const cases: { status: ConnectionStatus; recovery: RemoteRecoveryState; color: string; words: string }[] = [
+      { status: 'connected', recovery: { kind: 'connected' }, color: '#3fb950', words: 'Connection: connected' },
+      { status: 'connecting', recovery: { kind: 'connected' }, color: '#d29922', words: 'Connection: connecting' },
+      { status: 'offline', recovery: { kind: 'connected' }, color: '#f85149', words: 'Connection: offline' },
+      {
+        status: 'connected',
+        recovery: { kind: 'reauthenticating' },
+        color: '#d29922',
+        words: 'Re-authenticating…',
+      },
+      {
+        status: 'connected',
+        recovery: { kind: 'signin-required' },
+        color: '#f85149',
+        words: 'Sign-in required — select this server to sign in',
+      },
+    ]
+    for (const c of cases) {
+      act(() => useConnectHostStore.setState({ connectionStatus: c.status, recovery: c.recovery }))
+      const t = renderOn(host('rosson', 'rosson.k2.dev'))
+      const icon = screen.getByTestId('server-status-icon')
+      expect(icon.getAttribute('data-led-color')).toBe(c.color)
+      const leds = Array.from(icon.querySelectorAll('circle[data-led]'))
+      expect(leds.map((l) => l.getAttribute('fill'))).toEqual([c.color, c.color])
+      expect(t.getAttribute('aria-label')).toBe(`rosson.k2.dev — ${c.words}`)
+      expect(t.getAttribute('title')).toBe(`rosson.k2.dev — ${c.words} (⌘L)`)
+      cleanup()
+    }
+  })
+
+  it('no separate status dot: the icon is the only status mark in the trigger', () => {
+    const t = renderOn(host('rosson', 'rosson.k2.dev'))
+    const spans = Array.from(t.querySelectorAll('span'))
+    expect(spans.map((s) => s.getAttribute('data-testid'))).toEqual(['server-switcher-label'])
+    expect(t.querySelectorAll('[style*="background"]')).toHaveLength(0)
+    expect(t.querySelectorAll('[aria-label^="Connection"]')).toHaveLength(0)
   })
 
   it('the dropdown still opens below the trigger at its own 260px width, not the trigger width', () => {

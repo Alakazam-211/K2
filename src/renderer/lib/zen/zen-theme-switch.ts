@@ -27,11 +27,11 @@
 // hatch stays where it is (`zen-shortcut.ts`).
 
 import { create } from 'zustand'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { zenLocalScope } from './zen-api'
 import { ZEN_CHORD_LABEL } from './zen-shortcut'
-import type { ZenThemeScope } from './zen-page'
+import { ZenPageParseError, parseZenThemeEntries, type ZenThemeEntry, type ZenThemeScope } from './zen-page'
 
 export { ZEN_SHORTCUTS_MENU_EVENT, dispatchZenShortcutsMenu } from './zen-shortcut'
 
@@ -53,6 +53,29 @@ function scopeBody(scope: ZenThemeScope, gardenId: string): { garden?: string } 
 /** `POST /cli/zen/theme/set {name, garden?}` on this computer's daemon. */
 export async function setZenTheme(name: string, scope: ZenThemeScope, gardenId: string): Promise<void> {
   await daemonCliPost(zenLocalScope(), 'zen/theme/set', { name, ...scopeBody(scope, gardenId) })
+}
+
+/** One Garden's themes (`GET /cli/zen/theme/list?garden=`): the list in
+ *  the daemon's order and the theme the Garden shows now. */
+export interface ZenGardenThemes {
+  active: string | null
+  themes: ZenThemeEntry[]
+}
+
+/** Parse a `GET /cli/zen/theme/list` body. Throws `ZenPageParseError` when
+ *  there is no theme list in it. */
+export function parseZenGardenThemes(raw: unknown): ZenGardenThemes {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new ZenPageParseError('no themes in the answer')
+  const body = raw as Record<string, unknown>
+  if (!Array.isArray(body.themes)) throw new ZenPageParseError('no themes in the answer')
+  const active = typeof body.active === 'string' && body.active ? body.active : null
+  return { active, themes: parseZenThemeEntries(body.themes) }
+}
+
+/** `GET /cli/zen/theme/list?garden=<id>` on this computer's daemon (the
+ *  Garden settings' Theme row). */
+export async function loadZenGardenThemes(gardenId: string): Promise<ZenGardenThemes> {
+  return parseZenGardenThemes(await daemonCliGet<unknown>(zenLocalScope(), 'zen/theme/list', { garden: gardenId }))
 }
 
 /** `POST /cli/zen/theme/next|prev {garden?}` on this computer's daemon. */

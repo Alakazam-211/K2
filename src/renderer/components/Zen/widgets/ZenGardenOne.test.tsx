@@ -11,7 +11,7 @@
 //   - `activity-drawer`: the live turn shows in the drawer above the box,
 //     instead of the typing dots; off, the dots stay.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -24,6 +24,42 @@ import { ZenConversation } from './ZenConversationWidget'
 import { __resetZenDraftsForTests } from './ZenCompose'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+// This computer's daemon, for the Garden settings' Theme row: the theme
+// list (`themeList: null` = an older daemon without it) and theme set.
+const h = vi.hoisted(() => ({
+  gets: [] as { route: string; params: Record<string, unknown> }[],
+  posts: [] as { route: string; body: unknown }[],
+  themeList: null as unknown,
+}))
+
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: vi.fn(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {
+    h.gets.push({ route, params: params ?? {} })
+    if (route !== 'zen/theme/list') throw new Error(`unexpected GET ${route}`)
+    if (h.themeList === null) throw new Error('unknown zen route')
+    return h.themeList
+  }),
+  daemonCliPost: vi.fn(async (_scope: unknown, route: string, body: unknown) => {
+    h.posts.push({ route, body })
+    if (route !== 'zen/theme/set') throw new Error(`unexpected POST ${route}`)
+    return { ok: true }
+  }),
+}))
+
+const THEME_LIST = {
+  ok: true,
+  active: 'glass',
+  scope: 'garden',
+  global: 'basic',
+  garden: 'g-1',
+  gardenTheme: null,
+  themes: [
+    { name: 'basic', label: 'Basic', builtin: true, user: false, active: false },
+    { name: 'glass', label: 'Glass', builtin: true, user: false, active: true },
+    { name: 'paper', label: 'Paper', builtin: true, user: false, active: false },
+  ],
+}
 
 function row(handle: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
   return {
@@ -124,6 +160,9 @@ beforeEach(() => {
   localStorage.clear()
   useZenRecentFirstStore.getState().reload()
   __resetZenDraftsForTests()
+  h.gets.length = 0
+  h.posts.length = 0
+  h.themeList = THEME_LIST
 })
 
 afterEach(() => {
@@ -175,7 +214,7 @@ describe('Garden 1 pin grid (`pins`)', () => {
 })
 
 describe('Garden settings (`settings`): Recent agents first', () => {
-  it('the cog opens the Garden’s own settings; the switch is off, and on reorders the list below the pins', () => {
+  it('the cog opens the Garden’s own settings; the switch is off, and on reorders the list below the pins', async () => {
     useZenRecentFirstStore.getState().markSent('gamma::local', 200)
     useZenRecentFirstStore.getState().markSent('beta::local', 100)
     useZenRecentFirstStore.getState().markSent('pinA::local', 300)
@@ -183,7 +222,7 @@ describe('Garden settings (`settings`): Recent agents first', () => {
     render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl({ pins: true, settings: true })} />)
     // Off by default: the Home's order.
     expect(listRows()).toEqual(['alpha::local', 'beta::local', 'gamma::local'])
-    act(() => void fireEvent.click(el('[data-zen-agents-settings]')))
+    await act(async () => void fireEvent.click(el('[data-zen-agents-settings]')))
     const dialog = el('[data-testid="zen-garden-settings"]')
     expect(dialog.getAttribute('aria-label')).toBe('Garden settings')
     const sw = el('[data-zen-recent-first-switch]')
@@ -207,6 +246,115 @@ describe('Garden settings (`settings`): Recent agents first', () => {
     const fb = fakeBridge(ROWS())
     render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl({ settings: true })} />)
     expect(listRows()).toEqual(['pinA::local', 'pinB::local', 'gamma::local', 'alpha::local', 'beta::local'])
+  })
+})
+
+// Eleven pinned agents among three unpinned ones.
+const ROWS11 = (selected?: string): ZenAgentRow[] => {
+  const out: ZenAgentRow[] = [row('alpha')]
+  for (let i = 0; i <= 10; i++) {
+    out.push(row(`p${i}`, { pinned: true, selected: `p${i}` === selected }))
+    if (i === 4) out.push(row('beta'))
+  }
+  out.push(row('gamma'))
+  return out
+}
+const nine = Array.from({ length: 9 }, (_, i) => `p${i}::local`)
+
+describe('Garden 1 from the 0.46.0 daemon (`pin-limit` 9, `recent-first` true)', () => {
+  const garden1 = { pins: true, settings: true, 'pin-limit': 9, 'recent-first': true }
+
+  it('nine pins in the grid, the rest head the list; recent first is on by default', () => {
+    useZenRecentFirstStore.getState().markSent('gamma::local', 200)
+    useZenRecentFirstStore.getState().markSent('beta::local', 100)
+    const fb = fakeBridge(ROWS11())
+    render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl(garden1)} />)
+    expect(pinCells()).toEqual(nine)
+    expect(el('[data-zen-pins]').getAttribute('data-zen-pin-count')).toBe('9')
+    expect(listRows()).toEqual(['p9::local', 'p10::local', 'gamma::local', 'beta::local', 'alpha::local'])
+    expect(el('[role="listbox"][aria-label="Agents"]').getAttribute('data-zen-agents-order')).toBe('recent-first')
+  })
+
+  it('a stored choice wins over the Garden’s default', () => {
+    localStorage.setItem(ZEN_RECENT_FIRST_KEY, '0')
+    useZenRecentFirstStore.getState().reload()
+    useZenRecentFirstStore.getState().markSent('gamma::local', 200)
+    const fb = fakeBridge(ROWS11())
+    render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl(garden1)} />)
+    // Off: overflow pins still head the list, then the Home's order.
+    expect(listRows()).toEqual(['p9::local', 'p10::local', 'alpha::local', 'beta::local', 'gamma::local'])
+  })
+
+  it('⌘↓ from the last grid pin goes to the first overflow pin in the list', async () => {
+    const fb = fakeBridge(ROWS11('p8'))
+    render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl(garden1)} />)
+    await act(async () => void fireEvent.keyDown(window, { key: 'ArrowDown', metaKey: true }))
+    expect(fb.opened).toEqual(['p9::local'])
+  })
+
+  it('settings: Appearance, Pinned agents and Lists; the switch shows the Garden’s default; a theme pick is for this Garden', async () => {
+    const fb = fakeBridge(ROWS11())
+    render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl(garden1)} />)
+    await act(async () => void fireEvent.click(el('[data-zen-agents-settings]')))
+    const dialog = el('[data-testid="zen-garden-settings"]')
+    expect(dialog.querySelector('[data-zen-garden-settings-appearance]')).not.toBeNull()
+    expect(dialog.querySelector('[data-zen-garden-settings-pins]')).not.toBeNull()
+    expect(dialog.querySelector('[data-zen-garden-settings-lists]')).not.toBeNull()
+    expect(Array.from(dialog.querySelectorAll('section > span:first-child')).map((s) => s.textContent)).toEqual([
+      'Appearance',
+      'Pinned agents',
+      'Lists',
+    ])
+
+    // Theme: this Garden's list, its active theme selected.
+    expect(h.gets).toEqual([{ route: 'zen/theme/list', params: { garden: 'g-1' } }])
+    const select = el('[data-zen-garden-theme-select]') as HTMLSelectElement
+    expect(select.getAttribute('data-zen-garden-theme-select')).toBe('ready')
+    expect(select.disabled).toBe(false)
+    expect(select.value).toBe('glass')
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(['Basic', 'Glass', 'Paper'])
+    await act(async () => void fireEvent.change(select, { target: { value: 'paper' } }))
+    expect(h.posts).toEqual([{ route: 'zen/theme/set', body: { name: 'paper', garden: 'g-1' } }])
+    expect((el('[data-zen-garden-theme-select]') as HTMLSelectElement).value).toBe('paper')
+    expect(document.querySelector('[data-zen-garden-theme-error]')).toBeNull()
+
+    // Pinned agents: fixed, read-only.
+    expect(el('[data-zen-pin-grid-text]').textContent).toBe('3 × 3 (9)')
+    expect(dialog.querySelector('[data-zen-garden-settings-pins] button, [data-zen-garden-settings-pins] input')).toBeNull()
+
+    // Lists: on from the Garden until the person picks; their pick is stored.
+    expect(el('[data-zen-recent-first-switch]').getAttribute('aria-checked')).toBe('true')
+    expect(el('[data-zen-recent-first-note]').getAttribute('data-zen-recent-first-source')).toBe('garden')
+    expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBeNull()
+    act(() => void fireEvent.click(el('[data-zen-recent-first-switch]')))
+    expect(el('[data-zen-recent-first-switch]').getAttribute('aria-checked')).toBe('false')
+    expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('0')
+    expect(el('[data-zen-recent-first-note]').getAttribute('data-zen-recent-first-source')).toBe('stored')
+    act(() => void fireEvent.click(el('[data-zen-recent-first-switch]')))
+    expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('1')
+  })
+})
+
+describe('Garden 1 on an older daemon (no `pin-limit`, `recent-first`, or theme list)', () => {
+  it('every pin in the grid, recent first off, the settings’ Theme row disabled with a note', async () => {
+    h.themeList = null
+    useZenRecentFirstStore.getState().markSent('gamma::local', 200)
+    const fb = fakeBridge(ROWS11())
+    render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl({ pins: true, settings: true })} />)
+    expect(pinCells()).toHaveLength(11)
+    expect(listRows()).toEqual(['alpha::local', 'beta::local', 'gamma::local'])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await act(async () => void fireEvent.click(el('[data-zen-agents-settings]')))
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+    const select = el('[data-zen-garden-theme-select]') as HTMLSelectElement
+    expect(select.getAttribute('data-zen-garden-theme-select')).toBe('failed')
+    expect(select.disabled).toBe(true)
+    expect(el('[data-zen-garden-theme-note]').getAttribute('data-zen-garden-theme-note')).toBe('failed')
+    expect(el('[data-zen-pin-grid-text]').textContent).toBe('3 across, no limit')
+    expect(el('[data-zen-recent-first-switch]').getAttribute('aria-checked')).toBe('false')
+    expect(el('[data-zen-recent-first-note]').getAttribute('data-zen-recent-first-source')).toBe('default')
+    expect(h.posts).toEqual([])
   })
 })
 
@@ -282,7 +430,7 @@ describe('the activity drawer (`activity-drawer`)', () => {
     const r = row('cortana', { selected: true })
     render(<ZenConversation bridge={fb.bridge} row={r} options={{ compose: true, attachments: true, loadOlder: true, activityDrawer: true }} />)
     fb.pushThread(threadView({ turn: null, liveTurn: null }))
-    expect(useZenRecentFirstStore.getState().on).toBe(false)
+    expect(useZenRecentFirstStore.getState().stored).toBeNull()
     const input = el('[data-zen-compose-input]') as HTMLTextAreaElement
     act(() => void fireEvent.change(input, { target: { value: 'hello' } }))
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))

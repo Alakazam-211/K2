@@ -4,6 +4,13 @@
 // app's Settings window, and never sent to a server: it lives on this
 // computer only. Off by default.
 //
+// 0.46.0: a Garden may start it on. The Agents widget's `recent-first` prop
+// (Garden 1's template: true) is the Garden's default; the effective
+// setting is the person's own choice on this computer when they made one
+// (`'1'` / `'0'` in localStorage), else the Garden's default, else
+// `ZEN_RECENT_FIRST_DEFAULT` (off). An older daemon sends no prop: off
+// until the person turns it on, as before.
+//
 // On, a Garden's Agents widget keeps pinned agents at the top, then puts the
 // agents you last sent a message to from a Garden on this computer, newest
 // first; agents never messaged keep the list's own order after them. Off,
@@ -29,16 +36,37 @@ export const ZEN_RECENT_SENT_MAX = 200
  *  phone). One line to change. */
 export const ZEN_RECENT_FIRST_DEFAULT = false
 
-/** The stored setting, else the default. */
-export function readZenRecentFirst(): boolean {
+/** The person's own choice on this computer: true / false, or null when
+ *  they never picked (or storage can't be read). */
+export function readZenRecentFirstStored(): boolean | null {
   try {
     const v = localStorage.getItem(ZEN_RECENT_FIRST_KEY)
     if (v === '1') return true
     if (v === '0') return false
-    return ZEN_RECENT_FIRST_DEFAULT
+    return null
   } catch {
-    return ZEN_RECENT_FIRST_DEFAULT
+    return null
   }
+}
+
+/** The widget's `recent-first` prop: the Garden's default, or null (unset,
+ *  an older daemon, or not a boolean). */
+export function zenRecentFirstProp(props: Record<string, unknown>): boolean | null {
+  const v = props['recent-first']
+  return typeof v === 'boolean' ? v : null
+}
+
+/** The effective setting: the stored choice, else the Garden's default,
+ *  else `ZEN_RECENT_FIRST_DEFAULT`. */
+export function zenRecentFirstOn(stored: boolean | null, gardenDefault: boolean | null = null): boolean {
+  if (stored !== null) return stored
+  if (gardenDefault !== null) return gardenDefault
+  return ZEN_RECENT_FIRST_DEFAULT
+}
+
+/** The effective setting read from storage now (a Garden default optional). */
+export function readZenRecentFirst(gardenDefault: boolean | null = null): boolean {
+  return zenRecentFirstOn(readZenRecentFirstStored(), gardenDefault)
 }
 
 /** `{address: ms}`; anything else reads as empty. */
@@ -105,8 +133,11 @@ export function orderZenRecentFirst<T>(
 }
 
 interface ZenRecentFirstState {
-  /** The setting. */
-  on: boolean
+  /** The person's own choice on this computer, null until they pick. The
+   *  effective setting also needs the Garden's default: `zenRecentFirstOn`
+   *  / `useZenRecentFirst`. */
+  stored: boolean | null
+  /** Store the person's choice (it wins over the Garden's default from then on). */
   setOn(on: boolean): void
   /** Last send from a Garden on this computer, ms, by `zenRecentKey`. */
   sent: Record<string, number>
@@ -116,14 +147,14 @@ interface ZenRecentFirstState {
 }
 
 export const useZenRecentFirstStore = create<ZenRecentFirstState>((set, get) => ({
-  on: readZenRecentFirst(),
+  stored: readZenRecentFirstStored(),
   setOn: (on) => {
     try {
       localStorage.setItem(ZEN_RECENT_FIRST_KEY, on ? '1' : '0')
     } catch {
       /* the choice lasts this window */
     }
-    set({ on })
+    set({ stored: on })
   },
   sent: readZenRecentSent(),
   markSent: (address, at = Date.now()) => {
@@ -137,5 +168,12 @@ export const useZenRecentFirstStore = create<ZenRecentFirstState>((set, get) => 
     }
     set({ sent })
   },
-  reload: () => set({ on: readZenRecentFirst(), sent: readZenRecentSent() }),
+  reload: () => set({ stored: readZenRecentFirstStored(), sent: readZenRecentSent() }),
 }))
+
+/** React: the effective "Recent agents first" for a Garden whose default is
+ *  `gardenDefault` (the widget's `recent-first` prop, null when unset). */
+export function useZenRecentFirst(gardenDefault: boolean | null = null): boolean {
+  const stored = useZenRecentFirstStore((s) => s.stored)
+  return zenRecentFirstOn(stored, gardenDefault)
+}

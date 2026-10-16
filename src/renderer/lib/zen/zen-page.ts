@@ -618,7 +618,9 @@ export function zenThemeLabel(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
-function parseThemes(raw: unknown): ZenThemeEntry[] {
+/** A daemon theme list (`themes`) as entries: names kept once, labels
+ *  filled. Anything that isn't a list reads as none. */
+export function parseZenThemeEntries(raw: unknown): ZenThemeEntry[] {
   if (!Array.isArray(raw)) return []
   const out: ZenThemeEntry[] = []
   const seen = new Set<string>()
@@ -661,7 +663,7 @@ export function parseZenGet(raw: unknown): ZenResolvedPage {
   const builtin = builtinPageFor(template)
   const layout = parseLayout(page.layout, builtin)
   const widgets = parseWidgets(page.widgets, layout.split.length, builtin)
-  const themes = parseThemes(raw.themes)
+  const themes = parseZenThemeEntries(raw.themes)
   const named = isObj(raw.theme) && typeof raw.theme.name === 'string' && raw.theme.name ? raw.theme.name : null
   const flagged = Array.isArray(raw.themes)
     ? raw.themes.find((t): t is { name: string } => isObj(t) && t.active === true && typeof t.name === 'string')

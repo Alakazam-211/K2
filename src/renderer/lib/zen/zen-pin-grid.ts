@@ -8,6 +8,10 @@
 // the Agents page's pin), read into `ZenAgentRow.pinned`. Only Gardens draw
 // the grid (the Agents widget's `pins` prop, on in Garden 1); the app's
 // Agents page and sidebar are unchanged.
+//
+// 0.46.0: the widget's `pin-limit` prop (Garden 1: 9, a 3 × 3 grid) caps
+// the grid; pinned agents past it head the list. Unset (or an older
+// daemon): no limit, more rows as you pin more.
 
 import { orderZenRecentFirst, zenRecentKey } from './zen-recent-first'
 
@@ -45,14 +49,44 @@ export function zenPinGridRows(count: number, columns = ZEN_PIN_COLUMNS): number
   return count <= 0 ? 0 : Math.ceil(count / columns)
 }
 
-/** Split a list into the grid's pins and the rows below (each row once,
- *  order kept). With the grid off, every row stays in the list. */
-export function splitZenPins<T>(rows: readonly T[], isPinned: (row: T) => boolean, grid: boolean): { pins: T[]; rest: T[] } {
+/** Split a list into the grid's pins and the rows below (each row once).
+ *  With the grid off, every row stays in the list, order kept. With a
+ *  `limit` N (Garden 1: 9, the widget's `pin-limit`), the first N pinned
+ *  rows go to the grid and the pinned rows past N head the list, before
+ *  every unpinned row; each group keeps its order. No limit: every pinned
+ *  row goes to the grid. */
+export function splitZenPins<T>(
+  rows: readonly T[],
+  isPinned: (row: T) => boolean,
+  grid: boolean,
+  limit: number | null = null,
+): { pins: T[]; rest: T[] } {
   if (!grid) return { pins: [], rest: [...rows] }
   const pins: T[] = []
+  const over: T[] = []
   const rest: T[] = []
-  for (const r of rows) (isPinned(r) ? pins : rest).push(r)
-  return { pins, rest }
+  for (const r of rows) {
+    if (!isPinned(r)) rest.push(r)
+    else if (limit === null || pins.length < limit) pins.push(r)
+    else over.push(r)
+  }
+  return { pins, rest: [...over, ...rest] }
+}
+
+/** The Agents widget's `pin-limit` prop: an integer of 1 or more, else no
+ *  limit (unset, an older daemon, or anything else). */
+export function zenPinLimit(props: Record<string, unknown>): number | null {
+  const v = props['pin-limit']
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null
+}
+
+/** How the Garden's settings describe the grid: "3 × 3 (9)" for a limit
+ *  that fills whole rows, "3 across, up to 10" for one that doesn't, "3
+ *  across, no limit" with none. */
+export function zenPinGridText(limit: number | null, columns = ZEN_PIN_COLUMNS): string {
+  if (limit === null) return `${columns} across, no limit`
+  if (limit % columns === 0) return `${columns} × ${limit / columns} (${limit})`
+  return `${columns} across, up to ${limit}`
 }
 
 /** The picture's size (px) in a grid whose content box is `gridContentPx`
@@ -71,17 +105,18 @@ export function zenPinAvatarPx(
 
 /**
  * What a Garden's Agents widget draws, in order: the pin grid's rows and the
- * list's rows. With the grid on, pinned rows go to the grid (each row once).
+ * list's rows. With the grid on, pinned rows go to the grid (each row once),
+ * up to `limit` when there is one; pinned rows past it head the list.
  * With "Recent agents first" on, the list puts pinned rows first (when they
  * aren't in a grid), then the rows sent to from a Garden on this computer,
  * newest first, then the rest in their own order. Off: the view's order.
  */
 export function zenAgentsDisplay<T extends { address: string; pinned?: boolean }>(
   rows: readonly T[],
-  opts: { grid: boolean; recentFirst: boolean; sent: Record<string, number> },
+  opts: { grid: boolean; recentFirst: boolean; sent: Record<string, number>; limit?: number | null },
 ): { pins: T[]; list: T[] } {
   const isPinned = (r: T): boolean => r.pinned === true
-  const { pins, rest } = splitZenPins(rows, isPinned, opts.grid)
+  const { pins, rest } = splitZenPins(rows, isPinned, opts.grid, opts.limit ?? null)
   const list = opts.recentFirst ? orderZenRecentFirst(rest, opts.sent, (r) => zenRecentKey(r.address), isPinned) : rest
   return { pins, list }
 }

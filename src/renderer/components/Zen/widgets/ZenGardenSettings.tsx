@@ -1,19 +1,72 @@
 // The Garden's own settings (0.45.6, Rosson 2026-10-15; ported from K2
-// Companion's in-Zen settings sheet, `ZenSettings.tsx` → Lists). Reached
-// from inside the Garden: the cog in Garden 1's Agents header (the Agents
+// Companion's in-Zen settings sheet, `ZenSettings.tsx`). Reached from
+// inside the Garden: the cog in Garden 1's Agents header (the Agents
 // widget's `settings` prop). Never in the app's Settings window, which stays
 // as it is.
 //
-// One group today, Lists: "Recent agents first" (`zen-recent-first.ts`),
-// on this computer only, off until you turn it on.
+// Groups (0.46.0):
+//   - Appearance → Theme: the themes this computer's daemon offers
+//     (`GET /cli/zen/theme/list?garden=`), the Garden's active one picked;
+//     a pick is for THIS Garden only (`setZenTheme(name, 'garden', id)`).
+//     The list failing (an older daemon, offline) leaves the row disabled
+//     with a short note.
+//   - Pinned agents (when the widget draws the pin grid): the grid's size,
+//     read-only (the widget's `pin-limit`; Garden 1: 3 × 3). Pinned agents
+//     past it head the list.
+//   - Lists → "Recent agents first" (`zen-recent-first.ts`): on this
+//     computer only. Until the person picks it shows the Garden's default
+//     (the widget's `recent-first` prop; Garden 1 starts it on), else off.
 
-import { useState } from 'react'
-import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import { useEffect, useState } from 'react'
+import { useZenRecentFirst, useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import { loadZenGardenThemes, setZenTheme } from '@/lib/zen/zen-theme-switch'
+import type { ZenThemeEntry } from '@/lib/zen/zen-page'
+import { zenPinGridText } from '@/lib/zen/zen-pin-grid'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
 
 export const ZEN_RECENT_FIRST_LABEL = 'Recent agents first'
 export const ZEN_RECENT_FIRST_NOTE =
-  'Below your pinned agents, the agents you last messaged from a Garden on this computer come first, on My Home and Agents. Only this computer; the app’s Agents page doesn’t change.'
+  'Below your pinned agents, the agents you last messaged from a Garden on this computer come first, on My Home and Agents. Garden 1 starts with it on; your choice here sticks on this computer only. The app’s Agents page doesn’t change.'
+export const ZEN_GARDEN_THEME_NOTE = 'For this Garden only. Your other Gardens keep their theme.'
+export const ZEN_GARDEN_THEME_FAILED_NOTE = 'Couldn’t load the themes. K2 on this computer may be older than this app.'
+export const ZEN_PIN_GRID_NOTE = 'Set by this Garden. Pinned agents past the grid head the list below it.'
+export const ZEN_PIN_GRID_NOTE_NO_LIMIT = 'Set by this Garden. The grid adds rows as you pin more.'
+
+/** What the Agents widget hands its settings: which Garden, and the
+ *  Garden's own defaults from the widget's props. */
+export interface ZenGardenSettingsProps {
+  /** The Garden on screen (`bridge.gardens.current()`), null when none. */
+  gardenId: string | null
+  /** The widget draws the pin grid (`pins`). */
+  pinsOn: boolean
+  /** The grid's cap (`pin-limit`), null for none. */
+  pinLimit: number | null
+  /** The Garden's "Recent agents first" default (`recent-first`), null for none. */
+  recentFirstDefault: boolean | null
+}
+
+const rowStyle: React.CSSProperties = {
+  gap: 12,
+  padding: '8px 12px',
+  borderRadius: 'var(--zen-radius)',
+  background: 'var(--zen-surface)',
+  border: '1px solid var(--zen-border)',
+}
+const noteStyle: React.CSSProperties = { fontSize: '0.8em', color: 'var(--zen-text-muted)' }
+
+function Group({ id, title, children, data }: { id: string; title: string; children: React.ReactNode; data: string }): React.JSX.Element {
+  return (
+    <section aria-labelledby={id} {...{ [data]: '' }} className="flex flex-col" style={{ gap: 6 }}>
+      <span
+        id={id}
+        style={{ fontSize: '0.75em', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--zen-text-muted)' }}
+      >
+        {title}
+      </span>
+      {children}
+    </section>
+  )
+}
 
 function Switch({ on, onToggle, labelledBy }: { on: boolean; onToggle(): void; labelledBy: string }): React.JSX.Element {
   return (
@@ -52,30 +105,147 @@ function Switch({ on, onToggle, labelledBy }: { on: boolean; onToggle(): void; l
   )
 }
 
-export function ZenGardenSettings({ onClose }: { onClose(): void }): React.JSX.Element {
-  const on = useZenRecentFirstStore((s) => s.on)
+type ThemeState =
+  | { status: 'loading' }
+  | { status: 'ready'; active: string | null; themes: ZenThemeEntry[] }
+  | { status: 'failed' }
+
+/** Appearance → Theme: this Garden's theme, picked for this Garden only. */
+function ThemeRow({ gardenId }: { gardenId: string | null }): React.JSX.Element {
+  const [state, setState] = useState<ThemeState>(gardenId ? { status: 'loading' } : { status: 'failed' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!gardenId) {
+      setState({ status: 'failed' })
+      return
+    }
+    let live = true
+    setState({ status: 'loading' })
+    loadZenGardenThemes(gardenId).then(
+      (t) => {
+        if (live) setState({ status: 'ready', active: t.active, themes: t.themes })
+      },
+      (err: unknown) => {
+        console.warn('[zen] Garden theme list failed:', err)
+        if (live) setState({ status: 'failed' })
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [gardenId])
+
+  const ready = state.status === 'ready' && state.themes.length > 0 ? state : null
+  const pick = (name: string): void => {
+    if (!ready || !gardenId || name === ready.active) return
+    const label = ready.themes.find((t) => t.name === name)?.label ?? name
+    setBusy(true)
+    setError(null)
+    setZenTheme(name, 'garden', gardenId).then(
+      () => {
+        setBusy(false)
+        setState((s) => (s.status === 'ready' ? { ...s, active: name } : s))
+      },
+      (err: unknown) => {
+        setBusy(false)
+        setError(`Couldn’t switch to ${label}: ${err instanceof Error ? err.message : String(err)}`)
+      },
+    )
+  }
+  const failed = state.status === 'failed' || (state.status === 'ready' && state.themes.length === 0)
+  return (
+    <>
+      <div className="flex items-center justify-between" style={rowStyle}>
+        <label id="zen-garden-theme-label" htmlFor="zen-garden-theme-select">
+          Theme
+        </label>
+        <select
+          id="zen-garden-theme-select"
+          data-zen-garden-theme-select={state.status}
+          disabled={!ready || busy}
+          value={ready?.active ?? ''}
+          onChange={(e) => pick(e.target.value)}
+          className="no-drag cursor-pointer"
+          style={{
+            minWidth: 140,
+            padding: '4px 8px',
+            borderRadius: 'calc(var(--zen-radius) - 4px)',
+            border: '1px solid var(--zen-border)',
+            background: 'var(--zen-surface-raised)',
+            color: 'var(--zen-text)',
+            font: 'inherit',
+            opacity: ready ? 1 : 0.6,
+          }}
+        >
+          {ready ? (
+            <>
+              {ready.active === null && <option value="">Choose…</option>}
+              {ready.themes.map((t) => (
+                <option key={t.name} value={t.name} data-zen-garden-theme-option={t.name}>
+                  {t.label}
+                </option>
+              ))}
+            </>
+          ) : (
+            <option value="">{state.status === 'loading' ? 'Loading…' : 'Unavailable'}</option>
+          )}
+        </select>
+      </div>
+      <span data-zen-garden-theme-note={failed ? 'failed' : 'ok'} style={noteStyle}>
+        {failed ? ZEN_GARDEN_THEME_FAILED_NOTE : ZEN_GARDEN_THEME_NOTE}
+      </span>
+      {error && (
+        <span role="alert" data-zen-garden-theme-error="" style={{ ...noteStyle, color: 'var(--zen-danger)' }}>
+          {error}
+        </span>
+      )}
+    </>
+  )
+}
+
+export function ZenGardenSettings({
+  onClose,
+  gardenId,
+  pinsOn,
+  pinLimit,
+  recentFirstDefault,
+}: ZenGardenSettingsProps & { onClose(): void }): React.JSX.Element {
+  const stored = useZenRecentFirstStore((s) => s.stored)
+  const on = useZenRecentFirst(recentFirstDefault)
   const setOn = useZenRecentFirstStore((s) => s.setOn)
   return (
     <ZenOverlay label="Garden settings" onClose={onClose} testId="zen-garden-settings" width={420}>
       <strong style={{ fontSize: '1.1em' }}>Garden settings</strong>
-      <section aria-labelledby="zen-garden-settings-lists" data-zen-garden-settings-lists="" className="flex flex-col" style={{ gap: 6 }}>
-        <span
-          id="zen-garden-settings-lists"
-          style={{ fontSize: '0.75em', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--zen-text-muted)' }}
-        >
-          Lists
-        </span>
-        <div
-          className="flex items-center justify-between"
-          style={{ gap: 12, padding: '8px 12px', borderRadius: 'var(--zen-radius)', background: 'var(--zen-surface)', border: '1px solid var(--zen-border)' }}
-        >
+      <Group id="zen-garden-settings-appearance" title="Appearance" data="data-zen-garden-settings-appearance">
+        <ThemeRow gardenId={gardenId} />
+      </Group>
+      {pinsOn && (
+        <Group id="zen-garden-settings-pins" title="Pinned agents" data="data-zen-garden-settings-pins">
+          <div className="flex items-center justify-between" style={rowStyle}>
+            <span>Grid</span>
+            <span data-zen-pin-grid-text="" style={{ color: 'var(--zen-text-muted)' }}>
+              {zenPinGridText(pinLimit)}
+            </span>
+          </div>
+          <span data-zen-pin-grid-note="" style={noteStyle}>
+            {pinLimit === null ? ZEN_PIN_GRID_NOTE_NO_LIMIT : ZEN_PIN_GRID_NOTE}
+          </span>
+        </Group>
+      )}
+      <Group id="zen-garden-settings-lists" title="Lists" data="data-zen-garden-settings-lists">
+        <div className="flex items-center justify-between" style={rowStyle}>
           <span id="zen-recent-first-label">{ZEN_RECENT_FIRST_LABEL}</span>
           <Switch on={on} onToggle={() => setOn(!on)} labelledBy="zen-recent-first-label" />
         </div>
-        <span data-zen-recent-first-note="" style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
+        <span
+          data-zen-recent-first-note=""
+          data-zen-recent-first-source={stored !== null ? 'stored' : recentFirstDefault !== null ? 'garden' : 'default'}
+          style={noteStyle}
+        >
           {ZEN_RECENT_FIRST_NOTE}
         </span>
-      </section>
+      </Group>
       <div className="flex items-center justify-end">
         <button type="button" data-zen-garden-settings-done="" onClick={onClose} className="cursor-pointer" style={zenButtonStyle(true)}>
           Done
@@ -86,7 +256,7 @@ export function ZenGardenSettings({ onClose }: { onClose(): void }): React.JSX.E
 }
 
 /** The cog that opens the Garden's settings (the Agents header). */
-export function ZenGardenSettingsButton(): React.JSX.Element {
+export function ZenGardenSettingsButton(props: ZenGardenSettingsProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -106,7 +276,7 @@ export function ZenGardenSettingsButton(): React.JSX.Element {
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       </button>
-      {open && <ZenGardenSettings onClose={() => setOpen(false)} />}
+      {open && <ZenGardenSettings {...props} onClose={() => setOpen(false)} />}
     </>
   )
 }

@@ -12,9 +12,12 @@ import {
   ZEN_RECENT_SENT_MAX,
   orderZenRecentFirst,
   readZenRecentFirst,
+  readZenRecentFirstStored,
   readZenRecentSent,
   trimZenRecentSent,
   useZenRecentFirstStore,
+  zenRecentFirstOn,
+  zenRecentFirstProp,
   zenRecentKey,
 } from './zen-recent-first'
 
@@ -86,25 +89,27 @@ describe('trimZenRecentSent', () => {
 })
 
 describe('the setting (this computer)', () => {
-  it('is off by default', () => {
+  it('is off by default, with nothing stored', () => {
     expect(ZEN_RECENT_FIRST_DEFAULT).toBe(false)
     expect(readZenRecentFirst()).toBe(false)
-    expect(useZenRecentFirstStore.getState().on).toBe(false)
+    expect(readZenRecentFirstStored()).toBeNull()
+    expect(useZenRecentFirstStore.getState().stored).toBeNull()
   })
 
   it('turns on and off, and is kept in localStorage', () => {
     useZenRecentFirstStore.getState().setOn(true)
-    expect(useZenRecentFirstStore.getState().on).toBe(true)
+    expect(useZenRecentFirstStore.getState().stored).toBe(true)
     expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('1')
     useZenRecentFirstStore.getState().reload()
-    expect(useZenRecentFirstStore.getState().on).toBe(true)
+    expect(useZenRecentFirstStore.getState().stored).toBe(true)
     useZenRecentFirstStore.getState().setOn(false)
     expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('0')
+    expect(useZenRecentFirstStore.getState().stored).toBe(false)
     expect(readZenRecentFirst()).toBe(false)
   })
 
   it('records sends while it is off, lowercased, capped', () => {
-    expect(useZenRecentFirstStore.getState().on).toBe(false)
+    expect(useZenRecentFirstStore.getState().stored).toBeNull()
     useZenRecentFirstStore.getState().markSent('Cortana::Local', 42)
     expect(useZenRecentFirstStore.getState().sent).toEqual({ 'cortana::local': 42 })
     expect(readZenRecentSent()).toEqual({ 'cortana::local': 42 })
@@ -125,8 +130,56 @@ describe('the setting (this computer)', () => {
     })
     useZenRecentFirstStore.getState().setOn(true)
     useZenRecentFirstStore.getState().markSent('a::local', 1)
-    expect(useZenRecentFirstStore.getState().on).toBe(true)
+    expect(useZenRecentFirstStore.getState().stored).toBe(true)
     expect(useZenRecentFirstStore.getState().sent).toEqual({ 'a::local': 1 })
     expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBeNull()
+  })
+})
+
+describe('the Garden default (0.46.0: the widget’s `recent-first` prop)', () => {
+  it('the stored choice wins over the Garden default, both ways', () => {
+    expect(zenRecentFirstOn(false, true)).toBe(false)
+    expect(zenRecentFirstOn(true, false)).toBe(true)
+    localStorage.setItem(ZEN_RECENT_FIRST_KEY, '0')
+    expect(readZenRecentFirst(true)).toBe(false)
+    localStorage.setItem(ZEN_RECENT_FIRST_KEY, '1')
+    expect(readZenRecentFirst(false)).toBe(true)
+  })
+
+  it('nothing stored: the Garden default on means on', () => {
+    expect(zenRecentFirstOn(null, true)).toBe(true)
+    expect(readZenRecentFirst(true)).toBe(true)
+  })
+
+  it('nothing stored and no Garden default (older daemon): off', () => {
+    expect(zenRecentFirstOn(null, null)).toBe(false)
+    expect(zenRecentFirstOn(null)).toBe(false)
+    expect(readZenRecentFirst(null)).toBe(false)
+  })
+
+  it('toggling stores ’1’ / ’0’ and wins over the Garden default from then on', () => {
+    expect(zenRecentFirstOn(useZenRecentFirstStore.getState().stored, true)).toBe(true)
+    useZenRecentFirstStore.getState().setOn(false)
+    expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('0')
+    expect(zenRecentFirstOn(useZenRecentFirstStore.getState().stored, true)).toBe(false)
+    useZenRecentFirstStore.getState().reload()
+    expect(zenRecentFirstOn(useZenRecentFirstStore.getState().stored, true)).toBe(false)
+    useZenRecentFirstStore.getState().setOn(true)
+    expect(localStorage.getItem(ZEN_RECENT_FIRST_KEY)).toBe('1')
+    expect(zenRecentFirstOn(useZenRecentFirstStore.getState().stored, false)).toBe(true)
+  })
+
+  it('a garbage stored value counts as not picked', () => {
+    localStorage.setItem(ZEN_RECENT_FIRST_KEY, 'yes')
+    expect(readZenRecentFirstStored()).toBeNull()
+    expect(readZenRecentFirst(true)).toBe(true)
+  })
+
+  it('reads the prop only as a boolean', () => {
+    expect(zenRecentFirstProp({ 'recent-first': true })).toBe(true)
+    expect(zenRecentFirstProp({ 'recent-first': false })).toBe(false)
+    expect(zenRecentFirstProp({})).toBeNull()
+    expect(zenRecentFirstProp({ 'recent-first': 'true' })).toBeNull()
+    expect(zenRecentFirstProp({ 'recent-first': 1 })).toBeNull()
   })
 })

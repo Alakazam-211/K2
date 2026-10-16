@@ -61,9 +61,9 @@ import { AppFontRows } from '../shared/AppFontRows'
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: 'CLI Version', description: 'Installed k2so CLI version + install/update button', keywords: ['k2so', 'cli', 'terminal', 'install', 'update', 'path'] },
-  { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
+  { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
@@ -325,13 +325,14 @@ export function GeneralSection(): React.JSX.Element {
           </div>
         )}
 
+        {/* CLI Version — right under App Version so it feels like part of the app */}
+        <CLIVersionRow />
+
         {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
-            Sits just below the app version and its update notices (Rosson 2026-10-16). */}
+            Sits below the app and CLI versions (Rosson 2026-10-16). */}
         <div className="border border-[var(--color-border)]" data-settings-id="general.font">
           <AppFontRows where="general" lastHasBorder={false} />
         </div>
-        {/* CLI Version — right under App Version so it feels like part of the app */}
-        <CLIVersionRow />
 
         {/* Desktop only: open Chromium DevTools (prod + debug) for diagnosing
             remote freezes / network. Pref is thin-client localStorage. */}

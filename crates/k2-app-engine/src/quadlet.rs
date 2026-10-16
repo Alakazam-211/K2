@@ -21,8 +21,10 @@
 //! 7. pasta with two forwards from the container's own loopback (`-T`):
 //!    `127.0.0.1:8730` to the App's own gateway link on host loopback
 //!    (`-T 8730:<link>`, S14) and the App's egress proxy port (S15; the
-//!    container has no other way out); the App's port published on host
-//!    loopback only;
+//!    container has no other way out); plus one per owner-approved box
+//!    service (`-T <in-wall>:<host>`, 0.46.0; the per-App nft rule admits
+//!    only approved host ports, so a held or revoked one stays shut); the
+//!    App's port published on host loopback only;
 //! 9. environment from an env file (never systemd-expanded) and secrets as
 //!    Podman secrets (never in the unit); the App pass is a file in the
 //!    App's pass folder, mounted read-only (it rotates, S14);
@@ -73,6 +75,8 @@ pub struct Render<'a> {
     /// Disk ceilings (§6.2): `IO*Max=` on the unit; the user manager owns
     /// the delegated `io` controller (box prep's `Delegate=`).
     pub io: &'a k2_root_proto::apps::IoMax,
+    /// Box services (validated by `check_start`): extra pasta `-T`s.
+    pub box_forwards: &'a [k2_root_proto::engine::BoxForward],
 }
 
 /// Container stop timeout: the drain window plus 10 s (AR45).
@@ -133,7 +137,11 @@ pub fn render(r: &Render) -> String {
     if let Some(d) = r.pass_dir {
         line(format!("Volume={d}:{PASS_MOUNT}:ro"));
     }
-    line(format!("Network=pasta:-T,{IN_WALL_GATEWAY_PORT}:{},-T,{}", r.gw_port, r.px_port));
+    let mut net = format!("Network=pasta:-T,{IN_WALL_GATEWAY_PORT}:{},-T,{}", r.gw_port, r.px_port);
+    for f in r.box_forwards {
+        net.push_str(&format!(",-T,{}:{}", f.app_port, f.host_port));
+    }
+    line(net);
     line(format!("PublishPort=127.0.0.1:{p}:{p}", p = r.port));
     line("RunInit=true".into());
     line("PidsLimit=512".into());
@@ -186,6 +194,7 @@ mod tests {
             secrets,
             pass_dir: Some("/run/k2app/pass/nsi-skin"),
             io: &IO,
+            box_forwards: &[],
         }
     }
 
@@ -243,6 +252,23 @@ mod tests {
         let mut r = base_render(&app, &argv, &secrets);
         r.pass_dir = None;
         assert!(!render(&r).contains(":/run/k2:ro"), "no pass, no mount");
+    }
+
+    #[test]
+    fn box_forwards_are_extra_pasta_forwards() {
+        let app = AppId::parse("hearth").unwrap();
+        let argv = vec!["node".to_string()];
+        let fwd = [
+            k2_root_proto::engine::BoxForward { app_port: 8470, host_port: 8470 },
+            k2_root_proto::engine::BoxForward { app_port: 9000, host_port: 7880 },
+        ];
+        let mut r = base_render(&app, &argv, &[]);
+        r.box_forwards = &fwd;
+        let u = render(&r);
+        assert!(u.contains("\nNetwork=pasta:-T,8730:38601,-T,38901,-T,8470:8470,-T,9000:7880\n"), "{u}");
+        for never in ["map-host-loopback", "Network=host", "--map-gw"] {
+            assert!(!u.contains(never), "{never} in\n{u}");
+        }
     }
 
     #[test]

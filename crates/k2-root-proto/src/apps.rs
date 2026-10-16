@@ -124,6 +124,72 @@ pub const DB_PORTS: PortRange = PortRange {
     hi: 5_432,
 };
 
+// ── box services (0.46.0): owner-approved forwards to host loopback ────
+
+/// Most box services one App holds (allowed + pending).
+pub const MAX_BOX_SERVICES: usize = 8;
+/// Caddy's admin API (it rewrites the box router).
+pub const CADDY_ADMIN_PORT: u16 = 2_019;
+/// The box router's loopback listener (`skin_door::LOOPBACK_PORT`): it
+/// routes by Host header to the daemon and every App.
+pub const BOX_ROUTER_LOOPBACK_PORT: u16 = 38_472;
+
+/// Why a host loopback port can never be a box service (the static part
+/// of the deny-list, shared by the daemon, the root helper and the engine;
+/// the daemon adds its own listeners, which move). `None` = allowed.
+///
+/// - below 1024: system services (ssh 22, mail, DNS 53, CUPS …);
+/// - K2's App range (38600–38999): every App's gateway link and egress
+///   proxy, so no App reaches another App's doors;
+/// - Postgres (5432): an App's database has its own door (`k2 app db`,
+///   the 0.46.1 `db_raw` widening, scoped to the App's own role); a raw
+///   forward would hand it every database's login surface;
+/// - Caddy's admin API and the box router's loopback listener (the
+///   daemon's own surfaces by another road).
+///
+/// Unix sockets (the daemon's cell sockets, the root helper, Sew's mgmt
+/// socket) are out of reach by construction: a box service is TCP only.
+pub fn box_port_refusal(p: u16) -> Option<&'static str> {
+    if p < 1024 {
+        return Some("a system port (below 1024: ssh, mail, DNS and the like are never forwarded)");
+    }
+    if (RESERVED_PORTS.0..=RESERVED_PORTS.1).contains(&p) {
+        return Some("K2's App range (every App's gateway link and egress proxy)");
+    }
+    if (DB_PORTS.lo..=DB_PORTS.hi).contains(&p) {
+        return Some("Postgres (an App reaches its own database through its database door, never a raw forward)");
+    }
+    if p == CADDY_ADMIN_PORT {
+        return Some("Caddy's admin API");
+    }
+    if p == BOX_ROUTER_LOOPBACK_PORT {
+        return Some("the box router's loopback listener (it reaches the daemon and every App)");
+    }
+    None
+}
+
+pub fn box_port_ok(p: u16) -> bool {
+    box_port_refusal(p).is_none()
+}
+
+/// A box service's name: `^[a-z][a-z0-9-]{0,31}$`, no `--`, no trailing
+/// `-` (it becomes `K2_BOX_<NAME>` in the App's environment).
+pub fn box_name_ok(n: &str) -> bool {
+    let b = n.as_bytes();
+    !b.is_empty()
+        && b.len() <= 32
+        && b[0].is_ascii_lowercase()
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && !n.contains("--")
+        && !n.ends_with('-')
+}
+
+/// The environment variable that tells the App where a box service is:
+/// `sew-api` → `K2_BOX_SEW_API` (value `127.0.0.1:<port>`).
+pub fn box_env_name(n: &str) -> String {
+    format!("K2_BOX_{}", n.to_ascii_uppercase().replace('-', "_"))
+}
+
 /// The nftables table. Coexists with the old sandbox's `k2sandbox_<uid>`
 /// tables (AR24).
 pub const NFT_TABLE: &str = "k2app";
@@ -988,6 +1054,10 @@ pub struct AppRule {
     pub cgroup: String,
     pub level: u32,
     pub gw_port: u16,
+    /// The App's approved box services' host ports (owner-approved,
+    /// [`box_port_ok`]); revoking one re-renders the chain, so it closes at
+    /// once for new connections.
+    pub box_ports: Vec<u16>,
 }
 
 /// The cgroup paths an App's sockets can live in: its container slice
@@ -1007,9 +1077,17 @@ pub fn app_cgroups(uid: u32, id: &AppId) -> [(String, u32); 2] {
 }
 
 fn app_rule_line(r: &AppRule) -> String {
-    let ports = match proxy_port_for_gateway(r.gw_port) {
-        Some(px) => format!("{{ {}, {px} }}", r.gw_port),
-        None => r.gw_port.to_string(),
+    let mut ports = vec![r.gw_port];
+    ports.extend(proxy_port_for_gateway(r.gw_port));
+    for p in &r.box_ports {
+        if box_port_ok(*p) && !ports.contains(p) {
+            ports.push(*p);
+        }
+    }
+    let ports = if ports.len() == 1 {
+        ports[0].to_string()
+    } else {
+        format!("{{ {} }}", ports.iter().map(u16::to_string).collect::<Vec<_>>().join(", "))
     };
     format!(
         "socket cgroupv2 level {} \"{}\" oifname \"lo\" tcp dport {ports} accept",
@@ -1244,7 +1322,7 @@ mod tests {
             let gw = crate::engine::gateway_port(slot).unwrap();
             assert!(proxy_port_for_gateway(gw).is_some(), "slot {slot}");
         }
-        let r = AppRule { cgroup: "x".into(), level: 2, gw_port: 38_899 };
+        let r = AppRule { cgroup: "x".into(), level: 2, gw_port: 38_899, box_ports: vec![] };
         assert!(app_rule_line(&r).ends_with("tcp dport 38899 accept"), "no proxy port past the range");
     }
 
@@ -1378,12 +1456,42 @@ mod tests {
     }
 
     #[test]
+    fn box_ports_have_a_static_deny_list() {
+        for bad in [0u16, 22, 25, 53, 80, 443, 631, 1023, 5432, 2019, 38_472, 38_600, 38_601, 38_899, 38_900, 38_999] {
+            assert!(!box_port_ok(bad), "{bad} must be refused");
+            assert!(box_port_refusal(bad).is_some());
+        }
+        for ok in [1024u16, 3000, 7880, 8470, 8730, 38_599, 39_000, 65_535] {
+            assert!(box_port_ok(ok), "{ok} must be allowed");
+        }
+        assert!(box_port_refusal(22).unwrap().contains("ssh"));
+        assert!(box_port_refusal(5432).unwrap().contains("Postgres"));
+        assert!(box_name_ok("sew-api") && box_name_ok("a") && box_name_ok("svc2"));
+        for bad in ["", "Sew", "-x", "x-", "a--b", "a_b", "1x", &"a".repeat(33)] {
+            assert!(!box_name_ok(bad), "{bad:?}");
+        }
+        assert_eq!(box_env_name("sew-signal"), "K2_BOX_SEW_SIGNAL");
+    }
+
+    #[test]
+    fn box_ports_join_the_apps_own_rule() {
+        let rule = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470, 7880, 22, 8470, 38_650] };
+        let sc = nft_apps_script(&[rule]);
+        // Refused ports never reach nft, even from a doctored state file.
+        assert!(sc.contains("tcp dport { 38601, 38901, 8470, 7880 } accept"), "{sc}");
+        assert!(!sc.contains(" 22") && !sc.contains("38650"), "{sc}");
+        // Past the proxy range the gateway port stands alone (no braces).
+        let lone = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_899, box_ports: vec![] };
+        assert!(nft_apps_script(&[lone]).contains("tcp dport 38899 accept"));
+    }
+
+    #[test]
     fn nft_ruleset_shape() {
         let jobs = AppId::parse("nsi-skin").unwrap();
         let cg = app_cgroups(997, &jobs);
         assert_eq!(cg[0].0, "user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice");
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
-        let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601 };
+        let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![] };
         let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
         assert!(r.contains("meta skuid 998 jump k2app_v3"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));

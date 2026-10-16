@@ -62,6 +62,10 @@ pub struct RunState {
     pub slot: u64,
     pub unit: String,
     pub secrets: Vec<String>,
+    /// Box services forwarded into this container (0.46.0; absent in older
+    /// state files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub box_forwards: Vec<wire::BoxForward>,
 }
 
 impl Engine {
@@ -274,6 +278,7 @@ impl Engine {
             "name": "k2-app-engine",
             "version": env!("K2_PRODUCT_VERSION"),
             "protocol": wire::ENGINE_PROTOCOL,
+            "features": wire::ENGINE_FEATURES,
             "runtime": self.runtime(),
             "podman": podman,
             "seccomp": crate::seccomp::file_name(),
@@ -521,9 +526,20 @@ impl Engine {
             secrets: &mounts,
             pass_dir: pass_dir.as_deref(),
             io: &s.io,
+            box_forwards: &s.box_forwards,
         });
         let qfile = self.quadlets().join(format!("{stem}.container"));
-        let state = RunState { app: app.as_str().into(), deployment: s.deployment.clone(), port: s.port, gw_port: gw, px_port: px, slot, unit: unit.clone(), secrets: made.clone() };
+        let state = RunState {
+            app: app.as_str().into(),
+            deployment: s.deployment.clone(),
+            port: s.port,
+            gw_port: gw,
+            px_port: px,
+            slot,
+            unit: unit.clone(),
+            secrets: made.clone(),
+            box_forwards: s.box_forwards.clone(),
+        };
         let undo = |this: &Self| {
             let _ = std::fs::remove_file(&qfile);
             let _ = std::fs::remove_file(&env_file);
@@ -557,7 +573,7 @@ impl Engine {
             return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: k2 app logs)", r.why())));
         }
         let pid = self.show(&unit, "MainPID").and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 0);
-        Ok(json!({ "unit": unit, "gwPort": gw, "pxPort": px, "slot": slot, "pid": pid, "slice": app_slice(&app) }))
+        Ok(json!({ "unit": unit, "gwPort": gw, "pxPort": px, "slot": slot, "pid": pid, "slice": app_slice(&app), "boxForwards": s.box_forwards }))
     }
 
     fn show(&self, unit: &str, prop: &str) -> Option<String> {
@@ -688,7 +704,7 @@ impl Engine {
         for s in self.run_states() {
             let st = self.liveness(&s.app, &s.deployment)?;
             if st["state"] == "running" {
-                live.push(json!({ "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "pxPort": s.px_port, "unit": s.unit, "pid": st["pid"] }));
+                live.push(json!({ "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "pxPort": s.px_port, "unit": s.unit, "pid": st["pid"], "boxForwards": s.box_forwards }));
             }
         }
         Ok(json!({ "instances": live }))
@@ -1043,7 +1059,7 @@ mod tests {
 
     #[test]
     fn run_state_round_trip() {
-        let s = RunState { app: "jobs".into(), deployment: "d-0123456789ab".into(), port: 41000, gw_port: 38600, px_port: 38900, slot: 0, unit: "k2app-jobs--d-0123456789ab.service".into(), secrets: vec![] };
+        let s = RunState { app: "jobs".into(), deployment: "d-0123456789ab".into(), port: 41000, gw_port: 38600, px_port: 38900, slot: 0, unit: "k2app-jobs--d-0123456789ab.service".into(), secrets: vec![], box_forwards: vec![] };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<RunState>(&j).unwrap(), s);
         // A protocol-1 state file (no proxy forward) still reads.

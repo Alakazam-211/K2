@@ -8,6 +8,7 @@ import { usePanelsStore, type PanelTab } from '../../stores/panels'
 import { showContextMenu } from '../../lib/context-menu'
 import { Surface } from '@/components/ui'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 
 const TAB_LABELS: Record<PanelTab, string> = {
   files: 'Files',
@@ -149,9 +150,13 @@ export default function TabbedPanel({
       {/* Optional header above tabs (e.g. workspace info in focus mode) */}
       {header}
 
-      {/* Tab strip — h-8 (32px) matches the center PresetsBar launch strip so
-          the bottom border lines up across left / center / right. */}
-      <div className="flex h-8 items-center border-b border-[var(--color-border)] flex-shrink-0">
+      {/* Tab strip — the room TabBar's height (TAB_STRIP_HEIGHT, 36px) so
+          the tabs match and the bottom border lines up across left /
+          center / right. */}
+      <div
+        className={`flex ${TAB_STRIP_HEIGHT} items-center border-b border-[var(--color-border)] flex-shrink-0`}
+        data-drawer-tab-strip=""
+      >
         {/* The open drawer's close toggle sits at the strip's end nearest
             the room (`Layout/DrawerTabBarToggle.tsx`). */}
         {thisSide === 'right' && <DrawerTabBarToggle side="right" placement="drawer" />}

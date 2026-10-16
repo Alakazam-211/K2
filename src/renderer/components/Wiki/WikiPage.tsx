@@ -5,8 +5,8 @@
 // its own top bar (ServerSwitcher + PageTabs). Opened from the top bar's
 // Wiki tab (the wiki of the workspace on screen, `lib/wiki-open.ts`), the
 // drawer's View Wiki, or the nav menus. The header's workspace picker
-// switches the wiki shown; its "All of K2" row, and the "All of K2" toggle
-// next to it, show the server-wide `k2` map (every wiki on this server). Esc goes back to Home, then a second Esc closes and returns
+// switches the wiki shown; its first row, "All of K2", is the server-wide
+// `k2` map (every wiki on this server). The top bar's Wiki tab opens on it. Esc goes back to Home, then a second Esc closes and returns
 // to the page it was opened from (W6).
 //
 // Three views (prd-wiki-3d-view-v1 §3.1, §12), switched in the header and
@@ -46,12 +46,7 @@ import {
 } from './wiki-3d-guard'
 import type { WikiFocusRequest, WikiGraph3DProps } from './WikiGraph3D'
 import { FocusGroupFilterDropdown } from './FocusGroupFilterDropdown'
-import {
-  WikiWorkspacePicker,
-  WIKI_ALL_WORKSPACES,
-  WIKI_ALL_WORKSPACES_LABEL,
-  type WikiPickerWorkspace,
-} from './WikiWorkspacePicker'
+import { WikiWorkspacePicker, WIKI_ALL_WORKSPACES, type WikiPickerWorkspace } from './WikiWorkspacePicker'
 import {
   WorkspaceFilterDropdown,
   type FilterableWorkspace,
@@ -121,6 +116,7 @@ export default function WikiPage(): React.JSX.Element | null {
   const wikiProjectPath = usePageViewStore((s) => s.wikiProjectPath)
   const closeWiki = usePageViewStore((s) => s.closeWiki)
   const openWiki = usePageViewStore((s) => s.openWiki)
+  const wikiOpenAll = usePageViewStore((s) => s.wikiOpenAll)
   const view = usePageViewStore((s) => s.wikiView)
   const setWikiView = usePageViewStore((s) => s.setWikiView)
   const reducedMotion = useReducedMotion()
@@ -133,6 +129,12 @@ export default function WikiPage(): React.JSX.Element | null {
 
   const projectPath = wikiProjectPath
 
+  // The scope an open starts on: All of K2 from the top bar's Wiki tab,
+  // the workspace for deep links. Set during render on the closed → open
+  // transition so the first fetch already uses it. The view (Wiki/2D/3D)
+  // is never touched by an open or a workspace change.
+  const [openSeen, setOpenSeen] = useState(false)
+
   const [index, setIndex] = useState<WikiIndex | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -143,6 +145,12 @@ export default function WikiPage(): React.JSX.Element | null {
   const [search, setSearch] = useState('')
   /** k2 = fleet map (all workspace brains); global/local = this workspace only. */
   const [mode, setMode] = useState<'k2' | 'local' | 'global'>('global')
+  if (isOpen && !openSeen) {
+    setOpenSeen(true)
+    if (wikiOpenAll) setMode('k2')
+  } else if (!isOpen && openSeen) {
+    setOpenSeen(false)
+  }
   /** K2 sub-tab: Projects (V1) vs Focus Groups map. */
   const [k2Lens, setK2Lens] = useState<'projects' | 'groups'>('projects')
   /** K2 Groups lens: `all` | `ungrouped` | focus group id. */
@@ -623,24 +631,6 @@ export default function WikiPage(): React.JSX.Element | null {
             value={allWorkspaces ? WIKI_ALL_WORKSPACES : projectPath}
             onChange={onPickWorkspace}
           />
-          <button
-            type="button"
-            aria-pressed={allWorkspaces}
-            data-wiki-all-k2
-            onClick={() => setMode(allWorkspaces ? 'global' : 'k2')}
-            title={
-              allWorkspaces
-                ? 'Showing every wiki on this server. Click to go back to one workspace.'
-                : 'Show every wiki on this server in one map'
-            }
-            className={`no-drag px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer ${
-              allWorkspaces
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-            }`}
-          >
-            {WIKI_ALL_WORKSPACES_LABEL}
-          </button>
           <WikiViewToggle
             value={view}
             onChange={onPickView}

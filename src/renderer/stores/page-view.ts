@@ -51,8 +51,11 @@ interface PageViewState {
   setPage: (page: AppPage) => void
   /** Open the wiki page for a workspace path (null: no workspace yet).
    *  While the wiki is open it only switches the workspace; the page to
-   *  return to is kept. */
-  openWiki: (projectPath: string | null) => void
+   *  return to is kept. `allOfK2`: open on the server-wide map (the top
+   *  bar's Wiki tab); deep links (View Wiki, nav menus) open the workspace. */
+  openWiki: (projectPath: string | null, opts?: { allOfK2?: boolean }) => void
+  /** The last openWiki asked for All of K2 (WikiPage reads it when it opens). */
+  wikiOpenAll: boolean
   /** Close the wiki and return to the page it was opened from. */
   closeWiki: () => void
   /** The Wiki page's view: standard reading view, 2D graph or 3D graph.
@@ -69,6 +72,7 @@ export const usePageViewStore = create<PageViewState>((set) => ({
   wikiProjectPath: null,
   wikiReturnPage: 'agents',
   lastWikiPath: null,
+  wikiOpenAll: false,
   wikiView: readWikiViewPref(),
   setWikiView: (view) => {
     writeWikiViewPref(view)
@@ -82,9 +86,10 @@ export const usePageViewStore = create<PageViewState>((set) => ({
       wikiProjectPath: page === 'wiki' ? s.wikiProjectPath : null,
       wikiReturnPage: page === 'wiki' && s.page !== 'wiki' ? s.page : s.wikiReturnPage,
     })),
-  openWiki: (projectPath) =>
+  openWiki: (projectPath, opts) =>
     set((s) => ({
       page: 'wiki',
+      wikiOpenAll: opts?.allOfK2 === true,
       wikiProjectPath: projectPath,
       wikiReturnPage: s.page === 'wiki' ? s.wikiReturnPage : s.page,
       lastWikiPath: projectPath ?? s.lastWikiPath,

@@ -20,6 +20,7 @@ import {
   extractBriefOptions,
   filterByScope,
   isAssignedToMe,
+  isWaitingOnSomeone,
   myAssigneeNames,
   quickAnswerOptions,
 } from './feedback-api'
@@ -68,6 +69,11 @@ describe('scopes', () => {
     { id: 'b', status: 'answered' as const, assignees: ['Rosson'] },
     { id: 'c', status: 'waiting' as const, assignees: ['julie'] },
     { id: 'd', status: 'waiting' as const, assignees: [] },
+    { id: 'e', status: 'needs_discussion' as const, assignees: ['owner'] },
+    { id: 'f', status: 'needs_discussion' as const, assignees: [] },
+    { id: 'g', status: 'planned' as const, assignees: ['owner'] },
+    { id: 'h', status: 'resolved' as const, assignees: ['owner'] },
+    { id: 'i', status: 'dismissed' as const, assignees: ['owner'] },
   ]
 
   it('defaults to Waiting on me (GitHub #75)', () => {
@@ -80,15 +86,26 @@ describe('scopes', () => {
     expect(myAssigneeNames(null, 'Rosson')).toEqual([])
   })
 
-  it('Mine = assigned to me; Waiting on me = mine and waiting; All = all', () => {
+  it('Mine = assigned to me; Waiting on me = mine and waiting or needs discussion; All = all', () => {
     const owner = myAssigneeNames({ owner: true }, 'Rosson')
-    expect(filterByScope(rows, 'mine', owner).map((r) => r.id)).toEqual(['a', 'b'])
-    expect(filterByScope(rows, 'waiting', owner).map((r) => r.id)).toEqual(['a'])
-    expect(filterByScope(rows, 'all', owner).map((r) => r.id)).toEqual(['a', 'b', 'c', 'd'])
+    expect(filterByScope(rows, 'mine', owner).map((r) => r.id)).toEqual(['a', 'b', 'e', 'g', 'h', 'i'])
+    // Waiting + needs discussion kept; answered / planned / resolved /
+    // dismissed dropped; unassigned (d, f) and someone else's (c) dropped.
+    expect(filterByScope(rows, 'waiting', owner).map((r) => r.id)).toEqual(['a', 'e'])
+    expect(filterByScope(rows, 'waiting', []).map((r) => r.id)).toEqual([])
+    expect(filterByScope(rows, 'all', owner).map((r) => r.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'])
     const julie = myAssigneeNames({ owner: false, username: 'Julie' }, '')
     expect(filterByScope(rows, 'mine', julie).map((r) => r.id)).toEqual(['c'])
     expect(isAssignedToMe({ assignees: [] }, owner)).toBe(false)
     expect(filterByScope(rows, 'mine', []).map((r) => r.id)).toEqual([])
+  })
+
+  it('Waiting on me statuses: waiting and needs_discussion only', () => {
+    expect(isWaitingOnSomeone('waiting')).toBe(true)
+    expect(isWaitingOnSomeone('needs_discussion')).toBe(true)
+    for (const s of ['answered', 'planned', 'resolved', 'dismissed'] as const) {
+      expect(isWaitingOnSomeone(s)).toBe(false)
+    }
   })
 
   it('initials', () => {

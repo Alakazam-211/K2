@@ -257,8 +257,10 @@ pub enum SewVerb {
     MediaUninstall,
     /// Stdin: [`crate::sew::MediaRequest`] (no tarball) → `sew media install
     /// --reconfigure --config-json`: a new `voice.public_url`, node IP or
-    /// TURN material on an installed engine (K13).
-    MediaReconfigure,
+    /// TURN material on an installed engine (K13). `restart_now` adds
+    /// `--restart --now` (a new node IP: calls on the old one are already
+    /// broken, so the engine drains and restarts at once).
+    MediaReconfigure { restart_now: bool },
     /// Stdin: [`crate::sew::TurnCertRequest`] → `sew media turn-cert --cert
     /// <staged> --key <staged> --when-idle` (renewal, K13).
     MediaTurnCert,
@@ -299,7 +301,8 @@ impl SewVerb {
             ["token"] => Self::Token,
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
-            ["media", "reconfigure"] => Self::MediaReconfigure,
+            ["media", "reconfigure"] => Self::MediaReconfigure { restart_now: false },
+            ["media", "reconfigure", "restart-now"] => Self::MediaReconfigure { restart_now: true },
             ["media", "turn-cert"] => Self::MediaTurnCert,
             ["media", "status"] => Self::MediaStatus,
             ["media", "enable"] => Self::MediaEnable,
@@ -336,7 +339,8 @@ impl SewVerb {
             Self::Token => s(&["token"]),
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
-            Self::MediaReconfigure => s(&["media", "reconfigure"]),
+            Self::MediaReconfigure { restart_now: false } => s(&["media", "reconfigure"]),
+            Self::MediaReconfigure { restart_now: true } => s(&["media", "reconfigure", "restart-now"]),
             Self::MediaTurnCert => s(&["media", "turn-cert"]),
             Self::MediaStatus => s(&["media", "status"]),
             Self::MediaEnable => s(&["media", "enable"]),
@@ -376,7 +380,7 @@ impl SewVerb {
             | Self::Token
             | Self::MediaInstall
             | Self::MediaUninstall
-            | Self::MediaReconfigure
+            | Self::MediaReconfigure { .. }
             | Self::MediaTurnCert
             | Self::MediaEnable
             | Self::MediaDisable
@@ -387,7 +391,7 @@ impl SewVerb {
     fn stdin_cap(&self) -> Option<usize> {
         match self {
             Self::Stage | Self::StageMedia => Some(CAP_INSTALL_BIN),
-            Self::Install | Self::Config | Self::MediaInstall | Self::MediaReconfigure | Self::MediaTurnCert => {
+            Self::Install | Self::Config | Self::MediaInstall | Self::MediaReconfigure { .. } | Self::MediaTurnCert => {
                 Some(CAP_SEW_JSON)
             }
             Self::RotateMaster => Some(CAP_SEW_KEY),
@@ -421,7 +425,8 @@ impl SewVerb {
             Self::Token,
             Self::MediaInstall,
             Self::MediaUninstall,
-            Self::MediaReconfigure,
+            Self::MediaReconfigure { restart_now: false },
+            Self::MediaReconfigure { restart_now: true },
             Self::MediaTurnCert,
             Self::MediaStatus,
             Self::MediaEnable,
@@ -1747,7 +1752,7 @@ mod tests {
                     SewVerb::Install
                     | SewVerb::Config
                     | SewVerb::MediaInstall
-                    | SewVerb::MediaReconfigure
+                    | SewVerb::MediaReconfigure { .. }
                     | SewVerb::MediaTurnCert,
                 ) => {
                     assert_eq!(cap, Some(CAP_SEW_JSON))
@@ -1798,6 +1803,7 @@ mod tests {
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],
             &["engine", "sew", "media", "reconfigure"],
+            &["engine", "sew", "media", "reconfigure", "restart-now"],
             &["engine", "sew", "media", "turn-cert"],
             &["engine", "sew", "media", "enable"],
             &["engine", "sew", "media", "disable"],
@@ -1866,6 +1872,8 @@ mod tests {
             &["engine", "sew", "media"],
             &["engine", "sew", "media", "upgrade"],
             &["engine", "sew", "media", "reconfigure", "wss://hearth.box.k2.dev"],
+            &["engine", "sew", "media", "reconfigure", "--restart", "--now"],
+            &["engine", "sew", "media", "reconfigure", "restart-now", "x"],
             &["engine", "sew", "media", "turn-cert", "/etc/shadow", "/etc/shadow"],
             &["engine", "sew", "media", "turn-cert", "--now"],
             &["engine", "sew", "media", "status", "--check"],

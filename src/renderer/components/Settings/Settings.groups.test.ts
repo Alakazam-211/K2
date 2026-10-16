@@ -34,7 +34,7 @@ describe('Settings → Language Models group (was LLMs)', () => {
         kind: 'group',
         title: 'Language Models',
         items: [
-          { id: 'agents', label: 'Models' },
+          { id: 'agents', label: 'Providers / Models' },
           { id: 'llm-tokens', label: 'Subs / Tokens' },
           { id: 'token-usage', label: 'Usage' },
         ],
@@ -69,7 +69,7 @@ describe('Settings search: Language Models pages (was LLMs)', () => {
   it('labels the pages Models, Subs / Tokens, Usage', () => {
     expect(LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!.label).toBe('Subs / Tokens')
     expect(TOKEN_USAGE_MANIFEST.find((e) => e.id === 'token-usage.machine')!.label).toBe('Usage')
-    expect(SECTION_LABELS.agents).toBe('Models')
+    expect(SECTION_LABELS.agents).toBe('Providers / Models')
   })
 
   it('old and new words both find them', () => {

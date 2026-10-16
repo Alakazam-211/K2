@@ -595,7 +595,9 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         if installed.split('+').next() != Some(pin_v) {
             return Err(("install", format!("Sew reports version {installed}, the pin is {pin_v}")));
         }
-        allow_changed = out.pointer("/allowUid/changed").and_then(Value::as_bool).unwrap_or(false);
+        // SW5: Sew wrote the daemon's uid to [mgmt] allow_uids itself; a
+        // sew.service that was already up must restart to read it.
+        allow_changed = out.pointer("/allowUid/restartNeeded").and_then(Value::as_bool).unwrap_or(false);
         done(env, "install");
     }
 

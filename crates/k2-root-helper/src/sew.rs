@@ -16,9 +16,11 @@
 //! - **Sew's exit codes are data.** `install`, `upgrade`, `rollback`,
 //!   `purge`, `restore`, … answer `{"sewExit": n, "sew": <Sew's JSON>,
 //!   "stderrTail": "…"}` with helper exit 0; the daemon maps them (S29 §7.5).
-//! - **No groups, no firewall.** The daemon user never joins `sew-mgmt`:
-//!   its uid goes into `[mgmt] allow_uids` (Sew SW7) and it reads the mgmt
-//!   token through `engine sew token`. The helper opens no ports.
+//! - **No groups, no firewall, no edits of Sew's files.** The daemon user
+//!   never joins `sew-mgmt`: its uid rides `sew install`'s JSON as
+//!   `mgmt_allow_uids` and Sew writes `[mgmt] allow_uids` (SW5 + SW7); the
+//!   daemon reads the mgmt token through `engine sew token`. The helper
+//!   opens no ports.
 
 use std::ffi::OsStr;
 use std::io::Read;
@@ -432,7 +434,13 @@ fn install(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
     if v != pinned().version {
         return Err(Fail::state(format!("install refused: Sew {v} is installed, the pin is {}", pinned().version)));
     }
-    let path = put_json(ctx, SEW_STAGE_INSTALL_JSON, &req.sew_inputs())?;
+    // SW5 + SW7: the daemon's uid (from the caller check, never from
+    // input) rides Sew's own install JSON; `sew install` writes `[mgmt]
+    // allow_uids` itself. K2 never edits sew.toml.
+    let path = put_json(ctx, SEW_STAGE_INSTALL_JSON, &req.sew_inputs(uid))?;
+    // Sew reads allow_uids at start: a sew.service that is already up
+    // (a re-install over a running server) must restart to apply it.
+    let was_active = unit_state(ctx, UNIT_SEW) == "active";
     let mut key = req.master_key.trim_end_matches('\n').as_bytes().to_vec();
     key.push(b'\n');
     let res = run_sew(ctx, &["install", "--config-json", &path, "--master-key-from", "-", "--no-start"], Some(&key));
@@ -440,54 +448,9 @@ fn install(ctx: &Ctx, stdin: &[u8], who: &Caller) -> HResult<J> {
     let _ = remove_file(ctx, SEW_STAGE_INSTALL_JSON);
     let mut out = res?;
     if out["sewExit"] == 0 {
-        let changed = allow_uid(ctx, uid)?;
-        out["allowUid"] = json!({"uid": uid, "changed": changed});
+        out["allowUid"] = json!({"uid": uid, "restartNeeded": was_active});
     }
     Ok(out)
-}
-
-/// SW7: put the daemon's uid (from the caller check, never from input) in
-/// `[mgmt] allow_uids` of `/etc/sew/sew.toml`, keeping every other key and
-/// the file's owner and mode. `Ok(true)` when the file changed (Sew reads
-/// it at start: a running `sew.service` needs a restart).
-pub fn allow_uid(ctx: &Ctx, uid: u32) -> HResult<bool> {
-    let (d, n) = open_parent(ctx, SEW_CONFIG)?.ok_or_else(|| Fail::state("no /etc/sew (sew install did not run)"))?;
-    let name = OsStr::new(&n);
-    let st = d
-        .lstat(name)
-        .map_err(|e| Fail::io_err("stat sew.toml", e))?
-        .ok_or_else(|| Fail::state("no /etc/sew/sew.toml"))?;
-    if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
-        return Err(Fail::state("refused: sew.toml is not a regular file"));
-    }
-    let text = d
-        .read_file(name, 1024 * 1024)
-        .map_err(|e| Fail::io_err("read sew.toml", e))?
-        .unwrap_or_default();
-    let text = String::from_utf8(text).map_err(|_| Fail::state("sew.toml is not UTF-8"))?;
-    let mut doc: toml::Table = text.parse().map_err(|_| Fail::state("sew.toml does not parse"))?;
-    let mgmt = doc
-        .entry("mgmt")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| Fail::state("sew.toml [mgmt] is not a table"))?;
-    let list = mgmt
-        .entry("allow_uids")
-        .or_insert_with(|| toml::Value::Array(Vec::new()))
-        .as_array_mut()
-        .ok_or_else(|| Fail::state("sew.toml mgmt.allow_uids is not a list"))?;
-    if list.iter().any(|v| v.as_integer() == Some(uid as i64)) {
-        return Ok(false);
-    }
-    if list.len() >= 16 {
-        return Err(Fail::state("sew.toml mgmt.allow_uids is full (16)"));
-    }
-    list.push(toml::Value::Integer(uid as i64));
-    let out = toml::to_string(&doc).map_err(|_| Fail::io("encode sew.toml"))?;
-    let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
-    d.write_atomic(name, out.as_bytes(), (st.st_mode as u32) & 0o7777, owner)
-        .map_err(|e| Fail::io_err("write sew.toml", e))?;
-    Ok(true)
 }
 
 fn config(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {

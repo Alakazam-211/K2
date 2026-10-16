@@ -751,6 +751,27 @@ fn audit_widget_post(origin: &overlay::WidgetOrigin, from: &str, addr: &str, tex
     ));
 }
 
+/// One daemon-written line on a workspace's main Thread, for its human
+/// (clone proposals, prd-clone-carries-threads-and-vault-v1 §4.4). Plain
+/// text doc; no inject, no wake, no push. Returns the doc id.
+pub(crate) fn post_workspace_notice(addr: &str, from: &str, text: &str) -> Result<String, String> {
+    let resolved = resolve_addr(addr).map_err(|e| e.body)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) = overlay::post_thread(
+        &conn,
+        &resolved.conversation_id,
+        &resolved.project_id,
+        from,
+        &resolved.addr,
+        text,
+        "thread",
+    )?;
+    drop(conn);
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    Ok(item.id)
+}
+
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     // A23: a Thread turn's `startedAt` is the daemon's ms receipt time.
     let received_at = chrono::Utc::now().timestamp_millis();

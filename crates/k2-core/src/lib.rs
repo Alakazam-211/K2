@@ -76,6 +76,8 @@ pub mod cli_stage;
 /// Pre-trust Claude/Codex/Grok/Gemini folders on workspace add + harness spawn.
 pub mod cli_folder_trust;
 pub mod clone;
+// Agent-proposed clones held for a person (prd-clone-carries-threads-and-vault-v1 §4.4).
+pub mod clone_proposals;
 pub mod companion;
 // K2 compute nodes, controller side (prd-k2-compute-nodes-v1).
 pub mod compute;

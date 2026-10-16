@@ -479,6 +479,7 @@ mod tests {
             disabled,
             role,
             was_viewer: false,
+            can_clone: true,
         }
     }
 

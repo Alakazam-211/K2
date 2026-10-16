@@ -1354,6 +1354,12 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0170_app_walls_lite",
             include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
+        // 0181 — agent-proposed clones held for a person (prd-clone-
+        // carries-threads-and-vault-v1 §5.2, CL21). New table only.
+        (
+            "0181_clone_proposals",
+            include_str!("../../drizzle_sql/0181_clone_proposals.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2014,7 +2020,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0170_app_walls_lite",
+            last_name, "0181_clone_proposals",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2051,6 +2057,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0181_clone_proposals",
             ],
             "tail migrations out of order: {names:?}"
         );

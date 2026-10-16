@@ -994,6 +994,12 @@ async fn async_main() {
     // installs, self-correcting for affected ones.
     run_repair_cloned_session_paths();
 
+    // 0.46.0 (a clone carries its Threads, CL5): a clone's imported main
+    // Thread that waited for a pinned Chat settles onto the pin once one
+    // is known (also settled on resolve and on every pin write). Cheap
+    // (indexed on pending rows) and non-fatal.
+    run_settle_imported_threads();
+
     // 0.39.0 K2 Connect prep: `legacy_agent_types_v1` migration moved
     // from `src-tauri/src/lib.rs` (where it ran only on Tauri startup).
     // Headless daemons / K2 Connect now pick up the pre-0.34 pod-
@@ -2253,6 +2259,17 @@ fn run_repair_cloned_session_paths() {
             r.stale_source_path,
             r.project_path,
         );
+    }
+}
+
+/// Boot sweep for pending Thread imports (`overlay::transfer::settle_all_pending`).
+fn run_settle_imported_threads() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match k2_core::overlay::transfer::settle_all_pending(&conn) {
+        Ok(done) if done.is_empty() => {}
+        Ok(done) => log_debug!("[daemon/clone-threads] settled {} pending imported Thread(s)", done.len()),
+        Err(e) => log_debug!("[daemon/clone-threads] WARN: settle pending imports: {e}"),
     }
 }
 

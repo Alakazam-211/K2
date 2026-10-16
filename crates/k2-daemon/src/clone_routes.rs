@@ -36,6 +36,7 @@ use k2_core::clone::DestinationClass;
 use k2_core::db;
 use k2_core::db::schema::Project;
 use k2_core::log_debug;
+use k2_core::overlay::transfer::{ImportReport, ThreadsChoice, ThreadsSummary};
 use k2_core::projects_ops as pops;
 use serde::Deserialize;
 
@@ -53,6 +54,15 @@ struct BundleBody {
     /// Carry secrets over the (encrypted) link instead of scrubbing them.
     #[serde(default)]
     carry_secrets: bool,
+    /// Bring the Thread (prd-clone-carries-threads-and-vault-v1 §7.1):
+    /// `"all"` | `"none"` | `{"sinceDays": N}`. Absent = `"all"` (the
+    /// dialog's "Bring the Thread" is ticked by default, D3).
+    #[serde(default)]
+    threads: ThreadsChoice,
+    /// The clone id to stamp (a proposal or the dialog may pick it so the
+    /// vault carry can bind to it). Absent = minted here.
+    #[serde(default)]
+    clone_id: Option<String>,
 }
 
 /// How a bundle build failed — carried out of [`build_workspace_bundle`]
@@ -71,6 +81,69 @@ struct BundleOutcome {
     size_bytes: u64,
     entry_count: usize,
     scrubbed_count: usize,
+    /// The manifest's `clone_id` (binds the Threads import and the vault
+    /// carry to this bundle).
+    clone_id: String,
+    /// `threads/threads.json` summary, when the clone brings its Threads
+    /// and the workspace has any.
+    threads: Option<ThreadsSummary>,
+}
+
+/// Slice B API (prd-clone-carries-threads-and-vault-v1 §7.2): the
+/// `threads/threads.json` bytes + summary for the registered workspace at
+/// `project_path`, or `None` when `choice` is `none`, the path is not a
+/// registered workspace, or it has no Thread lines. Thread collection
+/// only; never Chatter or a secret value. `source_host` defaults to this
+/// server's Connect host.
+pub fn export_threads_for_clone(
+    project_path: &str,
+    choice: ThreadsChoice,
+    clone_id: &str,
+    source_host: Option<&str>,
+) -> Result<Option<(Vec<u8>, ThreadsSummary)>, String> {
+    use k2_core::overlay::transfer as t;
+    if !choice.includes_threads() {
+        return Ok(None);
+    }
+    let db = db::shared();
+    let conn = db.lock();
+    let Some(project_id) = project_id_for_path(&conn, project_path)? else {
+        return Ok(None);
+    };
+    let host = source_host.map(str::to_string).unwrap_or_else(t::default_source_host);
+    let export = t::export_project_threads(&conn, &project_id, &t::ExportOptions::new(clone_id, host, choice))?;
+    if export.conversations.is_empty() {
+        return Ok(None);
+    }
+    let json = export.to_json()?;
+    let summary = export.summary(json.len());
+    Ok(Some((json, summary)))
+}
+
+/// Registered project id for a workspace path (exact, trailing-slash or
+/// canonical spelling).
+fn project_id_for_path(conn: &rusqlite::Connection, project_path: &str) -> Result<Option<String>, String> {
+    let trimmed = project_path.trim_end_matches('/');
+    let canonical = std::fs::canonicalize(trimmed)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| trimmed.to_string());
+    let mut stmt = conn
+        .prepare("SELECT id, path FROM projects")
+        .map_err(|e| format!("project lookup: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("project lookup: {e}"))?;
+    for row in rows {
+        let (id, path) = row.map_err(|e| format!("project lookup row: {e}"))?;
+        let p = path.trim_end_matches('/');
+        if p == trimmed || p == canonical {
+            return Ok(Some(id));
+        }
+        if std::fs::canonicalize(p).is_ok_and(|c| c.to_string_lossy() == canonical) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
 }
 
 /// Build a workspace clone bundle into `<home>/.k2/clone-tmp/` — the shared
@@ -81,6 +154,8 @@ fn build_workspace_bundle(
     project_path: &str,
     opts: &clone::CloneOptions,
     home: &std::path::Path,
+    threads: ThreadsChoice,
+    clone_id: Option<String>,
 ) -> Result<BundleOutcome, BundleError> {
     let inv = clone::inventory(project_path, opts.clone())
         .map_err(|e| BundleError::BadRequest(format!("inventory failed: {e}")))?;
@@ -165,13 +240,36 @@ fn build_workspace_bundle(
         );
     }
 
-    clone::build_bundle(
+    // Slice B: the clone's Threads ride as threads/threads.json, bound to
+    // this bundle's clone id.
+    let clone_id = clone_id
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let threads_part = export_threads_for_clone(&inv.project_path, threads, &clone_id, None)
+        .map_err(|e| BundleError::Internal(format!("threads export: {e}")))?;
+    let threads_summary = threads_part.as_ref().map(|(_, s)| *s);
+    if let Some(s) = &threads_summary {
+        log_debug!(
+            "[daemon/clone] bundling {} Thread conversation(s), {} line(s) ({} dropped by caps)",
+            s.conversations,
+            s.docs,
+            s.dropped,
+        );
+    }
+
+    clone::build_bundle_with_extras(
         &inv,
         opts,
         created_at,
         settings,
         pinned_chat,
         chat_pins,
+        clone::BundleExtras {
+            clone_id: Some(clone_id.clone()),
+            threads_json: threads_part.map(|(json, _)| json),
+            threads: threads_summary,
+        },
         &bundle_path,
     )
     .map_err(|e| BundleError::Internal(format!("build bundle: {e}")))?;
@@ -183,6 +281,8 @@ fn build_workspace_bundle(
         size_bytes: size,
         entry_count,
         scrubbed_count,
+        clone_id,
+        threads: threads_summary,
     })
 }
 
@@ -209,7 +309,7 @@ pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
-    let out = match build_workspace_bundle(&b.project_path, &opts, &home) {
+    let out = match build_workspace_bundle(&b.project_path, &opts, &home, b.threads, b.clone_id.clone()) {
         Ok(o) => o,
         Err(BundleError::BadRequest(e)) => return CliResponse::bad_request(e),
         Err(BundleError::Internal(e)) => return CliResponse::internal_error(e),
@@ -218,12 +318,14 @@ pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
     CliResponse::ok_json(
         serde_json::json!({
             "bundle_path": out.bundle_path.to_string_lossy(),
+            "clone_id": out.clone_id,
             "manifest_summary": {
                 "entry_count": out.entry_count,
                 "scrubbed_secret_count": out.scrubbed_count,
                 "size_bytes": out.size_bytes,
                 "include_all_history": !b.live_only,
                 "carry_secrets": b.carry_secrets,
+                "threads": out.threads,
             }
         })
         .to_string(),
@@ -251,18 +353,26 @@ pub fn handle_clone_unpack(body: &[u8]) -> CliResponse {
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
-    match unpack_and_register(
+    match unpack_and_register_with_threads(
         std::path::Path::new(&b.bundle_path),
         std::path::Path::new(&b.dest_parent),
         &home,
     ) {
-        Ok((project, dest_path)) => CliResponse::ok_json(
-            serde_json::json!({
-                "project": project,
-                "dest_path": dest_path,
-            })
-            .to_string(),
-        ),
+        Ok(out) => {
+            let threads = out.threads.as_ref();
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "project": out.project,
+                    "dest_path": out.dest_path,
+                    "clone_id": out.clone_id,
+                    "threads_imported": threads.map_or(0, |r| r.docs_imported),
+                    "threads_skipped": threads.map_or(0, |r| r.docs_skipped),
+                    "threads": out.threads,
+                    "threads_error": out.threads_error,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -275,6 +385,31 @@ pub fn unpack_and_register(
     dest_parent: &std::path::Path,
     home: &std::path::Path,
 ) -> Result<(Project, String), String> {
+    let out = unpack_and_register_with_threads(bundle_path, dest_parent, home)?;
+    Ok((out.project, out.dest_path))
+}
+
+/// What [`unpack_and_register_with_threads`] did.
+#[derive(Debug)]
+pub struct UnpackOutcome {
+    pub project: Project,
+    pub dest_path: String,
+    /// The manifest's clone id (`None` on bundles from before 0.46.0).
+    pub clone_id: Option<String>,
+    /// The Threads import (`None`: the bundle carried no Threads).
+    pub threads: Option<ImportReport>,
+    /// The Threads import failed; the clone itself landed (non-fatal).
+    pub threads_error: Option<String>,
+}
+
+/// Slice B API: [`unpack_and_register`] + the Threads import (§7.3), run
+/// after the clone's identity is applied. Non-fatal: a failed import is
+/// reported in `threads_error`, the workspace stays registered.
+pub fn unpack_and_register_with_threads(
+    bundle_path: &std::path::Path,
+    dest_parent: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<UnpackOutcome, String> {
     // 1. Extract files at recomputed paths; get the manifest back.
     let (result, manifest) = clone::unpack_bundle(bundle_path, dest_parent, home)?;
     let dest_path = result.dest_path.to_string_lossy().to_string();
@@ -386,7 +521,89 @@ pub fn unpack_and_register(
         }
     }
 
-    Ok((project, dest_path))
+    // 5. Threads (slice B): import `threads/threads.json` under the clone's
+    //    pin / sidecar keys / pending key. Never fails the unpack.
+    let (threads, threads_error) = match result.threads_json.as_deref() {
+        None => (None, None),
+        Some(bytes) => match import_threads_for_clone(&project.id, &manifest, bytes, &Default::default()) {
+            Ok(rep) => {
+                log_debug!(
+                    "[daemon/clone] imported {} Thread line(s) into {} conversation(s) (pending: {}, detached: {})",
+                    rep.docs_imported,
+                    rep.conversations.len(),
+                    rep.pending,
+                    rep.detached,
+                );
+                (Some(rep), None)
+            }
+            Err(e) => {
+                log_debug!("[daemon/clone] WARN: Threads import failed (non-fatal): {e}");
+                (None, Some(e))
+            }
+        },
+    };
+
+    Ok(UnpackOutcome { project, dest_path, clone_id: manifest.clone_id.clone(), threads, threads_error })
+}
+
+/// Slice B API (§7.3): import a clone's `threads/threads.json` into the
+/// registered clone `project_id`. The export must belong to this bundle
+/// (`clone_id` equal to the manifest's when the manifest has one). Sidecars
+/// whose transcripts are in the manifest keep their addresses; the rest
+/// are detached read-only history. `copied_secret_names` (slice A) lets
+/// secret-card refs point at the clone's copies. Idempotent per line.
+pub fn import_threads_for_clone(
+    project_id: &str,
+    manifest: &clone::CloneManifest,
+    threads_json: &[u8],
+    copied_secret_names: &std::collections::HashSet<String>,
+) -> Result<ImportReport, String> {
+    use k2_core::overlay::transfer as t;
+    let export = t::ThreadsExport::parse(threads_json)?;
+    if let Some(id) = manifest.clone_id.as_deref() {
+        if id != export.clone_id {
+            return Err(format!(
+                "threads export belongs to clone {} but the bundle is clone {id}",
+                export.clone_id
+            ));
+        }
+    }
+    let travelled = travelled_sessions(manifest);
+    let db = db::shared();
+    let conn = db.lock();
+    let ctx = t::ImportContext {
+        project_id: project_id.to_string(),
+        clone_handle: None,
+        travelled_sessions: travelled,
+        copied_secret_names: copied_secret_names.clone(),
+    };
+    t::import_threads(&conn, &export, &ctx)
+}
+
+/// Session / conversation ids whose transcript files are in the bundle:
+/// Claude `<id>.jsonl` stems, provider file stems, and any id a provider
+/// path names (rollout files embed the id).
+fn travelled_sessions(manifest: &clone::CloneManifest) -> std::collections::HashSet<String> {
+    let mut out: std::collections::HashSet<String> = clone::session_ids_from_entries(
+        manifest.entries.iter().map(|e| (e.class, e.rel_path.clone())),
+    )
+    .into_iter()
+    .collect();
+    for e in &manifest.entries {
+        if !matches!(e.class, DestinationClass::Session | DestinationClass::Provider) {
+            continue;
+        }
+        // Uuid-shaped runs inside a provider path (`rollout-…-<uuid>.jsonl`).
+        let rel = e.rel_path.as_str();
+        for (i, _) in rel.char_indices() {
+            if let Some(cand) = rel.get(i..i + 36) {
+                if k2_core::workspace_session_handles::is_uuid_shape(cand) {
+                    out.insert(cand.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 // ── pull pack job (0.40.22 "Clone to this computer") ──────────────────
@@ -418,6 +635,12 @@ pub struct PackJob {
     pub entry_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scrubbed_secret_count: Option<u64>,
+    /// The bundle's clone id (on `done`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clone_id: Option<String>,
+    /// `threads/threads.json` summary (on `done`, when Threads travel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threads: Option<ThreadsSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -508,6 +731,8 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
         home_override: None,
     };
 
+    let threads = b.threads;
+    let clone_id = b.clone_id.clone();
     let job_id = new_pack_job_id();
     insert_pack_job(PackJob {
         job_id: job_id.clone(),
@@ -516,6 +741,8 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
         size_bytes: None,
         entry_count: None,
         scrubbed_secret_count: None,
+        clone_id: None,
+        threads: None,
         error: None,
     });
 
@@ -528,6 +755,8 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
             &opts,
             &home,
             k2_core::fs_commands::MAX_TRANSFER_SIZE,
+            threads,
+            clone_id,
         );
     });
 
@@ -559,8 +788,10 @@ fn run_pack_job(
     opts: &clone::CloneOptions,
     home: &std::path::Path,
     max_bytes: u64,
+    threads: ThreadsChoice,
+    clone_id: Option<String>,
 ) {
-    match build_workspace_bundle(project_path, opts, home) {
+    match build_workspace_bundle(project_path, opts, home, threads, clone_id) {
         Ok(out) => {
             // Transfer ceiling: a bundle the download machinery would refuse
             // to move must not linger on disk as a terminal "success".
@@ -588,6 +819,8 @@ fn run_pack_job(
                 j.size_bytes = Some(out.size_bytes);
                 j.entry_count = Some(out.entry_count as u64);
                 j.scrubbed_secret_count = Some(out.scrubbed_count as u64);
+                j.clone_id = Some(out.clone_id.clone());
+                j.threads = out.threads;
             });
         }
         Err(BundleError::BadRequest(e)) | Err(BundleError::Internal(e)) => {

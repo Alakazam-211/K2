@@ -115,6 +115,26 @@ fn forbidden(hint: impl std::fmt::Display) -> CliResponse {
 }
 
 /// Any Thread use of a `gb:` address other than a person's read.
+/// 409 `imported_read_only` (CL31): a write to Thread history that came
+/// with a clone (an imported line, or an `import:` conversation).
+fn imported_read_only() -> CliResponse {
+    error_json(
+        "409 Conflict",
+        "imported_read_only",
+        "this is imported Thread history from a clone; it is read-only",
+    )
+}
+
+/// `Some(409)` when the resolved conversation (or `doc_id` in it) is
+/// imported history.
+fn refuse_if_imported(resolved: &ResolvedOverlay, doc_id: Option<&str>) -> Option<CliResponse> {
+    match k2_core::overlay::transfer::is_read_only(&resolved.conversation_id, doc_id) {
+        Ok(false) => None,
+        Ok(true) => Some(imported_read_only()),
+        Err(e) => Some(error_json("500 Internal Server Error", "overlay", e)),
+    }
+}
+
 fn gb_refused() -> CliResponse {
     error_json(
         "403 Forbidden",
@@ -242,6 +262,25 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     if crate::grokbots_routes::is_gb_addr(addr) {
         return Err(gb_refused());
     }
+    // `import:<id>`: imported history with no session of its own (a
+    // detached sidecar, or a clone's main Thread before its first pin).
+    // Readable by address; every write is refused (CL30/CL31).
+    if k2_core::overlay::transfer::is_import_key(addr) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let Some(project_id) = k2_core::overlay::transfer::project_for_import_key(&conn, addr)
+            .map_err(|e| error_json("500 Internal Server Error", "db", e))?
+        else {
+            return Err(not_found(format!("imported Thread not found: {addr}")));
+        };
+        return Ok(ResolvedOverlay {
+            conversation_id: addr.to_string(),
+            project_id,
+            addr: addr.to_string(),
+            requested_addr: addr.to_string(),
+            canonical_alias: false,
+        });
+    }
     let canonical_alias =
         k2_core::workspace_session_handles::split_workspace_handle(addr).is_none();
     match workspace_msg::resolve_msg_target(addr) {
@@ -274,6 +313,23 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
                 k2_core::workspace::resume_chat::ensure_custom_thread_pin(&path).or(pinned)
             } else {
                 pinned
+            };
+            // A clone's imported main Thread (CL5): settle it onto the pin
+            // once one is known; until then the address shows the pending
+            // history read-only instead of a 404.
+            let pinned = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                match pinned {
+                    Some(pin) => {
+                        if let Err(e) = k2_core::overlay::transfer::settle_pending(&conn, &project_id) {
+                            k2_core::log_debug!("[clone/threads] settle {project_id} on resolve: {e}");
+                        }
+                        Some(pin)
+                    }
+                    None => k2_core::overlay::transfer::pending_canonical_for(&conn, &project_id)
+                        .map_err(|e| error_json("500 Internal Server Error", "db", e))?,
+                }
             };
             let Some(conversation_id) = pinned else {
                 return Err(not_found(format!(
@@ -775,6 +831,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(r) = refuse_if_imported(&resolved, None) {
+        return r;
+    }
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }
@@ -976,6 +1035,9 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(r) = refuse_if_imported(&resolved, None) {
+        return r;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     let from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
@@ -1061,6 +1123,9 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(r) = refuse_if_imported(&resolved, None) {
+        return r;
+    }
     let principal = crate::caller_workspace::principal_from_params(params);
     let from = overlay_sender_from(params, &resolved);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
@@ -1349,6 +1414,9 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(r) = refuse_if_imported(&resolved, Some(&card_id)) {
+        return r;
+    }
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }
@@ -1431,6 +1499,9 @@ fn secret_card_human_only() -> CliResponse {
 /// Map a card store error: a card that is no longer pending is 409
 /// `card_not_pending` (its answer is final); anything else is usage.
 fn card_error(e: String) -> CliResponse {
+    if e == overlay::IMPORTED_READ_ONLY {
+        return imported_read_only();
+    }
     if e == overlay::CARD_NOT_PENDING {
         error_json(
             "409 Conflict",
@@ -1455,6 +1526,9 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(r) => r,
         Err(e) => return e,
     };
+    if let Some(r) = refuse_if_imported(&resolved, Some(&card_id)) {
+        return r;
+    }
     if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_POST) {
         return e;
     }

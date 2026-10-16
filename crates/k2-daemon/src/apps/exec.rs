@@ -227,8 +227,9 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, who: Who, params: H
             let mut buf = [0u8; 8192];
             let _ = stream.read(&mut buf).await;
             let resp = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{frame}Connection: close\r\n\r\n{body}",
+                body.len(),
+                frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
             );
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.flush().await;
@@ -399,7 +400,11 @@ pub async fn serve_shell(stream: &mut tokio::net::TcpStream, _who: Who, _params:
     let mut buf = [0u8; 8192];
     let _ = stream.read(&mut buf).await;
     let body = json!({ "error": { "code": EXEC_UNAVAILABLE, "hint": "k2 app shell reaches guarded Apps on Linux boxes only" } }).to_string();
-    let resp = format!("HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let resp = format!(
+        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{frame}Connection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
+    );
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

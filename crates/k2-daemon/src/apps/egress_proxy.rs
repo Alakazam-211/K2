@@ -111,12 +111,16 @@ fn status_text(s: u16) -> &'static str {
     }
 }
 
+/// The proxy's own answer (a refusal). It is meant for the App's HTTP
+/// client, but the listener is on loopback where a browser on the box can
+/// reach it too, so it carries the deny-all frame headers (FA6).
 fn refusal_bytes(app: &str, r: &Refused) -> Vec<u8> {
     let body = json!({ "error": { "code": r.code, "hint": r.hint, "app": app } }).to_string();
     format!(
-        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nX-K2-Egress: refused\r\n\r\n{body}",
+        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{frame}Connection: close\r\nX-K2-Egress: refused\r\n\r\n{body}",
         status_text(r.status),
-        body.len()
+        body.len(),
+        frame = k2_core::frame_policy::FramePolicy::deny_all().header_lines(),
     )
     .into_bytes()
 }

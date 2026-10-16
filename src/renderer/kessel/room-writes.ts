@@ -87,6 +87,12 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'git/stage-all': 'stage everything in B’s checkout',
   'git/commit': 'commit in B’s checkout',
   'git/discard': 'the Changes tab discards a file in B’s checkout (its copy goes to B’s Trash first)',
+  'git/init': 'the Changes tab’s Initialize repository makes B’s workspace root a git repository',
+  'git/notes/add': 'a review note on a changed line in B’s checkout',
+  'git/notes/update': 'edit your review note on B',
+  'git/notes/resolve': 'resolve (or reopen) a review note on B',
+  'git/notes/delete': 'delete your review note on B',
+  'git/notes/send': 'Send to agent: B delivers the open notes to the room’s agent on B',
 
   // Heartbeats (row launch and toggle; the scheduler is B's).
   'heartbeat/launch': 'Launch on a heartbeat row fires it on B (call site checks the room write)',

@@ -48,7 +48,7 @@ import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
-import { cachedIsGitRepo, probeIsGitRepo } from '@/stores/git-changes'
+import { cachedChangesAvailable, probeChangesAvailable } from '@/stores/git-changes'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 
@@ -326,9 +326,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
     let shown = optionHeld
-    // Changes (C2) shows only for a git repo: paint from the last answer at
+    // Changes shows for every workspace while the server can do git (C5;
+    // an older daemon: only in a repo). Paint from the last answer at
     // once, then ask `git/info` on the bar's server and repaint if it moved.
-    let isGitRepo = cachedIsGitRepo(room.scope, barCwd) === true
+    let isGitRepo = cachedChangesAvailable(room.scope, barCwd) === true
     let shownGit = isGitRepo
     let stopped = false
     const paint = (): void => {
@@ -340,7 +341,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo),
       )
     }
-    probeIsGitRepo(room.scope, barCwd).then(
+    probeChangesAvailable(room.scope, barCwd).then(
       (yes) => {
         isGitRepo = yes
         paint()

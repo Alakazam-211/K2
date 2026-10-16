@@ -537,6 +537,21 @@ export interface GitChangedEvent {
   rev: string
 }
 
+/** APP-LEVEL — Changes tab v1.1 (C5): the review notes on `workspacePath`
+ *  changed (added, edited, resolved, deleted or sent). Refetch
+ *  `GET /cli/git/notes`. */
+export interface GitNotesChangedEvent {
+  kind: 'git_notes_changed'
+  workspacePath: string
+}
+
+/** APP-LEVEL — `k2 changes open` (C5): a window whose room shows
+ *  `workspacePath` opens (or focuses) its Changes tab. */
+export interface OpenChangesEvent {
+  kind: 'open_changes'
+  workspacePath: string
+}
+
 /** APP-LEVEL — this computer's Zen files changed (prd-zen-mode-v1 Z12).
  *  Payload-free: the Zen store re-reads `GET /cli/zen/get` from the LOCAL
  *  daemon. Nothing about the file rides the frame. */
@@ -692,6 +707,8 @@ export type SessionEventMessage =
   | LlmAccountsChangedEvent
   | FsChangedEvent
   | GitChangedEvent
+  | GitNotesChangedEvent
+  | OpenChangesEvent
   | ZenChangedEvent
   | SourcesChangedEvent
   | GardenDataChangedEvent
@@ -1172,6 +1189,8 @@ type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
 type GitChangedHandler = (e: GitChangedEvent) => void
+type GitNotesChangedHandler = (e: GitNotesChangedEvent) => void
+type OpenChangesHandler = (e: OpenChangesEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
 type MailChangedHandler = (reason: string) => void
@@ -1222,6 +1241,8 @@ interface AppBusHandlers {
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
   fsChanged: Set<FsChangedHandler>
   gitChanged: Set<GitChangedHandler>
+  gitNotesChanged: Set<GitNotesChangedHandler>
+  openChanges: Set<OpenChangesHandler>
   mailChanged: Set<MailChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
@@ -1269,6 +1290,8 @@ function createBusState(scopeId: string): BusState {
       llmAccountsChanged: new Set(),
       fsChanged: new Set(),
       gitChanged: new Set(),
+      gitNotesChanged: new Set(),
+      openChanges: new Set(),
       mailChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
@@ -1533,6 +1556,19 @@ export function onGitChanged(scope: ServerScope, fn: GitChangedHandler): Unsubsc
   return addHandler(busFor(scope).handlers.gitChanged, fn)
 }
 
+/** Changes tab v1.1 (C5) — subscribe to APP-LEVEL `git_notes_changed` on
+ *  `scope`'s server. Filter on `workspacePath`. */
+export function onGitNotesChanged(scope: ServerScope, fn: GitNotesChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.gitNotesChanged, fn)
+}
+
+/** C5 — subscribe to APP-LEVEL `open_changes` (`k2 changes open`) on
+ *  `scope`'s server. The tabs store acts only for a workspace its room
+ *  shows. */
+export function onOpenChanges(scope: ServerScope, fn: OpenChangesHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.openChanges, fn)
+}
+
 /** Home 0.43.2 (Q7) — subscribe to APP-LEVEL `mail_changed` (mail server,
  *  domain or approval queue changed on `scope`'s server). Refetch signal;
  *  the handler gets the `reason`. Settings → Email is the consumer, so a
@@ -1710,6 +1746,12 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   git_changed: (h, m) => {
     for (const fn of h.gitChanged) fn(m)
   },
+  git_notes_changed: (h, m) => {
+    for (const fn of h.gitNotesChanged) fn(m)
+  },
+  open_changes: (h, m) => {
+    for (const fn of h.openChanges) fn(m)
+  },
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
@@ -1780,6 +1822,8 @@ export interface AppBus {
   onLlmAccountsChanged(fn: LlmAccountsChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onGitChanged(fn: GitChangedHandler): UnsubscribeFn
+  onGitNotesChanged(fn: GitNotesChangedHandler): UnsubscribeFn
+  onOpenChanges(fn: OpenChangesHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
@@ -1829,6 +1873,8 @@ export function openAppBus(scope: ServerScope): AppBus {
     onLlmAccountsChanged: (fn) => onLlmAccountsChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onGitChanged: (fn) => onGitChanged(scope, fn),
+    onGitNotesChanged: (fn) => onGitNotesChanged(scope, fn),
+    onOpenChanges: (fn) => onOpenChanges(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),

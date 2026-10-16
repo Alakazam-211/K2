@@ -21,7 +21,16 @@ import {
   buildFontFamilyExtension,
 } from '@/components/FileViewerPane/CodeEditor'
 import { k2DiffTheme, autoHeightTheme, fillHeightTheme } from './diffTheme'
+import { notesExtension, setNoteMarks, type NoteMark, type NotesHandlers } from './notesExtension'
 import type { ChangesDiffLayout } from './types'
+
+/** Review notes for this editor (C5): placed marks per side and the
+ *  callbacks. The old side only shows in split view. */
+export interface EditorNotes {
+  marks: { old: NoteMark[]; new: NoteMark[] }
+  canWrite: boolean
+  handlers: (side: 'old' | 'new') => NotesHandlers
+}
 
 /** Imperative handle for next/previous change. Positions are in the NEW
  *  text (side b), which is what both layouts navigate. */
@@ -47,6 +56,8 @@ export interface MergeDiffEditorProps {
   /** The cursor moved or the editor took focus (position on side b). */
   onCursor?: (pos: number) => void
   apiRef?: React.MutableRefObject<MergeDiffApi | null>
+  /** Review notes (C5); absent = no notes gutter. */
+  notes?: EditorNotes
 }
 
 /** The diff algorithm gives up on precise diffs after this long and falls
@@ -78,9 +89,16 @@ function useEditorLook(): { theme: Extension; highlight: Extension; font: Extens
 }
 
 export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element {
-  const { oldText, newText, filePath, layout, wrap, collapse, fill, onChunks, onCursor, apiRef } = props
+  const { oldText, newText, filePath, layout, wrap, collapse, fill, onChunks, onCursor, apiRef, notes } = props
   const hostRef = useRef<HTMLDivElement>(null)
-  const viewsRef = useRef<{ nav: EditorView; all: EditorView[]; destroy: () => void } | null>(null)
+  const viewsRef = useRef<{ nav: EditorView; all: EditorView[]; destroy: () => void; old: EditorView | null } | null>(null)
+  // Notes callbacks are read at event time; the editor never rebuilds for them.
+  const noteHandlers = useRef({ old: { current: null as NotesHandlers | null }, new: { current: null as NotesHandlers | null } })
+  noteHandlers.current.old.current = notes ? notes.handlers('old') : null
+  noteHandlers.current.new.current = notes ? notes.handlers('new') : null
+  const notesNow = useRef(notes)
+  notesNow.current = notes
+  const withNotes = !!notes
   const lookRef = useRef<{ theme: Compartment; wrap: Compartment }>({ theme: new Compartment(), wrap: new Compartment() })
   const onChunksRef = useRef(onChunks)
   onChunksRef.current = onChunks
@@ -125,10 +143,11 @@ export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element 
     let all: EditorView[]
     let destroy: () => void
     let starts: () => number[]
+    let oldView: EditorView | null = null
     if (layout === 'split') {
       const mv = new MergeView({
-        a: { doc: oldText, extensions: shared() },
-        b: { doc: newText, extensions: [shared(), cursorListener] },
+        a: { doc: oldText, extensions: [shared(), withNotes ? notesExtension(noteHandlers.current.old) : []] },
+        b: { doc: newText, extensions: [shared(), cursorListener, withNotes ? notesExtension(noteHandlers.current.new) : []] },
         parent: host,
         highlightChanges: true,
         gutter: true,
@@ -141,6 +160,7 @@ export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element 
       }
       nav = mv.b
       all = [mv.a, mv.b]
+      oldView = mv.a
       destroy = () => mv.destroy()
       starts = () => chunkStarts(mv.chunks)
     } else {
@@ -151,6 +171,7 @@ export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element 
           extensions: [
             shared(),
             cursorListener,
+            withNotes ? notesExtension(noteHandlers.current.new) : [],
             unifiedMergeView({
               original: oldText,
               highlightChanges: true,
@@ -168,7 +189,12 @@ export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element 
       destroy = () => view.destroy()
       starts = () => chunkStarts(getChunks(view.state)?.chunks ?? [])
     }
-    viewsRef.current = { nav, all, destroy }
+    viewsRef.current = { nav, all, destroy, old: oldView }
+    const n = notesNow.current
+    if (n) {
+      nav.dispatch({ effects: setNoteMarks.of({ marks: n.marks.new, canWrite: n.canWrite }) })
+      oldView?.dispatch({ effects: setNoteMarks.of({ marks: n.marks.old, canWrite: n.canWrite }) })
+    }
     if (apiRef) {
       apiRef.current = {
         goTo(pos) {
@@ -192,7 +218,18 @@ export function MergeDiffEditor(props: MergeDiffEditorProps): React.JSX.Element 
     }
     // `apiRef` is a stable ref object from the parent.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oldText, newText, filePath, layout, collapse, fill])
+  }, [oldText, newText, filePath, layout, collapse, fill, withNotes])
+
+  // Notes moved or changed: hand the editors their marks.
+  const marksNew = notes?.marks.new
+  const marksOld = notes?.marks.old
+  const canWriteNotes = notes?.canWrite ?? false
+  useEffect(() => {
+    const v = viewsRef.current
+    if (!v || !marksNew) return
+    v.nav.dispatch({ effects: setNoteMarks.of({ marks: marksNew, canWrite: canWriteNotes }) })
+    v.old?.dispatch({ effects: setNoteMarks.of({ marks: marksOld ?? [], canWrite: canWriteNotes }) })
+  }, [marksNew, marksOld, canWriteNotes])
 
   // Theme / font / wrap: reconfigure in place.
   useEffect(() => {

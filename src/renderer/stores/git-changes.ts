@@ -381,7 +381,36 @@ export async function probeIsGitRepo(scope: ServerScope, path: string): Promise<
   return isRepo
 }
 
+/** Does the + menu offer Changes for `path` on `scope`'s server? Yes for
+ *  every workspace while the server can do git (`git/info.gitAvailable`,
+ *  C5); an older daemon without the field: only inside a repo (C2). The
+ *  not-a-repo state in the tab offers Initialize repository. */
+const changesCache = new Map<string, boolean>()
+
+export function cachedChangesAvailable(scope: ServerScope, path: string): boolean | undefined {
+  return changesCache.get(`${scope.id}\u0000${normPath(path)}`)
+}
+
+export async function probeChangesAvailable(scope: ServerScope, path: string): Promise<boolean> {
+  const key = `${scope.id}\u0000${normPath(path)}`
+  const info = await daemonCliGet<{ isRepo?: boolean; gitAvailable?: boolean }>(scope, 'git/info', { path: normPath(path) })
+  repoCache.set(key, info?.isRepo === true)
+  const yes = typeof info?.gitAvailable === 'boolean' ? info.gitAvailable : info?.isRepo === true
+  changesCache.set(key, yes)
+  return yes
+}
+
 // ── Writes (all POST, all refresh) ───────────────────────────────────────
+
+/** C5 scope add: `git init` at the workspace root (the tab's empty state). */
+export async function initRepo(scope: ServerScope, workspacePath: string): Promise<{ success: boolean; repoRoot: string; rev: string | null }> {
+  const path = normPath(workspacePath)
+  try {
+    return await daemonCliPost<{ success: boolean; repoRoot: string; rev: string | null }>(scope, 'git/init', { path })
+  } finally {
+    await refreshGitChanges(scope, path)
+  }
+}
 
 export async function stageFiles(scope: ServerScope, workspacePath: string, files: string[]): Promise<void> {
   const path = normPath(workspacePath)
@@ -451,6 +480,7 @@ export function __resetGitChangesForTests(): void {
   entries.clear()
   gitLiveScopes.clear()
   repoCache.clear()
+  changesCache.clear()
 }
 
 /** Entries with a mounted consumer (live subscriptions). */

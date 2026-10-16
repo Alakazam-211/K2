@@ -429,7 +429,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 className="min-w-0 w-full max-w-full box-border px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
                 style={{ fontSize: editorFontSize }}
               />
-              {/* Hide (left) across from Send (right). */}
+              {/* Hide (left) across from Send (right). Hide is the nav
+                  toggles' 32×32 box; Send stretches to the same height. */}
               <div className="flex items-stretch justify-between mt-1.5" data-project-chat-actions="">
                 <HideChatButton />
                 <button
@@ -461,6 +462,7 @@ function HideChatButton(): React.JSX.Element {
       side="right"
       placement="drawer"
       name="chat"
+      size="square"
       onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
     />
   )

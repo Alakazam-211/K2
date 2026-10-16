@@ -16,7 +16,7 @@
 import type { ReactNode } from 'react'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { usePanelsStore } from '@/stores/panels'
-import { useRoomTabBarDrawerToggle } from './drawer-toggles'
+import { NAV_TOGGLE_BOX, useRoomTabBarDrawerToggle } from './drawer-toggles'
 
 type Side = 'left' | 'right'
 
@@ -26,6 +26,7 @@ export function DrawerToggleButton({
   onToggle,
   name = `${side} drawer`,
   testId,
+  size = 'fill',
   children,
 }: {
   side: Side
@@ -36,6 +37,9 @@ export function DrawerToggleButton({
   name?: string
   /** `data-testid` for the button (e.g. the Tickets list's collapse). */
   testId?: string
+  /** 'fill': full height of its strip (tab bars). 'square': the nav
+   *  toggles' fixed box (`NAV_TOGGLE_BOX`, 32×32), e.g. beside Send. */
+  size?: 'fill' | 'square'
   /** Extra marks drawn on the button (e.g. an unread dot). */
   children?: ReactNode
 }): React.JSX.Element {
@@ -54,7 +58,8 @@ export function DrawerToggleButton({
       data-testid={testId}
       data-drawer-tabbar-toggle={side}
       data-placement={placement}
-      className="no-drag relative flex h-full w-8 flex-shrink-0 cursor-pointer items-center justify-center self-stretch bg-white/[0.04] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+      data-size={size}
+      className={`no-drag relative flex ${size === 'square' ? NAV_TOGGLE_BOX : 'h-full w-8 self-stretch'} flex-shrink-0 cursor-pointer items-center justify-center bg-white/[0.04] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}

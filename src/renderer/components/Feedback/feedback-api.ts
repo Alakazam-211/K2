@@ -360,8 +360,14 @@ export function isAssignedToMe(
   return (row.assignees ?? []).some((a) => me.includes(a.trim().toLowerCase()))
 }
 
-/** Mine = assigned to me; Waiting on me = assigned to me AND still waiting
- *  for an answer; All = everything. */
+/** The statuses "Waiting on me" keeps: a new ticket still waiting for an
+ *  answer, and one marked Needs discussion (Rosson 2026-10-16). */
+export function isWaitingOnSomeone(status: FeedbackStatus): boolean {
+  return status === 'waiting' || status === 'needs_discussion'
+}
+
+/** Mine = assigned to me; Waiting on me = assigned to me AND waiting for an
+ *  answer or needing discussion (`isWaitingOnSomeone`); All = everything. */
 export function filterByScope<T extends { status: FeedbackStatus; assignees?: string[] | null }>(
   rows: T[],
   scope: TicketScope,
@@ -369,7 +375,7 @@ export function filterByScope<T extends { status: FeedbackStatus; assignees?: st
 ): T[] {
   if (scope === 'all') return rows
   const mine = rows.filter((r) => isAssignedToMe(r, me))
-  return scope === 'waiting' ? mine.filter((r) => r.status === 'waiting') : mine
+  return scope === 'waiting' ? mine.filter((r) => isWaitingOnSomeone(r.status)) : mine
 }
 
 /** Up to two initials for an assignee chip: "julie" → "J",

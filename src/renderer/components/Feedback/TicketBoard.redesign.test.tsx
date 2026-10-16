@@ -166,6 +166,47 @@ describe('TicketBoard filters', () => {
     expect(screen.getAllByTestId('ticket-card')).toHaveLength(3)
   })
 
+  it("Waiting on me includes my Needs discussion tickets, not someone else's or unassigned ones", async () => {
+    const discussMine = makeRow({
+      id: 'dddddddd-0000-4000-8000-00000000000d',
+      title: 'Discuss mine',
+      status: 'needs_discussion',
+      assignees: ['owner'],
+    })
+    const discussNobody = makeRow({
+      id: 'eeeeeeee-0000-4000-8000-00000000000e',
+      title: 'Discuss nobody',
+      status: 'needs_discussion',
+      assignees: [],
+    })
+    const answeredMine = makeRow({
+      id: 'cccccccc-0000-4000-8000-00000000000c',
+      title: 'Answered mine',
+      status: 'answered',
+      assignees: ['owner'],
+    })
+    board([mine, julies, discussMine, discussNobody, answeredMine])
+    expect(screen.getByTestId('ticket-scope-waiting').getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => expect(screen.getAllByTestId('ticket-card')).toHaveLength(2))
+    expect(screen.getAllByTestId('ticket-card').map((c) => c.textContent)).toEqual([
+      expect.stringContaining('Mine ticket'),
+      expect.stringContaining('Discuss mine'),
+    ])
+    expect(screen.getByTestId('ticket-scope-waiting').textContent).toBe('Waiting on me2')
+  })
+
+  it('an empty Waiting tab counts other needs-discussion tickets too', async () => {
+    const discussJulie = makeRow({
+      id: 'dddddddd-0000-4000-8000-00000000000d',
+      title: 'Discuss julie',
+      status: 'needs_discussion',
+      assignees: ['julie'],
+    })
+    board([julies, discussJulie])
+    const empty = await screen.findByTestId('ticket-waiting-empty')
+    expect(empty.textContent).toContain('2 other waiting tickets are assigned to someone else or no one.')
+  })
+
   it('an empty Waiting tab says so (never silently shows All) and links to All', async () => {
     const answeredMine = makeRow({
       id: 'cccccccc-0000-4000-8000-00000000000c',
@@ -195,7 +236,7 @@ describe('TicketBoard filters', () => {
     board([answeredMine])
     const empty = await screen.findByTestId('ticket-waiting-empty')
     expect(empty.textContent).toContain('Nothing is waiting on you')
-    expect(empty.textContent).toContain('Tickets assigned to you that need an answer show up here.')
+    expect(empty.textContent).toContain('Tickets assigned to you that need an answer or a discussion show up here.')
     expect(screen.getByTestId('ticket-waiting-empty-all').textContent).toBe('Show all tickets')
   })
 
@@ -245,7 +286,15 @@ describe('TicketBoard per-window layout', () => {
     await waitFor(() => expect(screen.getByTestId('ticket-list').style.width).toBe('480px'))
     expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: false, chatOpen: true })
 
-    fireEvent.click(screen.getByTestId('ticket-list-collapse'))
+    // The collapse is the nav's shared » / « drawer toggle: « while open.
+    const collapse = screen.getByTestId('ticket-list-collapse')
+    expect(collapse.getAttribute('data-drawer-tabbar-toggle')).toBe('left')
+    expect(collapse.getAttribute('data-placement')).toBe('drawer')
+    expect(collapse.getAttribute('aria-label')).toBe('Hide ticket list')
+    expect(collapse.getAttribute('title')).toBe('Hide ticket list')
+    expect(collapse.getAttribute('aria-expanded')).toBe('true')
+    expect(collapse.querySelector('[data-double-chevron]')?.getAttribute('data-double-chevron')).toBe('left')
+    fireEvent.click(collapse)
     expect(screen.queryByTestId('ticket-list')).toBeNull()
     expect(screen.getByTestId('ticket-list-rail')).toBeTruthy()
     expect(readTicketBoardChrome('window-test')).toEqual({ listWidth: 480, collapsed: true, chatOpen: true })
@@ -263,7 +312,13 @@ describe('TicketBoard per-window layout', () => {
     fireEvent.click(item)
     expect(await screen.findByTestId('ticket-detail')).toBeTruthy()
 
-    fireEvent.click(screen.getByTestId('ticket-list-expand'))
+    // » while collapsed.
+    const expand = screen.getByTestId('ticket-list-expand')
+    expect(expand.getAttribute('data-placement')).toBe('room')
+    expect(expand.getAttribute('aria-label')).toBe('Show ticket list')
+    expect(expand.getAttribute('aria-expanded')).toBe('false')
+    expect(expand.querySelector('[data-double-chevron]')?.getAttribute('data-double-chevron')).toBe('right')
+    fireEvent.click(expand)
     expect(screen.getByTestId('ticket-list').style.width).toBe('480px')
     expect(readTicketBoardChrome('window-test').collapsed).toBe(false)
   })

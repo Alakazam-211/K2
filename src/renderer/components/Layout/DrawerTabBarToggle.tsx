@@ -11,7 +11,7 @@
 //
 // `DrawerTabBarToggle` drives the workspace drawers (per-window chrome,
 // `usePanelsStore`); `DrawerToggleButton` is the same button for any
-// other drawer (e.g. the Projects page's chat panel).
+// other drawer (e.g. the Projects page's chat panel, the Tickets list).
 
 import type { ReactNode } from 'react'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
@@ -25,6 +25,7 @@ export function DrawerToggleButton({
   placement,
   onToggle,
   name = `${side} drawer`,
+  testId,
   children,
 }: {
   side: Side
@@ -33,6 +34,8 @@ export function DrawerToggleButton({
   onToggle: () => void
   /** What the tooltip calls it: "Show <name>" / "Hide <name>". */
   name?: string
+  /** `data-testid` for the button (e.g. the Tickets list's collapse). */
+  testId?: string
   /** Extra marks drawn on the button (e.g. an unread dot). */
   children?: ReactNode
 }): React.JSX.Element {
@@ -48,9 +51,10 @@ export function DrawerToggleButton({
       title={label}
       aria-label={label}
       aria-expanded={!opening}
+      data-testid={testId}
       data-drawer-tabbar-toggle={side}
       data-placement={placement}
-      className="no-drag relative flex h-full w-8 flex-shrink-0 items-center justify-center self-stretch bg-white/[0.04] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+      className="no-drag relative flex h-full w-8 flex-shrink-0 cursor-pointer items-center justify-center self-stretch bg-white/[0.04] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}

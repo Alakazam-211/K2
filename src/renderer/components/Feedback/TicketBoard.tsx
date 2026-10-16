@@ -4,14 +4,16 @@
 //   - A narrow list (default 400 px) on the left, resizable with a drag
 //     handle; the detail (header + HTML brief + action bar) takes the rest.
 //   - Filters on top of the list: Mine (assigned to me), Waiting on me
-//     (the default, GitHub #75), All, plus search. Which tab it opens on is
+//     (the default, GitHub #75: waiting or needs discussion), All, plus
+//     search. Which tab it opens on is
 //     the person's "Open the Tickets page on" preference (Settings →
 //     Tickets, `lib/ticket-open-pref.ts`). An empty Waiting tab says
 //     "Nothing is waiting on you" instead of falling back to All. The
 //     caller may add one extra control (the Tickets page adds its
 //     workspace filter).
-//   - A collapse button folds the list into a slim rail of agent avatars
-//     with status dots; clicking one selects that ticket.
+//   - A collapse button (the nav's » / « drawer toggle) folds the list into
+//     a slim rail of agent avatars with status dots; clicking one selects
+//     that ticket.
 //   - List width and the collapsed state are remembered PER WINDOW in
 //     localStorage (`ticket-board-chrome.ts`); never daemon state.
 
@@ -27,6 +29,7 @@ import {
   filterByScope,
   filterBySearch,
   groupByStatus,
+  isWaitingOnSomeone,
   TICKET_SCOPES,
   UNLINKED_WORKSPACE_LABEL,
   type FeedbackListRow,
@@ -36,6 +39,7 @@ import { FeedbackCard, SectionHeader, TicketRailItem } from './TicketCard'
 import { FeedbackItemView } from './FeedbackItemView'
 import { useTicketMe } from './useTicketMe'
 import { initialTicketScope, writeLastTicketTab } from '@/lib/ticket-open-pref'
+import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 
 export interface TicketBoardProps {
   /** Rows to show (the caller's own scoping — workspace filter, project
@@ -170,11 +174,11 @@ export function TicketBoard({
 
   // Mine / Waiting wait for whoami before saying the list is empty.
   const emptyList = filtered !== null && filtered.length === 0 && (me !== null || scope === 'all')
-  // Waiting tickets on someone else's board (or nobody's): told in the
-  // empty Waiting state so "nothing is waiting on you" is never a lie by
-  // omission.
+  // Waiting / needs-discussion tickets on someone else's board (or
+  // nobody's): told in the empty Waiting state so "nothing is waiting on
+  // you" is never a lie by omission.
   const otherWaiting = useMemo(
-    () => (searched ? searched.filter((r) => r.status === 'waiting').length - scopeCounts.waiting : 0),
+    () => (searched ? searched.filter((r) => isWaitingOnSomeone(r.status)).length - scopeCounts.waiting : 0),
     [searched, scopeCounts],
   )
 
@@ -186,16 +190,15 @@ export function TicketBoard({
           className="flex flex-col items-center gap-1 py-2 border-r border-[var(--color-border)] flex-shrink-0 overflow-y-auto"
           style={{ width: 48 }}
         >
-          <button
-            type="button"
-            data-testid="ticket-list-expand"
-            onClick={() => setCollapsed(false)}
-            title="Show the ticket list"
-            aria-label="Show the ticket list"
-            className="flex items-center justify-center w-7 h-7 mb-1 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer"
-          >
-            <ChevronGlyph dir="right" />
-          </button>
+          <div className="flex h-8 mb-1 flex-shrink-0">
+            <DrawerToggleButton
+              side="left"
+              placement="room"
+              name="ticket list"
+              testId="ticket-list-expand"
+              onToggle={() => setCollapsed(false)}
+            />
+          </div>
           {ordered.map((row) => (
             <TicketRailItem
               key={row.id}
@@ -239,16 +242,13 @@ export function TicketBoard({
                   )
                 })}
               </div>
-              <button
-                type="button"
-                data-testid="ticket-list-collapse"
-                onClick={() => setCollapsed(true)}
-                title="Collapse the ticket list"
-                aria-label="Collapse the ticket list"
-                className="flex items-center justify-center w-6 h-6 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer"
-              >
-                <ChevronGlyph dir="left" />
-              </button>
+              <DrawerToggleButton
+                side="left"
+                placement="drawer"
+                name="ticket list"
+                testId="ticket-list-collapse"
+                onToggle={() => setCollapsed(true)}
+              />
             </div>
             <div className="flex items-center gap-1.5">
               <div className="relative flex-1 min-w-0">
@@ -295,7 +295,7 @@ export function TicketBoard({
                     <p className="text-[11px] text-[var(--color-text-muted)] mt-1 opacity-70">
                       {otherWaiting > 0
                         ? `${otherWaiting} other waiting ${otherWaiting === 1 ? 'ticket is' : 'tickets are'} assigned to someone else or no one.`
-                        : 'Tickets assigned to you that need an answer show up here.'}
+                        : 'Tickets assigned to you that need an answer or a discussion show up here.'}
                     </p>
                     <button
                       type="button"
@@ -381,17 +381,5 @@ export function TicketBoard({
         )}
       </div>
     </div>
-  )
-}
-
-function ChevronGlyph({ dir }: { dir: 'left' | 'right' }): React.JSX.Element {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
-      {dir === 'left' ? (
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 18l-6-6 6-6" />
-      ) : (
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 18l6-6-6-6" />
-      )}
-    </svg>
   )
 }

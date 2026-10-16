@@ -14,7 +14,7 @@
 import { useEffect } from 'react'
 import { DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
-import PresenceAvatar, { ROLE_COLORS, presenceDisplayName } from './PresenceAvatar'
+import PresenceAvatar, { presenceDisplayName, useSelfPresenceUser } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
 
 interface PresenceModalProps {
@@ -117,11 +117,14 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
 
 function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }): React.JSX.Element {
   const displayName = presenceDisplayName(user.user)
-  const roleColor = ROLE_COLORS[user.role] ?? ROLE_COLORS.member
+  // The modal lists another server's roster read-only: "you" is only known
+  // on the window's own server.
+  const self = useSelfPresenceUser()
+  const you = !readOnly && user.user === self
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-elevated)] transition-colors">
-      <PresenceAvatar name={user.user} role={user.role} size={32} />
+      <PresenceAvatar name={user.user} role={user.role} size={32} you={you} />
 
       {/* Identity + where they're working */}
       <div className="flex-1 min-w-0">
@@ -129,14 +132,11 @@ function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }
           <span className="text-xs font-medium text-[var(--color-text-primary)] truncate">
             {displayName}
           </span>
-          {/* Role chip, colored per ROLE_COLORS */}
+          {you && <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">(you)</span>}
+          {/* Role chip: neutral (role is the avatar's corner mark, never a
+              colour; plan-agent-status-unify-v1 §3.5). */}
           <span
-            className="flex-shrink-0 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide"
-            style={{
-              color: roleColor,
-              border: `1px solid ${roleColor}`,
-              borderRadius: 3,
-            }}
+            className="flex-shrink-0 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-[var(--color-text-secondary)] border border-[var(--color-border-strong)]"
           >
             {user.role}
           </span>

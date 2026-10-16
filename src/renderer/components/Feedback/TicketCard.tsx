@@ -15,6 +15,7 @@ import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
+import { PresenceChip } from '@/components/Presence/PresenceChip'
 import {
   assigneeInitials,
   cardSummary,
@@ -245,17 +246,14 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
   return (
     <span
       data-testid="card-assignee"
-      className="inline-flex items-center -space-x-1 flex-shrink-0"
+      className="inline-flex items-center gap-0.5 flex-shrink-0"
       title={`Assigned to ${names.join(', ')}`}
     >
+      {/* People chips (plan-agent-status-unify-v1 §3.5): chamfered, the
+          person's colour, no overlap. */}
       {shown.map((n) => (
-        <span
-          key={n}
-          data-testid="card-assignee-initials"
-          className="flex items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elevated)] font-bold leading-none text-[var(--color-text-secondary)]"
-          style={{ width: 16, height: 16, fontSize: 7.5 }}
-        >
-          {assigneeInitials(n)}
+        <span key={n} data-testid="card-assignee-initials" className="flex">
+          <PresenceChip name={n} role="member" size={16} title="" />
         </span>
       ))}
       {names.length > shown.length && (

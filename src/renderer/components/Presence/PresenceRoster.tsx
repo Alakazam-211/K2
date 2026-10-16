@@ -23,7 +23,8 @@ import {
 } from '@/stores/presence'
 import type { PresenceView, PresenceViewStore } from '@/stores/server-view'
 import { useTopBarScope } from '@/components/TopBar/top-bar-scope'
-import PresenceAvatar from './PresenceAvatar'
+import PresenceAvatar, { useSelfPresenceUser } from './PresenceAvatar'
+import { PresenceMoreChip } from './PresenceChip'
 import PresenceModal from './PresenceModal'
 
 /** Read when no room is followed (a hook can't be skipped). */
@@ -35,6 +36,7 @@ export default function PresenceRoster(): React.JSX.Element | null {
   const windowSupported = usePresenceStore((s) => s.supported)
   const roomPresence = useStore(target.room?.presence ?? NO_ROOM_PRESENCE)
   const [modalOpen, setModalOpen] = useState(false)
+  const windowSelf = useSelfPresenceUser()
 
   const following = target.room !== null
   const roster = following ? roomPresence.roster : windowRoster
@@ -60,34 +62,13 @@ export default function PresenceRoster(): React.JSX.Element | null {
             : `${roster.length} connected — click for details`
         }
       >
-        {/* Slightly overlapping stack, matching top-bar visual density. */}
-        <span className="flex items-center">
-          {visible.map((u, i) => (
-            <span
-              key={u.user}
-              style={{ marginLeft: i === 0 ? 0 : -4, zIndex: visible.length - i }}
-              className="relative"
-            >
-              <PresenceAvatar name={u.user} role={u.role} size={20} />
-            </span>
+        {/* plan-agent-status-unify-v1 §3.5: chamfered chips, 3px apart (no
+            overlap); you get a ring (on the window's own server). */}
+        <span className="flex items-center" style={{ gap: 3 }}>
+          {visible.map((u) => (
+            <PresenceAvatar key={u.user} name={u.user} role={u.role} size={20} you={!following && u.user === windowSelf} />
           ))}
-          {overflow > 0 && (
-            <span
-              className="relative flex items-center justify-center flex-shrink-0 text-[9px] font-bold text-[var(--color-text-secondary)]"
-              style={{
-                marginLeft: -4,
-                width: 20,
-                height: 20,
-                borderRadius: '50%',
-                border: '2px solid var(--color-border)',
-                backgroundColor: 'var(--color-bg-elevated)',
-                boxSizing: 'border-box',
-              }}
-              title={`${overflow} more connected`}
-            >
-              +{overflow}
-            </span>
-          )}
+          {overflow > 0 && <PresenceMoreChip count={overflow} size={20} title={`${overflow} more connected`} />}
         </span>
       </button>
 

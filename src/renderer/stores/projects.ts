@@ -258,6 +258,8 @@ interface Project {
   // 0101 — per-workspace completion chime (0/1, default 1 / ON).
   // Missing → treat as 1. Written via workspace/set completion_sound_enabled.
   completionSoundEnabled?: number
+  // 0178 — per-workspace Design mode (0/1, default 1 / ON). Missing → ON.
+  designModeEnabled?: number
   // 0103 — workspace address token. Empty until backfilled / minted.
   handle?: string
   // Create-only passport for `k2 db create` (`off` | `read` | `write`).

@@ -447,17 +447,35 @@ struct CarryExportBody {
     server: Vec<String>,
     #[serde(default)]
     own_box_move: bool,
+    /// The workspace id on the target box these secrets are for (CL12).
+    /// Needs exactly one source workspace.
+    target_workspace_id: Option<String>,
 }
 
-fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    may_carry(c)?;
-    let b: CarryExportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
-    let target = k2_vault::agefmt::Recipient::parse(b.target_recipient.as_deref().unwrap_or(""))?;
-    let target_id = b.target_vault_id.clone().ok_or_else(|| VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"))?;
-    let mut ws_ids: HashMap<String, String> = HashMap::new();
-    for w in &b.workspaces {
-        let id = crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?;
-        ws_ids.insert(id, crate::vault::workspace_label(w));
+/// A sealed carry: the age file plus `(scope label, name)` for each secret
+/// in it (never values). The label is empty for a server-scope secret.
+pub(crate) struct SealedCarry {
+    pub file: Vec<u8>,
+    pub names: Vec<(String, String)>,
+    pub target_fingerprint: String,
+}
+
+/// Seal `user` secrets to a target vault: the workspace-scope ones of every
+/// project in `ws_ids` (projects.id → the label shown), plus the
+/// server-scope ones named in `server`. Each workspace item records its
+/// source id (`scopeId`) so the target can match by id (CL12).
+pub(crate) fn seal_carry(
+    vault: &Arc<LocalVault>,
+    target_recipient: &str,
+    target_vault_id: &str,
+    ws_ids: &HashMap<String, String>,
+    server: &[String],
+    own_box_move: bool,
+    target_workspace_id: Option<String>,
+) -> Result<SealedCarry, VaultError> {
+    let target = k2_vault::agefmt::Recipient::parse(target_recipient)?;
+    if target_vault_id.trim().is_empty() {
+        return Err(VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"));
     }
     let all = vault.list(&k2_vault::ListFilter::default(), &k2_vault::Actor::System("carry".into()))?;
     let mut items = vec![];
@@ -465,18 +483,19 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
         if m.namespace != k2_vault::Namespace::User {
             continue;
         }
-        let label = match m.scope.kind {
+        let (label, scope_id) = match m.scope.kind {
             k2_vault::ScopeKind::Workspace => match ws_ids.get(&m.scope.id) {
-                Some(l) => l.clone(),
+                Some(l) => (l.clone(), Some(m.scope.id.clone())),
                 None => continue,
             },
-            k2_vault::ScopeKind::Server if b.server.contains(&m.name) => String::new(),
+            k2_vault::ScopeKind::Server if server.contains(&m.name) => (String::new(), None),
             _ => continue,
         };
         let v = vault.resolve(&k2_vault::Selector::Id(m.id.clone()), Use::System, &Requester::System("carry".into()))?;
         items.push(k2_vault::carry::CarryItem {
             scope_kind: m.scope.kind.as_str().into(),
             scope_label: label,
+            scope_id,
             name: m.name.clone(),
             kind: m.kind.as_str().into(),
             hosts: m.hosts.clone(),
@@ -488,16 +507,36 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
             value_b64: k2_vault::carry::CarryItem::encode_value(v.value.expose()),
         });
     }
-    let n = items.len();
-    let names: Vec<String> = items.iter().map(|i| format!("{}:{}", if i.scope_label.is_empty() { "server" } else { &i.scope_label }, i.name)).collect();
-    let file = vault.carry_seal(&target, &target_id, b.own_box_move, items)?;
-    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok export {n} to {}", target.fingerprint()), "-");
+    let names: Vec<(String, String)> = items.iter().map(|i| (i.scope_label.clone(), i.name.clone())).collect();
+    let file = vault.carry_seal_for(&target, target_vault_id, own_box_move, target_workspace_id, items)?;
+    Ok(SealedCarry { file, names, target_fingerprint: target.fingerprint() })
+}
+
+fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    may_carry(c)?;
+    let b: CarryExportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let target_id = b.target_vault_id.clone().ok_or_else(|| VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"))?;
+    let mut ws_ids: HashMap<String, String> = HashMap::new();
+    for w in &b.workspaces {
+        let id = crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?;
+        let label = crate::vault::workspace_label(&id);
+        ws_ids.insert(id, label);
+    }
+    let target_ws = b.target_workspace_id.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    if target_ws.is_some() && ws_ids.len() != 1 {
+        return Err(VaultError::bad_request("one_workspace_per_target", "--target-workspace needs exactly one --workspace"));
+    }
+    let sealed = seal_carry(vault, b.target_recipient.as_deref().unwrap_or(""), &target_id, &ws_ids, &b.server, b.own_box_move, target_ws.clone())?;
+    let n = sealed.names.len();
+    let names: Vec<String> = sealed.names.iter().map(|(l, name)| format!("{}:{}", if l.is_empty() { "server" } else { l }, name)).collect();
+    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok export {n} to {}", sealed.target_fingerprint), "-");
     Ok(json!({
         "ok": true,
         "count": n,
         "secrets": names,
-        "carryB64": base64::engine::general_purpose::STANDARD.encode(&file),
-        "targetFingerprint": target.fingerprint(),
+        "carryB64": base64::engine::general_purpose::STANDARD.encode(&sealed.file),
+        "targetFingerprint": sealed.target_fingerprint,
+        "targetWorkspaceId": target_ws,
     }))
 }
 
@@ -507,36 +546,148 @@ struct CarryImportBody {
     carry_b64: Option<String>,
     #[serde(default)]
     apply: bool,
+    /// The workspace on THIS box that gets the carry's workspace secrets:
+    /// its id, or a name that resolves to exactly the workspace the carry
+    /// was made for (CL12).
+    workspace: Option<String>,
 }
 
-fn carry_import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    may_carry(c)?;
-    let b: CarryImportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
-    let file = base64::engine::general_purpose::STANDARD
-        .decode(b.carry_b64.as_deref().unwrap_or("").trim())
-        .map_err(|_| VaultError::bad_request("bad_carry", "carryB64 isn't base64"))?;
-    let p = vault.carry_open(&file)?;
-    let source_fp = k2_vault::crypto::hex(&k2_vault::crypto::sha256(p.source_public_key.as_bytes())[..8]);
-    let listing: Vec<Value> = p
+/// Where one item of an opened carry lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ItemTarget {
+    Server,
+    /// `projects.id` on this box.
+    Workspace(String),
+    /// Not imported, with the reason people see.
+    Skip(String),
+}
+
+/// `projects.id` exists on this box (exact id, never a name).
+fn project_exists(id: &str) -> bool {
+    crate::vault::workspace_path(id).is_some()
+}
+
+/// The source workspaces in a carry, keyed by id (or the label for a
+/// carry made before 0.46.0, which has no ids).
+fn carry_sources(p: &k2_vault::carry::CarryPayload) -> Vec<String> {
+    let mut v: Vec<String> = p
         .items
         .iter()
-        .map(|i| json!({ "scope": if i.scope_label.is_empty() { "server".to_string() } else { format!("ws:{}", i.scope_label) }, "name": i.name, "hosts": i.hosts, "delivery": i.default_delivery }))
+        .filter(|i| i.scope_kind != "server")
+        .map(|i| i.scope_id.clone().unwrap_or_else(|| format!("label:{}", i.scope_label)))
         .collect();
-    if !b.apply {
-        return Ok(json!({ "ok": true, "dryRun": true, "sourceVaultId": p.source_vault_id, "sourceKeyFingerprint": source_fp, "ownBoxMove": p.own_box_move, "secrets": listing }));
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Pick the target workspace for each item of a carry, by id only (CL12).
+///
+/// - `explicit` is an exact `projects.id` here → every workspace item goes
+///   there (the carry must hold one source workspace, and a carry bound to
+///   another workspace id is refused).
+/// - `explicit` is a name → refused unless it resolves to exactly one
+///   workspace AND the carry was made for that id.
+/// - nothing named → the carry's bound target id, else the item's own
+///   source id, when that id exists here. Otherwise skipped; never a name.
+pub(crate) fn carry_targets(p: &k2_vault::carry::CarryPayload, explicit: Option<&str>) -> Result<Vec<ItemTarget>, VaultError> {
+    let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
+    let sources = carry_sources(p);
+    let made_for = |id: &str| -> bool {
+        match &p.target_workspace_id {
+            Some(t) => t == id,
+            None => sources.len() == 1 && p.items.iter().any(|i| i.scope_kind != "server" && i.scope_id.as_deref() == Some(id)),
+        }
+    };
+    let chosen: Option<String> = match explicit {
+        None => None,
+        Some(tok) if project_exists(tok) => {
+            if sources.len() > 1 {
+                return Err(VaultError::bad_request(
+                    "carry_has_many_workspaces",
+                    format!("this carry holds secrets of {} workspaces; import it without --workspace, or carry one workspace at a time", sources.len()),
+                ));
+            }
+            if let Some(t) = &p.target_workspace_id {
+                if t != tok {
+                    return Err(VaultError::forbidden(
+                        "carry_for_another_workspace",
+                        format!("this carry was made for workspace {t}, not {tok}"),
+                    ));
+                }
+            }
+            Some(tok.to_string())
+        }
+        Some(tok) => {
+            let id = match crate::workspace_msg::resolve_workspace_detailed(tok) {
+                crate::workspace_msg::WorkspaceResolve::Found(path) => crate::canonical_session::lookup_project_id(&path),
+                crate::workspace_msg::WorkspaceResolve::Ambiguous { .. } => {
+                    return Err(VaultError::conflict(
+                        "workspace_name_ambiguous",
+                        format!("{tok} names more than one workspace here; pass the workspace id (--workspace <id>)"),
+                    ))
+                }
+                _ => None,
+            };
+            let Some(id) = id else {
+                return Err(VaultError::not_found(format!("no workspace {tok} here; pass the workspace id (--workspace <id>)")));
+            };
+            if !made_for(&id) {
+                return Err(VaultError::forbidden(
+                    "carry_workspace_by_name",
+                    format!(
+                        "{tok} is workspace {id}, but this carry wasn't made for that id. Secrets never go to a workspace by name: \
+                         pass --workspace {id} if that is the right one, or ask for a carry made with --target-workspace {id}"
+                    ),
+                ));
+            }
+            Some(id)
+        }
+    };
+    Ok(p
+        .items
+        .iter()
+        .map(|i| {
+            if i.scope_kind == "server" {
+                return ItemTarget::Server;
+            }
+            if let Some(id) = &chosen {
+                return ItemTarget::Workspace(id.clone());
+            }
+            for cand in [p.target_workspace_id.as_ref(), i.scope_id.as_ref()].into_iter().flatten() {
+                if project_exists(cand) {
+                    return ItemTarget::Workspace(cand.clone());
+                }
+            }
+            ItemTarget::Skip(format!(
+                "{}: no workspace with id {} here (secrets never go by name); pass --workspace <id>",
+                i.name,
+                p.target_workspace_id.as_deref().or(i.scope_id.as_deref()).unwrap_or("(none in this carry)")
+            ))
+        })
+        .collect())
+}
+
+/// Write an opened carry's secrets where `targets` says (one per item).
+/// Returns `(imported names, skipped "name: why" lines)`; an existing
+/// secret is kept, never overwritten.
+pub(crate) fn apply_carry(
+    vault: &Arc<LocalVault>,
+    p: &k2_vault::carry::CarryPayload,
+    targets: &[ItemTarget],
+) -> Result<(Vec<String>, Vec<String>), VaultError> {
+    if targets.len() != p.items.len() {
+        return Err(VaultError::internal("carry targets don't match the items"));
     }
     let mut imported = vec![];
     let mut skipped = vec![];
-    for i in &p.items {
-        let scope = if i.scope_kind == "server" {
-            k2_vault::Scope::server()
-        } else {
-            match crate::vault::workspace_id(&i.scope_label) {
-                Some(id) => k2_vault::Scope::workspace(id),
-                None => {
-                    skipped.push(format!("{}: no workspace {} here", i.name, i.scope_label));
-                    continue;
-                }
+    for (i, t) in p.items.iter().zip(targets) {
+        let scope = match t {
+            ItemTarget::Server => k2_vault::Scope::server(),
+            ItemTarget::Workspace(id) => k2_vault::Scope::workspace(id.clone()),
+            ItemTarget::Skip(why) => {
+                skipped.push(why.clone());
+                continue;
             }
         };
         let mut req = k2_vault::PutRequest::new(k2_vault::Namespace::User, scope, i.name.clone(), k2_vault::Kind::parse(&i.kind)?);
@@ -555,8 +706,65 @@ fn carry_import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
             Err(e) => skipped.push(format!("{}: {}", i.name, e.code)),
         }
     }
-    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok import {} from {}", imported.len(), p.source_vault_id), "-");
-    Ok(json!({ "ok": true, "imported": imported, "skipped": skipped }))
+    Ok((imported, skipped))
+}
+
+fn carry_import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    may_carry(c)?;
+    let b: CarryImportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let file = base64::engine::general_purpose::STANDARD
+        .decode(b.carry_b64.as_deref().unwrap_or("").trim())
+        .map_err(|_| VaultError::bad_request("bad_carry", "carryB64 isn't base64"))?;
+    let p = vault.carry_open(&file)?;
+    let targets = carry_targets(&p, b.workspace.as_deref())?;
+    let source_fp = k2_vault::crypto::hex(&k2_vault::crypto::sha256(p.source_public_key.as_bytes())[..8]);
+    let listing: Vec<Value> = p
+        .items
+        .iter()
+        .zip(&targets)
+        .map(|(i, t)| {
+            let (target_ws, target_label, skip) = match t {
+                ItemTarget::Server => (None, None, None),
+                ItemTarget::Workspace(id) => (Some(id.clone()), Some(crate::vault::workspace_label(id)), None),
+                ItemTarget::Skip(why) => (None, None, Some(why.clone())),
+            };
+            json!({
+                "scope": if i.scope_label.is_empty() { "server".to_string() } else { format!("ws:{}", i.scope_label) },
+                "sourceWorkspaceId": i.scope_id,
+                "targetWorkspaceId": target_ws,
+                "targetWorkspace": target_label,
+                "skip": skip,
+                "name": i.name,
+                "hosts": i.hosts,
+                "delivery": i.default_delivery,
+            })
+        })
+        .collect();
+    if !b.apply {
+        return Ok(json!({
+            "ok": true,
+            "dryRun": true,
+            "sourceVaultId": p.source_vault_id,
+            "sourceKeyFingerprint": source_fp,
+            "ownBoxMove": p.own_box_move,
+            "madeForWorkspaceId": p.target_workspace_id,
+            "secrets": listing,
+        }));
+    }
+    let (imported, skipped) = apply_carry(vault, &p, &targets)?;
+    let into: Vec<String> = {
+        let mut v: Vec<String> = targets.iter().filter_map(|t| if let ItemTarget::Workspace(id) = t { Some(id.clone()) } else { None }).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    crate::vault::auth_audit(
+        "vault-carry",
+        &c.actor.stamp(),
+        &format!("ok import {} from {} into {}", imported.len(), p.source_vault_id, if into.is_empty() { "-".to_string() } else { into.join(",") }),
+        "-",
+    );
+    Ok(json!({ "ok": true, "imported": imported, "skipped": skipped, "workspaceIds": into }))
 }
 
 #[derive(Debug, Default, Deserialize)]

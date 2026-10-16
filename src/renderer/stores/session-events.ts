@@ -289,6 +289,13 @@ export interface MailChangedEvent {
  *  Server → Domains (`onDomainsChanged`). `reason` is `attached` |
  *  `removed` | `refreshed` | `status_changed` | `zone_missing`; `apex` is
  *  null when several domains changed. */
+/** APP-LEVEL — the Sew server on this box or its voice changed (S29 K14).
+ *  Refetch signal for GET /cli/sew/status. Ignored by this client today. */
+export interface SewChangedEvent {
+  kind: 'sew_changed'
+  reason: string
+}
+
 export interface DomainsChangedEvent {
   kind: 'domains_changed'
   reason: string
@@ -717,6 +724,7 @@ export type SessionEventMessage =
   | FederationPeersChangedEvent
   | NotifyPrefsChangedEvent
   | RemoteSessionAccessDeniedEvent
+  | SewChangedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void

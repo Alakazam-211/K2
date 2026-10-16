@@ -258,3 +258,112 @@ fn every_route_is_classified_post_only_where_it_mutates_and_on_the_agent_list() 
         assert!(crate::session_token::is_agent_verb(p), "{p}");
     }
 }
+
+// ── voice + users + standalone (K13/K14, 0.46.0 demo) ───────────────────
+
+const MEDIA: &str = "/home/k2/sew-media.tar.gz";
+
+fn with_media(t: &T) {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../k2-root-proto/testdata/sew/sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz");
+    t.ops.files.lock().unwrap().insert(MEDIA.into(), std::fs::read(p).unwrap());
+}
+
+#[test]
+fn voice_and_users_routes_sit_behind_manage_sew() {
+    let t = t();
+    for (path, body) in [
+        ("/cli/sew/media/install", json!({})),
+        ("/cli/sew/media/url", json!({"publicUrl": "wss://hearth.lztek.k2.dev"})),
+        ("/cli/sew/media/renew", json!({})),
+        ("/cli/sew/media/probe", json!({"udp": "ok", "tcp": "ok", "turnTls": "ok"})),
+        ("/cli/sew/media/uninstall", json!({})),
+        ("/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev"})),
+        ("/cli/sew/users/invite", json!({"user": "bob"})),
+        ("/cli/sew/users/owner", json!({"user": "rosson"})),
+        ("/cli/sew/users/reset", json!({"user": "bob"})),
+        ("/cli/sew/users/revoke", json!({"user": "bob"})),
+        ("/cli/sew/users/reactivate", json!({"user": "bob"})),
+        ("/cli/sew/users/role", json!({"user": "bob", "role": "admin"})),
+    ] {
+        let (st, v) = t.call(&agent("w-plain"), path, body.clone());
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "chat_manage_off"), "{path}");
+        let (st, v) = t.call(&shell("w-plain"), path, body.clone());
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "chat_manage_off"), "{path}");
+        let (st, v) = t.call(&login(Role::Member), path, body);
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{path}");
+    }
+    let (st, v) = t.get(&agent("w-plain"), "/cli/sew/users");
+    assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "chat_manage_off"));
+    // The preflight is a read.
+    assert_eq!(t.get(&agent("w-plain"), "/cli/sew/media/preflight").0, "200 OK");
+    // A Manage Sew agent gets through the gate to the checks.
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/media/url", json!({"publicUrl": "wss://evil.example"}));
+    assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "url_not_on_this_box"), "{v}");
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/media/probe", json!({"udp": "yes", "tcp": "ok", "turnTls": "ok"}));
+    assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"), "{v}");
+    assert!(t.ops.effects().is_empty());
+}
+
+#[test]
+fn enable_takes_an_explicit_standalone_identity_and_voice_in_one_call() {
+    let t = t();
+    with_media(&t);
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/enable", json!({"tarballPath": TARBALL, "identity": "ldap"}));
+    assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"));
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/enable", json!({"tarballPath": TARBALL, "voice": {"publicUrl": "wss://evil.example"}}));
+    assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "url_not_on_this_box"), "refused before any effect");
+    assert!(t.ops.effects().is_empty());
+    t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
+    let (st, v) = t.call(
+        &agent("w-it"),
+        "/cli/sew/server/enable",
+        json!({"tarballPath": TARBALL, "identity": "standalone",
+               "voice": {"publicUrl": "wss://hearth.lztek.k2.dev", "mediaTarballPath": MEDIA}}),
+    );
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["state"], "running");
+    assert_eq!(v["publicUrl"], "wss://hearth.lztek.k2.dev");
+    assert_eq!(v["turnHost"], "turn-lztek.k2.dev");
+    let s = t.get(&Who::Owner, "/cli/sew/status").1;
+    assert_eq!(s["identityProvider"], "standalone");
+    assert_eq!(s["voice"]["publicUrl"], "wss://hearth.lztek.k2.dev");
+    // Voice URL later, and setup links on the App.
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev", "setupUrl": "https://hearth.lztek.k2.dev/setup"}));
+    assert_eq!(st, "200 OK", "{v}");
+    // Users: the setup link comes back to the caller.
+    t.ops.mgmt_answers.lock().unwrap().entry("POST /mgmt/v1/local/users".into()).or_default().push_back(Ok(json!({
+        "member_id": "5", "username": "bob", "install_role": "member", "deactivated": false, "created": true,
+        "reactivated": false, "changed": true,
+        "setup_link": {"url": "https://hearth.lztek.k2.dev/setup#token=sewpw_x", "expires_at": "2026-10-17T00:00:00Z"}})));
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/users/invite", json!({"user": "bob", "role": "member"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["setupLink"]["url"], "https://hearth.lztek.k2.dev/setup#token=sewpw_x");
+    let _ = INSTALL_ID;
+}
+
+#[test]
+fn the_new_sew_routes_are_classified() {
+    use crate::routes::route_policy::lookup;
+    for p in [
+        "/cli/sew/media/install",
+        "/cli/sew/media/url",
+        "/cli/sew/media/renew",
+        "/cli/sew/media/probe",
+        "/cli/sew/media/uninstall",
+        "/cli/sew/server/config",
+        "/cli/sew/users/invite",
+        "/cli/sew/users/owner",
+        "/cli/sew/users/reset",
+        "/cli/sew/users/revoke",
+        "/cli/sew/users/reactivate",
+        "/cli/sew/users/role",
+    ] {
+        assert!(is_post_route(p), "{p}");
+        assert!(lookup(p).unwrap().post.is_some(), "{p}");
+        assert!(crate::session_token::is_agent_verb(p), "{p}");
+    }
+    for p in ["/cli/sew/users", "/cli/sew/media/preflight"] {
+        assert!(!is_post_route(p) && is_route(p), "{p}");
+        assert!(crate::session_token::is_agent_verb(p), "{p}");
+    }
+}

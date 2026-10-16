@@ -2302,7 +2302,7 @@ mod tests {
             // back too, newest first: 0170's columns go with `apps`, and
             // 0169's and 0168's tables go before the `apps` they point at.
             conn.execute_batch(
-                "DROP TABLE app_egress_hosts; DROP TABLE app_egress_policy;
+                "DROP TABLE app_box_services; DROP TABLE app_egress_hosts; DROP TABLE app_egress_policy;
                  DROP TABLE app_widenings; DROP TABLE app_owner_token_uses; DROP INDEX idx_api_keys_app;
                  ALTER TABLE api_keys DROP COLUMN app_service_id; ALTER TABLE api_keys DROP COLUMN app_key;
                  ALTER TABLE projects DROP COLUMN agents_can_publish_open_apps;",
@@ -2322,6 +2322,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0171_app_box_services",
                 "0177_published_services_probe_timeout",
             ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();

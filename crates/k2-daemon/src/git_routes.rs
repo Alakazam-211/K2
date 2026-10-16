@@ -515,6 +515,116 @@ pub fn handle_git_prune_worktrees(body: &[u8]) -> CliResponse {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Agent passports (cell socket) — `k2 changes`
+// ══════════════════════════════════════════════════════════════════════
+
+/// The Changes routes an agent passport may call on its cell socket,
+/// scoped to its own workspace (prd-changes-tab-v1 "Agent access").
+pub const AGENT_ROUTES: &[&str] = &[
+    "/cli/git/commit",
+    "/cli/git/diff-file",
+    "/cli/git/discard",
+    "/cli/git/snapshot",
+    "/cli/git/stage",
+    "/cli/git/stage-all",
+    "/cli/git/unstage",
+];
+
+const AGENT_POST_ROUTES: &[&str] =
+    &["/cli/git/commit", "/cli/git/discard", "/cli/git/stage", "/cli/git/stage-all", "/cli/git/unstage"];
+
+pub fn is_agent_route(path: &str) -> bool {
+    AGENT_ROUTES.contains(&path)
+}
+
+fn agent_forbidden(hint: String) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": hint, "code": "forbidden" }).to_string(),
+    }
+}
+
+/// The repo path an agent asked for, when it (and its repo root) are
+/// inside the agent's own workspace. Empty → the workspace itself.
+fn agent_scope(requested: &str, own_workspace: &str) -> Result<String, CliResponse> {
+    let own = own_workspace.trim_end_matches('/');
+    let want = if requested.trim().is_empty() { own.to_string() } else { requested.trim_end_matches('/').to_string() };
+    let canon = |p: &str| std::fs::canonicalize(p).ok();
+    let (Some(own_c), Some(want_c)) = (canon(own), canon(&want)) else {
+        return Err(agent_forbidden(format!("'{want}' is not a folder in your workspace ({own})")));
+    };
+    if !want_c.starts_with(&own_c) {
+        return Err(agent_forbidden(format!(
+            "agents can only use the Changes routes on their own workspace ({own}); '{want}' is outside it"
+        )));
+    }
+    // The repo must not reach above the workspace (a workspace that is a
+    // sub-folder of a bigger repo would let discard touch files outside it).
+    if let Some((_, root)) = git_changes::repo_key_and_root(&want) {
+        let inside = canon(&root).is_some_and(|r| r.starts_with(&own_c));
+        if !inside {
+            return Err(agent_forbidden(format!(
+                "the git repository at {root} reaches outside your workspace ({own})"
+            )));
+        }
+    }
+    Ok(want)
+}
+
+/// Serve one [`AGENT_ROUTES`] call for a passport whose workspace is
+/// `own_workspace` (resolved from the passport, never the request). GETs
+/// read `path` from the query, POSTs from the JSON body; a missing
+/// `path` means the agent's own workspace.
+pub fn handle_agent_route(
+    path: &str,
+    is_post: bool,
+    params: &HashMap<String, String>,
+    body: &[u8],
+    own_workspace: &str,
+) -> CliResponse {
+    if !is_agent_route(path) {
+        return CliResponse::not_found();
+    }
+    let post_route = AGENT_POST_ROUTES.contains(&path);
+    if post_route != is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if post_route {
+        let mut v: serde_json::Value = if body.iter().all(u8::is_ascii_whitespace) {
+            serde_json::json!({})
+        } else {
+            match serde_json::from_slice(body) {
+                Ok(v) => v,
+                Err(e) => return CliResponse::bad_request(format!("invalid JSON: {e}")),
+            }
+        };
+        let Some(obj) = v.as_object_mut() else {
+            return CliResponse::bad_request("body must be a JSON object");
+        };
+        let requested = obj.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        let scoped = match agent_scope(&requested, own_workspace) {
+            Ok(p) => p,
+            Err(r) => return r,
+        };
+        obj.insert("path".into(), serde_json::Value::String(scoped));
+        return dispatch_unit4_git_post(path, v.to_string().as_bytes());
+    }
+    let mut p = params.clone();
+    let requested = p.get("path").cloned().unwrap_or_default();
+    let scoped = match agent_scope(&requested, own_workspace) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    p.insert("path".into(), scoped);
+    match path {
+        "/cli/git/snapshot" => handle_git_snapshot(&p),
+        "/cli/git/diff-file" => handle_git_diff_file(&p),
+        _ => CliResponse::not_found(),
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // POST dispatch
 // ══════════════════════════════════════════════════════════════════════
 

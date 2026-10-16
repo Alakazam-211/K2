@@ -793,6 +793,123 @@ fn packages_install_uses_the_distro_and_gates_on_podman_5_with_pasta() {
     assert_eq!(o.code, exit::STATE, "no package manager");
 }
 
+/// The engine binaries `packages install` checks after the install.
+fn engine_bins(t: &T) {
+    bin(t, PODMAN);
+    bin(t, PASTA);
+    bin(t, CRUN);
+    rule(t, PODMAN, "--version", 0, "podman version 5.4.2\n");
+}
+
+/// apt (via env) or pacman installing `apparmor` puts the parser in place.
+fn apparmor_install_effect(t: &T, prog: &str) {
+    let root = t.root.clone();
+    t.exec.0.borrow_mut().effects.push((
+        prog.into(),
+        Rc::new(move |args: &[String]| {
+            if args.iter().any(|a| a == "apparmor") {
+                let p = crate::ctx::under(&root, "/usr/sbin/apparmor_parser");
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(&p, "#!fake\n").unwrap();
+            }
+        }),
+    ));
+}
+
+const APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit";
+
+#[test]
+fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missing() {
+    // apt: AppArmor on, no parser → the fixed `apparmor` package rides the
+    // same install, then the parser is there and `apparmor on` loads k2-app.
+    let t = box_root();
+    with_app_user(&t);
+    bin(&t, APT_GET);
+    engine_bins(&t);
+    write(&t, APPARMOR_ENABLED, "Y\n");
+    std::fs::create_dir_all(t.p(APPARMOR_DIR)).unwrap();
+    apparmor_install_effect(&t, ENV);
+    let v = ok_json(&t.call(&["apps", "packages", "install"]));
+    assert_eq!(
+        calls_of(&t, ENV),
+        vec![
+            "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -q".to_string(),
+            format!("{APT_INSTALL} apparmor"),
+        ]
+    );
+    assert_eq!(v["apparmor"]["needed"], true, "{v}");
+    assert_eq!(v["apparmor"]["installed"], serde_json::json!(["apparmor"]));
+    assert_eq!(v["apparmor"]["parser"], PARSER);
+    // Audited with the package it added.
+    assert!(
+        t.audit.0.borrow().iter().any(|l| l.contains("\"verb\":\"apps packages install\"")
+            && l.contains("\"apparmorInstalled\":[\"apparmor\"]")),
+        "{:?}",
+        t.audit.0.borrow()
+    );
+    let a = ok_json(&t.call(&["apps", "apparmor", "on"]));
+    assert_eq!(a["changed"], true, "{a}");
+    assert_eq!(calls_of(&t, PARSER), vec![format!("--replace --write-cache {APPARMOR_FILE}")]);
+
+    // Idempotent: the parser is there now, so the next prep adds nothing.
+    let v = ok_json(&t.call(&["apps", "packages", "install"]));
+    assert_eq!(v["apparmor"]["needed"], false, "{v}");
+    assert_eq!(calls_of(&t, ENV).last().unwrap(), APT_INSTALL);
+    assert!(!t.audit.0.borrow().last().unwrap().contains("apparmorInstalled"));
+
+    // pacman: the same fixed name.
+    let t = box_root();
+    bin(&t, PACMAN);
+    engine_bins(&t);
+    write(&t, APPARMOR_ENABLED, "Y\n");
+    apparmor_install_effect(&t, PACMAN);
+    let v = ok_json(&t.call(&["apps", "packages", "install"]));
+    assert_eq!(
+        calls_of(&t, PACMAN),
+        vec!["-S --needed --noconfirm podman crun passt skopeo catatonit apparmor"]
+    );
+    assert_eq!(v["apparmor"]["parser"], PARSER);
+
+    // The package installed but no parser where K2 looks: a clear stop.
+    let t = box_root();
+    bin(&t, APT_GET);
+    engine_bins(&t);
+    write(&t, APPARMOR_ENABLED, "Y\n");
+    let o = t.call(&["apps", "packages", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.starts_with("apparmor_missing: installed the distro's apparmor package"), "{}", o.stderr);
+
+    // dnf: no fixed name, so nothing is added and the answer says why.
+    let t = box_root();
+    bin(&t, DNF);
+    engine_bins(&t);
+    write(&t, APPARMOR_ENABLED, "Y\n");
+    let v = ok_json(&t.call(&["apps", "packages", "install"]));
+    assert_eq!(calls_of(&t, DNF), vec!["install -y -q podman crun passt shadow-utils skopeo catatonit"]);
+    assert_eq!(v["apparmor"]["needed"], true);
+    assert_eq!(v["apparmor"]["installed"], serde_json::json!([]));
+    assert!(v["apparmor"]["note"].as_str().unwrap().contains("no fixed AppArmor package for dnf"), "{v}");
+}
+
+#[test]
+fn packages_install_leaves_apparmor_alone_when_the_kernel_has_it_off_or_selinux_enforces() {
+    for (enabled, enforce) in [(None, None), (Some("N\n"), None), (Some("Y\n"), Some("1\n"))] {
+        let t = box_root();
+        bin(&t, APT_GET);
+        engine_bins(&t);
+        if let Some(e) = enabled {
+            write(&t, APPARMOR_ENABLED, e);
+        }
+        if let Some(e) = enforce {
+            write(&t, SELINUX_ENFORCE, e);
+        }
+        let v = ok_json(&t.call(&["apps", "packages", "install"]));
+        assert_eq!(calls_of(&t, ENV).last().unwrap(), APT_INSTALL, "{enabled:?} {enforce:?}");
+        assert_eq!(v["apparmor"]["needed"], false, "{v}");
+        assert!(v["apparmor"]["parser"].is_null(), "{v}");
+    }
+}
+
 #[test]
 fn youki_is_opt_in_daemon_only_and_needs_its_binary() {
     let t = box_root();

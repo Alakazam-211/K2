@@ -273,7 +273,7 @@ function isMarkdownPath(filePath: string): boolean {
   return lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.mdx')
 }
 
-function getLanguageExtension(filePath: string): Extension | null {
+export function getLanguageExtension(filePath: string): Extension | null {
   const name = filePath.split('/').pop() || ''
 
   // Check full filename first
@@ -584,7 +584,7 @@ const THEME_HIGHLIGHTS: Record<string, HighlightStyle> = {
   ]),
 }
 
-function getHighlightExtension(themeId: string): Extension {
+export function getHighlightExtension(themeId: string): Extension {
   if (themeId.startsWith('custom:')) {
     const custom = useCustomThemesStore.getState().getTheme(themeId)
     if (custom) {
@@ -716,7 +716,7 @@ function buildEditorTheme(colors: ThemeColors, isLight = false): Extension {
   }, { dark: !isLight })
 }
 
-function getThemeExtension(themeId: string): Extension {
+export function getThemeExtension(themeId: string): Extension {
   if (themeId.startsWith('custom:')) {
     const custom = useCustomThemesStore.getState().getTheme(themeId)
     if (custom) {
@@ -978,7 +978,7 @@ function buildGitGutterExtension(
 
 // ── Setting helpers ──────────────────────────────────────────────────
 
-function buildFontFamilyExtension(family: string, ligatures: boolean): Extension {
+export function buildFontFamilyExtension(family: string, ligatures: boolean): Extension {
   const fontStack = `"${family}", "Menlo", "Monaco", "Courier New", monospace`
   const ligatureCSS = ligatures
     ? { fontVariantLigatures: 'normal', fontFeatureSettings: '"liga" 1, "calt" 1' }

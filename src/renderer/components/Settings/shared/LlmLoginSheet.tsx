@@ -1,4 +1,4 @@
-// Settings → Language Models → Subscriptions / Tokens: the sign-in sheet for a subscription ("Add
+// Settings → Language Models → Subs / Tokens: the sign-in sheet for a subscription ("Add
 // subscription" / "Sign in again"; a wallet login internally).
 //
 // The daemon runs the tool's OWN login command in a daemon-owned terminal

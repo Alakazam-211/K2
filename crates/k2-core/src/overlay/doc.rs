@@ -116,6 +116,23 @@ impl WidgetOrigin {
     }
 }
 
+/// A Thread post a Design tab sent for the person (prd-browser-design-mode-v1
+/// D-A10): the batched page notes from one Send. Still the person's own
+/// message (`via: "compose"`), but set only by `POST /cli/browser/notes`,
+/// never by a body field on `/cli/thread/post`, and kept out of the compose
+/// history. Wire: `design: {itemId?, url, notes}` on the doc.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesignOrigin {
+    /// The Design tab's item id, when a tab sent it (`k2 browser note` has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+    /// The page the notes are about (query and hash stripped).
+    pub url: String,
+    /// How many notes the post carries.
+    pub notes: u32,
+}
+
 /// Who posted a person's Thread message, stamped by the daemon from the
 /// request's credential (never from the request body). A Thread is shared
 /// by the owner, Connect logins and app guests, and `from` alone can't say
@@ -194,6 +211,9 @@ pub struct OverlayDoc {
     /// Set when a Garden widget sent this post for the person (UWB12a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<WidgetOrigin>,
+    /// Set when a Design tab (or `k2 browser note`) sent this post (D-A10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<DesignOrigin>,
     /// Set on a person's post (the compose bar, a Garden widget, an app
     /// guest): who sent it, from the credential. None on agent posts and
     /// on docs written before this field.
@@ -265,6 +285,7 @@ impl OverlayDoc {
             choice: None,
             secret: None,
             widget: None,
+            design: None,
             author: None,
             external: None,
         }
@@ -302,6 +323,7 @@ impl OverlayDoc {
             }),
             secret: None,
             widget: None,
+            design: None,
             author: None,
             external: None,
         }
@@ -339,6 +361,7 @@ impl OverlayDoc {
                 expires_at: None,
             }),
             widget: None,
+            design: None,
             author: None,
             external: None,
         }
@@ -364,6 +387,7 @@ impl OverlayDoc {
             choice: None,
             secret: None,
             widget: None,
+            design: None,
             author: None,
             external: None,
         }

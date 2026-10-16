@@ -196,6 +196,12 @@ pub struct Project {
     /// `POST /cli/agent-access/set {toggle: "chat_manage"}` (Owner/Admin).
     #[serde(default)]
     pub agents_can_manage_chat: i64,
+    /// Design mode (migration 0179). DEFAULT 1 (on): the room shows the
+    /// pinned Design tab and the + menu's Design entry. 0 hides both for
+    /// this workspace (every client). Written via `/cli/workspace/set
+    /// {design_mode_enabled}` / `k2 workspace set <ws> design-mode on|off`.
+    #[serde(default = "project_switch_default_on")]
+    pub design_mode_enabled: i64,
 }
 
 fn project_switch_default_on() -> i64 {
@@ -215,7 +221,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -266,6 +272,7 @@ impl Project {
                 agents_can_operate_compute: row.get(35).unwrap_or(0),
                 agents_can_manage_projects: row.get(36).unwrap_or(1),
                 agents_can_manage_chat: row.get(37).unwrap_or(0),
+                design_mode_enabled: row.get(38).unwrap_or(1),
             })
         })?;
         rows.collect()
@@ -276,7 +283,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -327,6 +334,7 @@ impl Project {
                 agents_can_operate_compute: row.get(35).unwrap_or(0),
                 agents_can_manage_projects: row.get(36).unwrap_or(1),
                 agents_can_manage_chat: row.get(37).unwrap_or(0),
+                design_mode_enabled: row.get(38).unwrap_or(1),
                 })
             },
         )

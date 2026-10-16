@@ -14,7 +14,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage};
 
@@ -245,6 +245,55 @@ pub fn post_thread_with_origin(
         id,
     }];
     Ok((item, links))
+}
+
+/// A person's Design-notes post (prd-browser-design-mode-v1 D-A10): one
+/// Thread text item carrying `design`, otherwise exactly
+/// [`post_thread_with_origin`].
+#[allow(clippy::too_many_arguments)]
+pub fn post_thread_design(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    body: &str,
+    via: &str,
+    design: DesignOrigin,
+    author: Option<PostAuthor>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    let _guard = WRITE.lock();
+    let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut doc = OverlayDoc::text(
+        id.clone(),
+        from.trim().to_string(),
+        to.trim().to_string(),
+        body.to_string(),
+        via,
+    );
+    doc.design = Some(design);
+    doc.author = author;
+    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    let item = OverlayItem {
+        collection: "thread".to_string(),
+        seq,
+        id: id.clone(),
+        doc,
+        conversation_id: Some(conversation_id.to_string()),
+    };
+    let links = vec![OverlayLink {
+        collection: "thread",
+        conversation_id: Some(conversation_id.to_string()),
+        seq,
+        id,
+    }];
+    Ok((item, links))
+}
+
+/// One Thread item of this conversation by id (None when it is not there).
+pub fn find_thread_item(conversation_id: &str, id: &str) -> Result<Option<OverlayItem>, String> {
+    Ok(store::read_thread(conversation_id, 0)?.into_iter().find(|i| i.id == id))
 }
 
 /// How long a choice card stays open by default (Rosson 2026-10-13: a

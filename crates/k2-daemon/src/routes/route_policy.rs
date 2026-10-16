@@ -249,6 +249,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/auth/whoami", Member),
     post("/cli/awareness/publish", Member),
     get("/cli/awareness/subscribe", Member),
+    post("/cli/browser/notes", Member),
+    post("/cli/browser/notes/redeliver", Member),
     post("/cli/browser/open-url", Member),
     post("/cli/canonical/detect-state", Member),
     get("/cli/certs", Member),

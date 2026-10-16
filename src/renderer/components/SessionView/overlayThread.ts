@@ -128,6 +128,11 @@ export interface OverlayThreadItem {
   id: string
   doc: OverlayDoc
   conversation_id?: string | null
+  /** This window's own send, before the server's copy came back:
+   *  `doc.created_at` is the local send time (the `thread/post` answer has
+   *  no `created_at`). The server's stamp replaces it on merge, and a local
+   *  time never replaces a server one. */
+  localTime?: true
 }
 
 export interface OverlaySnapshot {
@@ -227,9 +232,14 @@ export function subscribeOverlayThreadLive(listener: OverlayLiveListener): () =>
   }
 }
 
+/** The row for this window's own `thread/post`. The answer carries no
+ *  `created_at`, so the row is stamped with the send time (`sentAtSec`,
+ *  unix seconds) and reads "just now" at once, like an agent's message; the
+ *  socket's copy brings the server's stamp (`mergeThreadItems`). */
 export function overlayItemFromThreadPost(
   resp: Record<string, unknown> | null | undefined,
   fallbackBody: string,
+  sentAtSec: number = Math.floor(Date.now() / 1000),
 ): OverlayThreadItem | null {
   if (!resp || resp.ok === false) return null
   const id = typeof resp.id === 'string' ? resp.id : ''
@@ -237,7 +247,9 @@ export function overlayItemFromThreadPost(
   const seq = overlaySeq(resp.seq)
   const conversation_id =
     typeof resp.conversation_id === 'string' ? resp.conversation_id : null
-  return {
+  const serverAt =
+    typeof resp.created_at === 'number' && Number.isFinite(resp.created_at) ? resp.created_at : null
+  const item: OverlayThreadItem = {
     collection: 'thread',
     seq: Number.isFinite(seq) ? seq : 0,
     id,
@@ -247,11 +259,14 @@ export function overlayItemFromThreadPost(
       kind: typeof resp.kind === 'string' ? resp.kind : 'text',
       from: typeof resp.from === 'string' ? resp.from : '',
       to: typeof resp.to === 'string' ? resp.to : null,
+      created_at: serverAt ?? sentAtSec,
       body: typeof resp.body === 'string' ? resp.body : fallbackBody,
       via: typeof resp.via === 'string' ? resp.via : 'compose',
       ...docExtras(resp),
     },
   }
+  if (serverAt === null) item.localTime = true
+  return item
 }
 
 /** What `postThreadCompose` did: the server took it (`item` is the new row,
@@ -326,7 +341,11 @@ export function threadWindowFloor(items: OverlayThreadItem[], hasMore: boolean):
 }
 
 function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
-  return a.seq === b.seq && JSON.stringify(a.doc) === JSON.stringify(b.doc)
+  return (
+    a.seq === b.seq &&
+    a.localTime === b.localTime &&
+    JSON.stringify(a.doc) === JSON.stringify(b.doc)
+  )
 }
 
 /**
@@ -348,11 +367,20 @@ export function mergeThreadItems(
     const list: OverlayThreadItem[] = next ?? current
     const at = list.findIndex((it) => it.id === item.id)
     if (at >= 0) {
+      const prev = list[at]
+      const prevServerAt = !prev.localTime && typeof prev.doc.created_at === 'number'
+      // A send's local time never replaces the server's stamp (the socket's
+      // copy can land before the send's answer).
+      const doc =
+        item.localTime && prevServerAt ? { ...item.doc, created_at: prev.doc.created_at } : item.doc
       const merged: OverlayThreadItem = {
-        ...list[at],
+        ...prev,
         ...item,
-        conversation_id: item.conversation_id ?? list[at].conversation_id,
+        doc,
+        conversation_id: item.conversation_id ?? prev.conversation_id,
       }
+      if (item.localTime && !prevServerAt) merged.localTime = true
+      else delete merged.localTime
       if (sameItem(list[at], merged)) continue
       next ??= current.slice()
       next[at] = merged
@@ -386,8 +414,9 @@ export function applyOverlayFrame(
   if (!doc || isChatterDoc(doc)) return items
   const existing = items.findIndex((it) => it.id === id)
   if (existing >= 0) {
+    const { localTime: _local, ...prev } = items[existing]
     return mergeThreadItems(items, [
-      { ...items[existing], seq: Number.isFinite(seq) ? seq : items[existing].seq, doc, collection: 'thread' },
+      { ...prev, seq: Number.isFinite(seq) ? seq : prev.seq, doc, collection: 'thread' },
     ])
   }
   // New id below the loaded window: an older card changing; its page has it.

@@ -551,10 +551,38 @@ export interface BrowserItemData {
   navSeq?: number
 }
 
+/** Changes tab (prd-changes-tab-v1, C2). One per workspace. The git state
+ *  itself is daemon truth (`GET /cli/git/snapshot`, `git_changed`); the item
+ *  only keeps what the tab is LOOKING at, so a reload (or another window)
+ *  opens on the same file, diff mode and compare base. */
+export type ChangesDiffMode = 'inline' | 'split'
+export type ChangesView = 'single' | 'all'
+export type ChangesListLayout = 'list' | 'tree'
+export type ChangesGroup = 'conflicted' | 'staged' | 'unstaged' | 'untracked' | 'base'
+
+export interface ChangesItemData {
+  /** Absolute workspace path (project root or worktree checkout) — the
+   *  `path` every `/cli/git/*` route takes. */
+  workspacePath: string
+  /** Repo-relative path of the selected row, or null. */
+  selectedPath?: string | null
+  /** Which group the selected row is in (a file can be both staged and
+   *  unstaged). */
+  selectedGroup?: ChangesGroup | null
+  /** Diff layout: inline (default) or side-by-side. */
+  mode?: ChangesDiffMode
+  /** Compare ref; null/absent = HEAD (the normal staged/unstaged view). */
+  base?: string | null
+  /** One file, or every changed file in one scroll. */
+  view?: ChangesView
+  /** Flat list or folder tree. */
+  listLayout?: ChangesListLayout
+}
+
 export interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | ChangesItemData
   pinned?: boolean
 }
 
@@ -705,6 +733,21 @@ export interface SerializedBrowserItem {
   icon?: string
 }
 
+/** Changes tab item (C2). ADDITIVE union member like the browser item: old
+ *  layouts never contain one; an older client reading one shows an empty
+ *  file viewer instead of crashing. Only view state is saved. */
+export interface SerializedChangesItem {
+  id: string
+  type: 'changes'
+  workspacePath?: string
+  selectedPath?: string | null
+  selectedGroup?: ChangesGroup | null
+  mode?: ChangesDiffMode
+  base?: string | null
+  view?: ChangesView
+  listLayout?: ChangesListLayout
+}
+
 /** Union of all serialized item shapes accepted by `restoreLayout`.
  *  Includes the legacy v1 terminal shape so pre-0.38.0 layouts deserialize
  *  cleanly; `restoreLayout` migrates them to v2 before constructing Tab
@@ -715,6 +758,7 @@ export type SerializedItem =
   | SerializedAgentItem
   | SerializedFileViewerItem
   | SerializedBrowserItem
+  | SerializedChangesItem
 
 export interface SerializedPaneGroup {
   id: string
@@ -886,6 +930,18 @@ export interface TabsState {
   ) => void
   /** `groupIndex` omitted or 0 appends to the primary strip. */
   openUntitledDocument: (cwd: string, groupIndex?: number) => void
+  /** Changes tab (C2) — open the workspace's Changes tab in column
+   *  `groupIndex` (0 / omitted = primary). One per workspace: when one is
+   *  already open (any column) it is focused instead. Returns its tab id. */
+  openChangesTab: (cwd: string, groupIndex?: number) => string
+  /** Stamp the Changes item's view state (selection, diff mode, base,
+   *  view, list layout). A same-value stamp changes nothing (no save). */
+  setChangesItemState: (
+    tabId: string,
+    paneGroupId: string,
+    itemId: string,
+    patch: Partial<Omit<ChangesItemData, 'workspacePath'>>,
+  ) => void
   /** Set a tab's bar title.
    *  - USER renames (TabBar `commitRename`) pass `{ locked: true }` — that
    *    marks the tab locked locally AND in the daemon `tab_titles` store so
@@ -1131,6 +1187,22 @@ function serializeTab(tab: Tab): SerializedTab {
           title: d.title,
           icon: d.icon,
         }
+      } else if (item.type === 'changes') {
+        const d = item.data as ChangesItemData
+        const out: SerializedChangesItem = {
+          id: item.id,
+          type: 'changes' as const,
+          workspacePath: d.workspacePath,
+        }
+        if (d.selectedPath) {
+          out.selectedPath = d.selectedPath
+          if (d.selectedGroup) out.selectedGroup = d.selectedGroup
+        }
+        if (d.mode) out.mode = d.mode
+        if (d.base) out.base = d.base
+        if (d.view) out.view = d.view
+        if (d.listLayout) out.listLayout = d.listLayout
+        return out
       } else {
         const d = item.data as FileViewerItemData
         return {
@@ -1372,6 +1444,9 @@ function restoreSerializedItem(
       },
     }
   }
+  if (si.type === 'changes') {
+    return { id, type: 'changes' as const, data: restoredChangesData(si, cwd) }
+  }
   const liveMode =
     live?.type === 'file-viewer' ? (live.data as FileViewerItemData).mode : undefined
   return {
@@ -1385,6 +1460,56 @@ function restoreSerializedItem(
     },
     pinned: si.pinned ?? false,
   }
+}
+
+const CHANGES_GROUPS: ReadonlySet<string> = new Set(['conflicted', 'staged', 'unstaged', 'untracked', 'base'])
+
+/** Restore a Changes item's view state. Unknown enum values (a newer or
+ *  hand-edited layout) fall back to the defaults instead of reaching the
+ *  pane. A missing workspace path is the tab strip's cwd. */
+function restoredChangesData(si: SerializedChangesItem, cwd: string): ChangesItemData {
+  const data: ChangesItemData = {
+    workspacePath: typeof si.workspacePath === 'string' && si.workspacePath ? si.workspacePath : cwd,
+  }
+  if (typeof si.selectedPath === 'string' && si.selectedPath) {
+    data.selectedPath = si.selectedPath
+    if (typeof si.selectedGroup === 'string' && CHANGES_GROUPS.has(si.selectedGroup)) {
+      data.selectedGroup = si.selectedGroup
+    }
+  }
+  if (si.mode === 'inline' || si.mode === 'split') data.mode = si.mode
+  if (typeof si.base === 'string' && si.base) data.base = si.base
+  if (si.view === 'single' || si.view === 'all') data.view = si.view
+  if (si.listLayout === 'list' || si.listLayout === 'tree') data.listLayout = si.listLayout
+  return data
+}
+
+/** Workspace path as the Changes tab keys it (no trailing `/`). */
+export function normalizeChangesPath(p: string): string {
+  return p.length > 1 ? p.replace(/\/+$/, '') : p
+}
+
+/** The Changes tab for `workspacePath` in this strip set: its column (0 =
+ *  primary) and tab id, or null. One per workspace (C2). */
+export function findChangesTab(
+  state: { tabs: Tab[]; extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }> },
+  workspacePath: string,
+): { groupIndex: number; tabId: string } | null {
+  const want = normalizeChangesPath(workspacePath)
+  const columns = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
+  for (let gi = 0; gi < columns.length; gi++) {
+    for (const tab of columns[gi]) {
+      for (const pg of tab.paneGroups.values()) {
+        for (const item of pg.items) {
+          if (item.type !== 'changes') continue
+          if (normalizeChangesPath((item.data as ChangesItemData).workspacePath) === want) {
+            return { groupIndex: gi, tabId: tab.id }
+          }
+        }
+      }
+    }
+  }
+  return null
 }
 
 function findTabAcrossGroups(state: { tabs: Tab[], extraGroups: Array<{ tabs: Tab[], activeTabId: string | null }> }, tabId: string): Tab | undefined {
@@ -1499,6 +1624,21 @@ function makeBrowserPaneGroup(paneGroupId: string, url: string): PaneGroup {
         id: crypto.randomUUID(),
         type: 'browser',
         data: { url },
+      },
+    ],
+    activeItemIndex: 0,
+  }
+}
+
+/** Create a PaneGroup with a single Changes item (C2). */
+function makeChangesPaneGroup(paneGroupId: string, workspacePath: string): PaneGroup {
+  return {
+    id: paneGroupId,
+    items: [
+      {
+        id: crypto.randomUUID(),
+        type: 'changes',
+        data: { workspacePath: normalizeChangesPath(workspacePath) },
       },
     ],
     activeItemIndex: 0,
@@ -4403,6 +4543,56 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
           const next = withBrowserPageMeta(tab, paneGroupId, itemId, meta)
           if (next !== tab) changed = true
           return next
+        })
+        if (!changed) return {}
+        return { tabs: result.tabs, extraGroups: result.extraGroups }
+      })
+    },
+
+    openChangesTab: (cwd: string, groupIndex?: number) => {
+      const existing = findChangesTab(get(), cwd)
+      if (existing) {
+        get().setActiveTabInGroup(existing.groupIndex, existing.tabId)
+        get().setActiveGroup(existing.groupIndex)
+        return existing.tabId
+      }
+      const paneGroupId = crypto.randomUUID()
+      const tabId = crypto.randomUUID()
+      const tab: Tab = {
+        id: tabId,
+        title: 'Changes',
+        mosaicTree: paneGroupId,
+        paneGroups: new Map([[paneGroupId, makeChangesPaneGroup(paneGroupId, cwd)]]),
+      }
+      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      return tabId
+    },
+
+    setChangesItemState: (tabId, paneGroupId, itemId, patch) => {
+      set((state) => {
+        let changed = false
+        const result = mapTabAcrossGroups(state, tabId, (tab) => {
+          const pg = tab.paneGroups.get(paneGroupId)
+          if (!pg) return tab
+          let pgChanged = false
+          const newItems = pg.items.map((item) => {
+            if (item.id !== itemId || item.type !== 'changes') return item
+            const prev = item.data as ChangesItemData
+            let next: ChangesItemData = prev
+            for (const [k, v] of Object.entries(patch) as Array<[keyof ChangesItemData, unknown]>) {
+              if (k === 'workspacePath' || v === undefined) continue
+              if ((prev[k] ?? null) === (v ?? null)) continue
+              next = { ...next, [k]: v }
+            }
+            if (next === prev) return item
+            pgChanged = true
+            return { ...item, data: next }
+          })
+          if (!pgChanged) return tab
+          changed = true
+          const newPaneGroups = new Map(tab.paneGroups)
+          newPaneGroups.set(paneGroupId, { ...pg, items: newItems })
+          return { ...tab, paneGroups: newPaneGroups }
         })
         if (!changed) return {}
         return { tabs: result.tabs, extraGroups: result.extraGroups }

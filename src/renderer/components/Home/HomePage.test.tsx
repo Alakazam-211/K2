@@ -45,8 +45,6 @@ vi.mock('@/components/TopBar/ServerSwitcher', () => ({
     h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`,
 }))
 vi.mock('@/components/TopBar/PageTabs', () => ({ default: () => null }))
-// 0.46.0: the nav bar's page row is the same chrome as PageTabs.
-vi.mock('@/components/Sidebar/NavPageRow', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/DesktopChromeLeft', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/DesktopChromeRight', () => ({
   default: ({ children }: { children?: React.ReactNode }) => <>{children}</>,

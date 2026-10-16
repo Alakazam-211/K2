@@ -36,7 +36,6 @@ import { FeedbackCard, SectionHeader, TicketRailItem } from './TicketCard'
 import { FeedbackItemView } from './FeedbackItemView'
 import { useTicketMe } from './useTicketMe'
 import { initialTicketScope, writeLastTicketTab } from '@/lib/ticket-open-pref'
-import NavPageRow from '@/components/Sidebar/NavPageRow'
 
 export interface TicketBoardProps {
   /** Rows to show (the caller's own scoping — workspace filter, project
@@ -53,10 +52,6 @@ export interface TicketBoardProps {
   emptyHint?: string
   /** Selected ticket to open on mount (the "Open in window" target). */
   initialSelectedId?: string | null
-  /** Draw the page row (Home / Agents / Projects / Tickets / Settings) at
-   *  the top of the list — the Tickets page only, not Zen or a project's
-   *  Tickets tab (0.46.0 experiment). */
-  pageNav?: boolean
 }
 
 export function TicketBoard({
@@ -68,7 +63,6 @@ export function TicketBoard({
   extraFilter,
   emptyHint = 'Agents file asks with `k2 tickets ask` — new items appear live.',
   initialSelectedId = null,
-  pageNav = false,
 }: TicketBoardProps): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const me = useTicketMe()
@@ -192,7 +186,6 @@ export function TicketBoard({
           className="flex flex-col items-center gap-1 py-2 border-r border-[var(--color-border)] flex-shrink-0 overflow-y-auto"
           style={{ width: 48 }}
         >
-          {pageNav && <NavPageRow orientation="column" />}
           <button
             type="button"
             data-testid="ticket-list-expand"
@@ -219,7 +212,6 @@ export function TicketBoard({
           className="relative flex flex-col min-h-0 border-r border-[var(--color-border)] flex-shrink-0"
           style={{ width: listWidth }}
         >
-          {pageNav && <NavPageRow />}
           <div className="flex flex-col gap-1.5 px-2 py-2 border-b border-[var(--color-border)] flex-shrink-0">
             <div className="flex items-center gap-1">
               <div role="tablist" aria-label="Which tickets" className="flex flex-1 min-w-0 border border-[var(--color-border)]">

@@ -51,8 +51,6 @@ vi.mock('@/components/Projects/ProjectNav', async () => {
 vi.mock('@/components/TopBar/TopBarUtilities', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/ServerSwitcher', () => ({ default: () => null }))
 vi.mock('@/components/TopBar/PageTabs', () => ({ default: () => null }))
-// 0.46.0: the nav bar's page row is the same chrome as PageTabs.
-vi.mock('@/components/Sidebar/NavPageRow', () => ({ default: () => null }))
 
 import { act } from 'react'
 import { cleanup, render } from '@testing-library/react'

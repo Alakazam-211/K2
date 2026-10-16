@@ -20,7 +20,6 @@ import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { primaryScope } from '@/kessel/server-scope'
-import NavPageRow from './NavPageRow'
 
 const RAIL_WIDTH = 48
 
@@ -250,8 +249,6 @@ export default function IconRail(): React.JSX.Element {
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: RAIL_WIDTH }}
     >
-      {/* 0.46.0 experiment: page icons along the top of the nav. */}
-      <NavPageRow orientation="column" />
       {/* Zone 1: Pinned (0.39.0: agent-mode workspaces flow through here
           as manual pins, not auto-promoted as a separate section) */}
       {topSection.length > 0 && (

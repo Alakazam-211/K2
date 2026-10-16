@@ -689,6 +689,12 @@ fn media_reconfigure_sets_the_voice_url_without_a_tarball() {
     assert_eq!(sew_calls(&t)[0].0, vec!["media", "install", "--reconfigure", "--config-json", path.as_str(), "--json"]);
     let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
     assert_eq!(j, serde_json::json!({"public_url": "wss://hearth.box.k2.dev", "profile": "shared"}));
+    // A new node IP: the engine drains and restarts in the same call.
+    ok(&t.call_in(&["engine", "sew", "media", "reconfigure", "restart-now"], br#"{"node_ip":"203.0.113.9"}"#));
+    assert_eq!(
+        sew_calls(&t)[1].0,
+        vec!["media", "install", "--reconfigure", "--restart", "--now", "--config-json", path.as_str(), "--json"]
+    );
 }
 
 #[test]

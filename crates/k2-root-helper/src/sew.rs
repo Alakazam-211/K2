@@ -84,7 +84,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             require_known(ctx)?;
             run_sew(ctx, &["media", "uninstall"], None)
         }
-        SewVerb::MediaReconfigure => media_reconfigure(ctx, stdin),
+        SewVerb::MediaReconfigure { restart_now } => media_reconfigure(ctx, stdin, *restart_now),
         SewVerb::MediaTurnCert => media_turn_cert(ctx, stdin),
         SewVerb::MediaStatus => {
             require_known(ctx)?;
@@ -586,7 +586,7 @@ fn drop_turn_tls(ctx: &Ctx) {
 /// `sew media install --config-json <staged>` (install: the staged pin
 /// tarball; reconfigure: `--reconfigure`, no tarball). The TURN key never
 /// outlives the call on the helper's side.
-fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: bool) -> HResult<J> {
+fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: bool, restart_now: bool) -> HResult<J> {
     let turn = match (&req.turn_cert_pem, &req.turn_key_pem) {
         (Some(c), Some(k)) => Some(put_turn_tls(ctx, c, k)?),
         _ => None,
@@ -602,6 +602,9 @@ fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: 
     let mut args = vec!["media", "install"];
     if reconfigure {
         args.push("--reconfigure");
+        if restart_now {
+            args.extend(["--restart", "--now"]);
+        }
     }
     args.extend(["--config-json", path.as_str()]);
     let res = run_sew(ctx, &args, None);
@@ -621,14 +624,14 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
         return Err(Fail::state("the staged sew-media tarball is not this build's pin"));
     }
     let tarball = ctx.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
-    media_run(ctx, &req, Some(&tarball), false)
+    media_run(ctx, &req, Some(&tarball), false, false)
 }
 
-fn media_reconfigure(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
+fn media_reconfigure(ctx: &Ctx, stdin: &[u8], restart_now: bool) -> HResult<J> {
     let req: MediaRequest = parse_json(stdin, "media refused: input")?;
     req.validate_reconfigure().map_err(Fail::argv)?;
     require_known(ctx)?;
-    media_run(ctx, &req, None, true)
+    media_run(ctx, &req, None, true, restart_now)
 }
 
 /// `sew media turn-cert --cert <staged> --key <staged> --when-idle`: a

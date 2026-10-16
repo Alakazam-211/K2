@@ -21,7 +21,7 @@ import type { ThreadTurn } from '@/components/SessionView/overlayThread'
 import { ZEN_RECENT_FIRST_KEY, useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
 import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversation } from './ZenConversationWidget'
-import { __resetZenDraftsForTests } from './ZenCompose'
+import { ZenCompose, __resetZenDraftsForTests, zenComposeRowChrome } from './ZenCompose'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -436,5 +436,104 @@ describe('the activity drawer (`activity-drawer`)', () => {
     await act(async () => void fireEvent.keyDown(input, { key: 'Enter' }))
     expect(fb.posts).toEqual(['hello'])
     expect(Object.keys(useZenRecentFirstStore.getState().sent)).toEqual(['cortana::local'])
+  })
+})
+
+// 0.46.0 (Rosson 2026-10-16): the Garden's box stacks like the desktop
+// Thread's past 3 lines (the shared rule in ThreadZenKit), back at 2.
+describe('the stacked message box', () => {
+  // 20px lines, 12px of padding: N lines = 12 + 20N. 300px wide.
+  const LINE = 20
+  let height = 32
+  function renderBox(opts: { stack?: boolean } = {}): { ta: HTMLTextAreaElement; box: HTMLElement } {
+    const real = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((elt: Element, pseudo?: string | null) =>
+      elt instanceof HTMLTextAreaElement ? ({ lineHeight: `${LINE}px`, fontSize: '14px' } as CSSStyleDeclaration) : real(elt, pseudo),
+    )
+    const proto = HTMLTextAreaElement.prototype
+    vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(() => height)
+    vi.spyOn(proto, 'clientWidth', 'get').mockImplementation(() => 300)
+    const fb = fakeBridge([])
+    render(<ZenCompose bridge={fb.bridge} address="cortana::local" label="cortana" disabled={false} {...opts} />)
+    return { ta: el('[data-zen-compose-input]') as HTMLTextAreaElement, box: el('[data-zen-compose-box]') }
+  }
+  const type = (ta: HTMLTextAreaElement, lines: number, text: string): void => {
+    height = 12 + lines * LINE
+    act(() => void fireEvent.change(ta, { target: { value: text } }))
+  }
+
+  beforeEach(() => {
+    height = 32
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('stacks past 3 lines with the same textarea, focus and caret kept', () => {
+    expect(zenComposeRowChrome(true)).toBe(80)
+    expect(zenComposeRowChrome(false)).toBe(40)
+    const { ta, box } = renderBox()
+    ta.focus()
+    type(ta, 1, 'a'.repeat(40))
+    expect(box.hasAttribute('data-stacked')).toBe(false)
+    type(ta, 3, 'a'.repeat(150))
+    expect(box.hasAttribute('data-stacked')).toBe(false)
+    type(ta, 5, 'a'.repeat(300))
+    expect(box.getAttribute('data-stacked')).toBe('true')
+    expect(el('[data-zen-compose-input]')).toBe(ta)
+    expect(document.activeElement).toBe(ta)
+    expect(ta.selectionStart).toBe(300)
+    // The text first across the full width; "+" and Send under it, Send right.
+    expect(ta.style.order).toBe('-1')
+    expect(ta.style.flexBasis).toBe('100%')
+    expect(box.style.flexWrap).toBe('wrap')
+    expect(Array.from(box.children).map((c) => c.getAttribute('data-zen-attach') !== null ? 'attach' : c.hasAttribute('data-thread-compose-spacer') ? 'spacer' : c.hasAttribute('data-zen-send') ? 'send' : c.tagName.toLowerCase())).toEqual([
+      'attach',
+      'textarea',
+      'spacer',
+      'send',
+    ])
+  })
+
+  it('unstacks at 2 lines or fewer, with no flapping at exactly 3', () => {
+    const { ta, box } = renderBox()
+    type(ta, 6, 'a'.repeat(400))
+    expect(box.getAttribute('data-stacked')).toBe('true')
+    // Exactly 3 lines while stacked: stays, and stays across more edits.
+    for (let i = 0; i < 4; i++) {
+      type(ta, 3, 'a'.repeat(200 + i))
+      expect(box.getAttribute('data-stacked')).toBe('true')
+    }
+    // 2 lines stacked would be 3 in the one-row field (300 → 220px): stays.
+    type(ta, 2, 'a'.repeat(130))
+    expect(box.getAttribute('data-stacked')).toBe('true')
+    // 1 line: back to one row, the same textarea.
+    type(ta, 1, 'short')
+    expect(box.hasAttribute('data-stacked')).toBe(false)
+    expect(ta.style.order).toBe('')
+    expect(document.querySelector('[data-thread-compose-spacer]')).toBeNull()
+    expect(el('[data-zen-compose-input]')).toBe(ta)
+    // And at exactly 3 from one row: stays one row.
+    type(ta, 3, 'a'.repeat(150))
+    expect(box.hasAttribute('data-stacked')).toBe(false)
+  })
+
+  it('reduced motion: the switch has no transition', () => {
+    const mm = vi.fn((q: string) => ({ matches: q.includes('prefers-reduced-motion'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false }))
+    vi.stubGlobal('matchMedia', mm)
+    const { ta, box } = renderBox()
+    type(ta, 5, 'a'.repeat(300))
+    expect(box.getAttribute('data-stacked')).toBe('true')
+    expect(box.style.transition).toBe('')
+    expect(ta.style.transition).toBe('')
+    expect(el('[data-thread-compose-spacer]').style.transition).toBe('')
+    vi.unstubAllGlobals()
+  })
+
+  it('`stack` off: never stacks', () => {
+    const { ta, box } = renderBox({ stack: false })
+    type(ta, 8, 'a'.repeat(600))
+    expect(box.hasAttribute('data-stacked')).toBe(false)
+    expect(ta.style.order).toBe('')
   })
 })

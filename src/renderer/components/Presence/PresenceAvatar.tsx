@@ -1,36 +1,25 @@
-// Presence S2 — circular initials avatar with a role-colored border.
-//
-// Forked from the initials-fallback branch of Sidebar/ProjectAvatar but
-// circular and fully self-contained (no icon fetching, no cache). V1 is
-// initials-ONLY by decree (PRD §3 / decisions log 2026-07-04): profile
-// images arrive later from K2 Connect Cloud accounts. The `imageUrl` prop
-// is accepted NOW so the Cloud identity source drops in without reshaping
-// any call site — but it is deliberately not rendered yet.
+// Presence — one person chip (plan-agent-status-unify-v1 §3.5, Q8:
+// chamfered square, approved 2026-10-16). The drawing is `PresenceChip`:
+// a person colour hashed from the username, white initials (or the photo
+// once K2 Connect Cloud supplies one), and the role as a corner mark
+// (filled = owner, hollow = admin, none = member). Role is never a colour,
+// and amber is gone from presence.
 
-/** Role → border color, decided 2026-07-04 (PRD §10): owner=amber-gold,
- *  admin=purple, member=blue. Single source of truth for every presence
- *  surface — the top-bar chips, the modal's role labels, and the
- *  workspace-nav mini avatars (S6) all read this map. (No viewer: the
- *  role was removed; an older server's `viewer` row falls back to the
- *  member color at the call sites.) */
-export const ROLE_COLORS: Record<'owner' | 'admin' | 'member', string> = {
-  owner: '#e2a92d', // amber-gold
-  admin: '#a855f7', // purple
-  member: '#3b82f6', // blue
-}
+import { useConnectHostStore } from '@/stores/connect-host'
+import { PresenceChip, type PresenceRole } from './PresenceChip'
 
 export interface PresenceAvatarProps {
   /** Username, or the wire literal `"owner"` (displayed as "Owner"). */
   name: string
-  role: 'owner' | 'admin' | 'member'
-  /** Diameter in px. ~20 for the top bar; renders fine down to 14-16
-   *  (the S6 workspace-nav size) and up to ~32 (the modal). */
+  role: PresenceRole
+  /** Side in px: 20 in the top bar, 14 on rows, 32 in the modal. */
   size?: number
-  /** Accepted but NOT rendered in V1 — avatars are initials-only until
-   *  K2 Connect Cloud accounts supply profile images.
-   *  TODO(K2 Connect Cloud): render the image (initials as fallback)
-   *  once Cloud identity lands — this prop is the drop-in point. */
+  /** This is you: a ring (top bar and modal only; rows never show you). */
+  you?: boolean
+  away?: boolean
+  /** A profile photo (K2 Connect Cloud), drawn over the person colour. */
   imageUrl?: string | null
+  title?: string
 }
 
 /** The wire `"owner"` row renders as "Owner" everywhere. */
@@ -38,37 +27,12 @@ export function presenceDisplayName(name: string): string {
   return name === 'owner' ? 'Owner' : name
 }
 
-export default function PresenceAvatar({
-  name,
-  role,
-  size = 20,
-  // V1: intentionally unused (see prop doc above).
-  imageUrl: _imageUrl,
-}: PresenceAvatarProps): React.JSX.Element {
-  const displayName = presenceDisplayName(name)
-  const initial = displayName.charAt(0).toUpperCase()
-  const borderColor = ROLE_COLORS[role] ?? ROLE_COLORS.member
+/** Who you are on the window's server, as its roster names you: `owner`
+ *  on this computer, else your saved login's username. */
+export function useSelfPresenceUser(): string {
+  return useConnectHostStore((s) => (s.activeHost === 'local' ? 'owner' : s.activeHost.username || 'owner'))
+}
 
-  return (
-    <span
-      className="flex flex-shrink-0 items-center justify-center select-none"
-      title={`${displayName} (${role})`}
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        border: `2px solid ${borderColor}`,
-        backgroundColor: 'var(--color-bg-elevated)',
-        color: 'var(--color-text-primary)',
-        // Border eats 4px of the diameter — scale the glyph to the
-        // inner circle so it stays legible at 14-16px.
-        fontSize: Math.max(7, Math.round((size - 4) * 0.6)),
-        fontWeight: 700,
-        lineHeight: 1,
-        boxSizing: 'border-box',
-      }}
-    >
-      {initial}
-    </span>
-  )
+export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title }: PresenceAvatarProps): React.JSX.Element {
+  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} />
 }

@@ -66,6 +66,9 @@ pub mod local_upload;
 // Embedded Browser Tab (PRD prd-browser-pane-v1.md) — Rust-side child-
 // webview lifecycle; renderer gets commands, never webview capabilities.
 pub mod browser_webviews;
+// Browser freeze-frame snapshots (engine capture + JPEG) for the pane above.
+#[cfg(feature = "browser-pane")]
+pub mod browser_snapshot;
 // Remote Gmail OAuth — bind/wait on the desktop's 127.0.0.1 loopback so
 // Google's redirect lands on the machine with a browser (not the daemon).
 pub mod oauth_loopback;

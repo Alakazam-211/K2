@@ -389,7 +389,9 @@ function ActiveBarItem({
       <span className="text-[11px] truncate flex-1">{project.name}</span>
       {display === 'working' && (
         <span className="text-[11px] font-mono flex-shrink-0 text-[var(--color-text-muted)]">
-          <span className="braille-spinner" />
+          {/* 1ch, not the shared 1em box: the glyph is ~0.6em wide and sat
+              left of a blank strip, so it read further left than the marks. */}
+          <span className="braille-spinner !w-[1ch]" />
         </span>
       )}
       {isAgentWorking && display !== 'working' && <ActivityMark display={display} />}

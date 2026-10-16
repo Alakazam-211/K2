@@ -608,11 +608,31 @@ fn users_refusals_map_and_bad_input_never_reaches_sew() {
     let t = t();
     standalone(&t);
     let env = t.env();
-    queue_mgmt(&t, "POST /mgmt/v1/local/users", Err(MgmtError::Status(409, r#"{"error":{"code":"conflict","reason":"username_taken"}}"#.into())));
+    // Sew's real error bodies (docs/mgmt.md; the 0.1.2 VM cycle answered
+    // exactly this for a second `users owner`): the reason is in
+    // error.details.reason.
+    queue_mgmt(
+        &t,
+        "POST /mgmt/v1/local/users",
+        Err(MgmtError::Status(
+            409,
+            r#"{"ok":false,"error":{"code":"conflict","hint":"the username is held by another active member","details":{"reason":"username_taken","field":"username"}}}"#.into(),
+        )),
+    );
     assert_eq!(crate::sew::users::invite(&env, "bob", None, "member", None).unwrap_err().code, "username_taken");
-    queue_mgmt(&t, "POST /mgmt/v1/local/setup-link", Err(MgmtError::Status(409, r#"{"error":{"code":"owner_exists"}}"#.into())));
-    assert_eq!(crate::sew::users::owner(&env, "rosson", None).unwrap_err().code, "owner_exists");
-    queue_mgmt(&t, "POST /mgmt/v1/local/users", Err(MgmtError::Status(403, r#"{"error":{"code":"forbidden","reason":"provider_is_k2"}}"#.into())));
+    queue_mgmt(
+        &t,
+        "POST /mgmt/v1/local/setup-link",
+        Err(MgmtError::Status(409, r#"{"ok":false,"error":{"code":"conflict","hint":"x","details":{"reason":"owner_exists"}}}"#.into())),
+    );
+    let f = crate::sew::users::owner(&env, "rosson", None).unwrap_err();
+    assert_eq!(f.code, "owner_exists");
+    assert!(f.hint.contains("already has an owner"), "{}", f.hint);
+    queue_mgmt(
+        &t,
+        "POST /mgmt/v1/local/users",
+        Err(MgmtError::Status(403, r#"{"ok":false,"error":{"code":"forbidden","hint":"x","details":{"reason":"provider_is_k2"}}}"#.into())),
+    );
     let f = crate::sew::users::invite(&env, "bob", None, "member", None).unwrap_err();
     assert_eq!(f.code, "provider_is_k2");
     assert!(f.hint.contains("--identity standalone"));

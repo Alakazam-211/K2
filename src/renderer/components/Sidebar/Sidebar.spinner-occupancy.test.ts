@@ -117,12 +117,10 @@ function walk(d: string, out: string[] = []): string[] {
   return out
 }
 
-/** Surfaces part 2 (tabs, pinned tab, Thread) still converts. Shrink only:
- *  a new file here is a sixth look. */
-const PART_2_PENDING = new Set([
-  'Activity/ActivityMark.tsx',
-  'RunningAgentsPanel/RunningAgentsPanel.tsx',
-])
+/** Surfaces still to convert. Empty since part 2 (tabs, the pinned Chat,
+ *  Running agents, the Thread drawer). Shrink only: a new file here is a
+ *  sixth look. */
+const PART_2_PENDING = new Set<string>([])
 
 describe('one renderer for agent activity', () => {
   it('no component outside AgentStatus draws its own activity look', () => {
@@ -140,6 +138,10 @@ describe('one renderer for agent activity', () => {
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  it('ActivityMark is gone: every activity mark is the shared AgentStatus glyphs', () => {
+    expect(() => statSync(join(componentsDir, 'Activity/ActivityMark.tsx'))).toThrow()
   })
 
   it('the pending list only names files that still exist', () => {

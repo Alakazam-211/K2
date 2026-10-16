@@ -286,7 +286,7 @@ describe('top bars share the Agents bar, not Focus', () => {
     expect(gate).not.toContain('PresenceRoster')
     expect(gate).not.toContain('UsageButton')
     expect(gate).not.toContain('TimerButton')
-    expect(gate).not.toContain('K2NounsCheatSheet')
+    expect(gate).not.toContain('HelpButton')
     expect(gate).not.toContain('ModeToggle')
   })
 

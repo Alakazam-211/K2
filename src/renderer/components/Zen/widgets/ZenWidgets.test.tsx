@@ -880,6 +880,23 @@ describe('the nav rail (Garden 1)', () => {
       expect(b.querySelector('svg')).not.toBeNull()
       expect(b.textContent?.trim()).toBe('')
     }
+    // K2's one icon set, style A3 (Rosson 2026-10-16): the top bar's page
+    // tab icons, 16px, 1.75 stroke, squared (square caps, mitred joins).
+    expect(
+      Array.from(rail.querySelectorAll('[data-zen-nav]')).map((b) => [b.getAttribute('data-zen-nav'), b.querySelector('svg')?.getAttribute('data-k2-icon')]),
+    ).toEqual([
+      ['home', 'home'],
+      ['agents', 'agents'],
+      ['projects', 'projects'],
+      ['tickets', 'tickets'],
+    ])
+    for (const svg of Array.from(rail.querySelectorAll('[data-zen-nav] svg'))) {
+      expect(svg.getAttribute('width')).toBe('16')
+      expect(svg.getAttribute('stroke-width')).toBe('1.75')
+      expect(svg.getAttribute('stroke')).toBe('currentColor')
+      expect(svg.getAttribute('stroke-linecap')).toBe('square')
+      expect(svg.getAttribute('stroke-linejoin')).toBe('miter')
+    }
     expect(currentNav()).toEqual(['home'])
     expect(navButton('agents').classList.contains('cursor-pointer')).toBe(true)
     // My Home is where you are: a click changes nothing.

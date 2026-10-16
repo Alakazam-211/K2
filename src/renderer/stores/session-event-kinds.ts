@@ -104,6 +104,12 @@ export const SESSION_EVENT_ROUTES = {
   },
   // Home 0.43.2 (Q7): Settings → Email refetches on it (`onMailChanged`).
   mail_changed: { class: 'app', app: true },
+  // Sew on K2 (S29 K14): no desktop Sew page in 0.46.0; `k2 hostchat` and
+  // remote clients read GET /cli/sew/status.
+  sew_changed: {
+    class: 'app',
+    ignored: 'No Sew page on this client yet (0.46.0); k2 hostchat reads /cli/sew/status.',
+  },
   // prd-dns-pending-and-cutover-safety-v1 DN12e: Settings → Domains
   // refetches on it (`onDomainsChanged`). Not carried: Settings reads the
   // window's own server.

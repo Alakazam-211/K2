@@ -725,7 +725,25 @@ pub const RESERVED_NESTED_LABELS: &[ReservedNestedLabel] = &[
         purpose: "K2 webmail (mail.<box>.k2.dev)",
         grandfathered: true,
     },
+    ReservedNestedLabel {
+        label: VOICE_NESTED_LABEL,
+        purpose: "K2 chat voice (voice.<box>.k2.dev)",
+        grandfathered: true,
+    },
+    ReservedNestedLabel {
+        label: TURN_NESTED_LABEL,
+        purpose: "K2 chat voice relay (TURN)",
+        grandfathered: true,
+    },
 ];
+
+/// Sew voice signalling (`voice.<box>.k2.dev` → sew-media's loopback
+/// 7880), registered box-level by the Sew supervisor (K13).
+pub const VOICE_NESTED_LABEL: &str = "voice";
+/// Kept from tenants: Sew's TURN host is the single label
+/// `turn-<box>.k2.dev` (k2-connect turn mode), never a nested `turn.<box>`,
+/// but a nested `turn` would read as it.
+pub const TURN_NESTED_LABEL: &str = "turn";
 
 /// The reserved entry for `name` (trimmed, case-insensitive), if any.
 /// Exact match only: `meeting`, `chats`, `skins` are ordinary labels.
@@ -5381,7 +5399,11 @@ mod tests {
             assert!(!is_reserved_nested_label(name), "{name:?} must stay claimable");
         }
         let labels: Vec<&str> = RESERVED_NESTED_LABELS.iter().map(|r| r.label).collect();
-        assert_eq!(labels, vec!["skin", "meet", "chat", "mail"]);
+        assert_eq!(labels, vec!["skin", "meet", "chat", "mail", "voice", "turn"]);
+        for name in ["voice", " Voice ", "turn", "TURN"] {
+            assert!(is_reserved_nested_label(name), "{name:?} must be reserved (Sew voice, K13)");
+        }
+        assert!(!is_reserved_nested_label("voices") && !is_reserved_nested_label("turn-x"));
 
         let meet = reserved_nested_label_error(" MEET ");
         assert_eq!(

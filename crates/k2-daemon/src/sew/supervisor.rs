@@ -144,6 +144,33 @@ fn sew_ok(env: &Env, tail: &[&str], stdin: Option<&[u8]>) -> Result<Value, Strin
     }
 }
 
+/// `engine sew <tail>` with no stdin (voice, users).
+pub fn helper_json(env: &Env, tail: &[&str]) -> Result<Value, String> {
+    helper(env, tail, None)
+}
+
+/// `engine sew <tail>` with `stdin` bytes.
+pub fn helper_stdin(env: &Env, tail: &[&str], stdin: &[u8]) -> Result<Value, String> {
+    helper(env, tail, Some(stdin))
+}
+
+/// A Sew run through the helper that must exit 0.
+pub fn sew_run(env: &Env, tail: &[&str], stdin: Option<&[u8]>) -> Result<Value, String> {
+    sew_ok(env, tail, stdin)
+}
+
+/// Wait until every unit is active (`secs` one-second polls).
+pub fn poll_units(env: &Env, units: &[&str], secs: u32) -> Result<(), String> {
+    poll_active(env, units, secs)
+}
+
+/// Tell every client the Sew server changed (`sew:changed` hook, mirrored
+/// as the app-level `sew_changed` session event). A refetch signal: the
+/// reason only, never a link, a key or a token.
+pub fn changed(reason: &str) {
+    k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SewChanged, json!({"reason": reason}));
+}
+
 /// Protocol 7 AND the `sew` namespace AND this daemon's pin.
 pub fn helper_check(env: &Env) -> R<()> {
     let st = env.ops.helper_state();
@@ -213,6 +240,28 @@ pub fn mgmt(env: &Env, method: &str, path: &str, body: Option<&Value>) -> Result
 pub struct EnableRequest {
     pub tarball_path: Option<std::path::PathBuf>,
     pub recovery_key_file: Option<std::path::PathBuf>,
+    /// `k2` (default) or `standalone` (Sew's own password logins). Fixed
+    /// for the life of an install: switching is a fresh install.
+    pub provider: Option<String>,
+    /// Also set up voice once chat runs (K13).
+    pub voice: Option<super::voice::InstallRequest>,
+}
+
+impl EnableRequest {
+    pub fn provider(&self) -> &str {
+        self.provider.as_deref().unwrap_or(pin::PROVIDER_K2)
+    }
+}
+
+/// The identity provider an install was made with (recorded in the enable
+/// progress; `k2` for installs from before the choice existed).
+pub fn row_provider(row: &Row) -> String {
+    row.enable_progress
+        .as_ref()
+        .and_then(|p| p.get("provider"))
+        .and_then(Value::as_str)
+        .unwrap_or(pin::PROVIDER_K2)
+        .to_string()
 }
 
 pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -453,6 +502,22 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
         if r.status == "upgrading" {
             return Err(no("upgrade_in_progress", 409, "a Sew upgrade is recorded as running: wait for it or check k2 hostchat status"));
         }
+        let had = row_provider(&r);
+        let installed_once = r.install_id.is_some() || step_done(&r.enable_progress, "install");
+        if installed_once && had != req.provider() {
+            return Err(no(
+                "provider_fixed",
+                409,
+                format!(
+                    "this Sew install uses identity '{had}'; it can only change with a fresh install \
+                     (k2 hostchat uninstall --purge, then k2 hostchat enable --identity {})",
+                    req.provider()
+                ),
+            ));
+        }
+    }
+    if !matches!(req.provider(), pin::PROVIDER_K2 | pin::PROVIDER_STANDALONE) {
+        return Err(no("bad_request", 400, "identity is k2 or standalone"));
     }
     let latch = begin(env)?;
     let checks = preflight(env, req);
@@ -469,6 +534,9 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
     row.last_error = None;
     row.updated_at = now;
     set_current(&mut row.enable_progress, Some("master-key"));
+    if let Some(p) = row.enable_progress.as_mut() {
+        p["provider"] = json!(req.provider());
+    }
     store::save(&row).map_err(|e| no("db_error", 500, e))?;
     Ok(Ok(latch))
 }
@@ -483,8 +551,10 @@ pub fn enable_machine(env: &Env, req: &EnableRequest) -> Result<(), String> {
             r.status = "error".into();
             r.last_error = Some(msg.clone());
         });
+        changed("enable-failed");
         return Err(msg);
     }
+    changed("enabled");
     Ok(())
 }
 
@@ -599,7 +669,11 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
     if !marked("install") {
         step(env, "install");
         let port = env.ops.daemon_port().ok_or(("install", "the daemon's HTTP port is unknown".to_string()))?;
-        let body = json!({"jwksUrl": format!("http://127.0.0.1:{port}/v1/chat/jwks"), "masterKey": key});
+        let body = if req.provider() == pin::PROVIDER_STANDALONE {
+            json!({"provider": pin::PROVIDER_STANDALONE, "masterKey": key})
+        } else {
+            json!({"jwksUrl": format!("http://127.0.0.1:{port}/v1/chat/jwks"), "masterKey": key})
+        };
         let out = helper(env, &["install"], Some(body.to_string().as_bytes())).map_err(|e| ("install", e))?;
         if let Some(n) = sew_exit(&out).filter(|n| *n != 0) {
             return Err(("install", format!("exit {n}: {}", sew_message(&out))));
@@ -655,7 +729,7 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
 
     step(env, "link");
     let status = mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| ("link", e.to_string()))?;
-    let install_id = link_check(&status, pin_v, &key).map_err(|e| ("link", e))?;
+    let install_id = link_check(&status, pin_v, &key, req.provider()).map_err(|e| ("link", e))?;
     done(env, "link");
 
     let _ = helper(env, &["unstage"], None);
@@ -679,13 +753,13 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
 
 /// The link checks (S29 §11.3 step 11): provider k2, version = pin, an
 /// install id, and the KEK id Sew reports = the vault key's.
-pub fn link_check(status: &Value, pin_v: &str, key: &str) -> Result<String, String> {
+pub fn link_check(status: &Value, pin_v: &str, key: &str, want_provider: &str) -> Result<String, String> {
     let provider = status.get("provider").and_then(Value::as_str).unwrap_or("");
-    if provider == "standalone" {
+    if provider == "standalone" && want_provider != "standalone" {
         return Err("a standalone Sew install is on this box; K2 will not adopt it".into());
     }
-    if provider != "k2" {
-        return Err(format!("Sew reports provider '{provider}', expected k2"));
+    if provider != want_provider {
+        return Err(format!("Sew reports provider '{provider}', expected {want_provider}"));
     }
     let v = status.get("version").and_then(Value::as_str).unwrap_or("");
     if v.split('+').next() != Some(pin_v) {
@@ -929,6 +1003,10 @@ pub fn status(env: &Env, with_health: bool) -> Value {
         alarms.push("k2_mgmt_unreachable".into());
     }
     alarms.extend(k2_alarms(env, &row, sew_status.as_ref(), now));
+    let mut warnings = warnings;
+    let (voice, voice_alarms, voice_warnings) = if up { super::voice::status(env, with_health) } else { super::voice::status_offline(env) };
+    alarms.extend(voice_alarms);
+    warnings.extend(voice_warnings);
     let db_ok = sew_status.as_ref().and_then(|s| s.pointer("/db/ok")).and_then(Value::as_bool) != Some(false);
     let verdict = if health_ok && db_ok && alarms.is_empty() { "running" } else { "degraded" };
     let rec = reconcile(&row.status, &db, &sew, verdict);
@@ -946,6 +1024,8 @@ pub fn status(env: &Env, with_health: bool) -> Value {
         "upgradeAvailable": upgrade_available,
         "installId": row.install_id,
         "provider": sew_status.as_ref().and_then(|s| s.get("provider")).cloned(),
+        "identityProvider": row_provider(&row),
+        "voice": voice,
         "units": {"sewDb": db.json(), "sew": sew.json()},
         "alarms": alarms,
         "warnings": warnings,
@@ -994,6 +1074,7 @@ pub fn health_tick(env: &Env) -> Option<String> {
         return None;
     }
     store::update(env.ops.now(), |r| r.status = new.clone()).ok()?;
+    changed("state");
     Some(new)
 }
 
@@ -1018,6 +1099,7 @@ pub fn spawn_background() {
             if let Some(s) = health_tick(&env) {
                 k2_core::log_debug!("[sew] state → {s}");
             }
+            super::voice::tick(&env);
         }
     });
 }
@@ -1057,6 +1139,7 @@ pub fn disable(env: &Env) -> R<Value> {
         r.status = "disabled".into();
         r.last_error = None;
     });
+    changed("disabled");
     Ok(json!({
         "ok": true,
         "state": "disabled",
@@ -1094,6 +1177,7 @@ pub fn uninstall(env: &Env, drop_grants: bool) -> R<Value> {
             steps.remove("install");
         }
     });
+    changed("uninstalled");
     Ok(json!({
         "ok": true,
         "state": "removed",
@@ -1146,15 +1230,68 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     }
     *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
     store::delete().map_err(|e| no("db_error", 500, e))?;
+    // Sew's purge removed sew-media too: drop K2's voice record, TURN DNS
+    // record, nested label and TURN key.
+    let voice_left = super::voice::forget(env, &super::voice::load(env));
+    changed("purged");
     Ok(json!({
         "ok": true,
         "state": "not-installed",
         "purged": true,
         "keptBackups": keep_backups,
         "backupsAt": backups_at,
+        "voiceLeftovers": voice_left,
         "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept the recovery key. \
                     K2 did not delete off-box copies.",
     }))
+}
+
+// ── config ───────────────────────────────────────────────────────────────
+
+/// `sew config set server.public_url | identity.standalone.setup_url`
+/// (each on this box's own k2.dev label or a bound custom domain), then a
+/// `sew.service` restart (Sew reads them at start). For the 0.46.0 demo:
+/// `https://<hearth origin>` and `https://<hearth origin>/setup`, so setup
+/// links point at the App.
+pub fn server_config(env: &Env, public_url: Option<&str>, setup_url: Option<&str>) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(unsupported());
+    }
+    let row = need_row(false)?;
+    let mut body = serde_json::Map::new();
+    if let Some(u) = public_url {
+        body.insert("server.public_url".into(), json!(super::voice::check_https_url(env, u, false)?));
+    }
+    if let Some(u) = setup_url {
+        if row_provider(&row) != pin::PROVIDER_STANDALONE {
+            return Err(no("provider_is_k2", 409, "setup links exist on standalone installs only"));
+        }
+        body.insert("identity.standalone.setup_url".into(), json!(super::voice::check_https_url(env, u, true)?));
+    }
+    if body.is_empty() {
+        return Err(no("bad_request", 400, "name publicUrl and/or setupUrl"));
+    }
+    helper_check(env)?;
+    let _l = begin(env)?;
+    let v = Value::Object(body.clone());
+    let out = helper(env, &["config"], Some(v.to_string().as_bytes())).map_err(|e| no("config_failed", 500, e))?;
+    if let Some(n) = sew_exit(&out).filter(|n| *n != 0) {
+        let detail = out
+            .get("results")
+            .and_then(Value::as_array)
+            .and_then(|r| r.last())
+            .map(|r| sew_message(&r["result"]))
+            .unwrap_or_else(|| sew_message(&out));
+        return Err(no("config_failed", 409, format!("Sew refused the config (exit {n}): {detail}")));
+    }
+    let restarted = if env.ops.unit(UNIT_SEW).is_active() {
+        helper(env, &["systemctl", "restart"], None).map_err(|e| no("restart_failed", 500, e))?;
+        true
+    } else {
+        false
+    };
+    changed("config");
+    Ok(json!({"ok": true, "set": body, "restarted": restarted}))
 }
 
 // ── upgrade / rollback ───────────────────────────────────────────────────

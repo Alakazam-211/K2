@@ -37,7 +37,7 @@ impl T {
         Env { ops: &self.ops, secrets: &self.secrets, latch: &self.latch, token: &self.token }
     }
     fn req(&self) -> EnableRequest {
-        EnableRequest { tarball_path: Some(TARBALL.into()), recovery_key_file: None }
+        EnableRequest { tarball_path: Some(TARBALL.into()), recovery_key_file: None, ..Default::default() }
     }
     /// The full enable, inline. Panics with the refusal on failure.
     fn enable(&self) -> Result<(), String> {
@@ -282,19 +282,22 @@ fn link_refuses_standalone_wrong_version_no_id_and_a_foreign_kek() {
     let pin_v = pinned().version;
     let good = json!({"provider": "k2", "version": format!("{pin_v}+gabc"), "install_id": INSTALL_ID,
                       "keys": {"kek_id": kek_id(&key).unwrap()}});
-    assert_eq!(link_check(&good, pin_v, &key).unwrap(), INSTALL_ID);
+    assert_eq!(link_check(&good, pin_v, &key, "k2").unwrap(), INSTALL_ID);
     let mut s = good.clone();
     s["provider"] = json!("standalone");
-    assert!(link_check(&s, pin_v, &key).unwrap_err().contains("will not adopt"));
+    assert!(link_check(&s, pin_v, &key, "k2").unwrap_err().contains("will not adopt"));
+    // A standalone install K2 made itself (enable --identity standalone).
+    assert_eq!(link_check(&s, pin_v, &key, "standalone").unwrap(), INSTALL_ID);
+    assert!(link_check(&good, pin_v, &key, "standalone").unwrap_err().contains("expected standalone"));
     let mut s = good.clone();
     s["version"] = json!("9.9.9");
-    assert!(link_check(&s, pin_v, &key).is_err());
+    assert!(link_check(&s, pin_v, &key, "k2").is_err());
     let mut s = good.clone();
     s["install_id"] = json!("0");
-    assert!(link_check(&s, pin_v, &key).is_err());
+    assert!(link_check(&s, pin_v, &key, "k2").is_err());
     let mut s = good.clone();
     s["keys"]["kek_id"] = json!("0000000000000001");
-    assert!(link_check(&s, pin_v, &key).unwrap_err().contains("k2_vault_key_mismatch"));
+    assert!(link_check(&s, pin_v, &key, "k2").unwrap_err().contains("k2_vault_key_mismatch"));
     // In the machine: a foreign KEK fails enable at `link`.
     let t = t();
     t.ops.mgmt_status.lock().unwrap()["keys"]["kek_id"] = json!("0000000000000001");
@@ -308,7 +311,11 @@ fn a_recovery_key_file_adopts_existing_data_and_never_replaces_a_vault_key() {
     let key = crate::sew::secrets::generate_master_key().unwrap();
     t.ops.files.lock().unwrap().insert("/home/k2/recovery.txt".into(), format!("{key}\n").into_bytes());
     t.ops.exists.lock().unwrap().push("/etc/sew".into());
-    let req = EnableRequest { tarball_path: Some(TARBALL.into()), recovery_key_file: Some("/home/k2/recovery.txt".into()) };
+    let req = EnableRequest {
+        tarball_path: Some(TARBALL.into()),
+        recovery_key_file: Some("/home/k2/recovery.txt".into()),
+        ..Default::default()
+    };
     let env = t.env();
     let l = enable_begin(&env, &req).unwrap().unwrap();
     enable_machine(&env, &req).unwrap();
@@ -606,6 +613,15 @@ fn upgrade_machine_with_flip(env: &Env, req: &UpgradeRequest, from: &str, ops: &
         fn mgmt(&self, m: &str, p: &str, t: &str, b: Option<&Value>) -> Result<Value, crate::sew::ops::MgmtError> { self.inner.mgmt(m, p, t, b) }
         fn now(&self) -> i64 { self.inner.now() }
         fn sleep_ms(&self, ms: u64) { self.inner.sleep_ms(ms) }
+        fn box_label(&self) -> Option<String> { self.inner.box_label() }
+        fn bound_apexes(&self) -> Vec<String> { self.inner.bound_apexes() }
+        fn public_ips(&self) -> Vec<String> { self.inner.public_ips() }
+        fn cp(&self, m: &str, p: &str, b: Option<&Value>) -> Result<Value, crate::sew::ops::CpError> { self.inner.cp(m, p, b) }
+        fn nested_label(&self, l: &str, t: Option<&str>) -> Result<(), String> { self.inner.nested_label(l, t) }
+        fn served_leaf(&self, c: &str, s: &str, p: u16) -> Option<String> { self.inner.served_leaf(c, s, p) }
+        fn frpc_logins(&self) -> u64 { self.inner.frpc_logins() }
+        fn voice_load(&self) -> Option<Value> { self.inner.voice_load() }
+        fn voice_save(&self, v: Option<&Value>) -> Result<(), String> { self.inner.voice_save(v) }
     }
     let w = Watch { inner: ops };
     let env2 = Env { ops: &w, secrets: env.secrets, latch: env.latch, token: env.token };

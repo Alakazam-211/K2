@@ -732,6 +732,14 @@ pub enum SessionEvent {
     /// that no client listened).
     MailChanged { reason: String },
 
+    /// Sew on K2 (S29 K14) — the Sew server on this box or its voice
+    /// changed. APP-LEVEL twin of the `sew:changed` HookEvent. Wire:
+    /// `{ "kind": "sew_changed", "reason": string }` (`state`, `enabled`,
+    /// `enable-failed`, `disabled`, `uninstalled`, `purged`, `config`,
+    /// `voice-installed`, `voice-failed`, `voice-url`, `voice-cert-renewed`,
+    /// `voice-probe`, `voice-removed`). Refetch signal only.
+    SewChanged { reason: String },
+
     /// prd-dns-pending-and-cutover-safety-v1 P1 (DN12e) — the host's
     /// custom-domain inventory (`domain_bindings`) changed: an apex was
     /// attached or removed, a manual check ran, the box's own pending-zone
@@ -858,6 +866,7 @@ impl SessionEvent {
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
+            SessionEvent::SewChanged { .. } => "sew_changed",
             SessionEvent::DomainsChanged { .. } => "domains_changed",
             SessionEvent::FederationPeersChanged { .. } => "federation_peers_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
@@ -1979,6 +1988,14 @@ mod tests {
     /// "reason": string }` with `reason` = the legacy hook name minus
     /// its `mail:` prefix. The Settings→Email consumer switches on
     /// `reason`; a tag/field drift fails CI loudly.
+    #[test]
+    fn sew_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::SewChanged { reason: "voice-installed".into() });
+        assert_eq!(json["kind"], "sew_changed");
+        assert_eq!(json["reason"], "voice-installed");
+        assert_keys(&json, &["kind", "reason"]);
+    }
+
     #[test]
     fn mail_changed_frozen_contract() {
         let json = as_json(&SessionEvent::MailChanged {

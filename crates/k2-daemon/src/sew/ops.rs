@@ -345,6 +345,10 @@ pub mod fake {
         pub mgmt_health_ok: Mutex<bool>,
         pub mgmt_status: Mutex<Value>,
         pub mgmt_calls: Mutex<Vec<String>>,
+        /// "METHOD path" → queued mgmt answers (before the canned ones).
+        pub mgmt_answers: Mutex<HashMap<String, VecDeque<Result<Value, MgmtError>>>>,
+        /// SW15: the bundles `GET /mgmt/v1/backups` lists, newest first.
+        pub mgmt_backups: Mutex<Vec<Value>>,
         pub files: Mutex<HashMap<String, Vec<u8>>>,
         pub exists: Mutex<Vec<String>>,
         pub taken: Mutex<Vec<(u16, bool)>>,
@@ -396,6 +400,11 @@ pub mod fake {
                     "client_listen": "127.0.0.1:8470",
                 })),
                 mgmt_calls: Mutex::new(vec![]),
+                mgmt_answers: Mutex::new(HashMap::new()),
+                mgmt_backups: Mutex::new(vec![
+                    json!({"id": "20260102T031500Z", "kind": "scheduled", "created_at": "2026-01-02T03:15:00Z", "bytes": 120, "schema_version": 920002, "sew_version": pin}),
+                    json!({"id": "20260101T031500Z", "kind": "scheduled", "created_at": "2026-01-01T03:15:00Z", "bytes": 100, "schema_version": 920002, "sew_version": pin}),
+                ]),
                 files: Mutex::new(HashMap::new()),
                 exists: Mutex::new(vec![]),
                 taken: Mutex::new(vec![]),
@@ -510,14 +519,6 @@ pub mod fake {
                 "engine sew doctor" => Self::sew_exit(0, json!({"ok": true, "checks": []})),
                 "engine sew rotate-master" => Self::sew_exit(0, json!({"restarted": true})),
                 "engine sew drop-prev" => Self::sew_exit(0, json!({"dropped": true})),
-                "engine sew backup" => Self::sew_exit(0, json!({"ok": true})),
-                "engine sew backups" => Self::sew_exit(
-                    0,
-                    json!([
-                        {"id": "20260101T031500Z", "kind": "daily", "created_at": "2026-01-01T03:15:00Z", "bytes": 100},
-                        {"id": "20260102T031500Z", "kind": "daily", "created_at": "2026-01-02T03:15:00Z", "bytes": 120},
-                    ]),
-                ),
                 a if a.starts_with("engine sew restore ") => {
                     let mut v = Self::sew_exit(0, json!({"restored": true, "safety_bundle": "20260103T000000Z-safety"}));
                     v["restarted"] = json!(true);
@@ -603,7 +604,30 @@ pub mod fake {
             if !self.unit(k2_root_proto::sew::UNIT_SEW).is_active() {
                 return Err(MgmtError::Unreachable("connection refused".into()));
             }
+            let queued = self.mgmt_answers.lock().unwrap().get_mut(&format!("{method} {path}")).and_then(VecDeque::pop_front);
+            if let Some(a) = queued {
+                return a;
+            }
             match path {
+                // SW15: the backup job runs to completion at once.
+                "/mgmt/v1/backup" if method == "POST" => {
+                    let id = format!("20260103T{:06}Z", self.mgmt_backups.lock().unwrap().len());
+                    let pin = k2_root_proto::sew::pinned().version;
+                    self.mgmt_backups.lock().unwrap().insert(
+                        0,
+                        json!({"id": id, "kind": "manual", "created_at": "2026-01-03T00:00:00Z", "bytes": 140, "schema_version": 920002, "sew_version": pin}),
+                    );
+                    Ok(json!({"job_id": format!("bk_{id}")}))
+                }
+                "/mgmt/v1/backups" => Ok(json!({"items": *self.mgmt_backups.lock().unwrap()})),
+                p if p.starts_with("/mgmt/v1/jobs/bk_") => {
+                    let bundle = &p["/mgmt/v1/jobs/bk_".len()..];
+                    Ok(json!({
+                        "id": &p[14..], "kind": "backup", "state": "succeeded", "attempts": 1,
+                        "created_at": "2026-01-03T00:00:00Z", "finished_at": "2026-01-03T00:00:01Z",
+                        "result": {"id": bundle, "bytes": 140, "duration_ms": 900, "linked": 2, "copied": 1},
+                    }))
+                }
                 "/mgmt/v1/health" => {
                     if *self.mgmt_health_ok.lock().unwrap() {
                         Ok(json!({"ok": true}))

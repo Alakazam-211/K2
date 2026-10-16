@@ -26,6 +26,7 @@
 pub mod ops;
 pub mod routes;
 pub mod secrets;
+pub mod sew_wire;
 pub mod store;
 pub mod supervisor;
 

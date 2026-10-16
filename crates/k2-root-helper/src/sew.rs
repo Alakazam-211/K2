@@ -77,14 +77,6 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             require_known(ctx)?;
             run_sew(ctx, &["keys", "drop-prev"], None)
         }
-        SewVerb::Backup => {
-            require_known(ctx)?;
-            run_sew(ctx, &["backup", "now"], None)
-        }
-        SewVerb::Backups => {
-            require_known(ctx)?;
-            run_sew(ctx, &["backup", "list"], None)
-        }
         SewVerb::Restore(id) => restore(ctx, id),
         SewVerb::Token => token(ctx),
         SewVerb::MediaInstall => media_install(ctx, stdin),

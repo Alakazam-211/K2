@@ -527,6 +527,15 @@ pub fn is_agent_verb(path: &str) -> bool {
         // payload hook ingest. The cell server pins the pane to the token.
         "/hook/event",
         "/cli/workspace/msg",
+        // Changes tab v1 (`k2 changes`): the cell server scopes every one
+        // of these to the passport's own workspace (git_routes::AGENT_ROUTES).
+        "/cli/git/commit",
+        "/cli/git/diff-file",
+        "/cli/git/discard",
+        "/cli/git/snapshot",
+        "/cli/git/stage",
+        "/cli/git/stage-all",
+        "/cli/git/unstage",
         // C2: workspace-addressed live terminal peek (`k2 read <ws>`).
         // Peer gate runs in the handler when principal is scoped.
         "/cli/terminal/read",

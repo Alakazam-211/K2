@@ -295,3 +295,58 @@ fn stage_refuses_traversal_and_mutations_bump_rev() {
     let snap = json(&crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &ws)])));
     assert_eq!(snap["counts"]["total"], 0, "{snap}");
 }
+
+// ── agent passports (cell socket) ────────────────────────────────────
+
+#[test]
+fn agent_routes_are_scoped_to_the_own_workspace() {
+    let d = repo("agent");
+    let own = s(&d);
+    std::fs::write(d.join("b.txt"), "b\n").expect("b");
+
+    // No path → the agent's own workspace.
+    let r = handle_agent_route("/cli/git/snapshot", false, &params(&[]), b"", &own);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(json(&r)["workspacePath"], own);
+    let r = handle_agent_route("/cli/git/diff-file", false, &params(&[("file_path", "b.txt"), ("sides", "1")]), b"", &own);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(json(&r)["new"]["text"], "b\n");
+
+    // Another repo on the box → 403, even by `..`.
+    let other = repo("agent-other");
+    for p in [s(&other), format!("{own}/../{}", other.file_name().expect("name").to_string_lossy())] {
+        let r = handle_agent_route("/cli/git/snapshot", false, &params(&[("path", &p)]), b"", &own);
+        assert_eq!(r.status, "403 Forbidden", "{p}: {}", r.body);
+        assert_eq!(json(&r)["code"], "forbidden");
+        let body = serde_json::json!({ "path": p, "files": ["a.txt"] }).to_string();
+        let w = handle_agent_route("/cli/git/discard", true, &params(&[]), body.as_bytes(), &own);
+        assert_eq!(w.status, "403 Forbidden", "{p}: {}", w.body);
+    }
+    assert_eq!(std::fs::read_to_string(other.join("a.txt")).expect("a"), "one\ntwo\n");
+
+    // POST with the path left out stages in the own workspace.
+    let st = handle_agent_route("/cli/git/stage", true, &params(&[]), br#"{"filePath":"b.txt"}"#, &own);
+    assert_eq!(st.status, "200 OK", "{}", st.body);
+    let snap = json(&handle_agent_route("/cli/git/snapshot", false, &params(&[]), b"", &own));
+    assert_eq!(snap["files"][0]["group"], "staged");
+
+    // Method mismatches are 405; non-agent git routes are not served here.
+    assert_eq!(handle_agent_route("/cli/git/stage", false, &params(&[]), b"", &own).status, "405 Method Not Allowed");
+    assert_eq!(handle_agent_route("/cli/git/snapshot", true, &params(&[]), b"{}", &own).status, "405 Method Not Allowed");
+    assert_eq!(handle_agent_route("/cli/git/create-worktree", true, &params(&[]), b"{}", &own).status, "404 Not Found");
+    assert_eq!(handle_agent_route("/cli/git/commit", true, &params(&[]), b"[1]", &own).status, "400 Bad Request");
+    assert!(crate::session_token::is_agent_verb("/cli/git/snapshot"));
+    assert!(crate::session_token::is_agent_verb("/cli/git/discard"));
+    assert!(!crate::session_token::is_agent_verb("/cli/git/create-worktree"));
+    assert!(!crate::session_token::is_agent_verb("/cli/git/merge-branch"));
+}
+
+#[test]
+fn agent_route_refuses_a_workspace_inside_a_bigger_repo() {
+    let d = repo("agent-mono");
+    let pkg = d.join("pkg");
+    std::fs::create_dir_all(&pkg).expect("pkg");
+    let r = handle_agent_route("/cli/git/snapshot", false, &params(&[]), b"", &s(&pkg));
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(json(&r)["error"].as_str().expect("hint").contains("reaches outside"));
+}

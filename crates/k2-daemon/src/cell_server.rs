@@ -662,6 +662,23 @@ mod unix_impl {
                 crate::hook_ingest::legacy_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // Changes tab v1 (`k2 changes`): git status/diff/stage/commit/
+            // discard on THIS passport's own workspace only. The workspace
+            // comes from the passport, never the request; the handler
+            // refuses a path (or repo) outside it with 403.
+            p if crate::git_routes::is_agent_route(p) => {
+                let own = match crate::caller_workspace::resolve_caller_workspace(Some(principal), None) {
+                    Ok(c) => c.path,
+                    Err(e) => {
+                        return (
+                            "403 Forbidden".to_string(),
+                            "application/json",
+                            serde_json::json!({ "error": e.hint(), "code": "forbidden" }).to_string(),
+                        )
+                    }
+                };
+                from_cli(crate::git_routes::handle_agent_route(p, is_post, params, body, &own))
+            }
             // K2 projects mutations + chat post over the cell socket: the
             // bound session's passport, gated by the workspace's "Manage
             // K2 projects" switch (0162) like the TCP arm. Reads fall to

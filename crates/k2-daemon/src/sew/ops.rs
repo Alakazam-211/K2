@@ -468,7 +468,8 @@ pub mod fake {
                 }
                 "engine sew install" => {
                     let mut v = Self::sew_exit(0, json!({"versions": {"sew": pin}}));
-                    v["allowUid"] = json!({"uid": 1001, "changed": true});
+                    let up = self.unit(UNIT_SEW).is_active();
+                    v["allowUid"] = json!({"uid": 1001, "restartNeeded": up});
                     v
                 }
                 "engine sew systemctl enable" => json!({"ok": true}),

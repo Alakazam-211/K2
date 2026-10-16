@@ -291,6 +291,12 @@ pub fn post_thread_design(
     Ok((item, links))
 }
 
+/// One overlay document by id, whatever conversation it sits in (None when
+/// there is no such doc). Callers check it belongs where they expect.
+pub fn get_doc(id: &str) -> Result<Option<OverlayDoc>, String> {
+    store::get_doc(id)
+}
+
 /// One Thread item of this conversation by id (None when it is not there).
 pub fn find_thread_item(conversation_id: &str, id: &str) -> Result<Option<OverlayItem>, String> {
     Ok(store::read_thread(conversation_id, 0)?.into_iter().find(|i| i.id == id))

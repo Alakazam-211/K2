@@ -600,6 +600,49 @@ mod tests {
     }
 
     #[test]
+    fn redeliver_finds_the_item_after_a_wake_re_pinned_the_chat() {
+        let (handle, project_id, conv) = seed_room("repin");
+        arm_test_delivery(&handle, false);
+        let resp = handle_notes(&no_params(), &note_body(&handle, 1), &NotesCaller::Owner);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let item_id = json(&resp)["threadItemId"].as_str().expect("id").to_string();
+        // The wake started a fresh session: the Chat is pinned to a new
+        // conversation now; the item stays in the old one.
+        let new_conv = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::WorkspaceSession::upsert(
+                &conn,
+                &format!("ws-{new_conv}"),
+                &project_id,
+                None,
+                Some(&new_conv),
+                "claude",
+                "system",
+                "running",
+            )
+            .expect("re-pin");
+        }
+        arm_test_delivery(&handle, true);
+        let body = serde_json::json!({"workspace": handle, "threadItemId": item_id}).to_string();
+        let resp = handle_notes_redeliver(&no_params(), body.as_bytes(), &NotesCaller::Owner);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let r = json(&resp);
+        assert_eq!(r["threadItemId"], item_id.as_str(), "{r}");
+        assert_eq!(r["delivered"], true, "{r}");
+        assert_eq!(thread(&conv).len(), 1, "the item stays where it was posted");
+        assert!(thread(&new_conv).is_empty(), "no second item in the new conversation");
+
+        // Another workspace cannot redeliver it by id.
+        let (other, _oid, _oconv) = seed_room("repin2");
+        let body = serde_json::json!({"workspace": other, "threadItemId": item_id}).to_string();
+        let resp = handle_notes_redeliver(&no_params(), body.as_bytes(), &NotesCaller::Owner);
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert!(recorded_deliveries(&other).is_empty());
+    }
+
+    #[test]
     fn redeliver_is_only_for_design_items_and_their_sender() {
         let (handle, _id, conv) = seed_room("redeliv");
         // A plain Thread item is not redeliverable here.

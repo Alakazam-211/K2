@@ -206,7 +206,8 @@ export default function PageTabs(): React.JSX.Element {
             : p === 'feedback'
               ? {
                   badge: ticketsBadge.badge,
-                  badgeClass: 'bg-[var(--color-status-working)]',
+                  // Tickets waiting on you: the needs-you orange, not working.
+                  badgeClass: 'bg-[var(--color-status-needs-you)]',
                   badgeStale: ticketsBadge.badgeStale,
                   badgeTitle: ticketsBadge.badgeTitle,
                 }

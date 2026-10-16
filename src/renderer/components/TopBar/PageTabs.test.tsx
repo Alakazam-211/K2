@@ -163,7 +163,7 @@ describe('PageTabs — Home tab', () => {
     expect(list[2].className).not.toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
   })
 
-  it('badges stay on the icon tabs: Projects unread, Tickets waiting (status colour)', () => {
+  it('badges stay on the icon tabs: Projects unread, Tickets waiting on you (needs-you colour)', () => {
     h.feedback.waitingCount = 3
     h.groups.unreadGroupIds = new Set(['g1', 'g2'])
     const { container } = render(<PageTabs />)
@@ -172,7 +172,8 @@ describe('PageTabs — Home tab', () => {
     const ticketsBadge = list[4].querySelector('[data-testid="page-tab-badge"]')
     expect(projectsBadge?.textContent).toBe('2')
     expect(ticketsBadge?.textContent).toBe('3')
-    expect(ticketsBadge?.className).toContain('bg-[var(--color-status-working)]')
+    expect(ticketsBadge?.className).toContain('bg-[var(--color-status-needs-you)]')
+    expect(ticketsBadge?.className).not.toContain('status-working')
     expect(list[1].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
     expect(list[2].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
   })

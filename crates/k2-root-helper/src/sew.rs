@@ -84,6 +84,29 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             require_known(ctx)?;
             run_sew(ctx, &["media", "uninstall"], None)
         }
+        SewVerb::MediaReconfigure => media_reconfigure(ctx, stdin),
+        SewVerb::MediaTurnCert => media_turn_cert(ctx, stdin),
+        SewVerb::MediaStatus => {
+            require_known(ctx)?;
+            run_sew(ctx, &["media", "status"], None)
+        }
+        SewVerb::MediaEnable => {
+            require_known(ctx)?;
+            run_sew(ctx, &["media", "enable"], None)
+        }
+        SewVerb::MediaDisable => {
+            require_known(ctx)?;
+            run_sew(ctx, &["media", "disable"], None)
+        }
+        SewVerb::MediaProbeRecord { udp, tcp, tls } => {
+            require_known(ctx)?;
+            let r = |b: &bool| if *b { "ok" } else { "fail" };
+            run_sew(
+                ctx,
+                &["media", "probe-record", "--udp", r(udp), "--tcp", r(tcp), "--turn-tls", r(tls), "--from", "k2"],
+                None,
+            )
+        }
     }
 }
 
@@ -543,6 +566,50 @@ fn restore(ctx: &Ctx, id: &str) -> HResult<J> {
     Ok(out)
 }
 
+/// Write the TURN chain + key PEM text to the helper's fixed staging files
+/// (0600 root) and return their real paths. Validated by the caller.
+fn put_turn_tls(ctx: &Ctx, cert_pem: &str, key_pem: &str) -> HResult<(String, String)> {
+    let d = stage_dir(ctx)?;
+    for (abs, body) in [(SEW_STAGE_TURN_CERT, cert_pem), (SEW_STAGE_TURN_KEY, key_pem)] {
+        let (_, name) = split(abs);
+        d.write_atomic(OsStr::new(name), body.as_bytes(), 0o600, ctx.root_owner())
+            .map_err(|e| Fail::io_err("write turn tls", e))?;
+    }
+    Ok((ctx.p(SEW_STAGE_TURN_CERT).display().to_string(), ctx.p(SEW_STAGE_TURN_KEY).display().to_string()))
+}
+
+fn drop_turn_tls(ctx: &Ctx) {
+    let _ = remove_file(ctx, SEW_STAGE_TURN_CERT);
+    let _ = remove_file(ctx, SEW_STAGE_TURN_KEY);
+}
+
+/// `sew media install --config-json <staged>` (install: the staged pin
+/// tarball; reconfigure: `--reconfigure`, no tarball). The TURN key never
+/// outlives the call on the helper's side.
+fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: bool) -> HResult<J> {
+    let turn = match (&req.turn_cert_pem, &req.turn_key_pem) {
+        (Some(c), Some(k)) => Some(put_turn_tls(ctx, c, k)?),
+        _ => None,
+    };
+    let inputs = req.sew_inputs(tarball, turn.as_ref().map(|(c, k)| (c.as_str(), k.as_str())));
+    let path = match put_json(ctx, SEW_STAGE_MEDIA_JSON, &inputs) {
+        Ok(p) => p,
+        Err(e) => {
+            drop_turn_tls(ctx);
+            return Err(e);
+        }
+    };
+    let mut args = vec!["media", "install"];
+    if reconfigure {
+        args.push("--reconfigure");
+    }
+    args.extend(["--config-json", path.as_str()]);
+    let res = run_sew(ctx, &args, None);
+    let _ = remove_file(ctx, SEW_STAGE_MEDIA_JSON);
+    drop_turn_tls(ctx);
+    res
+}
+
 fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let req: MediaRequest = parse_json(stdin, "media refused: input")?;
     req.validate().map_err(Fail::argv)?;
@@ -554,8 +621,24 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
         return Err(Fail::state("the staged sew-media tarball is not this build's pin"));
     }
     let tarball = ctx.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
-    let path = put_json(ctx, SEW_STAGE_MEDIA_JSON, &req.sew_inputs(&tarball))?;
-    let res = run_sew(ctx, &["media", "install", "--config-json", &path], None);
-    let _ = remove_file(ctx, SEW_STAGE_MEDIA_JSON);
+    media_run(ctx, &req, Some(&tarball), false)
+}
+
+fn media_reconfigure(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
+    let req: MediaRequest = parse_json(stdin, "media refused: input")?;
+    req.validate_reconfigure().map_err(Fail::argv)?;
+    require_known(ctx)?;
+    media_run(ctx, &req, None, true)
+}
+
+/// `sew media turn-cert --cert <staged> --key <staged> --when-idle`: a
+/// renewed chain (same key: Sew reloads it without an engine restart).
+fn media_turn_cert(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
+    let req: TurnCertRequest = parse_json(stdin, "turn-cert refused: input")?;
+    req.validate().map_err(Fail::argv)?;
+    require_known(ctx)?;
+    let (c, k) = put_turn_tls(ctx, &req.cert_pem, &req.key_pem)?;
+    let res = run_sew(ctx, &["media", "turn-cert", "--cert", &c, "--key", &k, "--when-idle"], None);
+    drop_turn_tls(ctx);
     res
 }

@@ -251,9 +251,25 @@ pub enum SewVerb {
     Token,
     /// Stdin: [`crate::sew::MediaRequest`] → `sew media install
     /// --config-json` with the staged media tarball (Sew writes its own
-    /// sysctl drop-in when `sysctl` is `apply`).
+    /// sysctl drop-in when `sysctl` is `apply`). TURN TLS PEM text in the
+    /// request is written to the helper's fixed staging files (K13).
     MediaInstall,
     MediaUninstall,
+    /// Stdin: [`crate::sew::MediaRequest`] (no tarball) → `sew media install
+    /// --reconfigure --config-json`: a new `voice.public_url`, node IP or
+    /// TURN material on an installed engine (K13).
+    MediaReconfigure,
+    /// Stdin: [`crate::sew::TurnCertRequest`] → `sew media turn-cert --cert
+    /// <staged> --key <staged> --when-idle` (renewal, K13).
+    MediaTurnCert,
+    /// `sew media status` (read-only).
+    MediaStatus,
+    /// `sew media enable` / `sew media disable` (start / drain and stop).
+    MediaEnable,
+    MediaDisable,
+    /// `sew media probe-record --udp <r> --tcp <r> --turn-tls <r> --from k2`
+    /// (an outside probe's results, each `ok`|`fail`).
+    MediaProbeRecord { udp: bool, tcp: bool, tls: bool },
 }
 
 impl SewVerb {
@@ -283,6 +299,16 @@ impl SewVerb {
             ["token"] => Self::Token,
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
+            ["media", "reconfigure"] => Self::MediaReconfigure,
+            ["media", "turn-cert"] => Self::MediaTurnCert,
+            ["media", "status"] => Self::MediaStatus,
+            ["media", "enable"] => Self::MediaEnable,
+            ["media", "disable"] => Self::MediaDisable,
+            ["media", "probe-record", u, t, l]
+                if crate::sew::probe_result_ok(u) && crate::sew::probe_result_ok(t) && crate::sew::probe_result_ok(l) =>
+            {
+                Self::MediaProbeRecord { udp: *u == "ok", tcp: *t == "ok", tls: *l == "ok" }
+            }
             _ => return None,
         })
     }
@@ -310,6 +336,15 @@ impl SewVerb {
             Self::Token => s(&["token"]),
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
+            Self::MediaReconfigure => s(&["media", "reconfigure"]),
+            Self::MediaTurnCert => s(&["media", "turn-cert"]),
+            Self::MediaStatus => s(&["media", "status"]),
+            Self::MediaEnable => s(&["media", "enable"]),
+            Self::MediaDisable => s(&["media", "disable"]),
+            Self::MediaProbeRecord { udp, tcp, tls } => {
+                let r = |b: &bool| if *b { "ok" } else { "fail" };
+                s(&["media", "probe-record", r(udp), r(tcp), r(tls)])
+            }
         }
     }
 
@@ -326,6 +361,7 @@ impl SewVerb {
             | Self::Unstage
             | Self::InstallBin
             | Self::Doctor
+            | Self::MediaStatus
             | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart) => Class::Open,
             Self::Install
             | Self::Config
@@ -339,21 +375,28 @@ impl SewVerb {
             | Self::Restore(_)
             | Self::Token
             | Self::MediaInstall
-            | Self::MediaUninstall => Class::Daemon,
+            | Self::MediaUninstall
+            | Self::MediaReconfigure
+            | Self::MediaTurnCert
+            | Self::MediaEnable
+            | Self::MediaDisable
+            | Self::MediaProbeRecord { .. } => Class::Daemon,
         }
     }
 
     fn stdin_cap(&self) -> Option<usize> {
         match self {
             Self::Stage | Self::StageMedia => Some(CAP_INSTALL_BIN),
-            Self::Install | Self::Config | Self::MediaInstall => Some(CAP_SEW_JSON),
+            Self::Install | Self::Config | Self::MediaInstall | Self::MediaReconfigure | Self::MediaTurnCert => {
+                Some(CAP_SEW_JSON)
+            }
             Self::RotateMaster => Some(CAP_SEW_KEY),
             _ => None,
         }
     }
 
     fn reads_only(&self) -> bool {
-        matches!(self, Self::Status | Self::Doctor)
+        matches!(self, Self::Status | Self::Doctor | Self::MediaStatus)
     }
 
     /// One of each (tests, docs).
@@ -378,6 +421,12 @@ impl SewVerb {
             Self::Token,
             Self::MediaInstall,
             Self::MediaUninstall,
+            Self::MediaReconfigure,
+            Self::MediaTurnCert,
+            Self::MediaStatus,
+            Self::MediaEnable,
+            Self::MediaDisable,
+            Self::MediaProbeRecord { udp: true, tcp: false, tls: true },
         ];
         v.extend(SewSystemctl::ALL.into_iter().map(Self::Systemctl));
         v
@@ -1690,7 +1739,13 @@ mod tests {
                 Verb::PgPsql { .. } => assert_eq!(cap, Some(CAP_SQL)),
                 Verb::AppsInstallEngine => assert_eq!(cap, Some(CAP_ENGINE)),
                 Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
-                Verb::Sew(SewVerb::Install | SewVerb::Config | SewVerb::MediaInstall) => {
+                Verb::Sew(
+                    SewVerb::Install
+                    | SewVerb::Config
+                    | SewVerb::MediaInstall
+                    | SewVerb::MediaReconfigure
+                    | SewVerb::MediaTurnCert,
+                ) => {
                     assert_eq!(cap, Some(CAP_SEW_JSON))
                 }
                 Verb::Sew(SewVerb::RotateMaster) => assert_eq!(cap, Some(CAP_SEW_KEY)),
@@ -1719,6 +1774,7 @@ mod tests {
             &["engine", "sew", "systemctl", "start-db"],
             &["engine", "sew", "systemctl", "start"],
             &["engine", "sew", "systemctl", "restart"],
+            &["engine", "sew", "media", "status"],
         ];
         let daemon: &[&[&str]] = &[
             &["engine", "sew", "install"],
@@ -1737,6 +1793,11 @@ mod tests {
             &["engine", "sew", "token"],
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],
+            &["engine", "sew", "media", "reconfigure"],
+            &["engine", "sew", "media", "turn-cert"],
+            &["engine", "sew", "media", "enable"],
+            &["engine", "sew", "media", "disable"],
+            &["engine", "sew", "media", "probe-record", "ok", "fail", "ok"],
         ];
         for a in open {
             let v = Verb::parse(a).unwrap_or_else(|e| panic!("{a:?}: {e}"));
@@ -1749,7 +1810,7 @@ mod tests {
             assert!(v.takes_lock(), "{a:?}");
         }
         assert_eq!(open.len() + daemon.len(), SewVerb::catalog().len(), "every sew verb is in one table");
-        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"]] {
+        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"], &["engine", "sew", "media", "status"]] {
             assert!(!Verb::parse(read).unwrap().takes_lock(), "{read:?}");
         }
         assert!(Verb::parse(&["engine", "sew", "stage"]).unwrap().takes_lock());
@@ -1800,6 +1861,14 @@ mod tests {
             &["engine", "sew", "media", "install", "--turn-cert", "/etc/shadow"],
             &["engine", "sew", "media"],
             &["engine", "sew", "media", "upgrade"],
+            &["engine", "sew", "media", "reconfigure", "wss://hearth.box.k2.dev"],
+            &["engine", "sew", "media", "turn-cert", "/etc/shadow", "/etc/shadow"],
+            &["engine", "sew", "media", "turn-cert", "--now"],
+            &["engine", "sew", "media", "status", "--check"],
+            &["engine", "sew", "media", "probe-record"],
+            &["engine", "sew", "media", "probe-record", "ok", "ok"],
+            &["engine", "sew", "media", "probe-record", "OK", "ok", "ok"],
+            &["engine", "sew", "media", "probe-record", "ok", "ok", "ok", "--from"],
             &["engine", "sew", "mgmt-group", "add"],
             &["engine", "sew", "sysctl", "net.core.rmem_max=1"],
             &["engine", "sew", "status;id"],

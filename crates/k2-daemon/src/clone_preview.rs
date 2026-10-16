@@ -61,7 +61,13 @@ pub fn caller_can_copy_secrets(who: &Who) -> bool {
 pub fn handle(who: &Who, body: &[u8]) -> CliResponse {
     match preview(who, body) {
         Ok(v) => CliResponse::ok_json(v.to_string()),
-        Err(e) => refusal_response(&e),
+        // `error` stays a string (the dialog shows it verbatim), like the
+        // clone gate's refusals.
+        Err(e) => {
+            let mut r = refusal_response(&e);
+            r.body = serde_json::json!({ "error": e.hint, "code": e.code, "hint": e.hint }).to_string();
+            r
+        }
     }
 }
 

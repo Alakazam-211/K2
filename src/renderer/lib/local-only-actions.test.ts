@@ -68,6 +68,7 @@ function sites(files: string[], withEvents: boolean): Map<string, string[]> {
 /** Room code: everything rendered inside a room (MS2), plus the tabs store. */
 const ROOM_DIRS = [
   'components/AgentPane/',
+  'components/AgentPanel/',
   'components/BrowserPane/',
   'components/ChangesPanel/',
   'components/ChatHistory/',
@@ -105,7 +106,6 @@ const ROOM_SITES: Record<string, Site> = {
   'components/TabBar/TabBar.tsx projects_open_in_terminal': { status: 'gated', gate: 'room.localCommands' },
   'components/WorkspacePanel/WorkspacePanel.tsx k2so_inbox_count': { status: 'gated', gate: 'room.localCommands' },
   'components/WorkspacePanel/WorkspacePanel.tsx projects_open_in_finder': { status: 'gated', gate: 'room.localCommands' },
-  'components/WorkspacePanel/WorkspacePanel.tsx sync:projects': { status: 'gated', gate: 'room.localCommands' },
   'components/common/HeartbeatSessionPicker.tsx k2so_agents_list': { status: 'gated', gate: 'room.room.localCommands' },
   'hooks/useTerminalShortcuts.ts projects_open_focus_window': { status: 'gated', gate: 'room.localCommands' },
   'stores/tabs.ts k2so_agents_list': { status: 'gated', gate: 'binding.localCommands' },

@@ -108,7 +108,8 @@ describe('Focus window overlay hygiene', () => {
     expect(focusLayoutSrc).toContain('<AnimatedDrawer open={leftPanelOpen} side="left">')
     expect(focusLayoutSrc).toContain('<AnimatedDrawer open={rightPanelOpen} side="right">')
     expect(appSrc).toContain('<NoTabBarDrawerToggles />')
-    expect(panelsSrc).toMatch(/type PanelTab = 'files' \| 'changes' \| 'history' \| 'workspace'/)
+    // 0.46.0: Agent replaced the Changes tab.
+    expect(panelsSrc).toMatch(/type PanelTab = 'files' \| 'agent' \| 'history' \| 'workspace'/)
   })
 
   it('F4/F13: ServerSwitcher lives in FocusLayout only, not DesktopChromeLeft; no PageTabs', () => {

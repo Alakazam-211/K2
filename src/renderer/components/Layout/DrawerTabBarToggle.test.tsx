@@ -68,7 +68,7 @@ beforeEach(() => {
     leftPanelOpen: false,
     rightPanelOpen: false,
     leftPanelTabs: ['files', 'workspace'],
-    rightPanelTabs: ['history', 'changes'],
+    rightPanelTabs: ['history', 'agent'],
     leftPanelActiveTab: 'files',
     rightPanelActiveTab: 'history',
   })
@@ -138,7 +138,7 @@ describe('room tab bar: closed drawers', () => {
 
 describe('drawer tab strip: open drawers', () => {
   function renderDrawer(side: 'left' | 'right'): HTMLElement {
-    const tabs = side === 'left' ? (['files', 'workspace'] as const) : (['history', 'changes'] as const)
+    const tabs = side === 'left' ? (['files', 'workspace'] as const) : (['history', 'agent'] as const)
     const { container } = render(
       <TabbedPanel
         tabs={[...tabs]}

@@ -21,7 +21,13 @@ import {
   type FederationPeer,
   type RosterAgent,
 } from '@/lib/federation'
-import { agentDisplayName, agentHandle, setAgentDisplayName, setAgentHandle } from '@/lib/workspace-agent'
+import { agentDisplayName } from '@/lib/workspace-agent'
+import {
+  AgentColorPicker,
+  AgentDisplayNameField,
+  AgentHandleField,
+  AgentPictureControls,
+} from '@/components/AgentIdentity/AgentIdentityFields'
 import { onAgentIdentityChanged } from '@/stores/session-events'
 import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 import { useSettingsStore } from '@/stores/settings'
@@ -32,8 +38,6 @@ import { useResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTabsStore } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { pickWorkspaceFolder } from '@/lib/pick-workspace-folder'
-import { pickIconImage } from '@/lib/pick-remote-image'
-import IconCropDialog from '../IconCropDialog'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { AgentPersonaEditor } from '@/components/AgentPersonaEditor/AgentPersonaEditor'
@@ -60,10 +64,7 @@ import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessio
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
-import { GROUP_AVATAR_COLORS } from '@/components/Projects/ProjectGroupAvatar'
-import { normalizeHexColor } from '@/components/Projects/projects-api'
 import { setSqlDbAgentAccess } from './data-api'
-import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
@@ -1021,8 +1022,6 @@ function ProjectDetail({
   assignProjectToGroup: (projectId: string, groupId: string | null) => Promise<void>
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
-  const [iconLoading, setIconLoading] = useState(false)
-  const [cropImage, setCropImage] = useState<string | null>(null)
   const [agentEditorOpen, setAgentEditorOpen] = useState(false)
   const [agentEditorName, setAgentEditorName] = useState('')
   /** Generic stack-layer edit (arbitrary .md path via AIFileEditor). */
@@ -1057,9 +1056,6 @@ function ProjectDetail({
   // canonical button label + which seed the modal launches with.
   const [canonicalModalMode, setCanonicalModalMode] = useState<'setup' | 'manage' | null>(null)
   const [canonicalProbes, setCanonicalProbes] = useState<HarnessProbe[]>([])
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [customHex, setCustomHex] = useState('')
-  const [hexError, setHexError] = useState(false)
   // Consume the deep-link on first paint so manage → Heartbeats does not
   // flash Agent, and so a remount still sees the requested tab.
   const initialWorkspaceTab = useSettingsStore((s) => s.initialWorkspaceTab)
@@ -1084,8 +1080,6 @@ function ProjectDetail({
     setWakeupEditingHb(null)
     setCanonicalModalMode(null)
     setHistoryEmpty(false)
-    setCustomHex('')
-    setHexError(false)
   }, [project.id])
 
   const openContextEdit = useCallback((target: ContextEditTarget) => {
@@ -1143,71 +1137,6 @@ function ProjectDetail({
     return () => { cancelled = true; offIdentity() }
   }, [project.path, project.agentMode])
 
-
-  const handleDetectIcon = async (): Promise<void> => {
-    setIconLoading(true)
-    try {
-      await daemonCliPost(primaryScope(), 'projects/detect-icon', { projectId: project.id })
-      emitProjectsChanged()
-      await fetchProjects()
-    } catch (err) {
-      console.error('Icon detection failed:', err)
-    } finally {
-      setIconLoading(false)
-    }
-  }
-
-  const handleUploadClick = (): void => {
-    // Host-aware: on a remote host the native input would browse THIS
-    // machine's disk — use the remote file picker instead.
-    void pickIconImage({
-      clickNativeInput: () => fileInputRef.current?.click(),
-      setCropImage,
-    })
-  }
-
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = () => {
-      setCropImage(reader.result as string)
-    }
-    reader.readAsDataURL(file)
-
-    // Reset input so the same file can be re-selected
-    e.target.value = ''
-  }
-
-  const handleCropConfirm = async (croppedDataUrl: string): Promise<void> => {
-    setCropImage(null)
-    setIconLoading(true)
-    try {
-      await daemonCliPost(primaryScope(), 'projects/update', { id: project.id, iconUrl: croppedDataUrl })
-      emitProjectsChanged()
-      await fetchProjects()
-    } catch (err) {
-      console.error('Icon save failed:', err)
-    } finally {
-      setIconLoading(false)
-    }
-  }
-
-  const handleClearIcon = async (): Promise<void> => {
-    setIconLoading(true)
-    try {
-      await daemonCliPost(primaryScope(), 'projects/clear-icon', { projectId: project.id })
-      emitProjectsChanged()
-      await fetchProjects()
-    } catch (err) {
-      console.error('Icon clear failed:', err)
-    } finally {
-      setIconLoading(false)
-    }
-  }
-
-  const firstLetter = project.name.charAt(0).toUpperCase()
 
   // Full-screen agent / context-file editor takeover (same pattern as CustomThemeCreator)
   if (contextFileEdit) {
@@ -1339,13 +1268,6 @@ function ProjectDetail({
 
   return (
     <>
-    {cropImage && (
-      <IconCropDialog
-        imageDataUrl={cropImage}
-        onConfirm={handleCropConfirm}
-        onCancel={() => setCropImage(null)}
-      />
-    )}
     <div className="flex flex-col h-full min-h-0 w-full">
       {/* ── Sticky header + tabs (full width of the settings content column) ── */}
       <div className="flex-shrink-0 space-y-4 pb-3 pr-1 w-full">
@@ -1410,129 +1332,11 @@ function ProjectDetail({
         {settingsTab === 'agent' && (
           <>
             <SettingsGroup title="Identity">
-              {/* Icon */}
-              <div className="flex items-center gap-4 py-2">
-                <div
-                  className="flex-shrink-0 flex items-center justify-center overflow-hidden"
-                  style={{
-                    width: 48,
-                    height: 48,
-                    backgroundColor: project.iconUrl ? 'transparent' : project.color,
-                    border: project.iconUrl ? `2px solid ${project.color}` : 'none'
-                  }}
-                >
-                  {project.iconUrl ? (
-                    <img
-                      src={project.iconUrl}
-                      alt={project.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
-                    />
-                  ) : (
-                    <span
-                      className="text-[var(--color-on-accent)] font-bold"
-                      style={{ fontSize: 22, lineHeight: 1 }}
-                    >
-                      {firstLetter}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleDetectIcon}
-                    disabled={iconLoading}
-                    className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {iconLoading ? 'Working...' : 'Detect'}
-                  </button>
-                  <button
-                    onClick={handleUploadClick}
-                    disabled={iconLoading}
-                    className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Upload
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
-                    className="hidden"
-                    onChange={handleFileSelected}
-                  />
-                  {project.iconUrl && (
-                    <button
-                      onClick={handleClearIcon}
-                      disabled={iconLoading}
-                      className="px-2.5 py-1 text-xs text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Color — palette + free hex/rgb (same contract as project-group color). */}
-              <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)] gap-3">
-                <span className="text-xs text-[var(--color-text-secondary)]">Color</span>
-                <div className="flex items-center gap-1.5 flex-wrap justify-end min-w-0">
-                  {GROUP_AVATAR_COLORS.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      title={color}
-                      onClick={() => {
-                        void useProjectsStore.getState().setProjectColor(project.id, color)
-                      }}
-                      className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
-                        project.color === color ? 'scale-125 ring-1 ring-white/50' : 'hover:scale-110'
-                      }`}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
-                  <input
-                    type="text"
-                    value={customHex}
-                    onChange={(e) => {
-                      setCustomHex(e.target.value)
-                      setHexError(false)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const normalized = normalizeHexColor(customHex)
-                        if (normalized === null) {
-                          setHexError(customHex.trim().length > 0)
-                          return
-                        }
-                        setHexError(false)
-                        setCustomHex('')
-                        void useProjectsStore.getState().setProjectColor(project.id, normalized)
-                      } else if (e.key === 'Escape') {
-                        e.stopPropagation()
-                        setCustomHex('')
-                        setHexError(false)
-                      }
-                    }}
-                    onBlur={() => {
-                      if (!customHex.trim()) return
-                      const normalized = normalizeHexColor(customHex)
-                      if (normalized === null) {
-                        setHexError(true)
-                        return
-                      }
-                      setHexError(false)
-                      setCustomHex('')
-                      void useProjectsStore.getState().setProjectColor(project.id, normalized)
-                    }}
-                    placeholder={project.color || '#rrggbb'}
-                    spellCheck={false}
-                    aria-label="Custom color (hex or rgb)"
-                    className={`w-[7.5rem] px-1.5 py-0.5 text-[11px] font-mono bg-[var(--color-bg)] border text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none no-drag ${
-                      hexError
-                        ? 'border-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)]'
-                        : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
-                    }`}
-                  />
-                </div>
-              </div>
+              {/* Picture, color, name and handle: the shared identity
+                  controls (`components/AgentIdentity`), the same ones the
+                  room's Agent drawer tab shows. */}
+              <AgentPictureControls scope={primaryScope()} project={project} />
+              <AgentColorPicker project={project} />
 
               {/* Agent display name — restored on the Agent tab Identity group
                   (below icon + color). Was only reachable via manager/custom
@@ -1541,10 +1345,11 @@ function ProjectDetail({
                   setAgentDisplayName → AGENT.md display_name frontmatter. */}
               <div className="py-2 border-t border-[var(--color-border)]">
                 <AgentDisplayNameField
+                  scope={primaryScope()}
                   projectPath={project.path}
-                  helpText="Shown in the nav and Workspace tab. Does not change the handle or federated address."
+                  helpText="Shown in the nav and Agent tab. Does not change the handle or federated address."
                 />
-                <AgentHandleField projectPath={project.path} projectHandle={project.handle} />
+                <AgentHandleField scope={primaryScope()} projectPath={project.path} projectHandle={project.handle} />
               </div>
 
               {/* Focus Group */}
@@ -1921,6 +1726,20 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
   )
 }
 
+// ── Agent permission rows ──────────────────────────────────────────
+// The per-agent permission switches below render in two places: here
+// (Settings → Workspaces → Agent, a bordered box with the full
+// description) and in the room's Agent drawer tab (`compact`: the label
+// and the switch only, so they fit a narrow drawer). One component each,
+// one writer each; the drawer never forks its own form.
+function permissionRowClass(compact: boolean): string {
+  return compact ? 'px-3 py-1.5' : 'border border-[var(--color-border)] p-3'
+}
+
+function permissionDescClass(compact: boolean): string {
+  return compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed'
+}
+
 // ── #67 Per-workspace remote-instruct opt-in ───────────────────────
 // Lets CONNECT-USERS (role >= Member, signed into this host over K2
 // Connect) message THIS workspace's agent via the composer. The OWNER is
@@ -1930,11 +1749,17 @@ function ShowHeartbeatSessionsToggle({ projectPath }: { projectPath: string }): 
 // daemon ENFORCES this server-side per-workspace; this toggle only records
 // the opt-in (and drives the composer-hide). Reads the current state from
 // the projects store (`allowRemoteInstruct`); writes via /cli/remote-instruct.
-function RemoteInstructToggle({
+export function RemoteInstructToggle({
   project,
+  compact = false,
+  readOnly = false,
   fetchProjects,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
@@ -1947,7 +1772,7 @@ function RemoteInstructToggle({
   const globalAllow = useSettingsStore((s) => s.allowRemoteInstruct)
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     setBusy(true)
     try {
@@ -1966,13 +1791,13 @@ function RemoteInstructToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.allow-remote-instruct"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -1989,12 +1814,12 @@ function RemoteInstructToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Let remote users message this workspace
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             {enabled
               ? 'People signed into this host over K2 Connect can send messages to this workspace\'s agent via the composer. You (the owner) can always message agents.'
               : 'Off (recommended): only you can message this workspace\'s agent. Turn on to let K2 Connect users instruct the agent here — it runs with full shell and filesystem access.'}
           </div>
-          {!enabled && globalAllow && (
+          {!enabled && globalAllow && !readOnly && (
             <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Let remote users message
               agents&rdquo; switch (Settings → K2 Connect) opts in every workspace,
@@ -2012,11 +1837,17 @@ function RemoteInstructToggle({
 // DEFAULTS OFF / fail-closed. The daemon ENFORCES this server-side via
 // `dns_manage_allowed_for_path` (app master OR per-workspace). Reads
 // from the projects store (`dnsManageEnabled`); writes via /cli/dns-manage.
-function DnsManageToggle({
+export function DnsManageToggle({
   project,
+  compact = false,
+  readOnly = false,
   fetchProjects,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
@@ -2029,7 +1860,7 @@ function DnsManageToggle({
   const globalAllow = useSettingsStore((s) => s.dnsManageEnabled)
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     setBusy(true)
     try {
@@ -2046,13 +1877,13 @@ function DnsManageToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.dns-manage-enabled"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2069,12 +1900,12 @@ function DnsManageToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage DNS for this workspace
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             {enabled
               ? 'Agents in this workspace may create, update, and delete DNS records.'
               : 'Off (recommended): agents in this workspace cannot mutate DNS. Turn on to grant DNS management for this workspace only.'}
           </div>
-          {!enabled && globalAllow && (
+          {!enabled && globalAllow && !readOnly && (
             <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to manage DNS
               records&rdquo; switch (Settings → K2 Connect) opts in every workspace,
@@ -2094,14 +1925,20 @@ function DnsManageToggle({
 // store patch; do not fetchProjects() on this path.
 export function AgentsManageAgentsToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.agentsCanManageAgents ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.agentsCanManageAgents
     setBusy(true)
@@ -2131,13 +1968,13 @@ export function AgentsManageAgentsToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-agents"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2158,7 +1995,7 @@ export function AgentsManageAgentsToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow hiring and managing agents
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s main agent open and stop sidecars (k2 sidecar). Later it also
             covers hiring and retiring agents. Sidecars themselves never can. You (the owner) always can.
           </div>
@@ -2174,14 +2011,20 @@ export function AgentsManageAgentsToggle({
 // (Owner/Admin). Optimistic store patch; no projects refetch here.
 export function AgentsManageVaultToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.agentsCanManageVault ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.agentsCanManageVault
     setBusy(true)
@@ -2211,13 +2054,13 @@ export function AgentsManageVaultToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-vault"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2238,7 +2081,7 @@ export function AgentsManageVaultToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow managing server-wide secrets
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s main agent share server secrets with other workspaces and look
             after them (k2 vault). It can&rsquo;t share them with itself or loosen a secret it uses.
             Seeing a secret&rsquo;s value always needs you. You (the owner) always can.
@@ -2258,8 +2101,14 @@ export function AgentsManageVaultToggle({
 // every grant. Optimistic store patch; no projects refetch here.
 export function AgentsUseComputeToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -2267,7 +2116,7 @@ export function AgentsUseComputeToggle({
   const enabled = (project.agentsCanUseCompute ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.agentsCanUseCompute
     setBusy(true)
@@ -2305,14 +2154,14 @@ export function AgentsUseComputeToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
           aria-label="Allow compute nodes"
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-use-compute"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2333,7 +2182,7 @@ export function AgentsUseComputeToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow compute nodes
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Allow this agent to use compute nodes: run builds and tests on the machines you&rsquo;ve
             switched on in Settings &rarr; Compute (k2 compute run), and on ones you add later. Defaults
             per machine: 2 h per job, 1 at a time, 10 queued; change them with k2 compute grant. Off
@@ -2373,8 +2222,14 @@ export function operateComputeVisibility(role: OperateComputeRole | null): { sho
 
 export function AgentsOperateComputeToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element | null {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -2395,7 +2250,7 @@ export function AgentsOperateComputeToggle({
   if (!show) return null
 
   const toggle = async (): Promise<void> => {
-    if (busy || !canFlip) return
+    if (busy || !canFlip || readOnly) return
     const next = !enabled
     const before = project.agentsCanOperateCompute
     setBusy(true)
@@ -2423,14 +2278,14 @@ export function AgentsOperateComputeToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
           aria-label="Allow this agent to operate compute nodes"
-          disabled={busy || !canFlip}
+          disabled={busy || !canFlip || readOnly}
           data-settings-id="projects.agents-can-operate-compute"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2454,7 +2309,7 @@ export function AgentsOperateComputeToggle({
             Allow this agent to operate compute nodes{' '}
             <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Lets this agent look after your compute machines without asking each time: pause, drain
             and resume them, tighten their limits, update them to a newer signed build or roll one
             back, and restart their services. It can also propose anything that needs root (power,
@@ -2482,15 +2337,21 @@ export function AgentsOperateComputeToggle({
 // projects refetch here.
 export function AgentsManageProjectsToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   // Absent (an older daemon) reads as on: that is the column default.
   const enabled = (project.agentsCanManageProjects ?? 1) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.agentsCanManageProjects
     setBusy(true)
@@ -2520,14 +2381,14 @@ export function AgentsManageProjectsToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
           aria-label="Manage K2 projects"
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-projects"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2548,7 +2409,7 @@ export function AgentsManageProjectsToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Manage K2 projects
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Lets this workspace&rsquo;s agent create, rename and delete K2 projects and add or remove
             their members (k2 project). On by default. Off: it can still read projects and post in
             its project chat. Every project created or deleted and every member change is logged.
@@ -2563,16 +2424,22 @@ export function AgentsManageProjectsToggle({
 // Per-workspace agents-may-manage-hosted-mail. DEFAULTS OFF.
 // No global master. Writes POST /cli/mail-manage `{project, enable: 0|1}`.
 // Optimistic store patch; do not fetchProjects() on this path.
-function MailManageToggle({
+export function MailManageToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.mailManageEnabled ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.mailManageEnabled
     setBusy(true)
@@ -2601,13 +2468,13 @@ function MailManageToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.mail-manage-enabled"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2628,7 +2495,7 @@ function MailManageToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to manage hosted mail on this host
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             {enabled
               ? 'This agent may run k2 hostmail enable/disable and domain list/add/check on this host. You (the owner) can always manage hosted mail. Uninstall, domain remove, OAuth, and access stay owner-managed.'
               : 'Off (recommended): hosted-mail enable/disable and domain mutations stay owner-managed. Turn on to let this workspace\'s agent drive k2 hostmail enable/disable and domain list/add/check. Uninstall, domain remove, OAuth, and access stay owner. You (the owner) can always manage hosted mail.'}
@@ -2643,16 +2510,22 @@ function MailManageToggle({
 // No global master (unlike DNS/connections). Writes POST /cli/workspace/set
 // `{ fields: { db_agent_access: "write"|"off" } }`. Optimistic store patch;
 // do not fetchProjects() on this path.
-function DbAgentCreateToggle({
+export function DbAgentCreateToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.dbAgentAccess ?? 'off') === 'write'
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.dbAgentAccess
     setBusy(true)
@@ -2678,13 +2551,13 @@ function DbAgentCreateToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.db-agent-create"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2705,7 +2578,7 @@ function DbAgentCreateToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to create databases
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             Existing databases this workspace owns or is granted are usable without this toggle;
             it only gates <span className="font-mono">k2 db create</span>.
           </div>
@@ -2718,16 +2591,22 @@ function DbAgentCreateToggle({
 // Chunk 2.2 — per-workspace agents-may-manage-Skin-Access. DEFAULTS OFF.
 // No global master. Writes POST /cli/agents-manage-skin `{project, enable: 0|1}`.
 // Optimistic store patch; do not fetchProjects() on this path. Never GET /cli/users.
-function AgentsManageSkinToggle({
+export function AgentsManageSkinToggle({
   project,
+  compact = false,
+  readOnly = false,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const enabled = (project.agentsCanManageSkin ?? 0) === 1
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     const before = project.agentsCanManageSkin
     setBusy(true)
@@ -2756,13 +2635,13 @@ function AgentsManageSkinToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-manage-skin"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2783,7 +2662,7 @@ function AgentsManageSkinToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow this agent to manage Apps.
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             {enabled
               ? 'This agent may add guests, roles, and platform tokens for this box. You (the owner) can always manage Apps.'
               : 'Off (recommended): guests, roles, and platform tokens for this box stay owner-managed. Turn on to let this workspace\'s agent drive existing k2 app / leftover k2 skin / k2 skin-token mutations. You (the owner) can always manage Apps.'}
@@ -2801,11 +2680,17 @@ function AgentsManageSkinToggle({
 // `agents_can_create_connections_for_path` (app master OR per-workspace).
 // Reads from the projects store (`agentsCanCreateConnections`); writes
 // via /cli/agents-create-connections.
-function AgentsCreateConnectionsToggle({
+export function AgentsCreateConnectionsToggle({
   project,
+  compact = false,
+  readOnly = false,
   fetchProjects,
 }: {
   project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server, or a role below the route floor. */
+  readOnly?: boolean
   fetchProjects: () => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
@@ -2813,7 +2698,7 @@ function AgentsCreateConnectionsToggle({
   const globalAllow = useSettingsStore((s) => s.agentsCanCreateConnections)
 
   const toggle = async (): Promise<void> => {
-    if (busy) return
+    if (busy || readOnly) return
     const next = !enabled
     setBusy(true)
     try {
@@ -2830,13 +2715,13 @@ function AgentsCreateConnectionsToggle({
   }
 
   return (
-    <div className="border border-[var(--color-border)] p-3">
+    <div className={permissionRowClass(compact)}>
       <div className="flex items-start gap-3">
         <button
           onClick={toggle}
           role="switch"
           aria-checked={enabled}
-          disabled={busy}
+          disabled={busy || readOnly}
           data-settings-id="projects.agents-can-create-connections"
           className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
             enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
@@ -2857,12 +2742,12 @@ function AgentsCreateConnectionsToggle({
           <div className="text-xs font-medium text-[var(--color-text-primary)]">
             Allow agents to create connections for this workspace
           </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+          <div className={permissionDescClass(compact)}>
             {enabled
               ? "Agents in this workspace may add and remove connections to other workspaces. You (the owner) can always manage connections."
               : "Off (recommended): agents in this workspace cannot add or remove connections. Turn on to grant connection management for this workspace only. You (the owner) can always manage connections."}
           </div>
-          {!enabled && globalAllow && (
+          {!enabled && globalAllow && !readOnly && (
             <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
               Currently allowed anyway: the global &ldquo;Allow agents to create
               connections&rdquo; switch (Settings → K2 Connect) opts in every
@@ -3494,283 +3379,6 @@ function ClaudeMdEditor({ projectPath, projectName, onClose }: { projectPath: st
   )
 }
 
-// ── Agent Display Name Input (0.37.4) ────────────────────────────────
-//
-// A small inline editor that reads the workspace's primary agent's
-// display name (AGENT.md `display_name:` → `name:` → projects.name)
-// and writes new values via `k2so_workspace_set_agent_display_name`.
-//
-// Why a separate field from the technical agent name? Because in
-// 0.37.4 the technical name (the agent's AGENT.md `name:` /
-// directory basename — historically the `__lead__` sentinel for
-// manager workspaces, removed in 0.39.0f Phase 2.1) still keys
-// infrastructure layers — v2_session_map,
-// `workspace_sessions.terminal_id`, pending_live queue dirs. Editing
-// the technical name would cascade through all of them and risk
-// dropping the live PTY. The display name decouples the
-// human-facing label from those keys; the user gets a friendly
-// "what to call this agent" without the rename gymnastics.
-//
-// A future 0.38.0 ships the full `agent-display-name.md` PRD: drop
-// the technical name from infrastructure, collapse `display_name:`
-// and `name:` back into one field. Until then, this is the cheap
-// stepping stone that fixes the user-visible "I renamed my agent
-// and the inbox tab still says the wrong name" complaint.
-
-function AgentDisplayNameField({
-  projectPath,
-  helpText,
-  trailing,
-}: {
-  projectPath: string
-  helpText?: string
-  /** Optional element rendered to the right of the Save button —
-   *  meant for siblings like a Manage Persona button so the row
-   *  reads input | save | persona on one line. */
-  trailing?: React.ReactNode
-}): React.JSX.Element {
-  const [ready, setReady] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [saved, setSaved] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [flash, setFlash] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    agentDisplayName(primaryScope(), projectPath)
-      .then((n) => { if (!cancelled) { setDraft(n); setSaved(n); setReady(true) } })
-      .catch((e) => { if (!cancelled) { console.error('[display-name] read failed:', e); setReady(true) } })
-    return () => { cancelled = true }
-  }, [projectPath])
-
-  // Agent rename live update: someone else renamed this agent. Follow it,
-  // but never clobber what this user is typing (an unsaved edit stays).
-  const savedRef = useRef(saved)
-  savedRef.current = saved
-  useEffect(() => {
-    return onAgentIdentityChanged(primaryScope(), (e) => {
-      if (!agentIdentityMatchesPath(e, projectPath)) return
-      const n = agentIdentityDisplayName(e)
-      if (!n) return
-      setDraft((d) => (d === savedRef.current ? n : d))
-      setSaved(n)
-    })
-  }, [projectPath])
-
-  const dirty = ready && draft !== saved
-
-  // Mirrors k2-core's `validate_display_name` (0.40.24 S3 loosened
-  // contract): display names are human labels — spaces + mixed case
-  // are allowed ("QA Bot", "K2 - Marketing Manager"). Still banned:
-  // empty, >64 chars, control characters, leading/trailing
-  // whitespace, and "/" (the name seeds retire's archive folder
-  // label).
-  const validate = (n: string): string | null => {
-    if (n.length === 0) return 'Display name must not be empty.'
-    if (n.length > 64) return 'Display name must be at most 64 characters.'
-    if (n !== n.trim()) return 'Display name must not start or end with whitespace.'
-    if (n.includes('/')) return "Display name must not contain '/'."
-    if (n.includes(':')) return "Display name must not contain ':' (federated addresses use name::host)."
-    // eslint-disable-next-line no-control-regex
-    if (/[\u0000-\u001f\u007f-\u009f]/.test(n)) return 'Display name must not contain control characters.'
-    return null
-  }
-
-  const handleSave = async (): Promise<void> => {
-    // 0.40.24 S3: names are case-preserving now (mixed case is part
-    // of the label), so the 0.37.9 save-time lowercasing is retired
-    // along with the slug-shaped rule.
-    const candidate = draft
-    const err = validate(candidate)
-    if (err) { setError(err); return }
-    setError(null)
-    setBusy(true)
-    try {
-      await setAgentDisplayName(primaryScope(), projectPath, candidate)
-      setDraft(candidate)
-      setSaved(candidate)
-      setFlash(true)
-      setTimeout(() => setFlash(false), 1200)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <div className="flex-1 min-w-0">
-          <label className="block text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-            Agent Name
-          </label>
-          <input
-            type="text"
-            value={draft}
-            // 0.37.9 — DON'T transform the value on every keystroke.
-            // Pre-fix this read `e.target.value.toLowerCase()`, which
-            // mutates the DOM input's value mid-composition during
-            // Apple Dictation. Dictation manages the input value
-            // internally during the composition phase; if we mutate
-            // it underneath, dictation's state desyncs and the
-            // engagement hangs/aborts. (0.40.24 S3: lowercase
-            // enforcement is gone entirely — names are case-
-            // preserving; `validate()` at save time carries the
-            // remaining rules.)
-            onChange={(e) => { setDraft(e.target.value); setError(null) }}
-            disabled={!ready || busy}
-            placeholder="agent"
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            onKeyDown={(e) => { if (e.key === 'Enter' && dirty && !busy) handleSave() }}
-            className="w-full px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
-          />
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={!ready || busy || !dirty}
-          className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0 self-end"
-        >
-          {busy ? 'Saving…' : flash ? 'Saved' : 'Save'}
-        </button>
-        {trailing}
-      </div>
-      {error && (
-        <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>
-      )}
-      {!error && helpText && (
-        <p className="text-[9px] text-[var(--color-text-muted)] mt-1">{helpText}</p>
-      )}
-    </div>
-  )
-}
-
-function federatedHostFromTunnel(status: {
-  running?: boolean
-  public_url?: string | null
-  subdomain?: string | null
-} | null): string | null {
-  if (!status?.running) return null
-  const url = status.public_url?.trim()
-  if (url) {
-    try {
-      const host = new URL(url.includes('://') ? url : `https://${url}`).hostname
-      if (host) return host
-    } catch {
-      /* fall through to subdomain */
-    }
-  }
-  const sub = status.subdomain?.trim()
-  if (sub) return sub.includes('.') ? sub : `${sub}.k2.dev`
-  return null
-}
-
-function AgentHandleField({
-  projectPath,
-  projectHandle,
-}: {
-  projectPath: string
-  projectHandle?: string
-}): React.JSX.Element {
-  const [handle, setHandle] = useState(projectHandle ?? '')
-  const [draft, setDraft] = useState(projectHandle ?? '')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const confirm = useConfirmDialogStore((s) => s.confirm)
-  const { status } = useTunnelUrls(primaryScope())
-  const tunnelHost = federatedHostFromTunnel(status)
-
-  useEffect(() => {
-    let cancelled = false
-    agentHandle(primaryScope(), projectPath)
-      .then((h) => {
-        if (!cancelled) {
-          setHandle(h)
-          setDraft(h)
-        }
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [projectPath, projectHandle])
-
-  const dirty = draft.trim() !== handle.trim() && draft.trim().length > 0
-
-  const onChange = async (): Promise<void> => {
-    const next = draft.trim()
-    if (!next || next === handle) return
-    const ok = await confirm({
-      title: 'Change handle?',
-      message:
-        `Changing the handle changes this agent's address (${handle || 'old'}::${tunnelHost ?? 'host'} → ${next}::${tunnelHost ?? 'host'}). Existing federated connections will break until the other side reconnects or updates the handle.`,
-      confirmLabel: 'Change handle',
-      destructive: true,
-    })
-    if (!ok) return
-    setBusy(true)
-    setError(null)
-    try {
-      const stored = await setAgentHandle(primaryScope(), projectPath, next)
-      setHandle(stored)
-      setDraft(stored)
-      void emit('sync:projects').catch(() => {})
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="mt-3">
-      <label className="block text-[9px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-        Handle
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => { setDraft(e.target.value); setError(null) }}
-          disabled={busy}
-          spellCheck={false}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
-        />
-        <button
-          onClick={() => { void onChange() }}
-          disabled={busy || !dirty}
-          className="px-3 py-1.5 text-[10px] font-medium text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/30 transition-colors no-drag cursor-pointer disabled:opacity-50 flex-shrink-0"
-        >
-          {busy ? 'Saving…' : 'Change handle…'}
-        </button>
-      </div>
-      {handle && tunnelHost && (
-        <p className="text-[9px] font-mono text-[var(--color-text-muted)] mt-1">{handle}::{tunnelHost}</p>
-      )}
-      {handle && !tunnelHost && (
-        <p className="text-[9px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-          Get a subdomain so this agent can talk to other people&apos;s agents on K2.{' '}
-          <button
-            type="button"
-            className="text-[var(--color-accent)] hover:underline bg-transparent border-none p-0 cursor-pointer no-drag"
-            onClick={() => useSettingsStore.getState().setSection('k2-connect')}
-          >
-            Open K2 Connect
-          </button>
-        </p>
-      )}
-      {error && (
-        <p className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</p>
-      )}
-    </div>
-  )
-}
-
 // ── Custom Agent Persona Button ──────────────────────────────────────
 
 function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { projectPath: string; projectName: string; onOpenEditor: (agentName: string) => void }): React.JSX.Element {
@@ -3839,6 +3447,7 @@ function CustomAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { 
 
   return (
     <AgentDisplayNameField
+      scope={primaryScope()}
       projectPath={projectPath}
       helpText="The friendly label used in the inbox tab, chat tab, and persona prompts. Edit anytime — does not affect the agent's technical name or live session."
       trailing={
@@ -3886,6 +3495,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
 
   return (
     <AgentDisplayNameField
+      scope={primaryScope()}
       projectPath={projectPath}
       helpText="The friendly label used in the inbox tab. Edit anytime — does not affect routing or the live session."
       trailing={
@@ -4507,6 +4117,7 @@ function ProjectAgentsPanel({ projectPath, onOpenEditor }: { projectPath: string
                   rides as the trailing slot so input | save | persona
                   all sit on one row. */}
               <AgentDisplayNameField
+                scope={primaryScope()}
                 projectPath={projectPath}
                 helpText="Shown on the inbox tab — what you call this manager. The internal agent identity (folder basename) is unchanged."
                 trailing={

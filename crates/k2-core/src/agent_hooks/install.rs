@@ -35,6 +35,10 @@ pub const NOTIFY_FRAGMENT: &str = "/.k2/hooks/notify.sh";
 pub const LEGACY_NOTIFY_FRAGMENT: &str = "/.k2so/hooks/notify.sh";
 /// The script's version stamp line prefix.
 pub const VERSION_STAMP: &str = "# k2-hook-version: ";
+/// Marks K2's Claude `statusLine` command (Usage v2, live limits).
+pub const STATUSLINE_FRAGMENT: &str = "/.k2/hooks/statusline.sh";
+/// At most one live-limits post per pane per this many seconds.
+pub const STATUSLINE_MIN_POST_SECS: u32 = 15;
 /// `X-K2-Hook-Version` the script sends.
 pub const HOOK_PROTOCOL: u32 = 2;
 
@@ -96,6 +100,11 @@ pub const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// `~/.k2/hooks/notify.sh` under `home`.
 pub fn script_path(home: &Path) -> PathBuf {
     home.join(".k2").join("hooks").join("notify.sh")
+}
+
+/// `~/.k2/hooks/statusline.sh` under `home`.
+pub fn statusline_script_path(home: &Path) -> PathBuf {
+    home.join(".k2").join("hooks").join("statusline.sh")
 }
 
 fn claude_settings_path(home: &Path) -> PathBuf {
@@ -208,6 +217,111 @@ exit 0
         max_body = super::envelope::MAX_BODY_BYTES,
         protocol = HOOK_PROTOCOL,
     )
+}
+
+/// The Claude `statusLine` script (Usage v2, Q5). Claude Code (≥ 2.1.80)
+/// pipes a JSON status payload to the statusLine command on every turn;
+/// for a Claude.ai subscriber it carries `rate_limits` (the session and
+/// weekly percent used). This forwards that payload to the daemon through
+/// `notify.sh` (event `StatusLine`, the session passport, never the owner
+/// token), wrapped with the session's `CLAUDE_CONFIG_DIR` so the daemon
+/// knows which login it is. At most one post per pane per
+/// [`STATUSLINE_MIN_POST_SECS`]. It prints nothing (the status line stays
+/// empty, as with no statusLine) and always exits 0.
+pub fn generate_statusline_script(daemon_version: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+# K2 live usage limits (Claude statusLine). DO NOT EDIT: managed by the K2 daemon.
+{VERSION_STAMP}{daemon_version}
+#
+# Installed only when ~/.claude/settings.json had no statusLine of its own.
+# Forwards Claude's `rate_limits` to the K2 daemon; prints nothing.
+
+export LC_ALL=C
+PAYLOAD="$(cat 2>/dev/null; printf x)"
+PAYLOAD="${{PAYLOAD%x}}"
+case "$PAYLOAD" in
+    *'"rate_limits"'*) ;;
+    *) exit 0 ;;
+esac
+# A backgrounded Claude job inherits a pane's env but runs outside it.
+[ -n "${{CLAUDE_JOB_DIR:-}}" ] && exit 0
+PANE="${{K2_PANE_ID:-${{K2SO_PANE_ID:-}}}}"
+[ -z "$PANE" ] && exit 0
+[ -z "${{K2_HOOK_TOKEN:-${{K2SO_HOOK_TOKEN:-}}}}" ] && exit 0
+
+SAFE="$(printf '%s' "$PANE" | tr -c 'A-Za-z0-9._-' '_' | tail -c 64)"
+STAMP="${{TMPDIR:-/tmp}}/k2-statusline-$SAFE"
+NOW="$(date +%s 2>/dev/null)"
+case "$NOW" in ''|*[!0-9]*) NOW="" ;; esac
+if [ -n "$NOW" ] && [ -f "$STAMP" ]; then
+    LAST=""
+    IFS= read -r LAST <"$STAMP" 2>/dev/null
+    case "$LAST" in ''|*[!0-9]*) LAST="" ;; esac
+    if [ -n "$LAST" ] && [ $((NOW - LAST)) -ge 0 ] && [ $((NOW - LAST)) -lt {min_post} ]; then
+        exit 0
+    fi
+fi
+[ -n "$NOW" ] && printf '%s' "$NOW" >"$STAMP" 2>/dev/null
+
+DIR="${{CLAUDE_CONFIG_DIR:-}}"
+case "$DIR" in *'"'*|*'\'*) DIR="" ;; esac
+NOTIFY="$(dirname "$0")/notify.sh"
+[ -x "$NOTIFY" ] || exit 0
+printf '{{"k2_config_dir":"%s","statusline":%s}}' "$DIR" "$PAYLOAD" \
+    | K2_HOOK_AGENT_PID=$PPID K2_HOOK_SOURCE=claude "$NOTIFY" StatusLine >/dev/null 2>&1
+exit 0
+"#,
+        min_post = STATUSLINE_MIN_POST_SECS,
+    )
+}
+
+/// The `statusLine.command` K2 registers.
+pub fn statusline_command(script: &Path) -> String {
+    let p = shell_escape(&script.to_string_lossy());
+    format!("[ -x {p} ] && {p} || true")
+}
+
+/// What the installer did with Claude's `statusLine`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusLineState {
+    /// The slot was empty; K2's feed is now there.
+    Installed,
+    /// K2's feed was already there, unchanged.
+    Unchanged,
+    /// The user has their own statusLine: never touched.
+    UserOwned,
+    /// K2's feed was removed (uninstall).
+    Removed,
+    /// Nothing of K2's there (uninstall).
+    NotInstalled,
+}
+
+/// Install K2's statusLine only into an empty slot; never replace a
+/// user's. On `remove`, take out only K2's.
+fn apply_statusline(root: &mut Map<String, Value>, command: &str, remove: bool) -> StatusLineState {
+    let current = root.get("statusLine").filter(|v| !v.is_null());
+    let ours = current
+        .and_then(|v| v.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(|c| c.contains(STATUSLINE_FRAGMENT));
+    if remove {
+        if ours {
+            root.remove("statusLine");
+            return StatusLineState::Removed;
+        }
+        return if current.is_some() { StatusLineState::UserOwned } else { StatusLineState::NotInstalled };
+    }
+    if current.is_some() && !ours {
+        return StatusLineState::UserOwned;
+    }
+    let want = json!({ "type": "command", "command": command, "padding": 0 });
+    if current == Some(&want) {
+        return StatusLineState::Unchanged;
+    }
+    root.insert("statusLine".to_string(), want);
+    StatusLineState::Installed
 }
 
 /// The version stamped in a script body, if any.
@@ -446,6 +560,10 @@ pub struct InstallReport {
     pub claude_event_set: &'static str,
     pub script: ScriptReport,
     pub clis: Vec<CliReport>,
+    /// Claude's `statusLine` (live limits feed); `None` when Claude's
+    /// config was not edited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statusline: Option<StatusLineState>,
 }
 
 impl InstallReport {
@@ -499,11 +617,12 @@ pub fn run(req: &InstallRequest<'_>) -> InstallReport {
             error: None,
         },
         clis: Vec::new(),
+        statusline: None,
     };
 
     let mut skip_newer = false;
     if !req.remove {
-        match write_script(&script, req.daemon_version) {
+        match write_script(&script, req.daemon_version, generate_hook_script(req.daemon_version)) {
             Ok((state, on_disk)) => {
                 skip_newer = state == ScriptState::SkippedNewer;
                 report.script.state = state;
@@ -589,7 +708,25 @@ pub fn run(req: &InstallRequest<'_>) -> InstallReport {
             continue;
         }
         let desired = if req.remove { desired.emptied() } else { desired };
-        match edit_config(&path, |root| apply(root, &desired)) {
+        let mut statusline: Option<StatusLineState> = None;
+        if cli == "claude" && !req.remove {
+            let feed = statusline_script_path(req.home);
+            if let Err(e) = write_script(&feed, req.daemon_version, generate_statusline_script(req.daemon_version)) {
+                crate::log_debug!("[hooks] statusline script: {e}");
+            }
+        }
+        let feed_command = statusline_command(&statusline_script_path(req.home));
+        let result = edit_config(&path, |root| {
+            apply(root, &desired)?;
+            if cli == "claude" {
+                statusline = Some(apply_statusline(root, &feed_command, req.remove));
+            }
+            Ok(())
+        });
+        if cli == "claude" && result.is_ok() {
+            report.statusline = statusline;
+        }
+        match result {
             Ok((state, root)) => report.clis.push(CliReport {
                 cli,
                 path: path_str,
@@ -610,7 +747,7 @@ pub fn run(req: &InstallRequest<'_>) -> InstallReport {
 
 /// Write `notify.sh` when this daemon's version is ≥ the on-disk stamp and
 /// the bytes differ. Returns the state and the stamp found on disk.
-fn write_script(path: &Path, version: &str) -> Result<(ScriptState, Option<String>), String> {
+fn write_script(path: &Path, version: &str, body: String) -> Result<(ScriptState, Option<String>), String> {
     let existing = std::fs::read_to_string(path).ok();
     let on_disk = existing.as_deref().and_then(script_stamp);
     if let Some(theirs) = on_disk.as_deref() {
@@ -620,7 +757,6 @@ fn write_script(path: &Path, version: &str) -> Result<(ScriptState, Option<Strin
             }
         }
     }
-    let body = generate_hook_script(version);
     let state = if existing.as_deref() == Some(body.as_str()) {
         ScriptState::Unchanged
     } else {
@@ -1328,7 +1464,7 @@ mod tests {
     #[test]
     fn t_s1b_script_posts_the_raw_payload_over_the_cell_socket() {
         let home = TempHome::new("s1b");
-        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let sock = PathBuf::from(format!("/tmp/k2s1b-{}-{}.sock", std::process::id(), Instant::now().elapsed().as_nanos() % 100000));
         let _ = std::fs::remove_file(&sock);
         let server = serve_one(ServerSock::Unix(std::os::unix::net::UnixListener::bind(&sock).expect("bind")), "204 No Content");
@@ -1372,7 +1508,7 @@ mod tests {
     #[test]
     fn t_s1b_script_falls_back_to_tcp_and_truncates_huge_bodies() {
         let home = TempHome::new("s1b-tcp");
-        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
@@ -1409,7 +1545,7 @@ mod tests {
     #[test]
     fn t_s1b_script_without_a_passport_sends_nothing() {
         let home = TempHome::new("s1b-nopass");
-        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::fs::write(home.path().join(".k2/heartbeat.port"), port.to_string()).unwrap();
@@ -1450,7 +1586,7 @@ mod tests {
     #[test]
     fn t_s1b_script_exits_zero_quickly_with_the_daemon_down() {
         let home = TempHome::new("s1b-down");
-        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         // A reserved port nobody listens on.
         let closed = crate::test_env::ClosedPort::new();
         let port = closed.port();
@@ -1475,7 +1611,7 @@ mod tests {
     #[test]
     fn t_s1b_tokens_never_on_curl_argv() {
         let home = TempHome::new("s1b-argv");
-        write_script(&script_path(home.path()), "0.44.3").expect("script");
+        write_script(&script_path(home.path()), "0.44.3", generate_hook_script("0.44.3")).expect("script");
         let shim_dir = home.path().join("shim");
         std::fs::create_dir_all(&shim_dir).unwrap();
         let argv_log = home.path().join("curl-argv.log");
@@ -1552,5 +1688,123 @@ mod tests {
         assert!(s.contains("/hook/event") && !s.contains("/hook/complete"));
         assert!(s.contains("X-K2-Hook-Version: 2"));
         assert!(!s.contains("mktemp"), "the payload must never touch disk (DA5)");
+    }
+
+    // ── Usage v2: the Claude statusLine feed (live limits) ──────────────
+
+    fn claude_home(tag: &str, settings: Option<Value>) -> TempHome {
+        let home = TempHome::new(tag);
+        std::fs::create_dir_all(home.path().join(".claude")).expect("claude dir");
+        if let Some(v) = settings {
+            std::fs::write(claude_settings_path(home.path()), serde_json::to_vec_pretty(&v).expect("json")).expect("settings");
+        }
+        home
+    }
+
+    #[test]
+    fn statusline_goes_only_into_an_empty_slot() {
+        let home = claude_home("sl-empty", Some(json!({"model": "opus"})));
+        let r = run(&req(home.path(), "0.46.0", Some("2.1.300")));
+        assert_eq!(r.statusline, Some(StatusLineState::Installed));
+        let v = read_json(&claude_settings_path(home.path()));
+        let cmd = v["statusLine"]["command"].as_str().expect("statusLine command");
+        assert!(cmd.contains(STATUSLINE_FRAGMENT), "{cmd}");
+        assert_eq!(v["statusLine"]["type"], json!("command"));
+        assert_eq!(v["model"], json!("opus"), "other settings kept");
+        let feed = statusline_script_path(home.path());
+        assert!(feed.is_file(), "the feed script is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&feed).expect("meta").permissions().mode() & 0o777, 0o755);
+        }
+        let again = run(&req(home.path(), "0.46.0", Some("2.1.300")));
+        assert_eq!(again.statusline, Some(StatusLineState::Unchanged));
+    }
+
+    #[test]
+    fn a_users_statusline_is_never_touched() {
+        let mine = json!({"type": "command", "command": "~/bin/my-line.sh", "padding": 1});
+        let home = claude_home("sl-user", Some(json!({"statusLine": mine})));
+        let r = run(&req(home.path(), "0.46.0", Some("2.1.300")));
+        assert_eq!(r.statusline, Some(StatusLineState::UserOwned));
+        let v = read_json(&claude_settings_path(home.path()));
+        assert_eq!(v["statusLine"], mine, "the user's statusLine is exactly theirs");
+        let mut off = req(home.path(), "0.46.0", Some("2.1.300"));
+        off.remove = true;
+        assert_eq!(run(&off).statusline, Some(StatusLineState::UserOwned));
+        assert_eq!(read_json(&claude_settings_path(home.path()))["statusLine"], mine, "uninstall leaves it too");
+    }
+
+    #[test]
+    fn uninstall_removes_only_k2s_statusline() {
+        let home = claude_home("sl-remove", None);
+        assert_eq!(run(&req(home.path(), "0.46.0", Some("2.1.300"))).statusline, Some(StatusLineState::Installed));
+        let mut off = req(home.path(), "0.46.0", Some("2.1.300"));
+        off.remove = true;
+        assert_eq!(run(&off).statusline, Some(StatusLineState::Removed));
+        let v = read_json(&claude_settings_path(home.path()));
+        assert!(v.get("statusLine").is_none(), "{v}");
+        assert_eq!(run(&off).statusline, Some(StatusLineState::NotInstalled));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn statusline_script_forwards_rate_limits_quietly_and_throttles() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+        let home = TempHome::new("sl-run");
+        let hooks = home.path().join(".k2").join("hooks");
+        std::fs::create_dir_all(&hooks).expect("hooks dir");
+        let capture = home.path().join("capture.txt");
+        // A stand-in notify.sh: records its argument, source and stdin.
+        let c = capture.display();
+        let fake = format!(
+            "#!/bin/bash\nprintf 'ARG=%s SRC=%s\\n' \"$1\" \"$K2_HOOK_SOURCE\" >> '{c}'\ncat >> '{c}'\nprintf '\\n' >> '{c}'\n"
+        );
+        std::fs::write(hooks.join("notify.sh"), fake).expect("fake notify");
+        std::fs::set_permissions(hooks.join("notify.sh"), std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let script = hooks.join("statusline.sh");
+        std::fs::write(&script, generate_statusline_script("0.46.0")).expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let tmp = home.path().join("tmp");
+        std::fs::create_dir_all(&tmp).expect("tmp");
+        let run_it = |payload: &str, pane: &str| -> String {
+            let mut child = Command::new(&script)
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("TMPDIR", &tmp)
+                .env("K2_PANE_ID", pane)
+                .env("K2_HOOK_TOKEN", "sid.secret")
+                .env("CLAUDE_CONFIG_DIR", "/slots/acc_1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn");
+            child.stdin.take().expect("stdin").write_all(payload.as_bytes()).expect("write");
+            let out = child.wait_with_output().expect("wait");
+            assert!(out.status.success());
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let count = || std::fs::read_to_string(&capture).unwrap_or_default().matches("ARG=").count();
+        let payload = r#"{"session_id":"s","rate_limits":{"five_hour":{"used_percentage":12.5,"resets_at":1800000000}}}"#;
+        assert_eq!(run_it(payload, "pane-1"), "", "prints nothing");
+        let got = std::fs::read_to_string(&capture).expect("forwarded");
+        assert!(got.starts_with("ARG=StatusLine SRC=claude"), "{got}");
+        let body = got.lines().nth(1).expect("body line");
+        let v: Value = serde_json::from_str(body).expect("wrapped JSON");
+        assert_eq!(v["k2_config_dir"], json!("/slots/acc_1"));
+        assert_eq!(v["statusline"]["rate_limits"]["five_hour"]["used_percentage"], json!(12.5));
+        // Throttled: a second tick from the same pane inside 15 s is dropped.
+        assert_eq!(run_it(payload, "pane-1"), "");
+        assert_eq!(count(), 1);
+        // Another pane is not throttled by the first.
+        run_it(payload, "pane-2");
+        assert_eq!(count(), 2);
+        // No rate_limits (an API-key session): nothing is sent.
+        run_it(r#"{"session_id":"s","model":{"id":"x"}}"#, "pane-3");
+        assert_eq!(count(), 2);
+        assert_eq!(script_stamp(&generate_statusline_script("0.46.0")).as_deref(), Some("0.46.0"));
     }
 }

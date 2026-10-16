@@ -34,7 +34,7 @@ use serde_json::Value;
 
 pub use parse::{Carry, CodexLimits, Draft};
 pub use query::{
-    report, report_host, turns, turns_host, CostSummary, DayTotals, Filter, GroupBy, GroupTotals, HarnessTotals,
+    parse_tz, report, report_host, turns, turns_host, CostSummary, DayTotals, Filter, GroupBy, GroupTotals, HarnessTotals,
     LoginTotals, ModelTotals, ReportOpts, TokenTotals, TurnCursor, TurnPage, TurnRow, UsageReport, WorkspaceTotals,
     DEFAULT_TURNS_LIMIT, MAX_TURNS_LIMIT,
 };

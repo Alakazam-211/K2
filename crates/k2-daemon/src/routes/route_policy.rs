@@ -1017,10 +1017,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/tunnel/subdomains/refresh", Member),
     post("/cli/tunnel/subdomains/unclaim", Member),
     post("/cli/tunnel/switch", NoLogin),
+    // Usage v2 (Rosson Q3, 2026-10-16): Owner and Admin, not Members. A
+    // passport reaches the reads through is_agent_verb (own workspace).
+    get("/cli/usage/limits", Admin),
+    post("/cli/usage/limits/refresh", Admin),
     get("/cli/usage/subscriptions", Member),
     post("/cli/usage/subscriptions/refresh", Member),
-    get("/cli/usage/tokens", Owner),
-    get("/cli/usage/turns", Owner),
+    get("/cli/usage/tokens", Admin),
+    get("/cli/usage/turns", Admin),
     get("/cli/users", Admin),
     post("/cli/users/add", Admin),
     get("/cli/users/audit", Owner),

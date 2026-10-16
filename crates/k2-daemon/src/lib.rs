@@ -93,6 +93,8 @@ pub mod connect_proxy;
 pub mod misc_routes;
 pub mod token_usage_scan;
 pub mod usage_routes;
+/// Usage v2 limits: live feeds (statusLine, Codex session logs) and the every-login document.
+pub mod usage_live;
 pub mod ops_routes;
 pub mod ops_stream_ws;
 pub mod pending_live;

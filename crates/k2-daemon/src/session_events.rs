@@ -545,6 +545,19 @@ pub enum SessionEvent {
         tool: Option<String>,
     },
 
+    /// Usage v2 (P9, B20) — subscription limits were written: the shared
+    /// cache (a probe) or one login's reading (a probe of an idle login, or
+    /// a live feed from a running session). APP-LEVEL refetch signal; never
+    /// carries a token. `source`: `probe` · `live_statusline` ·
+    /// `live_rollout`.
+    /// Wire: `{ "kind": "subscription_usage_changed", "tool": "claude",
+    /// "account_id": "acc_x", "source": "probe" }`.
+    SubscriptionUsageChanged {
+        tool: Option<String>,
+        account_id: Option<String>,
+        source: String,
+    },
+
     /// prd-daemon-activity-and-thread-working-v1 A11 — the daemon's hook
     /// installer found an agent CLI config it could not update (it did not
     /// parse, so it was left untouched) or hit a write error. APP-LEVEL,
@@ -832,6 +845,7 @@ impl SessionEvent {
             SessionEvent::ChatHistoryChanged {} => "chat_history_changed",
             SessionEvent::TokenUsageChanged {} => "token_usage_changed",
             SessionEvent::LlmAccountsChanged { .. } => "llm_accounts_changed",
+            SessionEvent::SubscriptionUsageChanged { .. } => "subscription_usage_changed",
             SessionEvent::ZenChanged {} => "zen_changed",
             SessionEvent::SourcesChanged { .. } => "sources_changed",
             SessionEvent::GardenDataChanged { .. } => "garden_data_changed",
@@ -955,6 +969,15 @@ pub fn emit_domains_changed(reason: &str, apex: Option<&str>) {
 /// Best-effort: the LLM login wallet changed (refetch signal).
 pub fn emit_llm_accounts_changed(tool: Option<&str>) {
     let _ = emit(SessionEvent::LlmAccountsChanged { tool: tool.map(str::to_string) });
+}
+
+/// Best-effort: subscription limits were written (Usage v2, B20).
+pub fn emit_subscription_usage_changed(tool: Option<&str>, account_id: Option<&str>, source: &str) {
+    let _ = emit(SessionEvent::SubscriptionUsageChanged {
+        tool: tool.map(str::to_string),
+        account_id: account_id.map(str::to_string),
+        source: source.to_string(),
+    });
 }
 
 /// 0.39.39 (#677.1) — best-effort broadcast that a heartbeat session's

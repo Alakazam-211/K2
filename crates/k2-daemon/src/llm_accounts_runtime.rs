@@ -1027,25 +1027,65 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
             .and_then(|e| e.usage_json)
             .and_then(|s| serde_json::from_str(&s).ok())
     };
-    let row = crate::subscription_usage::probe_wallet_slot(tool.as_str(), &slot, claude_token, prev.as_ref());
+    let mut row = crate::subscription_usage::probe_wallet_slot(tool.as_str(), &slot, claude_token, prev.as_ref());
+    row.source = "probe".into();
+    crate::subscription_usage::note_outcome(&format!("acct:{}", entry.id), &row, chrono::Utc::now());
     let text = serde_json::to_string(&row).map_err(|e| e.to_string())?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    // A switch may have made it live while the check ran: then the shared
-    // probe owns its row.
-    if active_is(tool, &entry.id) {
-        return Ok(());
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        // A switch may have made it live while the check ran: then the shared
+        // probe owns its row.
+        if active_is(tool, &entry.id) {
+            return Ok(());
+        }
+        wallet_core::update_meta(
+            &conn,
+            &entry.id,
+            &wallet_core::MetaUpdate {
+                usage_json: Some(text),
+                usage_checked_at: if row.error.is_none() { Some(chrono::Utc::now().timestamp()) } else { None },
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
     }
-    wallet_core::update_meta(
-        &conn,
-        &entry.id,
-        &wallet_core::MetaUpdate {
-            usage_json: Some(text),
-            usage_checked_at: if row.error.is_none() { Some(chrono::Utc::now().timestamp()) } else { None },
-            ..Default::default()
-        },
-    )
-    .map_err(|e| e.to_string())
+    crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), Some(&entry.id), "probe");
+    Ok(())
+}
+
+/// Usage v2 (P9, Q5): probe idle signed-in logins whose reading is older
+/// than `max_age`, skipping a login a running session reported on lately
+/// (live feed) and one that is backing off after failures / a 429. Runs
+/// from the 15-minute subscription loop; never under air-gap.
+pub fn probe_idle_stale(max_age: Duration) {
+    if k2_core::airgap::enabled() {
+        return;
+    }
+    let now = chrono::Utc::now();
+    let entries = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet_core::list(&conn).unwrap_or_default()
+    };
+    for e in entries {
+        let Some(tool) = e.tool() else { continue };
+        if e.state != state::SIGNED_IN || e.is_api_key() || !tool.subscription_supported() || active_is(tool, &e.id) {
+            continue;
+        }
+        let fresh = e.usage_checked_at.is_some_and(|t| now.timestamp() - t < max_age.as_secs() as i64);
+        let reading: Option<crate::subscription_usage::HarnessUsage> =
+            e.usage_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
+        if fresh || reading.as_ref().is_some_and(|r| crate::subscription_usage::live_fresh(r, now, max_age)) {
+            continue;
+        }
+        if crate::subscription_usage::backing_off(&format!("acct:{}", e.id), now).is_some() {
+            continue;
+        }
+        if let Err(err) = probe_idle_usage(&e) {
+            k2_core::log_debug!("[llm-accounts] usage {}: {err}", e.id);
+        }
+    }
 }
 
 // ── Boot + loop ─────────────────────────────────────────────────────

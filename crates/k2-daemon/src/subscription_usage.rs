@@ -14,7 +14,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,8 @@ const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 pub const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
 pub const STATUS_SIGN_IN_EXPIRED: &str = "Sign-in expired";
 pub const STATUS_NO_WINDOW: &str = "No usage window";
+/// API-key logins and tools with no limits API (Gemini).
+pub const STATUS_NOT_SUPPORTED: &str = "Not supported";
 /// Row status while air-gap is on. An older renderer prints it as-is.
 pub const STATUS_AIRGAP: &str = "Off in air-gap mode";
 
@@ -46,15 +48,35 @@ const HARNESS_CODEX: &str = "codex";
 const HARNESS_GROK: &str = "grok";
 const PROBED_HARNESSES: [&str; 3] = [HARNESS_CLAUDE, HARNESS_CODEX, HARNESS_GROK];
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
     pub label: String,
+    /// Fraction used, 0..1.
     pub used: f64,
     pub resets_at: String,
+    /// Stable id: `five_hour`, `seven_day`, `seven_day_oauth_apps`,
+    /// `model:<name>:<kind>`, `primary`, `secondary`, `credit`, `grok_build`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// `session` · `weekly` · `monthly` · `daily` · `other`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    /// Percent used, 0..100 (filled when served).
+    #[serde(default)]
+    pub used_percent: f64,
+    /// The window's length, when the vendor says (pace mark).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_secs: Option<i64>,
+    /// `resetsAt − windowSecs` (filled when served).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_start: Option<String>,
+    /// `resetsAt` is past: a re-check is under way (filled when served).
+    #[serde(default)]
+    pub reset_passed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessUsage {
     pub harness: String,
@@ -76,6 +98,18 @@ pub struct HarnessUsage {
     /// When the failed check ran (freshness of the 15 s cache).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempted_at: Option<String>,
+    /// Why there are (no) numbers, typed (P8): `ok` · `no_window` ·
+    /// `not_signed_in` · `expired` · `probe_failed` · `unsupported` ·
+    /// `airgap`. Filled when served ([`derive_state`]).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// Where the numbers came from: `probe` · `live_statusline` ·
+    /// `live_rollout` (Q5).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// The daemon is backing off this check until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_probe_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -189,6 +223,7 @@ pub fn airgap_doc() -> Value {
             windows: Vec::new(),
             checked_at: now.clone(),
             status: STATUS_AIRGAP.to_string(),
+            ..Default::default()
         })
         .collect();
     json!({
@@ -224,7 +259,9 @@ pub fn cache_path() -> PathBuf {
         .join("subscriptions.json")
 }
 
-/// `GET /cli/usage/subscriptions`. Reads the cache. Writes nothing.
+/// `GET /cli/usage/subscriptions`. Reads the cache (never probes inline).
+/// A window past its reset is marked `resetPassed` and kicks ONE
+/// background re-check (P8, B18).
 pub fn handle_get() -> CliResponse {
     if airgap_on() {
         return airgap_response();
@@ -235,38 +272,57 @@ pub fn handle_get() -> CliResponse {
             harnesses: Vec::new(),
         });
     }
-    match fs::read_to_string(&path) {
+    let doc = match fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<SubscriptionFile>(&text) {
-            Ok(doc) => ok_doc(&filter_known(doc)),
-            Err(_) => CliResponse::internal_error("subscriptions cache is not valid JSON"),
+            Ok(doc) => filter_known(doc),
+            Err(_) => return CliResponse::internal_error("subscriptions cache is not valid JSON"),
         },
-        Err(e) => CliResponse::internal_error(format!("subscriptions cache: {e}")),
+        Err(e) => return CliResponse::internal_error(format!("subscriptions cache: {e}")),
+    };
+    let doc = decorate_file(doc, Utc::now());
+    if any_reset_passed(&doc) {
+        kick_background_probe();
     }
+    ok_doc(&doc)
 }
 
 /// `POST /cli/usage/subscriptions/refresh`.
 /// A cache newer than 15 seconds is returned as-is. Otherwise the probe
 /// runs here — the caller must be off the connection task (`spawn_blocking`
-/// or the background loop).
+/// or the background loop). Concurrent callers share one probe (B19).
 pub fn handle_refresh() -> CliResponse {
     if airgap_on() {
         return airgap_response();
     }
-    let now = Utc::now();
-    if let Some(doc) = fresh_cache(now) {
-        return ok_doc(&doc);
-    }
-    let io = io_for_probe();
-    match probe_and_write(io.as_ref()) {
-        Ok(doc) => ok_doc(&doc),
+    match refresh_shared(None) {
+        Ok(doc) => ok_doc(&decorate_file(doc, Utc::now())),
         Err(e) => CliResponse::internal_error(e),
     }
 }
 
+/// The shared cache, refreshed when older than 15 s (one tool, or all).
+/// Single-flight. Air-gap is the caller's check.
+pub fn refresh_shared(only: Option<&str>) -> Result<SubscriptionFile, String> {
+    if only.is_none() {
+        if let Some(doc) = fresh_cache(Utc::now()) {
+            return Ok(doc);
+        }
+    }
+    probe_singleflight(io_for_probe().as_ref(), only, Mode::Manual)
+}
+
+/// How long after boot the first probe may run (lets boot settle).
+const BOOT_PROBE_DELAY: Duration = Duration::from_secs(20);
+
 /// Headless 15-minute probe. No webview. Not the heartbeat monitor.
-/// The first fire waits one interval; the menu POST covers a cold cache.
+/// At boot it probes once when the cache is missing or older than 15
+/// minutes (B18), then every 15 minutes.
 pub fn spawn() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        tokio::time::sleep(BOOT_PROBE_DELAY).await;
+        if cache_stale(Utc::now()) {
+            let _ = tokio::task::spawn_blocking(background_tick).await;
+        }
         let mut interval = tokio::time::interval(PROBE_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
@@ -277,15 +333,279 @@ pub fn spawn() -> tokio::task::JoinHandle<()> {
     })
 }
 
-/// One background fire. Returns whether it probed. Air-gap skips it.
+/// Missing, unreadable, or a tool's row older than [`PROBE_INTERVAL`].
+fn cache_stale(now: DateTime<Utc>) -> bool {
+    let Ok(doc) = read_cache_file() else { return true };
+    PROBED_HARNESSES.iter().any(|name| {
+        let Some(h) = doc.harnesses.iter().find(|h| h.harness == *name) else { return true };
+        let when = h.attempted_at.as_deref().unwrap_or(&h.checked_at);
+        match DateTime::parse_from_rfc3339(when) {
+            Ok(t) => now.signed_duration_since(t.with_timezone(&Utc)) > chrono::Duration::from_std(PROBE_INTERVAL).unwrap_or_default(),
+            Err(_) => true,
+        }
+    })
+}
+
+/// One background fire: the default logins (skipping live-fresh and
+/// backed-off ones), then idle wallet logins whose reading is stale.
+/// Returns whether it probed. Air-gap skips it.
 fn background_tick() -> bool {
     if airgap_on() {
         return false;
     }
-    if let Err(e) = probe_and_write(io_for_probe().as_ref()) {
+    if let Err(e) = probe_singleflight(io_for_probe().as_ref(), None, Mode::Background) {
         k2_core::log_debug!("[usage] subscription probe failed: {e}");
     }
+    #[cfg(not(test))]
+    crate::llm_accounts_runtime::probe_idle_stale(PROBE_INTERVAL);
     true
+}
+
+// ── Single flight (B19) ─────────────────────────────────────────────
+
+/// Who asked: the background loop honours every back-off and skips a
+/// login with a fresh live reading; a person's refresh only waits out a
+/// 429 `Retry-After`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Background,
+    Manual,
+}
+
+type FlightResult = (Instant, Option<String>, Result<SubscriptionFile, String>);
+
+fn flight_gate() -> &'static Mutex<()> {
+    static GATE: Mutex<()> = Mutex::new(());
+    &GATE
+}
+
+fn flight_last() -> &'static Mutex<Option<FlightResult>> {
+    static LAST: Mutex<Option<FlightResult>> = Mutex::new(None);
+    &LAST
+}
+
+/// One probe at a time. A caller that waited on a probe which finished
+/// after it asked (covering what it wants) takes that result instead of
+/// starting another.
+fn probe_singleflight(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Result<SubscriptionFile, String> {
+    let asked = Instant::now();
+    let _gate = flight_gate().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((done, done_only, res)) = flight_last().lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        if done >= asked && (done_only.is_none() || done_only.as_deref() == only) {
+            return res;
+        }
+    }
+    let res = probe_and_write_mode(io, only, mode);
+    *flight_last().lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), only.map(str::to_string), res.clone()));
+    res
+}
+
+fn background_running() -> &'static AtomicBool {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    &RUNNING
+}
+
+#[cfg(test)]
+fn kicks() -> &'static AtomicUsize {
+    static KICKS: AtomicUsize = AtomicUsize::new(0);
+    &KICKS
+}
+
+/// Start one background re-check unless one is running. (Tests count the
+/// kick instead of starting a thread.)
+fn kick_background_probe() {
+    if airgap_on() || background_running().swap(true, Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(test)]
+    {
+        kicks().fetch_add(1, Ordering::SeqCst);
+        background_running().store(false, Ordering::SeqCst);
+    }
+    #[cfg(not(test))]
+    {
+        let spawned = std::thread::Builder::new().name("usage-recheck".into()).spawn(|| {
+            if let Err(e) = probe_singleflight(io_for_probe().as_ref(), None, Mode::Background) {
+                k2_core::log_debug!("[usage] re-check after a reset failed: {e}");
+            }
+            background_running().store(false, Ordering::SeqCst);
+        });
+        if spawned.is_err() {
+            background_running().store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Start one background re-check of the default logins (the limits
+/// document's GET found a window past its reset).
+pub(crate) fn kick_recheck() {
+    kick_background_probe();
+}
+
+fn any_reset_passed(doc: &SubscriptionFile) -> bool {
+    doc.harnesses.iter().any(|h| h.windows.iter().any(|w| w.reset_passed))
+}
+
+// ── Back-off ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct Backoff {
+    failures: u32,
+    until: DateTime<Utc>,
+    rate_limited: bool,
+}
+
+fn backoffs() -> &'static Mutex<std::collections::HashMap<String, Backoff>> {
+    static MAP: OnceLock<Mutex<std::collections::HashMap<String, Backoff>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// The longest failure back-off.
+const BACKOFF_CAP: Duration = Duration::from_secs(2 * 3600);
+
+/// `retry-after <secs>` in a probe error (the HTTP header, carried by
+/// [`LiveIo::claude_get`]).
+fn retry_after_secs(err: &str) -> Option<i64> {
+    let lower = err.to_ascii_lowercase();
+    let at = lower.find("retry-after")?;
+    let digits: String = lower[at + "retry-after".len()..]
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// Record a check's outcome for `key` (a harness, or `acct:<id>`): a
+/// success clears the back-off; a failure doubles it from 15 minutes up to
+/// two hours, and a 429 `Retry-After` wins when longer.
+pub(crate) fn note_outcome(key: &str, row: &HarnessUsage, now: DateTime<Utc>) {
+    let mut map = backoffs().lock().unwrap_or_else(|p| p.into_inner());
+    let Some(err) = row.error.as_deref() else {
+        map.remove(key);
+        return;
+    };
+    let failures = map.get(key).map_or(0, |b| b.failures).saturating_add(1);
+    let step = PROBE_INTERVAL.as_secs().saturating_mul(1u64 << (failures - 1).min(8));
+    let step = step.min(BACKOFF_CAP.as_secs()) as i64;
+    let mut until = now + chrono::Duration::seconds(step);
+    // The vendor said when to come back: even a person's refresh waits.
+    let rate_limited = err.contains("429") && retry_after_secs(err).is_some();
+    if let Some(secs) = retry_after_secs(err) {
+        let ra = now + chrono::Duration::seconds(secs);
+        if ra > until {
+            until = ra;
+        }
+    }
+    map.insert(key.to_string(), Backoff { failures, until, rate_limited });
+}
+
+/// `(until, rate_limited)` while `key` is backing off.
+pub(crate) fn backing_off(key: &str, now: DateTime<Utc>) -> Option<(DateTime<Utc>, bool)> {
+    let map = backoffs().lock().unwrap_or_else(|p| p.into_inner());
+    map.get(key).filter(|b| b.until > now).map(|b| (b.until, b.rate_limited))
+}
+
+/// A reading from a running session younger than `max_age`.
+pub(crate) fn live_fresh(row: &HarnessUsage, now: DateTime<Utc>, max_age: Duration) -> bool {
+    if !row.source.starts_with("live") {
+        return false;
+    }
+    DateTime::parse_from_rfc3339(&row.checked_at)
+        .map(|t| now.signed_duration_since(t.with_timezone(&Utc)) < chrono::Duration::from_std(max_age).unwrap_or_default())
+        .unwrap_or(false)
+}
+
+// ── Cache writes ────────────────────────────────────────────────────
+
+/// Serializes read-modify-write of the cache file (a probe's final write
+/// and a live feed's row update).
+fn cache_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The cached rows (known harnesses), undecorated. Empty when missing or
+/// unreadable.
+pub fn cached_rows() -> Vec<HarnessUsage> {
+    match load_cache() {
+        Loaded::Ready(doc) => filter_known(doc).harnesses,
+        _ => Vec::new(),
+    }
+}
+
+/// Replace one harness's cache row with `f(old)` (`None` = keep). Returns
+/// whether it wrote. An unreadable cache is left alone.
+pub(crate) fn update_cache_row(harness: &str, f: impl FnOnce(Option<&HarnessUsage>) -> Option<HarnessUsage>) -> bool {
+    if !is_known_harness(harness) {
+        return false;
+    }
+    let _g = cache_lock();
+    let mut doc = match load_cache() {
+        Loaded::Ready(doc) => doc,
+        Loaded::Missing => SubscriptionFile { harnesses: Vec::new() },
+        Loaded::Unreadable(_) => return false,
+    };
+    let prev = doc.harnesses.iter().find(|h| h.harness == harness).cloned();
+    let Some(row) = f(prev.as_ref()) else { return false };
+    match doc.harnesses.iter_mut().find(|h| h.harness == harness) {
+        Some(slot) => *slot = row,
+        None => {
+            doc.harnesses.push(row);
+            doc.harnesses.sort_by_key(|h| PROBED_HARNESSES.iter().position(|n| *n == h.harness).unwrap_or(usize::MAX));
+        }
+    }
+    match write_cache(&doc) {
+        Ok(()) => true,
+        Err(e) => {
+            k2_core::log_debug!("[usage] live reading not cached: {e}");
+            false
+        }
+    }
+}
+
+// ── Serving ─────────────────────────────────────────────────────────
+
+/// Why a row has (no) numbers (P8).
+pub fn derive_state(h: &HarnessUsage) -> &'static str {
+    match h.status.as_str() {
+        STATUS_AIRGAP => "airgap",
+        STATUS_NOT_SIGNED_IN => "not_signed_in",
+        STATUS_SIGN_IN_EXPIRED => "expired",
+        STATUS_NOT_SUPPORTED => "unsupported",
+        _ if h.error.is_some() => "probe_failed",
+        _ if h.windows.is_empty() => "no_window",
+        _ => "ok",
+    }
+}
+
+/// Fill the served fields: `state`, `source`, `usedPercent`,
+/// `windowStart`, `resetPassed`, `nextProbeAt`.
+pub fn decorate_row(mut h: HarnessUsage, now: DateTime<Utc>, backoff_key: &str) -> HarnessUsage {
+    h.state = derive_state(&h).to_string();
+    if h.source.is_empty() && !h.checked_at.is_empty() {
+        h.source = "probe".into();
+    }
+    h.next_probe_at = backing_off(backoff_key, now).map(|(t, _)| t.to_rfc3339());
+    for w in &mut h.windows {
+        w.used_percent = (w.used * 10_000.0).round() / 100.0;
+        let reset = DateTime::parse_from_rfc3339(&w.resets_at).ok().map(|t| t.with_timezone(&Utc));
+        w.reset_passed = reset.is_some_and(|t| t <= now);
+        w.window_start = match (reset, w.window_secs) {
+            (Some(t), Some(secs)) if secs > 0 => Some((t - chrono::Duration::seconds(secs)).to_rfc3339()),
+            _ => None,
+        };
+    }
+    h
+}
+
+fn decorate_file(doc: SubscriptionFile, now: DateTime<Utc>) -> SubscriptionFile {
+    SubscriptionFile {
+        harnesses: doc.harnesses.into_iter().map(|h| {
+            let key = h.harness.clone();
+            decorate_row(h, now, &key)
+        }).collect(),
+    }
 }
 
 fn io_for_probe() -> Arc<dyn UsageIo> {
@@ -380,6 +700,7 @@ fn read_cache_file() -> Result<SubscriptionFile, String> {
 
 /// Probe Claude, Codex, and Grok, then atomic-replace the cache.
 /// A failed read of an existing file does not truncate it.
+#[cfg(test)]
 fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
     probe_and_write_only(io, None)
 }
@@ -400,7 +721,7 @@ fn wallet_generation(harness: &str) -> Option<(String, i64)> {
 
 /// The last reading of a wallet token (its own row, never another
 /// token's): what a failed check keeps.
-fn wallet_row(account_id: &str) -> Option<HarnessUsage> {
+pub(crate) fn wallet_row(account_id: &str) -> Option<HarnessUsage> {
     let db = k2_core::db::try_shared()?;
     let conn = db.lock();
     let e = k2_core::llm_accounts::get(&conn, account_id).ok()??;
@@ -410,7 +731,7 @@ fn wallet_row(account_id: &str) -> Option<HarnessUsage> {
 /// Store a reading on the wallet token it belongs to (Settings → LLMs
 /// shows each token's own numbers and their age). A failed check keeps the
 /// token's `usage_checked_at`.
-fn record_on_wallet(account_id: &str, row: &HarnessUsage) {
+pub(crate) fn record_on_wallet(account_id: &str, row: &HarnessUsage) {
     let Some(db) = k2_core::db::try_shared() else { return };
     let Ok(text) = serde_json::to_string(row) else { return };
     let conn = db.lock();
@@ -434,11 +755,43 @@ pub fn probe_now(harness: Option<&str>) -> Result<SubscriptionFile, String> {
     if airgap_on() {
         return Err(k2_core::airgap::TEACHING.to_string());
     }
-    probe_and_write_only(io_for_probe().as_ref(), harness)
+    probe_singleflight(io_for_probe().as_ref(), harness, Mode::Manual)
 }
 
 /// `only`: probe that harness and keep the others' rows as they are.
+#[cfg(test)]
 fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<SubscriptionFile, String> {
+    probe_and_write_mode(io, only, Mode::Manual)
+}
+
+/// Why a harness is not probed this time (its cached row is kept).
+fn skip_reason(cached: Option<&HarnessUsage>, owner: Option<&str>, name: &str, mode: Mode, now: DateTime<Utc>) -> Option<String> {
+    let row = cached?;
+    // Only skip when the cached row is this token's own.
+    if row.account_id.as_deref() != owner {
+        return None;
+    }
+    if let Some((until, rate_limited)) = backing_off(name, now) {
+        if mode == Mode::Background || rate_limited {
+            return Some(format!("backing off until {}", until.to_rfc3339()));
+        }
+    }
+    let fresh_for = match mode {
+        Mode::Background => PROBE_INTERVAL,
+        Mode::Manual => Duration::from_secs(60),
+    };
+    // A window past its reset needs a new reading even if a session
+    // reported lately (the re-check a GET kicks, B18).
+    let reset_passed = row.windows.iter().any(|w| {
+        DateTime::parse_from_rfc3339(&w.resets_at).is_ok_and(|t| t.with_timezone(&Utc) <= now)
+    });
+    if !reset_passed && live_fresh(row, now, fresh_for) {
+        return Some("a running session reported it".into());
+    }
+    None
+}
+
+fn probe_and_write_mode(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Result<SubscriptionFile, String> {
     // Belt for any caller that missed the route/loop gate.
     if airgap_on() {
         return Err(k2_core::airgap::TEACHING.to_string());
@@ -463,6 +816,14 @@ fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<Subscrip
             continue;
         }
         let gen_before = wallet_generation(name);
+        let owner = gen_before.as_ref().map(|g| g.0.as_str());
+        if let Some(why) = skip_reason(cached(name).as_ref(), owner, name, mode, now) {
+            k2_core::log_debug!("[usage] {name}: not probed ({why})");
+            if let Some(row) = cached(name) {
+                rows.push(row);
+            }
+            continue;
+        }
         // A failed check keeps THIS token's last reading: the token's own
         // row when the wallet knows which token is live, else (no wallet
         // entry) the cache row, only if it isn't some other token's.
@@ -475,6 +836,8 @@ fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<Subscrip
             HARNESS_CODEX => probe_codex(io.codex(), prev.as_ref(), now),
             _ => probe_grok(io.grok(), prev.as_ref(), now),
         };
+        row.source = "probe".into();
+        note_outcome(name, &row, now);
         let gen_after = wallet_generation(name);
         match (&gen_before, &gen_after) {
             (Some(b), Some(a)) if a == b => {
@@ -491,8 +854,25 @@ fn probe_and_write_only(io: &dyn UsageIo, only: Option<&str>) -> Result<Subscrip
         }
         rows.push(row);
     }
-    let doc = SubscriptionFile { harnesses: rows };
-    write_cache(&doc)?;
+    let mut doc = SubscriptionFile { harnesses: rows };
+    {
+        // A live feed may have written a newer reading while the probe ran
+        // (it held no lock): keep that one.
+        let _g = cache_lock();
+        if let Loaded::Ready(current) = load_cache() {
+            for row in &mut doc.harnesses {
+                let Some(cur) = current.harnesses.iter().find(|h| h.harness == row.harness) else { continue };
+                let cur_t = DateTime::parse_from_rfc3339(&cur.checked_at).ok();
+                let row_t = DateTime::parse_from_rfc3339(&row.checked_at).ok();
+                let newer = matches!((cur_t, row_t), (Some(c), Some(r)) if c > r) || (cur_t.is_some() && row_t.is_none());
+                if cur.source.starts_with("live") && newer && cur.account_id == row.account_id {
+                    *row = cur.clone();
+                }
+            }
+        }
+        write_cache(&doc)?;
+    }
+    crate::session_events::emit_subscription_usage_changed(only, None, "probe");
     Ok(doc)
 }
 
@@ -541,6 +921,7 @@ fn probe_claude(
                     windows,
                     checked_at: now.to_rfc3339(),
                     status,
+                    ..Default::default()
                 }
             }
             Err(_) => preserved(HARNESS_CLAUDE, prev, prev_status(prev), &plan, now, Some("the usage answer was unreadable".into())),
@@ -575,6 +956,7 @@ fn probe_codex(
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: STATUS_NOT_SIGNED_IN.into(),
+            ..Default::default()
         },
         CodexOutcome::Failed => preserved(HARNESS_CODEX, prev, prev_status(prev), "", now, Some("codex did not answer".into())),
         CodexOutcome::Ready { plan, windows } => {
@@ -592,6 +974,7 @@ fn probe_codex(
                 windows,
                 checked_at: now.to_rfc3339(),
                 status,
+                ..Default::default()
             }
         }
     }
@@ -612,6 +995,7 @@ fn probe_grok(
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: STATUS_NOT_SIGNED_IN.into(),
+            ..Default::default()
         },
         GrokOutcome::Failed => preserved(HARNESS_GROK, prev, prev_status(prev), "", now, Some("grok did not answer".into())),
         GrokOutcome::Ready { plan, windows } => {
@@ -629,6 +1013,7 @@ fn probe_grok(
                 windows,
                 checked_at: now.to_rfc3339(),
                 status,
+                ..Default::default()
             }
         }
     }
@@ -677,6 +1062,7 @@ fn preserved(
         windows,
         checked_at,
         status: status.to_string(),
+        ..Default::default()
     }
 }
 
@@ -798,50 +1184,56 @@ fn credential_file_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Window lengths, for the pace mark.
+const FIVE_HOURS_SECS: i64 = 5 * 3600;
+const WEEK_SECS: i64 = 7 * 86_400;
+const MONTH_SECS: i64 = 30 * 86_400;
+const DAY_SECS: i64 = 86_400;
+
+/// A window with its id, kind and length.
+pub fn window(id: &str, label: &str, kind: &str, used: f64, resets_at: String, window_secs: Option<i64>) -> UsageWindow {
+    UsageWindow {
+        id: id.to_string(),
+        label: label.to_string(),
+        kind: kind.to_string(),
+        used,
+        resets_at,
+        window_secs,
+        ..Default::default()
+    }
+}
+
+fn kind_secs(kind: &str) -> Option<i64> {
+    match kind {
+        "session" => Some(FIVE_HOURS_SECS),
+        "weekly" => Some(WEEK_SECS),
+        "monthly" => Some(MONTH_SECS),
+        "daily" => Some(DAY_SECS),
+        _ => None,
+    }
+}
+
+/// Claude `api/oauth/usage` (P7): `utilization` is always a percent
+/// (B5: 0.4 is 0.4 %, never 40 %). Weekly is `seven_day`, the all-models
+/// week `/usage` shows (B6); the third-party-app allowance
+/// `seven_day_oauth_apps` is its own row, only when it is above 0.
 fn parse_claude_usage(body: &str) -> Result<Vec<UsageWindow>, String> {
     let payload: Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
-    let session = object_bucket(&payload, "five_hour");
-    let weekly = object_bucket(&payload, "seven_day_oauth_apps")
-        .or_else(|| object_bucket(&payload, "seven_day"));
-    let limits = payload
-        .get("limits")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut raw_values = Vec::new();
-    if let Some(bucket) = session {
-        raw_values.push(util_number(bucket.get("utilization")));
-    }
-    if let Some(bucket) = weekly {
-        raw_values.push(util_number(bucket.get("utilization")));
-    }
-    for entry in &limits {
-        raw_values.push(util_number(
-            entry.get("percent").or_else(|| entry.get("utilization")),
-        ));
-    }
-    let percent_scale = raw_values.iter().flatten().any(|n| *n >= 1.0);
-
     let mut windows = Vec::new();
-    if let Some(bucket) = session {
-        if let Some(used) = normalize_used(util_number(bucket.get("utilization")), percent_scale) {
-            windows.push(UsageWindow {
-                label: "Session".into(),
-                used,
-                resets_at: reset_of(bucket),
-            });
+    let buckets = [
+        ("five_hour", "Session", "session", false),
+        ("seven_day", "Weekly", "weekly", false),
+        ("seven_day_oauth_apps", "Weekly (apps)", "weekly", true),
+    ];
+    for (key, label, kind, only_when_used) in buckets {
+        let Some(bucket) = object_bucket(&payload, key) else { continue };
+        let Some(used) = normalize_used(util_number(bucket.get("utilization"))) else { continue };
+        if only_when_used && used <= 0.0 {
+            continue;
         }
+        windows.push(window(key, label, kind, used, reset_of(bucket), kind_secs(kind)));
     }
-    if let Some(bucket) = weekly {
-        if let Some(used) = normalize_used(util_number(bucket.get("utilization")), percent_scale) {
-            windows.push(UsageWindow {
-                label: "Weekly".into(),
-                used,
-                resets_at: reset_of(bucket),
-            });
-        }
-    }
+    let limits = payload.get("limits").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let mut seen = std::collections::BTreeSet::new();
     for entry in &limits {
         let Some(name) = scoped_model_name(entry) else {
@@ -851,17 +1243,18 @@ fn parse_claude_usage(body: &str) -> Result<Vec<UsageWindow>, String> {
         if !seen.insert((name.clone(), kind.to_string())) {
             continue;
         }
-        let Some(used) = normalize_used(
-            util_number(entry.get("percent").or_else(|| entry.get("utilization"))),
-            percent_scale,
-        ) else {
+        let Some(used) = normalize_used(util_number(entry.get("percent").or_else(|| entry.get("utilization")))) else {
             continue;
         };
-        windows.push(UsageWindow {
-            label: scoped_title(&name, kind),
+        let k = scoped_kind(kind);
+        windows.push(window(
+            &format!("model:{}:{}", name.to_ascii_lowercase(), if k.is_empty() { "other" } else { k }),
+            &scoped_title(&name, kind),
+            if k.is_empty() { "other" } else { k },
             used,
-            resets_at: reset_of(entry),
-        });
+            reset_of(entry),
+            kind_secs(k),
+        ));
     }
     Ok(windows)
 }
@@ -879,17 +1272,13 @@ fn util_number(value: Option<&Value>) -> Option<f64> {
     text.parse::<f64>().ok()
 }
 
-fn normalize_used(raw: Option<f64>, percent_scale: bool) -> Option<f64> {
+/// A vendor percent (0..100) as a fraction. Never guesses the scale.
+fn normalize_used(raw: Option<f64>) -> Option<f64> {
     let n = raw?;
     if !n.is_finite() || n < 0.0 {
         return None;
     }
-    let used = if percent_scale || n > 1.0 {
-        n / 100.0
-    } else {
-        n
-    };
-    Some(used.clamp(0.0, 1.0))
+    Some((n / 100.0).clamp(0.0, 1.0))
 }
 
 fn scoped_model_name(entry: &Value) -> Option<String> {
@@ -907,16 +1296,25 @@ fn scoped_model_name(entry: &Value) -> Option<String> {
     Some(name.trim().to_string())
 }
 
-fn scoped_title(name: &str, kind: &str) -> String {
+fn scoped_kind(kind: &str) -> &'static str {
     let text = kind.to_ascii_lowercase();
-    let window = if text.contains("month") {
-        "Monthly"
+    if text.contains("month") {
+        "monthly"
     } else if text.contains("week") || text.contains("day") {
-        "Weekly"
+        "weekly"
     } else if text.contains("hour") || text.contains("session") {
-        "Session"
+        "session"
     } else {
         ""
+    }
+}
+
+fn scoped_title(name: &str, kind: &str) -> String {
+    let window = match scoped_kind(kind) {
+        "monthly" => "Monthly",
+        "weekly" => "Weekly",
+        "session" => "Session",
+        _ => "",
     };
     if window.is_empty() {
         name.to_string()
@@ -978,25 +1376,69 @@ fn codex_label(mins: i64) -> String {
     }
 }
 
-fn codex_window(window: &Value) -> Option<UsageWindow> {
+fn kind_of_secs(secs: i64) -> &'static str {
+    if secs >= MONTH_SECS - DAY_SECS {
+        "monthly"
+    } else if secs >= WEEK_SECS {
+        "weekly"
+    } else if secs >= DAY_SECS {
+        "daily"
+    } else if secs > 0 {
+        "session"
+    } else {
+        "other"
+    }
+}
+
+/// One Codex window. Reads the app-server shape (`usedPercent`,
+/// `windowDurationMins`, `resetsAt`) and the session-log shape
+/// (`used_percent`, `window_minutes`, `resets_at` or `resets_in_seconds`
+/// from `observed_ms`).
+pub(crate) fn codex_window(id: &str, window: &Value, observed_ms: Option<i64>) -> Option<UsageWindow> {
     if !window.is_object() {
         return None;
     }
-    let used_percent = window.get("usedPercent")?.as_f64()?;
+    let used_percent = window.get("usedPercent").or_else(|| window.get("used_percent"))?.as_f64()?;
     let mins = window
         .get("windowDurationMins")
+        .or_else(|| window.get("window_minutes"))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let resets_at = window
+    let mut resets_at = window
         .get("resetsAt")
         .or_else(|| window.get("resets_at"))
         .map(reset_to_rfc3339)
         .unwrap_or_default();
-    Some(UsageWindow {
-        label: codex_label(mins),
-        used: (used_percent / 100.0).clamp(0.0, 1.0),
-        resets_at,
-    })
+    if resets_at.is_empty() {
+        if let (Some(secs), Some(at)) = (
+            window.get("resets_in_seconds").or_else(|| window.get("resetsInSeconds")).and_then(|v| v.as_i64()),
+            observed_ms,
+        ) {
+            resets_at = DateTime::<Utc>::from_timestamp_millis(at + secs * 1000).map(|d| d.to_rfc3339()).unwrap_or_default();
+        }
+    }
+    let secs = (mins > 0).then_some(mins * 60);
+    Some(window_of(id, &codex_label(mins), kind_of_secs(mins * 60), (used_percent / 100.0).clamp(0.0, 1.0), resets_at, secs))
+}
+
+fn window_of(id: &str, label: &str, kind: &str, used: f64, resets_at: String, secs: Option<i64>) -> UsageWindow {
+    window(id, label, kind, used, resets_at, secs)
+}
+
+/// The `primary` / `secondary` windows and plan of a Codex rate-limit
+/// snapshot (app-server `rateLimits` or a session log's `rate_limits`).
+pub(crate) fn codex_windows(snapshot: &Value, observed_ms: Option<i64>) -> (String, Vec<UsageWindow>) {
+    let plan = snapshot
+        .get("planType")
+        .or_else(|| snapshot.get("plan_type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let windows = ["primary", "secondary"]
+        .iter()
+        .filter_map(|key| snapshot.get(*key).and_then(|w| codex_window(key, w, observed_ms)))
+        .collect();
+    (plan, windows)
 }
 
 fn parse_codex_results(account_msg: &Value, limits_msg: &Value) -> Result<CodexParsed, CodexFail> {
@@ -1028,14 +1470,7 @@ fn parse_codex_results(account_msg: &Value, limits_msg: &Value) -> Result<CodexP
         })
         .unwrap_or("")
         .to_string();
-    let mut windows = Vec::new();
-    if let Some(limits) = limits {
-        for key in ["primary", "secondary"] {
-            if let Some(window) = limits.get(key).and_then(codex_window) {
-                windows.push(window);
-            }
-        }
-    }
+    let windows = limits.map(|l| codex_windows(l, None).1).unwrap_or_default();
     Ok(CodexParsed { plan, windows })
 }
 
@@ -1312,36 +1747,48 @@ fn grok_from_result(result: &Value) -> GrokParsed {
         None => None,
     };
     let build = grok_build_percent(result);
-    let percent_scale = [credit, build].into_iter().flatten().any(|n| n >= 1.0);
     let resets_at = config
         .pointer("/currentPeriod/end")
         .map(reset_to_rfc3339)
         .unwrap_or_default();
-    let label = grok_period_label(
-        config
-            .pointer("/currentPeriod/type")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
+    let started = config.pointer("/currentPeriod/start").map(reset_to_rfc3339).unwrap_or_default();
+    let period_type = config
+        .pointer("/currentPeriod/type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let label = grok_period_label(period_type);
+    let secs = match (DateTime::parse_from_rfc3339(&started), DateTime::parse_from_rfc3339(&resets_at)) {
+        (Ok(a), Ok(b)) if b > a => Some((b - a).num_seconds()),
+        _ => kind_secs(grok_period_kind(period_type)),
+    };
+    let kind = secs.map(kind_of_secs).unwrap_or_else(|| grok_period_kind(period_type));
     let mut windows = Vec::new();
     // `credit` is None only when there is no percent and no period.
-    if let Some(used) = normalize_used(credit, percent_scale) {
-        windows.push(UsageWindow {
-            label,
-            used,
-            resets_at: resets_at.clone(),
-        });
+    // Percent always (B5): 0.22 is 0.22 %, never 22 %.
+    if let Some(used) = normalize_used(credit) {
+        windows.push(window("credit", &label, kind, used, resets_at.clone(), secs));
     }
     if credit.is_some() {
-        if let Some(used) = normalize_used(build, percent_scale) {
-            windows.push(UsageWindow {
-                label: "Grok Build".into(),
-                used,
-                resets_at,
-            });
+        if let Some(used) = normalize_used(build) {
+            windows.push(window("grok_build", "Grok Build", kind, used, resets_at, secs));
         }
     }
     GrokParsed { plan, windows }
+}
+
+fn grok_period_kind(kind: &str) -> &'static str {
+    let text = kind.to_ascii_uppercase();
+    if text.contains("WEEK") || text.is_empty() {
+        "weekly"
+    } else if text.contains("MONTH") {
+        "monthly"
+    } else if text.contains("DAY") {
+        "daily"
+    } else if text.contains("HOUR") {
+        "session"
+    } else {
+        "other"
+    }
 }
 
 fn grok_plan(result: &Value) -> String {
@@ -1652,7 +2099,16 @@ impl UsageIo for LiveIo {
             .map_err(|_| "usage get failed".to_string())?;
         let status = response.status();
         if !status.is_success() {
-            return Err(format!("usage endpoint status {}", status.as_u16()));
+            // A 429 says when to come back; the back-off honours it.
+            let retry = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<i64>().ok());
+            return Err(match retry {
+                Some(secs) => format!("usage endpoint status {} retry-after {secs}", status.as_u16()),
+                None => format!("usage endpoint status {}", status.as_u16()),
+            });
         }
         response
             .text()
@@ -1812,6 +2268,7 @@ pub fn probe_wallet_slot(
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
             status: STATUS_AIRGAP.into(),
+            ..Default::default()
         };
     }
     match tool {
@@ -1852,7 +2309,8 @@ pub fn probe_wallet_slot(
             plan: String::new(),
             windows: Vec::new(),
             checked_at: now.to_rfc3339(),
-            status: "Not supported".into(),
+            status: STATUS_NOT_SUPPORTED.into(),
+            ..Default::default()
         },
     }
 }
@@ -1949,6 +2407,9 @@ mod tests {
         // another test's rows in the shared DB must not change this one.
         let _db = k2_core::db::scoped_for_test();
         probe_hits().store(0, Ordering::SeqCst);
+        // Back-off and single-flight state are process-wide: start clean.
+        backoffs().lock().unwrap_or_else(|p| p.into_inner()).clear();
+        *flight_last().lock().unwrap_or_else(|p| p.into_inner()) = None;
         *test_io_slot().lock().unwrap_or_else(|p| p.into_inner()) = None;
         // Air-gap off unless a test says otherwise; immune to a parallel
         // test that sets K2_AIRGAP.
@@ -2043,6 +2504,7 @@ mod tests {
                         label: "Weekly".into(),
                         used: 0.42,
                         resets_at: future_reset(now),
+                        ..Default::default()
                     }],
                     "",
                     &now.to_rfc3339(),
@@ -2135,6 +2597,7 @@ mod tests {
             windows,
             checked_at: checked.into(),
             status: status.into(),
+            ..Default::default()
         }
     }
 
@@ -2224,6 +2687,7 @@ mod tests {
                 label: "Weekly".into(),
                 used: 0.31,
                 resets_at: reset.clone(),
+                ..Default::default()
             }],
             "",
             now.to_rfc3339().as_str(),
@@ -2330,6 +2794,7 @@ mod tests {
                 label: "Weekly".into(),
                 used: 0.31,
                 resets_at: reset,
+                ..Default::default()
             }],
             "",
             &now.to_rfc3339(),
@@ -2555,6 +3020,7 @@ mod tests {
                         label: "Weekly".into(),
                         used: 0.99,
                         resets_at: now.clone(),
+                        ..Default::default()
                     }],
                     "",
                     &now,
@@ -2693,6 +3159,7 @@ mod tests {
                         label: "keep-me-weekly".into(),
                         used: 0.31,
                         resets_at: reset,
+                        ..Default::default()
                     }],
                     "",
                     &checked,
@@ -2767,7 +3234,7 @@ mod tests {
             let now = Utc::now();
             let mut old = harness(
                 HARNESS_CLAUDE,
-                vec![UsageWindow { label: "old-account-weekly".into(), used: 0.95, resets_at: future_reset(now) }],
+                vec![UsageWindow { label: "old-account-weekly".into(), used: 0.95, resets_at: future_reset(now), ..Default::default() }],
                 "",
                 &(now - chrono::Duration::minutes(40)).to_rfc3339(),
             );
@@ -2899,15 +3366,235 @@ mod tests {
     }
 
     #[test]
-    fn fraction_utilization_stays_a_fraction() {
-        let body = r#"{"five_hour":{"utilization":0.31,"resets_at":"2026-09-26T20:00:00Z"},"seven_day":{"utilization":0.2,"resets_at":"2026-10-03T00:00:00Z"}}"#;
+    fn utilization_under_one_is_a_small_percent_not_a_fraction() {
+        // B5: right after a reset every window is under 1 %; 0.4 is 0.4 %,
+        // never 40 %.
+        let body = r#"{"five_hour":{"utilization":0,"resets_at":"2026-09-26T20:00:00Z"},"seven_day":{"utilization":0.6,"resets_at":"2026-10-03T00:00:00Z"}}"#;
         let windows = parse_claude_usage(body).expect("usage json");
-        let session = windows
-            .iter()
-            .find(|w| w.label == "Session")
-            .expect("session");
-        assert!((session.used - 0.31).abs() < 1e-9);
-        assert_eq!(percent_left(session.used), 69);
+        let weekly = windows.iter().find(|w| w.label == "Weekly").expect("weekly");
+        assert!((weekly.used - 0.006).abs() < 1e-12, "{}", weekly.used);
+        assert_ne!((weekly.used * 100.0).round() as i64, 60);
+        assert_eq!(percent_left(weekly.used), 99);
+        let session = windows.iter().find(|w| w.label == "Session").expect("session");
+        assert_eq!(session.used, 0.0);
+    }
+
+    #[test]
+    fn weekly_is_seven_day_and_the_apps_allowance_is_its_own_row() {
+        // B6: the oauth-apps bucket never stands in for the all-models week.
+        let body = r#"{"five_hour":{"utilization":10,"resets_at":"2026-09-26T20:00:00Z"},"seven_day":{"utilization":31,"resets_at":"2026-10-03T00:00:00Z"},"seven_day_oauth_apps":{"utilization":0,"resets_at":"2026-10-03T00:00:00Z"}}"#;
+        let windows = parse_claude_usage(body).expect("usage json");
+        let weekly = windows.iter().find(|w| w.label == "Weekly").expect("weekly");
+        assert_eq!((weekly.id.as_str(), (weekly.used * 100.0).round() as i64), ("seven_day", 31));
+        assert!(windows.iter().all(|w| w.id != "seven_day_oauth_apps"), "a 0 % apps bucket is not shown");
+        let used = r#"{"seven_day":{"utilization":31,"resets_at":"2026-10-03T00:00:00Z"},"seven_day_oauth_apps":{"utilization":12,"resets_at":"2026-10-03T00:00:00Z"}}"#;
+        let windows = parse_claude_usage(used).expect("usage json");
+        let apps = windows.iter().find(|w| w.id == "seven_day_oauth_apps").expect("apps row");
+        assert_eq!(apps.label, "Weekly (apps)");
+        assert_eq!((windows.iter().find(|w| w.label == "Weekly").expect("w").used * 100.0).round() as i64, 31);
+    }
+
+    #[test]
+    fn windows_carry_ids_kinds_and_lengths_for_the_pace_mark() {
+        let windows = parse_claude_usage(&usage_body()).expect("usage json");
+        let get = |id: &str| windows.iter().find(|w| w.id == id).cloned().expect(id);
+        assert_eq!((get("five_hour").kind.as_str(), get("five_hour").window_secs), ("session", Some(5 * 3600)));
+        assert_eq!((get("seven_day").kind.as_str(), get("seven_day").window_secs), ("weekly", Some(7 * 86_400)));
+        let scoped = get("model:opus:weekly");
+        assert_eq!((scoped.label.as_str(), scoped.window_secs), ("Opus Weekly", Some(7 * 86_400)));
+        let codex = codex_windows(
+            &json!({"primary": {"usedPercent": 18.0, "windowDurationMins": 300, "resetsAt": 1_800_000_000}, "secondary": {"usedPercent": 3.0, "windowDurationMins": 10080}}),
+            None,
+        )
+        .1;
+        assert_eq!((codex[0].id.as_str(), codex[0].kind.as_str(), codex[0].window_secs), ("primary", "session", Some(18_000)));
+        assert_eq!((codex[1].label.as_str(), codex[1].kind.as_str()), ("Weekly", "weekly"));
+        // The session-log shape (snake case, resets_in_seconds).
+        let log = codex_windows(&json!({"primary": {"used_percent": 40.0, "window_minutes": 300, "resets_in_seconds": 600}}), Some(1_800_000_000_000)).1;
+        assert!((log[0].used - 0.4).abs() < 1e-12);
+        assert_eq!(log[0].resets_at, DateTime::<Utc>::from_timestamp(1_800_000_600, 0).expect("t").to_rfc3339());
+        let grok = parse_grok_billing(&grok_value(GROK_FIXTURE)).expect("grok");
+        assert_eq!((grok.windows[0].id.as_str(), grok.windows[0].window_secs), ("credit", Some(7 * 86_400)), "period start → end");
+    }
+
+    #[test]
+    fn served_rows_have_state_percent_pace_start_and_reset_flags() {
+        let now = DateTime::parse_from_rfc3339("2026-10-16T12:00:00Z").expect("t").with_timezone(&Utc);
+        let row = HarnessUsage {
+            harness: "claude".into(),
+            checked_at: "2026-10-16T11:58:00Z".into(),
+            windows: vec![
+                window("five_hour", "Session", "session", 0.315, "2026-10-16T14:00:00Z".into(), Some(18_000)),
+                window("seven_day", "Weekly", "weekly", 0.97, "2026-10-16T11:00:00Z".into(), Some(604_800)),
+            ],
+            ..Default::default()
+        };
+        let r = decorate_row(row, now, "decorate-test-key");
+        assert_eq!(r.state, "ok");
+        assert_eq!(r.source, "probe");
+        assert!((r.windows[0].used_percent - 31.5).abs() < 1e-9);
+        assert_eq!(r.windows[0].window_start.as_deref(), Some("2026-10-16T09:00:00+00:00"));
+        assert!(!r.windows[0].reset_passed);
+        assert!(r.windows[1].reset_passed, "past resetsAt (B18)");
+        let state = |status: &str, err: Option<&str>, wins: usize| {
+            derive_state(&HarnessUsage {
+                status: status.into(),
+                error: err.map(str::to_string),
+                windows: vec![UsageWindow::default(); wins],
+                ..Default::default()
+            })
+        };
+        assert_eq!(state(STATUS_SIGN_IN_EXPIRED, Some("x"), 1), "expired", "kept visible with a typed state (B22)");
+        assert_eq!(state(STATUS_NOT_SIGNED_IN, None, 0), "not_signed_in");
+        assert_eq!(state("", Some("usage endpoint status 500"), 1), "probe_failed");
+        assert_eq!(state(STATUS_NOT_SUPPORTED, None, 0), "unsupported");
+        assert_eq!(state(STATUS_AIRGAP, None, 0), "airgap");
+        assert_eq!(state("", None, 0), "no_window");
+    }
+
+    #[test]
+    fn a_get_past_a_reset_marks_it_and_kicks_one_recheck() {
+        with_isolated(|| {
+            let past = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+            write_cache(&SubscriptionFile {
+                harnesses: vec![harness(HARNESS_CLAUDE, vec![window("seven_day", "Weekly", "weekly", 0.97, past, Some(604_800))], "", &Utc::now().to_rfc3339())],
+            })
+            .expect("cache");
+            let before = kicks().load(Ordering::SeqCst);
+            let resp = handle_get();
+            let v: Value = serde_json::from_str(&resp.body).expect("json");
+            assert_eq!(v["harnesses"][0]["windows"][0]["resetPassed"], json!(true));
+            assert_eq!(v["harnesses"][0]["state"], json!("ok"));
+            assert_eq!(kicks().load(Ordering::SeqCst), before + 1, "the GET started a re-check");
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 0, "never inline");
+        });
+    }
+
+    #[test]
+    fn concurrent_refreshes_share_one_probe() {
+        struct SlowIo(AtomicUsize);
+        impl UsageIo for SlowIo {
+            fn claude_login(&self) -> ClaudeLogin {
+                ClaudeLogin::Token { access_token: "T".into(), expires_at: Some(future_expiry_secs()), plan: String::new() }
+            }
+            fn claude_get(&self, _t: &str) -> Result<String, String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(usage_body())
+            }
+            fn codex(&self) -> CodexOutcome {
+                CodexOutcome::NotSignedIn
+            }
+            fn grok(&self) -> GrokOutcome {
+                GrokOutcome::NotSignedIn
+            }
+        }
+        with_isolated(|| {
+            let io = Arc::new(SlowIo(AtomicUsize::new(0)));
+            install(io.clone());
+            let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(|| refresh_shared(None).map(|d| d.harnesses.len()))).collect();
+            for t in threads {
+                assert_eq!(t.join().expect("join").expect("refresh"), 3);
+            }
+            assert_eq!(io.0.load(Ordering::SeqCst), 1, "one GET for four callers (B19)");
+            assert_eq!(probe_hits().load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn failures_back_off_and_a_429_retry_after_is_honoured() {
+        let _probe = probe_lock();
+        let now = Utc::now();
+        let failed = |err: &str| HarnessUsage { error: Some(err.into()), ..Default::default() };
+        let key = format!("backoff-test-{}", std::process::id());
+        note_outcome(&key, &failed("usage endpoint status 500"), now);
+        let (until, limited) = backing_off(&key, now).expect("backing off");
+        assert_eq!((until - now).num_minutes(), 15);
+        assert!(!limited);
+        note_outcome(&key, &failed("usage endpoint status 500"), now);
+        assert_eq!((backing_off(&key, now).expect("2nd").0 - now).num_minutes(), 30, "doubles");
+        for _ in 0..10 {
+            note_outcome(&key, &failed("x"), now);
+        }
+        assert_eq!((backing_off(&key, now).expect("cap").0 - now).num_minutes(), 120, "capped at 2 h");
+        note_outcome(&key, &HarnessUsage::default(), now);
+        assert!(backing_off(&key, now).is_none(), "a success clears it");
+        note_outcome(&key, &failed("usage endpoint status 429 retry-after 7200"), now);
+        let (until, limited) = backing_off(&key, now).expect("429");
+        assert!(limited);
+        assert_eq!((until - now).num_seconds(), 7200, "Retry-After wins when longer");
+        assert_eq!(retry_after_secs("status 429 retry-after 90"), Some(90));
+        assert_eq!(retry_after_secs("status 500"), None);
+    }
+
+    #[test]
+    fn background_skips_live_fresh_and_backed_off_logins_manual_waits_only_for_429() {
+        let _probe = probe_lock();
+        let now = Utc::now();
+        let live = HarnessUsage { source: "live_statusline".into(), checked_at: (now - chrono::Duration::minutes(5)).to_rfc3339(), ..Default::default() };
+        assert!(skip_reason(Some(&live), None, "skip-test-a", Mode::Background, now).is_some(), "a 5-minute-old live reading is not polled");
+        assert!(skip_reason(Some(&live), None, "skip-test-a", Mode::Manual, now).is_none(), "a person's refresh still checks");
+        let other = HarnessUsage { account_id: Some("acc_other".into()), ..live.clone() };
+        assert!(skip_reason(Some(&other), Some("acc_me"), "skip-test-a", Mode::Background, now).is_none(), "never keep another token's row");
+        let probed = HarnessUsage { source: "probe".into(), checked_at: now.to_rfc3339(), ..Default::default() };
+        let key = format!("skip-test-{}", std::process::id());
+        note_outcome(&key, &HarnessUsage { error: Some("status 500".into()), ..Default::default() }, now);
+        assert!(skip_reason(Some(&probed), None, &key, Mode::Background, now).is_some());
+        assert!(skip_reason(Some(&probed), None, &key, Mode::Manual, now).is_none());
+        note_outcome(&key, &HarnessUsage { error: Some("status 429 retry-after 60".into()), ..Default::default() }, now);
+        assert!(skip_reason(Some(&probed), None, &key, Mode::Manual, now).is_some(), "a 429 with Retry-After holds a person's refresh too");
+        note_outcome(&key, &HarnessUsage::default(), now);
+        note_outcome(&key, &HarnessUsage { error: Some("usage endpoint status 429".into()), ..Default::default() }, now);
+        assert!(skip_reason(Some(&probed), None, &key, Mode::Manual, now).is_none(), "a bare 429 only slows the loop");
+        note_outcome(&key, &HarnessUsage::default(), now);
+        let past = (now - chrono::Duration::minutes(1)).to_rfc3339();
+        let live_reset = HarnessUsage { windows: vec![window("five_hour", "Session", "session", 0.9, past, Some(18_000))], ..live.clone() };
+        assert!(skip_reason(Some(&live_reset), None, "skip-test-b", Mode::Background, now).is_none(), "a reset window is re-checked even when live");
+    }
+
+    #[test]
+    fn a_probe_announces_itself_and_keeps_a_newer_live_row() {
+        with_isolated(|| {
+            let mut rx = crate::session_events::subscribe();
+            let future = (Utc::now() + chrono::Duration::days(2)).to_rfc3339();
+            let live_at = (Utc::now() + chrono::Duration::seconds(30)).to_rfc3339();
+            install(signed_in_script());
+            // A live row lands "after" the probe's start.
+            write_cache(&SubscriptionFile {
+                harnesses: vec![HarnessUsage {
+                    harness: HARNESS_CODEX.into(),
+                    windows: vec![window("primary", "5h", "session", 0.5, future, Some(18_000))],
+                    checked_at: live_at.clone(),
+                    source: "live_rollout".into(),
+                    ..Default::default()
+                }],
+            })
+            .expect("cache");
+            let doc = probe_now(None).expect("probe");
+            let codex = doc.harnesses.iter().find(|h| h.harness == HARNESS_CODEX).expect("codex");
+            assert_eq!((codex.source.as_str(), codex.checked_at.as_str()), ("live_rollout", live_at.as_str()), "the newer live row wins");
+            let mut saw = false;
+            while let Ok(ev) = rx.try_recv() {
+                if matches!(ev, crate::session_events::SessionEvent::SubscriptionUsageChanged { ref source, .. } if source == "probe") {
+                    saw = true;
+                }
+            }
+            assert!(saw, "subscription_usage_changed after the write (B20)");
+        });
+    }
+
+    #[test]
+    fn a_missing_or_old_cache_is_stale_at_boot() {
+        with_isolated(|| {
+            assert!(cache_stale(Utc::now()), "missing");
+            let fresh = Utc::now().to_rfc3339();
+            write_cache(&SubscriptionFile {
+                harnesses: PROBED_HARNESSES.iter().map(|n| harness(n, Vec::new(), "", &fresh)).collect(),
+            })
+            .expect("cache");
+            assert!(!cache_stale(Utc::now()));
+            assert!(cache_stale(Utc::now() + chrono::Duration::minutes(16)), "older than 15 minutes (B18)");
+        });
     }
 
     const GROK_FIXTURE: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":22.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-09-19T00:00:00Z","end":"2026-09-26T00:00:00Z"}},"subscription_tier":"SuperGrok"}}"#;
@@ -2964,10 +3651,11 @@ mod tests {
     }
 
     #[test]
-    fn grok_fraction_credit_stays_a_fraction() {
+    fn grok_credit_under_one_is_a_small_percent() {
+        // B5: creditUsagePercent is a percent: 0.22 is 0.22 %, never 22 %.
         let raw = r#"{"jsonrpc":"2.0","id":1,"result":{"config":{"creditUsagePercent":0.22,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-26T00:00:00Z"}},"subscription_tier":"SuperGrok"}}"#;
-        let parsed = parse_grok_billing(&grok_value(raw)).expect("fraction");
-        assert!((parsed.windows[0].used - 0.22).abs() < 1e-9);
+        let parsed = parse_grok_billing(&grok_value(raw)).expect("small percent");
+        assert!((parsed.windows[0].used - 0.0022).abs() < 1e-12, "{}", parsed.windows[0].used);
     }
 
     #[test]
@@ -3076,6 +3764,7 @@ mod tests {
                         label: "Weekly".into(),
                         used: 0.18,
                         resets_at: "2026-10-03T00:00:00Z".into(),
+                        ..Default::default()
                     }],
                 }),
                 grok: Mutex::new(GrokOutcome::NotSignedIn),

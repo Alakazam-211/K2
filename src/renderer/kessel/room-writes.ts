@@ -108,6 +108,11 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'thread/post': 'post a Thread message to the agent on B',
   'thread/answer': 'answer a Thread ask on B',
   'thread/void': 'void a Thread message on B',
+
+  // Design mode (prd-browser-design-mode-v1 D-A15): the page renders here,
+  // the notes go to the room's agent on B (one Thread item + one inject).
+  'browser/notes': 'a Design tab sends its page notes to the agent on B (one Thread post)',
+  'browser/notes/redeliver': 'Retry delivers an already-posted Design notes item again on B (never a second post)',
 })
 
 /** The routes, as the request layer checks them. */

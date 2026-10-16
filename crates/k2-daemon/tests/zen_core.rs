@@ -1253,7 +1253,9 @@ fn t1_2_broken_file_keeps_last_good_across_a_restart() {
     std::fs::remove_dir_all(f.history_root()).expect("rm history");
     let bare = f.resolve(Some(&g)).expect("resolve no history");
     assert_eq!(bare["sources"]["zen.toml"], "default", "{bare}");
-    assert_eq!(bare["theme"]["tokens"]["shape"]["radius"], 14);
+    // Garden 1's default theme is Glass (0.46.0): radius 22.
+    assert_eq!(bare["theme"]["name"], "glass", "{bare}");
+    assert_eq!(bare["theme"]["tokens"]["shape"]["radius"], 22);
     assert_eq!(bare["errors"].as_array().map(Vec::len), Some(1));
 }
 
@@ -1578,7 +1580,8 @@ fn per_garden_pages_override_zen_toml() {
     write(&f, &garden(&two), "schema = 1\ntemplate = \"k2.texting@1\"\n[shape]\nradius = 2\n[colors.dark]\naccent = \"#ffcc00\"\n");
     let a = f.resolve(Some(&one)).expect("one");
     let b = f.resolve(Some(&two)).expect("two");
-    assert_eq!(a["theme"]["tokens"]["shape"]["radius"], 14);
+    // Garden 1 shows its own default theme, Glass (0.46.0): radius 22.
+    assert_eq!(a["theme"]["tokens"]["shape"]["radius"], 22);
     assert_eq!(b["theme"]["tokens"]["shape"]["radius"], 2);
     assert_eq!(b["theme"]["tokens"]["colors"]["dark"]["accent"], "#ffcc00");
     assert_eq!(b["page"], a["page"], "both are the texting template");
@@ -2276,11 +2279,15 @@ fn unknown_theme_names_are_refused_and_change_nothing() {
     }
     assert_eq!(ZenFile::parse("themes/mine/theme.toml").expect("theme"), ZenFile::Theme("mine".into()));
 
-    // The active theme's folder is deleted by hand: basic, with a warning.
+    // The active theme's folder is deleted by hand: Garden 1 falls back to
+    // its own default (Glass, 0.46.0), with a warning; a Garden with no
+    // default of its own falls back to basic.
     f.set_theme(Some("mine"), None).expect("mine");
     std::fs::remove_dir_all(f.theme_dir("mine")).expect("rm mine");
     let r = f.resolve(Some(&g)).expect("resolve");
-    assert_eq!(r["theme"]["name"], "basic", "{r}");
+    assert_eq!(r["theme"]["name"], "glass", "{r}");
+    let two = gid(&f, 1);
+    assert_eq!(f.resolve(Some(&two)).expect("resolve Garden 2")["theme"]["name"], "basic");
     let w = r["warnings"].as_array().expect("warnings");
     assert!(w.iter().any(|d| d["file"] == "active.json" && d["message"].as_str().is_some_and(|m| m.contains("theme 'mine' doesn't exist"))), "{r}");
     assert_eq!(r["errors"], json!([]));

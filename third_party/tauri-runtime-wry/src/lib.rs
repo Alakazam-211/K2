@@ -145,6 +145,17 @@ type IpcHandler = dyn Fn(Request<String>) + 'static;
 
 #[cfg(not(debug_assertions))]
 mod dialog;
+#[cfg(all(
+  feature = "unstable",
+  any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  )
+))]
+mod child_container;
 mod monitor;
 #[cfg(any(
   windows,
@@ -388,6 +399,14 @@ impl<T: UserEvent> Context<T> {
           pending,
           #[cfg(windows)]
           _options.focused_webview,
+          #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+          ))]
+          _options.child_container,
         )
       }),
       tx,
@@ -1508,6 +1527,15 @@ pub type CreateWebviewClosure =
 pub struct CreateWebviewOptions {
   #[cfg(windows)]
   pub focused_webview: Arc<Mutex<FocusState>>,
+  /// Linux: the window's child-webview container (see `child_container`).
+  #[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  ))]
+  pub child_container: Option<gtk::Fixed>,
 }
 
 pub enum Message<T: 'static> {
@@ -2470,6 +2498,15 @@ pub struct WindowWrapper {
   surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
   #[cfg(windows)]
   focused_webview: Arc<Mutex<FocusState>>,
+  /// Linux: where this window's child webviews live (see `child_container`).
+  #[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  ))]
+  child_container: Option<gtk::Fixed>,
 }
 
 impl WindowWrapper {
@@ -2931,6 +2968,14 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
           CreateWebviewOptions {
             #[cfg(windows)]
             focused_webview: w.focused_webview.clone(),
+            #[cfg(any(
+              target_os = "linux",
+              target_os = "dragonfly",
+              target_os = "freebsd",
+              target_os = "netbsd",
+              target_os = "openbsd"
+            ))]
+            child_container: w.child_container.clone(),
           },
         )
       });
@@ -2948,6 +2993,14 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
         pending,
         #[cfg(windows)]
         _options.focused_webview,
+        #[cfg(any(
+          target_os = "linux",
+          target_os = "dragonfly",
+          target_os = "freebsd",
+          target_os = "netbsd",
+          target_os = "openbsd"
+        ))]
+        _options.child_container,
       )?;
 
       if let Some(w) = self
@@ -3609,11 +3662,33 @@ fn handle_user_message<T: UserEvent>(
         });
 
         if let Some(webview) = webview_handle {
-          if let Some((Some(new_parent_window), new_parent_window_webviews)) = windows
-            .0
-            .borrow_mut()
-            .get_mut(&new_parent_window_id)
-            .map(|w| (w.inner.clone(), &mut w.webviews))
+          if let Some((Some(new_parent_window), new_parent_window_webviews, _new_parent_container)) =
+            windows
+              .0
+              .borrow_mut()
+              .get_mut(&new_parent_window_id)
+              .map(|w| {
+                (
+                  w.inner.clone(),
+                  &mut w.webviews,
+                  #[cfg(any(
+                    target_os = "linux",
+                    target_os = "dragonfly",
+                    target_os = "freebsd",
+                    target_os = "netbsd",
+                    target_os = "openbsd"
+                  ))]
+                  w.child_container.clone(),
+                  #[cfg(not(any(
+                    target_os = "linux",
+                    target_os = "dragonfly",
+                    target_os = "freebsd",
+                    target_os = "netbsd",
+                    target_os = "openbsd"
+                  )))]
+                  (),
+                )
+              })
           {
             #[cfg(target_os = "macos")]
             let reparent_result = {
@@ -3631,7 +3706,9 @@ fn handle_user_message<T: UserEvent>(
               target_os = "openbsd"
             ))]
             let reparent_result = {
-              if let Some(container) = new_parent_window.default_vbox() {
+              if let Some(container) = &_new_parent_container {
+                webview.inner.reparent(container)
+              } else if let Some(container) = new_parent_window.default_vbox() {
                 webview.inner.reparent(container)
               } else {
                 Err(wry::Error::MessageSender)
@@ -3973,6 +4050,14 @@ fn handle_user_message<T: UserEvent>(
           CreateWebviewOptions {
             #[cfg(windows)]
             focused_webview: w.focused_webview.clone(),
+            #[cfg(any(
+              target_os = "linux",
+              target_os = "dragonfly",
+              target_os = "freebsd",
+              target_os = "netbsd",
+              target_os = "openbsd"
+            ))]
+            child_container: w.child_container.clone(),
           },
         )
       });
@@ -4015,6 +4100,29 @@ fn handle_user_message<T: UserEvent>(
       if let Ok(window) = builder.build(event_loop) {
         window_id_map.insert(window.id(), window_id);
 
+        #[cfg(all(
+          feature = "unstable",
+          any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+          )
+        ))]
+        let child_container = child_container::new_for(&window);
+        #[cfg(all(
+          not(feature = "unstable"),
+          any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+          )
+        ))]
+        let child_container: Option<gtk::Fixed> = None;
+
         let window = Arc::new(window);
 
         #[cfg(windows)]
@@ -4049,6 +4157,14 @@ fn handle_user_message<T: UserEvent>(
             surface,
             #[cfg(windows)]
             focused_webview: Default::default(),
+            #[cfg(any(
+              target_os = "linux",
+              target_os = "dragonfly",
+              target_os = "freebsd",
+              target_os = "netbsd",
+              target_os = "openbsd"
+            ))]
+            child_container,
           },
         );
         sender.send(Ok(Arc::downgrade(&window))).unwrap();
@@ -4579,6 +4695,31 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
 
   context.window_id_map.insert(window.id(), window_id);
 
+  // Linux: one container for this window's child webviews, made with the
+  // window (tauri#15704 review: create it once, keep it on the window).
+#[cfg(all(
+  feature = "unstable",
+  any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  )
+))]
+  let child_container = child_container::new_for(&window);
+#[cfg(all(
+  not(feature = "unstable"),
+  any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  )
+))]
+  let child_container: Option<gtk::Fixed> = None;
+
   if let Some(handler) = after_window_creation {
     let raw = RawWindow {
       #[cfg(windows)]
@@ -4627,6 +4768,14 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
       webview,
       #[cfg(windows)]
       focused_webview.clone(),
+      #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+      ))]
+      child_container.clone(),
     )?);
   }
 
@@ -4662,6 +4811,14 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
     surface,
     #[cfg(windows)]
     focused_webview,
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "dragonfly",
+      target_os = "freebsd",
+      target_os = "netbsd",
+      target_os = "openbsd"
+    ))]
+    child_container,
   })
 }
 
@@ -4690,6 +4847,14 @@ fn create_webview<T: UserEvent>(
   context: &Context<T>,
   pending: PendingWebview<T, Wry<T>>,
   #[cfg(windows)] focused_webview: Arc<Mutex<FocusState>>,
+  #[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+  ))]
+  child_container: Option<gtk::Fixed>,
 ) -> Result<WebviewWrapper> {
   if !context.webview_runtime_installed {
     #[cfg(all(not(debug_assertions), windows))]
@@ -5184,11 +5349,16 @@ You may have it installed on another user account, but it is not available for t
       target_os = "ios",
       target_os = "android"
     )))]
-    WebviewKind::WindowChild => {
+    WebviewKind::WindowChild => match &child_container {
+      // In the window's child container: wry places each webview at its
+      // own position and size (a box would stack them).
+      Some(container) => webview_builder.build_gtk(container),
       // only way to account for menu bar height, and also works for multiwebviews :)
-      let vbox = window.default_vbox().unwrap();
-      webview_builder.build_gtk(vbox)
-    }
+      None => {
+        let vbox = window.default_vbox().unwrap();
+        webview_builder.build_gtk(vbox)
+      }
+    },
     #[cfg(any(
       target_os = "windows",
       target_os = "macos",

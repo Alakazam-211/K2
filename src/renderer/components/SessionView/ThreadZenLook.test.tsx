@@ -234,6 +234,12 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(field.contains(box())).toBe(true)
     expect(field.contains(screen.getByRole('button', { name: 'Attach file' }))).toBe(true)
     expect(field.contains(screen.getByTestId('compose-slash-button'))).toBe(true)
+    // "+" and "/" sit together, 2px apart (not the box's 8px gap).
+    const tools = field.querySelector('[data-compose-tools]') as HTMLElement
+    expect(tools.style.gap).toBe('2px')
+    expect(tools.contains(screen.getByRole('button', { name: 'Attach file' }))).toBe(true)
+    expect(tools.contains(screen.getByTestId('compose-slash-button'))).toBe(true)
+    expect(screen.getByTestId('compose-slash-button').style.width).toBe('26px')
     const send = screen.getByRole('button', { name: 'Send message' })
     expect(send.hasAttribute('data-zen-send')).toBe(true)
     expect(send.style.borderRadius).toBe('999px')

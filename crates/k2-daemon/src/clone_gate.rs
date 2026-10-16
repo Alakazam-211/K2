@@ -22,7 +22,8 @@
 //! requester) and `bundle` (it can be downloaded with `fs/read-range`) —
 //! also need the master switch for Admin/Member logins. `unpack` gates who
 //! may land a clone on THIS server. Copying secrets additionally needs an
-//! Owner/Admin vault confirm (D1), checked by the vault slice.
+//! Owner/Admin vault confirm (D1, `clone-carry`, which also covers sending
+//! `.env` files as files, D4), checked by the vault slice (`clone_vault`).
 //!
 //! Every decision is written to the auth audit as `clone-gate` (names
 //! only). Every `/cli/clone/*` arm in the dispatcher and the proposal
@@ -78,6 +79,12 @@ impl Door {
             "/cli/clone/unpack" => Door::Unpack,
             "/cli/thread/export" => Door::ThreadExport,
             "/cli/thread/import" => Door::ThreadImport,
+            // Slice A's vault half of a clone (names-only plan, the
+            // clone-carry confirm, a standalone seal, an import, the
+            // same-box copy).
+            "/cli/clone/vault/plan" | "/cli/clone/vault/confirm" => Door::Preview,
+            "/cli/clone/vault/export" => Door::Bundle,
+            "/cli/clone/vault/import" | "/cli/clone/vault/copy" => Door::Unpack,
             _ => return None,
         })
     }
@@ -166,74 +173,6 @@ pub fn check(who: &Who, door: Door, ingress: &str) -> Result<(), CliResponse> {
         "clone",
     ));
     r.map_err(|d| d.response())
-}
-
-/// D4 (Rosson 2026-10-16): the legacy "Include secrets" tick sends `.env*`
-/// files as plaintext files inside the bundle. It now needs a fresh vault
-/// confirm (Touch ID, the vault password or the Connect password; 60 s,
-/// single use) bound to the workspace path as sent:
-/// `secretId = "env-files:<project_path>"`. Only an Owner/Admin person can
-/// confirm (the vault's `human_admin`), so a Member with "Can clone" can't
-/// send `.env` files (D1).
-pub const ENV_CONFIRM_ACTION: &str = "clone-env";
-
-pub mod env_codes {
-    pub const CONFIRM_REQUIRED: &str = "clone_env_confirm_required";
-    pub const OWNER_ADMIN: &str = "clone_env_owner_or_admin";
-}
-
-/// The `secretId` an `.env` confirm is bound to.
-pub fn env_secret_id(project_path: &str) -> String {
-    format!("env-files:{project_path}")
-}
-
-/// The vault actor stamp a confirm was minted for (owner token / login).
-fn confirm_stamp(who: &Who) -> Option<String> {
-    match who {
-        Who::Owner => Some("owner".into()),
-        Who::Login { username, role: Role::Owner | Role::Admin } => Some(format!("connect:{username}")),
-        _ => None,
-    }
-}
-
-/// Bundle/pack with `carry_secrets: true` needs `env_confirm_token` (D4).
-/// A body without `carry_secrets` (or false) passes untouched; a body
-/// that isn't JSON is left for the handler's own 400.
-pub fn env_files_confirm(who: &Who, body: &[u8]) -> Result<(), CliResponse> {
-    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return Ok(());
-    };
-    if !v.get("carry_secrets").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-        return Ok(());
-    }
-    let deny = |code: &'static str, hint: &str| {
-        Err(Denied { code, hint: hint.to_string() }.response())
-    };
-    let Some(stamp) = confirm_stamp(who) else {
-        return deny(
-            env_codes::OWNER_ADMIN,
-            "sending .env files needs an Owner or Admin to confirm; move them into the vault first (k2 vault import .env)",
-        );
-    };
-    let path = v.get("project_path").and_then(serde_json::Value::as_str).unwrap_or("");
-    let Some(token) = v.get("env_confirm_token").and_then(serde_json::Value::as_str).filter(|t| !t.is_empty()) else {
-        return deny(
-            env_codes::CONFIRM_REQUIRED,
-            "sending .env files as files needs your confirm (Touch ID or a password), or move them into the vault first \
-             (k2 vault import .env)",
-        );
-    };
-    let vault = match crate::vault::get() {
-        Ok(v) => v,
-        Err(e) => return deny(env_codes::CONFIRM_REQUIRED, &format!("the vault isn't open ({}): {}", e.code, e.hint)),
-    };
-    match vault.confirm.take(token, ENV_CONFIRM_ACTION, Some(&env_secret_id(path)), &stamp) {
-        Ok(k2_vault::HumanProof::Confirmed { .. }) => Ok(()),
-        _ => deny(
-            env_codes::CONFIRM_REQUIRED,
-            "confirm again: a confirm works once, for this workspace's .env files, within 60 seconds",
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -334,29 +273,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn env_files_need_an_owner_or_admin_confirm_bound_to_the_path() {
-        let vault = crate::vault::ensure_test_vault();
-        let body = |tok: Option<&str>| {
-            serde_json::json!({ "project_path": "/w/sales", "carry_secrets": true, "env_confirm_token": tok }).to_string()
-        };
-        // No carry_secrets → untouched.
-        assert!(env_files_confirm(&login("m", Role::Member), br#"{"project_path":"/w/sales"}"#).is_ok());
-        let r = env_files_confirm(&Who::Owner, body(None).as_bytes()).expect_err("needs a confirm");
-        assert!(r.body.contains(env_codes::CONFIRM_REQUIRED), "{}", r.body);
-        let r = env_files_confirm(&login("m", Role::Member), body(Some("x")).as_bytes()).expect_err("member");
-        assert!(r.body.contains(env_codes::OWNER_ADMIN), "{}", r.body);
-        let other = vault.confirm.mint(ENV_CONFIRM_ACTION, Some(&env_secret_id("/w/other")), "owner", "local-auth");
-        assert!(env_files_confirm(&Who::Owner, body(Some(&other)).as_bytes()).is_err(), "bound to the path");
-        let wrong = vault.confirm.mint("clone-approve", Some(&env_secret_id("/w/sales")), "owner", "local-auth");
-        assert!(env_files_confirm(&Who::Owner, body(Some(&wrong)).as_bytes()).is_err(), "bound to clone-env");
-        let ok = vault.confirm.mint(ENV_CONFIRM_ACTION, Some(&env_secret_id("/w/sales")), "owner", "local-auth");
-        assert!(env_files_confirm(&Who::Owner, body(Some(&ok)).as_bytes()).is_ok());
-        assert!(env_files_confirm(&Who::Owner, body(Some(&ok)).as_bytes()).is_err(), "single use");
-        let ada = vault.confirm.mint(ENV_CONFIRM_ACTION, Some(&env_secret_id("/w/sales")), "connect:ada", "connect-password");
-        assert!(env_files_confirm(&login("ada", Role::Admin), body(Some(&ada)).as_bytes()).is_ok());
-    }
-
     /// CL4: every dispatcher arm that reaches a clone handler calls the
     /// gate first. Walks the dispatcher source: each line that calls
     /// `crate::clone_routes::handle_clone_*` or the proposal approve must
@@ -376,14 +292,19 @@ mod tests {
             if t.contains("clone_gate::check(") || t.contains("clone_gate_check(") {
                 last_gate = Some(i);
             }
-            if t.contains("clone_routes::handle_clone_") || t.contains("clone_preview::handle(") {
+            if t.contains("clone_routes::handle_clone_")
+                || t.contains("clone_preview::handle(")
+                || t.contains("clone_vault::handle(")
+                || t.contains("thread_transfer_routes::handle(")
+            {
                 calls += 1;
                 let gated = last_gate.is_some_and(|g| g > last_arm);
                 assert!(gated, "dispatcher.rs:{} reaches a clone handler without clone_gate::check in its arm", i + 1);
             }
         }
-        // bundle, unpack, pack, pack-cleanup, pack-status, preview.
-        assert!(calls >= 6, "expected the six clone doors in the dispatcher, saw {calls}");
+        // bundle, unpack, pack, pack-cleanup, pack-status, preview, vault/*,
+        // thread export/import.
+        assert!(calls >= 8, "expected every clone door in the dispatcher, saw {calls}");
         // The per-cell socket never serves `/cli/clone/*` (deny prefix).
         assert!(!crate::session_token::is_agent_verb("/cli/clone/bundle"));
         assert!(!crate::session_token::is_agent_verb("/cli/clone/preview"));

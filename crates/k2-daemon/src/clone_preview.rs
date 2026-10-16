@@ -3,23 +3,29 @@
 //! preview` show before anything is built.
 //!
 //! ```text
-//! POST /cli/clone/preview {project_path | workspace, sinceDays?}
+//! POST /cli/clone/preview {project_path | workspace, sinceDays?,
+//!                          …slice A's CarryAsk: vault_target, clone_id, secrets,
+//!                          own_box_move, send_env_files (alias carry_secrets)}
 //! → { ok, workspace:{id,handle,path}, history:{sessions,files,entries},
-//!     threads:{available, …B's summary…},
-//!     secrets:{available, rows:[{name,kind,group,default,copyable,note}], notCarried:[…]},
-//!     envFiles:[rel paths], callerCanCopySecrets }
+//!     threads:{available, conversations, docs, dropped, participants[], roles{}},
+//!     secrets:{available, rows:[{name,kind,group,default,choice,copyable,note?,envNames?}],
+//!              notCarried:["NAME (reason)"], plan, needsConfirm, confirm?},
+//!     envFiles:[rel paths], envFilesHint, callerCanCopySecrets }
 //! ```
 //!
 //! Gated by the clone gate (door `preview`) in the dispatcher. Never a
-//! value: secret rows are names/kinds/defaults, `.env` files are paths.
+//! value: secret rows are names/kinds/choices, `.env` files are paths.
 //!
-//! The Thread summary comes from the Threads slice and the secret rows
-//! from the vault slice; until those land, [`sources`] answers
-//! `available: false` and the dialog shows the Thread tick (always
-//! offered, R1) without counts and no Secrets block.
+//! The Thread block reads slice B's export (`ThreadsExport::{summary,
+//! participants}`); the Secrets block is slice A's plan (`clone_vault::
+//! plan_json`), so `secrets.confirm` is the exact `clone-carry` binding the
+//! person confirms next (`/cli/clone/vault/confirm`, or `vault.sock`
+//! `confirm/finish` with `clonePlan`). Without a `vault_target` every
+//! unnamed row is `skip` (nothing can travel yet).
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::{no, refusal_response, Who, R};
+use crate::vault::actor::VaultCaller;
 use k2_core::clone;
 use k2_core::clone::DestinationClass;
 use k2_core::connect_users::Role;
@@ -37,19 +43,97 @@ struct PreviewBody {
     since_days: Option<u32>,
 }
 
-/// Where the Thread summary and secret rows come from (the Threads and
-/// vault slices). Each answers `None` when its slice isn't built in.
+/// Where the Thread summary and secret rows come from (slices B and A).
 pub(crate) mod sources {
-    use serde_json::Value as J;
+    use super::*;
+    use k2_core::overlay::transfer as t;
 
-    /// `{conversations, docs, participants:[…], …}` for the Thread block.
-    pub fn threads(_project_id: &str, _since_days: Option<u32>) -> Option<J> {
-        None
+    /// `{conversations, docs, dropped, participants[], roles{}}` for the
+    /// Thread block (slice B's export, built and dropped: names, counts).
+    pub fn threads(project_id: &str, since_days: Option<u32>) -> Option<J> {
+        let choice = match since_days {
+            Some(d) => t::ThreadsChoice::SinceDays(d),
+            None => t::ThreadsChoice::All,
+        };
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let export = match t::export_project_threads(&conn, project_id, &t::ExportOptions::new("preview", t::default_source_host(), choice)) {
+            Ok(e) => e,
+            Err(e) => {
+                k2_core::log_debug!("[clone/preview] thread summary for {project_id}: {e}");
+                return None;
+            }
+        };
+        drop(conn);
+        let s = export.summary(0);
+        let mut roles = serde_json::Map::new();
+        for c in &export.conversations {
+            let n = roles.get(&c.role).and_then(J::as_u64).unwrap_or(0);
+            roles.insert(c.role.clone(), json!(n + 1));
+        }
+        Some(json!({
+            "conversations": s.conversations,
+            "docs": s.docs,
+            "dropped": s.dropped,
+            "participants": export.participants(),
+            "roles": roles,
+        }))
     }
 
-    /// `{rows:[{name,kind,group,default,copyable,note}], notCarried:[…]}`.
-    pub fn secrets(_project_id: &str, _member: bool) -> Option<J> {
-        None
+    /// Slice A's plan for this caller and ask, reshaped for the dialog.
+    pub fn secrets(caller: Option<&VaultCaller>, project_path: &str, body: &[u8]) -> Option<J> {
+        let caller = caller?;
+        let vault = crate::vault::get().ok()?;
+        let mut ask: crate::clone_vault::CarryAsk = serde_json::from_slice(body).unwrap_or_default();
+        ask.project_path = Some(project_path.to_string());
+        ask.project_id = None;
+        ask.confirm_token = None;
+        let v = match crate::clone_vault::plan_json(&vault, caller, &ask) {
+            Ok(v) => v,
+            Err(e) => {
+                k2_core::log_debug!("[clone/preview] vault plan: {} {}", e.code, e.hint);
+                return None;
+            }
+        };
+        let plan = &v["plan"];
+        let rows: Vec<J> = plan["rows"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .map(|r| {
+                        let mut o = json!({
+                            "name": r["name"], "kind": r["kind"], "group": r["group"],
+                            "default": r["default"], "choice": r["choice"],
+                            "copyable": r["copyAllowed"].as_bool().unwrap_or(false),
+                        });
+                        if !r["note"].is_null() {
+                            o["note"] = r["note"].clone();
+                        }
+                        if let Some(e) = r.get("envNames") {
+                            o["envNames"] = e.clone();
+                        }
+                        o
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let not_carried: Vec<String> = plan["notCarried"]
+            .as_array()
+            .map(|ns| {
+                ns.iter()
+                    .map(|n| format!("{} ({})", n["name"].as_str().unwrap_or("?"), n["reason"].as_str().unwrap_or("?")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(json!({
+            "rows": rows,
+            "notCarried": not_carried,
+            "member": plan["member"],
+            "needsConfirm": v["needsConfirm"],
+            "confirm": v.get("confirm").cloned().unwrap_or(J::Null),
+            "envFilesHint": v["envFilesHint"],
+            "plan": plan.clone(),
+        }))
     }
 }
 
@@ -58,8 +142,8 @@ pub fn caller_can_copy_secrets(who: &Who) -> bool {
     matches!(who, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
 }
 
-pub fn handle(who: &Who, body: &[u8]) -> CliResponse {
-    match preview(who, body) {
+pub fn handle(who: &Who, caller: Option<&VaultCaller>, body: &[u8]) -> CliResponse {
+    match preview(who, caller, body) {
         Ok(v) => CliResponse::ok_json(v.to_string()),
         // `error` stays a string (the dialog shows it verbatim), like the
         // clone gate's refusals.
@@ -71,7 +155,7 @@ pub fn handle(who: &Who, body: &[u8]) -> CliResponse {
     }
 }
 
-fn preview(who: &Who, body: &[u8]) -> R<J> {
+fn preview(who: &Who, caller: Option<&VaultCaller>, body: &[u8]) -> R<J> {
     let b: PreviewBody =
         serde_json::from_slice(body).map_err(|e| no("bad_request", 400, format!("invalid JSON body: {e}")))?;
     let token = if b.project_path.trim().is_empty() { b.workspace.trim() } else { b.project_path.trim() };
@@ -93,8 +177,8 @@ fn preview(who: &Who, body: &[u8]) -> R<J> {
         }
     }
     // Names only: the inventory lists what would travel and which files
-    // the scrubber would hold back (the legacy `.env` option, D4).
-    let inv = clone::inventory(&ws.path, clone::CloneOptions { include_all_history: true, carry_secrets: false, home_override: None })
+    // the scrubber would hold back (the `.env` option, D4).
+    let inv = clone::inventory(&ws.path, clone::CloneOptions { include_all_history: true, carry_secrets: false, ..Default::default() })
         .map_err(|e| no("bad_request", 400, format!("inventory failed: {e}")))?;
     let sessions = inv
         .entries
@@ -104,7 +188,7 @@ fn preview(who: &Who, body: &[u8]) -> R<J> {
     let files = inv.entries.iter().filter(|e| e.class == DestinationClass::Workspace).count();
     let mut env_files: Vec<String> = inv.scrubbed_secrets.clone();
     env_files.sort();
-    let member = !caller_can_copy_secrets(who);
+    let can_copy = caller_can_copy_secrets(who);
     let threads = match sources::threads(&ws.id, b.since_days) {
         Some(mut t) => {
             t["available"] = json!(true);
@@ -112,7 +196,7 @@ fn preview(who: &Who, body: &[u8]) -> R<J> {
         }
         None => json!({ "available": false }),
     };
-    let secrets = match sources::secrets(&ws.id, member) {
+    let secrets = match sources::secrets(caller, &ws.path, body) {
         Some(mut s) => {
             s["available"] = json!(true);
             s
@@ -126,6 +210,6 @@ fn preview(who: &Who, body: &[u8]) -> R<J> {
         "threads": threads,
         "secrets": secrets,
         "envFiles": env_files,
-        "callerCanCopySecrets": !member,
+        "callerCanCopySecrets": can_copy,
     }))
 }

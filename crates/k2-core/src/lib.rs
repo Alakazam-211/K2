@@ -295,6 +295,7 @@ pub mod zen;
 // the flag was retired in 0.39.0e (these are always-on now). See
 // .k2so/prds/session-stream-and-awareness-bus.md for the original rollout.
 pub mod awareness;
+pub mod browser_notes;
 pub mod session;
 pub mod term;
 

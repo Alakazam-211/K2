@@ -32,12 +32,21 @@ function statusRowFor(s: ScopeActivity, ref: AgentStatusRef, display: ActivityDi
 }
 
 /** A workspace's status view on `scope`'s server. */
-export function useAgentStatus(scope: Pick<ServerScope, 'id' | 'isPrimary'>, ref: AgentStatusRef): AgentStatusView {
+export function useAgentStatus(
+  scope: Pick<ServerScope, 'id' | 'isPrimary' | 'serverSupports'>,
+  ref: AgentStatusRef,
+): AgentStatusView {
   const projectId = ref.projectId ?? null
   const path = ref.path ?? null
   const rollup = useActivity(scope, (s) => workspaceRollup(s, { projectId, path }))
   const unseen = useActivity(scope, (s) => (projectId ? projectUnseenOutcome(s, projectId) : null))
-  const daemonLive = useActivity(scope, daemonReportsLive)
+  // The daemon reports `live` (D1): its feature key once its snapshot is in
+  // (a workspace with no rollup then holds no PTY: reaped), or a rollup that
+  // carries the field. Otherwise a missing `live` is unknown.
+  const daemonLive = useActivity(
+    scope,
+    (s) => (s.supported && scope.serverSupports('activity-live-busy')) || daemonReportsLive(s),
+  )
   const waitingRow = useActivity(scope, (s) => statusRowFor(s, { projectId, path }, 'waiting'))
   const monitoringRow = useActivity(scope, (s) => statusRowFor(s, { projectId, path }, 'monitoring'))
   const staleRow = useActivity(scope, (s) => statusRowFor(s, { projectId, path }, 'unverifiable'))

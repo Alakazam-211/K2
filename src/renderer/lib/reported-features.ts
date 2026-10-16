@@ -51,6 +51,13 @@ export const REPORTED_FEATURES = {
   /** Local Grok Bots (0.45.7): `/cli/grokbots/*` and `grokbots_changed`.
    *  A server without the key shows no Grok Bot rows and no Settings page. */
   'grokbots-v1': 'grokbots-v1',
+  /** plan-agent-status-unify-v1 D1/D2 (0.46.0): activity rollups carry
+   *  `live` (live PTYs, 0 = reaped) and `busy` (mid-turn or subagents
+   *  running), and `presence/summary` `agentActivity` carries `heartbeat`,
+   *  `live`, `busy`, `counts` plus idle entries. Without it the renderer
+   *  keeps its own live-session set and reads working from
+   *  `counts.working`; a missing `live` is unknown, never 0. */
+  'activity-live-busy': 'activity-live-busy',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

@@ -632,7 +632,12 @@ describe('Home — the Agents page shell', () => {
         expect(found.length).toBeLessThanOrEqual(1)
         return found[0]?.textContent ?? null
       })
-      expect(badges).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', null, null])
+      // plan-agent-status-unify-v1: the number column runs 1–9, then 0 (the
+      // Cmd+0 row), then a muted dash so the column never collapses.
+      expect(badges).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', null])
+      expect(rowEls.map((el) => el.querySelector('[data-slot="number"]')?.textContent ?? null)).toEqual([
+        '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-',
+      ])
       // Badge N is on rows[N - 1], the row Cmd+N opens.
       expect(rowEls.map((el) => el.getAttribute('data-home-row'))).toEqual(
         useHomesStore.getState().homes[0].rows.map((r) => r.address),

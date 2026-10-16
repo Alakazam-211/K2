@@ -47,6 +47,7 @@ import { useHomeAvatarSync } from '@/lib/home-avatars'
 import { grokBotIdFromAddress, grokRowStatus } from '@/lib/grokbots'
 import { useGrokBotsStore, type GrokHostState } from '@/stores/grokbots'
 import { useSelectTopHomeRowOnEnter } from './home-auto-select'
+import { roomFactsOf, type RoomFacts } from '@/lib/home-agent-status'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -140,6 +141,21 @@ function useRoomRowActivity(room: Pick<Room, 'activityView' | 'cwd'> | null): Ro
     [room],
   )
   return useSyncExternalStore(subscribe, read, read)
+}
+
+/** An open room's facts for its row, live; null when no room is open. The
+ *  snapshot is a string so React gets a stable value between changes. */
+export function useRoomRowFacts(room: Pick<Room, 'activityView' | 'cwd'> | null): RoomFacts | null {
+  const subscribe = useCallback(
+    (onChange: () => void) => (room ? room.activityView.subscribe(onChange) : () => {}),
+    [room],
+  )
+  const read = useCallback(
+    () => (room ? JSON.stringify(roomFactsOf(room.activityView.getState(), room.cwd())) : ''),
+    [room],
+  )
+  const key = useSyncExternalStore(subscribe, read, read)
+  return useMemo(() => (key ? (JSON.parse(key) as RoomFacts) : null), [key])
 }
 
 export type RowStatusInputs = {

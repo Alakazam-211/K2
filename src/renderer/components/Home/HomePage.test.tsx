@@ -730,6 +730,52 @@ describe('Home — the Agents page shell', () => {
 // Rosson 2026-10-16: "When going to home, if there is no agent selected,
 // select the top-most one." Each mount of HomeShellEffects is an entry.
 describe('entering Home selects the top row when nothing is selected', () => {
+  // Homes made here go, so later tests see the one Home.
+  afterEach(() => {
+    const st = useHomesStore.getState()
+    for (const h of st.homes.slice(1)) st.deleteHome(h.id)
+  })
+
+  /** A second Home with these rows; the first stays selected. */
+  function addWorkHome(rows: { address: string; workspaceId: string; label: string }[]): string {
+    const st = useHomesStore.getState()
+    const first = st.homes[0].id
+    const id = st.createHome('Work')
+    if (!id) throw new Error('createHome refused')
+    for (const r of rows) useHomesStore.getState().addRow(id, r)
+    useHomesStore.getState().selectHome(first)
+    return id
+  }
+
+  it('picking another Home with no valid selection on it opens that Home\'s top row', () => {
+    const work = addWorkHome([{ address: 'nova::local', workspaceId: 'pn', label: 'Nova' }])
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    act(() => useHomesStore.getState().selectHome(work))
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(rowOf('Nova').getAttribute('aria-current')).toBe('true')
+  })
+
+  it('picking another Home keeps a selection that is a row of it', () => {
+    const work = addWorkHome([
+      { address: 'nova::local', workspaceId: 'pn', label: 'Nova' },
+      { address: 'cortana::local', workspaceId: 'pl', label: 'Cortana' },
+    ])
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    act(() => useHomesStore.getState().selectHome(work))
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+  })
+
+  it('picking an empty Home selects nothing new', () => {
+    const work = addWorkHome([])
+    render(<Shell />)
+    act(() => useHomesStore.getState().selectHome(work))
+    expect(useHomesStore.getState().homes.find((h) => h.id === work)?.rows).toEqual([])
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+  })
+
   it('no selection: the top row opens, as a click on it would', () => {
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
     render(<Shell />)

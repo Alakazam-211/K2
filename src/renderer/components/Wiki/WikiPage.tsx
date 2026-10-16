@@ -39,6 +39,7 @@ import {
   setWikiServe,
   setWikiPublicChat,
   wikiIndexFingerprint,
+  WIKI_HOSTING_UI_ENABLED,
   countVisibleWikiArticles,
   findWikiHomeNode,
   type WikiIndex,
@@ -641,6 +642,9 @@ export default function WikiPage(): React.JSX.Element | null {
           {seedBusy ? 'Seeding…' : 'Seed wiki'}
         </button>
 
+        {/* W0 (0.46.0): hosting hidden until it is rebuilt on the runtime. */}
+        {WIKI_HOSTING_UI_ENABLED && (
+        <>
         <button
           type="button"
           disabled={serveBusy || !projectPath}
@@ -693,6 +697,8 @@ export default function WikiPage(): React.JSX.Element | null {
           >
             {serve.url}
           </a>
+        )}
+        </>
         )}
 
         <button

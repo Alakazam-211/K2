@@ -8363,6 +8363,11 @@ k2 app — getting existing Apps ready for K2 0.46.1 (0.46.0 removes nothing)
                                        Apps" and the nested "…and publish open
                                        Apps".
 
+In 0.46.0 a new --cmd service from an agent without those switches still
+runs, with a warning (warn-only); from 0.46.1 it is held for the owner.
+Owner-token calls are traced on Linux only for now: on macOS, warnings and
+clean-mode say "not available on macOS" (the code scan still works).
+
 Exit codes: 0 done, 2 held for the owner (or a usage error), 3 refused or
 infra (JSON on stderr).
 EOF
@@ -8414,6 +8419,7 @@ v = json.load(sys.stdin)
 reports = v.get("services") if "services" in v else [v]
 if not reports:
     print("No server Apps (--cmd services) to check.")
+tracing = v.get("ownerTokenAttribution") or next((r.get("ownerTokenAttribution") for r in reports if r.get("ownerTokenAttribution")), None)
 for r in reports:
     a = r.get("app", {})
     mode = a.get("envMode") or "-"
@@ -8428,8 +8434,9 @@ for r in reports:
     sc = r.get("scan") or {}
     if sc.get("truncated"):
         print("  (the code scan stopped early: %s files)" % sc.get("filesScanned"))
-    if r.get("ownerTokenAttribution") and r["ownerTokenAttribution"] != "on":
-        print("  (owner-token calls are traced on Linux only)")
+if tracing and tracing != "on":
+    # Linux only for now (Rosson 2026-10-16): say so, never stay silent.
+    print("owner-token tracing: %s (Linux only for now; the code scan still names reads of ~/.k2/daemon.token)" % tracing)
 '
 }
 
@@ -8452,7 +8459,9 @@ cmd_app_clean_mode() {
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("%s: clean mode %s (env %s); %s" % (v["app"].get("handle"), "on" if v.get("cleanMode") else "off", v.get("envMode"), v.get("restart")))'
+print("%s: clean mode %s (env %s); %s" % (v["app"].get("handle"), "on" if v.get("cleanMode") else "off", v.get("envMode"), v.get("restart")))
+if v.get("ownerTokenAttributionNote"):
+    print("owner-token tracing: %s (%s)" % (v.get("ownerTokenAttribution"), v["ownerTokenAttributionNote"]))'
 }
 
 # k2 app key mint|revoke …
@@ -17951,7 +17960,8 @@ if mode == "service" and verb in ("run", "start"):
         sys.stderr.write(env_warning(str(_s.get("name") or "?"), _s) + "\n")
     _c = d.get("crossover") if isinstance(d, dict) else None
     if isinstance(_c, dict) and _c.get("wouldHold"):
-        sys.stderr.write("notice: %s\n" % _c.get("hint", ""))
+        # 0.46.0 is warn-only: the run went through; say so first.
+        sys.stderr.write("warning: %s\n" % (_c.get("message") or ("it ran (this release only warns); " + str(_c.get("hint", "")))))
 
 if as_json:
     print(json.dumps(d, separators=(",", ":")))

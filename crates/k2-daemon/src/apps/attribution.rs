@@ -64,6 +64,24 @@ fn live_cmd_sessions() -> HashMap<i32, String> {
     out
 }
 
+/// Owner-token tracing on this box, for status and the CLI: `"on"` on
+/// Linux; elsewhere it says it isn't available (Rosson 2026-10-16: Linux
+/// only for now; never silence on a Mac).
+pub const fn availability() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "on"
+    } else if cfg!(target_os = "macos") {
+        "not available on macOS"
+    } else {
+        "not available on this OS (Linux only)"
+    }
+}
+
+/// Said next to [`availability`] when tracing is off: what still works.
+pub const UNAVAILABLE_NOTE: &str = "owner-token calls are traced on Linux only for now; \
+the code scan still names any read of ~/.k2/daemon.token; clean mode still cleans the environment but can't refuse \
+owner-token calls it can't trace";
+
 /// Cheap, non-blocking: could this call come from a published service at
 /// all? (Linux, loopback, at least one live child.) The dispatcher skips
 /// the blocking lookup otherwise.
@@ -216,6 +234,21 @@ mod tests {
         let lan: SocketAddr = "192.168.1.9:50000".parse().unwrap();
         let local: SocketAddr = "127.0.0.1:4000".parse().unwrap();
         assert_eq!(owner_token_call(lan, local, "/cli/thread"), Verdict::NotAnApp);
+    }
+
+    #[test]
+    fn tracing_is_linux_only_and_a_mac_says_so() {
+        // Rosson 2026-10-16: Linux only for now; never silence elsewhere.
+        if cfg!(target_os = "linux") {
+            assert_eq!(availability(), "on");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(availability(), "not available on macOS");
+            let peer: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+            assert!(!worth_checking(peer), "nothing is traced on a Mac");
+        } else {
+            assert!(availability().starts_with("not available"), "{}", availability());
+        }
+        assert!(UNAVAILABLE_NOTE.contains("Linux only"), "{UNAVAILABLE_NOTE}");
     }
 
     #[test]

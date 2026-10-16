@@ -526,6 +526,12 @@ pub(crate) fn purge_orphan_project_children(conn: &Connection) -> Result<()> {
 
 /// Simple migration runner using a _migrations table to track applied migrations.
 pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
+    run_migrations_through(conn, None)
+}
+
+/// [`run_migrations`], stopping after `last` when given (tests build an
+/// older release's database this way, then upgrade it).
+fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _migrations (
             id INTEGER PRIMARY KEY,
@@ -1397,6 +1403,9 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
                 return Err(e);
             }
         }
+        if last == Some(*name) {
+            break;
+        }
     }
 
     Ok(())
@@ -2064,6 +2073,63 @@ mod tests {
             ],
             "tail migrations out of order: {names:?}"
         );
+    }
+
+    /// A 0.45.7 database (last migration 0164) upgrades to 0.46.0: the
+    /// runtime (0165, 0168–0170) and the publish probe grace (0177) apply
+    /// in order on top of existing rows, which keep their data and get the
+    /// new columns' defaults.
+    #[test]
+    fn a_045_7_database_upgrades_through_the_046_0_tail() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0164_garden_data")).unwrap();
+        let last: String = conn
+            .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(last, "0164_garden_data", "the 0.45.7 database stops at 0164");
+        assert!(!table_names(&conn).iter().any(|n| n == "apps"), "0.45.7 has no runtime tables");
+        conn.execute(
+            "INSERT INTO published_services (id, project_id, name, cmd, cwd, port, expose, desired) \
+             VALUES ('svc-old', 'p-old', 'site', 'npm start', '/srv/site', 3000, 'tunnel', 'running')",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM _migrations WHERE name > '0164' ORDER BY id")
+            .unwrap();
+        let tail: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(
+            tail,
+            vec![
+                "0165_app_runtime_core",
+                "0168_app_grace",
+                "0169_app_egress",
+                "0170_app_walls_lite",
+                "0177_published_services_probe_timeout",
+            ],
+            "0.46.0 tail on a 0.45.7 database: {tail:?}"
+        );
+        let (cmd, probe, pending): (String, Option<i64>, i64) = conn
+            .query_row(
+                "SELECT cmd, probe_timeout_ms, hostname_pending FROM published_services WHERE id = 'svc-old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(cmd, "npm start", "the old row keeps its data");
+        assert_eq!(probe, None, "no per-service grace: the daemon default");
+        assert_eq!(pending, 0, "not waiting for a first answer");
+        for t in ["apps", "app_widenings", "app_egress_policy", "app_egress_hosts"] {
+            assert!(table_names(&conn).iter().any(|n| n == t), "{t} missing after the upgrade");
+        }
+        // Running again is a no-op (every name is recorded once).
+        run_migrations(&conn).unwrap();
+        let again: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name > '0164'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(again, 5);
     }
 
     /// 0.46.0: one held-request table for every kind (grace and egress), a

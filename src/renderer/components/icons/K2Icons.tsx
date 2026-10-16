@@ -3,10 +3,12 @@
 // icon"). Every icon is 16px on a 24 viewBox with one 1.75 stroke in
 // `currentColor`.
 //
-//   Home, Agents, Projects, Tickets, Server, Admin, Run, Drawer
+//   Home, Agents, Projects, Tickets, Server, Admin, Run, Drawer, Clock,
+//   Mug, Cheat sheet
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `server`,
-//     `circle-user`, `play`, `panel-left`), corners squared: square caps,
-//     mitred joins, no corner radius.
+//     `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `file-text`),
+//     corners squared: square caps, mitred joins, no corner radius (true
+//     circles and arcs, like the clock face, stay round).
 //   Settings
 //     Lucide 1.58 `settings`, unedited (round caps and joins).
 //   Gardens
@@ -182,6 +184,62 @@ export function DrawerIcon({ side, open, ...props }: DrawerIconProps): React.JSX
     <svg {...iconProps('drawer', props)} data-drawer-side={side} data-drawer-open={open ? 'true' : 'false'}>
       <rect width="18" height="18" x="3" y="3" />
       <path d={side === 'left' ? 'M9 3v18' : 'M15 3v18'} strokeDasharray={open ? undefined : '0.5 4'} />
+    </svg>
+  )
+}
+
+/** Stopwatch (the timer's start button): Lucide `clock`, squared hands. */
+export function ClockIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('clock', props)} data-testid="timer-icon">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 6v6l4 2" />
+    </svg>
+  )
+}
+
+/** How full the Keep awake mug is: Off empty, While agents are working
+ *  half, Always full. */
+export type MugFill = 'none' | 'half' | 'full'
+
+/** The liquid's top edge inside the mug body (interior y 8.875 to 20.125). */
+export const MUG_LIQUID_TOP: Record<Exclude<MugFill, 'none'>, number> = { half: 14.5, full: 8.875 }
+export const MUG_LIQUID_BOTTOM = 20.125
+
+/** Keep awake: Lucide `coffee`, squared body (the handle's arc kept). The
+ *  liquid, in the accent colour, fills the body to the mode's level. */
+export function MugIcon({ fill, ...props }: K2IconProps & { fill: MugFill }): React.JSX.Element {
+  return (
+    <svg {...iconProps('mug', props)} data-testid="keep-awake-icon" data-fill={fill}>
+      {fill !== 'none' ? (
+        <rect
+          data-testid="keep-awake-liquid"
+          x="3.875"
+          y={MUG_LIQUID_TOP[fill]}
+          width="12.25"
+          height={MUG_LIQUID_BOTTOM - MUG_LIQUID_TOP[fill]}
+          fill="var(--color-accent)"
+          stroke="none"
+        />
+      ) : null}
+      <path d="M6 2v2" />
+      <path d="M10 2v2" />
+      <path d="M14 2v2" />
+      <path data-testid="keep-awake-body" d="M3 8h14v13H3Z" />
+      <path d="M17 8h1a4 4 0 0 1 0 8h-1" />
+    </svg>
+  )
+}
+
+/** K2 cheat sheet: Lucide `file-text`, squared (folded corner kept). */
+export function CheatSheetIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('cheat-sheet', props)}>
+      <path d="M4 2h10l6 6v14H4Z" />
+      <path d="M14 2v6h6" />
+      <path d="M10 9H8" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
     </svg>
   )
 }

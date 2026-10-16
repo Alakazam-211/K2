@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTimerStore, getElapsedMs, formatElapsed } from '@/stores/timer'
-import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
+import { ClockIcon } from '@/components/icons/K2Icons'
 
 export default function TimerButton(): React.JSX.Element | null {
   const status = useTimerStore((s) => s.status)
@@ -43,19 +43,8 @@ export default function TimerButton(): React.JSX.Element | null {
           style={noDrag}
           title="Start stopwatch"
         >
-          <svg
-            className="w-3.5 h-3.5 flex-shrink-0"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={TOP_BAR_ICON_STROKE_WIDTH}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            data-testid="timer-icon"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
+          {/* Icon style A3: Lucide `clock`, squared. */}
+          <ClockIcon className="flex-shrink-0" />
         </button>
       </div>
     )

@@ -351,9 +351,9 @@ describe('KeepAwakeButton', () => {
         seen.add(tone)
       }
       if (tone !== 'off') expect([tone, st.mode === 'off']).toEqual([tone, false])
+      // Each state is a fresh server answer: without the reset the next
+      // render shows this state's cached entry before its own fetch lands.
       cleanup()
-      // The store keeps the last status per server: without a reset the
-      // next render paints the previous state before its own fetch lands.
       resetKeepAwakeForTests()
     }
     expect([...seen].sort()).toEqual(['armed', 'held', 'off'])

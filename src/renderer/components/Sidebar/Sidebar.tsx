@@ -648,7 +648,25 @@ function ProjectItem({
 
 // ── Focus Group Selector ──────────────────────────────────────────────────────
 
+type NavProject = ReturnType<typeof useProjectsStore.getState>['projects'][number]
+
+/** The workspaces the nav's main list shows for a focus group pick (null =
+ *  no group: all of them). Pinned ones never: they have the Pinned list.
+ *  Ungrouped ones in every group view — 0.39.45 (GH #26): ungrouped
+ *  projects (CLI-created, or onboarded against a focus-group name that
+ *  doesn't exist) filtered out were unreachable from the nav entirely.
+ *  The picker's counts use this too, so a count is what the list shows. */
+export function navListedProjects<P extends Pick<NavProject, 'pinned' | 'focusGroupId'>>(
+  projects: readonly P[],
+  groupId: string | null,
+): P[] {
+  const unpinned = projects.filter((p) => !p.pinned)
+  if (groupId === null) return unpinned
+  return unpinned.filter((p) => p.focusGroupId === groupId || p.focusGroupId == null)
+}
+
 function FocusGroupSelector(): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
   const setActiveFocusGroup = useFocusGroupsStore((s) => s.setActiveFocusGroup)
@@ -668,8 +686,14 @@ function FocusGroupSelector(): React.JSX.Element {
     <div className="px-3 pt-3 pb-2 no-drag flex items-center gap-1.5">
       <div className="flex-1 min-w-0">
         <FocusGroupDropdown
-          options={focusGroups.map((g) => ({ id: g.id, name: g.name, color: g.color }))}
+          options={focusGroups.map((g) => ({
+            id: g.id,
+            name: g.name,
+            color: g.color,
+            count: navListedProjects(projects, g.id).length,
+          }))}
           value={activeFocusGroupId}
+          triggerCount={navListedProjects(projects, activeFocusGroupId).length}
           onChange={setActiveFocusGroup}
         />
       </div>
@@ -726,17 +750,10 @@ export default function Sidebar(): React.JSX.Element {
   const pinnedProjects = useMemo(() =>
     projects.filter((p) => p.pinned), [projects])
 
-  const filteredProjects = useMemo(() => {
-    const unpinned = projects.filter((p) => !p.pinned)
-    if (!focusGroupsEnabled || activeFocusGroupId === null) return unpinned
-    // 0.39.45 (GH #26): ungrouped projects (focusGroupId = null — e.g.
-    // CLI-created via `k2so workspace create`, or onboarded against a
-    // focus-group name that doesn't exist) render in EVERY group view.
-    // Filtering them out made them unreachable from the nav entirely.
-    return unpinned.filter(
-      (p) => p.focusGroupId === activeFocusGroupId || p.focusGroupId == null,
-    )
-  }, [projects, focusGroupsEnabled, activeFocusGroupId])
+  const filteredProjects = useMemo(
+    () => navListedProjects(projects, focusGroupsEnabled ? activeFocusGroupId : null),
+    [projects, focusGroupsEnabled, activeFocusGroupId],
+  )
 
   // ── Nudge to enable focus groups at 10+ workspaces (every 3 hours) ──
   useEffect(() => {
